@@ -73,9 +73,29 @@ name: Test & Mark Stable Release
           lock (cancel-in-progress: false) for ~37m on a slow reviewer
           LLM step (~29m), serialising the bait review behind it; the
           extra headroom absorbs that contention.
+          Raised 40→60 after run 28282500673 (v1.20.1): a healthy review
+          whose single "Run reviewer models" step ran 41m aged out the
+          40m timer because GitHub does not stream in-progress step logs
+          (see review_step_timeout below for the structural guard).
         required: false
         type: number
-        default: 40
+        default: 60
+      review_step_timeout:
+        description: >
+          Step-runtime cap consulted after the review_timeout inactivity
+          threshold fires. GitHub's
+          /actions/jobs/{id}/logs endpoint does not stream an in-progress
+          step's output, so a long LLM step (reviewer models / editor)
+          freezes every cached activity signal the loop watches. While the
+          review run is in_progress and its current step has been running
+          for less than this cap, the loop defers the inactivity-stall
+          decision; once the step reaches this cap, the normal stall path
+          continues. Defaults to 50 minutes; set it above review_timeout
+          when a long single step should extend the wait past the
+          inactivity window.
+        required: false
+        type: number
+        default: 50
       review_workflow_file:
         description: >
           Filename (under .github/workflows/ in TEST_REPO) of the
@@ -328,7 +348,23 @@ jobs:
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
       PHASE_TIMEOUT: ${{ inputs.phase_timeout || 30 }}
       PLAN_PHASE_TIMEOUT: ${{ inputs.plan_timeout || inputs.phase_timeout || 60 }}
-      REVIEW_TIMEOUT: ${{ inputs.review_timeout || inputs.phase_timeout || 40 }}
+      REVIEW_TIMEOUT: ${{ inputs.review_timeout || inputs.phase_timeout || 60 }}
+      # Per-step grace cap (minutes) consulted after REVIEW_TIMEOUT's
+      # inactivity window fires. GitHub's /actions/jobs/{id}/logs endpoint
+      # does NOT
+      # stream an in-progress step's output, so during a single long LLM step
+      # (e.g. "Run reviewer models" can run >40m for 6 two-pass reviewers)
+      # every cached activity signal the wait loop watches (log byte size,
+      # step name, review-comment count) freezes and the global inactivity
+      # timer would age out a perfectly healthy review — the v1.20.1 release
+      # failure on run 28282500673, where the reviewer step ran 41m, log_sz
+      # was pinned at 52333b the whole time, and the run nonetheless completed
+      # success ~6m after the poller gave up. While the run is in_progress and
+      # its current step has been running for less than this cap, the loop
+      # treats the silence as a healthy long step and defers that inactivity
+      # stall decision; a genuinely hung step still falls through once the
+      # cap is exceeded, so stuck-run detection is preserved.
+      REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || 50 }}
       POLL_INTERVAL: 10
       # Wrapper-workflow filename used by the smoke gate to dispatch
       # / poll review_autofix runs. Defaults to the source repo's
@@ -1275,8 +1311,21 @@ jobs:
           fi
           echo "Inactivity timeout: ${REVIEW_TIMEOUT} minutes"
           INACTIVITY_LIMIT=$((REVIEW_TIMEOUT * 60))
+          # Per-step wall-clock cap (see REVIEW_STEP_TIMEOUT env above):
+          # a single in-progress review step may run this long before the
+          # inactivity check treats it as a stall, since GitHub does not
+          # stream in-progress step logs and the cached activity signals
+          # freeze for the step's whole duration. Fall back to 50m when the
+          # env is unset/non-numeric so the arithmetic below never errors.
+          REVIEW_STEP_TIMEOUT="${REVIEW_STEP_TIMEOUT:-50}"
+          [[ "$REVIEW_STEP_TIMEOUT" =~ ^[0-9]+$ ]] && [ "$REVIEW_STEP_TIMEOUT" -gt 0 ] || REVIEW_STEP_TIMEOUT=50
+          STEP_INACTIVITY_LIMIT=$((REVIEW_STEP_TIMEOUT * 60))
+          echo "Per-step stall cap: ${REVIEW_STEP_TIMEOUT} minutes"
           LAST_ACTIVITY=$(date +%s)
           PREV_STATE=""
+          LAST_STEP_GUARD_RUN_ID=""
+          LAST_STEP_GUARD_NAME=""
+          LAST_STEP_GUARD_STARTED_AT=""
           ELAPSED=0
           RATE_LIMIT_BACKOFF=0
           # Mutable pin tracking the head SHA the loop is currently polling
@@ -1641,15 +1690,42 @@ jobs:
             # Beyond run status/conclusion, probe deeper indicators
             # that the review workflow is genuinely making progress.
 
-            # 1) Current step name — reuse JOBS_JSON if already fetched
+            # 1) Current step name — reuse JOBS_JSON if already fetched.
+            #    Also capture the in-progress step's started_at so the
+            #    inactivity check can tell a healthy long step (whose logs
+            #    GitHub does not stream) apart from a genuinely hung run —
+            #    see the REVIEW_STEP_TIMEOUT guard below.
             CURRENT_STEP=""
+            CURRENT_STEP_STARTED_AT=""
+            STEP_METADATA_FETCH_OK=0
             if [ "$RUN_ID" != "unknown" ]; then
               if [ -n "${JOBS_JSON:-}" ]; then
                 CURRENT_STEP=$(echo "$JOBS_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' 2>/dev/null || echo "")
+                CURRENT_STEP_STARTED_AT=$(echo "$JOBS_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .started_at // ""' 2>/dev/null || echo "")
+                if [ -n "${CURRENT_STEP_STARTED_AT:-}" ]; then
+                  STEP_METADATA_FETCH_OK=1
+                fi
               else
-                CURRENT_STEP=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" \
-                  --jq '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' || echo "")
+                JOBS_STEP_JSON=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" || echo "")
+                if [ -n "$JOBS_STEP_JSON" ]; then
+                  CURRENT_STEP=$(echo "$JOBS_STEP_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' 2>/dev/null || echo "")
+                  CURRENT_STEP_STARTED_AT=$(echo "$JOBS_STEP_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .started_at // ""' 2>/dev/null || echo "")
+                  if [ -n "${CURRENT_STEP_STARTED_AT:-}" ]; then
+                    STEP_METADATA_FETCH_OK=1
+                  fi
+                fi
               fi
+            fi
+            if [ -n "${CURRENT_STEP_STARTED_AT:-}" ]; then
+              LAST_STEP_GUARD_RUN_ID="$RUN_ID"
+              LAST_STEP_GUARD_NAME="${CURRENT_STEP:-}"
+              LAST_STEP_GUARD_STARTED_AT="$CURRENT_STEP_STARTED_AT"
+            elif [ "${RUN_STATUS:-}" = "in_progress" ] && [ "$STEP_METADATA_FETCH_OK" != "1" ] && [ "${LAST_STEP_GUARD_RUN_ID:-}" = "$RUN_ID" ] && [ -n "${LAST_STEP_GUARD_STARTED_AT:-}" ] && { [ -z "${CURRENT_STEP:-}" ] || [ "${CURRENT_STEP}" = "${LAST_STEP_GUARD_NAME:-}" ]; }; then
+              CURRENT_STEP_STARTED_AT="$LAST_STEP_GUARD_STARTED_AT"
+              CURRENT_STEP="${CURRENT_STEP:-${LAST_STEP_GUARD_NAME:-}}"
+              echo "  ⚠ Jobs API returned no in-progress step timing for run ${RUN_ID}; reusing last-seen step metadata for this poll" >&2
+            elif [ "${RUN_STATUS:-}" = "in_progress" ] && [ "$STEP_METADATA_FETCH_OK" != "1" ]; then
+              echo "  ⚠ Jobs API returned no in-progress step timing for run ${RUN_ID}; per-step stall guard is unavailable this poll" >&2
             fi
 
             # 2) Commit count on PR branch — editor pushes trigger changes
@@ -1697,6 +1773,31 @@ jobs:
             # review-run inventory for the branch so the diagnosis
             # doesn't require an out-of-band gh api call.
             if [ $IDLE -ge $INACTIVITY_LIMIT ]; then
+              # Structural guard against GitHub not streaming in-progress
+              # step logs: when the pinned review run is still in_progress
+              # and its current step has been running for less than the
+              # per-step cap, the inactivity silence is explained by one
+              # long healthy step (e.g. "Run reviewer models", which ran
+              # 41m on v1.20.1 run 28282500673 with log_sz frozen at
+              # 52333b) rather than a genuine stall. Defer the stall check
+              # and keep polling. Once the step reaches the cap (or its
+              # timestamp cannot be trusted), execution falls through to the
+              # normal stall path below.
+              if [ "${RUN_STATUS:-}" = "in_progress" ] && [ -n "${CURRENT_STEP_STARTED_AT:-}" ]; then
+                STEP_STARTED_EPOCH=$(date -d "${CURRENT_STEP_STARTED_AT}" +%s 2>/dev/null || echo 0)
+                if [ "$STEP_STARTED_EPOCH" -gt 0 ]; then
+                  STEP_ELAPSED=$((NOW - STEP_STARTED_EPOCH))
+                  if [ "$STEP_ELAPSED" -ge 0 ] && [ "$STEP_ELAPSED" -lt "$STEP_INACTIVITY_LIMIT" ]; then
+                    STEP_REMAINING=$(( (STEP_INACTIVITY_LIMIT - STEP_ELAPSED + 59) / 60 ))
+                    echo "  ⏳ idle ${IDLE}s ≥ ${REVIEW_TIMEOUT}m, but review run ${RUN_ID} step '${CURRENT_STEP:-?}' has only run ${STEP_ELAPSED}s (< ${REVIEW_STEP_TIMEOUT}m cap; GitHub does not stream in-progress step logs) — deferring stall check (~${STEP_REMAINING}m of step budget left)"
+                    sleep "$POLL_INTERVAL"
+                    ELAPSED=$((ELAPSED + POLL_INTERVAL))
+                    continue
+                  fi
+                else
+                  echo "  ⚠ Could not parse in-progress step started_at='${CURRENT_STEP_STARTED_AT}' for run ${RUN_ID}; per-step stall guard is unavailable this poll" >&2
+                fi
+              fi
               # jq's `last` on an empty array yields the literal string
               # "null" rather than empty, so both branches are needed.
               if [ -n "${BAIT_SHA:-}" ] && { [ -z "${REVIEW_RUN:-}" ] || [ "${REVIEW_RUN}" = "null" ]; }; then
