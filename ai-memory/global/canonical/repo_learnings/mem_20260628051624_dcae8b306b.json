@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Memory and lesson-record schemas are stable artifacts that need versioned, schema-checked edits rather than ad hoc field changes.",
   "timestamps": {
     "created_at": "2026-06-28T05:16:24Z",
