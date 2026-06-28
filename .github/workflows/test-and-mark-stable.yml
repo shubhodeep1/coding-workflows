@@ -90,7 +90,8 @@ name: Test & Mark Stable Release
           review run is in_progress and its current step has been running
           for less than this cap, the loop defers the inactivity-stall
           check; a step that exceeds the cap still fails, preserving
-          stuck-run detection. Defaults to review_timeout (or 50).
+          stuck-run detection. Defaults to 50 minutes and is configured
+          independently from review_timeout.
         required: false
         type: number
         default: 50
@@ -361,7 +362,7 @@ jobs:
       # treats the silence as a healthy long step and defers the stall check;
       # a genuinely hung step still trips once it exceeds the cap, so
       # stuck-run detection is preserved.
-      REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || inputs.review_timeout || inputs.phase_timeout || 50 }}
+      REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || 50 }}
       POLL_INTERVAL: 10
       # Wrapper-workflow filename used by the smoke gate to dispatch
       # / poll review_autofix runs. Defaults to the source repo's
@@ -1320,6 +1321,9 @@ jobs:
           echo "Per-step stall cap: ${REVIEW_STEP_TIMEOUT} minutes"
           LAST_ACTIVITY=$(date +%s)
           PREV_STATE=""
+          LAST_STEP_GUARD_RUN_ID=""
+          LAST_STEP_GUARD_NAME=""
+          LAST_STEP_GUARD_STARTED_AT=""
           ELAPSED=0
           RATE_LIMIT_BACKOFF=0
           # Mutable pin tracking the head SHA the loop is currently polling
@@ -1691,17 +1695,31 @@ jobs:
             #    see the REVIEW_STEP_TIMEOUT guard below.
             CURRENT_STEP=""
             CURRENT_STEP_STARTED_AT=""
+            STEP_METADATA_FETCH_OK=0
             if [ "$RUN_ID" != "unknown" ]; then
               if [ -n "${JOBS_JSON:-}" ]; then
+                STEP_METADATA_FETCH_OK=1
                 CURRENT_STEP=$(echo "$JOBS_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' 2>/dev/null || echo "")
                 CURRENT_STEP_STARTED_AT=$(echo "$JOBS_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .started_at // ""' 2>/dev/null || echo "")
               else
                 JOBS_STEP_JSON=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" || echo "")
                 if [ -n "$JOBS_STEP_JSON" ]; then
+                  STEP_METADATA_FETCH_OK=1
                   CURRENT_STEP=$(echo "$JOBS_STEP_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' 2>/dev/null || echo "")
                   CURRENT_STEP_STARTED_AT=$(echo "$JOBS_STEP_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .started_at // ""' 2>/dev/null || echo "")
                 fi
               fi
+            fi
+            if [ -n "${CURRENT_STEP_STARTED_AT:-}" ]; then
+              LAST_STEP_GUARD_RUN_ID="$RUN_ID"
+              LAST_STEP_GUARD_NAME="${CURRENT_STEP:-}"
+              LAST_STEP_GUARD_STARTED_AT="$CURRENT_STEP_STARTED_AT"
+            elif [ "${RUN_STATUS:-}" = "in_progress" ] && [ "$STEP_METADATA_FETCH_OK" != "1" ] && [ "${LAST_STEP_GUARD_RUN_ID:-}" = "$RUN_ID" ] && [ -n "${LAST_STEP_GUARD_STARTED_AT:-}" ]; then
+              CURRENT_STEP_STARTED_AT="$LAST_STEP_GUARD_STARTED_AT"
+              CURRENT_STEP="${CURRENT_STEP:-${LAST_STEP_GUARD_NAME:-}}"
+              echo "  ⚠ Jobs API returned no in-progress step timing for run ${RUN_ID}; reusing last-seen step metadata for this poll" >&2
+            elif [ "${RUN_STATUS:-}" = "in_progress" ] && [ "$STEP_METADATA_FETCH_OK" != "1" ]; then
+              echo "  ⚠ Jobs API returned no in-progress step timing for run ${RUN_ID}; per-step stall guard is unavailable this poll" >&2
             fi
 
             # 2) Commit count on PR branch — editor pushes trigger changes
