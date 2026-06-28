@@ -91,6 +91,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/analyze_soft_errors.py` — Soft-error log analyzer for the release-gate smoke test.
 - `scripts/analyze_workflow_logs.py` — Prepare aggregated workflow telemetry context for the Codex analysis pass.
 - `scripts/apply_audit_gate_assets.py` — Apply canonical audit-gate assets atomically to a repository.
+- `scripts/assemble_prompt.sh` — Shell wrapper over render_prompt.py --assemble-only for shared-prelude prompt assembly.
 - `scripts/audit_consumer_drift.py` — Audit consumer workflow-wrapper drift against checked-in templates.
 - `scripts/blocker_check.py` — Python helper for blocker check.
 - `scripts/build_semble_wrapper.sh` — build_semble_wrapper.sh — fail-soft Semble BM25 wrapper builder.
@@ -188,6 +189,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/semble_helpers.sh` — semble_helpers.sh — shared, sourceable Semble query helpers.
 - `scripts/serena_stats_emit.py` — Aggregate Serena tool-call rollups from Codex logs.
 - `scripts/setup_serena.sh` — setup_serena.sh — fail-soft Serena bootstrapper for Codex MCP usage.
+- `scripts/slop_scan_local.py` — Local slop-scan heuristics for review_autofix changed scripts and Python heredocs.
 - `scripts/stage_workflow_support.sh` — Shell helper for stage workflow support.
 - `scripts/summarize_reviewer_consensus.sh` — ledger via codex-cli (model: openai/gpt-5.4-mini, reasoning: medium).
 - `scripts/summarize_unselected_runs.py` — Summarize unselected workflow runs via gpt-5.4-mini to widen analysis coverage.
@@ -208,6 +210,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/validation_template_bootstrap.py` — Shared onboarding helper for validation template manifests.
 - `scripts/verify_integration_fingerprints.py` — Verify that an orchestrator integration-sync resolver run preserved merged sub-issue intent.
 - `scripts/watchdog_helpers.sh` — Shell helper for shared Codex watchdog utilities.
+- `scripts/workflow_retro.py` — Build weekly workflow-retro context from workflow-log-analysis telemetry.
 - `scripts/workspace_init.sh` — Shell helper for workspace init.
 - `scripts/workspace_safety_check.sh` — Shell helper for workspace safety check.
 - `scripts/write_codex_config.sh` — write_codex_config.sh — central writer for ~/.codex/config.toml.
