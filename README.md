@@ -929,17 +929,21 @@ implement → review`, which is the "safest possible" route. With
 `AUTO_IMPLEMENT_ON_CLEAR_PLAN=true` (the default) the opened issue can flow all
 the way to a fix PR without human action.
 
-- **Trigger:** `check_run: completed` with a `failure`, `timed_out`, or
-  `action_required` conclusion, on a check associated with an open PR. The
-  workflow file lives on the default branch (required for `check_run` events).
+- **Trigger:** `check_run: completed` with a `failure` or `timed_out`
+  conclusion, on a check associated with an open PR. The workflow file lives
+  on the default branch (required for `check_run` events).
 - **Opt-in:** disabled unless the repo variable `CHECK_FAILURE_TRIAGE_ENABLED`
   is `true`. While disabled the wrapper job is skipped immediately (no checkout
   / no model call).
-- **Diagnosis:** the repo is checked out at the failing head SHA; the diagnosis
-  model (`WORKFLOW_CHECK_TRIAGE_MODEL`, default `openai/gpt-5.4`, `xhigh`) reads
-  the failing check's logs (via `collect_pr_check_runs_context.py`) and the
-  branch code, then writes the issue body (summary, evidence, root cause,
-  suggested fix, affected files) per `prompts/mode-check-failure-triage.txt`.
+- **Same-repo guard:** fork-origin PRs are skipped before checkout / model
+  execution, so `GH_PAT` and model credentials are never exposed to untrusted
+  fork code.
+- **Diagnosis:** for same-repo PRs, the repo is checked out at the failing head
+  SHA; the diagnosis model (`WORKFLOW_CHECK_TRIAGE_MODEL`, default
+  `openai/gpt-5.4`, `xhigh`) reads the failing check's logs (via
+  `collect_pr_check_runs_context.py`) and the branch code, then writes the
+  issue body (summary, evidence, root cause, suggested fix, affected files)
+  per `prompts/mode-check-failure-triage.txt`.
 - **De-duplication:** a per-`repo+PR+check` concurrency group keeps one triage
   in flight; an HTML-comment fingerprint marker
   (`<!-- check-failure-triage:fp=… -->`) means no second issue is opened for a

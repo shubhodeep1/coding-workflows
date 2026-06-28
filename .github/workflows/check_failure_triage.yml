@@ -20,7 +20,7 @@ name: AI Check Failure Triage (Reusable)
         type: string
         default: ""
       check_conclusion:
-        description: "Check-run conclusion (failure|timed_out|action_required|...)"
+        description: "Check-run conclusion (failure|timed_out|...)"
         required: false
         type: string
         default: ""
@@ -54,7 +54,7 @@ jobs:
     if: >-
       vars.CHECK_FAILURE_TRIAGE_ENABLED == 'true' &&
       inputs.pr_number != '' &&
-      contains(fromJson('["failure","timed_out","action_required"]'), inputs.check_conclusion) &&
+      contains(fromJson('["failure","timed_out"]'), inputs.check_conclusion) &&
       !contains(inputs.check_name, 'Check Failure Triage')
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -85,7 +85,24 @@ jobs:
           echo "Check: ${{ inputs.check_name }} (conclusion: ${{ inputs.check_conclusion }})"
           echo "Head SHA: ${{ inputs.head_sha }}"
 
+      - name: Guard against fork PRs
+        id: pr_origin_guard
+        run: |
+          set -euo pipefail
+          HEAD_REPO="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ inputs.pr_number }}" --jq '.head.repo.full_name // ""')"
+          if [ -z "${HEAD_REPO}" ] || [ "${HEAD_REPO}" = "null" ]; then
+            echo "::error::Unable to determine PR head repository for PR #${{ inputs.pr_number }}"
+            exit 1
+          fi
+          if [ "${HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]; then
+            echo "same_repo=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping check-failure triage for fork PR #${{ inputs.pr_number }} (head repo: ${HEAD_REPO})."
+            exit 0
+          fi
+          echo "same_repo=true" >> "$GITHUB_OUTPUT"
+
       - name: Checkout PR head (failing branch)
+        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         uses: actions/checkout@v5
         with:
           ref: ${{ inputs.head_sha || github.sha }}
@@ -93,11 +110,13 @@ jobs:
           token: ${{ secrets.GH_PAT }}
 
       - name: Install Codex CLI
+        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Resolve workflow support ref
+        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -109,6 +128,7 @@ jobs:
 
       - name: Checkout workflow support source
         id: checkout_support_source
+        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -119,7 +139,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
+        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' && steps.checkout_support_source.outcome == 'failure' }}
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -129,6 +149,7 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
+        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -188,6 +209,7 @@ jobs:
           rm -rf .codex-workflow-src
 
       - name: Create Codex config
+        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         run: |
           set -euo pipefail
           bash scripts/write_codex_config.sh \
@@ -196,6 +218,7 @@ jobs:
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
       - name: Create runtime workspace
+        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         run: |
           set -euo pipefail
           RUNTIME_DIR="/tmp/check-triage-${GITHUB_RUN_ID}"
@@ -203,6 +226,7 @@ jobs:
           echo "RUNTIME_DIR=${RUNTIME_DIR}" >> "$GITHUB_ENV"
 
       - name: Run check-failure triage
+        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         env:
           CHECK_TRIAGE_PR_NUMBER: ${{ inputs.pr_number }}
           CHECK_TRIAGE_CHECK_RUN_ID: ${{ inputs.check_run_id }}
