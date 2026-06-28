@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Shared helper scripts are a central integration point and should be changed cautiously because many workflows depend on them at once.",
   "timestamps": {
     "created_at": "2026-06-28T05:14:23Z",
