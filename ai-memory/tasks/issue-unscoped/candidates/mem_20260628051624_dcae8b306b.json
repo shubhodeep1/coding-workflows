@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.87,
+  "details": "Merged runs touched AI memory schemas, examples, CLI helpers, and schema tests together, indicating the repository treats memory formats as a contract. This matters whenever adding, renaming, or reinterpreting stored run data, because downstream tooling likely assumes backward-compatible structure.",
+  "fingerprint": "89c42f42c6a8c7c39deb70936457a15cc2e0ef16ab0d8c2f74cdd8048d66c1aa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28312223219",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28312223219",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3535",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3537",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3540",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3542",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3552",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3536",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3538",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3541",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3543",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3553"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260628051624_dcae8b306b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Memory and lesson-record schemas are stable artifacts that need versioned, schema-checked edits rather than ad hoc field changes.",
+  "timestamps": {
+    "created_at": "2026-06-28T05:16:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
