@@ -429,3 +429,94 @@ No `TODO`, `FIXME`, or `HACK` markers matched under `.github/workflows`, `script
 | Code modularization | ~6 | Medium |
 | Expression size reduction | ~6 | Medium |
 | Medium/Low fixes | ~4 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-06-28)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the repository already proves the calls are equivalent enough to consolidate without changing behavior. `NEEDS_VERIFICATION` means the overlap is real but static reading does not fully prove freshness/error-semantic parity. `RISKY_SKIP` means the call sits in a retry/poll/race-defensive path, uses pagination, or lives in `scripts/orchestrate_poll_process.sh`, so it should not be auto-implemented even if it looks redundant.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID:** `MERGE-001`  
+  **Safety tag:** `RISKY_SKIP`  
+  **File path and line ranges:** `.github/workflows/test-and-mark-stable.yml:3036-3045`  
+  **Current call count:** `2` per poll iteration  
+  **Proposed call count:** `1` per poll iteration  
+  **Endpoint(s):** `GET /repos/{repo}/actions/runs/{run_id}`  
+  **Evidence:** the polling loop reads the same run resource twice back-to-back, once for `.status` and once for `.conclusion`:
+  ```bash
+  EXISTING_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+    --jq '.status // ""' 2>/dev/null || echo "")
+  EXISTING_CONCLUSION=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+    --jq '.conclusion // ""' 2>/dev/null || echo "")
+  ```
+  Both fields come from the same JSON document, and there is no intervening mutation inside the loop body.  
+  **Proposed fix:** replace the pair with one fetch into a temp JSON string/object in the same loop iteration, then parse both `.status` and `.conclusion` locally.  
+  **Safety rationale:** `RISKY_SKIP` because the duplicate calls are inside a polling loop; consolidating them changes how transient failures surface and could alter the timeout/empty-string behavior.  
+  **Downstream signal:** Do not auto-implement. Manual review must preserve the current 5s poll cadence, 600s timeout, and fail-open handling when the run lookup intermittently returns empty data.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID:** `REUSE-001`  
+  **Safety tag:** `NEEDS_VERIFICATION`  
+  **File path and line ranges:** `scripts/review_collect_pr_metadata.sh:251-278`, `scripts/review_rb_judge.sh:834-885`  
+  **Current call count:** `1` early GraphQL fetch, then `1` additional GraphQL fetch plus `up to N` `GET /issues/{issue_number}` calls in the judge path  
+  **Proposed call count:** keep the early GraphQL fetch, then `0` additional GraphQL fetches and `at most 1` live issue fetch only if current labels still need refreshing  
+  **Endpoint(s):** GraphQL `repository.pullRequest(number).closingIssuesReferences(first:50)`, `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence:** the metadata collector explicitly says it fetches linked issues early and exports a cache:
+  ```bash
+  # Fetch linked issue title+body via GraphQL — single call that also
+  # populates LINKED_ISSUES_JSON early so the late-stage cache step can
+  # skip its own fetch.
+  if gh_retry "${_linked_tmp}" api graphql ... nodes{number title body} ...
+  ...
+  printf 'LINKED_ISSUES_JSON=%s\n' "${_linked_numbers}" >> "${GITHUB_ENV}"
+  ```
+  But the judge ignores that early cache and re-queries linked issues, then walks issues one by one:
+  ```bash
+  ISSUE_NUMBERS="$(gh_retry gh api graphql ... nodes { number } ...)"
+  ...
+  ISSUE_META_JSON="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" || echo '{}')"
+  BODY="$(printf '%s' "${ISSUE_META_JSON}" | jq -r '.body // ""' ...)"
+  ```
+  **Proposed fix:** make `scripts/review_rb_judge.sh` consume the already-exported linked-issue artifact first; if the existing `LINKED_ISSUES_JSON` payload is too small, extend the existing `review_collect_pr_metadata.sh` GraphQL query to include the fields the judge needs and export them in a machine-readable file/env var. Keep a single live `GET /issues/{FIRST_ISSUE}` fallback only if judge-time label freshness is required.  
+  **Safety rationale:** `NEEDS_VERIFICATION` because `review_rb_judge.sh` currently reads live first-issue labels/body, while the exported cache today only guarantees linked issue numbers.  
+  **Downstream signal:** Verify before changing: (1) `review_collect_pr_metadata.sh` runs on every path that can reach `review_rb_judge.sh`, including `force_rb_judge=true` dispatches; (2) no earlier step depends on judge-time freshness of first-issue labels/body; (3) all judge branches still behave correctly if the cache is missing and the live fallback remains single-call.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID:** `DEAD-API-001`  
+  **Safety tag:** `RISKY_SKIP`  
+  **File path and line ranges:** `scripts/orchestrate_poll_process.sh:17601-17618`, `scripts/orchestrate_poll_process.sh:12549-12599`  
+  **Current call count:** `1`  
+  **Proposed call count:** `0`  
+  **Endpoint(s):** `GET /repos/{repo}`  
+  **Evidence:** the standalone conflict sweep fetches the repo default branch into `DEFAULT_BRANCH`, but the sweep never reads it:
+  ```bash
+  CONFLICT_SWEEP_FIXED=0
+  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+
+  for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
+  ```
+  The only helper it dispatches in this block is `_dispatch_review_for_conflicts`, whose signature is just `<pr_number> <head_ref>` and whose body (`scripts/orchestrate_poll_process.sh:12551-12599`) does not read `DEFAULT_BRANCH`. The remainder of the sweep uses `S_PR`, `S_HEAD`, `S_BASE`, `S_PR_JSON`, and `S_HEAD_SHA`, not `DEFAULT_BRANCH`.  
+  **Proposed fix:** remove only the standalone-conflict-sweep lookup at `scripts/orchestrate_poll_process.sh:17614`; leave the other `DEFAULT_BRANCH` fetches elsewhere in the file unchanged.  
+  **Safety rationale:** `RISKY_SKIP` because the dead-looking call is inside `scripts/orchestrate_poll_process.sh`, which the repo treats as an upstream-race-defensive path requiring manual review.  
+  **Downstream signal:** Do not auto-implement. Manual review must confirm no helper reached from the standalone conflict sweep relies on the ambient `DEFAULT_BRANCH` shell variable before removing just this lookup.
+
+### Cross-References to Deep Audit Section
+
+- `API-001`: `RISKY_SKIP` — shared retry/backoff helpers are themselves the rate-limit/recovery path, so permanent-error fast-fail logic should be reviewed manually rather than auto-applied.
+- `API-002`: `NEEDS_VERIFICATION` — caching the first fallback issue metadata is sound, but the later merged-alert suppression path may depend on fresher labels/body than the first fallback captured.
+- `API-003`: `NEEDS_VERIFICATION` — batching commit attribution matches §15, but the replacement must prove GraphQL returns the same author/committer-login semantics and null-handling as the current per-SHA REST loop.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | REUSE-001 |
+| RISKY_SKIP | 2 | MERGE-001, DEAD-API-001 |
+
+### Implement-Stage Handoff
+
+- No SAFE_TO_MERGE findings in this pass.
