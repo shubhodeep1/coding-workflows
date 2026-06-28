@@ -90,9 +90,9 @@ name: Test & Mark Stable Release
           review run is in_progress and its current step has been running
           for less than this cap, the loop defers the inactivity-stall
           check; a step that exceeds the cap still fails, preserving
-          stuck-run detection. Defaults to 50 minutes for
-          workflow_dispatch; set it explicitly if you want a different
-          cap than review_timeout.
+          stuck-run detection. Defaults to 50 minutes; set it explicitly
+          if you want a different per-step cap (for example, to match
+          `review_timeout`).
         required: false
         type: number
         default: 50
@@ -351,9 +351,10 @@ jobs:
       REVIEW_TIMEOUT: ${{ inputs.review_timeout || inputs.phase_timeout || 60 }}
       # Per-step wall-clock cap (minutes) for the review run's currently
       # in-progress step. For normal workflow_dispatch runs this comes from
-      # review_step_timeout (default 50); the review_timeout/phase_timeout
-      # fallbacks below are only a defensive backstop for unexpected
-      # falsey/missing values. GitHub's /actions/jobs/{id}/logs endpoint does NOT
+      # the dedicated review_step_timeout input (default 50); it does not
+      # auto-track review_timeout. The review_timeout/phase_timeout fallbacks
+      # below are only a defensive backstop for unexpected falsey/missing values.
+      # GitHub's /actions/jobs/{id}/logs endpoint does NOT
       # stream an in-progress step's output, so during a single long LLM step
       # (e.g. "Run reviewer models" can run >40m for 6 two-pass reviewers)
       # every cached activity signal the wait loop watches (log byte size,
