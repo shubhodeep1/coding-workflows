@@ -164,6 +164,14 @@
     "e2e-smoke-test": {
       "color": "5319e7",
       "description": "E2E smoke test PR — review_autofix skips auto-merge"
+    },
+    "ai:check-triage": {
+      "color": "d876e3",
+      "description": "Issue auto-filed from a failing PR check by check-failure triage"
+    },
+    "ai:check-triage-escalated": {
+      "color": "b60205",
+      "description": "Check-failure auto-fix chain hit the lineage cap; needs human attention"
     }
   },
   "phase_groups": [

@@ -1,0 +1,224 @@
+---
+name: AI Check Failure Triage (Reusable)
+
+"on":
+  workflow_call:
+    inputs:
+      pr_number:
+        description: "PR number associated with the failing check-run"
+        required: false
+        type: string
+        default: ""
+      check_run_id:
+        description: "Failing check-run id"
+        required: false
+        type: string
+        default: ""
+      check_name:
+        description: "Failing check-run name"
+        required: false
+        type: string
+        default: ""
+      check_conclusion:
+        description: "Check-run conclusion (failure|timed_out|action_required|...)"
+        required: false
+        type: string
+        default: ""
+      head_sha:
+        description: "Head SHA the check ran against"
+        required: false
+        type: string
+        default: ""
+      details_url:
+        description: "Check-run details URL"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      GH_PAT:
+        required: true
+      OPENROUTER_API_KEY:
+        required: true
+      TG_BOT_SECRET:
+        required: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+
+jobs:
+  triage:
+    # Cost gate: do nothing unless the consumer repo has explicitly opted in,
+    # and only for genuine failure conclusions on a real PR. The job is skipped
+    # (no checkout / no codex install) when disabled.
+    if: >-
+      vars.CHECK_FAILURE_TRIAGE_ENABLED == 'true' &&
+      inputs.pr_number != '' &&
+      contains(fromJson('["failure","timed_out","action_required"]'), inputs.check_conclusion) &&
+      !contains(inputs.check_name, 'Check Failure Triage')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      # One in-flight triage per repo + PR + check. cancel-in-progress: false
+      # means a check that is already being triaged keeps its run; a second
+      # event queues and then no-ops via the open-issue dedup in the script.
+      group: ai-check-triage-${{ github.repository }}-${{ inputs.pr_number }}-${{ inputs.check_name }}
+      cancel-in-progress: false
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      MODEL_EDITOR: ${{ vars.WORKFLOW_CHECK_TRIAGE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CHECK_TRIAGE || 'xhigh' }}
+      MODEL_VERBOSITY: ${{ vars.VERBOSITY_CHECK_TRIAGE || 'low' }}
+      OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+      CHECK_FAILURE_TRIAGE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_ENABLED || 'false' }}
+      CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH: ${{ vars.CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH || '3' }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+      TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+    steps:
+      - name: Log trigger context
+        run: |
+          set -euo pipefail
+          echo "Check-failure triage for ${GITHUB_REPOSITORY} PR #${{ inputs.pr_number }}"
+          echo "Check: ${{ inputs.check_name }} (conclusion: ${{ inputs.check_conclusion }})"
+          echo "Head SHA: ${{ inputs.head_sha }}"
+
+      - name: Checkout PR head (failing branch)
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.head_sha || github.sha }}
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Install Codex CLI
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        with:
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+
+      - name: Resolve workflow support ref
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+          else
+            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout workflow support source
+        id: checkout_support_source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Checkout workflow support source fallback
+        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Stage workflow support files
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ ! -d .codex-workflow-src ]; then
+            echo "::error::Failed to checkout workflow support source"
+            exit 1
+          fi
+          mkdir -p scripts
+
+          _fetched=()
+          for f in gh_helpers.sh tg_helpers.sh render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh collect_pr_check_runs_context.py check_failure_triage.sh; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ]; then
+              if [ "${f}" = "render_prompt.py" ]; then
+                echo "::notice::Optional ${f} absent; render_prompt.sh resolves it elsewhere or uses the bundled renderer."
+                continue
+              fi
+              echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
+              exit 1
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched+=("${f}")
+          done
+
+          catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
+          if [ -f "${catalog_src}" ]; then
+            install -m 0644 "${catalog_src}" scripts/codex_model_catalog.json
+            _fetched+=(codex_model_catalog.json)
+          else
+            echo "::warning::Codex model catalog not found; apply_patch may not be registered for non-built-in models"
+          fi
+
+          # Canonical repo-architecture facts for the diagnosis prompt.
+          if [ -f ".codex-workflow-src/agents.md" ]; then
+            install -m 0644 ".codex-workflow-src/agents.md" agents_canonical.md
+          fi
+
+          for f in unattended_system_instructions.md; do
+            if [ ! -f "${f}" ] && [ -f ".codex-workflow-src/${f}" ]; then
+              install -m 0644 ".codex-workflow-src/${f}" "${f}"
+            fi
+          done
+
+          mkdir -p prompts
+          if [ ! -f prompts/mode-check-failure-triage.txt ] && [ -f ".codex-workflow-src/prompts/mode-check-failure-triage.txt" ]; then
+            install -m 0644 ".codex-workflow-src/prompts/mode-check-failure-triage.txt" prompts/mode-check-failure-triage.txt
+          fi
+
+          if [ "${{ github.repository }}" != "${wf_source}" ]; then
+            {
+              echo "# Auto-generated by coding-workflows — DO NOT EDIT"
+              echo "# Prevents runtime-fetched support scripts from being committed."
+              printf '%s\n' "${_fetched[@]}" .gitignore
+            } > scripts/.gitignore
+          fi
+
+          rm -rf .codex-workflow-src
+
+      - name: Create Codex config
+        run: |
+          set -euo pipefail
+          bash scripts/write_codex_config.sh \
+            --model "${MODEL_EDITOR}" \
+            --reasoning "${MODEL_REASONING_EFFORT}"
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Create runtime workspace
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="/tmp/check-triage-${GITHUB_RUN_ID}"
+          mkdir -p "${RUNTIME_DIR}"
+          echo "RUNTIME_DIR=${RUNTIME_DIR}" >> "$GITHUB_ENV"
+
+      - name: Run check-failure triage
+        env:
+          CHECK_TRIAGE_PR_NUMBER: ${{ inputs.pr_number }}
+          CHECK_TRIAGE_CHECK_RUN_ID: ${{ inputs.check_run_id }}
+          CHECK_TRIAGE_CHECK_NAME: ${{ inputs.check_name }}
+          CHECK_TRIAGE_CHECK_CONCLUSION: ${{ inputs.check_conclusion }}
+          CHECK_TRIAGE_HEAD_SHA: ${{ inputs.head_sha }}
+          CHECK_TRIAGE_DETAILS_URL: ${{ inputs.details_url }}
+        run: |
+          set -euo pipefail
+          bash scripts/check_failure_triage.sh
+
+      - name: Notify on triage workflow failure
+        if: ${{ failure() }}
+        run: |
+          set -euo pipefail
+          source scripts/tg_helpers.sh 2>/dev/null || true
+          type tg_send_msg >/dev/null 2>&1 || exit 0
+          RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          tg_send_msg "AI Check Failure Triage workflow itself failed for ${GITHUB_REPOSITORY} PR #${{ inputs.pr_number }} (check '${{ inputs.check_name }}')."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true

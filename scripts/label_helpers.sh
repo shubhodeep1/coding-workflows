@@ -61,6 +61,8 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:review-skipped"]="c2e0c6"
 	["force-review"]="fbca04"
 	["e2e-smoke-test"]="5319e7"
+	["ai:check-triage"]="d876e3"
+	["ai:check-triage-escalated"]="b60205"
 )
 
 declare -A _AI_LABEL_DESCS=(
@@ -105,6 +107,8 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:review-skipped"]="Reviewer panel + editor cycle skipped by deterministic gate (doc-only or under size threshold)"
 	["force-review"]="Force a full review_autofix cycle, bypassing the deterministic pre-review skip"
 	["e2e-smoke-test"]="E2E smoke test PR — review_autofix skips auto-merge"
+	["ai:check-triage"]="Issue auto-filed from a failing PR check by check-failure triage"
+	["ai:check-triage-escalated"]="Check-failure auto-fix chain hit the lineage cap; needs human attention"
 )
 
 _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'

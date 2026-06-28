@@ -100,6 +100,18 @@ Copy this block when adding a new entry:
   - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py` returns `4 passed`.
 - **Owner:** @shubhodeep1
 
+### `scripts/check_failure_triage.sh` + `.github/workflows/check_failure_triage.yml`
+
+- **Introduced in:** claude/llm-pr-check-resolution-7vjfvi (2026-06-28)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `rg -n 'check_failure_triage\.sh' .github/workflows/check_failure_triage.yml` shows the reusable workflow still stages and invokes the script.
+  - `rg -n 'check_failure_triage\.yml' .github/workflows/internal-check-failure-triage.yml workflow-templates/ai-check-failure-triage.yml` shows both the self-hosting (`@main`) and consumer (`@stable`) wrappers still call the reusable workflow.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.`
+  - For every consumer in `.github/ai/consumer_repos.json`, `gh variable list --repo <consumer>` shows `CHECK_FAILURE_TRIAGE_ENABLED` is unset or `false` (no repo still relies on the feature) before removing it.
+- **Owner:** @shubhodeep1
+
 ### `.github/workflows/workspace-cache-maintenance.yml`
 
 - **Introduced in:** #3066 (2026-06-02)
