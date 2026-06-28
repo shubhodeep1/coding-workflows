@@ -47,7 +47,28 @@ env:
   ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
 
 jobs:
+  derive_check_name_key:
+    if: >-
+      vars.CHECK_FAILURE_TRIAGE_ENABLED == 'true' &&
+      inputs.pr_number != '' &&
+      contains(fromJson('["failure","timed_out"]'), inputs.check_conclusion) &&
+      !contains(inputs.check_name, 'Check Failure Triage')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      check_name_key: ${{ steps.hash_check_name.outputs.check_name_key }}
+    steps:
+      - name: Hash check name for concurrency key
+        id: hash_check_name
+        env:
+          CHECK_NAME: ${{ inputs.check_name }}
+        run: |
+          set -euo pipefail
+          check_name_key="$(printf '%s' "${CHECK_NAME}" | sha256sum | awk '{print $1}')"
+          echo "check_name_key=${check_name_key}" >> "$GITHUB_OUTPUT"
+
   triage:
+    needs: derive_check_name_key
     # Cost gate: do nothing unless the consumer repo has explicitly opted in,
     # and only for genuine failure conclusions on a real PR. The job is skipped
     # (no checkout / no codex install) when disabled.
@@ -59,10 +80,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
-      # One in-flight triage per repo + PR + check. cancel-in-progress: false
-      # means a check that is already being triaged keeps its run; a second
-      # event queues and then no-ops via the open-issue dedup in the script.
-      group: ai-check-triage-${{ github.repository }}-${{ inputs.pr_number }}-${{ inputs.check_name }}
+      # One in-flight triage per repo + PR + check. The hashed check-name
+      # suffix preserves per-check serialization without exposing the raw
+      # check name to GitHub's concurrency-group length/character limits.
+      # cancel-in-progress: false means a check that is already being triaged
+      # keeps its run; a second event queues and then no-ops via the
+      # open-issue dedup in the script.
+      group: ai-check-triage-${{ github.repository }}-${{ inputs.pr_number }}-${{ needs.derive_check_name_key.outputs.check_name_key }}
       cancel-in-progress: false
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -89,7 +113,23 @@ jobs:
         id: pr_origin_guard
         run: |
           set -euo pipefail
-          HEAD_REPO="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ inputs.pr_number }}" --jq '.head.repo.full_name // ""')"
+          pr_payload="$(mktemp)"
+          trap 'rm -f "${pr_payload}"' EXIT
+
+          attempt=1
+          while true; do
+            if gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ inputs.pr_number }}" > "${pr_payload}" 2>/dev/null; then
+              break
+            fi
+            if [ "${attempt}" -ge 3 ]; then
+              echo "::error::Unable to determine PR head repository for PR #${{ inputs.pr_number }} after ${attempt} attempts"
+              exit 1
+            fi
+            sleep $((attempt * 2))
+            attempt=$((attempt + 1))
+          done
+
+          HEAD_REPO="$(jq -r '.head.repo.full_name // ""' "${pr_payload}" 2>/dev/null || echo '')"
           if [ -z "${HEAD_REPO}" ] || [ "${HEAD_REPO}" = "null" ]; then
             echo "::error::Unable to determine PR head repository for PR #${{ inputs.pr_number }}"
             exit 1

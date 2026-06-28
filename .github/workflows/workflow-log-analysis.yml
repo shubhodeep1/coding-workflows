@@ -59,7 +59,7 @@ concurrency:
 
 jobs:
   collect-logs:
-    if: ${{ github.event_name != 'schedule' || (env.WORKFLOW_RETRO_ENABLED == 'true' && github.event.schedule == env.WORKFLOW_RETRO_CRON) }}
+    if: ${{ github.event_name != 'schedule' || ((vars.WORKFLOW_RETRO_ENABLED || 'false') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -189,7 +189,7 @@ jobs:
 
   weekly-retro:
     needs: collect-logs
-    if: ${{ github.event_name == 'schedule' && env.WORKFLOW_RETRO_ENABLED == 'true' && github.event.schedule == env.WORKFLOW_RETRO_CRON }}
+    if: ${{ github.event_name == 'schedule' && (vars.WORKFLOW_RETRO_ENABLED || 'false') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:

@@ -63,7 +63,20 @@ type gh_api_json_to_file >/dev/null 2>&1 || gh_api_json_to_file()
 	shift
 	"$@" > "${_gh_api_json_outfile}"
 }
-type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() { gh api "$@"; }
+type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq()
+{
+	local _safe_gh_jq_tmp
+	if ! _safe_gh_jq_tmp=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null); then
+		return 1
+	fi
+	if gh api "$@" > "${_safe_gh_jq_tmp}"; then
+		cat "${_safe_gh_jq_tmp}"
+		rm -f "${_safe_gh_jq_tmp}"
+		return 0
+	fi
+	rm -f "${_safe_gh_jq_tmp}"
+	return 1
+}
 source scripts/tg_helpers.sh 2>/dev/null || true
 type tg_send_msg >/dev/null 2>&1 || tg_send_msg() { :; }
 
@@ -177,7 +190,12 @@ case "${PARENT_ISSUE}" in
 esac
 
 if [ -n "${PARENT_ISSUE}" ]; then
-	PARENT_BODY="$(_safe_gh_jq "repos/${REPO}/issues/${PARENT_ISSUE}" --jq '.body // ""' 2>/dev/null || echo '')"
+	if PARENT_BODY="$(_safe_gh_jq "repos/${REPO}/issues/${PARENT_ISSUE}" --jq '.body // ""' 2>/dev/null)"; then
+		:
+	else
+		log "warn parent_body_fetch_failed issue=${PARENT_ISSUE}"
+		PARENT_BODY=""
+	fi
 	PGEN="$(printf '%s' "${PARENT_BODY}" | sed -n "s/.*${MARKER_PREFIX}gen=\([0-9]\{1,\}\).*/\1/p" | head -1)"
 	PROOT="$(printf '%s' "${PARENT_BODY}" | sed -n "s/.*${MARKER_PREFIX}root=\([0-9a-f]\{64\}\).*/\1/p" | head -1)"
 	if [[ "${PGEN}" =~ ^[0-9]+$ ]]; then
