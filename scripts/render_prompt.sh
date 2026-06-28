@@ -6,10 +6,42 @@ if [ "$#" -ne 1 ]; then
 	exit 1
 fi
 
-PROMPT_FILE="$1"
+PROMPT_FILE_ARG="$1"
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-if [ ! -f "${PROMPT_FILE}" ]; then
-	echo "Prompt file not found: ${PROMPT_FILE}" >&2
+resolve_prompt_file()
+{
+	local prompt_path="$1"
+	local candidate=""
+	local script_root=""
+	local -a candidates=()
+
+	if [ -f "${prompt_path}" ]; then
+		printf '%s\n' "${prompt_path}"
+		return 0
+	fi
+
+	if [[ "${prompt_path}" = /* ]]; then
+		return 1
+	fi
+
+	script_root="$(dirname -- "${SCRIPT_DIR}")"
+	candidates=(
+		"${script_root}/${prompt_path}"
+	)
+
+	for candidate in "${candidates[@]}"; do
+		if [ -f "${candidate}" ]; then
+			printf '%s\n' "${candidate}"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+if ! PROMPT_FILE="$(resolve_prompt_file "${PROMPT_FILE_ARG}")"; then
+	echo "Prompt file not found: ${PROMPT_FILE_ARG}" >&2
 	exit 1
 fi
 
@@ -57,7 +89,6 @@ MODEL_FAMILY_OVERLAY_BLOCK="${MODEL_FAMILY_OVERLAY:-}"
 # Unresolved SERENA_TOOL_HINTS placeholder in rendered output for ${PROMPT_FILE}
 # Unresolved MODEL_FAMILY_OVERLAY placeholder in rendered output for ${PROMPT_FILE}
 
-SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROMPT_BASENAME="$(basename -- "${PROMPT_FILE}")"
 MODE_NAME="${PROMPT_BASENAME%.*}"
 
@@ -83,9 +114,80 @@ resolve_render_prompt_py()
 	return 1
 }
 
+resolve_assemble_prompt_sh()
+{
+	local candidate=""
+	local -a candidates=()
+
+	candidates+=(
+		"${SCRIPT_DIR}/assemble_prompt.sh"
+		"$(pwd)/.codex-workflow-src/scripts/assemble_prompt.sh"
+		"$(pwd)/.codex-workflow-src-main/scripts/assemble_prompt.sh"
+	)
+
+	for candidate in "${candidates[@]}"; do
+		if [ -f "${candidate}" ]; then
+			printf '%s\n' "${candidate}"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+resolve_assembly_source_path()
+{
+	local prompt_path="$1"
+	local prompt_dir=""
+	local prompt_dir_name=""
+	local template_candidate=""
+
+	prompt_dir="$(dirname -- "${prompt_path}")"
+	prompt_dir_name="$(basename -- "${prompt_dir}")"
+	if [ "${prompt_dir_name}" = "_templates" ]; then
+		printf '%s\n' "${prompt_path}"
+		return 0
+	fi
+	if [ "${prompt_dir_name}" = "prompts" ]; then
+		template_candidate="${prompt_dir}/_templates/$(basename -- "${prompt_path}")"
+		if [ -f "${template_candidate}" ]; then
+			printf '%s\n' "${template_candidate}"
+			return 0
+		fi
+	fi
+	printf '%s\n' "${prompt_path}"
+}
+
+resolve_prompt_root_dir()
+{
+	local prompt_path="$1"
+	local prompt_dir=""
+	local prompt_dir_name=""
+
+	prompt_dir="$(dirname -- "${prompt_path}")"
+	prompt_dir_name="$(basename -- "${prompt_dir}")"
+	if [ "${prompt_dir_name}" = "prompts" ]; then
+		printf '%s\n' "${prompt_dir}"
+		return 0
+	fi
+	if [ "${prompt_dir_name}" = "_templates" ] && [ "$(basename -- "$(dirname -- "${prompt_dir}")")" = "prompts" ]; then
+		printf '%s\n' "$(dirname -- "${prompt_dir}")"
+		return 0
+	fi
+	printf '%s\n' "${prompt_dir}"
+}
+
+cleanup_assembled_prompt()
+{
+	if [ -n "${ASSEMBLED_PROMPT_FILE:-}" ] && [ -f "${ASSEMBLED_PROMPT_FILE}" ]; then
+		rm -f "${ASSEMBLED_PROMPT_FILE}"
+	fi
+}
+
 collect_prompt_placeholders()
 {
-	"${PYTHON_BIN}" - <<'PY' "${PROMPT_FILE}"
+	local placeholder_source_file="$1"
+	"${PYTHON_BIN}" - <<'PY' "${placeholder_source_file}"
 import pathlib
 import re
 import sys
@@ -121,13 +223,37 @@ if ! RENDER_PROMPT_PY="$(resolve_render_prompt_py)"; then
 	exit 1
 fi
 
+RENDER_INPUT_FILE="${PROMPT_FILE}"
+PLACEHOLDER_SOURCE_FILE="${PROMPT_FILE}"
+ASSEMBLED_PROMPT_FILE=""
+
+if [ "${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" = "true" ]; then
+	ASSEMBLY_SOURCE_FILE="$(resolve_assembly_source_path "${PROMPT_FILE}")"
+	if [ "${ASSEMBLY_SOURCE_FILE}" != "${PROMPT_FILE}" ] || [ "$(basename -- "$(dirname -- "${PROMPT_FILE}")")" = "_templates" ]; then
+		if ! ASSEMBLE_PROMPT_SH="$(resolve_assemble_prompt_sh)"; then
+			echo "assemble_prompt.sh not found for ${PROMPT_FILE}" >&2
+			exit 1
+		fi
+		PROMPT_ROOT_DIR="$(resolve_prompt_root_dir "${ASSEMBLY_SOURCE_FILE}")"
+		ASSEMBLED_PROMPT_FILE="$(mktemp "${PROMPT_ROOT_DIR}/.${PROMPT_BASENAME}.assembled.XXXXXX")"
+		trap cleanup_assembled_prompt EXIT
+		"${ASSEMBLE_PROMPT_SH}" "${PROMPT_FILE}" > "${ASSEMBLED_PROMPT_FILE}"
+		RENDER_INPUT_FILE="${ASSEMBLED_PROMPT_FILE}"
+		PLACEHOLDER_SOURCE_FILE="${ASSEMBLED_PROMPT_FILE}"
+	fi
+fi
+
 declare -A RENDER_VARS_SEEN=()
 declare -a RENDER_ARGS=()
 
 RENDER_ARGS=(
-	"${PYTHON_BIN}" "${RENDER_PROMPT_PY}" "${PROMPT_FILE}"
+	"${PYTHON_BIN}" "${RENDER_PROMPT_PY}" "${RENDER_INPUT_FILE}"
 	--legacy-mode-name "${MODE_NAME}"
 )
+
+if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
+	RENDER_ARGS+=(--input-already-assembled)
+fi
 
 append_render_var "WORKFLOW_EDIT_RESTRICTION" "${WORKFLOW_EDIT_RESTRICTION_LINE}"
 append_render_var "SEMBLE_PREFETCH" "${SEMBLE_PREFETCH_BLOCK}"
@@ -139,6 +265,11 @@ while IFS= read -r placeholder_name; do
 	if [ "${!placeholder_name+x}" = "x" ]; then
 		append_render_var "${placeholder_name}" "${!placeholder_name}"
 	fi
-done < <(collect_prompt_placeholders)
+done < <(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")
+
+if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
+	"${RENDER_ARGS[@]}"
+	exit 0
+fi
 
 exec "${RENDER_ARGS[@]}"

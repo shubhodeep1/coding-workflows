@@ -53,6 +53,17 @@ Copy this block when adding a new entry:
 
 ## Entries
 
+### `scripts/workflow_retro.py`
+
+- **Introduced in:** #3532 (2026-06-26)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh workflow view workflow-log-analysis.yml -R shubhodeep1/coding-workflows` confirms the scheduled retro path still exists and still invokes `scripts/workflow_retro.py`.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_retro.py` returns exit code 0 after the focused retro-script assertions pass.
+  - `rg -n 'workflow_retro\.py' .github/workflows/workflow-log-analysis.yml tests/test_workflow_retro.py` shows the live scheduled caller plus its focused contract coverage.
+- **Owner:** @shubhodeep1
+
 ### `scripts/validation_discovery_bootstrap.py` + `.github/workflows/validation-refresh.yml` discovery dispatch
 
 - **Introduced in:** claude/eloquent-ramanujan-5Mud6 (2026-05-26)

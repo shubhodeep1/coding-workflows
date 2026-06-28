@@ -48,6 +48,213 @@ is_truthy()
 	esac
 }
 
+first_linked_issue_number()
+{
+	if ! command -v python3 >/dev/null 2>&1; then
+		return 0
+	fi
+
+	PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' 2>/dev/null || true
+import json
+import os
+
+for raw_payload, object_key in (
+	(os.environ.get("LINKED_ISSUES_JSON", "[]"), "number"),
+	(os.environ.get("LINKED_ISSUE_FALLBACK_NUMBERS_JSON", "[]"), None),
+):
+	try:
+		payload = json.loads(raw_payload)
+	except Exception:
+		payload = []
+	if not isinstance(payload, list) or not payload:
+		continue
+	first = payload[0]
+	if object_key is not None:
+		if not isinstance(first, dict):
+			continue
+		first = first.get(object_key)
+	if isinstance(first, int) and first > 0:
+		print(first)
+		break
+PY
+}
+
+emit_lessons_learned_records_from_consolidator_output()
+{
+	local issue_number=""
+	local telemetry_json=""
+
+	if ! is_truthy "${AI_MEMORY_ENABLED:-true}" || ! is_truthy "${LESSONS_LEARNED_ENABLED:-true}"; then
+		return 0
+	fi
+	[ -s "${CONSOLIDATOR_RAW_FILE}" ] || return 0
+	if ! command -v python3 >/dev/null 2>&1; then
+		return 0
+	fi
+
+	issue_number="$(first_linked_issue_number || true)"
+	telemetry_json="$({
+		PYTHONDONTWRITEBYTECODE=1 \
+		PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+		python3 - "${PWD}" "${CONSOLIDATOR_RAW_FILE}" "${issue_number}" <<'PY'
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+from ai_memory_lib import persist_memory_operation, record_lessons_learned, resolve_memory_root_dir
+
+
+def safe_int(value: str | None) -> int | None:
+	text = str(value or "").strip()
+	if not text:
+		return None
+	try:
+		parsed = int(text)
+	except ValueError:
+		return None
+	return parsed if parsed > 0 else None
+
+
+def split_csv_paths(value: str) -> list[str]:
+	paths: list[str] = []
+	for item in value.split(","):
+		path = item.strip()
+		if path and path not in paths:
+			paths.append(path)
+	return paths
+
+
+repo_root = Path(sys.argv[1]).resolve()
+raw_path = Path(sys.argv[2])
+issue_number = safe_int(sys.argv[3])
+pr_number = safe_int(os.environ.get("PR_NUMBER"))
+memory_branch = str(os.environ.get("AI_MEMORY_BRANCH", "ai-memory") or "ai-memory").strip() or "ai-memory"
+memory_root_relative = str(os.environ.get("AI_MEMORY_ROOT", "ai-memory") or "ai-memory").strip() or "ai-memory"
+push_retries = safe_int(os.environ.get("AI_MEMORY_PUSH_RETRIES")) or 8
+
+lines = raw_path.read_text(encoding="utf-8", errors="replace").splitlines()
+block_start = re.compile(r"^=== ISSUE (.+) ===$")
+block_end = re.compile(r"^=== END ISSUE .+ ===$")
+closed_blocks: list[tuple[str, str]] = []
+current_issue_id: str | None = None
+current_lines: list[str] = []
+
+for line in lines:
+	start_match = block_start.match(line)
+	if start_match:
+		current_issue_id = start_match.group(1).strip()
+		current_lines = []
+		continue
+	if current_issue_id is not None and block_end.match(line):
+		closed_blocks.append((current_issue_id, "\n".join(current_lines)))
+		current_issue_id = None
+		current_lines = []
+		continue
+	if current_issue_id is not None:
+		current_lines.append(line)
+
+
+def line_value(block_text: str, field_name: str) -> str:
+	match = re.search(rf"^{re.escape(field_name)}:\s*(.*)$", block_text, re.MULTILINE)
+	return match.group(1).strip() if match else ""
+
+
+lessons: list[dict[str, object]] = []
+for issue_id, block_text in closed_blocks:
+	classification = line_value(block_text, "CLASSIFICATION").lower()
+	rejection_kind = line_value(block_text, "REJECTION_KIND").lower()
+	if classification != "non-actionable" or rejection_kind != "out-of-scope":
+		continue
+
+	section_match = re.search(r"^EVIDENCE_FILES_TOUCHED:\n((?:  .*\n?)*)", block_text, re.MULTILINE)
+	section_text = section_match.group(1) if section_match else ""
+	cited_path = ""
+	files_touched = ""
+	for section_line in section_text.splitlines():
+		stripped = section_line.strip()
+		if stripped.startswith("cited_path:"):
+			cited_path = stripped.split(":", 1)[1].strip()
+		elif stripped.startswith("files_touched:"):
+			files_touched = stripped.split(":", 1)[1].strip()
+
+	files_touched_list = split_csv_paths(files_touched)
+	anchor_file = line_value(block_text, "FILE")
+	anchor_lines = line_value(block_text, "LINES")
+	anchor_ref = anchor_file
+	if anchor_file and anchor_lines:
+		anchor_ref = f"{anchor_file}:{anchor_lines}"
+
+	tags: list[str] = []
+	for tag in [cited_path, anchor_file, *files_touched_list]:
+		if tag and tag not in tags:
+			tags.append(tag)
+	if not tags:
+		continue
+
+	lesson_parts = [f"Consolidator rejected issue {issue_id} as out-of-scope"]
+	if anchor_ref:
+		lesson_parts.append(f"anchor={anchor_ref}")
+	if cited_path:
+		lesson_parts.append(f"cited_path={cited_path}")
+	if files_touched_list:
+		lesson_parts.append(f"files_touched={', '.join(files_touched_list)}")
+
+	lessons.append(
+		{
+			"lesson_kind": "review_finding_outside_plan_scope",
+			"lesson_text": "; ".join(lesson_parts) + ".",
+			"tags": tags,
+		}
+	)
+
+telemetry = {
+	"op": "write_lessons_learned",
+	"ok": True,
+	"phase": "review_autofix",
+	"source": "review_consolidate",
+	"issue_number": issue_number,
+	"pr_number": pr_number,
+	"count": 0,
+	"did_push": False,
+}
+
+if lessons:
+	def operation(clone_dir: Path) -> dict[str, object]:
+		memory_root = resolve_memory_root_dir(clone_dir, memory_root_relative)
+		records = record_lessons_learned(
+			memory_root,
+			issue_number=issue_number,
+			pr_number=pr_number,
+			phase="review_autofix",
+			lessons=lessons,
+		)
+		return {"records": records}
+
+	result = persist_memory_operation(
+		repo_root,
+		memory_branch=memory_branch,
+		memory_root_relative=memory_root_relative,
+		push_retries=push_retries,
+		commit_message="ai-memory: record lessons learned [review_autofix consolidator]",
+		operation=operation,
+	)
+	records = (result.get("operation_result") or {}).get("records") or []
+	telemetry["count"] = len(records)
+	telemetry["did_push"] = bool(result.get("did_push", False))
+
+print(json.dumps(telemetry, ensure_ascii=True, sort_keys=True))
+PY
+	} 2>&1)" || {
+		printf '%s\n' '::warning::review_consolidate lessons-learned write failed; continuing fail-open' >&2
+		printf '%s\n' 'AI_MEMORY_TELEMETRY: {"count":0,"fail_open":true,"ok":false,"op":"write_lessons_learned","phase":"review_autofix","source":"review_consolidate"}' >&2
+		return 0
+	}
+
+	[ -n "${telemetry_json}" ] && printf 'AI_MEMORY_TELEMETRY: %s\n' "${telemetry_json}" >&2
+}
+
 emit_context_budget_warn_for_prompt()
 {
 	local phase="$1"
@@ -216,6 +423,8 @@ REVIEW_CONSOLIDATOR_TIMEOUT_SECS="${REVIEW_CONSOLIDATOR_TIMEOUT_SECS:-300}"
 REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT="${REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT:-16000}"
 REVIEW_LEDGER_ENABLED="${REVIEW_LEDGER_ENABLED:-1}"
 REVIEW_LEDGER_REREVIEW_ENABLED="${REVIEW_LEDGER_REREVIEW_ENABLED:-0}"
+LESSONS_LEARNED_ENABLED="${LESSONS_LEARNED_ENABLED:-true}"
+REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED="${REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED:-true}"
 
 RUNTIME_DIR="${RUNTIME_DIR:?RUNTIME_DIR is required}"
 PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-consolidator.txt"
@@ -228,6 +437,8 @@ JUDGE_INTERIM_PRIORS_FILE="${JUDGE_INTERIM_PRIORS_FILE:-${RUNTIME_DIR}/judge_int
 REVIEW_LEDGER_PATH="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}"
 PRIOR_ROUND_DECISIONS_FILE="${RUNTIME_DIR}/prior_round_decisions.txt"
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
+SLOP_SCAN_FINDINGS_FILE="${SLOP_SCAN_FINDINGS_FILE:-${GITHUB_WORKSPACE:-$PWD}/.ai/slop_scan/findings.json}"
+AGENTS_MD_MATERIALITY_RESULT_FILE="${AGENTS_MD_MATERIALITY_RESULT_FILE:-${RUNTIME_DIR}/agents_md_materiality_result.json}"
 
 # Validate REVIEW_CONSOLIDATOR_REASONING is a known reasoning level.
 # Prevent invalid values from breaking TOML config or shell quoting.
@@ -290,6 +501,14 @@ render_prior_round_decisions_file "${REVIEW_LEDGER_PATH}" "${PRIOR_ROUND_DECISIO
 				printf 'UNTRUSTED_DATA: %s\n' "${line}"
 			done < "${PRIOR_ROUND_DECISIONS_FILE}"
 			echo "=== END PRIOR ROUND DECISIONS ==="
+			echo
+		fi
+		if [ -f "${SLOP_SCAN_FINDINGS_FILE}" ]; then
+			emit_consolidator_untrusted_file 'SLOP SCAN FINDINGS' "${SLOP_SCAN_FINDINGS_FILE}"
+			echo
+		fi
+		if is_truthy "${REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED}" && [ -s "${AGENTS_MD_MATERIALITY_RESULT_FILE}" ]; then
+			emit_consolidator_untrusted_file 'AGENTS MD MATERIALITY RESULT' "${AGENTS_MD_MATERIALITY_RESULT_FILE}"
 			echo
 		fi
 	echo "=== REVIEWER BUNDLE ==="
@@ -433,6 +652,8 @@ if [ "${cmd_rc}" -ne 0 ] || [ ! -s "${CONSOLIDATOR_RAW_FILE}" ]; then
 		output_bytes=0
 	fi
 fi
+
+emit_lessons_learned_records_from_consolidator_output
 
 review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} input_bytes=${input_bytes} output_bytes=${output_bytes} wall_secs=${wall_secs} exit_code=${cmd_rc} capped=${capped} failopen=${failopen}"
 

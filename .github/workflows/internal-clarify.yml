@@ -12,5 +12,6 @@ permissions:
 
 jobs:
   clarify:
+    if: ${{ !contains(github.event.issue.labels.*.name, 'ai:security-audit') && !contains(github.event.issue.labels.*.name, 'ai:retro') }}
     uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@main
     secrets: inherit

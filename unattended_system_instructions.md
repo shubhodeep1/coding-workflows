@@ -63,7 +63,10 @@ the deliverable, encode assumptions as code comments, or emit `BLOCKED:`.
 
 When requirements are ambiguous, choose the safest conservative interpretation,
 minimize change scope, and encode assumptions as code comments in the file
-you're editing. Never invent requirements. Never broaden scope.
+you're editing. Never invent requirements. Never broaden scope. "Minimum safe
+change" is scoped to the scope-mode chosen by the approved plan phase; during
+implementation and review, silently shrinking scope below that approved plan is
+forbidden.
 
 Interactive STOP-and-ASK is forbidden in every phase. The clarify and plan
 phases may emit clarification questions as part of their structured output
