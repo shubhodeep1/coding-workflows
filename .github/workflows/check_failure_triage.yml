@@ -252,10 +252,8 @@ jobs:
         if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         run: |
           set -euo pipefail
-          bash scripts/write_codex_config.sh \
-            --model "${MODEL_EDITOR}" \
-            --reasoning "${MODEL_REASONING_EFFORT}"
-          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+          source scripts/codex_helpers.sh
+          codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low"
 
       - name: Create runtime workspace
         if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
