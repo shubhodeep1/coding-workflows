@@ -422,7 +422,7 @@ def collect_scan_result(
 			suppressed_findings.extend(block_suppressed)
 			errors.extend(block_errors)
 
-	def finding_sort_key(finding: dict[str, Any]) -> tuple[Any, Any, Any]:
+	def finding_sort_key(finding: dict[str, Any]) -> tuple[str, int, str]:
 		return (finding["path"], finding["line"], finding["rule_id"])
 
 	result: dict[str, Any] = {

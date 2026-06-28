@@ -1,4 +1,5 @@
 ai-cancel-on-pr-close.yml
+ai-check-failure-triage.yml
 ai-clarify.yml
 ai-implement.yml
 ai-issue-pr-status.yml

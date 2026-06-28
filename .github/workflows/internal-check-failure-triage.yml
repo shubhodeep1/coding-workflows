@@ -1,0 +1,28 @@
+name: "Internal: AI Check Failure Triage"
+
+on:
+  check_run:
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  triage:
+    if: >-
+      vars.CHECK_FAILURE_TRIAGE_ENABLED == 'true' &&
+      (github.event.check_run.conclusion == 'failure' ||
+       github.event.check_run.conclusion == 'timed_out') &&
+      github.event.check_run.pull_requests[0] != null &&
+      !contains(github.event.check_run.name, 'Check Failure Triage')
+    uses: shubhodeep1/coding-workflows/.github/workflows/check_failure_triage.yml@main
+    with:
+      pr_number: ${{ github.event.check_run.pull_requests[0].number }}
+      check_run_id: ${{ github.event.check_run.id }}
+      check_name: ${{ github.event.check_run.name }}
+      check_conclusion: ${{ github.event.check_run.conclusion }}
+      head_sha: ${{ github.event.check_run.head_sha }}
+      details_url: ${{ github.event.check_run.details_url }}
+    secrets: inherit

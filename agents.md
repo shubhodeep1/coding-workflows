@@ -46,6 +46,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
     self-heal a validation harness for the implemented change.
 12. **workflow log analysis** (`workflow-log-analysis.yml`,
     `mode-workflow-*.txt`) — periodic audit of workflow runs.
+13. **check failure triage** (`check_failure_triage.yml`,
+    `internal-check-failure-triage.yml`, `scripts/check_failure_triage.sh`,
+    `prompts/mode-check-failure-triage.txt`) — triggers on `check_run:
+    completed` failures on a PR; the diagnosis model analyses the failing
+    check's logs and opens a GitHub issue (label `ai:check-triage`) describing
+    the root cause + suggested fix, which the clarify→…→review pipeline then
+    picks up. Opt-in per repo via `CHECK_FAILURE_TRIAGE_ENABLED`; never pushes
+    code itself. De-dupes one in-flight triage per repo+PR+check and caps the
+    auto-fix lineage at `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` generations
+    (escalates with `ai:check-triage-escalated` + Telegram at the cap).
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
 choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
@@ -177,7 +187,7 @@ Cycle-local caches that must not be re-fetched per iteration:
 PROFILE.default=full
 PROFILE.name=core manifest=workflow-templates/profiles/core.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml
 PROFILE.name=standard manifest=workflow-templates/profiles/standard.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml,ai-orchestrate.yml,ai-orchestrate-poll.yml,ai-orchestrate-clarify-respond.yml,ai-validate.yml,ai-sync-labels.yml,review_rb_judge_dispatch.yml
-PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-cancel-on-pr-close.yml,ai-clarify.yml,ai-implement.yml,ai-issue-pr-status.yml,ai-memory-maintenance.yml,ai-orchestrate-clarify-respond.yml,ai-orchestrate-poll.yml,ai-orchestrate.yml,ai-plan.yml,ai-review.yml,ai-sync-labels.yml,ai-update-workflows.yml,ai-validate.yml,review_rb_judge_dispatch.yml
+PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-cancel-on-pr-close.yml,ai-check-failure-triage.yml,ai-clarify.yml,ai-implement.yml,ai-issue-pr-status.yml,ai-memory-maintenance.yml,ai-orchestrate-clarify-respond.yml,ai-orchestrate-poll.yml,ai-orchestrate.yml,ai-plan.yml,ai-review.yml,ai-sync-labels.yml,ai-update-workflows.yml,ai-validate.yml,review_rb_judge_dispatch.yml
 
 ---
 
@@ -375,6 +385,7 @@ and shipped:
 - `SERENA_FALLBACK`
 - `SERENA_PROBE`
 - `drift-audit:`
+- `CHECK_TRIAGE`
 
 LOG_PREFIX.name=LABEL_REPAIR
 LOG_PREFIX.name=LABEL_REPAIR_DIFF
@@ -441,6 +452,7 @@ LOG_PREFIX.name=SERENA_QUERY
 LOG_PREFIX.name=SERENA_FALLBACK
 LOG_PREFIX.name=SERENA_PROBE
 LOG_PREFIX.name=drift-audit:
+LOG_PREFIX.name=CHECK_TRIAGE
 
 ---
 
