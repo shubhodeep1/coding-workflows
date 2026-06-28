@@ -218,7 +218,12 @@ fi
 
 # --- Duplicate-issue dedup -------------------------------------------------
 
-OPEN_TRIAGE="$(gh_retry gh issue list --repo "${REPO}" --state open --label "${TRIAGE_LABEL}" --limit 200 --json number,body 2>/dev/null || echo '[]')"
+OPEN_TRIAGE="$(gh_retry gh api --paginate --method GET "repos/${REPO}/issues" \
+	-f state=open \
+	-f labels="${TRIAGE_LABEL}" \
+	-F per_page=100 \
+	--jq '[.[] | select(.pull_request | not) | {number, body: (.body // "")}]' 2>/dev/null \
+	| jq -s 'add // []' 2>/dev/null || echo '[]')"
 EXISTING="$(printf '%s' "${OPEN_TRIAGE}" | jq -r --arg fp "fp=${FP}" '[.[] | select((.body // "") | contains($fp)) | .number] | first // empty' 2>/dev/null || echo '')"
 if [ -n "${EXISTING}" ]; then
 	log "skip reason=duplicate_open_issue issue=${EXISTING} fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME}"
@@ -315,12 +320,14 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 } > "${PROMPT_FILE}"
 
 if command -v codex >/dev/null 2>&1; then
-	if cat "${PROMPT_FILE}" | codex --ask-for-approval never \
+	if env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
+		codex --ask-for-approval never \
 		-c model_verbosity="${MODEL_VERBOSITY:-low}" \
 		-c include_apply_patch_tool=true \
 		exec --skip-git-repo-check \
 		--model "${MODEL_EDITOR:-openai/gpt-5.4}" \
 		--sandbox danger-full-access \
+		< "${PROMPT_FILE}" \
 		> "${DIAG_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
 		:
 	else
