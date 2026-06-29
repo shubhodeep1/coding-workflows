@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1348-1382 | severity=high | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Hardcoded script list must be manually kept in sync with REQUIRED_BOOTSTRAP_SCRIPTS in stage_workflow_support.sh\n  WHY: If stage_workflow_support.sh adds a new required script but this list is not updated, the new script will not be backfilled for older PR branches, causing preflight failures.\n- .github/workflows/review_autofix.yml:1348-1382 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: When a script exists in the hardcoded list but is missing from both source directories, the loop silently continues without warning\n  WHY: A missing required bootstrap script will only surface later as a confusing preflight failure; the backfill step should warn when it cannot satisfy an expected dependency.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:1348-1382 | severity=high | confidence=4\n  PROBLEM: Hardcoded script list must be manually kept in sync with REQUIRED_BOOTSTRAP_SCRIPTS in stage_workflow_support.sh\n  WHY: If stage_workflow_support.sh adds a new required script but this hardcoded list is not updated, the new script won't be backfilled when PR branches predate its introduction, causing preflight failures\n- .github/workflows/review_autofix.yml:1348-1382 | severity=low | confidence=3\n  PROBLEM: When a script exists in the hardcoded list but is missing from both source directories, the loop silently continues without warning\n  WHY: A missing required bootstrap script that isn't detected will cause a later preflight failure with a confusing error message; the backfill code should alert when it cannot satisfy a dependency it expects to provide\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "b7efbfcd4b2e80b5c906c4ede090e7034b2e85524916d7c616a215b965e506b5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28342404538",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28342404538",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260629012851_86fdc3eb0b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28342404538"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-29T01:28:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
