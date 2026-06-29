@@ -152,9 +152,17 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert "assemble_prompt.sh" in required_bootstrap_line
 	assert "render_prompt.py" not in required_bootstrap_line
 	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh render_prompt.py"' in stage_helper
-	assert 'check_required_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh"' in preflight_block
-	assert 'check_required_file "${SUPPORT_SCRIPTS_DIR}/assemble_prompt.sh"' in preflight_block
-	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.py"' in preflight_block
+	assert (
+		"REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-\n"
+		"    codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh\n"
+		"    review_run_reviewers.sh render_prompt.sh assemble_prompt.sh"
+	) in workflow
+	assert "REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-\n    render_prompt.py" in workflow
+	assert "for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS} ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do" in stage_step_block
+	assert 'for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS}; do' in preflight_block
+	assert 'check_required_file "${SUPPORT_SCRIPTS_DIR}/${f}"' in preflight_block
+	assert 'for f in ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do' in preflight_block
+	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/${f}"' in preflight_block
 	assert "for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do" in stage_helper
 	assert 'Optional Serena support asset ${f} is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_helper
 	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"' in stage_helper

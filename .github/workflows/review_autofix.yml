@@ -201,6 +201,14 @@ env:
   FINGERPRINT_QUARANTINE_RUNS_M: ${{ vars.FINGERPRINT_QUARANTINE_RUNS_M || '3' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
+  # Shared source of truth for the scripts the later preflight checks under
+  # SUPPORT_SCRIPTS_DIR. Keep the hard-required and soft-checked sets separate
+  # so the staging backfill and preflight stay in sync without conflating them.
+  REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-
+    codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh
+    review_run_reviewers.sh render_prompt.sh assemble_prompt.sh
+  REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-
+    render_prompt.py
 
 jobs:
   gate:
@@ -1348,6 +1356,33 @@ jobs:
 
           SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
+          SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
+
+          # Backfill the preflight-checked SUPPORT_SCRIPTS_DIR subset that the
+          # branch-pinned staging helper did not stage. review_autofix.yml runs
+          # @main, but stage_workflow_support.sh is sourced from the PR branch
+          # checkout (SCRIPT_REF). When the PR branch predates a commit that
+          # introduced a new preflight-checked script (e.g. assemble_prompt.sh,
+          # added in #3501), the stale helper never iterates that name, so it is
+          # never copied — and the helper's own main-snapshot fallback is skipped
+          # for the same reason. The shared REVIEW_PREFLIGHT_*_SUPPORT_SCRIPTS env
+          # vars are the single source of truth for this checked subset.
+          for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS} ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do
+            if [ -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
+              continue
+            fi
+            backfill_src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${backfill_src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              backfill_src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ -f "${backfill_src}" ]; then
+              install -m 0755 "${backfill_src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+              echo "::notice::Backfilled ${f} into the runtime support bundle from ${backfill_src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+            else
+              echo "::warning::Preflight support script ${f} was not staged and could not be backfilled from .codex-workflow-src/scripts or .codex-workflow-src-main/scripts; the later preflight step will report whether this is a hard or soft miss."
+            fi
+          done
+
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
             src=".codex-workflow-src/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
@@ -2643,13 +2678,12 @@ jobs:
           check_required_dir "${SUPPORT_SCRIPTS_DIR}"
           check_required_dir "${SUPPORT_PROMPTS_DIR}"
 
-          check_required_file "${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
-          check_required_file "${SUPPORT_SCRIPTS_DIR}/codex_stall_guard.sh"
-          check_required_file "${SUPPORT_SCRIPTS_DIR}/watchdog_helpers.sh"
-          check_required_file "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
-          check_required_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh"
-          check_required_file "${SUPPORT_SCRIPTS_DIR}/assemble_prompt.sh"
-          check_soft_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.py"
+          for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS}; do
+            check_required_file "${SUPPORT_SCRIPTS_DIR}/${f}"
+          done
+          for f in ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do
+            check_soft_file "${SUPPORT_SCRIPTS_DIR}/${f}"
+          done
           check_required_nonempty_file "${SUPPORT_INSTRUCTIONS_FILE}"
           check_required_file "./pre_assembled_static.txt"
           check_required_file "${PR_DIFF_FILE}"
