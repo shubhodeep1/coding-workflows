@@ -2,11 +2,11 @@
 # automatically when upstream templates change. To opt out of auto-updates,
 # set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
 #
-# This workflow is a no-op until you set the repository variable
-# CHECK_FAILURE_TRIAGE_ENABLED to 'true'. When enabled, a failing check on a
-# pull request is analysed by an LLM, which opens a GitHub issue describing the
-# failure and its root cause; the normal AI pipeline (clarify -> plan ->
-# implement -> review) then picks that issue up automatically.
+# This workflow is ENABLED BY DEFAULT. A failing check on a pull request is
+# analysed by an LLM, which opens a GitHub issue describing the failure and its
+# root cause; the normal AI pipeline (clarify -> plan -> implement -> review)
+# then picks that issue up automatically. To disable it for this repository,
+# set the repository variable CHECK_FAILURE_TRIAGE_ENABLED to 'false'.
 name: AI Check Failure Triage
 on:
   check_run:
@@ -18,7 +18,7 @@ permissions:
 jobs:
   triage:
     if: >-
-      vars.CHECK_FAILURE_TRIAGE_ENABLED == 'true' &&
+      vars.CHECK_FAILURE_TRIAGE_ENABLED != 'false' &&
       (github.event.check_run.conclusion == 'failure' ||
        github.event.check_run.conclusion == 'timed_out' ||
        github.event.check_run.conclusion == 'action_required') &&

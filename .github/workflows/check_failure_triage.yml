@@ -48,11 +48,12 @@ env:
 
 jobs:
   triage:
-    # Cost gate: do nothing unless the consumer repo has explicitly opted in,
-    # and only for genuine failure conclusions on a real PR. The job is skipped
-    # (no checkout / no codex install) when disabled.
+    # Enabled by default; a consumer opts OUT by setting
+    # CHECK_FAILURE_TRIAGE_ENABLED to 'false'. Only genuine failure conclusions
+    # on a real PR proceed; the job is skipped (no checkout / no codex install)
+    # otherwise.
     if: >-
-      vars.CHECK_FAILURE_TRIAGE_ENABLED == 'true' &&
+      vars.CHECK_FAILURE_TRIAGE_ENABLED != 'false' &&
       inputs.pr_number != '' &&
       contains(fromJson('["failure","timed_out","action_required"]'), inputs.check_conclusion) &&
       !contains(inputs.check_name, 'Check Failure Triage')
@@ -72,7 +73,7 @@ jobs:
       MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CHECK_TRIAGE || 'xhigh' }}
       MODEL_VERBOSITY: ${{ vars.VERBOSITY_CHECK_TRIAGE || 'low' }}
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
-      CHECK_FAILURE_TRIAGE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_ENABLED || 'false' }}
+      CHECK_FAILURE_TRIAGE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_ENABLED || 'true' }}
       CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH: ${{ vars.CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH || '3' }}
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
       TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}

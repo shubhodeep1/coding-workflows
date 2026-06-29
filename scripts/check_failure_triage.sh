@@ -38,7 +38,7 @@
 #   CHECK_TRIAGE_CHECK_RUN_ID    check-run id
 #
 # Optional env (have defaults):
-#   CHECK_FAILURE_TRIAGE_ENABLED             "true" to act; anything else = no-op
+#   CHECK_FAILURE_TRIAGE_ENABLED             "false" to disable; default on
 #   CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH   max auto-fix generations (default 3)
 #   MODEL_EDITOR                             diagnosis model (default openai/gpt-5.4)
 #   MODEL_VERBOSITY                          codex verbosity (default low)
@@ -62,7 +62,7 @@ type tg_send_msg >/dev/null 2>&1 || tg_send_msg() { :; }
 
 # --- Config ----------------------------------------------------------------
 
-ENABLED="${CHECK_FAILURE_TRIAGE_ENABLED:-false}"
+ENABLED="${CHECK_FAILURE_TRIAGE_ENABLED:-true}"
 MAX_DEPTH="${CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH:-3}"
 case "${MAX_DEPTH}" in
 	''|*[!0-9]*)
@@ -88,8 +88,8 @@ RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${REPO}/actions/runs/${GITHUB_
 
 # --- Gates -----------------------------------------------------------------
 
-if [ "${ENABLED}" != "true" ]; then
-	log "skip reason=disabled (set CHECK_FAILURE_TRIAGE_ENABLED=true to enable) repo=${REPO}"
+if [ "${ENABLED}" = "false" ]; then
+	log "skip reason=disabled (CHECK_FAILURE_TRIAGE_ENABLED=false) repo=${REPO}"
 	exit 0
 fi
 
