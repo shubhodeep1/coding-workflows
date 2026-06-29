@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_semble_contract.py:155-157 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The contract test still asserts literal check_required_file/check_soft_file calls that the loop refactor removed.\n  WHY: The workflow now uses env-var-driven loops, so the assertions fail with AssertionError and block CI.\n- .github/workflows/review_autofix.yml:1376-1378 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: When a listed script is missing from both the branch copy and the main snapshot, the backfill step only emits a warning and continues.\n  WHY: That defers failure attribution until the later preflight step; one reviewer disputed the defect as acceptable layering, but the staging step itself does not surface a hard miss.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Contract test and documentation updates: UNMET.\n  expected_change_site: tests/test_review_semble_contract.py\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: `.github/workflows/review_autofix.yml:2678-2689` now uses loops over `${REVIEW_PREFLIGHT_*_SUPPORT_SCRIPTS}` rather than individual `check_required_file`/`check_soft_file` calls; `tests/test_review_semble_contract.py:155-157` still asserts the removed literal strings, and CI fails with `AssertionError`.\n- requirement: Document top-level env vars: The PR introduces `REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS` and `REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS` at the workflow top-level but does not document them in `README.md` or `agents.md`.\n  expected_change_site: README.md or agents.md\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: `.github/workflows/review_autofix.yml:206-213` introduces the env vars; neither README.md nor agents.md documents them.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_semble_contract.py:155-157 | severity=critical | confidence=5\n  PROBLEM: The contract test still asserts literal check_required_file/check_soft_file calls that the loop refactor removed.\n  WHY: The workflow now uses env-var-driven loops, so the assertions fail with AssertionError and block CI.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_review_semble_contract.py:155-157 | severity=critical | confidence=5\n  PROBLEM: The contract test `test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena` asserts that the preflight block contains literal check_required_file and check_soft_file calls for each script, but the PR refactored these individual calls into loops over the new `${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS}` and `${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}` env vars.\n  WHY: The literal strings no longer exist in the workflow, so the lint job fails with `AssertionError` on line 155 and blocks the PR from merging.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: Contract test and documentation updates: UNMET.\n  Expected change site: tests/test_review_semble_contract.py\n  Evidence of absence: `.github/workflows/review_autofix.yml:2678-2689` now uses loops over `${REVIEW_PREFLIGHT_*_SUPPORT_SCRIPTS}` rather than individual `check_required_file`/`check_soft_file` calls, `tests/test_review_semble_contract.py:155-157` still reads the removed literal assertions, CI fails with `AssertionError`\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: Document top-level env vars: The PR introduces `REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS` and `REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS` at the workflow top-level but does not document them in `README.md` or `agents.md`.\n  Expected change site: README.md or agents.md\n  Evidence of absence: `.github/workflows/review_autofix.yml:206-213` introduces the env vars; neither README.md nor agents.md documents them\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_review_semble_contract.py:155-157 | severity=critical | confidence=5\n  PROBLEM: The contract test asserts literal `check_required_file` / `check_soft_file` call strings in the workflow preflight block, but the PR replaced those six individual calls with two `for` loops driven by `${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS}` and `${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}`.\n  WHY: The literal strings no longer exist in the preflight step text, so the lint CI job exits with `AssertionError` at line 155 and blocks all PRs touching `review_autofix.yml` until fixed.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_review_semble_contract.py:155-157 | severity=critical | confidence=5\n  PROBLEM: The three `assert \u2026 in preflight_block` statements look for literal strings that no longer exist after the loop refactor.\n  WHY: The workflow now uses two `for` loops over `${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS}` and `${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}`, so the test fails with `AssertionError` on the first literal and aborts the lint check-run.\n- .github/workflows/review_autofix.yml:1371-1380 | severity=high | confidence=4\n  PROBLEM: When a listed script is missing from both `.codex-workflow-src/scripts/` and the main snapshot, the loop emits only a `::warning::` and continues.\n  WHY: A sufficiently old PR branch can then fail later in preflight with a delayed, less attributable error instead of an immediate staging-time signal.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "7aef35d9c8bd91d11d868aba80fd7b8ebf6786d084e1abdd850d97cf6ae918d2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3570,
+    "run_id": "28344282394",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28344282394",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260629025826_0de29bf354",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3570,
+    "run_id": "28344282394"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-29T02:58:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
