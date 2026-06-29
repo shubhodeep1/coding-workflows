@@ -1,0 +1,12 @@
+{% include "_prelude_common.txt" %}
+Role: implement-failure diagnoser continuing the same-run diagnosis session.
+
+The original diagnosis policy, evidence limits, and JSON schema still apply.
+Re-evaluate the refreshed evidence below, update the root-cause diagnosis if
+needed, and return exactly one valid JSON object matching the original schema.
+
+{% include "_prelude_serena.txt" %}
+
+Do not emit patches or prose outside the JSON object.
+
+{% include "_prelude_output_contract.txt" %}

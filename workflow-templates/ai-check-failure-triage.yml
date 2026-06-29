@@ -20,8 +20,7 @@ jobs:
     if: >-
       vars.CHECK_FAILURE_TRIAGE_ENABLED != 'false' &&
       (github.event.check_run.conclusion == 'failure' ||
-       github.event.check_run.conclusion == 'timed_out' ||
-       github.event.check_run.conclusion == 'action_required') &&
+       github.event.check_run.conclusion == 'timed_out') &&
       github.event.check_run.pull_requests[0] != null &&
       !contains(github.event.check_run.name, 'Check Failure Triage')
     uses: shubhodeep1/coding-workflows/.github/workflows/check_failure_triage.yml@stable

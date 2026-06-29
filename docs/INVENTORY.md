@@ -5,6 +5,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 ## Phase prompts
 
+- `prompts/mode-check-failure-triage.txt` — Role: CI failure triager. Goal: analyze a failing pull-request check and write a GitHub issue body describing the likely root cause and suggested fix.
 - `prompts/mode-clarify-respond.txt` — You are an AI assistant resolving clarification questions on behalf of the project orchestrator.
 - `prompts/mode-clarify.txt` — Role: clarify-phase auditor. Goal: emit `STATUS: CLEAR` or a `Q1`/`Q2` batch of blocking clarification questions.
 - `prompts/mode-extract-learnings.txt` — Extract stable repository learnings from prior merged AI-workflow runs as a machine-readable JSON array.
@@ -21,6 +22,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/mode-orchestrate-poll-judge.txt` — Role: orchestrate-poll judge. Goal: evaluate whether the current wave is progressing correctly.
 - `prompts/mode-orchestrate.txt` — Role: orchestrator. Goal: decompose a high-level project description into a set of well-scoped GitHub issues with an explicit dependency graph.
 - `prompts/mode-plan.txt` — Role: planning-phase auditor. Goal: emit a structured implementation plan or `BLOCKED:` line.
+- `prompts/mode-security-audit.txt` — Role: Chief Security Officer. Goal: emit a JSON-array security audit for default-branch scope.
 - `prompts/mode-review-apply-fixes-continuation.txt` — Role: review-autofix editor continuing the same-run editor session.
 - `prompts/mode-review-conflict-resolver-continuation.txt` — Role: merge-conflict resolver continuing the same-run resolver session.
 - `prompts/mode-validate-diagnose.txt` — Role: validate-diagnose. Goal: analyze runtime validation failures and emit one JSON object with structured fix-up issue proposals.
@@ -39,6 +41,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 - `.github/workflows/audit_consumer_drift.yml` — GitHub Actions workflow: Audit Consumer Drift.
 - `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
+- `.github/workflows/check_failure_triage.yml` — GitHub Actions workflow: AI Check Failure Triage (Reusable).
 - `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
 - `.github/workflows/comprehensive-test-and-release.yml` — GitHub Actions workflow: Workflow Log Analysis And Improvement.
@@ -47,6 +50,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/implement.yml` — GitHub Actions workflow: AI Implement.
 - `.github/workflows/integration-pr-readiness.yml` — GitHub Actions workflow: Integration PR readiness check.
 - `.github/workflows/internal-cancel-on-pr-close.yml` — GitHub Actions workflow: Internal: Cancel on PR Close.
+- `.github/workflows/internal-check-failure-triage.yml` — GitHub Actions workflow: Internal: AI Check Failure Triage.
 - `.github/workflows/internal-clarify.yml` — GitHub Actions workflow: Internal: AI Clarify.
 - `.github/workflows/internal-implement.yml` — GitHub Actions workflow: Internal: AI Implement.
 - `.github/workflows/internal-issue-pr-status.yml` — GitHub Actions workflow: Internal: Issue-PR Status Sync.
@@ -71,6 +75,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/review_autofix.yml` — GitHub Actions workflow: Codex PR Self-Healing Semantic Agent.
 - `.github/workflows/review_autofix_sweep.yml` — GitHub Actions workflow: Internal: AI Review Autofix Sweep.
 - `.github/workflows/review_rb_judge_dispatch.yml` — GitHub Actions workflow: Internal: Review-Blocked Judge Dispatch.
+- `.github/workflows/security-audit.yml` — GitHub Actions workflow: Security Audit.
 - `.github/workflows/sync_ai_labels.yml` — GitHub Actions workflow: AI Sync Labels.
 - `.github/workflows/test-and-mark-stable.yml` — GitHub Actions workflow: Test & Mark Stable Release.
 - `.github/workflows/update_workflows.yml` — GitHub Actions workflow: Update Workflow Wrappers.
@@ -89,12 +94,14 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/analyze_soft_errors.py` — Soft-error log analyzer for the release-gate smoke test.
 - `scripts/analyze_workflow_logs.py` — Prepare aggregated workflow telemetry context for the Codex analysis pass.
 - `scripts/apply_audit_gate_assets.py` — Apply canonical audit-gate assets atomically to a repository.
+- `scripts/assemble_prompt.sh` — Shell wrapper over render_prompt.py --assemble-only for shared-prelude prompt assembly.
 - `scripts/audit_consumer_drift.py` — Audit consumer workflow-wrapper drift against checked-in templates.
 - `scripts/blocker_check.py` — Python helper for blocker check.
 - `scripts/build_semble_wrapper.sh` — build_semble_wrapper.sh — fail-soft Semble BM25 wrapper builder.
 - `scripts/build_state_snapshot.py` — Python helper for build state snapshot.
 - `scripts/build_static_context.sh` — codex-cli phases.
 - `scripts/check_external_branch_advance.sh` — branch has advanced past a pinned local SHA due to a non-autofix push.
+- `scripts/check_failure_triage.sh` — Diagnose a failing pull-request check, enforce triage dedup/lineage rules, and open the follow-up triage issue.
 - `scripts/check_integration_pr_readiness.py` — Check whether an orchestrator integration PR is ready to merge based on the tracking issue's sub-issue checkbox state.
 - `scripts/check_resolver_diff.sh` — Validate the output of the AI conflict-resolver step before committing.
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
@@ -181,9 +188,12 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/run_workspace_hook.sh` — Shell helper for run workspace hook.
 - `scripts/self_heal_validation.sh` — failure context, then signalling validate_process.sh to re-run.
 - `scripts/semantic_cache.py` — Semantic cache helper for clarify-phase workflows.
+- `scripts/security_audit.sh` — security_audit.sh — Run the default-branch OWASP Top 10 + STRIDE security audit.
+- `scripts/security_audit_fp_exclusions.json` — JSON asset for editable security-audit false-positive exclusions.
 - `scripts/semble_helpers.sh` — semble_helpers.sh — shared, sourceable Semble query helpers.
 - `scripts/serena_stats_emit.py` — Aggregate Serena tool-call rollups from Codex logs.
 - `scripts/setup_serena.sh` — setup_serena.sh — fail-soft Serena bootstrapper for Codex MCP usage.
+- `scripts/slop_scan_local.py` — Local slop-scan heuristics for review_autofix changed scripts and Python heredocs.
 - `scripts/stage_workflow_support.sh` — Shell helper for stage workflow support.
 - `scripts/summarize_reviewer_consensus.sh` — ledger via codex-cli (model: openai/gpt-5.4-mini, reasoning: medium).
 - `scripts/summarize_unselected_runs.py` — Summarize unselected workflow runs via gpt-5.4-mini to widen analysis coverage.
@@ -204,6 +214,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/validation_template_bootstrap.py` — Shared onboarding helper for validation template manifests.
 - `scripts/verify_integration_fingerprints.py` — Verify that an orchestrator integration-sync resolver run preserved merged sub-issue intent.
 - `scripts/watchdog_helpers.sh` — Shell helper for shared Codex watchdog utilities.
+- `scripts/workflow_retro.py` — Build weekly workflow-retro context from workflow-log-analysis telemetry.
 - `scripts/workspace_init.sh` — Shell helper for workspace init.
 - `scripts/workspace_safety_check.sh` — Shell helper for workspace safety check.
 - `scripts/write_codex_config.sh` — write_codex_config.sh — central writer for ~/.codex/config.toml.
@@ -236,6 +247,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/contracts/mode-orchestrate-poll-judge.yml` — Strict render contract for mode-orchestrate-poll-judge.
 - `prompts/contracts/mode-orchestrate.yml` — Strict render contract for mode-orchestrate.
 - `prompts/contracts/mode-plan.yml` — Strict render contract for mode-plan.
+- `prompts/contracts/mode-security-audit.yml` — Strict render contract for mode-security-audit.
 - `prompts/contracts/mode-review-apply-fixes-continuation.yml` — Strict render contract for mode-review-apply-fixes-continuation.
 - `prompts/contracts/mode-review-conflict-resolver-continuation.yml` — Strict render contract for mode-review-conflict-resolver-continuation.
 - `prompts/contracts/mode-validate-diagnose.yml` — Strict render contract for mode-validate-diagnose.

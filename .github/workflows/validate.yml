@@ -262,6 +262,7 @@ jobs:
               "scripts/gh_helpers.sh",
               "scripts/ai_labels.py",
               "scripts/render_prompt.sh",
+              "scripts/assemble_prompt.sh",
               "scripts/load_workflow_overlay.py",
               "scripts/tg_helpers.sh",
               "scripts/memory_helpers.sh",
@@ -380,6 +381,16 @@ jobs:
               "prompts/mode-validate-diagnose.txt",
               "prompts/mode-validate-discover.txt",
               "prompts/mode-validate-fix-harness.txt",
+              "prompts/_prelude_common.txt",
+              "prompts/_prelude_common_large.txt",
+              "prompts/_prelude_common_xl.txt",
+              "prompts/_prelude_role_persona.txt",
+              "prompts/_prelude_serena.txt",
+              "prompts/_prelude_output_contract.txt",
+              "prompts/_templates/mode-validate-generate.txt",
+              "prompts/_templates/mode-validate-diagnose.txt",
+              "prompts/_templates/mode-validate-discover.txt",
+              "prompts/_templates/mode-validate-fix-harness.txt",
               "prompts/references/output-contract.txt",
               "prompts/references/verification-loop.txt",
               "prompts/references/validate-output-contract.txt"
@@ -387,6 +398,8 @@ jobs:
             "optional_preserve_files_after_prompts": [
               "prompts/mode-validate-self-heal.txt",
               "prompts/mode-validate-self-heal-continuation.txt",
+              "prompts/_templates/mode-validate-self-heal.txt",
+              "prompts/_templates/mode-validate-self-heal-continuation.txt",
               "prompts/contracts/mode-validate-self-heal-continuation.yml"
             ],
             "required_root_files_if_missing": [
@@ -399,6 +412,7 @@ jobs:
           }
           EOF
 
+          echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           bash "${helper_path}" validate --manifest "${manifest_path}"
       - name: Initialize workspace metadata
         id: workspace_meta

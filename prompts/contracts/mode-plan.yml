@@ -1,5 +1,8 @@
 required_vars: []
 optional_vars:
+  PLAN_DIAGRAMS_OPTIONAL: true
+  PLAN_SCOPE_MODE_REQUIRED: true
+  PLAN_REUSE_AUDIT_REQUIRED: true
   REFERENCE_OUTPUT_CONTRACT: ""
 forbidden_vars:
   - WORKFLOW_EDIT_RESTRICTION

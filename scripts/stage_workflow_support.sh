@@ -38,9 +38,10 @@ mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_
   echo "SUPPORT_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/unattended_system_instructions.md"
   echo "SUPPORT_CODEX_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/unattended_system_instructions.md"
   echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
+  echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}"
 } >> "$GITHUB_ENV"
 
-REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh workspace_init.sh workspace_safety_check.sh"
+REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh workspace_init.sh workspace_safety_check.sh"
 # Main-primary bootstrap scripts: prefer the fresh main snapshot so
 # wedged integration branches still pick up resolver safety fixes
 # shipped on main. Entries staged only via this list fail open when
@@ -118,7 +119,7 @@ else
   install -m 0644 "${serena_template_src}" "${SUPPORT_SCRIPTS_DIR}/templates/serena_project.yml.j2"
 fi
 
-for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json fingerprint_quarantine.v1.json validation_history.v1.json operator_bypass_audit.v1.json revalidate_events.v1.json validation_discovery.v1.json workflow_overlay.v1.json; do
+for sf in memory_record.v1.json lessons_learned_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json fingerprint_quarantine.v1.json validation_history.v1.json operator_bypass_audit.v1.json revalidate_events.v1.json validation_discovery.v1.json workflow_overlay.v1.json; do
   src=".codex-workflow-src/ai-memory/schemas/${sf}"
   if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/ai-memory/schemas/${sf}" ]; then
     src=".codex-workflow-src-main/ai-memory/schemas/${sf}"
@@ -268,6 +269,26 @@ for reference_asset in output-contract.txt severity-classification.txt; do
     else
       echo "::warning::prompts/references/${reference_asset} not found in checked-out support sources for ${SCRIPT_REF}; review-blocked/interim judge will degrade (REFERENCE_* placeholder left unhydrated)."
     fi
+  fi
+done
+# When the shared-prelude refactor is enabled, the staged judge prompts resolve
+# sibling templates under prompts/_templates/, shared fragments under
+# prompts/_prelude*.txt, and default persona prefixes from the checked-in
+# prompts/_prelude_role_persona.txt map. Stage the exact assets those support-
+# bundle renders need so the assembled path works from SUPPORT_ROOT_DIR without
+# a support checkout on disk.
+for prompt_assembly_asset in _prelude_common.txt _prelude_role_persona.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-interim.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-orchestrate-poll-judge.txt; do
+  if [ ! -f "${SUPPORT_PROMPTS_DIR}/${prompt_assembly_asset}" ]; then
+    src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
+    if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/${prompt_assembly_asset}" ]; then
+      src=".codex-workflow-src-main/prompts/${prompt_assembly_asset}"
+    fi
+    if [ ! -f "${src}" ]; then
+      echo "::error::Missing required support file prompts/${prompt_assembly_asset}"
+      exit 1
+    fi
+    mkdir -p "$(dirname -- "${SUPPORT_PROMPTS_DIR}/${prompt_assembly_asset}")"
+    install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/${prompt_assembly_asset}"
   fi
 done
 if [ ! -f "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt" ]; then
@@ -805,6 +826,9 @@ run_overlay_loader()
 stage_validate_support()
 {
 	local repo_path require_remote_when_external model_catalog_path serena_template_path
+	if [ -n "${GITHUB_ENV:-}" ]; then
+		echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" >> "$GITHUB_ENV"
+	fi
 
 	while IFS= read -r repo_path; do
 		[ -n "${repo_path}" ] || continue
