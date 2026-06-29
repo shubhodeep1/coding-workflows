@@ -1348,6 +1348,35 @@ jobs:
 
           SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
+          SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
+
+          # Backfill preflight-required bootstrap scripts that the branch-pinned
+          # staging helper did not stage.  review_autofix.yml runs @main and its
+          # preflight (the "Preflight: Verify required files" step) defines the
+          # required asset set, but stage_workflow_support.sh is sourced from the
+          # PR branch checkout (SCRIPT_REF).  When the PR branch predates a commit
+          # that introduced a new required bootstrap script (e.g. assemble_prompt.sh,
+          # added in #3501), the stale helper's REQUIRED_BOOTSTRAP_SCRIPTS list does
+          # not include it, so it is never copied — and the main-snapshot fallback
+          # in the helper is also skipped because the helper itself never iterates
+          # the new name.  The main snapshot is already checked out here and holds
+          # the current required set, so re-stage any preflight-required script that
+          # is still missing.  Prefer the branch copy (consistent with the helper's
+          # branch-first policy) and fall back to the main snapshot.
+          for f in codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh review_run_reviewers.sh render_prompt.sh assemble_prompt.sh render_prompt.py; do
+            if [ -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
+              continue
+            fi
+            backfill_src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${backfill_src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              backfill_src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ -f "${backfill_src}" ]; then
+              install -m 0755 "${backfill_src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+              echo "::notice::Backfilled ${f} into the runtime support bundle from ${backfill_src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+            fi
+          done
+
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
             src=".codex-workflow-src/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
