@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Changes to memory records and labels repeatedly included schema files plus dedicated schema or CLI tests. That pattern indicates downstream tools depend on strict JSON structure, so new fields or validation rules should be introduced with explicit schema coverage and representative examples. This matters most for memory, labeling, and audit-related artifacts.",
+  "fingerprint": "73f29dd2b050afd7d7a16c8ddb5a41dda091a25c9b2377cde35c7ee96d9d480f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28493517548",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28493517548",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3535",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3537",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3540",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3542",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3552",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3536",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3538",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3541",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3543",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3553"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260701043043_7febbf0fe5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Contract and schema changes should be paired with schema tests and example fixtures to keep memory and audit pipelines stable.",
+  "timestamps": {
+    "created_at": "2026-07-01T04:30:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
