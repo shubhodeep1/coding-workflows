@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow prompt rendering is tightly contract-driven; when adding or changing modes, update the prompt templates and the corresponding render/assembly tests together.",
   "timestamps": {
     "created_at": "2026-07-01T04:28:49Z",
