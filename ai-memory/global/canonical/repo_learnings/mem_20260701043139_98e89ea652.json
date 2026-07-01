@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Post-failure recovery and diagnostic paths are first-class and should be tested as behavior, not just shell wiring.",
   "timestamps": {
     "created_at": "2026-07-01T04:31:39Z",
