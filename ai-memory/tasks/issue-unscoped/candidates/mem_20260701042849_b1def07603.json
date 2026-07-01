@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.91,
+  "details": "Several merged runs touched both prompt files and tests that assert exact prompt construction. This suggests prompt regressions are easy to introduce, so future changes should validate the assembled output rather than only the template text. It matters most when adding new modes, changing preludes, or adjusting context selection logic.",
+  "fingerprint": "7754fcc44d7016e34f20812e6367f340ff009fa0f4bba690193b743c8384875e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28493517548",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28493517548",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3535",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3537",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3540",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3542",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3552",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3536",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3538",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3541",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3543",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3553"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260701042849_b1def07603",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow prompt rendering is tightly contract-driven; when adding or changing modes, update the prompt templates and the corresponding render/assembly tests together.",
+  "timestamps": {
+    "created_at": "2026-07-01T04:28:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
