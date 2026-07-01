@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:8348-8349 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The error sanitization truncates multi-line or longer error messages, which can remove diagnostic context.\n  WHY: The 200-character cap is a readability trade-off rather than a correctness issue, so the impact is limited to less verbose warnings.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:8349 | confidence=5\n  PROBLEM: The cross-pollination status_line finding is incorrect because `_fetch_status` does not always show `status='none'` when an HTTP status line is present.\n  WHY: `status_line` is captured when the response file's first line starts with `HTTP/`, and `test_403_failure_captures_http_status_line` verifies `status='HTTP/2 403'`.\n- scripts/orchestrate_poll_process.sh:8348-8349 | confidence=2\n  PROBLEM: The error sanitization uses `head -n 1 | cut -c1-200`, which can truncate multi-line or longer error messages.\n  WHY: This is an intentional log-readability trade-off, so the main effect is reduced diagnostic detail rather than a functional bug.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "39f16a8c2838c7355c80968ed11c32693c392db3ac4bce1827f2abb0b4cc03c0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3074,
+    "run_id": "26862331130",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26862331130",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260603035751_a21b16cedc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3074,
+    "run_id": "26862331130"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-03T03:57:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_force_tick_repository_env.py:Lines ~106-108 and ~111-117 in `test_named_force_tick_steps_bind_repository` | severity=high | confidence=[5]\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: Both assertion error messages use the literal string `$shubhodeep1/coding-workflows` instead of `${REPOSITORY}`.\n  WHY: If either assertion fails, the failure text will mention the repository path instead of the shell variable under test, making the CI failure misleading and harder to debug.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Line or code reference: Lines ~106-108 and ~111-117 in `test_named_force_tick_steps_bind_repository`\n  Problem: Both assertion error messages use the literal string `$shubhodeep1/coding-workflows` instead of `${REPOSITORY}` (the shell variable the regex actually checks for).\n  Why it fails at runtime: The test's pass/fail logic is unaffected, but if either assertion ever triggers, the failure message will cite `$shubhodeep1/coding-workflows` instead of the variable under test, which is confusing and misleading during CI debugging.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "59b84d4e25db945b79c9d5b639bb7887def016d105601feaad99e727eef29be5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3459,
+    "run_id": "28003968259",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28003968259",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260623055252_1cd7c61864",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3459,
+    "run_id": "28003968259"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-23T05:52:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

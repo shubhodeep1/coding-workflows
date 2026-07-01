@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n**ERROR PATHS & EDGE CASES**  \nFile: .github/workflows/clarify.yml (both steps)  \nLine or code reference: lines ~1071 and ~1234 (the added shims)  \nProblem: The local fallback `type gh_retry >/dev/null 2>&1 || gh_retry() { \"$@\"; }` is defined after `source scripts/gh_helpers.sh 2>/dev/null || true` but the test in `test_workflow_gh_retry_fallback_contract.py` asserts the shim must appear *immediately* after the source line and before any `gh_retry` call inside the step block. The added lines satisfy both the contract test and the original BUG-002 requirement exactly.  \nWhy it fails at runtime: (does not fail)  \nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "8ffe90b7dcd51de626a20a670ba6d1f73251d26324d61e44eab2514ffbaade18",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3302,
+    "run_id": "27392044580",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27392044580",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260612034451_ba70b001ba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3302,
+    "run_id": "27392044580"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-12T03:44:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

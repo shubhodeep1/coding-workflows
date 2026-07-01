@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/check_failure_triage.yml:53-87 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5]\n  PROBLEM: Job-level `if` conditions still require `vars.CHECK_FAILURE_TRIAGE_ENABLED == 'true'`, so repos that leave the variable unset silently skip the default-on workflow.\n  WHY: Both reviewers report the same default-on mismatch; deepseek described it as critical and minimax marked MAJOR, and the env default only applies inside steps, not job `if` expressions.\n- .github/workflows/internal-check-failure-triage.yml:13-22 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The internal workflow still gates on `vars.CHECK_FAILURE_TRIAGE_ENABLED == 'true'`, so it does not follow the new default-on behavior.\n  WHY: Repos using this workflow still need the variable explicitly set to true, contradicting the on-by-default intent.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/check_failure_triage.yml:54 and 72-80 | severity=high | confidence=5\n  PROBLEM: The reusable workflow's job-level `if` conditions gate on `vars.CHECK_FAILURE_TRIAGE_ENABLED == 'true'`, which requires the repo variable to be explicitly set to the string `'true'`. When the variable is unset (the default-on scenario), `vars.CHECK_FAILURE_TRIAGE_ENABLED` evaluates to null/empty, and `null == 'true'` is false \u2014 both jobs are skipped.\n  WHY: A consumer repo that has not set `CHECK_FAILURE_TRIAGE_ENABLED` at all (the intended default-on case) will have its wrapper job dispatch to the reusable workflow, but the reusable workflow's jobs will be silently skipped because `vars.CHECK_FAILURE_TRIAGE_ENABLED == 'true'` evaluates false. The feature is effectively disabled by default, contradicting the PR's stated intent of default-on.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/check_failure_triage.yml:53-60 and 80-87 | severity=high | confidence=4\n  PROBLEM: The `if` conditions still use `vars.CHECK_FAILURE_TRIAGE_ENABLED == 'true'` but the intent was to make this default-on. The env block sets a default of `'true'` but this only affects steps inside the job, NOT the `if` condition evaluation. When a consumer repo does NOT set the `CHECK_FAILURE_TRIAGE_ENABLED` variable, the condition evaluates to `'' == 'true'` which is false, causing the workflow to skip entirely.\n  WHY: For consumer repos that don't explicitly set `CHECK_FAILURE_TRIAGE_ENABLED`, the workflow will never run because the `if` condition fails. This contradicts the stated goal of making the feature default-on.\n- .github/workflows/internal-check-failure-triage.yml:16-22 | severity=high | confidence=4\n  PROBLEM: The internal self-hosting workflow still uses the old gate `vars.CHECK_FAILURE_TRIAGE_ENABLED == 'true'` without any default. Unlike the consumer template that was updated to use `!= 'false'`, this file was not updated in the last run.\n  WHY: For repos using the internal workflow (like the source repo itself), the check-failure triage will NOT run unless `CHECK_FAILURE_TRIAGE_ENABLED` is explicitly set to `true`, even though the documentation claims it's \"on by default\".\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "5949973bb28293cf40256f8560c9ca92dfc596dcaffd05cd7f3d733efb6fe23a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28342352696",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28342352696",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260629012233_11f30fdb16",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28342352696"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-29T01:22:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

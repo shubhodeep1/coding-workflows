@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-3496` @ `2ab3a68ede4d6465a9fb3b98f8c5db2410aae98b`  \nIntegration branch check: matches orchestrator metadata (`orchestrator/project-3496`).\n\nClarification mapping: no QIDs were asked; `/answer [auto-answered-by-orchestrator]` only confirms continuation.\n\nReviewed context: `prompts/review-consolidator.txt`, `tests/test_render_prompt_review_judge_modes.py`, `README.md`, `agents.md`, plus the downstream consolidator parser/ledger surfaces to confirm whether a prompt-only lens addition needs shell/workflow changes.\n\n1. Files likely to change\n- `prompts/review-consolidator.txt`\n- `tests/test_render_prompt_review_judge_modes.py`\n- `README.md`\n- `agents.md`\n\n2. Functions or modules to implement\n- In `prompts/review-consolidator.txt`, extend the consolidator contract with a separate Diataxis docs-coverage advisory lens while preserving the first seven lens names exactly as-is and in the same order.\n- Update the prompt rules so that the new docs lens:\n  - stays advisory-only / low-severity,\n  - is grounded in reviewer evidence already present in the bundle,\n  - names only the specific Diataxis categories that need updates,\n  - avoids blanket \u201cdocs are missing\u201d findings.\n- Keep the docs-category detail inside existing free-text fields (`SUGGESTED_APPROACH` / `NOTES`) instead of inventing new output markers, so parser/ledger behavior does not need to change.\n- Add a focused render-based prompt regression in `tests/test_render_prompt_review_judge_modes.py` (preferably a dedicated test, not just a generic shared-block assertion) and make sure the file\u2019s direct-run `main()` calls it.\n- Add append-only documentation notes/rows in `README.md` and `agents.md` near the existing review-consolidator contract/flag sections so the docs match the prompt change without rewriting existing rows.\n\n3. Data structures affected\n- Consolidator issue-block text contract:\n  - `LENS`\n  - `SEVERITY`\n  - `SUGGESTED_APPROACH`\n  - `NOTES`\n- Documentation tables / contract bullets for consolidator behavior in `README.md` and `agents.md`.\n- No parser/schema/workflow env structure change is expected: the read-only check showed the parser/ledger already pass through non-empty `LENS` values and do not reject `low` severity.\n\n4. API or interface changes\n- Prompt/output-contract change only: consolidator output may now include one additional advisory docs-coverage lens label.\n- No GitHub API, workflow input, CLI, or env-var wiring change is needed in this phase.\n- No reviewer-checklist change is expected; the consolidator should synthesize the docs advisory only from already-grounded reviewer/task-gap evidence.\n\n5. Potential risks or edge cases\n- Current prompt text explicitly says \u201cUse these seven lenses exactly\u201d and \u201cLENS: one of the seven lenses above,\u201d so the prompt contract itself currently conflicts with the requested new lens.\n- `agents.md` currently describes the consolidator as having seven lenses; that doc drift must be reconciled additively.\n- Because the reviewer checklist has no dedicated docs lens, the consolidator must not invent docs gaps from silence, missing files, or absent bundle coverage.\n- Keep the new lens low-severity and advisory; it must not become a gating/high-severity path.\n- Respect the issue\u2019s append-only rule for `README.md` / `agents.md`; add notes/rows instead of rewriting existing consolidator rows.\n\n6. Testing considerations\n- Run `python3 tests/test_render_prompt_review_judge_modes.py`.\n- The new focused test should assert:\n  - the original seven lens names are still present in the same order,\n  - the new advisory docs-coverage wording renders,\n  - the prompt constrains it to low-severity/advisory use,\n  - the prompt requires category-specific docs updates rather than generic docs complaints.\n- If a new dedicated test function is added, include it in that file\u2019s manual `main()` runner so CI actually executes it.\n\n7. Conflicts / assumptions\n- Conflict: the current prompt contract hard-restricts output to seven lenses, but the issue requires an additional advisory lens.\n- Assumption: \u201cdocs/flag rows\u201d means append-only documentation in the existing `README.md` / `agents.md` consolidator sections (including the existing consolidator flag tables), not a new runtime flag, because no docs-coverage flag exists in the current workflow/scripts and this phase is scoped to prompt/docs/test files.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: WARNING: No existing docs-coverage runtime flag exists; this plan assumes the requested \u201cflag rows\u201d are additive documentation rows/notes under the existing consolidator feature, not new workflow wiring.\nPLAN_SELF_CHECK: WARNING: The reviewer checklist still has no dedicated docs lens, so the new consolidator advisory must remain evidence-derived and non-gating.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "420ca62972f8cd0835582f2a9df4e994ba9a65e46e75f052e3c9ab80d36c589d",
+  "lineage": {
+    "issue_number": 3537,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28270210254",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28270210254",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3537"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260626231154_e5d159dcc4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3537,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28270210254"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3537",
+  "timestamps": {
+    "created_at": "2026-06-26T23:11:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

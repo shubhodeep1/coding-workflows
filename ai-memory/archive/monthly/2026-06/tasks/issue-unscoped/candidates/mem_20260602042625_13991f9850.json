@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:1116 | severity=high | confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The contract test fails because `.github/workflows/review_autofix.yml` is missing the `AGENTS_MD_MATERIALITY_*` env wiring expected by the codex-agent job.\n  WHY: The reviewer reports the lint job exits non-zero on that assertion, so the review-autofix pipeline contract is not satisfied.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cUpdate README stall-recovery sections, add the new branch-fallback test to all three CI/release workflows (ci.yml, mark-stable.yml, test-and-mark-stable.yml), harden Layer-1 and Layer-2 guards against both missing and unparseable headPushedAt, narrow the Layer-2 re-anchor selector to ai:done only (matching _PHASES_WITH_PUSH_REANCHOR), and align docs/tests with that contract.\u201d\n  expected_change_site: .github/workflows/review_autofix.yml (codex-agent env map)\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The codex-agent materiality wiring expected by the contract test is still absent from `.github/workflows/review_autofix.yml`, and the lint job failed on that exact assertion.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: tests/test_review_autofix_review_pipeline_contract.py (line 1116 in the failing test)\n  Line or code reference: test_review_pipeline_knobs_are_wired_into_codex_agent_env()\n  Problem: The contract test asserts that `AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '0' }}` (and the companion LLM_FALLBACK + MODEL/REASONING vars) must appear in the `codex-agent` job\u2019s `env:` block inside `.github/workflows/review_autofix.yml` (and `internal-review.yml`).\n  Why it fails at runtime: The `lint` job (explicitly run on this PR head) exits non-zero because the test cannot find the wiring; the PR diff and LAST_RUN_DIFF never added the block.\n  ISSUE_CONFIDENCE: 5\n- Requirement: \u201cUpdate README stall-recovery sections, add the new branch-fallback test to all three CI/release workflows (ci.yml, mark-stable.yml, test-and-mark-stable.yml), harden Layer-1 and Layer-2 guards against both missing and unparseable headPushedAt, narrow the Layer-2 re-anchor selector to ai:done only (matching _PHASES_WITH_PUSH_REANCHOR), and align docs/tests with that contract.\u201d\n  Expected change site: .github/workflows/review_autofix.yml (codex-agent env map)\n  Evidence of absence: The materiality wiring required by the contract test is still absent; the lint job failed on exactly that assertion. All other deliverables (new test, README updates, Layer-1/Layer-2 hardening, ai:done-only selector, diagnostic logs) are present in the current PR diff and LAST_RUN_DIFF.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "d74952993efe537d4bdf1c0c678d20ef97aaf8d3bd9ee661494ae1b87e74d7d3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3039,
+    "run_id": "26797878535",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26797878535",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260602042625_13991f9850",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3039,
+    "run_id": "26797878535"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-02T04:26:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for `orchestrator/project-3185` @ `c6bfcc64176b2485d8d6609feeb60a52e000ff13`\nIntegration branch metadata matches the checked-out ref.\n\nClarification\n- No clarification questions were asked.\n- `/answer [auto-answered-by-orchestrator]` adds no extra constraints, so the issue body/guardrails are the planning source of truth.\n\nAutomation / wiring summary\n- Change type: add 1 new shared helper script and update the existing validate workflow to call it.\n- Entry point remains `.github/workflows/validate.yml` (`workflow_call` reusable workflow). No new trigger, scheduler, supervisor, or manual script path.\n- No DB work.\n- No `docs/scripts-pending-removal.md` entry is needed; this is permanent shared runtime code, not a single-use or long-running script.\n\nRepresentative code reviewed\n- Current inline validate bootstrap in `.github/workflows/validate.yml` (`Fetch workflow support files`).\n- Current bootstrap hook in `.github/actions/setup-runtime/action.yml`.\n- Existing support-source checkout pattern in `.github/workflows/review_autofix.yml`.\n- Existing validate runtime fallbacks in `scripts/validate_process.sh` and workspace exclusion behavior in `scripts/workspace_init.sh`.\n\nConflict detected\n- The issue text implies `scripts/stage_workflow_support.sh` already exists, but it is absent on this ref. Plan assumption: this issue must create the helper and make validate its first caller.\n\nRecommended implementation approach\n- Do this with a validate-local support-source bootstrap (matching the review_autofix pattern), not a setup-runtime-only change. That is the smallest safe path and avoids relying on `setup-runtime@stable` to expose a branch-local helper during the same rollout.\n\nFiles likely to change\n- `scripts/stage_workflow_support.sh` (new)\n- `.github/workflows/validate.yml`\n- Tests:\n  - `tests/test_validate_workflow_validate_bootstrap.py`\n  - `tests/test_validate_semble_contract.py`\n  - `tests/test_codex_thread_reuse_core.py`\n  - `tests/test_workspace_init.py`\n  - `tests/test_workspace_hooks.py`\n  - `tests/test_workflow_overlay_core.py`\n  - likely 1 new focused helper test file for the helper contract\n\nModules / responsibilities to implement\n1. New helper: `scripts/stage_workflow_support.sh`\n- Own the validate support-staging logic currently embedded in `validate.yml`.\n- Keep validate\u2019s current semantics, especially:\n  - self-repo vs external-repo behavior\n  - `stable` primary ref with `main` fallback\n  - local-file fallback rules\n  - `cp` + explicit `chmod` behavior (do not switch to review_autofix-style `install`)\n  - optional `render_prompt.py`\n  - validate template/schema staging\n  - workflow overlay export\n  - current warning/fail-open behavior for optional assets\n\n2. Validate workflow bootstrap in `.github/workflows/validate.yml`\n- Add a small pre-fetch bootstrap sequence like review_autofix:\n  - resolve `SCRIPT_REF` (`GITHUB_SHA` in workflow-source repo, `stable` otherwise)\n  - checkout support source to `.codex-workflow-src`\n  - fallback `.codex-workflow-src` checkout to `main`\n  - optional `.codex-workflow-src-main` snapshot\n- Keep the step name `Fetch workflow support files`, but replace the large inline shell body with a short helper invocation.\n\n3. Helper-owned validate profile\n- Stage the same validate-specific assets now fetched inline:\n  - required core scripts including `validate_driver.sh` and `validate_process.sh`\n  - optional helpers (`render_prompt.py`, self-heal, heartbeat/stall/thread-reuse, Semble, Serena)\n  - `scripts/render_validation_templates.py`\n  - `scripts/templates/slot_manifest.schema.json`\n  - `workflow-templates/validation-harness/**`\n  - validate prompts, including self-heal continuation prompt + contract\n  - `ai-memory/schemas/**` used by validate\n  - root files currently staged (`unattended_system_instructions.md`, `ai_pipeline.md`, `.github/ai/label_contract.v1.json`)\n- Preserve consumer `scripts/.gitignore` generation.\n\nData / contract surfaces affected\n- Validate support asset lists and required-vs-optional classification.\n- Support-source roots: `.codex-workflow-src` and `.codex-workflow-src-main`.\n- `SCRIPT_REF`/`main` fallback contract.\n- `GITHUB_ENV` exports produced by `load_workflow_overlay.py`.\n- Consumer `scripts/.gitignore` contents for fetched validate support files.\n\nAPI / interface changes\n- Internal only: new helper CLI/env contract for validate support staging.\n- No user-facing workflow inputs, env var names, staged destination paths, or validation result schema should change.\n\nRisks / edge cases\n- Self-repo runs must still prefer current-branch content, not `stable`.\n- External repos must still require remote copies of `validate_driver.sh` and `validate_process.sh`.\n- Optional assets must stay fail-open (`render_prompt.py`, self-heal, Semble, Serena, etc.).\n- Consumer-owned `scripts/templates/serena_project.yml.j2` must remain preserved.\n- Overlay export must still run against `GITHUB_WORKSPACE`, not the support checkout.\n- `.codex-workflow-src*` must not pollute workspace reuse; this is safe because `workspace_init.sh` already excludes those roots.\n- `validate_process.sh` already looks for fallback helpers in `.codex-workflow-src*`, so using that bootstrap surface is aligned with existing runtime behavior.\n\nTesting considerations\n- Update workflow-level tests to assert helper delegation instead of the old inline shell snippets.\n- Add focused helper coverage for the validate asset list and fallback rules.\n- Run at least:\n  - `python3 tests/test_validate_workflow_validate_bootstrap.py`\n  - `python3 tests/test_validate_semble_contract.py`\n  - `python3 tests/test_codex_thread_reuse_core.py`\n  - `python3 tests/test_workspace_init.py`\n  - `python3 tests/test_workspace_hooks.py`\n  - `python3 tests/test_workflow_overlay_core.py`\n  - new helper test file, if added\n- Then run the existing repo validation wrapper: `bash scripts/run_validation_repo_checks.sh`\n\nAssumptions\n- This issue is allowed to add `scripts/stage_workflow_support.sh` even though no other workflow is migrated in the same PR.\n- The safest minimal path is to keep setup-runtime unchanged unless an additive, non-required tweak is needed; validate should not depend solely on a setup-runtime change for helper availability in this rollout.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "2ff3a8d956c73b5230ff150582cca60572e6a6f202ddb7e31cc9d4fdc0b886cb",
+  "lineage": {
+    "issue_number": 3194,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27089748861",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27089748861",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3194"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260607102906_13ab7b4df0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3194,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27089748861"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3194",
+  "timestamps": {
+    "created_at": "2026-06-07T10:29:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

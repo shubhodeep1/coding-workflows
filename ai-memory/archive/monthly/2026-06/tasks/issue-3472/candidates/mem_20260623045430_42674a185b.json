@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Validate and land the safe subset of the 2026-06-16 to 2026-06-23 workflow-optimization findings\",\"issues\":[{\"id\":\"ai-memory-retrieve-telemetry\",\"title\":\"Add structured token-budget and miss-reason telemetry to AI-memory retrieve\",\"priority\":1},{\"id\":\"workflow-log-telemetry-dedupe\",\"title\":\"Deduplicate duplicated wrapper-step cost telemetry in workflow log analysis\",\"priority\":1},{\"id\":\"orchestrate-safe-gh-fallback\",\"title\":\"Replace the raw `_safe_gh_jq` fallback in orchestrate integration-branch bootstrap\",\"priority\":2},{\"id\":\"retire-2026-06-optimization-source-docs\",\"title\":\"Fold the 2026-06-16 through 2026-06-23 optimization docs into the processing report and delete them\",\"priority\":3}],\"dependency_edges\":[{\"from\":\"ai-memory-retrieve-telemetry\",\"to\":\"retire-2026-06-optimization-source-docs\"},{\"from\":\"workflow-log-telemetry-dedupe\",\"to\":\"retire-2026-06-optimization-source-docs\"},{\"from\":\"orchestrate-safe-gh-fallback\",\"to\":\"retire-2026-06-optimization-source-docs\"}]}",
+  "fingerprint": "bb7cb45e041b10ff1aa57c5d8d6779750dd6f25a01c2753f6a018c4b34362f82",
+  "lineage": {
+    "issue_number": 3472,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28002750266",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28002750266",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260623045430_42674a185b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3472,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28002750266"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Validate and land the safe subset of the 2026-06-16 to 2026-06-23 workflow-optimization findings' into 4 issues (tracking #3472)",
+  "timestamps": {
+    "created_at": "2026-06-23T04:54:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

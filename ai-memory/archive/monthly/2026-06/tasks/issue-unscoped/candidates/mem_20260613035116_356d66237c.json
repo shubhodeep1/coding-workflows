@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:lines 528-532 (new \"Prompt tier budget\" step) and tests/prompt_size_budget.py lines 26-29 (prompt_paths function) | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The new prompt_size_budget.py gate only covers files matching prompts/mode-*.txt and prompts/review-*.txt, so conflict-resolver.txt, integration-sync-conflict-resolver.txt, integration-sync-conflict-resolver-retry-prelude.txt, and header.txt are no longer size-enforced.\n  WHY: Future changes could bloat those four prompt files without any CI gate catching the regression, whereas the old bash step would have failed the build.\n- tests/inventory_parity.py:SECTION_ORDER matchers at lines 16-35 | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The \"Audit-gate assets\" matcher excludes prompts/contracts/conflict-resolver.yml and prompts/contracts/integration-sync-conflict-resolver.yml, so inventory_parity.py silently ignores those two contract files.\n  WHY: The gate can report parity success without detecting drift in those files, so adding required vars there without updating INVENTORY.md would not be caught.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/ci.yml:lines 528-532 (new \"Prompt tier budget\" step) and tests/prompt_size_budget.py lines 26-29 (prompt_paths function) | confidence=4\n  PROBLEM: The old \"Prompt-length budget\" bash step enforced per-file line caps on 24 prompt files including conflict-resolver.txt (cap 150), integration-sync-conflict-resolver.txt (cap 200), integration-sync-conflict-resolver-retry-prelude.txt (cap 100), and header.txt (cap 20); the new prompt_size_budget.py gate only covers files matching prompts/mode-*.txt and prompts/review-*.txt (28 files confirmed at runtime), excluding those four files.\n  WHY: Future changes could bloat these four prompt files without any CI gate catching the regression, so the old build-failing enforcement is lost.\n- tests/inventory_parity.py:SECTION_ORDER matchers at lines 16-35 | confidence=3\n  PROBLEM: The \"Audit-gate assets\" section matcher uses `path.match(\"prompts/contracts/mode-*.yml\") or path.match(\"prompts/contracts/review-*.yml\")`, which excludes prompts/contracts/conflict-resolver.yml and prompts/contracts/integration-sync-conflict-resolver.yml.\n  WHY: These two contract files exist in the repo but match no section in SECTION_ORDER, so inventory_parity.py silently ignores them and reports \"OK: inventory parity validated across 215 documented paths\" without awareness of the drift risk.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "02829ad173dde97e27d0992ed458abb90b57d2f02e2b5a5097c4ea53c399270f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27455334066",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27455334066",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260613035116_356d66237c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27455334066"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-13T03:51:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

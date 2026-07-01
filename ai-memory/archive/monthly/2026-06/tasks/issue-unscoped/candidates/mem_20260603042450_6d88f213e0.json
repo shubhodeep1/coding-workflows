@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:~1108 and ~1134 (duplicated expectation blocks) | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The contract test duplicates the AGENTS_MD_MATERIALITY_ENABLED expectation in two places, making the test brittle and harder to maintain.\n  WHY: The reviewer notes that any future workflow default or env-var propagation change will require editing both locations and may cause spurious failures.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_review_autofix_review_pipeline_contract.py:~1108 and ~1134 (duplicated expectation blocks) | confidence=3\n  PROBLEM: The contract test duplicates the AGENTS_MD_MATERIALITY_ENABLED expectation in two places, making it fragile and harder to maintain.\n  WHY: The reviewer notes that any future workflow default or env-var propagation change will require editing both locations and may cause spurious failures.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "7c0701fbe49e942531ce37f28d97b17e1fd57ad7c5bb26940fe0339566da16be",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3074,
+    "run_id": "26863266056",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26863266056",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260603042450_6d88f213e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3074,
+    "run_id": "26863266056"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-03T04:24:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

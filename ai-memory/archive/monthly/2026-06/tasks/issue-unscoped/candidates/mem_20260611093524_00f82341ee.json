@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:1246 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The test passes `issue_labels=[\"ai:implementation-failed\"]`, which triggers the diagnose script's idempotency guard and prevents the prompt from being generated.\n  WHY: The script exits early when that label is present, so the prompt file is empty and the assertion on captured prompt content fails.\n- tests/test_implement_post_codex_recovery.py:103-123 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: `_run_shell_script()` strips several Git/workspace env vars but omits `GIT_COMMON_DIR`, letting the diagnose script inherit the runner's git object database.\n  WHY: The sibling `_git()` helper strips `GIT_COMMON_DIR`; on CI worktree runners this asymmetry can make `git diff HEAD`/`git ls-files` use the wrong repository context and break the test.\n- tests/test_implement_post_codex_recovery.py:~1300 | severity=medium | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The test's exact prompt substring check for `Keep apply_patch as the primary write path` does not match the longer prompt text emitted by the shell script.\n  WHY: The production prompt includes `... in implement-family runs`, so the literal assertion fails unless the test or prompt text is aligned.\n- tests/test_implement_post_codex_recovery.py:1440 | severity=medium | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The fallback issue-JSON assertions hard-code a specific fetch/retry shape, so the current production behavior or retry budget can make the test fail.\n  WHY: The reviewer reports the fallback path combines a label lookup with a later full-payload read, and the test's strict expectations are the source of the lint failure.\n- scripts/implement_diagnose_post_codex_failure.sh:169-178 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: When fallback issue JSON retrieval exhausts retries, the function clears the attempt flag but leaves the cached payload state inconsistent, so a later caller can re-issue the same GitHub request.\n  WHY: The failure branch resets `FALLBACK_ISSUE_JSON_FETCH_ATTEMPTED` without preventing repeated identical requests after exhaustion.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_implement_post_codex_recovery.py:1246 | confidence=5\n  PROBLEM: The test passes `issue_labels=[\"ai:implementation-failed\"]`, which triggers the diagnose script's idempotency guard and prevents the prompt from being generated.\n  WHY: The script exits early when that label is present, so the prompt file is empty and the assertion on captured prompt content fails.\n- tests/test_implement_post_codex_recovery.py:104-123 | confidence=3\n  PROBLEM: The env-stripping loop omits `GIT_COMMON_DIR`.\n  WHY: The diagnose shell script runs `git diff HEAD` and `git ls-files`; in a worktree CI environment, inheriting `GIT_COMMON_DIR` can point those commands at the wrong object database.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_implement_post_codex_recovery.py:97-110 | confidence=4\n  PROBLEM: `_run_shell_script()` strips critical git environment variables including `GIT_COMMON_DIR`, which can break git operations when the test runs the diagnose script.\n  WHY: On CI runners that set `GIT_COMMON_DIR`, the diagnose script can read the wrong git object database and the failing test depends on git output being correct.\n- tests/test_implement_post_codex_recovery.py:~1300 | confidence=4\n  PROBLEM: The test's exact prompt assertion for `Keep apply_patch as the primary write path` does not match the longer prompt text emitted by the shell script.\n  WHY: The production prompt includes `... in implement-family runs`, so the literal substring check fails unless the test or prompt is updated.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_implement_post_codex_recovery.py:104 vs 123 | confidence=4\n  PROBLEM: `_run_shell_script()` omits `GIT_COMMON_DIR` while `_git()` strips it, creating an asymmetric cleanup that leaks the runner's git context into the diagnose script.\n  WHY: On workspace runners that inject `GIT_COMMON_DIR`, `git diff HEAD` can read from an unrelated object database and produce the wrong or empty change listing.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_implement_post_codex_recovery.py:1440 | confidence=5\n  PROBLEM: The fallback issue-JSON assertions hard-code a specific fetch/retry shape, so the current production behavior or retry budget can make the test fail.\n  WHY: The reviewer reports the fallback path combines a label lookup with a later full-payload read, and the test's strict expectations are the source of the lint failure.\n- scripts/implement_diagnose_post_codex_failure.sh:169-178 | confidence=4\n  PROBLEM: When fallback issue JSON retrieval exhausts retries, the function clears the attempt flag but leaves the cached payload state inconsistent, so a later caller can re-issue the same GitHub request.\n  WHY: The failure branch resets `FALLBACK_ISSUE_JSON_FETCH_ATTEMPTED` without preventing repeated identical requests after exhaustion.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "30fba4946bb6053ede09092a3efae11acc8e528f4fa8c82a3b60ecd116766cb2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3275,
+    "run_id": "27334680708",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27334680708",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260611093524_00f82341ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3275,
+    "run_id": "27334680708"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-11T09:35:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

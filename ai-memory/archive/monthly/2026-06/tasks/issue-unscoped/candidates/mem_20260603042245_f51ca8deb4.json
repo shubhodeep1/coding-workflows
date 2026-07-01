@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:205-212,2599-2605 (mirrored in review_apply_fixes.sh:1431, review_rb_judge.sh:1061/1116/1491-1502, validate_process.sh:2652/3353) | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The flag is unconditionally appended to every `codex exec`, including probes and heartbeat-wrapped/background execs.\n  WHY: The source says this is currently a no-op on main and does not fail today, but it expands the argv surface for a flag whose semantics may evolve in future codex releases.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/review_run_reviewers.sh (and mirrored in review_apply_fixes.sh:1431, review_rb_judge.sh:1061/1116/1491-1502, validate_process.sh:2652/3353)  \n  Line or code reference: added `--skip-git-repo-check` (probe lines 205-212, execute_reviewer_attempt:2599-2605; heartbeat-wrapped and direct exec sites)  \n  Problem: The flag is unconditionally appended to every `codex exec` (including probes, heartbeat-wrapped background exec, judge, fix, discover, diagnose).  \n  Why it fails at runtime: It does not fail today (workspace-reuse is still on the feature branch only). However, it extends the argv surface for a flag whose semantics may evolve in future codex releases (e.g. disabling ancillary safety probes). The PR description acknowledges this as \"defensive no-op\" but does not document the exact contract with workspace-reuse.  \n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "1fdf39359f12dbb3dc62a06c12f621734f10c196a73cfb5cd7abb82a798c5853",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3077,
+    "run_id": "26863113958",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26863113958",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260603042245_f51ca8deb4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3077,
+    "run_id": "26863113958"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-03T04:22:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

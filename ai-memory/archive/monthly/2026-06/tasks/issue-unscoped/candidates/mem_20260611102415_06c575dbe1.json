@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:1296 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The test asserts the diagnose prompt contains `Edit-tool discipline (apply_patch first with fallbacks`, but the diagnose script renders `Keep apply_patch as the primary write path in implement-family runs`.\n  WHY: With `SERENA_AVAILABLE=true`, the generated `stdin_prompt` does not contain the asserted substring, so `test_diagnose_prompt_contract_round_trip_and_fixup_metadata()` fails at runtime.\n- scripts/implement_diagnose_post_codex_failure.sh:169-178 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_20]\n  PROBLEM: The fallback issue JSON cache can be left empty after a failed validation, yet later callers still derive labels and body from that cached payload.\n  WHY: A transient API failure can propagate an empty or partial issue payload into the diagnose flow, degrading recovery output instead of guaranteeing a usable retry result.\n- tests/test_implement_post_codex_recovery.py:1443-1444 | severity=low | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The assertion failure message uses `non---jq` with a triple hyphen instead of `non--jq`.\n  WHY: The test logic is unaffected, but the failure text is confusing and reads like a typo.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"the validated safe subset for #3272 is MERGE-001 (single fallback issue payload for labels+body) and DEAD-002 (remove `list_run_log_excerpts()` wrapper from collect_workflow_logs.py and update callers/tests)\"\n  expected_change_site: `scripts/implement_diagnose_post_codex_failure.sh` (for MERGE-001) + test cleanups in both test files\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The PR diff and LAST RUN DIFF contain exactly those changes; the ledger records them as implemented on this ref and the deleted source doc is gone, so there is no remaining gap against the scoped safe-subset task.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_implement_post_codex_recovery.py:1296\n  PROBLEM: The assertion `assert \"Edit-tool discipline (apply_patch first with fallbacks\" in stdin_prompt` expects prompt text that the diagnose script does not emit.\n  WHY: The diagnose flow renders `Keep apply_patch as the primary write path in implement-family runs; for this diagnose role, use Serena only to reason about symbols and files named in the supplied evidence.`, so the assertion fails at runtime.\n  confidence=5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_implement_post_codex_recovery.py:1296\n  PROBLEM: The test assertion checks for the wrong prompt text.\n  WHY: The test expects `\"Edit-tool discipline (apply_patch first with fallbacks\"` but the diagnose script outputs `Keep apply_patch as the primary write path in implement-family runs; for this diagnose role, use Serena only to reason about symbols and files named in the supplied evidence.`, so the assertion fails.\n  confidence=5\n- scripts/implement_diagnose_post_codex_failure.sh:169-178\n  PROBLEM: When the fallback issue API fetch fails validation, the code resets `FALLBACK_ISSUE_JSON_FETCH_ATTEMPTED=false` but leaves `FALLBACK_ISSUE_JSON=\"\"`.\n  WHY: A concurrent caller could observe the empty payload before the retry completes, which can produce empty results or confusing error paths.\n  confidence=3\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_implement_post_codex_recovery.py:1296\n  PROBLEM: The assertion text was changed from \"Keep apply_patch as the primary write path\" to \"Edit-tool discipline (apply_patch first with fallbacks\", but the actual script emits \"Keep apply_patch as the primary write path in implement-family runs\".\n  WHY: The test will fail because the expected substring does not match what the script renders.\n  confidence=5\n- tests/test_implement_post_codex_recovery.py:1444\n  PROBLEM: Typo in assertion failure message: `non---jq` contains three hyphens instead of the intended two.\n  WHY: This makes error messages confusing when tests fail.\n  confidence=4\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_implement_post_codex_recovery.py:1296\n  PROBLEM: The assertion was changed to the wrong prompt substring.\n  WHY: The diagnose prompt pipeline renders `Keep apply_patch as the primary write path in implement-family runs;`, so the expected `\"Edit-tool discipline (apply_patch first with fallbacks\"` substring is absent and the test fails.\n  confidence=5\n- tests/test_implement_post_codex_recovery.py:1443\n  PROBLEM: The assertion failure message contains a typo: `non---jq` with a triple hyphen.\n  WHY: The test logic is correct, but the error message is harder to parse and reads like a typo.\n  confidence=5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/implement_diagnose_post_codex_failure.sh:169-178\n  PROBLEM: On retry-exhaustion or malformed JSON, the function clears the attempt flag so later callers can retry, but a later caller still copies `FALLBACK_ISSUE_JSON` before checking whether the payload is valid.\n  WHY: A transient GitHub API flake can leave `FALLBACK_ISSUE_JSON=\"\"`, causing empty labels or an empty diagnosis prompt to flow through the post-Codex recovery path.\n  confidence=4\n- Requirement: \"the validated safe subset for #3272 is MERGE-001 (single fallback issue payload for labels+body) and DEAD-002 (remove `list_run_log_excerpts()` wrapper from collect_workflow_logs.py and update callers/tests)\"\n  Expected change site: `scripts/implement_diagnose_post_codex_failure.sh` (for MERGE-001) + test cleanups in both test files\n  Evidence of absence: The PR diff and LAST RUN DIFF contain exactly those changes; the ledger records them as implemented on this ref and the deleted source doc is gone, so there is no remaining gap against the scoped safe-subset task.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "6d12ddb0ebcaf433c95025aedf3155238898c6207864df806a46eb37939524dd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3275,
+    "run_id": "27338143986",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27338143986",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260611102415_06c575dbe1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3275,
+    "run_id": "27338143986"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-11T10:24:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

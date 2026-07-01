@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1458-1471 | flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The tier 2 comment says the updated_at bound is removed, but the jq filter feeding tier 2 still includes the updated_at condition inside its OR clause.\n  WHY: This is a cosmetic documentation mismatch only; the runtime behavior still works because tier 2 also checks .status == \"in_progress\".\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/test-and-mark-stable.yml:1458-1464 (comment) vs 1471 (jq filter)\n  PROBLEM: The comment for tier 2 says: \"(No updated_at bound here: see the run 27328808462 frozen-timestamp note above.)\"\n  WHY: However, the $m filter that feeds tier 2 still contains the updated_at bound as part of its OR condition; this is a cosmetic issue only.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "973a5b1caa57d512451bfaa30be855ee4edf9193cbe5481511ae0923e3790cda",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27360674131",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27360674131",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260611162559_4ee1e07123",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27360674131"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-11T16:25:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

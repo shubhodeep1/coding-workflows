@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:approximately line 176 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The security audit is intended to be read-only, but Codex was granted write/exec capabilities, increasing blast radius if the model misbehaves.\n  WHY: Any Codex runtime error or adversarial response could modify code in the checkout during the audit, contradicting the stated intent.\n- scripts/security_audit.sh:lines 107-616 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `gh issue list/create/edit/reopen/comment` invocations are not wrapped with `gh_retry`.\n  WHY: A transient GitHub API failure or rate limit could make the weekly audit workflow exit non-zero and stop the audit.\n- scripts/security_audit.sh:lines 438-442 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `gh_retry` invocations for issue list/create/edit/reopen are missing or mis-indented.\n  WHY: The shell line continuations can break, causing the commands to be treated as comments or fail parsing and preventing the workflow from running.\n- scripts/security_audit.sh:Uses gh_retry at multiple locations (e.g., line 94, 151, 155, 161, 430, 619, 626, 632) | severity=critical | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The script invokes `gh_retry` but never sources `scripts/gh_helpers.sh` where that function is defined.\n  WHY: Standalone execution will fail with `gh_retry: command not found` when the first GitHub CLI command is attempted, stopping the weekly audit before analysis.\n- scripts/security_audit.sh:block around lines 582-618 constructing follow-up issue bodies | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Title truncation uses a simplistic 250-character cap without word boundaries.\n  WHY: Long titles may be split mid-word or mid-URL, making GitHub issue titles harder to read and potentially malformed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/security_audit.sh:approximately line 176 | severity=high | confidence=5\n  PROBLEM: The security audit is intended to be read-only, but Codex was granted write/exec capabilities, increasing blast radius if the model misbehaves.\n  WHY: Any Codex runtime error or adversarial response could modify code in the checkout during the audit, contradicting the stated intent.\n- scripts/security_audit.sh:lines 107-616 | severity=high | confidence=5\n  PROBLEM: The `gh issue list/create/edit/reopen/comment` invocations are not wrapped with `gh_retry`.\n  WHY: A transient GitHub API failure or rate limit could make the weekly audit workflow exit non-zero and stop the audit.\n- scripts/security_audit.sh:lines 438-442 | severity=critical | confidence=5\n  PROBLEM: `gh_retry` invocations for issue list/create/edit/reopen are missing or mis-indented.\n  WHY: The shell line continuations can break, causing the commands to be treated as comments or fail parsing and preventing the workflow from running.\n- scripts/security_audit.sh:block around lines 582-618 constructing follow-up issue bodies | severity=low | confidence=4\n  PROBLEM: Title truncation uses a simplistic 250-character cap without word boundaries.\n  WHY: Long titles may be split mid-word or mid-URL, making GitHub issue titles harder to read and potentially malformed.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/security_audit.sh:Uses gh_retry at multiple locations (e.g., line 94, 151, 155, 161, 430, 619, 626, 632) | severity=critical | confidence=5\n  PROBLEM: The script invokes `gh_retry` but never sources `scripts/gh_helpers.sh` where that function is defined.\n  WHY: Standalone execution will fail with `gh_retry: command not found` when the first GitHub CLI command is attempted, causing the weekly audit workflow to error out before any security analysis is performed.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "c5d15a60614554d32f5e80a7d19b6a32044676d8b330b0aea40f69134baa70ad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3514,
+    "run_id": "28209739761",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28209739761",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260626013140_54be571033",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3514,
+    "run_id": "28209739761"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-26T01:31:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

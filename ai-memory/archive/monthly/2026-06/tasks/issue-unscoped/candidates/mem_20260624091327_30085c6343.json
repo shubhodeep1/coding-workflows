@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:147 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The variable `PR_CHECKS_LAST_REASON` is defined twice within the `_pr_checks_completed()` function, with the second assignment hiding the intended local variable initialization.\n  WHY: The duplicate `PR_CHECKS_LAST_REASON=\"query_failed\"` line inside the function overrides the local variable declaration and can prevent correct initialization in some code paths.\n- scripts/pr_checks_lib.sh:156-157 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_pr_checks_completed()` does not validate that the first argument (PR number) is non-empty before proceeding to API calls.\n  WHY: An empty string or invalid PR number passed as the first argument can lead to invalid GitHub API calls and incorrect merge-gate behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/pr_checks_lib.sh:147 | severity=critical | confidence=5\n  PROBLEM: The variable `PR_CHECKS_LAST_REASON` is defined twice within the `_pr_checks_completed()` function: once at the beginning of the function and again immediately inside the function body.\n  WHY: The duplicate declaration causes the function parameter declaration to be hidden and breaks the reason-mapping logic used by callers like `review_rb_judge.sh`.\n- scripts/pr_checks_lib.sh:156-157 | severity=high | confidence=4\n  PROBLEM: The argument-count check in `_pr_checks_completed()` accepts at least 3 positional parameters, but the code at lines 156-157 does not validate whether the PR_NUMBER argument is non-empty before proceeding.\n  WHY: When an empty string or invalid PR number is passed as the first argument, the API call to fetch PR JSON can fail or return unexpected results.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "7e0ddf1e8880ad375ce02e036c358d66e884e06170e9648ae6d871b415682307",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3486,
+    "run_id": "28085768807",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28085768807",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260624091327_30085c6343",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3486,
+    "run_id": "28085768807"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-24T09:13:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

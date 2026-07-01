@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ai_memory_push_retry_backoff.py:127-135 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5]\n  PROBLEM: The `fake_run_git` stub does not accept the new `inherit_location_env` keyword-only parameter, so patched `_run_git` calls now raise `TypeError`.\n  WHY: `_resolve_origin_url` passes `inherit_location_env=True`, causing all six `test_persist_memory_operation_*` tests to fail before their assertions.\n- scripts/ai_memory_lib.py:2307-2312 | severity=medium | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The new `inherit_location_env` keyword-only parameter changes `_run_git`'s signature in a way that breaks existing test mocks.\n  WHY: `_resolve_origin_url` now calls `_run_git(..., inherit_location_env=True)`, and the existing `fake_run_git` helper in `tests/test_ai_memory_push_retry_backoff.py` rejects the unexpected keyword, causing six CI failures.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_ai_memory_push_retry_backoff.py:127-135 | severity=high | confidence=5\n  PROBLEM: The stub `fake_run_git(cwd, args, check: bool = True)` does not accept the new `inherit_location_env` keyword-only parameter added to the real `_run_git` in this PR.\n  WHY: `_resolve_origin_url` now passes `inherit_location_env=True`, which reaches the monkey-patched fake and raises `TypeError`, so the six `test_persist_memory_operation_*` tests crash before their assertions.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/ai_memory_lib.py:2307-2312 | severity=medium | confidence=5\n  PROBLEM: The addition of the `inherit_location_env` keyword-only parameter changes `_run_git`'s signature and breaks existing test mocks that don't accept the new keyword argument.\n  WHY: When `_resolve_origin_url` calls `_run_git(..., inherit_location_env=True)`, the patched `fake_run_git` in `tests/test_ai_memory_push_retry_backoff.py` rejects it with `TypeError`, causing six test failures.\n- scripts/ai_memory_lib.py:2326-2330 | severity=low | confidence=2\n  PROBLEM: The environment selection logic is broader than necessary because `inherit_location_env=True` uses the full `os.environ` rather than preserving only the git location variables.\n  WHY: This is described as intended behavior and the code works as intended, so it's only a minor observation rather than a blocking issue.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/ai_memory_lib.py:2307-2312 | severity=medium | confidence=5\n  PROBLEM: The new `inherit_location_env` keyword-only parameter in `_run_git` introduces a backward compatibility issue for existing callers/mocks that don't accept the parameter.\n  WHY: `_resolve_origin_url` now calls `_run_git(..., inherit_location_env=True)`, and the existing `fake_run_git` helper in `tests/test_ai_memory_push_retry_backoff.py` raises `TypeError` on the unexpected keyword, producing six CI failures.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "de70ee057cf3733f98765c038b5f445e77255efcb7c566149f6a9585fa318390",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27087174262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27087174262",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260607083545_75cd80c2b5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27087174262"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-07T08:35:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

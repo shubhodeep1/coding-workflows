@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3412,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3412\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3413\",\"pr_number\":3413,\"branch\":\"ai/issue-3412\",\"run_id\":\"27896193736\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/27896193736\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/audit_consumer_drift.yml\",\"README.md\",\"agents.md\",\"scripts/audit_consumer_drift.py\",\"scripts/label_helpers.sh\",\"tests/test_audit_consumer_drift.py\"]}",
+  "fingerprint": "5570c02d6ac800b04bba821ca4120a2bcc33fe35b100cdffe6a8ca4d77b0b169",
+  "lineage": {
+    "issue_number": 3412,
+    "parent_ids": [],
+    "pr_number": 3413,
+    "run_id": "27896193736",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27896193736",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3413"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260621065129_12914bc4ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3412,
+    "level": "run",
+    "pr_number": 3413,
+    "run_id": "27896193736"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3412: https://github.com/shubhodeep1/coding-workflows/pull/3413",
+  "timestamps": {
+    "created_at": "2026-06-21T06:51:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

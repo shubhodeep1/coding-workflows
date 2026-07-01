@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1272-1290 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_20]\n  PROBLEM: The inline timeout-prelude staging block duplicates helper logic and is effectively dead/no-op at runtime because the helper already stages the same file first.\n  WHY: Both reviewers note the helper runs before the inline block and installs the same prelude, so the inline branch never changes runtime behavior; x-ai also says the duplicate branches can diverge on transient failures or source-ref changes.\n- .github/workflows/review_autofix.yml:1272-1273 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: SUPPORT_ROOT_DIR and SUPPORT_PROMPTS_DIR are recomputed locally in the inline block, so future helper-path changes could drift the staging location.\n  WHY: The values match today, but this duplicates the helper\u2019s path computation and could create a second staging location that downstream code does not read.\n- .github/workflows/review_autofix.yml:~1288 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The rm -f cleanup in the timeout-prelude block can leave the file absent in a way that differs from the resolver\u2019s soft-missing handling.\n  WHY: x-ai reports the cleanup plus duplicate helper/workflow paths are not idempotent and may cause the timeout-aware prelude guidance to be skipped in favor of the original prompt.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \".github/workflows/review_autofix.yml explicitly stages `prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt` into `${SUPPORT_PROMPTS_DIR}` via the install signature that the existing test asserts on\" (and keep the existing orchestrator refresh allowlist, soft-missing behavior, resolver retry semantics intact)\n  expected_change_site: .github/workflows/review_autofix.yml (inside \"Stage workflow support files\" step, after the `stage_workflow_support.sh` call) + minimal update to `.ai/.workspace_source_manifest.txt` if any reference changed\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST_RUN_DIFF and PR_DIFF only added (then partially cleaned) one timeout-prelude inline block; `scripts/stage_workflow_support.sh` already contains the exact `install -m 0644` + fallback + rm + warning for both retry-prelude and timeout variant; no equivalent centralized call or updated manifest entry removes the duplication while preserving the test-asserted shape.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml:1272-1285 (inline timeout-prelude staging block) | confidence=3\n  PROBLEM: The inline block duplicates helper logic and is dead code at runtime because the helper stages the same prelude first.\n  WHY: The helper runs before the inline block and stages both preludes into `${SUPPORT_PROMPTS_DIR}`, so the inline guard is always false and the block never executes.\n- .github/workflows/review_autofix.yml:1272-1273 | confidence=2\n  PROBLEM: SUPPORT_ROOT_DIR and SUPPORT_PROMPTS_DIR are recomputed locally in the inline block, so a future helper change could drift the staging path.\n  WHY: The values match now, but this duplicates the helper\u2019s derivation and could create a second staging location that downstream code does not read.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/review_autofix.yml:1275-1290 (SUPPORT_ROOT_DIR / SUPPORT_PROMPTS_DIR block after helper call) | confidence=5\n  PROBLEM: The inline staging block duplicates the helper\u2019s fallback logic and creates two independent resolution branches that can diverge.\n  WHY: The same fallback logic already exists in `scripts/stage_workflow_support.sh`; the duplicate path can diverge on transient checkout failures or source-ref changes.\n- .github/workflows/review_autofix.yml:~1288 (`rm -f \"${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt\"`) | confidence=4\n  PROBLEM: The sentinel rm -f can leave the file absent in a way that differs from the resolver\u2019s soft-missing handling.\n  WHY: The duplicate workflow block and helper are not idempotent, and timeout-induced retry may receive the original prompt instead of timeout-aware guidance.\n- Requirement: \".github/workflows/review_autofix.yml explicitly stages `prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt` into `${SUPPORT_PROMPTS_DIR}` via the install signature that the existing test asserts on\" (and keep existing orchestrator refresh allowlist, soft-missing behavior, resolver retry semantics intact)\n  Expected change site: .github/workflows/review_autofix.yml (inside \"Stage workflow support files\" step, after the `stage_workflow_support.sh` call) + minimal update to `.ai/.workspace_source_manifest.txt` if any reference changed\n  Evidence of absence: LAST_RUN_DIFF and PR_DIFF only added (then partially cleaned) one timeout-prelude inline block; the helper `stage_workflow_support.sh` already contains the exact `install -m 0644` + fallback + rm + warning for both retry-prelude and timeout variant; no equivalent centralized call or updated manifest entry removes the duplication while preserving the test-asserted shape.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "680642299e1b49ea28ed2efc86c4fb93c0285eeee6dab560192db3a50f693d9e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3227,
+    "run_id": "27129347291",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27129347291",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260608102852_4dfab9f76b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3227,
+    "run_id": "27129347291"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-08T10:28:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

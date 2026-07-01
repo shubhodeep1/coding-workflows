@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nRef/context\n- Planning ref: `orchestrator/project-3323` @ `bff7a8ae671ca64f0949109e7a0550945d17ef4d`\n- Integration metadata matches the checked-out ref.\n- Clarification mapping: no `Q1/Q2/...` were asked; `/answer [auto-answered-by-orchestrator]` only confirmed planning should proceed.\n\nRepresentative pattern to follow\n- Mirror the existing extracted-helper pattern already used in review autofix: thin workflow wrapper in `.github/workflows/review_autofix.yml` + bootstrapped runtime helper (`scripts/review_collect_pr_metadata.sh`) + contract assertions in `tests/test_review_autofix_review_pipeline_contract.py`.\n\n1. Files likely to change\n- `.github/workflows/review_autofix.yml`\n- `scripts/collect_pr_check_runs_context.py` (new)\n- `scripts/stage_workflow_support.sh`\n- `tests/test_review_autofix_review_pipeline_contract.py`\n- `tests/test_review_autofix_reasoning_schedule.py`\n\n2. Functions/modules to implement\n- New `scripts/collect_pr_check_runs_context.py` entrypoint that owns the current step logic:\n  - read `PR_PAYLOAD_FILE` and derive `HEAD_SHA`\n  - emit the exact existing sentinel outputs for `disabled` / `unavailable`\n  - clamp `CHECK_RUNS_WAIT_TIMEOUT_SECS`, `CHECK_RUNS_POLL_INTERVAL_SECS`, and `CHECK_RUNS_LOG_TAIL_BYTES` exactly as today\n  - poll `gh api --paginate --slurp repos/{repo}/commits/{head_sha}/check-runs?per_page=100`\n  - exclude only the current workflow run via `details_url` + `SELF_RUN_ID`\n  - preserve the stable wait-signature + adaptive 1x/2x/4x backoff with the current cap/deadline behavior\n  - merge paginated page objects into one run list, compute failed/incomplete sets, and serialize the exact `PR_CHECK_RUNS_CONTEXT_FILE` format\n  - fetch Actions job log tails only when `output.summary` is empty/blank, preserving the current redirect + range-fetch + last-200-lines behavior\n  - preserve fail-open `api_error`, `timeout`, and `writer_error` handling, including existing warning/log literals\n  - emit the same final size/hash diagnostics so the workflow wrapper stays thin\n- In `.github/workflows/review_autofix.yml`, replace the large inline `Collect PR check-run failures` block with a minimal call into `${SUPPORT_SCRIPTS_DIR}/collect_pr_check_runs_context.py`, keeping existing env var names and outputs unchanged.\n- In `scripts/stage_workflow_support.sh`, add the new helper to `REQUIRED_BOOTSTRAP_SCRIPTS` so consumer repos stage it into `SUPPORT_SCRIPTS_DIR`.\n\n3. Data structures affected\n- `PR_CHECK_RUNS_CONTEXT_FILE` text contract, including:\n  - header lines\n  - `collection_status`\n  - `total_check_runs`, `failed_count`, `incomplete_count`\n  - `failed[i].*` fields\n  - `failed[i].log_tail (...)`\n  - `incomplete[i].*` fields\n- Internal wait-view snapshot used for adaptive backoff (`id`/`status` after self-run exclusion).\n- Parsed GitHub check-run page objects and Actions job-log redirect metadata.\n\n4. API/interface changes\n- No user-visible or reviewer/editor interface change is intended.\n- Internal refactor only:\n  - workflow step delegates to the new helper\n  - helper consumes the current env contract (`PR_PAYLOAD_FILE`, `PR_CHECK_RUNS_CONTEXT_FILE`, `SELF_RUN_ID`, `GH_TOKEN`/`GITHUB_TOKEN`, `GITHUB_REPOSITORY`, check-run tuning env vars)\n- Keep current status tokens and warning keys stable, especially `CHECK_RUNS_WAIT_TIMEOUT` and `CHECK_RUNS_AUTOFIX_WRITER_ERROR`.\n\n5. Risks / edge cases\n- Do not change review-gate policy: preserve the current wait budget/defaults and fail-open behavior.\n- Preserve both JSON input shapes: paginated `--slurp` array and legacy single-object fallback.\n- Preserve self-run exclusion narrowly; do not exclude sibling workflow runs on the same SHA.\n- Keep `CHECK_RUNS_LOG_TAIL_BYTES` clamping and blank-summary-only log-tail fetching unchanged.\n- Preserve exact sentinel/body wording in the output file; reviewer/editor prompts already depend on that contract.\n- Consumer-repo bootstrap is easy to miss; if the helper is referenced in the workflow before it is added to `REQUIRED_BOOTSTRAP_SCRIPTS`, consumer runs will fail.\n\n6. Testing considerations\n- Extend `tests/test_review_autofix_review_pipeline_contract.py` to assert:\n  - the workflow step is now a thin delegation to `collect_pr_check_runs_context.py`\n  - the helper is present in `REQUIRED_BOOTSTRAP_SCRIPTS`\n  - the helper preserves the artifact contract for representative ready/fail-open cases\n- Update `tests/test_review_autofix_reasoning_schedule.py` so the wait-time/default assertion follows the new helper location instead of the deleted inline shell block.\n- Run targeted validation:\n  - `python3 tests/test_review_autofix_review_pipeline_contract.py`\n  - `python3 tests/test_review_autofix_reasoning_schedule.py`\n  - `python3 scripts/check_workflow_script_refs.py`\n\nConflicts detected\n- `tests/test_review_autofix_reasoning_schedule.py` still expects inline `_wait_timeout` strings and a `900`-second fallback, while the current workflow env/default is `300`. The extraction should update the test to the current contract, not reintroduce the stale value.\n\nAssumptions\n- `files_touched` is intended to cover the named workflow, the new helper, the bootstrap script, and directly related review-autofix tests.\n- This issue is code motion/extraction only; no reviewer/editor behavior change is intended.\n\nMissing-context notes\n- The explicit `files_touched` allowlist is not present in the planning context. If it is narrower than assumed, keep coverage changes inside the existing review-autofix test files rather than widening scope.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e296193d4b41770b802f14fe664fbd9c6c04cc41376e64c3398b9e4711657762",
+  "lineage": {
+    "issue_number": 3327,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27468416552",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27468416552",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3327"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260613134705_353ae4e9a1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3327,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27468416552"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3327",
+  "timestamps": {
+    "created_at": "2026-06-13T13:47:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

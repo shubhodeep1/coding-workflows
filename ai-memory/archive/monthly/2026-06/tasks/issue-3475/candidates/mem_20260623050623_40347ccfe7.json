@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3475,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3475\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3476\",\"pr_number\":3476,\"branch\":\"ai/issue-3475\",\"run_id\":\"28003341138\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/28003341138\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/orchestrate.yml\",\"scripts/write_guard.sh\",\"tests/test_workflow_gh_retry_fallback_contract.py\"]}",
+  "fingerprint": "ce0f0d6ffb5bdc3c661ee7cb0ad53a1092329bb49c2cdb5dd378f16b2632e499",
+  "lineage": {
+    "issue_number": 3475,
+    "parent_ids": [],
+    "pr_number": 3476,
+    "run_id": "28003341138",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28003341138",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3476"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260623050623_40347ccfe7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3475,
+    "level": "run",
+    "pr_number": 3476,
+    "run_id": "28003341138"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3475: https://github.com/shubhodeep1/coding-workflows/pull/3476",
+  "timestamps": {
+    "created_at": "2026-06-23T05:06:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

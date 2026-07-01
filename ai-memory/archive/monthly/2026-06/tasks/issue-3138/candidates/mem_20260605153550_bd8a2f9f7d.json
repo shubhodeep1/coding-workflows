@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-3042` @ `fd8497221b8ba8b3ac38352bbcf63e06a8347627`\nIntegration-branch metadata matches the checked-out ref.\n\nClarification mapping:\n- No Q1/Q2 batch was needed.\n- `/answer [auto-answered-by-orchestrator]` confirms proceeding with the issue\u2019s stated scope and guardrails.\n\n## Automation / entrypoint summary\n- Change type: extend existing workflows/tests only; no new standalone script, no new supervisor.\n- Entry points this change affects:\n  - `workflow-templates/ai-orchestrate.yml` \u2192 `.github/workflows/orchestrate.yml` via `workflow_dispatch`\n  - `workflow-templates/ai-orchestrate-poll.yml` \u2192 `.github/workflows/orchestrate_poll.yml` via `schedule` (`*/5 * * * *`) and `workflow_dispatch`\n  - `workflow-templates/ai-orchestrate-clarify-respond.yml` \u2192 `.github/workflows/orchestrate_clarify_respond.yml` via `issue_comment.created`\n- DB work: none.\n- New removal-registry entry: none.\n\n## Representative patterns to follow\n- Mirror the existing overlay bootstrap/load pattern in `.github/workflows/plan.yml`:\n  - stage `load_workflow_overlay.py`\n  - stage `ai-memory/schemas/workflow_overlay.v1.json`\n  - call the loader with `--repo-root \"${GITHUB_WORKSPACE}\"` and `--github-env \"${GITHUB_ENV}\"`\n- Mirror the test style from:\n  - `tests/test_workflow_overlay_core.py` for overlay wiring assertions\n  - `tests/test_semble_workflow_parity_contract.py` for small orchestrator-family parity contracts\n\n## Files likely to change\n\nRuntime wiring:\n- `.github/workflows/orchestrate.yml`\n  - Extend the `Stage workflow support files` shell block to stage `load_workflow_overlay.py`.\n  - Add `workflow_overlay.v1.json` to the staged schema list.\n  - Invoke the loader in that staging block so later `render_prompt.sh` calls in `Build Codex prompt` see the overlay env vars.\n- `.github/workflows/orchestrate_poll.yml`\n  - Same bootstrap additions as above.\n  - Run the loader before `Process each tracking issue`, so `scripts/orchestrate_poll_process.sh` inherits the overlay env for its `mode-judge*` prompt renders.\n- `.github/workflows/orchestrate_clarify_respond.yml`\n  - Same bootstrap additions as above.\n  - Run the loader before the initial and retry prompt-render paths so the overlay is visible everywhere this workflow calls `render_prompt.sh`.\n\nTests:\n- `tests/test_workflow_overlay_orchestrator.py` \u2014 create this file (it does not exist on this ref).\n  - Add reusable-workflow wiring assertions for the three orchestrator workflows.\n  - Add wrapper-parity assertions for the three matching templates.\n\nParity-checked files (likely unchanged unless drift is found):\n- `workflow-templates/ai-orchestrate.yml`\n- `workflow-templates/ai-orchestrate-poll.yml`\n- `workflow-templates/ai-orchestrate-clarify-respond.yml`\n  - Current inspection shows these already point at the correct reusable workflows; they likely only need verification via the new test.\n- `scripts/load_workflow_overlay.py`\n  - Current logic already preserves absent-file no-op behavior and exports the needed env vars; only touch this file if implementation finds a concrete wiring gap. No orchestrator-specific parsing branch should be added by default.\n\n## Functions / modules to implement\n- The `Stage workflow support files` shell blocks in the three reusable workflows.\n- A new contract-style test module: `tests/test_workflow_overlay_orchestrator.py`.\n- No change is currently planned for `scripts/orchestrate_poll_process.sh`; workflow-level env inheritance should be sufficient.\n\n## Data structures affected\n- Workflow bootstrap script lists (`_fetched_scripts`) gain `load_workflow_overlay.py`.\n- Staged schema lists gain `workflow_overlay.v1.json`.\n- Existing overlay env contract becomes available in the orchestrator family:\n  - `WORKFLOW_OVERLAY_ENABLED`\n  - `WORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON`\n  - `WORKFLOW_OVERLAY_REPO_ROOT`\n- No changes to orchestrator state JSON, wrapper inputs, or prompt schema formats.\n\n## API / interface changes\n- No external API changes.\n- No `workflow_call` input or secret changes.\n- No wrapper interface changes.\n- Internal behavior change only: orchestrator-family workflows will populate the existing overlay env contract before prompt rendering.\n\n## Risks / edge cases\n- Preserve absent-file behavior by calling the shared loader unconditionally; do not add workflow-local `if [ -f .github/ai/WORKFLOW.md ]` branches. The loader already returns the disabled/no-op env block when the file is absent.\n- Keep the script-ref/main fallback for both the loader script and the schema file, matching `plan.yml`, so consumer repos on older refs still bootstrap cleanly.\n- `orchestrate_poll.yml` is the easy place to miss: the actual prompt rendering happens later inside `scripts/orchestrate_poll_process.sh`, so the loader must run early enough for that shell step to inherit the env.\n- `orchestrate_clarify_respond.yml` has multiple prompt render passes; the loader must be wired once at workflow setup, not only inside the first Codex call path.\n- Guardrail: do not widen scope into snapshot/blocker/cap logic.\n\n## Conflict notes\n- `tests/test_workflow_overlay_orchestrator.py` is referenced in the issue scope but is absent on this ref; plan assumes it should be created.\n- `scripts/load_workflow_overlay.py` already implements the absent-file no-op contract, so the work is primarily reusable-workflow wiring, not new loader semantics.\n\n## Testing considerations\n- Add targeted contract tests in `tests/test_workflow_overlay_orchestrator.py` for:\n  - reusable-workflow wiring (`load_workflow_overlay.py`, `workflow_overlay.v1.json`, loader invocation, order before prompt/process execution)\n  - wrapper parity (`uses:` target, and `project_description` pass-through for `ai-orchestrate.yml`)\n- Run at least:\n  - `python3 -m pytest tests/test_workflow_overlay_orchestrator.py tests/test_workflow_overlay_core.py`\n- If the workflow edits touch nearby contract snippets, also run:\n  - `python3 -m pytest tests/test_orchestrate_poll_workflow_contract.py tests/test_semble_workflow_parity_contract.py`\n\nIf this plan matches intent, reply `/approved`. If you want changes to the plan first, reply `/reclarify`.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "8f3dfbba791d3a72ba9f74521e81cb9084025eda0762b06be2a2957b10ccd5be",
+  "lineage": {
+    "issue_number": 3138,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27023996554",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27023996554",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3138"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260605153550_bd8a2f9f7d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3138,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27023996554"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3138",
+  "timestamps": {
+    "created_at": "2026-06-05T15:35:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

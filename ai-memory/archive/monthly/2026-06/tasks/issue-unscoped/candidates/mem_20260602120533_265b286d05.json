@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1252-1258 | severity=high | confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` still omits `render_prompt.py`.\n  WHY: `REQUIRED_BOOTSTRAP_SCRIPTS` includes `render_prompt.py`, but the main-primary bootstrap list used for branch-rebuild/main-snapshot preference does not, so the backend can still fail to stage and abort the reviewer step on fallback paths.\n- .github/workflows/review_autofix.yml:3368-3374 | severity=high | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The new `check_required_file \"${SUPPORT_SCRIPTS_DIR}/render_prompt.py\"` does not cover the main-primary fallback path.\n  WHY: The preflight validates the support-scripts path, but the corresponding main-primary bootstrap path remains unchecked, so the same not-found abort can still surface at runtime.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Also hardened review_autofix.yml: Added render_prompt.py to the consumer-repo leaked-paths guard, keeping it symmetric with render_prompt.sh.\" (and \"The same missing-backend gap exists in every other workflow that stages the shim; left unfixed they break... Added render_prompt.py beside render_prompt.sh in: clarify.yml, plan.yml, implement.yml, orchestrate.yml, orchestrate_poll.yml, orchestrate_clarify_respond.yml, validate.yml.\")\n  expected_change_site: .github/workflows/review_autofix.yml (the leaked_paths git ls-files block) + all 7 other workflow files (full list of fetch loops)\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The PR/last-run diffs added `render_prompt.py` to every for-loop list (good), and added it to leaked_paths and the preflight (good), but MAIN_PRIMARY_BOOTSTRAP_SCRIPTS remains incomplete (not mentioned in PR body but required for the \"proactive fixes\" and branch-rebuild safety claim).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/review_autofix.yml:1252-1258 | severity=high | confidence=[5]\n  PROBLEM: `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` now omits `render_prompt.py`.\n  WHY: REQUIRED_BOOTSTRAP_SCRIPTS includes `render_prompt.py` and the preflight calls `check_required_file` for it, but the main-primary bootstrap list used for wedged integration branches / branch-rebuilds still omits it, so the bootstrap loop can abort with \"render_prompt.py not found for ...\" at runtime.\n- .github/workflows/review_autofix.yml:3368-3374 | severity=high | confidence=[4]\n  PROBLEM: The new `check_required_file \"${SUPPORT_SCRIPTS_DIR}/render_prompt.py\"` is present, but the fallback path symmetry is still incomplete.\n  WHY: The support-scripts path is checked, but the main-primary fallback path is not symmetrically covered, so the same latent \"not found\" abort can still occur.\n- Requirement: \"Also hardened review_autofix.yml: Added render_prompt.py to the consumer-repo leaked-paths guard, keeping it symmetric with render_prompt.sh.\" (and \"The same missing-backend gap exists in every other workflow that stages the shim; left unfixed they break... Added render_prompt.py beside render_prompt.sh in: clarify.yml, plan.yml, implement.yml, orchestrate.yml, orchestrate_poll.yml, orchestrate_clarify_respond.yml, validate.yml.\")  \n  Expected change site: .github/workflows/review_autofix.yml (the leaked_paths git ls-files block) + all 7 other workflow files (full list of fetch loops).  \n  Evidence of absence: The PR/last-run diffs added `render_prompt.py` to every for-loop list (good), and added it to leaked_paths and the preflight (good), but MAIN_PRIMARY_BOOTSTRAP_SCRIPTS remains incomplete (not mentioned in PR body but required for the \"proactive fixes\" and branch-rebuild safety claim).  \n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5a80ba110fe2bb9f67994fbf194b8ac97c68859ec06e13aaf6104529f7bd6a5c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3047,
+    "run_id": "26817990529",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26817990529",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260602120533_265b286d05",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3047,
+    "run_id": "26817990529"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-02T12:05:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

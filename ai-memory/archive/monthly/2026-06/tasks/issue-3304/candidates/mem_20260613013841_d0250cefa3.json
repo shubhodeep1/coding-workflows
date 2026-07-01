@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3304,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3304\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3305\",\"pr_number\":3305,\"branch\":\"ai/issue-3304\",\"run_id\":\"27452324372\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/27452324372\",\"changed_files\":[\".github/workflows/ci.yml\",\"agents.md\",\"docs/INVENTORY.md\",\"prompts/contracts/mode-clarify-respond.yml\",\"prompts/contracts/mode-clarify.yml\",\"prompts/contracts/mode-implement-diagnose-continuation.yml\",\"prompts/contracts/mode-implement-diagnose.yml\",\"prompts/contracts/mode-implement-repair-continuation.yml\",\"prompts/contracts/mode-implement-repair-syntax.yml\",\"prompts/contracts/mode-implement-repair.yml\",\"prompts/contracts/mode-implement.yml\",\"prompts/contracts/mode-judge-interim.yml\",\"prompts/contracts/mode-judge-review-blocked.yml\",\"prompts/contracts/mode-judge-stall-recovery.yml\",\"prompts/contracts/mode-judge.yml\",\"prompts/contracts/mode-orchestrate-poll-judge.yml\",\"prompts/contracts/mode-orchestrate.yml\",\"prompts/contracts/mode-plan.yml\",\"prompts/contracts/mode-review-apply-fixes-continuation.yml\",\"prompts/contracts/mode-review-conflict-resolver-continuation.yml\",\"prompts/contracts/mode-validate-diagnose.yml\",\"prompts/contracts/mode-validate-discover.yml\",\"prompts/contracts/mode-validate-fix-harness.yml\",\"prompts/contracts/mode-validate-generate.yml\",\"prompts/contracts/mode-validate-self-heal-continuation.yml\",\"prompts/contracts/mode-validate-self-heal.yml\",\"prompts/contracts/mode-workflow-analysis.yml\",\"prompts/contracts/mode-workflow-api-redundancy.yml\",\"prompts/contracts/mode-workflow-audit.yml\",\"prompts/contracts/review-consolidator.yml\",\"prompts/contracts/review-reviewer-checklist.yml\",\"prompts/mode-clarify-respond.txt\",\"prompts/mode-clarify.txt\",\"prompts/mode-implement-diagnose-continuation.txt\",\"prompts/mode-implement-diagnose.txt\",\"prompts/mode-implement-repair-continuation.txt\",\"prompts/mode-implement-repair-syntax.txt\",\"prompts/mode-implement-repair.txt\",\"prompts/mode-implement.txt\",\"prompts/mode-judge-interim.txt\",\"prompts/mode-judge-review-blocked.txt\",\"prompts/mode-judge-stall-recovery.txt\",\"prompts/mode-judge.txt\",\"prompts/mode-orchestrate-poll-judge.txt\",\"prompts/mode-orchestrate.txt\",\"prompts/mode-plan.txt\",\"prompts/mode-review-apply-fixes-continuation.txt\",\"prompts/mode-review-conflict-resolver-continuation.txt\",\"prompts/mode-validate-diagnose.txt\",\"prompts/mode-validate-discover.txt\",\"prompts/mode-validate-fix-harness.txt\",\"prompts/mode-validate-generate.txt\",\"prompts/mode-validate-self-heal-continuation.txt\",\"prompts/mode-validate-self-heal.txt\",\"prompts/mode-workflow-analysis.txt\",\"prompts/mode-workflow-api-redundancy.txt\",\"prompts/mode-workflow-audit.txt\",\"prompts/references/output-contract.txt\",\"prompts/references/severity-classification.txt\",\"prompts/references/validate-output-contract.txt\",\"prompts/references/verification-loop.txt\",\"prompts/review-consolidator.txt\",\"prompts/review-reviewer-checklist.txt\",\"scripts/render_prompt.py\",\"tests/inventory_exemptions.txt\",\"tests/inventory_parity.py\",\"tests/prompt_size_budget.py\",\"tests/test_render_prompt_core_modes.py\",\"tests/test_render_prompt_foundation.py\",\"tests/test_render_prompt_review_judge_modes.py\",\"tests/test_render_prompt_validate_analytics_modes.py\",\"unattended_system_instructions.md\"]}",
+  "fingerprint": "397b53f049a31debbae5bf8e948f99626d5f698543a50782dd6ce97d922a6843",
+  "lineage": {
+    "issue_number": 3304,
+    "parent_ids": [],
+    "pr_number": 3305,
+    "run_id": "27452324372",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27452324372",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3305"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260613013841_d0250cefa3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3304,
+    "level": "run",
+    "pr_number": 3305,
+    "run_id": "27452324372"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3304: https://github.com/shubhodeep1/coding-workflows/pull/3305",
+  "timestamps": {
+    "created_at": "2026-06-13T01:38:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

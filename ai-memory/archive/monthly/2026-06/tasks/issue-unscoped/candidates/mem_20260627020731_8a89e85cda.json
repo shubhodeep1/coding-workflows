@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_plan_clarify_header_prompt_staging.py:55-63 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: HEADER_RENDER_RE matches comment text, so workflows that merely mention render_prompt.sh prompts/header.txt can be misclassified as callers and fail the staging assertion.\n  WHY: The current test passes only because the same files also contain the real invocation, so a comment-only mention would be a false positive.\n- tests/test_plan_clarify_header_prompt_staging.py:92-114 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The contract test performs exact string matches on duplicated staging fragments and the error echo line, but it does not explicitly cover the case where both .codex-workflow-src and .codex-workflow-src-main are absent.\n  WHY: That leaves regressions in the fallback/hard-error path or staging sequence undetected until a consumer hits the failure again.\n- tests/test_plan_clarify_header_prompt_staging.py:163-193 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: _render_header sanitizes the environment and hard-codes a narrower shell context than the GitHub Actions runner used by the real workflows.\n  WHY: Changes that depend on runner shell/environment behavior could still pass this test while failing in consumers.\n- tests/test_plan_clarify_header_prompt_staging.py:200-216 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_6-plus]\n  PROBLEM: The loop over prefer_main_snapshot hides which branch failed because the assertion messages do not include the active value.\n  WHY: A regression in either the primary or fallback path will produce the same assertion text without identifying the failing iteration.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: tests/test_plan_clarify_header_prompt_staging.py\n  Line or code reference: 203-216\n  Problem: The loop in test_header_renders_when_staged iterates over both prefer_main_snapshot=False and prefer_main_snapshot=True, but none of the three assertion messages inside the loop include the prefer_main_snapshot value.\n  Why it fails at runtime: This is a test diagnostic gap, not an application runtime failure; when the primary path passes but the fallback path fails, a developer reading the assertion output cannot distinguish which path is broken without inspecting the traceback line number.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- File: tests/test_plan_clarify_header_prompt_staging.py\n  Line or code reference: 56\n  Problem: HEADER_RENDER_RE matches the string render_prompt.sh prompts/header.txt anywhere in workflow YAML text, including code comments.\n  Why it fails at runtime: A future workflow YAML mentions the string in prose without actually running the command, _workflows_rendering_header() would include it, and test_render_callers_stage_header_prompt would fail on that workflow for lacking the staging block.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: tests/test_plan_clarify_header_prompt_staging.py\n  Line or code reference: 55-56 (HEADER_RENDER_RE regex)\n  Problem: The regex render_prompt.sh prompts/header.txt matches anywhere in the YAML text, including comment text that describes the command without executing it.\n  Why it fails at runtime: A future workflow could mention the command in a prose comment without actually running it, causing the test to incorrectly flag it as a caller and fail.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: tests/test_plan_clarify_header_prompt_staging.py\n  Line or code reference: HEADER_RENDER_RE (line ~55) and _workflows_rendering_header() (lines 58-63)\n  Problem: The regex matches comment text, not just executable YAML command lines.\n  Why it fails at runtime: A workflow YAML file containing the string in an inline comment but never executing it would be picked up by _workflows_rendering_header and fail the staging assertions.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- File: tests/test_plan_clarify_header_prompt_staging.py\n  Line or code reference: test_header_renders_when_staged (lines 200-214)\n  Problem: The test loops over both prefer_main_snapshot values, but the assertion messages do not identify which branch failed.\n  Why it fails at runtime: A regression in the fallback path will produce the same assertion text with no indication of the failing iteration.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: tests/test_plan_clarify_header_prompt_staging.py\n  Line or code reference: _render_header() (lines ~163-193: env=os.environ.copy() + PWD/OLDPWD/BASH_ENV stripping + subprocess.run(cwd=..., env=env))\n  Problem: The test sandbox deliberately sanitizes the inherited environment while the real workflows execute in the full GitHub Actions runner shell context.\n  Why it fails at runtime: A future change that depends on runner environment behavior could still pass this test while failing in consumers.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- File: tests/test_plan_clarify_header_prompt_staging.py\n  Line or code reference: test_render_callers_stage_header_prompt() (lines ~92-114) + test_header_renders_when_staged() (lines ~205-216)\n  Problem: The contract test performs exact string matches on duplicated staging fragments and the error echo line, and the looped assertions do not identify which prefer_main_snapshot iteration failed.\n  Why it fails at runtime: A regression that drops the fallback logic, changes the echo format, or breaks only the fallback branch can slip through or produce ambiguous CI failures.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "535017d33852dc36560d7306917521f31456bae02c170dcf25a5dd45b3eb5198",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3539,
+    "run_id": "28274223617",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28274223617",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260627020731_8a89e85cda",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3539,
+    "run_id": "28274223617"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-27T02:07:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

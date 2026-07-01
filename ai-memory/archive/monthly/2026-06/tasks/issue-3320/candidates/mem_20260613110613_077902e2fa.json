@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `phase-e-workflow-install-profiles`\n\nRef / clarification\n- Planning ref: `orchestrator/project-3303` @ `02c239dd499df13645a5a218e6c4fb20e9f99937`.\n- Integration metadata matches the checked-out ref, so there is no branch blocker.\n- Clarification mapping: no `Q1/Q2/...` were issued; `/answer [auto-answered-by-orchestrator]` means proceed on the issue text as written.\n- Codebase check: the issue\u2019s `full` inventory matches the current top-level `workflow-templates/*.yml` set on this ref.\n\n1. Files likely to change\n- `workflow-templates/profiles/core.txt` (new)\n- `workflow-templates/profiles/standard.txt` (new)\n- `workflow-templates/profiles/full.txt` (new)\n- `.github/workflows/update_workflows.yml`\n- `README.md`\n- `agents.md`\n- `tests/test_update_workflows_guardrails.py`\n\n2. Functions / modules to implement\n- `workflow-templates/profiles/core.txt`\n  - Add a one-wrapper-per-line manifest with exactly:\n    - `ai-clarify.yml`\n    - `ai-plan.yml`\n    - `ai-implement.yml`\n    - `ai-review.yml`\n    - `ai-issue-pr-status.yml`\n    - `ai-cancel-on-pr-close.yml`\n- `workflow-templates/profiles/standard.txt`\n  - Add core +:\n    - `ai-orchestrate.yml`\n    - `ai-orchestrate-poll.yml`\n    - `ai-orchestrate-clarify-respond.yml`\n    - `ai-validate.yml`\n    - `review_rb_judge_dispatch.yml`\n- `workflow-templates/profiles/full.txt`\n  - Add every current top-level wrapper on this ref:\n    - `ai-cancel-on-pr-close.yml`\n    - `ai-clarify.yml`\n    - `ai-implement.yml`\n    - `ai-issue-pr-status.yml`\n    - `ai-memory-maintenance.yml`\n    - `ai-orchestrate-clarify-respond.yml`\n    - `ai-orchestrate-poll.yml`\n    - `ai-orchestrate.yml`\n    - `ai-plan.yml`\n    - `ai-review.yml`\n    - `ai-update-workflows.yml`\n    - `ai-validate.yml`\n    - `review_rb_judge_dispatch.yml`\n- `.github/workflows/update_workflows.yml`\n  - Extend the existing `Compare and update workflow wrappers` step instead of adding a new helper script.\n  - Read `vars.WORKFLOW_PROFILE` with default `full`.\n  - Load `workflow-templates/profiles/<profile>.txt` from the fetched upstream checkout and narrow the wrapper candidate set to the manifest entries.\n  - Preserve current fail-fast validation ordering, current copy/update behavior, audit-gate sync, `.claude` sync, top-level `CLAUDE.md` sync, and the non-destructive \u201cleave unlisted local wrappers in place\u201d behavior.\n  - Preserve the existing `SELF_TEMPLATE=\"ai-update-workflows.yml\"` skip contract even though `full.txt` includes that filename.\n- `README.md`\n  - Add append-only install-profile docs under the existing Quickstart/install area, likely beneath `### 2. Create wrapper workflows`.\n  - Document `vars.WORKFLOW_PROFILE`, default `full`, exact meaning of `core` / `standard` / `full`, and that downgrading profiles does not delete already-present wrappers.\n- `agents.md`\n  - Add machine-greppable profile predicates alongside the existing predicate-style facts, including:\n    - `PROFILE.default=full`\n    - one line per defined profile\n- `tests/test_update_workflows_guardrails.py`\n  - Extend the existing contract-style test file rather than adding a new test harness.\n\n3. Data structures affected\n- New plain-text manifests under `workflow-templates/profiles/`, one wrapper basename per line.\n- Updater workflow shell state: a selected-profile name plus a manifest-derived wrapper list/array.\n- No DB/schema/contracts changes.\n\n4. API / interface changes\n- New operator surface: `vars.WORKFLOW_PROFILE` with supported values `core`, `standard`, `full`; default `full`.\n- No new GitHub API calls.\n- No consumer-repo migration logic and no cross-repo edits.\n\n5. Risks / edge cases / conflicts\n- Conflict to document clearly: README already uses \u201ccore wrappers\u201d for the minimum manual trio, while the new `core` install profile is a six-wrapper manifest. The new docs should disambiguate those terms instead of rewriting unrelated sections.\n- Contract nuance: `full.txt` must include `ai-update-workflows.yml`, but the updater must still not overwrite/create its own wrapper.\n- Manifest drift risk: `full.txt` can go stale when future top-level wrappers are added; tests should compare it to the live `workflow-templates/*.yml` inventory.\n- Invalid/unknown `WORKFLOW_PROFILE` values should fail fast or otherwise surface a clear guardrail signal; silent fallback would make operator choice ambiguous.\n- The workflow fetches upstream templates from `coding-workflows@stable`, so real consumer propagation only reflects these changes after the normal release/update path; pre-release verification should stay repo-local.\n- Missing-context note: the issue mentions a `files_touched` allowlist, but that serialized allowlist is not present in the planning context. Assumption: it matches the scoped files named above.\n\n6. Testing considerations\n- Extend `tests/test_update_workflows_guardrails.py` to cover:\n  - exact `core.txt` membership\n  - exact `standard.txt` membership\n  - `full.txt` parity with current `workflow-templates/*.yml` inventory and exclusion of non-wrapper assets\n  - default-`full` behavior in `.github/workflows/update_workflows.yml`\n  - no-removal-on-downgrade contract\n  - preserved self-updater skip\n- Reuse the existing CI entrypoint already wired in `.github/workflows/ci.yml`:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_guardrails.py`\n- No CI workflow edit should be required unless the implementation chooses a different test entrypoint.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "17ba47045dc11e7e11c1857f17eca64fa4439383e933413c8b9972adc86c9c7c",
+  "lineage": {
+    "issue_number": 3320,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27464887636",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27464887636",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3320"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260613110613_077902e2fa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3320,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27464887636"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3320",
+  "timestamps": {
+    "created_at": "2026-06-13T11:06:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

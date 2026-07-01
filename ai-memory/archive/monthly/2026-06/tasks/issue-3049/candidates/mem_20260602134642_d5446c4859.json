@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for `s1-core-mode-contracts`\n\nRef: `orchestrator/project-3042` @ `b05e73782db7e91f018895f69a9d3d84dbff7b6b`  \nIntegration metadata matches the checked-out ref.\n\nClarification mapping:\n- No `Q1`/`Q2` batch was issued in clarify.\n- The `/answer [auto-answered-by-orchestrator]` comment only confirmed continuation; it did not add new constraints.\n\nAutomation / wiring\n- Change type: existing-code/data only; add six contract files plus one new test module.\n- Scheduler / PR-push wiring: none.\n- Long-running supervisor: none.\n- DB gate pattern: none.\n- Pending-removal registry: none.\n\nContext checked\n- Existing contract patterns: `prompts/contracts/mode-plan.yml` (no placeholders) and `prompts/contracts/mode-implement.yml` (optional `SERENA_TOOL_HINTS`).\n- Existing strict renderer path: `scripts/render_prompt.py` (`discover_contract_path`, `load_contract`, `validate_contract`).\n- Existing test pattern: `tests/test_render_prompt_foundation.py`.\n- Current prompt shapes:\n  - `prompts/mode-clarify.txt`, `prompts/mode-clarify-respond.txt`, `prompts/mode-orchestrate.txt`: no `{{...}}` placeholders.\n  - `prompts/mode-implement-repair.txt`, `prompts/mode-implement-repair-syntax.txt`, `prompts/mode-implement-diagnose.txt`: only `{{SERENA_TOOL_HINTS}}`.\n- No factual scope conflict found; the six target contract files and `tests/test_render_prompt_core_modes.py` are simply net-new.\n\nFiles likely to change\n- Create `prompts/contracts/mode-clarify.yml`\n- Create `prompts/contracts/mode-clarify-respond.yml`\n- Create `prompts/contracts/mode-orchestrate.yml`\n- Create `prompts/contracts/mode-implement-repair.yml`\n- Create `prompts/contracts/mode-implement-repair-syntax.yml`\n- Create `prompts/contracts/mode-implement-diagnose.yml`\n- Create `tests/test_render_prompt_core_modes.py`\n\nImplementation plan\n1. Add zero-placeholder contracts for:\n   - `mode-clarify`\n   - `mode-clarify-respond`\n   - `mode-orchestrate`\n\n   Mirror the `mode-plan.yml` pattern:\n   - `required_vars: []`\n   - `optional_vars: {}`\n   - `forbidden_vars:` `WORKFLOW_EDIT_RESTRICTION`, `SEMBLE_PREFETCH`, `SERENA_TOOL_HINTS`\n\n2. Add Serena-enabled contracts for:\n   - `mode-implement-repair`\n   - `mode-implement-repair-syntax`\n   - `mode-implement-diagnose`\n\n   Mirror the `mode-implement.yml` pattern, but only allow the variable these prompts actually use:\n   - `required_vars: []`\n   - `optional_vars.SERENA_TOOL_HINTS: \"\"`\n   - `forbidden_vars:` `WORKFLOW_EDIT_RESTRICTION`, `SEMBLE_PREFETCH`\n\n3. Add one focused test module, modeled on `tests/test_render_prompt_foundation.py`, that:\n   - table-drives success renders across the six real prompt files using `scripts/render_prompt.py`\n   - proves the no-placeholder modes pass with empty contracts\n   - proves the three implement-family modes pass with optional `SERENA_TOOL_HINTS`\n   - adds one representative negative case using a temporary prompt plus `--legacy-mode-name` to trigger a core-mode contract failure without editing source prompt prose (best candidate: forbidden placeholder in a no-placeholder mode)\n\nData structures affected\n- New YAML `PromptContract` instances only.\n- No schema change: still `required_vars`, `optional_vars`, `forbidden_vars`.\n\nAPI / interface changes\n- Internal only: strict contract discovery now covers these six mode names.\n- No workflow input/output, CLI, or user-facing interface change expected.\n\nRisks / edge cases\n- `SERENA_TOOL_HINTS` must stay optional with default `\"\"`; making it required would break runs where Serena is unavailable.\n- The three zero-placeholder modes should forbid legacy standalone placeholders rather than silently allowing them.\n- Keep prompt prose unchanged; negative tests should use synthetic prompt files.\n- Scope note: these workflows currently render via `scripts/render_prompt.sh`; this issue should stay limited to contract files plus strict-render tests, not widen into renderer rewiring.\n\nTesting considerations\n- Run: `PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/test_render_prompt_core_modes.py tests/test_render_prompt_foundation.py`\n- Ensure all six real prompt files render successfully under strict mode.\n- Ensure at least one representative forbidden/unresolved-variable failure is asserted in the new module.\n- Verify the final diff stays inside the seven scoped files.\n\nAssumptions\n- This slice is intentionally limited to contract declaration + tests.\n- No additional placeholders beyond the ones currently present need to be supported for these six modes.\n\nMissing context\n- None blocking.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a760bd6408491b735053cd3ee8d7b38a04e22c548b5e26026d2031be67018c49",
+  "lineage": {
+    "issue_number": 3049,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26823588610",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26823588610",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3049"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260602134642_d5446c4859",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3049,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26823588610"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3049",
+  "timestamps": {
+    "created_at": "2026-06-02T13:46:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

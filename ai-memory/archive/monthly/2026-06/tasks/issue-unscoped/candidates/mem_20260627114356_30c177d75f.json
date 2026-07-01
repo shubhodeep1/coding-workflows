@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.py:782 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The default value was changed from \"false\" to \"true\".\n  WHY: This is actually a FIX, not a bug; the previous default of \"false\" was incorrect per Phase C documentation, and the new test validates the corrected default behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: `.ai/.workspace_source_manifest.txt` lists `docs/changelog-style.md` as a tracked file ... The manifest implies this file should exist in the repository.\n  expected_change_site: `docs/changelog-style.md`\n  confidence=3\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  EVIDENCE: \"docs/changelog-style.md update\" / \"The full PR diff contains no diff --git a/docs/changelog-style.md hunk \u2014 the file was never created or updated in this PR.\"\n- requirement: \"Keep scope narrow: do not expand into unrelated prompt rewrites or Phase C/persona-prefix work\"\n  expected_change_site: scripts/render_prompt.py function _persona_prefix_enabled() and tests/test_render_prompt_foundation.py\n  confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  EVIDENCE: \"The default value for PROMPT_PERSONA_PREFIX_ENABLED was changed from \\\"false\\\" to \\\"true\\\" at line 783 in scripts/render_prompt.py, and a new test test_render_prompt_py_enables_phase_c_persona_prefix_by_default was added to tests/test_render_prompt_foundation.py to validate this Phase C behavior.\" / \"FIXED in last run. The default value was changed from \\\"false\\\" to \\\"true\\\" at line 782. A new test `test_render_prompt_py_enables_phase_c_persona_prefix_by_default` validates the corrected default.\"\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/render_prompt.py:782 | severity=low | confidence=5\n  PROBLEM: The default value was changed from \"false\" to \"true\".\n  WHY: This is actually a FIX, not a bug; the previous default of \"false\" was incorrect per Phase C documentation, and the new test validates the corrected default behavior.\n- Requirement: \"Extract the shared prompt-prelude files, add the assembly path, migrate the listed prompt templates onto the shared prelude, and add byte-stability coverage. Reuse the current render pipeline.\"\n  Expected change site: docs/changelog-style.md update\n  Evidence of absence: docs/changelog-style.md was mentioned in the manifest but was never updated with a changelog entry documenting this feature rollout.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- Requirement: Phase C persona-prefix should be default-on (documented behavior)\n  Expected change site: scripts/render_prompt.py:_persona_prefix_enabled()\n  Evidence of absence: FIXED in last run. The default value was changed from \"false\" to \"true\" at line 782. A new test `test_render_prompt_py_enables_phase_c_persona_prefix_by_default` validates the corrected default.\n  SEVERITY: MAJOR (was), now FIXED\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Requirement: \"Keep scope narrow: do not expand into unrelated prompt rewrites or Phase C/persona-prefix work\"\n  Expected change site: scripts/render_prompt.py function _persona_prefix_enabled() and tests/test_render_prompt_foundation.py\n  Evidence of absence: The last run diff shows the default value for PROMPT_PERSONA_PREFIX_ENABLED was changed from \"false\" to \"true\" at line 783 in scripts/render_prompt.py, and a new test test_render_prompt_py_enables_phase_c_persona_prefix_by_default was added to tests/test_render_prompt_foundation.py to validate this Phase C behavior. The linked issue explicitly prohibits Phase C/persona-prefix work as out of scope for Phase O, stating \"Keep scope narrow: do not expand into unrelated prompt rewrites or Phase C/persona-prefix work\" and \"leave structurally distinct legacy prompts unchanged unless they already fit the shared prelude exactly.\" Both the default change and the new test are implementing and validating Phase C functionality, which contradicts the issue scope constraints.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- Requirement: `.ai/.workspace_source_manifest.txt` lists `docs/changelog-style.md` as a tracked file (line 111: `+docs/changelog-style.md`), and `README.md` references it at line 1179. The manifest implies this file should exist in the repository.\n  Expected change site: `docs/changelog-style.md` (new or existing file referenced by manifest and README)\n  Evidence of absence: The full PR diff contains no `diff --git a/docs/changelog-style.md` hunk \u2014 the file was never created or updated in this PR. If it was supposed to be a new file introduced by the Phase O rollout, no corresponding file-change hunk exists anywhere in the PR diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "6e572b5e1bd39e1ac43f18baf9854a6672c0c1cdd9e3ce732c18e7e40482e7d2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3543,
+    "run_id": "28286984905",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28286984905",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260627114356_30c177d75f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3543,
+    "run_id": "28286984905"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-27T11:43:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

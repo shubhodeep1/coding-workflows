@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:3408-3422 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_20]\n  PROBLEM: The manual remediation command in the `::error::` block hard-codes a two-step create-only sequence and does not reproduce the exact create-or-edit fallback with the description contract used by the automated path.\n  WHY: If label write operations fail, the operator is given incomplete instructions that may leave the latch unapplied, allowing redispatch of the blocked issue and defeating the guard.\n- .github/workflows/implement.yml:3415-3422 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: When `gh issue view` fails, the step only emits a warning that the latch state is unknown, but the downstream redispatch gate still proceeds as if the guard succeeded.\n  WHY: A transient read failure can leave the destructive-blocked latch in an unknown and unenforced state while the workflow continues, which is the failure mode the guard was meant to prevent.\n- .github/workflows/review_autofix.yml:near line 1071 based on grep pattern matching | severity=medium | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The `codex-agent` job is missing env wiring for `AGENTS_MD_MATERIALITY_ENABLED`.\n  WHY: The CI lint check fails because the expected env variable wiring is absent, so the feature flag is not passed into the codex-agent environment.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/implement.yml:Line ~3416 (the `::error::` branch in the latch verification block) | severity=medium | confidence=4\n  PROBLEM: The manual remediation command hard-codes a two-step create-only sequence (`gh label create ... ; gh issue edit ...`) that does not reproduce the same idempotent create-or-edit fallback logic as the main step.\n  WHY: In the rare double-failure case where both label create and edit fail, the operator receives remediation instructions that may themselves fail or produce different behavior than the automated step.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:codex-agent job env block (near line 1071 based on grep pattern matching) | severity=medium | confidence=5\n  PROBLEM: Missing env wiring for `AGENTS_MD_MATERIALITY_ENABLED` in the codex-agent job.\n  WHY: The CI lint check fails because the expected env variable wiring is missing, which prevents the feature flag from being passed to the codex-agent environment.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/implement.yml:lines 3408-3422 (remediation command inside ::error:: block) | severity=medium | confidence=4\n  PROBLEM: The manual remediation command printed for the user when latch verification fails hard-codes a two-step `gh label create \u2026 ; gh issue edit \u2026` sequence that does not reproduce the exact `if ! create && ! edit` create-or-edit fallback used by the automated path above it.\n  WHY: On repos where the label cannot be written, the operator receives incomplete instructions that may leave the latch unapplied, allowing redispatch and defeating the guard.\n- .github/workflows/implement.yml:lines 3415-3422 (the `else` branch of the latch verification read) | severity=high | confidence=5\n  PROBLEM: When `gh issue view` itself fails, the step emits only a `::warning::` that the latch state is unknown, but the downstream redispatch gate still treats absence of the `ai:destructive-blocked` label as safe to proceed.\n  WHY: A transient read failure silently leaves the destructive-blocked latch in an unknown state while the workflow continues as if the guard succeeded.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "24e6aa989e461de7005fc7f49d67f24aee0881761567c575814a60e2d7f2a815",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3075,
+    "run_id": "26863494344",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26863494344",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260603043049_b43ff2ecb4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3075,
+    "run_id": "26863494344"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-03T04:30:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

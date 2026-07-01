@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. What is the primary target of this issue? Pick one.\nChoices:\nA. Clarify/plan/implement workflow or prompt behavior\nB. Review/autofix/orchestrator/validate behavior\nC. Docs/templates/configuration only\nD. Another specific file/path/workflow not listed above \u2014 name it exactly (RECOMMENDED)\nQ2. What specific improvement do you want in that target area? Pick one.\nChoices:\nA. Fix a specific bug/regression \u2014 describe the current wrong behavior and expected behavior (RECOMMENDED)\nB. Improve reliability/performance of an existing behavior \u2014 name the current failure mode or bottleneck\nC. Add or change behavior \u2014 describe the exact new behavior\nD. Documentation/content improvement \u2014 name the exact text/section/file to update\nQ3. What concrete artifact should planning use to verify the change? Choose one or more if available.\nChoices:\nA. The exact issue/PR/workflow run/log snippet showing the problem (RECOMMENDED)\nB. A before/after example of the desired behavior (RECOMMENDED)\nC. The exact files/paths you expect to change\nD. A short acceptance checklist in plain English",
+  "fingerprint": "c79c2960d002d5c7251452e31bb52ccdbe7bcd1a4d8b0a8008cf003c7dde862d",
+  "lineage": {
+    "issue_number": 3215,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27112703722",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27112703722",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260608023350_f7c89a7707",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3215,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27112703722"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #3215 needs clarification",
+  "timestamps": {
+    "created_at": "2026-06-08T02:33:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. What does \u201cit\u201d refer to in this repository?\nChoices:\nA. A specific workflow under .github/workflows/ \u2014 name the workflow file (RECOMMENDED)\nB. A specific script or prompt under scripts/ or prompts/ \u2014 name the path (RECOMMENDED)\nC. A documentation file such as README.md or agents.md \u2014 name the file/section\nD. Something else in the repo \u2014 describe the exact component/path\nQ2. What kind of improvement do you want for that target?\nChoices:\nA. Fix a broken or incorrect behavior \u2014 describe current vs expected behavior (RECOMMENDED)\nB. Add or change automation behavior \u2014 describe the exact new outcome (RECOMMENDED)\nC. Improve speed, reliability, or cost \u2014 name the concrete pain point or metric\nD. Improve wording/docs/usability \u2014 quote the text or section to change\nQ3. What should we use to verify the change is correct?\nChoices:\nA. A specific failing workflow run, PR, log, or error message \u2014 provide the reference (RECOMMENDED)\nB. A specific before/after behavior \u2014 describe what should be different (RECOMMENDED)\nC. A specific file/output/section should change \u2014 name it explicitly",
+  "fingerprint": "2de6128290c03f53a7bb1cd03ff5a14b056d5fa8fe26c6720a0a3cd5e7e2a56e",
+  "lineage": {
+    "issue_number": 3308,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27456127015",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27456127015",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260613041138_240ae289fb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3308,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27456127015"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #3308 needs clarification",
+  "timestamps": {
+    "created_at": "2026-06-13T04:11:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

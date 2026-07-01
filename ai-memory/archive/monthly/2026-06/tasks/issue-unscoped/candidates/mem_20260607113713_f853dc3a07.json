@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:4908-4912 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The issue-summary step retains `|| true`, so non-zero Codex exits and malformed or empty summary output can be suppressed without a clear job-level failure.\n  WHY: The review says the step is still best-effort and may exhaust retries or lose observability when Codex produces empty or non-matching summary output.\n- scripts/implement_diagnose_post_codex_failure.sh:607-613 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The diagnose path assumes `extract_last_json_with_key` can parse Codex output, so non-JSON or partial responses can leave no structured diagnostic context.\n  WHY: The review says the timeout-wrapped Codex call has no fallback for malformed output and can silently lose diagnostics after the git-check fix.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/implement.yml:4908-4912 | severity=medium | confidence=4\n  PROBLEM: The summary step retains `|| true`, so non-zero exits from prompt errors, refusals, or malformed output can be suppressed.\n  WHY: The review says the subsequent file/grep check may allow repeated summary failures without clear job-level failure or error artifacts. (2 related items)\n- scripts/implement_diagnose_post_codex_failure.sh:607-613 | severity=medium | confidence=4\n  PROBLEM: The diagnose path assumes `extract_last_json_with_key` will parse Codex output, so non-JSON output can leave the result empty and the caller without structured diagnostics.\n  WHY: The review says partial responses, model errors, or other non-JSON output are not guarded, leading to silent diagnostic loss. (2 related items)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "0cf0fbc3e3c8765d1c0c6c70cbca5e3aebf65ac8121f1b2360dce2977fd5233b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3196,
+    "run_id": "27090524622",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27090524622",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260607113713_f853dc3a07",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3196,
+    "run_id": "27090524622"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-07T11:37:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

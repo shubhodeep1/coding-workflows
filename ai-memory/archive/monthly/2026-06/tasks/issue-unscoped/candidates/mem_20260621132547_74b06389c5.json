@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/codex_helpers.sh:93-101 | severity=low | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The option-parsing loop can fall through to an unconditional `shift 2` on a missing final argument, producing a generic shell failure instead of the explicit missing-value error.\n  WHY: The guard for required values is unreachable for the last positional argument under the current control flow, so `set -e` aborts before the intended error path runs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cDo not create extra helper domains beyond the two new files already approved by the plan.\u201d\n  expected_change_site: no new helper files\n  confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The ZIP archive context missed references to `.github/workflows/audit_consumer_drift.yml`, `scripts/audit_consumer_drift.py`, and `tests/test_audit_consumer_drift.py` within the PR\u2019s changed files list (they only appear in changed lines and `docs/INVENTORY.md`). These three files implement approved Phase-B actor surfaces respective to the extraction scope (workflow, script, test), so their absence as first-class extracted helpers violates the requirement to avoid extra domains. Owner confirmation remains in `agents.md`, and the inventory update is present.\n- requirement: \u201cAdd helper-focused shell tests in `scripts/dev/test_codex_helpers.sh` and `scripts/dev/test_watchdog_helpers.sh`.\u201d\n  expected_change_site: `scripts/dev/` (both test files are present and exercised by the new CI job in `.github/workflows/ci.yml`)\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: None \u2014 tests exist, pass syntax checks, and cover the new helper contracts (missing-writer preflight, option-value guard, default-dir `PWD` preservation, fallback definition, signal normalization, FIFO reaping, stall-state parsing).\n- requirement: \u201cReplace the duplicated inline blocks in `.github/workflows/implement.yml`, `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/validate.yml`, and `.github/workflows/review_autofix.yml` with sourced helper calls\u201d\n  expected_change_site: `.github/workflows/validate.yml` (tg_send_phase_failure wiring)\n  confidence=[4]\n  flagged_by: [moonshotai_kimi-k2_5]\n  EVIDENCE: The `validate.yml` workflow contains Telegram notification logic but does not use the new `tg_send_phase_failure` helper. Comparing with other workflows (clarify.yml, plan.yml, implement.yml, review_autofix.yml), they all have `tg_send_phase_failure` in their failure notification blocks. The CI anti-regression check in `.github/workflows/ci.yml` line 638-648 also only checks 4 workflows, missing `validate.yml` from the `tg_send_phase_failure` verification loop. Additionally, `scripts/validate_process.sh` still uses the legacy `tg_send_tracked` and `tg_send_msg` directly rather than the new helper.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: \u201cDo not create extra helper domains beyond the two new files already approved by the plan.\u201d\n  Expected change site: no new helper files\n  Evidence of absence: The ZIP archive context missed references to `.github/workflows/audit_consumer_drift.yml`, `scripts/audit_consumer_drift.py`, and `tests/test_audit_consumer_drift.py` within the PR\u2019s changed files list (they only appear in changed lines and `docs/INVENTORY.md`). These three files implement approved Phase-B actor surfaces respective to the extraction scope (workflow, script, test), so their absence as first-class extracted helpers violates the requirement to avoid extra domains. Owner confirmation remains in `agents.md`, and the inventory update is present.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n- Requirement: \u201cAdd helper-focused shell tests in `scripts/dev/test_codex_helpers.sh` and `scripts/dev/test_watchdog_helpers.sh`.\u201d\n  Expected change site: `scripts/dev/` (both test files are present and exercised by the new CI job in `.github/workflows/ci.yml`)\n  Evidence of absence: None \u2014 tests exist, pass syntax checks, and cover the new helper contracts (missing-writer preflight, option-value guard, default-dir `PWD` preservation, fallback definition, signal normalization, FIFO reaping, stall-state parsing).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Requirement: \u201cReplace the duplicated inline blocks in `.github/workflows/implement.yml`, `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/validate.yml`, and `.github/workflows/review_autofix.yml` with sourced helper calls\u201d\n  Expected change site: `.github/workflows/validate.yml` (tg_send_phase_failure wiring)\n  Evidence of absence: The `validate.yml` workflow contains Telegram notification logic but does not use the new `tg_send_phase_failure` helper. Comparing with other workflows (clarify.yml, plan.yml, implement.yml, review_autofix.yml), they all have `tg_send_phase_failure` in their failure notification blocks. The CI anti-regression check in `.github/workflows/ci.yml` line 638-648 also only checks 4 workflows, missing `validate.yml` from the `tg_send_phase_failure` verification loop. Additionally, `scripts/validate_process.sh` still uses the legacy `tg_send_tracked` and `tg_send_msg` directly rather than the new helper.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/codex_helpers.sh:93-101\n  Problem: The option-parsing loop can fall through to an unconditional `shift 2` on a missing final argument, producing a generic shell failure instead of the explicit missing-value error.\n  Why it fails at runtime: The guard for required values is unreachable for the last positional argument under the current control flow, so `set -e` aborts before the intended error path runs.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "f47ba543c6724554133d369cf87f1ef93deb53b96f49228c66dff5ab1a61c9d5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3415,
+    "run_id": "27904711583",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27904711583",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260621132547_74b06389c5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3415,
+    "run_id": "27904711583"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-21T13:25:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

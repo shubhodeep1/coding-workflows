@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/implement_diagnose_post_codex_failure.sh:157-293 | severity=medium | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The per-run `FALLBACK_ISSUE_JSON_FETCH_ATTEMPTED` + `FALLBACK_ISSUE_JSON` cache is cleared on JSON validation failure, but the function still returns success, so a later caller in the same run can reuse poisoned empty state instead of retrying.\n  WHY: Transient API failures can leave the diagnostic step silently falling back to empty labels/body instead of recovering.\n- tests/test_implement_post_codex_recovery.py:1443-1445 | severity=low | confidence=[5]\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The assertion message still says \u201cnon---jq\u201d instead of \u201cnon--jq\u201d.\n  WHY: This makes CI failure output misleading even though the test logic is correct.\n- tests/test_implement_post_codex_recovery.py:1296 | severity=medium | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The test still asserts the old short prompt phrase instead of the stable rendered prefix emitted by the live workflow.\n  WHY: That makes the test brittle against prompt wording changes and can fail on the next editor-prompt adjustment.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Squash-merge of orchestrator project #3272 \u2014 apply only the safe subset of the 2026-06-10 analysis (specifically MERGE-001 + DEAD-002 / DEAD-API-002). The PR description and validation status explicitly scope to these two cleanups; broader 2026-06-10 recommendations remain deferred.\n  expected_change_site: analysis/recommendation-processing-report.md; scripts/collect_workflow_logs.py; scripts/implement_diagnose_post_codex_failure.sh; tests/test_collect_workflow_logs.py; tests/test_implement_post_codex_recovery.py\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The PR diff + last_run_diff fully implement the scoped safe subset \u2014 `list_run_log_excerpts` is removed (with test update), diagnose now reuses one cached fallback JSON for both labels and body, and the report now correctly records MERGE-001 / DEAD-002 as implemented-on-this-ref. No additional deliverables from the 2026-06-10 safe subset are missing.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/implement_diagnose_post_codex_failure.sh:157-178 | severity=medium | confidence=4\n  PROBLEM: The per-run `FALLBACK_ISSUE_JSON_FETCH_ATTEMPTED` + `FALLBACK_ISSUE_JSON` cache is cleared on JSON validation failure, but the function returns success.\n  WHY: A second caller later in the same run can see stale empty state and never retry, so transient API flakes can leave the diagnostic step using empty labels/body instead of recovering.\n- tests/test_implement_post_codex_recovery.py:1445 | severity=low | confidence=5\n  PROBLEM: Assertion message still says \u201cnon---jq\u201d (triple hyphen typo).\n  WHY: Test failure output becomes misleading during CI debugging; the string is the only place the typo appears, and the test otherwise passes.\n- tests/test_implement_post_codex_recovery.py:1296 | severity=medium | confidence=4\n  PROBLEM: Test still asserts on the old short prompt phrase instead of the stable rendered prefix now emitted by the live workflow.\n  WHY: Test becomes flaky or fails on the next editor-prompt change; it was already updated in a prior autofix but regressed again in the last_run prompt tightening.\n- Requirement: Squash-merge of orchestrator project #3272 \u2014 apply only the *safe* subset of the 2026-06-10 analysis (specifically MERGE-001 + DEAD-002 / DEAD-API-002). The PR description and validation status explicitly scope to these two cleanups; broader 2026-06-10 recommendations remain deferred.\n  Expected change site: analysis/recommendation-processing-report.md (update ledger + provenance), scripts/collect_workflow_logs.py (remove wrapper), scripts/implement_diagnose_post_codex_failure.sh (memoized fallback fetch), tests/test_collect_workflow_logs.py + tests/test_implement_post_codex_recovery.py (update callers/tests).\n  Evidence of absence: The PR diff + last_run_diff fully implement the scoped safe subset \u2014 `list_run_log_excerpts` is removed (with test update), diagnose now reuses one cached fallback JSON for both labels and body, and the report now correctly records MERGE-001 / DEAD-002 as implemented-on-this-ref. No additional deliverables from the 2026-06-10 safe subset are missing.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "187b95b1ca61797c123deafbf4769c39a6f882b37d77862d3c1637031df9ba20",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3275,
+    "run_id": "27340610740",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27340610740",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260611110820_054349220f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3275,
+    "run_id": "27340610740"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-11T11:08:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

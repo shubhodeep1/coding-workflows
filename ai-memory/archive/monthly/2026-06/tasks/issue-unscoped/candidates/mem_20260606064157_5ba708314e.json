@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/validate-consumer-issue.md:Decision Rule section, lines ~32-34 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The command can derive a replacement fix for an INCORRECT proposal without the deeper investigation procedure that /investigate-issue uses.\n  WHY: The validate procedure lacks the artifact-chasing and recursive root-cause steps needed to make a derived fix fully evidence-based, so a superficially correct fix could miss deeper causes.\n- workflow-templates/.claude/commands/validate-consumer-issue.md:Decision Rule section, lines ~35-37 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The consumer-template copy can also derive a replacement fix for an INCORRECT proposal without the deeper investigation procedure that /investigate-issue uses.\n  WHY: The validation-focused procedure does not include the deeper artifact-fetching and recursive root-cause steps needed to make a derived fix fully evidence-based, so a superficially correct fix could miss deeper causes.\n- .claude/commands/validate-consumer-issue.md:Tool Access section, Bash write entry (\"git (branch off main, commit, push -u origin <branch>)\") | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The write path does not specify a branch-naming convention, so the command may choose arbitrary or colliding branch names.\n  WHY: Without a naming rule, the model can create unhelpful branches or hit branch-name collisions, which complicates review and recovery.\n- workflow-templates/.claude/commands/validate-consumer-issue.md:Tool Access section, Bash write entry (\"git (branch off main, commit, push -u origin <branch>)\") | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The consumer-template write path also lacks a branch-naming convention, so the command may choose arbitrary or colliding branch names.\n  WHY: Without a naming rule, the model can create unhelpful branches or hit branch-name collisions, which complicates review and recovery.\n- .claude/commands/validate-consumer-issue.md:Decision Rule, \"Otherwise\" paragraph and \"Environmental failure\" bullet | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The escape-hatch format is inconsistent: only the \u00a76/\u00a710/tradeoff cases are told to use the CLAUDE.md \u00a72 Q/A format, while HYPOTHESIS, cross-consumer-break, and blocked-resource cases are only told to ask the user.\n  WHY: This is a low-impact inconsistency, but it can lead the model to use different ask formats for different non-edit paths.\n- workflow-templates/.claude/commands/validate-consumer-issue.md:Decision Rule, read-write side sub-bullets | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The consumer-template copy has the same escape-hatch format inconsistency: only the \u00a76/\u00a710/tradeoff cases are told to use the CLAUDE.md \u00a72 Q/A format.\n  WHY: This is the same low-impact inconsistency, and it can lead the model to use different ask formats for different non-edit paths.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/validate-consumer-issue.md:Decision Rule section, lines ~32-34 | severity=medium | confidence=3\n  PROBLEM: The Decision Rule instructs the model to derive the correct fix from evidence when the proposed fix is INCORRECT or UNNECESSARY, but the procedure lacks the deeper investigation scaffolding that /investigate-issue provides.\n  WHY: A model could derive a fix from superficial code reading alone and miss root causes only discoverable through deeper artifact-chasing, causing a superficially correct but incomplete fix to ship.\n- workflow-templates/.claude/commands/validate-consumer-issue.md:Decision Rule section, lines ~35-37 | severity=medium | confidence=3\n  PROBLEM: The consumer-template copy has the same investigation-depth gap when it tells the model to settle on the correct fix first and derive the real fix from the evidence.\n  WHY: The validation-focused procedure does not include the deeper investigation steps that would make a derived fix safe, so the same root-cause-miss risk applies.\n- .claude/commands/validate-consumer-issue.md:Tool Access section, Bash write entry (\"git (branch off main, commit, push -u origin <branch>)\") | severity=low | confidence=2\n  PROBLEM: No branch-naming convention is specified for the new write path.\n  WHY: The model could pick arbitrary names that collide with existing branches, are uninformative for review, or conflict with protected branch patterns.\n- workflow-templates/.claude/commands/validate-consumer-issue.md:Tool Access section, Bash write entry (\"git (branch off main, commit, push -u origin <branch>)\") | severity=low | confidence=2\n  PROBLEM: The consumer-template copy has the same missing branch-naming convention.\n  WHY: The same collision and reviewability risk applies.\n- .claude/commands/validate-consumer-issue.md:Decision Rule, \"Otherwise\" paragraph and \"Environmental failure\" bullet | severity=low | confidence=2\n  PROBLEM: The escape-hatch specification is inconsistent about when to use the CLAUDE.md \u00a72 Q/A format.\n  WHY: Only the \u00a76/\u00a710/tradeoff cases get format guidance; HYPOTHESIS, cross-consumer-break, and blocked-resource cases are only told to ask the user.\n- workflow-templates/.claude/commands/validate-consumer-issue.md:Decision Rule, read-write side sub-bullets | severity=low | confidence=2\n  PROBLEM: The consumer-template copy has the same escape-hatch format inconsistency.\n  WHY: The same low-impact inconsistency applies to the non-\u00a76/\u00a710 ask paths.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "bd8e39e21a6205188f5fb1b3e6a833dcca70afc442d02cea588089a15d51dba0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27054995106",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27054995106",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260606064157_5ba708314e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27054995106"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-06T06:41:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

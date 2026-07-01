@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No Q1/Q2 were issued in clarify; `/answer [auto-answered-by-orchestrator]` means there are no unresolved clarification constraints to map.\n\nPlanning ref:\n- HEAD: `599f8ea9a73eee65d4ebb398fa836d46e8c6a19e`\n- Checked-out branch: `orchestrator/project-3376`\n- Integration branch metadata: `orchestrator/project-3376`\n- Match status: aligned\n\nActions taken:\n- Inspected `prompts/mode-implement.txt`, item 4 in `docs/plans/open-agents-learnings-plan.md`, the shared verification reference in `prompts/references/verification-loop.txt`, the implement prompt contract in `prompts/contracts/mode-implement.yml`, and existing prompt/render test coverage.\n\nAutomation / wiring snapshot:\n- Change type: existing prompt edit only\n- Scheduler / PR-push wiring: none\n- Long-running supervisor: not required\n- DB gate / migration work: not applicable\n- Removal-registry entry: not applicable\n\nAssumptions:\n- This issue is satisfied by a prompt-only change in `prompts/mode-implement.txt`.\n- The shared verification reference stays untouched because validate prompts must remain unchanged.\n\n1. Files likely to change\n- `prompts/mode-implement.txt`\n  - Add an implement-specific verification-loop block in the main body, best placed near the existing `Test verification:` section.\n  - Preserve `{{REFERENCE_VERIFICATION_LOOP}}`, `{{REFERENCE_OUTPUT_CONTRACT}}`, commit-discipline text, completeness contract, and output-contract blocks.\n- Intentionally unchanged:\n  - `prompts/references/verification-loop.txt`\n  - `prompts/mode-validate-generate.txt`\n  - `prompts/mode-validate-fix-harness.txt`\n  - `prompts/contracts/mode-implement.yml`\n\n2. Functions or modules to implement\n- Prompt-only update in `prompts/mode-implement.txt`.\n- Add wording that tells the implement phase to:\n  - run verification in the exact order `typecheck -> lint -> tests -> build`\n  - iterate on fixes until all four stages pass\n  - never emit a done/completion signal before the full verification sequence has been run successfully end-to-end\n  - consult the target repo\u2019s `AGENTS.md`, `package.json`, and `Makefile` for the exact verification commands instead of inventing repo-level commands\n- Keep the existing `Test verification:` bullets intact; the new block supplements them.\n\n3. Data structures affected\n- Rendered implement prompt text only.\n- No new placeholders, env vars, schemas, workflow inputs, or contracts.\n- Existing placeholder contract remains unchanged: `REFERENCE_VERIFICATION_LOOP` and `REFERENCE_OUTPUT_CONTRACT` stay as-is.\n\n4. API or interface changes\n- No external API, CLI, workflow, or schema changes.\n- Internal prompt-behavior change only: the implement phase gets stricter completion semantics around verification.\n\n5. Potential risks, edge cases, and conflicts\n- Conflict: the source plan cites `prompts/mode-implement.txt:1-71`, but the current file extends to line 123; implementation should follow the current section anchors, not the stale line range.\n- Scope trap: `prompts/references/verification-loop.txt` already injects a shared `typecheck -> lint -> tests -> build -> smoke` loop and is reused by validate prompts. Editing that shared file would violate the \u201cimplement only / validate unchanged\u201d scope.\n- Edge case: this repo currently has no root `package.json` or `Makefile`, so the new wording must reference them as per-repo lookup surfaces, not assume they always exist locally.\n- Avoid bundling item 5 guardrails or touching `mode-implement-repair*` / validate prompts.\n\n6. Testing considerations\n- Confirm the final diff is additive and limited to `prompts/mode-implement.txt`.\n- Render-check `prompts/mode-implement.txt` with the existing prompt renderer to verify:\n  - the new verification text appears\n  - `{{REFERENCE_VERIFICATION_LOOP}}` still resolves\n  - `{{REFERENCE_OUTPUT_CONTRACT}}` still resolves\n- Re-run existing prompt-focused test surfaces on the repo\u2019s pinned CI/toolchain path if available:\n  - `tests/test_implement_post_codex_recovery.py`\n  - `tests/test_phase_prompt_untrusted_context_contract.py`\n  - `tests/test_render_prompt_foundation.py`\n- No test-file edits are expected unless an existing assertion fails after the prompt update.\n\n7. Pre-execution self-check result\n- Scope matches `files_touched` and the issue acceptance criteria.\n- No missing external inputs.\n- No integration-branch mismatch.\n- The plan preserves existing placeholders and keeps validate prompts untouched.\n\nMissing-context notes:\n- None blocking.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "9fb749e1be65157a7ebc9e81ca77f663a2c96ec83671045503dc545bb210450a",
+  "lineage": {
+    "issue_number": 3398,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27742461242",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27742461242",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3398"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260618070414_c76b642cf9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3398,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27742461242"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3398",
+  "timestamps": {
+    "created_at": "2026-06-18T07:04:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/build_state_snapshot.py:147 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: `_placeholder_tracking_summary` hardcodes `\"status\": \"in-progress\"` for placeholder tracking summaries.\n  WHY: Empty/no-work tick snapshots can report stale terminal states as in-progress until a later non-empty tick updates the tracker export.\n- scripts/build_state_snapshot.py:310-323 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: `_placeholder_tracking_summary` hardcodes `\"status\": \"in-progress\"` for placeholder tracking summaries used when a tracking issue is present in `tracking_issues.json` but missing from tracker exports.\n  WHY: Empty-tick snapshots can report incorrect terminal states instead of the source issue\u2019s actual status; one reviewer rated this medium and the other did not state severity.\n- scripts/build_state_snapshot.py:198-220 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_latest_ledger_enrichment()` caches `(None, None)` on corrupted or invalid ledger data, turning validation errors into silence.\n  WHY: Silent enrichment failures reduce observability for run-ledger data issues and make token/substate collection problems harder to debug.\n- scripts/build_state_snapshot.py:468 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `main()` cleanup path does not remove the temporary schema-only tree created in the `--memory-root-dir` path.\n  WHY: Leftover temporary directories can accumulate on runners and eventually cause disk or inode pressure.\n- scripts/build_state_snapshot.py:560-565 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `main()` leaves the temporary schema copy tree uncollected in the `--memory-root-dir` workflow path.\n  WHY: Temporary directories can accumulate across poll ticks and eventually cause resource pressure.\n- scripts/orchestrate_poll_process.sh:14147-14150 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: `write_state_snapshot_tracker_export \"${TRACKING_NUM}\" \"${TRACKING_TITLE}\" || true` runs for every tracking issue on every poll tick, rewriting identical tracker JSON and swallowing real write failures.\n  WHY: The repeated writes add unnecessary I/O and workflow duration, and the `|| true` masks serialization or filesystem errors; severity differs across reviewers (low/medium/unspecified), so the higher medium applies.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/build_state_snapshot.py:147 | confidence=4\n  PROBLEM: The `_placeholder_tracking_summary` function always hardcodes `\"status\": \"in-progress\"` for placeholder entries.\n  WHY: Empty/no-work tick snapshots will report stale terminal states until the next non-empty tick updates the tracker export.\n- scripts/orchestrate_poll_process.sh:14150 | confidence=4\n  PROBLEM: `write_state_snapshot_tracker_export` is called for every tracking issue on every poll tick, rewriting identical tracker JSON files repeatedly and swallowing real JSON write failures.\n  WHY: Unnecessary I/O increases workflow duration and error suppression hides disk/permission/serialization failures. (2 related items: the ERROR PATHS & EDGE CASES finding and the PERFORMANCE & RESOURCE USE finding)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/build_state_snapshot.py:468 | severity=high | confidence=5\n  PROBLEM: When `--memory-root-dir` is supplied, the finally-block cleanup bypasses the temporary schema-only tree created by `read_memory_root_from_branch`.\n  WHY: Leftover temporary directories accumulate on runners, leading to potential disk pressure or inode exhaustion on long-lived runners.\n- scripts/build_state_snapshot.py:323 | severity=medium | confidence=4\n  PROBLEM: `_placeholder_tracking_summary()` always forces `status=\"in-progress\"` regardless of the tracking issue\u2019s actual terminal state.\n  WHY: Empty-tick snapshots report stale or incorrect terminal states, breaking downstream consumers that rely on current tick state.\n- scripts/build_state_snapshot.py:198-220 | severity=low | confidence=4\n  PROBLEM: When ledger entries are corrupted or validation fails, `_latest_ledger_enrichment()` caches `(None, None)` and returns silently.\n  WHY: Silent failures weaken observability for run-ledger data issues and make token/substate collection problems harder to debug.\n- scripts/orchestrate_poll_process.sh:14147 | severity=medium | confidence=4\n  PROBLEM: `write_state_snapshot_tracker_export \"${TRACKING_NUM}\" \"${TRACKING_TITLE}\" || true` is invoked for every tracking issue on every poll tick and rewrites the same tracker JSON files repeatedly.\n  WHY: Repeated I/O adds unnecessary workflow duration and `|| true` hides real write failures.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/build_state_snapshot.py:~310-322 and ~370-375 | confidence=4\n  PROBLEM: `_placeholder_tracking_summary` hard-codes status=\"in-progress\" and is used for tracking issues present in `tracking_issues.json` but absent from tracker_exports.\n  WHY: On no-work ticks, the snapshot can report stale or inaccurate terminal states until a later non-empty tick updates the source tracker data.\n- scripts/build_state_snapshot.py:~560-565 | severity=high | confidence=4\n  PROBLEM: The `main()` finally block does not remove the temporary schema copy tree in the `--memory-root-dir` path.\n  WHY: Temporary directories under `/tmp` or `RUNTIME_DIR` can accumulate across poll ticks and eventually cause disk/inode pressure.\n- scripts/orchestrate_poll_process.sh:~14150 and ~12790 | confidence=4\n  PROBLEM: `write_state_snapshot_tracker_export` is called unconditionally for every tracking issue on every poll tick and writes full JSON blobs each time; `|| true` swallows write failures.\n  WHY: Redundant I/O on every cycle and silent loss of updates if the filesystem is temporarily unavailable or jq fails.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "e1c19bd21c8d9b7787330041e4560ff527d203b8523c08a0c56e34545cbe2831",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3143,
+    "run_id": "27035370755",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27035370755",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260605201514_62151bdaaf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3143,
+    "run_id": "27035370755"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 6 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-05T20:15:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

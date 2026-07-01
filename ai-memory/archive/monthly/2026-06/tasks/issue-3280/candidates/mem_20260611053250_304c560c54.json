@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref / grounding\n\n- Ref: `2fb68a6ea9986352ef82e44a24a75e0d49bbb624`\n- Branch: `orchestrator/project-3272`\n- Integration metadata matches the checked-out ref.\n- Clarification: none required; the `/answer [auto-answered-by-orchestrator]` comment just confirms continuation.\n- Grounding checked: `analysis/recommendation-processing-report.md`, `analysis/workflow-optimization-2026-06-10.md`, `scripts/implement_diagnose_post_codex_failure.sh`, and `scripts/collect_workflow_logs.py`.\n\nAutomation / wiring impact\n\n- Existing-file-only cleanup.\n- No new script, workflow, scheduler wiring, supervisor, or DB gate.\n- No `docs/scripts-pending-removal.md` entry needed.\n\nRepresentative convention to follow\n\n- Use the normal bucketed closeout style already present in `analysis/recommendation-processing-report.md` for `analysis/workflow-optimization-2026-06-08-2.md`:\n  - `Implemented by sibling work` / `Implemented on this ref`\n  - `Already satisfied on this ref`\n  - `Invalid / obsolete on this ref`\n  - `Intentionally deferred`\n\nFiles likely to change\n\n1. `analysis/recommendation-processing-report.md`\n   - Add `analysis/workflow-optimization-2026-06-10.md` to `## Processed source docs`.\n   - Bump the processed-doc count from `95` to `96`.\n   - Update the explanatory sentence from \u201ctwelve source docs deleted\u201d to `thirteen`.\n   - Replace the provisional 2026-06-10 block with the normal closed-out bucketed structure.\n   - Record only the landed safe subset as actioned:\n     - `MERGE-001` \u2014 implement-diagnose fallback issue fetch collapse\n     - `DEAD-002` \u2014 `collect_workflow_logs.py` dead wrapper removal\n   - Keep every other 2026-06-10 item present, but bucket it as deferred, already satisfied, or invalid with its rationale preserved.\n   - Make minimal consistency edits to stale report lines elsewhere that now contradict current HEAD.\n\n2. `analysis/workflow-optimization-2026-06-10.md`\n   - Delete after its provenance and outcome are absorbed into the report.\n\nFunctions / modules to implement\n\n- No runtime code changes.\n- Verification-only code paths already checked:\n  - `scripts/implement_diagnose_post_codex_failure.sh`\n    - `fetch_fallback_issue_json()`\n    - fallback label recovery\n    - `fetch_issue_body_to_file()`\n  - `scripts/collect_workflow_logs.py`\n    - `list_run_log_excerpts()` is no longer present on this ref.\n\nData structures affected\n\n- Markdown provenance list under `## Processed source docs`\n- Per-doc outcome buckets for the 2026-06-10 source doc\n- Minimal stale cross-reference bullets/notes inside the same report\n- No schema, JSON, or runtime data-structure changes\n\nAPI / interface changes\n\n- None.\n\nImplementation outline\n\n1. Normalize the 2026-06-10 section out of provisional form.\n   - Remove the \u201cprovisional closeout\u201d wording.\n   - Convert inline status tags into the report\u2019s normal grouped buckets.\n   - Preserve stable labels and refs (`Speed-*`, `Cost-*`, `MERGE-*`, `DEAD-*`, etc.).\n\n2. Record the verified actioned subset only.\n   - `MERGE-001` is landed: the diagnoser now caches one fallback issue payload and reuses it for both labels and body.\n   - `DEAD-002` is landed: `list_run_log_excerpts()` is gone, and repo-local search no longer finds a live definition/caller.\n   - If the section convention wants sibling-work attribution, use the current HEAD commit trail (`AI implementation for issue #3276 (#3278)`).\n\n3. Preserve the non-actioned 2026-06-10 outcomes.\n   - Keep remaining `VALID-BUT-RISKY` items deferred.\n   - Move existing `STALE-or-already-done` items into `Already satisfied on this ref`.\n   - Move existing `INVALID` items into `Invalid / obsolete on this ref`.\n\n4. Reconcile stale report contradictions with minimal edits.\n   - Earlier report text still says the implement-diagnose cache-miss path is only partially landed.\n   - Earlier report text still says `list_run_log_excerpts()` still exists.\n   - The follow-up conflict note about `analysis/workflow-optimization-2026-06-05-3.md` partial landing is now stale.\n   - Update only those contradictory lines; do not rewrite unrelated history.\n\n5. Delete `analysis/workflow-optimization-2026-06-10.md`.\n\nRisks / edge cases\n\n- Repeated recommendation IDs across dated docs: make sure the 2026-06-10 section is updated without silently dropping rationale or refs.\n- The report\u2019s grounding note says outcomes are based on current repo state, so leaving stale contradictory bullets elsewhere in the report would make the artifact internally inconsistent.\n- Only delete `analysis/workflow-optimization-2026-06-10.md`; do not touch:\n  - `analysis/last_collection_timestamp.txt`\n  - `analysis/validation-selftest-status.json`\n  - any `analysis/recommendation-processing-report*.md`\n\nTesting considerations\n\n- After editing, verify:\n  - `analysis/recommendation-processing-report.md` now lists `analysis/workflow-optimization-2026-06-10.md`\n  - processed-doc count is `96`\n  - deleted-doc sentence says `thirteen`\n  - the 2026-06-10 section no longer says \u201cprovisional\u201d\n  - only `MERGE-001` and `DEAD-002` are actioned in that section\n  - all other 2026-06-10 items remain present with deferred / already-satisfied / invalid rationale\n  - `analysis/workflow-optimization-2026-06-10.md` is deleted\n  - `git diff --stat` shows only the report edit plus that source-doc deletion\n\nConflicts detected\n\n- The current codebase already contradicts the provisional 2026-06-10 section:\n  - `MERGE-001` is landed now.\n  - `DEAD-002` is landed now.\n- The report already contains stale lines outside the 2026-06-10 block that still describe those same fixes as deferred/not landed; those need minimal consistency edits as part of the closeout.\n\nAssumptions / missing context\n\n- Assumption: the \u201cnormal closed-out convention\u201d for this doc should match the nearby bucketed sections, especially `analysis/workflow-optimization-2026-06-08-2.md`.\n- Missing-context note: history is shallow, so sibling attribution is grounded from current HEAD commit metadata rather than a full local merge history; that is enough for planning and likely enough for the report citation if needed.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "9ed21fa72c1ff6c6afb905537b0893a9b51630d013c12055e6590ba6cbd7ac0d",
+  "lineage": {
+    "issue_number": 3280,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27325829934",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27325829934",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3280"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260611053250_304c560c54",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3280,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27325829934"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3280",
+  "timestamps": {
+    "created_at": "2026-06-11T05:32:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

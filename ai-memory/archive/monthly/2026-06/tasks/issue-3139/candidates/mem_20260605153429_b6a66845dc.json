@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan\n\n### Automation / wiring\n- **Change type:** only modifies existing code; no new script, workflow, or subsystem.\n- **Existing entry point:** `.github/workflows/implement.yml` in the implement phase (the existing PR-creation path for approved issues). No new scheduler or PR-push wiring is needed.\n- **Long-running supervisor:** none.\n- **DB work / gate pattern:** none.\n- **`docs/scripts-pending-removal.md` entry:** not needed.\n\n### Clarification mapping\n- No clarification questions were asked.\n- The `/answer [auto-answered-by-orchestrator]` comment does not add new scope; it just confirms planning can proceed under the issue body\u2019s stated guardrails.\n\n### Planning ref context\n- **HEAD:** `fd8497221b8ba8b3ac38352bbcf63e06a8347627`\n- **Checked-out branch:** `orchestrator/project-3042`\n- **Integration branch metadata:** `orchestrator/project-3042`\n- **Mismatch:** none\n\n### Representative pattern inspected\n- PR-body composition + lint coupling in `.github/workflows/implement.yml`:\n  - `Pre-flight \u2014 lint PR title/body for auto-close keywords against tracking issues`\n  - `Create Pull Request`\n- Workflow-contract test style already used in:\n  - `tests/test_lint_pr_body_auto_close.py`\n  - `tests/test_implement_post_codex_recovery.py`\n\n## Files likely to change\n1. `.github/workflows/implement.yml`\n2. `tests/test_implement_pr_body_tracking_refs.py` **(new file)**\n\n## Functions / modules / workflow blocks to implement\n### 1) Update PR body composition in `.github/workflows/implement.yml`\nLikely touch only the preflight body-building block that currently writes:\n\n- `Automated implementation. Closes <child-issue-url>`\n\nPlanned behavior:\n- Keep the existing **child issue auto-close** line unchanged.\n- For **orchestrator-managed child issues only**, append a second line with a **non-closing** tracking reference:\n  - `Refs #<tracking issue>`\n- Continue writing the composed body into the same `PR_BODY_FILE` that is later:\n  - concatenated into the lint input\n  - passed to `gh pr create --body-file`\n\n### 2) Reuse existing issue metadata instead of adding new API calls\nThe workflow already has cached issue metadata in `ISSUE_META_FILE` from `Fetch issue metadata`. The implementation should reuse that data to determine:\n- whether the issue is orchestrator-managed (`ai:orchestrator-managed`)\n- the tracking issue number from the child issue body footer (`Tracking issue: #<N>`)\n\nThis keeps the change local and avoids introducing a new GitHub API call.\n\n### 3) Keep the existing auto-close lint intact\nNo planned changes to:\n- `scripts/lint_pr_body_auto_close.py`\n- archival lint logic\n\nThe workflow change should remain compatible with the existing lint by ensuring:\n- the child issue still uses `Closes ...`\n- the tracking issue uses only `Refs #...`, never `Closes/Fixes/Resolves`\n\n## Data structures affected\n- **`ISSUE_META_FILE` JSON**: read-only use of existing fields:\n  - `.body`\n  - `.labels[].name`\n- **PR body artifacts**:\n  - `PR_BODY_FILE`\n  - `PR_LINT_FILE`\n- Likely new local shell variables in the preflight step, such as:\n  - orchestrator-managed flag\n  - parsed tracking issue number\n  - final composed PR body string\n\nNo persistent schema or API payload format changes are needed.\n\n## API / interface changes\n### User-visible behavior change\n- PR bodies for orchestrator-managed child issues will change from:\n  - `Automated implementation. Closes <child issue URL>`\n- to:\n  - `Automated implementation. Closes <child issue URL>`\n  - `Refs #<tracking issue>`\n\n### Non-changes\n- Child issues should still auto-close on merge.\n- Tracking issues must **not** auto-close from child PRs.\n- No new workflow inputs, env vars, labels, or CLI flags.\n\n## Risks / edge cases\n- **Missing or malformed tracking footer:** if an issue has `ai:orchestrator-managed` but its body does not expose a parseable `Tracking issue: #<N>`, the safest implementation is to preserve the old close-only body rather than guess.\n- **Keyword safety:** the tracking reference must remain `Refs`, never `Fixes`, `Closes`, `Resolves`, etc.\n- **Body/lint lockstep:** the exact body written to `PR_BODY_FILE` must stay identical to what the preflight lint validates; do not compose two different variants.\n- **Backward compatibility:** keep the existing `Closes <child issue URL>` text intact so existing close-detection logic and auto-close behavior remain unaffected.\n- **YAML formatting:** preserve YAML\u2019s 2-space indentation rules; do not introduce tabs.\n\n## Testing considerations\n### New focused test file\nCreate `tests/test_implement_pr_body_tracking_refs.py` as a narrow workflow-contract test that validates the composed PR body.\n\nRecommended coverage:\n1. **Positive path**\n   - Given an orchestrator-managed issue with body metadata containing `Tracking issue: #829`\n   - When the PR-body composition step runs\n   - Assert the generated body includes:\n     - the existing child `Closes <issue URL>` line\n     - a separate `Refs #829` line\n2. **Guardrail path** (small optional companion test if cheap)\n   - Non-orchestrator-managed issue, or missing tracking metadata\n   - Assert the body remains close-only\n\n### Test style\n- Prefer the existing repo pattern: extract and execute the actual `run:` block from `implement.yml` in a temp workspace, rather than reimplementing the shell logic in Python.\n- Reuse the helper style already seen in `tests/test_implement_post_codex_recovery.py`.\n\n### Targeted regressions to run\n- `pytest tests/test_implement_pr_body_tracking_refs.py`\n- `pytest tests/test_lint_pr_body_auto_close.py`\n- `pytest tests/test_subissue_closing_pr.py`\n\n## Assumptions\n- Orchestrator-managed child issues continue to carry tracking metadata in the issue body footer.\n- Exact blank-line formatting between `Closes ...` and `Refs #...` is not specified by the issue; use the smallest safe formatting and pin that exact output in the new test.\n- No change is needed in `scripts/lint_plan_archival_completeness.py`; it already accepts `Refs #N` as the required non-closing reference.\n\n## Conflicts / missing-context notes\n- **No ref conflict found**: checked-out branch matches integration metadata.\n- **No codebase naming/path conflict found** within the scoped files.\n- `tests/test_implement_pr_body_tracking_refs.py` does not exist yet; it should be created as part of this change.\n\n## Estimated implementation budget\n- ~20\u201330 minutes of editing and targeted test validation.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "10623143579c2736ae112799a1a1d01fcdef8a096e2e5c350e8ce49bd61c616d",
+  "lineage": {
+    "issue_number": 3139,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27023998692",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27023998692",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3139"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260605153429_b6a66845dc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3139,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27023998692"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3139",
+  "timestamps": {
+    "created_at": "2026-06-05T15:34:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

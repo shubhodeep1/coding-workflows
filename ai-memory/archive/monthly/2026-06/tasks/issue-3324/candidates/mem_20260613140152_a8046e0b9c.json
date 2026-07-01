@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3324,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3324\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3335\",\"pr_number\":3335,\"branch\":\"ai/issue-3324\",\"run_id\":\"27468550499\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/27468550499\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/implement.yml\",\"scripts/implement_commit_changes.sh\",\"tests/test_implement_post_codex_recovery.py\",\"tests/test_implement_semble_contract.py\"]}",
+  "fingerprint": "c0cfb280d8c8a1da51bf1fe566db1226cea493e71e0831baa6cbc4f0ef359994",
+  "lineage": {
+    "issue_number": 3324,
+    "parent_ids": [],
+    "pr_number": 3335,
+    "run_id": "27468550499",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27468550499",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3335"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260613140152_a8046e0b9c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3324,
+    "level": "run",
+    "pr_number": 3335,
+    "run_id": "27468550499"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3324: https://github.com/shubhodeep1/coding-workflows/pull/3335",
+  "timestamps": {
+    "created_at": "2026-06-13T14:01:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

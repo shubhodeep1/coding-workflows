@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update `prompts/references/output-contract.txt` so it carries the shared status-update cadence from the plan: one short preamble before each tool-call batch, a compact checkpoint after every 3\u20135 tool calls or any >3-file edit burst, and the final artefact/deliverable contract. Preserve the existing terminal-deliverable bullets instead of weakening them.\n  expected_change_site: prompts/references/output-contract.txt (wired via {{REFERENCE_OUTPUT_CONTRACT}} placeholder in prompts/mode-plan.txt and prompts/mode-judge.txt)\n  confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: PRIOR TO FIX - The file contained only terminal-output contract bullets. POST-FIX - Lines 1-5 added the exact cadence text from the linked issue: \"Status-update cadence for interim stdout/tool-call narration:\" followed by the three bullet points specifying preamble/checkpoint rules. The terminal output contract bullets (lines 9-14) remain preserved and unchanged.\n- requirement: Add regression coverage in an existing prompt-render/contract test so the shared reference cannot silently lose the cadence again.\n  expected_change_site: tests/test_render_prompt_foundation.py - test function extending existing contract assertions\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: BEFORE - No test specifically verified the output-contract.txt content. AFTER - Added test_output_contract_reference_includes_status_update_cadence() at lines 36-43 that loads the reference text and asserts presence of the four key cadence strings, then integrated into main() test runner at line 294. This ensures the cadence cannot be accidentally removed in future changes.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: Update `prompts/references/output-contract.txt` so it carries the shared status-update cadence from the plan: one short preamble before each tool-call batch, a compact checkpoint after every 3\u20135 tool calls or any >3-file edit burst, and the final artefact/deliverable contract. Preserve the existing terminal-deliverable bullets instead of weakening them.\n  Expected change site: prompts/references/output-contract.txt (wired via {{REFERENCE_OUTPUT_CONTRACT}} placeholder in prompts/mode-plan.txt and prompts/mode-judge.txt)\n  Evidence of absence: PRIOR TO FIX - The file contained only terminal-output contract bullets. POST-FIX - Lines 1-5 added the exact cadence text from the linked issue: \"Status-update cadence for interim stdout/tool-call narration:\" followed by the three bullet points specifying preamble/checkpoint rules. The terminal output contract bullets (lines 9-14) remain preserved and unchanged.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n- Requirement: Add regression coverage in an existing prompt-render/contract test so the shared reference cannot silently lose the cadence again.\n  Expected change site: tests/test_render_prompt_foundation.py - test function extending existing contract assertions\n  Evidence of absence: BEFORE - No test specifically verified the output-contract.txt content. AFTER - Added test_output_contract_reference_includes_status_update_cadence() at lines 36-43 that loads the reference text and asserts presence of the four key cadence strings, then integrated into main() test runner at line 294. This ensures the cadence cannot be accidentally removed in future changes.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "fc4d8e7eb19e45d274c9f084800c69b6866dbda98162c9e7b928acf557f9803f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3372,
+    "run_id": "27610458393",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27610458393",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260616104728_296dadcec3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3372,
+    "run_id": "27610458393"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-16T10:47:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "> **Q1: What part of this repository should change?**\n>\n> Choices:\n> - **A** \u2014 A specific workflow file under `.github/workflows/` \u2014 name the workflow/path (RECOMMENDED)\n> - **B** \u2014 A specific script, prompt, or helper under `scripts/`, `prompts/`, or similar \u2014 name the file/path (RECOMMENDED)\n> - **C** \u2014 A broader pipeline phase (`clarify`, `plan`, `implement`, `review`, `orchestrate`, or `validate`) \u2014 name the phase and pair it with a concrete example in Q3\n>\n> Reply: `Q1: A`\n> **Q2: What kind of improvement do you want?**\n>\n> Choices:\n> - **A** \u2014 Fix a broken behavior or failing run \u2014 describe the current behavior and the expected behavior (RECOMMENDED)\n> - **B** \u2014 Add a missing capability \u2014 describe the new behavior you want (RECOMMENDED)\n> - **C** \u2014 Improve docs/usability/maintainability without changing core behavior \u2014 describe what is unclear or painful today\n>\n> Reply: `Q2: A`\n> **Q3: What concrete example should the implementer use as the source of truth?**\n>\n> Choices:\n> - **A** \u2014 A GitHub issue, PR, workflow run, or log snippet shows the problem \u2014 include the number or link (RECOMMENDED)\n> - **B** \u2014 The change should target specific file/path(s) \u2014 list them (RECOMMENDED)\n> - **C** \u2014 There is no failing example; success is the exact end state I describe in one sentence\n>\n> Reply: `Q3: A`",
+  "fingerprint": "07f6b8a53fd48fe1dfd46a58c882ad3b14dcfa164de11eafd2d6ed84894013e8",
+  "lineage": {
+    "issue_number": 3558,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28311897490",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28311897490",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260628045934_cb1b7fd413",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3558,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28311897490"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #3558 needs clarification",
+  "timestamps": {
+    "created_at": "2026-06-28T04:59:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

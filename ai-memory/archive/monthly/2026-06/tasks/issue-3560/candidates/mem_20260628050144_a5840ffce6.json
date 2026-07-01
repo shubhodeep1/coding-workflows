@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope\nReuse-audit: extends existing file overwrite pattern\nScope-mode justification:\nThe issue is fully specified, constrained to a single existing text file, and explicitly forbids touching any other path. The safest and correct plan is the minimum local change: overwrite `tests/e2e_smoke_canary.txt` with the exact three required lines and preserve the trailing newline. There is no justification for expansion because \u00a76 priorities favor correctness and backward compatibility over speed, and the requested complete solution is already the smallest safe change.\n\nPlanning ref:\n- HEAD: `9c3d1cee7badb266c4c84d18fc55e6394e2e37d7`\n- Branch: `main`\n\nClarification mapping:\n- Clarify phase determined no questions were needed.\n- `/answer [auto-answered-by-clarify]` means the task is treated as fully specified with no missing inputs.\n\nFiles likely to change:\n- `tests/e2e_smoke_canary.txt`\n\nFunctions or modules to implement:\n- No code modules or functions.\n- Single file-content replacement only.\n\nData structures affected:\n- None beyond the plaintext contents of `tests/e2e_smoke_canary.txt`.\n\nAPI/interface changes:\n- None.\n\nRisks and edge cases:\n- Must replace the entire file, not append.\n- Final content must be exactly:\n  - `status: ok`\n  - `run_id: 28311883052`\n  - `updated-by: ai-pipeline`\n- Must keep a trailing newline after the third line.\n- Must not modify any other file.\n- No repo/code conflict found: the target file exists on the planning ref.\n\nTesting considerations:\n- Verify only `tests/e2e_smoke_canary.txt` is changed in `git diff --stat`.\n- Verify file content matches exactly the three required lines.\n- Verify the file ends with a newline byte.\n- No broader lint/test/typecheck/build work is needed for this plaintext-only change.\n\nPre-execution self-check result:\n- Scope is singular and unambiguous.\n- Required file exists on the checked-out ref.\n- No external inputs, private docs, or unresolved dependencies are needed.\n- Integration branch metadata is absent (`unknown`), but there is no mismatch signal to block planning.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "9533a33470dbb337f6f73364d3644b69de44ca8e1f6d2661c03034de1c1adac0",
+  "lineage": {
+    "issue_number": 3560,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28311936453",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28311936453",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3560"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260628050144_a5840ffce6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3560,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28311936453"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3560",
+  "timestamps": {
+    "created_at": "2026-06-28T05:01:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

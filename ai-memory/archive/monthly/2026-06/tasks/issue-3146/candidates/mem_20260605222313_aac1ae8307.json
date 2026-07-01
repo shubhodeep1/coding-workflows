@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `f47616407a5b4a241a39f00ff1496ac4701dff31` on `orchestrator/project-3042` (matches integration-branch metadata).\n\nClarification mapping:\n- No `Q1+` questions were asked.\n- `/answer [auto-answered-by-orchestrator]` only confirms continuation; it adds no extra scope.\n\nImplementation plan\n\n1. Files likely to change\n- `tests/test_codex_stall_guard_poller.py` \u2014 primary and likely only required edit.\n- No production-file change is expected in `.github/workflows/implement.yml` or `scripts/codex_thread_reuse.sh`; use them as the contract sources unless the test rewrite uncovers a real missing handoff.\n- No workflow-file change is expected in `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, or `.github/workflows/test-and-mark-stable.yml` if the poller test keeps its current path.\n\n2. Functions or modules to update\n- In `tests/test_codex_stall_guard_poller.py`, rewrite or split `test_implement_workflow_uses_shared_stall_guard_path()` so it validates the real shared contract:\n  - workflow-side delegation anchors in `.github/workflows/implement.yml`;\n  - helper-side timeout/stall-guard wrapper anchors in `scripts/codex_thread_reuse.sh`.\n- Update `_run_poller_contract()` in the same file to seed `REVIEW_RUN_MAX_RUNTIME_MINUTES` (or mirror the script default) before calling extracted poller helpers, because `build_active_issue_set()` now assumes it exists under `set -u`.\n- Add/update local test constants/docstring as needed (for example a `THREAD_REUSE_HELPER` path). `main()` should not need changes because it auto-discovers `test_*`.\n- Representative existing pattern: use the `direct-run` path in `scripts/codex_thread_reuse.sh` as the source of truth; `tests/test_codex_thread_reuse_core.py::test_implement_workflow_contains_thread_reuse_wiring` already covers the delegation pattern and should be complemented, not duplicated.\n\n3. Data structures affected\n- The poller test\u2019s snippet expectations will likely split into:\n  - workflow delegation snippets;\n  - helper wrapper snippets.\n- The inline bash harness in `_run_poller_contract()` gains the missing review-runtime env default.\n- No runtime schema, persisted state, or public interface changes.\n\n4. API or interface changes\n- No production behavior/API change expected.\n- Effective tested contract becomes:\n  - `.github/workflows/implement.yml` delegates launch details into `scripts/codex_thread_reuse.sh`;\n  - `scripts/codex_thread_reuse.sh` remains the single authoritative owner of `timeout --signal=TERM --kill-after=5s` and stall-guard runner wiring.\n\n5. Potential risks / edge cases\n- Do not move timeout logic back into `.github/workflows/implement.yml` just to satisfy string matching.\n- Prefer stable cross-file anchors over stale inline strings. For example:\n  - workflow: `CODEX_THREAD_REUSE_STALL_GUARD_HELPER`, `CODEX_THREAD_REUSE_TIMEOUT_SECS`, `CODEX_THREAD_REUSE_STATUS_FILE`, `CODEX_THREAD_REUSE_PHASE`;\n  - helper: `timeout --signal=TERM --kill-after=5s`, `--phase \"${phase}\"`, `--status-file \"${status_file}\"`.\n- The same poller test currently has a second failure mode unrelated to the issue summary: extracted poller helpers now assume `REVIEW_RUN_MAX_RUNTIME_MINUTES`.\n- Current ref baseline is not fully green outside this issue: direct runs also failed in `tests/test_codex_stall_guard_scripts.py` (heartbeat issue selection under inherited `ISSUE_NUMBER`) and in prompt-contract checks inside `tests/test_codex_thread_reuse_core.py` and `tests/test_codex_thread_reuse_review.py`. Treat those as pre-existing unless implementation reveals a shared cause.\n\n6. Testing considerations\n- Required targeted validation:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py`\n- Non-regression checks named by the issue:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_review.py`\n- Keep `tests/test_codex_stall_guard_poller.py` at the same path to avoid touching `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, and `.github/workflows/test-and-mark-stable.yml`. Only update those workflows if the test file is intentionally renamed or split.\n\nAssumption:\n- The current architecture is already correct: `scripts/codex_thread_reuse.sh` is the single authoritative launch path, so the smallest safe fix is to realign the regression test to that architecture rather than change production launch logic.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "11ed042000a7098fec90b6d7a81246c13b0453bdc611a0323ab7a1d2d436b6a7",
+  "lineage": {
+    "issue_number": 3146,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27042975793",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27042975793",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3146"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260605222313_aac1ae8307",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3146,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27042975793"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3146",
+  "timestamps": {
+    "created_at": "2026-06-05T22:23:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref.\n- HEAD: `9c3d1cee7badb266c4c84d18fc55e6394e2e37d7`\n- Branch: `orchestrator/project-3561`\n- Integration metadata: matches checked-out ref (`integration branch mismatch: false`)\n\nClarification handling.\n- No `Q1`/`Q2` clarification was issued.\n- `/answer [auto-answered-by-orchestrator]` only confirms continuation; scope comes from the issue body.\n\nAutomation/wiring.\n- Change type: existing file update only.\n- Scheduler / PR-push wiring: none.\n- Long-running supervisor: none.\n- DB gate / removal-registry entry: not applicable.\n\nScope-mode: Hold Scope\nReuse-audit: extends existing sibling smoke-canary pattern (`tests/e2e_smoke_canary_b.txt`)\nScope-mode justification:\nThis issue is fully specified and tightly bounded to one `files_touched` path. The safest plan is a surgical content edit in `tests/e2e_smoke_canary.txt` that mirrors the existing `status: ok` + `decompose-run:` prefix already present in the sibling canary, while leaving `tests/e2e_smoke_canary_b.txt` and all shared workflow/spec/test files untouched. Expanding into broader smoke-harness cleanup would violate the \u201csmallest possible edit\u201d and independent Wave 1 mergeability requirements; under \u00a76 priorities, correctness and backward-compatible scope control win over opportunistic cleanup.\n\nFiles likely to change.\n- `tests/e2e_smoke_canary.txt` only.\n- Explicit non-targets: `tests/e2e_smoke_canary_b.txt`, `tests/e2e_smoke_canary_spec.txt`, workflow files, scripts, and docs.\n\nFunctions or modules to implement.\n- None; this is a data-only fixture edit.\n- Update the existing line-oriented contents of `tests/e2e_smoke_canary.txt`.\n\nData structures affected.\n- `tests/e2e_smoke_canary.txt` plain-text canary record:\n  - line 1 is already `status: ok` on the planning ref and should remain unchanged\n  - line 2 should change from `run_id: 26151428977` to `decompose-run: 28311883052`\n  - preserve existing trailing content/newline state (currently `updated-by: ai-pipeline`) unless a rewrite is absolutely required to satisfy the first two lines exactly\n\nAPI/interface changes.\n- None. No workflow logic, prompt contract, helper script, or external interface changes are needed.\n\nRisks and edge cases.\n- Conflict detected: shared smoke assets elsewhere in the repo still describe a 3-line `run_id`/`updated-by` canary contract (`tests/e2e_smoke_canary_spec.txt`, `tests/test_e2e_editor_smoke_canary.py`, and related smoke helpers). This issue is narrower and should stay narrowed to the single-file `decompose-run` update.\n- Because line 1 already matches, an implementation could accidentally miss the required line-2 change and become a no-op.\n- `tests/e2e_smoke_canary_b.txt` has a similar name and already uses `decompose-run:`; use it as the pattern reference only, not as a change target.\n- Rewriting the file down to only two lines would likely satisfy the leading-line acceptance but would also remove unrelated existing content, conflicting with the \u201cprefer the smallest possible edit / do not reflow unrelated content\u201d instruction.\n\nTesting considerations.\n- Verify `git diff --name-only` shows only `tests/e2e_smoke_canary.txt`.\n- Verify the file begins with:\n  1. `status: ok`\n  2. `decompose-run: 28311883052`\n- If using the minimal-edit approach, confirm the existing third line `updated-by: ai-pipeline` remains intact.\n- No repo-wide toolchain validation is required; acceptance is content/diff-based.\n\nPre-execution self-check result.\n- Checked-out ref matches the integration branch metadata.\n- `tests/e2e_smoke_canary.txt` and `tests/e2e_smoke_canary_b.txt` both exist on the planning ref.\n- No clarification answers are missing or contradictory.\n- The change is implementation-ready as a single-file, Wave-1-safe edit.\n\nPLAN_SELF_CHECK: WARNING: Shared smoke spec/tests still describe the older 3-line `run_id` canary contract, so implementation should hold scope strictly to the issue\u2019s one-file `decompose-run` update.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "9d8db287f9b3d52dc9186315ee77daf880496a4eadcb6a67f155c20018ab5822",
+  "lineage": {
+    "issue_number": 3562,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28311974075",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28311974075",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3562"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260628050531_4bd0d39c06",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3562,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28311974075"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3562",
+  "timestamps": {
+    "created_at": "2026-06-28T05:05:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

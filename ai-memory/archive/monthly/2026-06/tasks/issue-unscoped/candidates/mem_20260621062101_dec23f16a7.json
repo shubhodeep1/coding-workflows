@@ -1,0 +1,40 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_labels.py:658-663 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The JSON output returns `\"errors\": errors` as a list of error objects, but the linked issue and PR description explicitly require `\"errors\"` to be a numeric count instead.\n  WHY: Reviewers disagreed on severity and intent \u2014 mistralai marked this BLOCKER, while other reviewers treated the same contract as an intentional list form in the plan/CI \u2014 but the reported finding claims the list-form output breaks downstream consumers.\n- .github/workflows/ci.yml:456-483 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The assert in the \"AI label sync dry-run smoke\" job checks for `set(payload) == {\"created\", \"updated\", \"unchanged\", \"errors\"}` but then immediately asserts `isinstance(payload[\"errors\"], list)`.\n  WHY: The reviewer reported these assertions as contradictory and said they would cause the CI job to fail with an unhelpful assertion error.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Extend `scripts/ai_labels.py` with a new `sync-labels` CLI path (`cmd_sync_labels`) that reads `label_contract.v1.json`, checks each contract label against the target repo, creates missing labels, updates mismatched color/description, and reports JSON counts for `created`, `updated`, `unchanged`, and `errors`.\"\n  expected_change_site: `scripts/ai_labels.py:cmd_sync_labels` (output dictionary)\n  confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  EVIDENCE: `scripts/ai_labels.py` lines 658-663 use `\"errors\": errors` where `errors` is a list of error objects, `.github/workflows/ci.yml` lines 478-479 assert `isinstance(payload[\"errors\"], list)`, and `docs/plans/complete-squad-improvements-plan.md` line 169 specifies `{\"created\": N, \"updated\": N, \"unchanged\": N, \"errors\": []}`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/ai_labels.py:658-663 | severity=critical | confidence=5\n  PROBLEM: The JSON output returns `\"errors\": errors` as a list of error objects, but the linked issue and PR description explicitly require `\"errors\"` to be a numeric count instead.\n  WHY: The output contract mismatch will cause downstream consumers (workflows and scripts parsing the sync results) to fail since they expect a count, not an array.\n- .github/workflows/ci.yml:456-483 | severity=critical | confidence=5\n  PROBLEM: The assert in the \"AI label sync dry-run smoke\" job checks for `set(payload) == {\"created\", \"updated\", \"unchanged\", \"errors\"}` but then immediately asserts `isinstance(payload[\"errors\"], list)`.\n  WHY: The reviewer reported this as contradictory and said it will cause the CI job to fail with an unhelpful assertion error.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\nRequirement: \"reports JSON counts for `created`, `updated`, `unchanged`, and `errors`\"\nExpected change site: `scripts/ai_labels.py` in `cmd_sync_labels` function, return value\nEvidence of absence: The output dictionary at lines 658-663 uses `\"errors\": errors` where `errors` is a list of error objects, not a numeric count. The requirement explicitly states \"counts\" for all four fields. However, the CI test at `.github/workflows/ci.yml:478-479` explicitly validates this list structure (`assert isinstance(payload[\"errors\"], list)`), suggesting the implementation intentionally returns detailed error objects rather than just a count. The implementation is functionally correct and tested, but technically deviates from the literal wording of the requirement.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\nRequirement: \"reports JSON counts for `created`, `updated`, `unchanged`, and `errors`\"\nExpected change site: `scripts/ai_labels.py` in `cmd_sync_labels` function, output dictionary\nEvidence of absence: The output JSON returns `\"errors\": [list of error dicts]` rather than a numeric `error_count`. The CI dry-run smoke test (`.github/workflows/ci.yml` ~line 478) asserts `isinstance(payload[\"errors\"], list)`, confirming the implementation intentionally ships a list. Both the issue text and the plan document (docs/plans/complete-squad-improvements-plan.md \u00a7162-181) request counts, but the plan's explicit `{\"created\": N, \"updated\": N, \"unchanged\": N, \"errors\": []}` spec was followed. The \"counts\" language in the issue appears shorthand for \"numeric tallies + error list.\" A downstream consumer expecting `errors` to be an integer would fail parsing.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\nRequirement: \"Extend `scripts/ai_labels.py` with a new `sync-labels` CLI path (`cmd_sync_labels`) that reads `label_contract.v1.json`, checks each contract label against the target repo, creates missing labels, updates mismatched color/description, and reports JSON counts for `created`, `updated`, `unchanged`, and `errors`.\"\nExpected change site: `scripts/ai_labels.py:cmd_sync_labels` (output dictionary)\nEvidence of absence: The implementation returns `\"errors\": errors` (a list of objects) rather than an integer count, which contradicts the explicit contract stated in the issue and the plan document. While the CI smoke test accepts the list form, the task acceptance criteria and reviewer consensus both require numeric counts for all four fields.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n\n(The remaining five deliverables \u2014 reusable workflow, wrapper template, README note, `agents.md` log-prefix registrations, test/CI smoke coverage, and additive-only constraint \u2014 are already satisfied in the current PR state. The two description tweaks to `label_contract.v1.json` and `scripts/label_helpers.sh` are the only non-additive edits present; they are low-impact and already surfaced by prior reviewers.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "75eb8582e73eb42b4ef6f720320b754f32eb7a17f2e7b1dabc158add0d906d83",
+  "injection_suspected": true,
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3410,
+    "run_id": "27895074165",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27895074165",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260621062101_dec23f16a7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3410,
+    "run_id": "27895074165"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-21T06:21:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

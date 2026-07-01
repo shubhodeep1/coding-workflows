@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:602-665 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m2_5, mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The shared anti-regression check switched from `rg` to `grep`, which changes the matching engine and can miss future wiring regressions.\n  WHY: Three reviewers reported the same rg-to-grep portability/regression-guard concern, pointing to the removal of the explicit `rg` prerequisite and differing regex behavior on some runners.\n- .github/workflows/ci.yml:662-665 | confidence=2\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The new `grep -nE` pattern adds avoidable regex-compilation overhead to the CI workflow.\n  WHY: The reviewer explicitly called out a small CI runtime increase from compiling the ERE on every workflow run.\n- scripts/write_guard.sh:24-34 | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `write_guard_sanitize_log_value` can emit an unquoted empty token when sanitization strips the input to empty.\n  WHY: The reviewer noted the fallback to `printf '%q'` on an empty string leaves downstream structured logs without the guaranteed single-token safety the helper is supposed to provide.\n- scripts/dev/test_write_guard.sh:221-237 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The assertions do not account for the empty-output behavior of `write_guard_sanitize_log_value`.\n  WHY: The reviewer said the test expects escaped control characters, but line 224 will not match when sanitization produces empty output.\n- tests/test_implement_post_codex_recovery.py:1480-1492 | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The test hardcodes network-output strings from steps that only run in specific Docker contexts, making it brittle.\n  WHY: The reviewer said the assertions depend on environment-specific diagnostic output rather than the PR's label contract or workflow intent.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/ci.yml:602-665 | severity=high | confidence=4\n  PROBLEM: The shared shell-block anti-regression check now uses `grep` instead of `rg` (ripgrep), removing both the availability check and using a different tool for pattern matching.\n  WHY: While the regexes are mostly compatible, the change removes the explicit `command -v rg` pre-check and can let the guard behave differently on systems where `grep` and `rg` do not match identically.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/ci.yml:602-665 | confidence=4\n  PROBLEM: The anti-regression shell block now relies exclusively on `grep -nE`/`grep -q` instead of `rg` for pattern matching.\n  WHY: On minimal containers or BSD runners where `grep` may behave differently, the pattern match can produce false-negatives and allow future drift in the wiring checks.\n- scripts/write_guard.sh:24-34 | confidence=3\n  PROBLEM: When the sanitized log value is empty after cleaning, the function falls back to `printf '%q'` on empty string, which produces an unquoted empty token in shell output.\n  WHY: The empty output is not properly sanitized, and this could affect downstream consumers expecting guaranteed single-token safety in structured logs.\n- scripts/dev/test_write_guard.sh:221-237 | confidence=4\n  PROBLEM: Assertions expect escaped control characters in logs, but line 224 does not account for empty sanitized output behavior in `scripts/write_guard.sh`'s `write_guard_sanitize_log_value`.\n  WHY: If `write_guard_log_value` becomes empty during sanitization, the test asserts a non-empty escaped output pattern that will not match the real function behavior.\n- tests/test_implement_post_codex_recovery.py:1480-1492 | confidence=3\n  PROBLEM: The test `test_destructive_guard_latch_verifies_label_applied` asserts network output that includes hardcoded strings from steps that only run in specific Docker contexts.\n  WHY: The network assumptions in diagnostic output assertions make the test brittle across different execution environments and do not reflect the PR's actual label contract or workflow intent.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/ci.yml:602-665 | severity=high | confidence=5\n  PROBLEM: The lint now uses `grep -nE` / `grep -q` (and `grep -qE` for the watchdog_helpers pattern) exclusively instead of `rg`.\n  WHY: The ERE patterns are complex and the change can let the guard silently pass on some runners, defeating the regression check's purpose.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "eaf751d2bdfe419b3c3b7462b844f1c4273465071af250ea22f0fc7ee9a79362",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3456,
+    "run_id": "27955497659",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27955497659",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260622135836_9e4aac4789",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3456,
+    "run_id": "27955497659"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-22T13:58:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

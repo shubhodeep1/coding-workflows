@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:3494-3502 | confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The nested `git -C ...` probe has an unreachable failure branch, so `support_checkout_changes` is not safely cleared when the probe fails.\n  WHY: The command-substitution/error-handling logic on these lines does not provide a real failure path for nested-checkout probe errors, so the intended \"treat it as clean\" behavior is not reliably honored.\n- .github/workflows/implement.yml:3500-3502 | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Splicing `support_checkout_changes` into `remaining_changes` can produce leading newlines or duplicate/garbage entries across multiple support-checkout iterations.\n  WHY: The newline join happens after the outer filter but before inner normalization, so downstream Guard 1 and warning output can see malformed `remaining_changes`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/implement.yml:3494-3502 | confidence=5\n  PROBLEM: Command substitution `$(git -C ... 2>/dev/null)` always succeeds (exit code 0) even when `git` itself fails (non-zero exit, e.g. missing binary, corrupted .git, permission error, or PATH issue). The `else` branch that sets the empty string and emits `::warning::` is therefore unreachable.\n  WHY: On a real failure the `support_checkout_changes` variable retains the (potentially empty or stale) stderr output captured from the failed command; subsequent string concatenation and `grep -qE` on `remaining_changes` can produce malformed output, incorrect no-op classification, or a missed pathspec-filtered edit. The \"treating it as clean\" intent is not honoured.\n- .github/workflows/implement.yml:3500-3502 | confidence=4\n  PROBLEM: When the loop iterates over a second support checkout and the first produced output, the splice can produce a leading newline or duplicate entries because the `remaining_changes:+$'\\n'` test is applied after the outer `grep` but before any inner `sed` normalization.\n  WHY: Combined with the unreachable failure branch above, `remaining_changes` fed to Guard 1 and the warning block can contain garbage, duplicated lines, or un-prefixed inner paths.\n- .github/workflows/implement.yml:3494-3502 | confidence=5\n  PROBLEM: The only error path for a nested-checkout probe is an unreachable `else` branch that never fires because of command-substitution semantics. No handling exists for `git -C` stderr, non-zero exits, or transient failures.\n  WHY: A legitimate probe failure (e.g. nested .git absent mid-run, network filesystem hiccup on consumer runners) leaves `remaining_changes` in an inconsistent state, silently bypassing the \"treat as clean\" intent and the Guard 1 escalation contract.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "75eed615c52ac84c26d137fad3be73a6f80ed753aa139cae4f261e5b91f3a8c3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3092,
+    "run_id": "26954524917",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26954524917",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260604133936_ba0e820cc8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3092,
+    "run_id": "26954524917"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-04T13:39:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

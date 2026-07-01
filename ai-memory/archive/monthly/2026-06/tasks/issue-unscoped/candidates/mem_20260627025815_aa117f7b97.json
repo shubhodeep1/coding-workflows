@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_plan_clarify_header_prompt_staging.py:lines ~174-200 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Test forces a sanitized/minimal environment (copy + selective pop + explicit PWD) that diverges from real GitHub Actions runner env used by clarify.yml/plan.yml.\n  WHY: Subprocess may resolve paths, locale, or shell startup differently than production; positive-path render assertion can pass in test but the exact consumer failure mode (or a latent variant) could be masked.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Adds `tests/test_plan_clarify_header_prompt_staging.py` (wired into `ci.yml`): static contract that every workflow rendering prompts/header.txt also stages it (mkdir + install + .codex-workflow-src\u2192-main fallback + hard error); behavioural test reproducing runtime layout that asserts header renders with {{REPO_LEARNINGS}} hydrated; negative control reproducing exact consumer error.\"\n  expected_change_site: .github/workflows/ci.yml (test invocation), tests/test_plan_clarify_header_prompt_staging.py (full test suite), .github/workflows/clarify.yml + plan.yml (staging blocks asserted by static contract)\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: Test file exists, is wired into ci.yml (line 449), static contract assertions and all three behavioural tests (including support-missing hard-fail and prefer_main_snapshot branches) are present in current LAST RUN DIFF and PR DIFF; no unmet deliverable remains.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_plan_clarify_header_prompt_staging.py:lines ~174-200 | severity=high | confidence=4\n  PROBLEM: Test forces a sanitized/minimal environment (copy + selective pop + explicit PWD) that diverges from real GitHub Actions runner env used by clarify.yml/plan.yml.\n  WHY: Subprocess may resolve paths, locale, or shell startup differently than production; positive-path render assertion can pass in test but the exact consumer failure mode (or a latent variant) could be masked. The gemini-code-assist[bot] comment at line 174 and previous editor summaries already noted this gap.\n- Requirement: \"Adds `tests/test_plan_clarify_header_prompt_staging.py` (wired into `ci.yml`): static contract that every workflow rendering prompts/header.txt also stages it (mkdir + install + .codex-workflow-src\u2192-main fallback + hard error); behavioural test reproducing runtime layout that asserts header renders with {{REPO_LEARNINGS}} hydrated; negative control reproducing exact consumer error.\"\n  Expected change site: .github/workflows/ci.yml (test invocation), tests/test_plan_clarify_header_prompt_staging.py (full test suite), .github/workflows/clarify.yml + plan.yml (staging blocks asserted by static contract)\n  Evidence of absence: Test file exists, is wired into ci.yml (line 449), static contract assertions and all three behavioural tests (including support-missing hard-fail and prefer_main_snapshot branches) are present in current LAST RUN DIFF and PR DIFF; no unmet deliverable remains.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "b0a58b27b51d8982d1dd60292aef90523b7c2f576d35b541e124d3510d82dd00",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3539,
+    "run_id": "28275534633",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28275534633",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260627025815_aa117f7b97",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3539,
+    "run_id": "28275534633"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-27T02:58:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

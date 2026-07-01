@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:12441-12448 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The second `if [ -z \"${blocker_err_file}\" ]` guard after the successful `mktemp` call is unreachable dead code.\n  WHY: When `mktemp` succeeds the variable is guaranteed non-empty, and when it fails the first guard already returns immediately.\n- scripts/blocker_check.py:60-103 | severity=high | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: A malformed non-list `dependency_edges` value is treated the same as missing metadata, so blocker eligibility falls back to `True` instead of deferring dispatch.\n  WHY: Corrupted orchestrator state can make the poller dispatch a still-blocked issue rather than emitting a blocker signal and structured blocker list.\n- scripts/blocker_check.py:242-260 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_20]\n  PROBLEM: Errors from state loading or candidate JSON parsing are reduced to exit(1), and the shell wrapper fail-opens on any non-zero exit.\n  WHY: Missing/corrupt `STATE_FILE` or bad `--candidate-details-json` can silently become \u201cdispatch anyway,\u201d defeating the blocker gate and leaving only a generic warning.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: scripts/orchestrate_poll_process.sh\n  Line or code reference: 12441-12448\n  Problem: The second `if [ -z \"${blocker_err_file}\" ]` guard after the successful `mktemp` call is unreachable dead code.\n  Why it fails at runtime: When `mktemp` succeeds, the variable is guaranteed non-empty. When `mktemp` fails, the first `if ! blocker_err_file=...` branch returns immediately.\n  ISSUE_CONFIDENCE: 3\n- File: scripts/blocker_check.py\n  Line or code reference: 250-252\n  Problem: OSErrors from _load_state() (file not found, permission denied, corruption) cause the script to exit with code 1, but the shell caller in _runtime_blocker_dispatch_eligible() treats any non-zero exit as fail-open.\n  Why it fails at runtime: Critical state-file issues are swallowed - the poller proceeds with dispatch when it should either fail hard or at least log a distinct error signal for operators to detect.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/blocker_check.py\n  Line or code reference: _incoming_blocker_local_ids (lines 60-68) + evaluate_blocker_eligibility (lines 100-103)\n  Problem: `state.get(\"dependency_edges\")` that returns a non-list value other than `None` (e.g. a str, int, or dict from malformed state) is treated exactly like a missing key - returns `False, []` \u2192 `\"no_dependency_metadata\"` + `eligible=True`.\n  Why it fails at runtime: Partial or corrupted orchestrator state (common in transient JSON writes to the state comment) would cause the poller to dispatch a still-blocked issue instead of emitting a clear `dispatch_deferred_blocker` signal and the structured blocker list.\n  ISSUE_CONFIDENCE: 4\n- File: scripts/blocker_check.py\n  Line or code reference: main() (lines 242-260)\n  Problem: All caught exceptions (`OSError`, `ValueError`, `JSONDecodeError`) from state load or candidate JSON parsing are printed to stderr and cause exit(1).\n  Why it fails at runtime: A missing/corrupt `STATE_FILE` or bad `--candidate-details-json` during a poll tick silently becomes \"dispatch anyway\", defeating the gate's purpose and producing no audit trail beyond a generic warning line.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "4957c87885d2a1d50e64c9d098baff003b6a3e014ea28733d578b7be2c10716f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3064,
+    "run_id": "26847705299",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26847705299",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260602211629_b06342e654",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3064,
+    "run_id": "26847705299"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-02T21:16:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

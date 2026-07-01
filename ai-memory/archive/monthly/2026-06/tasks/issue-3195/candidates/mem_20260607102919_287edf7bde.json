@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `orchestrator/project-3185` at `c6bfcc64176b2485d8d6609feeb60a52e000ff13`  \nIntegration-branch check: matched (`orchestrator/project-3185`), so planning can proceed.\n\nClarification mapping\n- No `Q1`/`Q2` batch was issued for this issue.\n- The only answer was `/answer [auto-answered-by-orchestrator]`, so the plan proceeds from the issue body as written.\n\nAutomation / wiring summary\n- Change type: add 1 new runtime helper script and modify 2 existing workflows.\n- Existing entry points remain:\n  - `.github/workflows/review_autofix.yml` \u2192 `Collect PR metadata`\n  - `.github/workflows/internal-review.yml` \u2192 `resolve-claude-branch-pr` / `review-claude-branch-push`\n- No new scheduler trigger, no supervisor, no DB gate.\n- Registry change: add `scripts/review_collect_pr_metadata.sh` to `docs/scripts-pending-removal.md` in the existing block format.\n\n1. Files likely to change\n- `scripts/review_collect_pr_metadata.sh` (new)\n  - Extract the current inline metadata-collection logic.\n  - Follow the existing extracted-helper pattern used by `scripts/review_conflict_prepare.sh`.\n- `.github/workflows/review_autofix.yml`\n  - Replace the large inline `Collect PR metadata` `run:` block with a helper invocation.\n  - Add `review_collect_pr_metadata.sh` to `REQUIRED_BOOTSTRAP_SCRIPTS` so consumer repos stage it into `${SUPPORT_SCRIPTS_DIR}`.\n  - Keep the step name and downstream env/file names unchanged.\n- `.github/workflows/internal-review.yml`\n  - Percent-encode `HEAD_REF` in the open-PR lookup.\n  - Source default branch from `github.event.repository.default_branch` with shell fallback instead of a repo GET.\n- `docs/scripts-pending-removal.md`\n  - Add the new helper\u2019s registry entry.\n- `tests/test_review_autofix_review_pipeline_contract.py` (recommended)\n  - Extend existing contract coverage instead of adding a brand-new harness.\n\n2. Functions / modules to implement\n- New helper: `scripts/review_collect_pr_metadata.sh`\n  - Lift the current `Collect PR metadata` behavior with minimal semantic change:\n    - real-PR fetch path for `PR_PAYLOAD_FILE`, `PR_ISSUE_COMMENTS_FILE`, `PR_REVIEWS_FILE`, `PR_REVIEW_COMMENTS_FILE`, `PR_META_FILE`\n    - synthetic no-PR path for `force_claude_branch_review=true`\n    - linked-issue GraphQL fetch plus current body-text fallback for context only\n    - combined comments-context file generation\n    - diff capture and current env exports (`HAS_PR_DIFF`, `PR_DIFF_SOURCE`, `PR_DIFF_ATTEMPTED_PATHS`, `BASE_BRANCH`)\n- `review_autofix.yml`\n  - Invoke `bash \"${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh\"`.\n  - Preserve the current env contract; do not rename inputs or runtime files.\n- `internal-review.yml`\n  - Reuse the repo\u2019s existing encoding pattern from `scripts/post_review_comment.sh` (`jq -nr --arg ref ... '$ref | @uri'`) for the `head=` query parameter.\n  - Keep outputs `proceed`, `head_ref`, `head_sha`, `base_ref` unchanged.\n\n3. Data structures affected\n- `pr_payload.json` and `pr_meta.json` must keep their current shapes.\n- `pr_issue_comments.json`, `pr_reviews.json`, `pr_review_comments.json` remain the inputs to `pr_all_comments_context.txt`.\n- `LINKED_ISSUES_JSON` remains a numbers-only env cache.\n- `linked_issue_context.txt` remains the richer prompt context artifact.\n- `internal-review.yml` job outputs stay the same; only lookup/default-branch sourcing changes.\n- `docs/scripts-pending-removal.md` gets one new entry block.\n\n4. API / interface changes\n- No reusable-workflow input/output names should change.\n- `internal-review.yml` keeps the same open-PR REST endpoint shape, but the branch ref must be percent-encoded before interpolation.\n- `internal-review.yml` should stop calling `repos/{repo}` just to read `default_branch`.\n- `review_autofix.yml` should preserve current filenames/env usage for:\n  - `PR_PAYLOAD_FILE`\n  - `PR_META_FILE`\n  - `PR_ALL_COMMENTS_CONTEXT_FILE`\n  - `LINKED_ISSUE_CONTEXT_FILE`\n  - `LINKED_ISSUES_JSON`\n  - synthetic no-PR metadata behavior\n\n5. Risks / edge cases\n- Do not turn this into a retry/consolidation refactor; extraction should preserve behavior.\n- Do not remove review_autofix\u2019s current no-PR repo-GET fallback for missing `BASE_REF_OVERRIDE`; the issue explicitly keeps that in scope as behavior-preserving.\n- The no-PR path is load-bearing:\n  - `PR_NUMBER` stays empty\n  - prior discussion arrays stay empty\n  - downstream commit-comment routing must still work\n- Preserve the current split between:\n  - `LINKED_ISSUES_JSON` for later label/merge logic\n  - `LINKED_ISSUE_CONTEXT_FILE` for richer reviewer/editor context\n- Land the new helper and the bootstrap-list update atomically; otherwise `${SUPPORT_SCRIPTS_DIR}` will not contain the helper on pinned caller paths.\n- Keep check-run collection and reviewer tuning out of scope.\n\n6. Testing considerations\n- Extend `tests/test_review_autofix_review_pipeline_contract.py` to cover:\n  - helper bootstrap + invocation\n  - unchanged metadata/context file contract\n  - `internal-review.yml` no-PR query/default-branch fixes\n- Existing repo validation already gives the new script automatic coverage via `.github/workflows/test-and-mark-stable.yml`:\n  - `bash -n scripts/*.sh`\n  - `shellcheck --severity=error scripts/*.sh`\n- Most targeted repo-local check after implementation:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py`\n\nConflicts noted\n- `docs/scripts-pending-removal.md`\u2019s schema says `Introduced in` should be `#NNNN (YYYY-MM-DD)`, but at least one live entry already uses a branch-style identifier instead. The new entry should keep the field set consistent even if the exact identifier format follows current repo precedent.\n\nAssumptions made\n- Treat the issue text as the approved safe subset; do not reopen the broader analysis-doc recommendations in this PR.\n- Treat the new helper as a long-running runtime script for registry purposes unless maintainers prefer a different removal trigger/owner.\n\nMissing-context note\n- I did not inspect the referenced `analysis/workflow-optimization-*.md` files because the issue already narrows the accepted scope; if those docs differ, the issue text should win for this change.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a656f672a5f6c62a340700f29b8922144ee84c612c283b5a77f1ad5d485149f9",
+  "lineage": {
+    "issue_number": 3195,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27089746778",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27089746778",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3195"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260607102919_287edf7bde",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3195,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27089746778"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3195",
+  "timestamps": {
+    "created_at": "2026-06-07T10:29:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

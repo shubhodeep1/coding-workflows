@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n- HEAD: `fc9049673fdeeec58b291d0998d3af6e78834f8e`\n- Branch: `orchestrator/project-3024`\n- Integration metadata: matched `orchestrator/project-3024` (no mismatch)\n\nClarification mapping\n- No Q1/Q2 questions were issued.\n- The `/answer [auto-answered-by-orchestrator]` comment only confirms that no extra clarification was needed.\n\nAutomation / rollout impact\n- Existing documentation only; no new script, workflow, scheduler wiring, supervisor, DB gate, or `docs/scripts-pending-removal.md` entry.\n- Scope should fit one implement rollout once the separate `CLAUDE.md`-edit unlock lands.\n\nActions taken\n- Verified the target sections in `CLAUDE.md` (`\u00a77` at lines 139-145, `\u00a716` at lines 453-463).\n- Verified the Phase 3 source text in `docs/plans/apply-ai-tools-learnings-plan.md`.\n- Verified the current unattended implement restriction in `.github/workflows/implement.yml:1507-1510`.\n\nImplementation plan\n\n1. Files likely to change\n- `CLAUDE.md` only.\n  - `\u00a77. Output Requirements` (`CLAUDE.md:141-145`): append one additive bullet under `In every final response:` telling interactive Claude to say `edited path/to/file` in user-facing replies instead of naming internal edit tools such as `Edit`, `Write`, or `apply_patch`, while explicitly exempting internal logs and code comments.\n  - `\u00a716. Task Delegation` (`CLAUDE.md:455-463`): append a non-numbered `When to use a subagent` subsection after the current `Spawn rules` list and before `\u00a717`, with:\n    - do-use cases:\n      - well-specified multi-file scaffolding that should not need follow-up clarification,\n      - mass renames / bulk generation / repetitive lint sweeps,\n      - parallel independent research reads / web fetches / grep sweeps;\n    - do-not-use cases:\n      - exploratory codebase mapping where the right questions emerge mid-task,\n      - architecture or tradeoff decisions that should stay with the parent,\n      - debugging that may need follow-up user questions;\n    - the framing sentence that each subagent should be treated like a productive junior engineer who cannot ask follow-ups once started, so tasks that may need mid-rollout clarification should stay with the parent.\n\n2. Functions or modules to implement\n- None; this is a documentation-only change.\n- Formatting reference: follow the existing bullet-list style already used in `CLAUDE.md` `\u00a77` and `\u00a716`.\n\n3. Data structures affected\n- None.\n\n4. API or interface changes\n- No code/API/workflow changes.\n- Interactive instruction-surface change only:\n  - final user-visible replies become tool-name-opaque,\n  - subagent delegation guidance becomes more explicit.\n\n5. Risks, edge cases, and conflicts\n- Preserve the interactive-only nature of `CLAUDE.md`; do not import unattended-only \"bias to action\" / \"never ask\" rules.\n- Keep the edit additive only: no renumbering, no heading changes, no churn outside the two insertion points.\n- Ensure the new `\u00a716` subsection supplements the existing Haiku/Sonnet/Opus and spawn-rule bullets rather than replacing them.\n- Ensure the `\u00a77` addition is scoped to user-facing reply text only, so internal logs/comments can still name concrete tools when useful.\n- No file/section mismatch exists: the issue targets sections that are present exactly in `CLAUDE.md`.\n- Dependency note: the current unattended implement prompt still forbids editing `CLAUDE.md` (`.github/workflows/implement.yml:1507-1510`), so implementation should wait for the separate unlock issue noted in the issue body.\n\n6. Testing / verification considerations\n- No runtime tests; docs-only change.\n- Verify `git diff --stat` shows only `CLAUDE.md`.\n- Verify `\u00a77` keeps the same heading and existing bullets, plus the new tool-name-opacity bullet.\n- Verify `\u00a716` keeps the existing model-tier and spawn-rule bullets, followed by the new `When to use a subagent` subsection before `\u00a717`.\n- Verify markdown spacing/list structure renders cleanly.\n\nAssumptions\n- The separate implement-prompt unlock lands before this issue reaches the unattended implement phase.\n- Phase 3 in `docs/plans/apply-ai-tools-learnings-plan.md` is the source of truth for the inserted wording.\n\nMissing context\n- None for planning beyond the external status of the unlock dependency.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f4539bb322beaf17327db08d3963e1b7c24ff938041d369ac025876dacc5e954",
+  "lineage": {
+    "issue_number": 3030,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26734078475",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26734078475",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3030"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260601035308_14114563f3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3030,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26734078475"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3030",
+  "timestamps": {
+    "created_at": "2026-06-01T03:53:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

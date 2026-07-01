@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/write_guard.sh:24-37 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5]\n  PROBLEM: write_guard_sanitize_log_value() returns early on empty input, so empty values are emitted as blank fields instead of a consistently quoted empty string.\n  WHY: Both reviewers describe the same empty-value short-circuit in the sanitizer; mistralai rated it MAJOR/5 while moonshotai rated it NIT/3, so the higher severity is reported here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Squash merge of orchestrator project #3408\" requiring \"label-sync, consumer drift audit, helper extraction, repo learnings extraction, and write-guard hardening per docs/plans/complete-squad-improvements-plan.md\"\n  expected_change_site: .github/ai/label_contract.v1.json, scripts/label_helpers.sh, scripts/orchestrate_lib.py\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603, minimax_minimax-m2_5]\n  EVIDENCE: No hunks touch the contract files, helper extraction path, or drift-audit consumer repo logic; changes are localized to implement.yml CI gate and write_guard escape fixes\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\nRequirement: \"Squash merge of orchestrator project #3408\" requiring \"label-sync, consumer drift audit, helper extraction, repo learnings extraction, and write-guard hardening per docs/plans/complete-squad-improvements-plan.md\"\nExpected change site: .github/ai/label_contract.v1.json, scripts/label_helpers.sh, scripts/orchestrate_lib.py\nEvidence of absence: No hunks touch the contract files, helper extraction path, or drift-audit consumer repo logic; changes are localized to implement.yml CI gate and write_guard escape fixes\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: scripts/write_guard.sh\n  Line or code reference: write_guard_sanitize_log_value() lines 24-37\n  Problem: Function returns 0 early on empty input instead of consistently escaping empty values\n  Why it fails at runtime: The empty return leaves `$()` expansion empty, producing malformed `WRITE_GUARD_BLOCK`/`WRITE_GUARD_CONFIG_ERROR` log lines like `config= detail=python3_unavailable` instead of properly escaped empty values\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\nRequirement: \"Squash merge of orchestrator project #3408\" requiring \"label-sync, consumer drift audit, helper extraction, repo learnings extraction, and write-guard hardening per docs/plans/complete-squad-improvements-plan.md\"\nExpected change site: .github/ai/label_contract.v1.json, scripts/label_helpers.sh, scripts/orchestrate_lib.py\nEvidence of absence: No hunks touch the contract files, helper extraction path, or drift-audit consumer repo logic; changes are localized to implement.yml CI gate and write_guard escape fixes\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: scripts/write_guard.sh\n  Line or code reference: write_guard_sanitize_log_value() (lines 27-35)\n  Problem: The function returns early with no output when the sanitized value is empty, producing an empty field in log lines instead of a quoted empty string.\n  Why it fails at runtime: When used in command substitution (e.g., `env=$(write_guard_sanitize_log_value \"\")`), an empty input produces nothing, resulting in log lines like `env=` instead of `env=''`. This creates inconsistency with non-empty values which are shell-escaped with `%q`. Downstream parsers expecting uniformly quoted values may fail to handle the unquoted empty case correctly.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "f3b8bb7844b0d4a2e27e6ab5fa661b7601ec174c5229daf03816a574e1b62d00",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3456,
+    "run_id": "27963263703",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27963263703",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260622160120_ec4533b0d7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3456,
+    "run_id": "27963263703"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-22T16:01:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

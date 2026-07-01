@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3223,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3223\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3227\",\"pr_number\":3227,\"branch\":\"ai/issue-3223\",\"run_id\":\"27126683738\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/27126683738\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/review_autofix.yml\"]}",
+  "fingerprint": "c01b8be1c4c68144805b3f1ee519a972174c9740afd86015f1a30fcaacaec0f8",
+  "lineage": {
+    "issue_number": 3223,
+    "parent_ids": [],
+    "pr_number": 3227,
+    "run_id": "27126683738",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27126683738",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3227"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260608090133_7acbeb8b4d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3223,
+    "level": "run",
+    "pr_number": 3227,
+    "run_id": "27126683738"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3223: https://github.com/shubhodeep1/coding-workflows/pull/3227",
+  "timestamps": {
+    "created_at": "2026-06-08T09:01:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

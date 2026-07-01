@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for current ref `5dc71c0e8d1153069d64f8a17f5f54c89feaf440` on `orchestrator/project-3243`  \nIntegration-branch metadata matches the checked-out ref.  \nClarification mapping: none required; the `/answer [auto-answered-by-orchestrator]` comment only confirms continuation.\n\nBaseline re-validation\n- Re-validated current HEAD on the exact hot poller regression named in the repo\u2019s optimization note: `tests/test_orchestrate_poll_process.py test_implementation_failed_reissue_preserves_dependency_gates_and_pending_defs` currently passes.\n- So this issue is a workflow-ordering / watcher-runtime change, not a code-fix for a currently failing test.\n\nFiles likely to change\n- `.github/workflows/test-and-mark-stable.yml`\n  - `e2e-smoke-test` job: add an earlier targeted poller-regression guard before the long review/wait tail.\n  - `workflow-log-analysis-test` job: change the success path from \u201cdispatch + wait to terminal completion\u201d to \u201cdispatch + confirm registration + snapshot current status + exit\u201d.\n  - Downstream output/reporting in the same workflow file: keep the audit non-blocking while surfacing child run id/status context.\n\nFunctions/modules/sections to implement\n1. Early targeted poller guard in `e2e-smoke-test`\n- Insert a new preflight step after the early checkout/prerequisite validation and before the long live-workflow phases.\n- Reuse the existing single-test invocation pattern already used later in the file (`python3 tests/test_orchestrate_poll_process.py <test_name>`).\n- Target the actual repeated late regression from the repo analysis: `test_implementation_failed_reissue_preserves_dependency_gates_and_pending_defs`.\n- Keep the broader orchestrator/unit coverage later in the workflow unchanged.\n\n2. Async `workflow-log-analysis-test` dispatch path\n- Keep the existing `PRE` snapshot + `gh workflow run` dispatch + registration detection logic.\n- Remove the long terminal-state watcher loop after registration succeeds.\n- After registration, fetch one current snapshot of the child run (at least run id and current status) and log/output that context.\n- Preserve the existing fail-open behavior for:\n  - dispatch failure\n  - registration-not-found failure\n\n3. Output/result plumbing in the same workflow file\n- Keep the release gate non-blocking.\n- Treat successful registration as the successful smoke outcome for this job path.\n- If child run context needs to be shown downstream, add it as additive metadata (for example separate run-id/current-status outputs) instead of overloading terminal-conclusion semantics.\n\nData structures affected\n- Step outputs from `dispatch_log_analysis`:\n  - existing `run_id`\n  - existing `workflow_conclusion`\n  - likely additive current-status/context output(s) if needed\n- Job outputs for `workflow-log-analysis-test` if the notify path should surface run id/current status.\n- Possibly one additive status output for the new early guard if the final e2e summary should attribute that failure cleanly.\n\nAPI/interface changes\n- No external product/API changes.\n- Internal workflow behavior only:\n  - stable release checks the hot poller regression earlier\n  - `workflow-log-analysis-test` stops waiting for child terminal completion\n  - warning-only / non-blocking semantics remain intact\n\nPotential risks / edge cases\n- Important codebase nuance: the repeated late regression is in `tests/test_orchestrate_poll_process.py::test_implementation_failed_reissue_preserves_dependency_gates_and_pending_defs`, not in the existing Phase 5 `tests/test_codex_stall_guard_poller.py` call. The early guard should target the real hot failure, not just move the current Phase 5 block.\n- Avoid renumbering or renaming existing phases/step ids unless necessary; the workflow has many phase-specific comments and summary rows.\n- Do not let a non-terminal child status like `queued`/`in_progress` masquerade as a hard failure in downstream reporting; surface it as additive context.\n- Preserve the current `dispatch_failed` / `dispatch_not_registered` warning-only behavior exactly so this audit never becomes a release gate.\n- The soft-error analyzer already has its own short wait cap; unless it becomes the remaining bottleneck, it can stay scoped as-is.\n\nTesting considerations\n- Run the new early-guard command exactly as wired in the workflow.\n- Confirm the later broad coverage still remains later in the workflow (`validate-scripts` / existing orchestrator test sections).\n- Smoke-check the async audit path:\n  - dispatch succeeds\n  - child run registers\n  - run id/current status are surfaced\n  - the job exits without waiting for terminal child completion\n- Confirm dispatch failure and registration failure still warn and continue.\n- Re-run the repo\u2019s existing workflow/YAML validation path after the edit.\n\nAssumptions\n- The safest minimal implementation is one-file-only in `.github/workflows/test-and-mark-stable.yml`.\n- The early guard should be the single hot regression test above, with broader coverage intentionally left later rather than moved.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "7ecd3d420e00b25f6f1df569f7d9cec8d7ca86c70ae7ca0b20da8d42bc502485",
+  "lineage": {
+    "issue_number": 3247,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27233529586",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27233529586",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3247"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260609203321_7aa114e086",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3247,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27233529586"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3247",
+  "timestamps": {
+    "created_at": "2026-06-09T20:33:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

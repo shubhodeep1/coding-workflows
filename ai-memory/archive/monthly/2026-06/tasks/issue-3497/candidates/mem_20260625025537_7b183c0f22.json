@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3497,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3497\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3498\",\"pr_number\":3498,\"branch\":\"ai/issue-3497\",\"run_id\":\"28143500008\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/28143500008\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/plan.yml\",\"agents.md\",\"prompts/contracts/mode-plan.yml\",\"prompts/mode-plan.txt\",\"tests/test_plan_scope_mode_contract.py\",\"unattended_system_instructions.md\"]}",
+  "fingerprint": "3ee2f8db025dfd00d9cc7ec1c0edce48d560bd2d2bc6e54e5bcc62d5abd9e21c",
+  "lineage": {
+    "issue_number": 3497,
+    "parent_ids": [],
+    "pr_number": 3498,
+    "run_id": "28143500008",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28143500008",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3498"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260625025537_7b183c0f22",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3497,
+    "level": "run",
+    "pr_number": 3498,
+    "run_id": "28143500008"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3497: https://github.com/shubhodeep1/coding-workflows/pull/3498",
+  "timestamps": {
+    "created_at": "2026-06-25T02:55:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/openrouter_prompt_cache.py:11 | severity=low | confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: DEFAULT_PROMPT_BUDGET_TOKENS is an unused module-level alias, so it is dead public surface.\n  WHY: It does not fail at runtime, but it adds an undocumented alias that future callers may accidentally depend on.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Change the public helper so it returns the assembled prompt string derived from the retained section bodies after applying the required tier-drop order. Keep the public name and signature `compact_if_over_budget(sections, budget_tokens)`. Update `tests/test_prompt_compaction.py` so the four authored cases assert assembled-prompt output rather than retained tuple lists. The helper must remain opt-in/dormant by default (no rewiring of existing runtime call paths).\n  expected_change_site: scripts/openrouter_prompt_cache.py (public `compact_if_over_budget` at line 170 and private helpers) + tests/test_prompt_compaction.py (all test assertions)\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The LAST RUN DIFF (and full original PR diff) already implemented exactly these changes \u2014 `_resolve_budget_tokens`, `_assemble_prompt`, `_estimate_prompt_tokens`, `_retain_sections_within_budget` (which drops one section at a time in descending `(tier, index)` order), updated public wrapper returning `str`, all core tests updated to assert assembled string output (including new within-tier drop test, invalid-budget fallback, negative budget clamp, and extreme tier-1-only case), no other callers rewire the helper (per manifest and grep of callers), and `scripts/render_prompt.sh` was hardened in the subsequent pass to keep `MODEL_FAMILY_OVERLAY` placeholder resolution correct.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/openrouter_prompt_cache.py:11 | severity=low | confidence=5\n  PROBLEM: DEFAULT_PROMPT_BUDGET_TOKENS is an unused module-level alias, so it is dead public surface.\n  WHY: It does not fail at runtime, but it adds an undocumented alias that future callers may accidentally depend on.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Change the public helper so it returns the assembled prompt string derived from the retained section bodies after applying the required tier-drop order. Keep the public name and signature `compact_if_over_budget(sections, budget_tokens)`. Update `tests/test_prompt_compaction.py` so the four authored cases assert assembled-prompt output rather than retained tuple lists. The helper must remain opt-in/dormant by default (no rewiring of existing runtime call paths).\n  Expected change site: scripts/openrouter_prompt_cache.py (public `compact_if_over_budget` at line 170 and private helpers) + tests/test_prompt_compaction.py (all test assertions)\n  Evidence of absence: The LAST RUN DIFF (and full original PR diff) already implemented exactly these changes \u2014 `_resolve_budget_tokens`, `_assemble_prompt`, `_estimate_prompt_tokens`, `_retain_sections_within_budget` (which drops one section at a time in descending `(tier, index)` order), updated public wrapper returning `str`, all core tests updated to assert assembled string output (including new within-tier drop test, invalid-budget fallback, negative budget clamp, and extreme tier-1-only case), no other callers rewire the helper (per manifest and grep of callers), and `scripts/render_prompt.sh` was hardened in the subsequent pass to keep `MODEL_FAMILY_OVERLAY` placeholder resolution correct.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5fce76058f6641ef419b822f7561b172836db971721e09b19285cc4edf85f823",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3406,
+    "run_id": "27762383463",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27762383463",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260618140234_b77a699a63",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3406,
+    "run_id": "27762383463"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-18T14:02:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

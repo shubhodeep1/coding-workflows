@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nPlanning context\n- Ref: `4d96c0ed103f2a1c1941b353c80254b85eda183a` on `orchestrator/project-3185`.\n- Integration branch metadata matches the checked-out ref, so there is no branch-mismatch blocker.\n- Clarification mapping: no `Q1`/`Q2` batch was needed; `/answer [auto-answered-by-orchestrator]` confirms the issue description is sufficient.\n\nAutomation / wiring\n- Change shape: modify existing files only.\n- Entry point remains the existing implement workflow at `.github/workflows/implement.yml`; no scheduler or PR-push wiring changes.\n- No new supervisor.\n- No DB work / gate pattern.\n- No `docs/scripts-pending-removal.md` entry needed.\n\nRepresentative patterns inspected\n- Exact canonical self-repo comparison already exists earlier in `.github/workflows/implement.yml` in the \u201cResolve workflow support ref for duplicate PR notice\u201d and \u201cResolve workflow support ref\u201d steps.\n- Safe GH-read handling already exists via `_safe_gh_jq` in `scripts/gh_helpers.sh` and is already used in `scripts/implement_diagnose_post_codex_failure.sh` for other issue/job reads.\n\nFiles likely to change\n- `.github/workflows/implement.yml`\n- `scripts/implement_diagnose_post_codex_failure.sh`\n- `tests/test_implement_post_codex_recovery.py`\n\nFunctions / modules to update\n- `.github/workflows/implement.yml`\n  - \u201cStage workflow support files\u201d\n  - \u201cPreflight destructive-commit guard\u201d\n  - \u201cCommit changes\u201d\n  Replace the remaining `*\"/coding-workflows\"` suffix checks with the exact canonical repo comparison pattern already used elsewhere. For the latter two steps, add the local canonical repo variable in-step if needed so the comparison matches the established pattern.\n- `scripts/implement_diagnose_post_codex_failure.sh`\n  - Keep `issue_meta_matches_issue()` as the cache-validity gate.\n  - Tighten the issue-body load block so it prefers `ISSUE_META_FILE` when that cache matches the current issue.\n  - Use the safe gh-helper fallback only when the cache is missing, mismatched, or unparsable.\n  - Preserve current outputs, labels, and failure semantics.\n\nData structures affected\n- `wf_source` / canonical repo slug (`shubhodeep1/coding-workflows`)\n- `is_self_repo` shell boolean\n- `ISSUE_META_FILE` JSON fields `.number`, `.body`, `.labels[]`\n- `ISSUE_BODY_FILE` scratch file\n\nAPI / interface changes\n- No user-visible API, env var, output, or identifier changes.\n- Internal change only: the diagnose script\u2019s fallback body read should stop using raw `gh api ... --jq` and use the safe helper path instead.\n\nPotential risks / edge cases\n- Exact-match self-repo detection will stop treating arbitrary `*/coding-workflows` repos as canonical; that is the intended hardening and should be pinned by tests.\n- The diagnose path must still fail open on missing/truncated/invalid `ISSUE_META_FILE` and keep empty-body behavior intact.\n- Adjacent comments in the preflight/commit blocks still say `*/coding-workflows`; if those lines are touched, align the wording so comments do not contradict the exact-match behavior.\n- Do not broaden into force-tick, orchestrator API consolidation, or unrelated implement refactors.\n\nTesting considerations\n- Extend `tests/test_implement_post_codex_recovery.py` rather than adding a new test file.\n- Add workflow-text assertions that the three cited implement steps no longer use the wildcard suffix match and instead use the exact canonical comparison.\n- Add diagnose-script coverage for:\n  - matching `ISSUE_META_FILE` + missing `ISSUE_BODY_FILE` => cached metadata body reused, no issue-body API fallback;\n  - mismatched/invalid `ISSUE_META_FILE` => safe gh-helper fallback is used and still produces a clean plain-text body file.\n- Run focused pytest coverage for `tests/test_implement_post_codex_recovery.py` on the repo\u2019s pinned toolchain / CI path.\n\nConflict check\n- No blocker found. The codebase drift matches the issue description exactly: three wildcard self-repo guards remain, and the diagnose body-read fallback still uses raw `gh api`.\n\nAssumptions\n- The canonical self-repo slug remains `shubhodeep1/coding-workflows`, matching the existing exact comparisons already in this workflow family.\n- Scope is limited to the cited implement guards, the diagnose body-load fallback, and regression coverage.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "66ac9e4d79e122040b79b288e7adde4721002c0e9bdbc6a930184b795376d18c",
+  "lineage": {
+    "issue_number": 3205,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27104974246",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27104974246",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3205"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260607211922_87d9b1590b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3205,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27104974246"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3205",
+  "timestamps": {
+    "created_at": "2026-06-07T21:19:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

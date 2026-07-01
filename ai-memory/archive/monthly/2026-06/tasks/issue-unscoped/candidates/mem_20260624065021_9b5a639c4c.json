@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_rb_judge_reference_staging.py:51-52 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The regression guard hardcodes exactly two reference assets (`output-contract.txt`, `severity-classification.txt`), so a future `REFERENCE_*` placeholder would not be covered.\n  WHY: A new reference file could be added without test coverage for staging or hydration, which is a maintenance gap rather than a runtime defect.\n- scripts/stage_workflow_support.sh:247-248 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The staging loop skips copying when the destination file already exists, so updated upstream reference content can remain stale in an existing bundle.\n  WHY: Re-running staging against a changed reference file would preserve the old bundle contents until the existing file is deleted.\n- tests/test_review_rb_judge_reference_staging.py:152-158 | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The staging contract and static test assertions are hard-coded to exactly two reference assets, so a future `REFERENCE_*` placeholder would need manual updates.\n  WHY: A new placeholder in a prompt template could be skipped at staging time and remain unhydrated.\n- scripts/stage_workflow_support.sh:257-275 | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The `[ ! -f ... ]` guard prevents refreshing reference files that already exist in a previously staged bundle, so changed upstream references stay stale.\n  WHY: Rendering from an existing bundle after a reference update can hydrate `REFERENCE_*` placeholders with outdated data.\n- tests/test_review_rb_judge_reference_staging.py:106-132 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `_render_review_blocked_prompt` uses `tempfile.TemporaryDirectory()` with no fallback or explicit `dir=` argument, so the behavioural tests can fail with `FileNotFoundError` before reaching the render path in restricted-tempdir workspaces.\n  WHY: The positive and negative tests never exercise the consumer error or hydration path, making the regression guard unreliable in this environment.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"tests/test_review_rb_judge_reference_staging.py (new): static staging contract + behavioural render test + negative control (fires the exact consumer error when references are absent).\"\n  expected_change_site: tests/test_review_rb_judge_reference_staging.py (_render_review_blocked_prompt helper and both behavioural tests)\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The test has `main()` + hermetic env, but `tempfile.TemporaryDirectory()` has no `dir=` fallback or `try/except` for workspace-restricted `/tmp`, so the behavioural tests fail with `FileNotFoundError` instead of testing the reference-missing path.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_review_rb_judge_reference_staging.py:51-52 | severity=NIT | confidence=4\n  PROBLEM: The regression guard hardcodes exactly two reference assets (`output-contract.txt`, `severity-classification.txt`).\n  WHY: A future `REFERENCE_*` placeholder would not be covered by the test.\n- scripts/stage_workflow_support.sh:247-248 | severity=NIT | confidence=4\n  PROBLEM: The staging loop skips copying when the destination file already exists, so stale reference content can persist.\n  WHY: If the upstream reference changes, a bundle built earlier can keep the old file.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/stage_workflow_support.sh:257-275 | severity=NIT | confidence=2\n  PROBLEM: The `[ ! -f ... ]` guard prevents refresh of reference files that already exist in a previously staged bundle.\n  WHY: If `prompts/references/output-contract.txt` or `severity-classification.txt` changes upstream after staging, the bundle retains stale reference content.\n- tests/test_review_rb_judge_reference_staging.py:152-158 | severity=NIT | confidence=2\n  PROBLEM: The staging contract and static test assertions are hard-coded to exactly two reference assets (`output-contract.txt`, `severity-classification.txt`).\n  WHY: A future `REFERENCE_*` placeholder would need manual updates or it may be silently skipped at staging time.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_review_rb_judge_reference_staging.py:_render_review_blocked_prompt: lines 106-132 | severity=MAJOR | confidence=5\n  PROBLEM: The test helper uses `tempfile.TemporaryDirectory()` with no fallback or explicit `dir=` argument, but this workspace has no usable temp directory in the default search list.\n  WHY: The negative-control and positive tests fail before any rendering occurs, so the regression guard cannot validate the consumer error path.\n- tests/test_review_rb_judge_reference_staging.py:test_review_blocked_prompt_fails_without_staged_references + _render_review_blocked_prompt:106 | severity=MAJOR | confidence=4\n  PROBLEM: The behavioural tests only assert the reference-missing case, but the tempdir failure makes that path unreachable in this environment.\n  WHY: The exact consumer error (`Reference file for placeholder...`) is never exercised, weakening the load-bearing guarantee of the test.\n- Requirement: \"tests/test_review_rb_judge_reference_staging.py (new): static staging contract + behavioural render test + negative control (fires the exact consumer error when references are absent).\"\n  Expected change site: tests/test_review_rb_judge_reference_staging.py (the _render_review_blocked_prompt helper and both behavioural tests)\n  Evidence of absence: The test now has `main()` + hermetic env, but `tempfile.TemporaryDirectory()` has no `dir=` fallback or `try/except` for workspace-restricted `/tmp`, so behavioural tests fail with `FileNotFoundError` instead of testing the reference-missing path.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "b4d96bd974336be5754f4dfc49246eeae3cf1ef7f3121233758f32bc56a79261",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3485,
+    "run_id": "28078707904",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28078707904",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260624065021_9b5a639c4c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3485,
+    "run_id": "28078707904"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-24T06:50:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

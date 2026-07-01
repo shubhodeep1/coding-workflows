@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The helper must \"return the assembled prompt\" string, not a list of retained tuples, and must keep the public name/signature `compact_if_over_budget(sections, budget_tokens)`.\n  expected_change_site: scripts/openrouter_prompt_cache.py public helper `compact_if_over_budget` return type and `tests/test_prompt_compaction.py` assertions\n  confidence=[1-5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: No regression \u2014 LAST RUN DIFF shows the helper now returns an assembled prompt string and tests assert output strings.\n- requirement: Preserve documented budget fallback behavior (`budget_tokens` \u2192 `OPENROUTOR_PROMPT_BUDGET_TOKENS` \u2192 default 160000) and clamp negative budgets to zero.\n  expected_change_site: `_resolve_budget_tokens()` in scripts/openrouter_prompt_cache.py\n  confidence=[1-5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Implementation present in LAST RUN DIFF \u2014 uses `_to_int_or_none()` chain and clamps negatives via `max(0, resolved_budget_tokens)`.\n- requirement: Preserve existing tier-based drop ordering: drop tier 3 before tier 2, and within any tier drop later sections before earlier ones; stop dropping as soon as the assembled prompt fits.\n  expected_change_site: `_retain_sections_within_budget()` in scripts/openrouter_prompt_cache.py\n  confidence=[1-5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: LAST RUN DIFF implements one-by-one dropping in descending `(tier, index)` order and exits early once the prompt fits; gemini-code-assist[bot]'s reported whole-tier regression was addressed in prior autofix round.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: The helper must \"return the assembled prompt\" string, not a list of retained tuples, and must keep the public name/signature `compact_if_over_budget(sections, budget_tokens)`.\n  Expected change site: scripts/openrouter_prompt_cache.py public helper `compact_if_over_budget` return type and `tests/test_prompt_compaction.py` assertions\n  Evidence of absence: No regression \u2014 LAST RUN DIFF shows the helper now returns an assembled prompt string and tests assert output strings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: Preserve documented budget fallback behavior (`budget_tokens` \u2192 `OPENROUTOR_PROMPT_BUDGET_TOKENS` \u2192 default 160000) and clamp negative budgets to zero.\n  Expected change site: `_resolve_budget_tokens()` in scripts/openrouter_prompt_cache.py\n  Evidence of absence: Implementation present in LAST RUN DIFF \u2014 uses `_to_int_or_none()` chain and clamps negatives via `max(0, resolved_budget_tokens)`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: Preserve existing tier-based drop ordering: drop tier 3 before tier 2, and within any tier drop later sections before earlier ones; stop dropping as soon as the assembled prompt fits.\n  Expected change site: `_retain_sections_within_budget()` in scripts/openrouter_prompt_cache.py\n  Evidence of absence: LAST RUN DIFF implements one-by-one dropping in descending `(tier, index)` order and exits early once the prompt fits; gemini-code-assist[bot]'s reported whole-tier regression was addressed in prior autofix round.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "ed51dc9407a48da08d64291b82543d50eac8208bebbeb85c55f365c36baeda2a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3406,
+    "run_id": "27767842875",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27767842875",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260618153249_7b44e3a157",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3406,
+    "run_id": "27767842875"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-18T15:32:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

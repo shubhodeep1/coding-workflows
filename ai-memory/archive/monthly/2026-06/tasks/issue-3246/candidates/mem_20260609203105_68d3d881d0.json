@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Plan (`orchestrator/project-3243` @ `5dc71c0e8d1153069d64f8a17f5f54c89feaf440`)\nIntegration metadata matched the checkout ref.\n\nActions taken:\n- Reviewed `.github/workflows/ci.yml`, the existing named-test pattern in `.github/workflows/test-and-mark-stable.yml`, and the relevant `tests/test_orchestrate_poll_process.py` cases.\n- Revalidated current HEAD by running the 10 `test_implementation_failed_*` cases in `tests/test_orchestrate_poll_process.py`; all passed (`10/10`).\n- Result: no live poller bug is currently proven, so this plan stays CI-only and does **not** touch `scripts/orchestrate_poll_process.sh`.\n\n## Automation / wiring\n- Change type: extend existing workflow only.\n- Scheduler / entry point: `.github/workflows/ci.yml` on existing `pull_request` + `push` triggers for `main` / `stable`.\n- New script: none.\n- New long-running supervisor: none.\n- DB work / gate pattern: none.\n- `docs/scripts-pending-removal.md` entry: none.\n\n## 1. Files likely to change\n- `.github/workflows/ci.yml`\n  - Add an early fast-fail step in `jobs.lint`.\n  - Keep the existing later `Orchestrate poll process unit tests` step intact.\n\nNo test-file or poller-script edits are planned.\n\n## 2. Functions / modules / steps to implement\n- Prefer a **front-of-job step** inside the existing `lint` job (smaller and keeps the existing `CI / lint` check name stable).\n- Insert the new step immediately after `Install Python CI dependencies` and before `YAML lint`, `actionlint`, ruff, ShellCheck, and the later full poller unit-test step.\n- Reuse the existing named-test invocation pattern already used in `.github/workflows/test-and-mark-stable.yml:2273-2277`.\n\nSuggested early subset: run the current `test_implementation_failed_*` cases in one command:\n- `test_implementation_failed_post_codex_open_blockers_defers_reissue_and_persists_dependency_metadata`\n- `test_implementation_failed_post_codex_closed_blockers_reissues_with_post_codex_guidance_and_uses_depends_on`\n- `test_implementation_failed_noop_path_keeps_existing_guidance_without_post_codex_context`\n- `test_implementation_failed_post_codex_unknown_blocker_state_defers_reissue`\n- `test_implementation_failed_comment_lookup_failure_defers_reissue`\n- `test_implementation_failed_reissue_keeps_orchestrator_labels_and_updates_mapping`\n- `test_implementation_failed_reissue_hits_cap_and_closes_without_creating_new_issue`\n- `test_implementation_failed_reissue_preserves_dependency_gates_and_pending_defs`\n- `test_implementation_failed_reissue_persists_fixup_blocker_metadata_from_comment`\n- `test_implementation_failed_reissue_without_blocker_metadata_keeps_state_compatible`\n\nLeave the existing later full-module run:\n- `python3 tests/test_orchestrate_poll_process.py`\n- plus the sibling poller/state tests already in that step.\n\n## 3. Data structures affected\n- GitHub Actions step ordering in `.github/workflows/ci.yml`.\n- The curated early regression-test name list.\n- No production/runtime poller state or schema changes.\n\n## 4. API / interface changes\n- No production API change.\n- CI-only surface change: one new early step in `CI / lint`.\n- Keeping this inside the existing job avoids branch-protection/check-name churn.\n\n## 5. Risks / edge cases\n- Green builds will run the targeted cases twice (early subset + later full module); that is intentional for fast failure.\n- If new `implementation_failed` regression tests are added later, the curated early list can drift; the full later module run remains the backstop.\n- The new step must stay **after** Python dependency installation so the sandboxed poller test environment matches current CI expectations.\n- No factual issue/code conflict found: the repo matches the issue description (`tests/test_orchestrate_poll_process.py` currently runs late inside `.github/workflows/ci.yml`).\n\n## 6. Testing considerations\n- Re-run the new early named-test step by itself.\n- Run the existing later full poller unit-test step or full `CI` workflow to confirm the full module still runs later.\n- Rely on the existing `yamllint` and `actionlint` steps in the same workflow to validate the YAML edit.\n- Verify in CI logs that the new fast-fail step appears before the long lint/static-analysis block.\n\nAssumptions:\n- `.github/workflows/ci.yml` is within the issue\u2019s `files_touched` allowlist.\n- The intended \u201chigh-signal subset\u201d is the current `test_implementation_failed_*` family, because it directly covers the implementation-failed reissue / dependency-gate regression described in the issue.\n\nMissing-context notes:\n- No explicit `files_touched` list or CI timing data was included in the prompt, so this plan chooses the smallest safe workflow-only change rather than broader runtime tuning.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "be3491b559780444a34fedf7f3e42389f3e7dcc39bb611eebfa4ce713debc874",
+  "lineage": {
+    "issue_number": 3246,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27233529620",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27233529620",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3246"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260609203105_68d3d881d0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3246,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27233529620"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3246",
+  "timestamps": {
+    "created_at": "2026-06-09T20:31:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

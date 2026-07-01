@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3346,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3346\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3347\",\"pr_number\":3347,\"branch\":\"ai/issue-3346\",\"run_id\":\"27473574858\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/27473574858\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/cancel_on_pr_close.yml\",\".github/workflows/mark-stable.yml\",\".github/workflows/orchestrate_poll.yml\",\".github/workflows/test-and-mark-stable.yml\",\"scripts/memory_injection_patterns.py\",\"tests/test_workflow_gh_retry_fallback_contract.py\"]}",
+  "fingerprint": "36115987164898ff5e2628e881c81155973accd106c64d8cc6f3f319528b6550",
+  "lineage": {
+    "issue_number": 3346,
+    "parent_ids": [],
+    "pr_number": 3347,
+    "run_id": "27473574858",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27473574858",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3347"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260613172509_9a0d1bb235",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3346,
+    "level": "run",
+    "pr_number": 3347,
+    "run_id": "27473574858"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3346: https://github.com/shubhodeep1/coding-workflows/pull/3347",
+  "timestamps": {
+    "created_at": "2026-06-13T17:25:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

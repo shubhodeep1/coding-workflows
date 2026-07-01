@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1471 | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: No correctness defect found in the updated jq candidate-set filter and tier-2 narrowing; the interlock is sound.\n  WHY: The in_progress + created_at <= BAIT_CREATED_AT condition means the run was in flight when the bait landed, and the historical stale-review false match remains excluded.\n- .github/workflows/test-and-mark-stable.yml:81,334 | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The REVIEW_TIMEOUT default bump is a pure default change, not a contract break.\n  WHY: Explicit `review_timeout` / `phase_timeout` inputs still override the fallback chain, so callers are unaffected.\n- .github/workflows/test-and-mark-stable.yml:1471 | severity=low | confidence=1\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The tier-2 versus tier-3 selection preference looks inconsistent, but it is intentional rather than a bug.\n  WHY: Tier 2 specifically targets the original long-running PR-open review, while tier 3 is a generic fallback.\n- .github/workflows/test-and-mark-stable.yml:~1460-1468 | severity=medium | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The tier-2 fallback can latch onto an unrelated in_progress run because it relies on created_at ordering alone and is not robust against cancellation or pagination gaps.\n  WHY: If the original lock-holder is cancelled or missing from the paginated result, the activity timer can track the wrong run and miss the actual bait-review execution.\n- .github/workflows/test-and-mark-stable.yml:~1468-1474 | severity=medium | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The tier-2 jq selector is not explicitly constrained to the $m candidate set, so it can theoretically pull an older run that was excluded by the outer select.\n  WHY: With many historical branch runs, the inner map can choose a run outside the intended candidate set and prevent the fallback chain from reaching the true candidate.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml:1471 | severity=low | confidence=1\n  PROBLEM: The interlock between candidate-set admission and tier-2 narrowing is sound; no correctness defect found.\n  WHY: A run that is in_progress AND created_at <= BAIT_CREATED_AT was necessarily in flight when the bait landed, and the historical stale-review false match remains excluded.\n- .github/workflows/test-and-mark-stable.yml:81,334 | severity=low | confidence=1\n  PROBLEM: The REVIEW_TIMEOUT default bump is a pure default change, not a contract break.\n  WHY: Explicit `review_timeout` or `phase_timeout` inputs still win, so callers are unaffected.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/test-and-mark-stable.yml:1471 | severity=low | confidence=1\n  PROBLEM: The tier-2 selection's apparent preference mismatch with tier-3 is intentional, not a bug.\n  WHY: Tier 2 specifically targets the original long-running PR-open review, while tier 3 is a generic fallback; the logic is correct.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/test-and-mark-stable.yml:~1460-1468 | severity=medium | confidence=2\n  PROBLEM: The tier-2 fallback can latch onto an unrelated in_progress run because it relies on created_at ordering alone and is not robust against cancellation or pagination gaps.\n  WHY: If the original lock-holder is cancelled or missing from the paginated result, the activity timer can track the wrong run and miss the actual bait-review execution.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/test-and-mark-stable.yml:~1468-1474 | severity=medium | confidence=3\n  PROBLEM: The tier-2 jq selector is not explicitly constrained to the $m candidate set, so it can theoretically pull an older run that was excluded by the outer select.\n  WHY: With many historical branch runs, the inner map can choose a run outside the intended candidate set and prevent the fallback chain from reaching the true candidate.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "d843e3bd7c84480d6ac61fbf9ef2e843fe495fe6d261a0d0897979a8f9bea09a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3290,
+    "run_id": "27360706513",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27360706513",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260611164948_ba7dcc4025",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3290,
+    "run_id": "27360706513"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-11T16:49:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

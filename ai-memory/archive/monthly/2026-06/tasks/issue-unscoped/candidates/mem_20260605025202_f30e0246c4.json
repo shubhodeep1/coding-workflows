@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1369-1370 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The jq selection logic relies on `.conclusion != \"cancelled\"` and assumes `.conclusion` is always present as a string field.\n  WHY: If GitHub returns a run with a null or missing conclusion, the filter will still include it as non-cancelled, so the selection behavior depends on API shape staying stable.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/test-and-mark-stable.yml:1369-1370 | severity=low | confidence=2 (2 related items)\n  PROBLEM: The jq query's `.conclusion != \"cancelled\"` filter and fallback behavior are potentially brittle around null or missing conclusions.\n  WHY: The review notes that `null != \"cancelled\"` evaluates true, and that the query assumes `.conclusion` exists as a string field, so unexpected API responses could affect which run is selected.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "62841df9bb52c44e9d509c7d353eb0131a441873e05ac7cc3f26fa89198a9ecd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26992057722",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26992057722",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260605025202_f30e0246c4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26992057722"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-05T02:52:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

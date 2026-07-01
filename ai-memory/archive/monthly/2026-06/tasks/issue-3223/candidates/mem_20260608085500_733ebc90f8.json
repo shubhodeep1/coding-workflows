@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n- HEAD: `1f70432f120081991425da6492c044232de6721f`\n- Checked-out branch: `orchestrator/project-3222`\n- Integration metadata matches checkout: yes\n\nClarification mapping\n- No Q1/Q2 clarification questions were asked in clarify.\n- `/answer [auto-answered-by-orchestrator]` adds no new constraints beyond the issue body, so the plan follows the scoped issue text as-is.\n\nAutomation / wiring summary\n- Change type: modify existing workflow code only; no new script, no new supervisor.\n- Existing entry point: `.github/workflows/review_autofix.yml` (reusable workflow, `workflow_call`); no new scheduler or PR-push wiring.\n- DB work/gates: none.\n- Removal-registry entry: none.\n\nConflict / codebase note\n- `prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt` already exists.\n- `scripts/stage_workflow_support.sh` already stages that file, and `scripts/review_conflict_resolve.sh` already selects it for timeout retries.\n- The remaining mismatch is workflow-local: the regression test asserts that `review_autofix.yml` itself contains the explicit `install -m 0644 ... ${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt` contract, so changing the helper alone would not satisfy this issue.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/review_autofix.yml`\n- No source edits expected in `scripts/orchestrate_poll_process.sh`, `scripts/review_conflict_resolve.sh`, or `scripts/stage_workflow_support.sh`; use them as reference patterns only.\n- `tests/test_orchestrate_poll_process.py` should remain unchanged unless a tiny additive adjustment is absolutely unavoidable, which is not expected here.\n\n2. Workflow/module change\n- Update the `Stage workflow support files` step in `.github/workflows/review_autofix.yml` so it explicitly stages `prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt` into `${SUPPORT_PROMPTS_DIR}` with the exact `install -m 0644 ...` signature the test expects.\n- Mirror the existing lookup order already used by the helper:\n  - prefer `.codex-workflow-src/prompts/...`\n  - fall back to `.codex-workflow-src-main/prompts/...`\n- Preserve current soft-missing behavior:\n  - if the prompt is absent from both support-source checkouts, keep the warning/remove behavior instead of turning this into a hard failure.\n- Keep the existing helper invocation and the rest of the staging flow intact; do not broaden this into a bootstrap refactor.\n\n3. Implementation detail to watch\n- The helper currently runs via `bash \"${helper}\"` and writes `SUPPORT_PROMPTS_DIR` to `$GITHUB_ENV` for later steps.\n- If the new staging logic runs in the same step, it must recompute or otherwise materialize `SUPPORT_PROMPTS_DIR` in-shell before calling `install`; otherwise it will reference a path that is not set in the current shell context.\n\n4. Data structures affected\n- Ephemeral runtime support tree under `${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/prompts`\n- Staged support prompt file: `integration-sync-conflict-resolver-retry-timeout-prelude.txt`\n- No schema, contract, or persisted-state changes\n\n5. API / interface changes\n- No external API changes\n- Internal contract only: the review-autofix workflow explicitly guarantees the timeout retry prelude is staged under `${SUPPORT_PROMPTS_DIR}` for integration-sync resolver retries\n- No changes to reviewer fan-out, reasoning levels, retry budgets, env-var names, or resolver semantics\n\n6. Risks and edge cases\n- Do not touch the orchestrator refresh allowlist in `scripts/orchestrate_poll_process.sh`; it already includes both retry preludes.\n- Do not change the timeout/generic retry selection in `scripts/review_conflict_resolve.sh`; it already behaves correctly.\n- Preserve existing warning/log strings and env-var names to avoid contract drift.\n- Keep the YAML edit surgical; no unrelated cleanup in `review_autofix.yml`.\n\n7. Testing considerations\n- Run targeted pytest:\n  - `tests/test_orchestrate_poll_process.py::test_resolver_tooling_refresh_allowlist_includes_both_retry_preludes`\n  - `tests/test_orchestrate_poll_process.py::test_implementation_failed_reissue_preserves_dependency_gates_and_pending_defs` as a nearby non-regression guard, since that behavior is explicitly out of scope\n- No broader coverage expansion is needed unless the workflow edit unexpectedly alters adjacent staging behavior.\n\nAssumptions\n- The workflow edit alone should satisfy the current failing test; no substantive test rewrite is expected.\n- The desired fix is a workflow-level staging contract restoration, not a behavior change to the resolver or orchestrator refresh logic.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "08ac6e540342496dcb5d720396fcd2c7e1875eac8a9cb3185e96c81bbb3f1883",
+  "lineage": {
+    "issue_number": 3223,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27126373739",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27126373739",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3223"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260608085500_733ebc90f8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3223,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27126373739"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3223",
+  "timestamps": {
+    "created_at": "2026-06-08T08:55:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

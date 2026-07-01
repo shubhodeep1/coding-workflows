@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"opaque-phase skip/gate telemetry\" + CI regression fixes + Semble fallback observability (safe subset tracked as #3225/#3224/#3223/#3226).\n  expected_change_site: workflow YAMLs, `cost_audit.py`, Semble helpers, `targeted_file_context.py`, `validate.yml`, `review_autofix.yml`, test contracts, manifest/report closeout\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: All four safe-subset items are present (new `AI_PHASE_GATE_V1` lines, split fallback counters with `context=contract-test` tagging, cache path prep + v5 action, retry-prelude staging contract, contract test wired into CI + release workflows, manifest cleanup, and processing-report buckets). Risky hot-path follow-ups (oversized-context fallback, `xhigh` downshift, memory-push hardening, reviewer-slot tightening, poll coalescing) were explicitly deferred in the report and are absent \u2014 matching intent.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- requirement: \"opaque-phase skip/gate telemetry\" + CI regression fixes + Semble fallback observability (safe subset tracked as #3225/#3224/#3223/#3226).\n  expected_change_site: workflow YAMLs, `cost_audit.py`, Semble helpers, `targeted_file_context.py`, `validate.yml`, `review_autofix.yml`, test contracts, manifest/report closeout\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: All four safe-subset items are present (new `AI_PHASE_GATE_V1` lines, split fallback counters with `context=contract-test` tagging, cache path prep + v5 action, retry-prelude staging contract, contract test wired into CI + release workflows, manifest cleanup, and processing-report buckets). Risky hot-path follow-ups (oversized-context fallback, `xhigh` downshift, memory-push hardening, reviewer-slot tightening, poll coalescing) were explicitly deferred in the report and are absent \u2014 matching intent.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "031e45a53c9a18eccbd9658d2f5d86be2269d696b5a7d80de1c1fb48f8c19244",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3231,
+    "run_id": "27152999466",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27152999466",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260608172433_6c0a16ad27",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3231,
+    "run_id": "27152999466"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-08T17:24:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

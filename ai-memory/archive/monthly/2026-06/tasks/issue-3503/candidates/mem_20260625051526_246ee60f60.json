@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `a3e35233eccb47f304f45307bf0c8ebb9b0d164a` on `orchestrator/project-3496`; integration branch metadata matches.\n\nClarification interpretation: no Q-ID clarification questions were issued, so `/answer [auto-answered-by-orchestrator]` leaves no unresolved answer dependency.\n\nInspection summary: reviewed the current `mode-plan` prompt, its prompt-contract defaults, the existing scope-mode prompt test, the prompt renderer path, and the Phase B design note. Representative pattern to follow: `prompts/mode-plan.txt` + `prompts/contracts/mode-plan.yml` + `tests/test_plan_scope_mode_contract.py`.\n\n1. Files likely to change\n- `prompts/mode-plan.txt` \u2014 add the three-layer reuse-audit rule and the new `Reuse-audit:` output-contract field.\n- `prompts/contracts/mode-plan.yml` \u2014 add `PLAN_REUSE_AUDIT_REQUIRED: true` as an optional default so the new placeholder renders without helper or workflow changes.\n- `tests/test_plan_reuse_audit_contract.py` (new, preferred) \u2014 focused prompt-contract coverage for the new field and flag behavior.\n\n2. Functions/modules to implement\n- No new runtime helpers, no workflow edits, no doc sweep.\n- In `prompts/mode-plan.txt`, add a reuse-audit subsection after the existing clarification-answer rule:\n  - Layer 1: force a search for existing helpers first, using the existing examples `scripts/gh_helpers.sh` and `scripts/memory_helpers.sh`.\n  - Layer 2: force a search for established repo patterns, using the existing batched GraphQL helpers `_fetch_candidate_issue_details_graphql`, `_fetch_linked_pr_status_graphql`, and the cycle-local caches `ACTIVE_WORKFLOW_ISSUES`, `STALL_MANAGED_LINKED_PR_CACHE`.\n  - Layer 3: allow net-new only when Layers 1 and 2 genuinely miss the pattern, and require explicit justification.\n- Extend the output contract so plans emit:\n  - `Reuse-audit: extends <existing-name>`\n  - or `Reuse-audit: net-new (Layer 3) \u2014 <justification>`\n- Keep the cited helper/cache names verbatim; do not rename anything.\n\n3. Data structures affected\n- Prompt placeholder surface: add `{{PLAN_REUSE_AUDIT_REQUIRED}}` to `prompts/mode-plan.txt`.\n- Prompt-contract defaults: `prompts/contracts/mode-plan.yml` gains `PLAN_REUSE_AUDIT_REQUIRED: true`.\n- Plan output schema: clear plans gain a `Reuse-audit:` line after `Scope-mode:`.\n\n4. API or interface changes\n- Planner output interface only: plan comments now include the new `Reuse-audit:` field when the flag is on.\n- Assumption for this phase: `PLAN_REUSE_AUDIT_REQUIRED` defaults through the prompt contract, not new repo-var plumbing in `.github/workflows/plan.yml`.\n- No external API, helper, workflow, or CLI interface changes.\n\n5. Potential risks or edge cases\n- Conflict detected: `.github/workflows/plan.yml` already duplicates the current scope-mode wording, including the \u201cimmediately after the `Scope-mode:` line\u201d text, but the issue explicitly forbids workflow edits. The prompt change must therefore stay internally consistent on its own.\n- The broader design note mentions additional examples, but this issue narrows Phase B to `gh_helpers.sh`, `memory_helpers.sh`, the two batched GraphQL helpers, and the two cycle-local caches; do not broaden beyond those names.\n- If the new placeholder is added to `prompts/mode-plan.txt` without the matching contract entry in `prompts/contracts/mode-plan.yml`, strict prompt-contract validation will fail.\n- The wording must make `extends <existing-name>` the default whenever a real reuse candidate exists; Layer 3 must stay exceptional.\n\n6. Testing considerations\n- Add one focused prompt-contract test that renders `prompts/mode-plan.txt` directly and checks:\n  - default render requires `Reuse-audit:` because `PLAN_REUSE_AUDIT_REQUIRED` defaults to `true`;\n  - `--var PLAN_REUSE_AUDIT_REQUIRED=false` makes the field optional;\n  - the rendered prompt contains the exact `extends <existing-name>` vs `net-new (Layer 3)` contract text;\n  - `Reuse-audit:` appears after `Scope-mode:` in the prompt contract text.\n- Keep the new test prompt-only; do not add workflow-parity assertions for this phase.\n- Existing `tests/test_plan_scope_mode_contract.py` remains a useful regression check because the same prompt section is being edited.\n\n7. Pre-execution self-check result\n- The requested change is implementation-ready as a small prompt/contract/test update.\n- No external docs, secrets, or unresolved clarification inputs are required.\n\nImplementation-time estimate: 25 minutes\nScope-mode: Hold Scope\nScope-mode justification: The safest implementation is the exact planner-only slice requested: update the plan prompt, add the matching prompt-contract default, and lock it with one focused prompt-contract test. Expanding into workflow parity, helper changes, or doc updates would exceed the requested Phase B boundary without improving correctness for this specific issue.\n\nPLAN_SELF_CHECK: WARNING: this plan intentionally leaves `.github/workflows/plan.yml` untouched, so the new flag defaults via prompt-contract rendering only and the workflow\u2019s duplicated scope-mode wording remains unchanged in this phase.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d1ebb8ab6e9e216f797472868e26217c83ba559c89f60a19f2a1e9bc9f1dfce7",
+  "lineage": {
+    "issue_number": 3503,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28148338364",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28148338364",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3503"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260625051526_246ee60f60",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3503,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28148338364"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3503",
+  "timestamps": {
+    "created_at": "2026-06-25T05:15:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

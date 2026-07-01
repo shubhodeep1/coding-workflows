@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n- HEAD: `b1daf343f89d0a7a3facca6554490f6dfc11a843`\n- Branch: `orchestrator/project-3376`\n- Integration metadata match: yes\n\nAutomation / wiring check\n- Change type: modify existing code/tests only.\n- Scheduler / PR-push entry point: none; no workflow wiring changes.\n- Long-running supervisor: none.\n- DB gate pattern: none.\n- `docs/scripts-pending-removal.md` entry: none.\n\nClarification mapping\n- No `Q1`/`Q2` clarification questions were asked.\n- `/answer [auto-answered-by-orchestrator]` means there are no extra user constraints beyond the issue body.\n\nRepresentative patterns inspected\n- `scripts/summarize_unselected_runs.py:146-158` \u2014 existing repo convention for `~4 chars/token` estimation.\n- `.github/workflows/implement.yml:3246-3254` \u2014 existing prompt assembly pattern using blank-line joins.\n\n1. Files likely to change\n- `scripts/openrouter_prompt_cache.py`\n  - Add/recreate `compact_if_over_budget(sections, budget_tokens)`.\n  - If tuple-retention logic is still useful, move it behind a new private helper.\n  - Add/update docstring and type hints to describe tuple input and string output.\n- `tests/test_prompt_compaction.py`\n  - Rewrite expectations from retained tuple lists to assembled prompt strings.\n  - Keep env-budget and negative-budget regression coverage aligned with the new return type.\n- `README.md`\n  - Likely no change required; it already documents `OPENROUTER_PROMPT_BUDGET_TOKENS` and the dormant helper contract. Verify only.\n\n2. Functions or modules to implement\n- Public helper in `scripts/openrouter_prompt_cache.py`:\n  - `compact_if_over_budget(sections, budget_tokens)` must remain the only public helper name.\n  - It should:\n    1. resolve budget from explicit arg -> `OPENROUTER_PROMPT_BUDGET_TOKENS` -> default `160000`,\n    2. clamp negative budgets to zero,\n    3. drop lowest-priority sections first (`tier 3` before `tier 2`; never drop `tier 1`),\n    4. preserve original retained-section order,\n    5. return the assembled prompt string from retained section bodies,\n    6. avoid mutating the caller\u2019s `sections` list.\n- Optional private helpers:\n  - retained-section filtering by tier/budget,\n  - budget resolution,\n  - prompt assembly / token estimation.\n\n3. Data structures affected\n- Input contract stays: ordered `list[tuple[int, str, str]]` as `(tier, label, body)`.\n- Public output contract becomes: assembled `str`, not a tuple list.\n- Labels remain metadata; output should be derived from retained bodies.\n- Env-var contract remains: `OPENROUTER_PROMPT_BUDGET_TOKENS` with default `160000`.\n\n4. API or interface changes\n- Public surface: keep `compact_if_over_budget(sections, budget_tokens)` exactly.\n- Semantic change: public return value must be the assembled prompt string.\n- No runtime rewiring: repo search shows no active callers outside docs/README/tests, so the helper can remain opt-in/dormant.\n\n5. Potential risks, edge cases, and conflicts\n- Conflict: the issue says the helper already exists and returns tuple lists from `scripts/openrouter_prompt_cache.py:116-167`, but on this ref the file is only 110 lines and contains no `compact_if_over_budget`. Plan this as an add/recreate change, not an in-place edit.\n- Conflict: `README.md` already references the helper/env var, so docs currently lead code.\n- The issue requires an \u201cassembled prompt\u201d but does not spell out the exact separator between retained bodies. The implementation should choose one documented assembly rule consistent with existing repo prompt composition and lock it into tests.\n- Empty input should return an empty string with no stray separators.\n- Extreme/negative-budget cases should still keep only tier-1 bodies, even if that output remains over budget.\n- Preserve current `None` budget fallback behavior and tier-drop ordering semantics.\n\n6. Testing considerations\n- Update `tests/test_prompt_compaction.py` so the authored four cases assert string output:\n  - empty input -> `\"\"`\n  - under budget -> full assembled prompt\n  - over budget -> tier-3 bodies dropped before tier-2\n  - extreme over budget -> tier-1 bodies only\n- Also update the existing env-fallback and negative-budget tests to assert string output.\n- Keep an assertion that the input `sections` list is unchanged after the call.\n- Verification target:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_prompt_compaction.py`\n\n7. Pre-execution self-check\n- Scope is surgical and implementation-ready: one helper module plus one focused test file.\n- No workflow, scheduler, supervisor, or DB changes are needed.\n\nPLAN_SELF_CHECK: WARNING: The issue describes patching an existing tuple-returning helper, but `scripts/openrouter_prompt_cache.py` on `b1daf343f89d0a7a3facca6554490f6dfc11a843` has no `compact_if_over_budget`; implementation must recreate the public helper from the authored contract.\nPLAN_SELF_CHECK: WARNING: Local validation is unverified here because `python3 -m pytest -q tests/test_prompt_compaction.py` fails with `/usr/bin/python3: No module named pytest`; run the target in the repo/CI environment where pytest is available.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b4ccd9de95de76e546eccddce0f72c8b6bc3d6dbede0209590b7b8b0b0c39a49",
+  "lineage": {
+    "issue_number": 3405,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27756741034",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27756741034",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3405"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260618114143_bfa1ee0317",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3405,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27756741034"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3405",
+  "timestamps": {
+    "created_at": "2026-06-18T11:41:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

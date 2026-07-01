@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_collect_pr_metadata.sh:84-86 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `numbers_json` is not validated as a JSON array before `jq` processing, so malformed batch input can crash the helper.\n  WHY: If `numbers_json` is malformed, the function may fail while processing it instead of failing open.\n- scripts/review_collect_pr_metadata.sh:90-93 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The captured `count` value is not validated as strictly numeric before shell integer comparisons.\n  WHY: `[ \"${count}\" -eq 0 ]` requires a valid integer, so a non-numeric value can make the script error out.\n- scripts/review_collect_pr_metadata.sh:132-140 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: GraphQL error handling is incomplete because `.errors` is only checked when `data.repository` is null.\n  WHY: HTTP-200 GraphQL responses with `.errors` plus partial `.data.repository` may be processed incorrectly, returning partial or corrupted data.\n- tests/test_review_autofix_review_pipeline_contract.py:1766-1767 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The partial-hydration scenario where GraphQL returns fewer items than requested is not covered by tests.\n  WHY: Without that coverage, the implementation could mishandle valid partial data and lose linked-issue context.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"keep the same fail-open behavior when fallback data cannot be fetched\"\n  expected_change_site: GITHUB_ENV outputs and linked-issue context preservation\n  confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: While the code handles complete failures by returning empty and warning, there is no explicit guarantee that partial GraphQL hydration results will be preserved when errors are present.\n- requirement: Preserve existing contract that the GraphQL fallback path should maintain the same error behavior as the previous REST fallback path\n  expected_change_site: scripts/review_collect_pr_metadata.sh fallback block at lines 296-303\n  confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: No explicit comment documenting that both complete and partial failures follow the same fail-open behavior as the per-issue REST loop.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_collect_pr_metadata.sh:84-86 | severity=medium | confidence=4\n  PROBLEM: No input validation of `numbers_json` before processing with `jq`\n  WHY: If `numbers_json` is malformed (not a JSON array), the function may crash with \"integer expression expected\" error when using arithmetic comparison tests.\n- scripts/review_collect_pr_metadata.sh:90-93 | severity=medium | confidence=4\n  PROBLEM: Missing validation that the captured `count` value is strictly numeric before integer comparisons\n  WHY: The numeric test `[ \"${count}\" -eq 0 ]` requires a valid integer; if `count` contains a non-numeric value from `jq`, the shell script will fail with an error.\n- scripts/review_collect_pr_metadata.sh:90-93 | severity=medium | confidence=4\n  PROBLEM: Count value from `jq 'length'` may not be a valid integer for shell arithmetic\n  WHY: If the input JSON is malformed, `jq` may output non-numeric values or errors, causing `-eq` test to fail with \"integer expression expected\".\n- scripts/review_collect_pr_metadata.sh:132-140 | severity=high | confidence=5\n  PROBLEM: Incomplete GraphQL error handling; only checks for GraphQL errors when data.repository is null\n  WHY: HTTP-200 GraphQL responses with errors in `.errors` but with `.data.repository` existing may be processed incorrectly, potentially returning partial or corrupted data.\n- tests/test_review_autofix_review_pipeline_contract.py:1766-1767 | severity=low | confidence=4\n  PROBLEM: Missing test coverage for partial hydration scenario with GraphQL returning fewer items than requested\n  WHY: The implementation may not properly handle cases where GraphQL returns partial data with errors, potentially losing valid linked-issue context.\n- Requirement: \"keep the same fail-open behavior when fallback data cannot be fetched\"\n  Expected change site: GITHUB_ENV outputs and linked-issue context preservation\n  Evidence of absence: While the code handles complete failures by returning empty and warning, there is no explicit guarantee that partial GraphQL hydration results will be preserved when errors are present.\n  ISSUE_CONFIDENCE: 3\n- Requirement: Preserve existing contract that the GraphQL fallback path should maintain the same error behavior as the previous REST fallback path\n  Expected change site: scripts/review_collect_pr_metadata.sh fallback block at lines 296-303\n  Evidence of absence: No explicit comment documenting that both complete and partial failures follow the same fail-open behavior as the per-issue REST loop.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "07fe866207a02b735c7273f9c2ddf0e0fcc14d19d15ee8c3154761967eb2fa04",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3333,
+    "run_id": "27472094061",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27472094061",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260613165241_5c89415bcb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3333,
+    "run_id": "27472094061"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-13T16:52:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

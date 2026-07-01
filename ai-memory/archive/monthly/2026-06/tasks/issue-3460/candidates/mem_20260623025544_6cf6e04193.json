@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. Which repo surface should be improved?\nChoices:\nA. A workflow under `.github/workflows/` \u2014 name which one (`clarify`, `plan`, `implement`, `review`, `orchestrate`, `validate`, etc.) (RECOMMENDED)\nB. Shared helpers under `scripts/`\nC. Docs / templates / setup guidance\nD. Other \u2014 give the exact path(s), file(s), or user flow\nQ2. What kind of improvement do you want?\nChoices:\nA. Fix a broken behavior or regression \u2014 include current behavior vs expected behavior (RECOMMENDED)\nB. Improve reliability / reduce flakes or failures\nC. Improve output quality / prompt / comment / report quality\nD. Improve maintainability / cleanup without changing behavior\nE. Improve speed / cost / rate-limit efficiency\nQ3. What concrete reference should implementation use?\nChoices:\nA. A specific issue, PR, or workflow run number/link showing the problem (RECOMMENDED)\nB. A specific file path or function/symbol name\nC. A before/after example of the desired behavior or output\nD. Step-by-step reproduction of the problem",
+  "fingerprint": "b48a8aa15e0a66369c8477ab1f2bb7f7ecd3c638e5382d93a344275b56286368",
+  "lineage": {
+    "issue_number": 3460,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27998862094",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27998862094",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260623025544_6cf6e04193",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3460,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27998862094"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #3460 needs clarification",
+  "timestamps": {
+    "created_at": "2026-06-23T02:55:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

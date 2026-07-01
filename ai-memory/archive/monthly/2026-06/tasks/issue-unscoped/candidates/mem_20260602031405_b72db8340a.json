@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:15554-15614 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The Layer-2 re-anchor jq merge uses `${_head_pushed_at_json}` directly, so an empty or unset value makes jq fail and the fallback preserves the empty value, silently losing the resolved timestamp enrichment.\n  WHY: Three reviewers reported the runtime data-loss bug, while one reviewer disputed it as a false positive because the variable is initialized earlier.\n- tests/test_stall_freshness_branch_fallback.py:149-371 | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The tests use GNU `date -u -d '-N minutes'` syntax, which is not portable to macOS/BSD and breaks local test execution there.\n  WHY: Both reviewers identified the same cross-platform test-portability issue across multiple cases.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:15554-15614 | confidence=1\n  PROBLEM: The Layer-2 fallback jq merge uses the bare variable reference `${_head_pushed_at_json}` without a default.\n  WHY: Reviewer says this is a false positive because `_head_pushed_at_json` is initialized to `{}` and reset by guards before line 15614, so no runtime defect exists.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:15614 | confidence=4\n  PROBLEM: The Layer-2 fallback jq merge uses `${_head_pushed_at_json}` directly, so an empty or unset value makes the enrichment path lose the timestamp data.\n  WHY: When `_head_pushed_at_json` starts empty, jq parse fails and the `|| printf` fallback preserves the empty string instead of the resolved timestamp.\n- tests/test_stall_freshness_branch_fallback.py:157,217,258,302,336,371 | confidence=5\n  PROBLEM: Multiple test cases use GNU `date -u -d '-N minutes'` syntax that fails on macOS/BSD.\n  WHY: BSD `date` uses different flags, so the suite breaks on non-Linux systems.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:15614 | confidence=4\n  PROBLEM: The jq merge command uses `${_head_pushed_at_json}` directly without a default value, so if the variable is empty or unset at this point, jq will fail to parse it as valid JSON and the fallback `|| printf '%s' \"${_head_pushed_at_json}\"` will preserve the empty value, losing the resolved `_rf_iso` timestamp.\n  WHY: When `_head_pushed_at_json` is empty, the jq command receives empty input which is invalid JSON, causing jq to error out and the fallback to discard the resolution data.\n- tests/test_stall_freshness_branch_fallback.py:149,226,252,276,313,334,335,358 | confidence=5\n  PROBLEM: Multiple test cases use GNU `date -u -d '-N minutes'` syntax which is not portable to macOS/BSD systems where BSD `date` uses different flags.\n  WHY: On macOS or other BSD-based systems, `date -d` is interpreted differently and the tests fail with an illegal time format error.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:~15614 | confidence=4\n  PROBLEM: `_head_pushed_at_json=\"$(printf '%s' \"${_head_pushed_at_json}\" | jq ... || printf '%s' \"${_head_pushed_at_json}\")\"` loses the enrichment when `_head_pushed_at_json` is unset/empty.\n  WHY: The outer `printf` can produce no JSON, `jq` fails to parse it, the `||` branch re-uses the empty string, and the `--head-pushed-at-json` arg passed onward stays degraded.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "928983f0607652b5927920779856e85a4463bee69f2154ec9094aa80ec33a35d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3039,
+    "run_id": "26795528044",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26795528044",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260602031405_b72db8340a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3039,
+    "run_id": "26795528044"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-02T03:14:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

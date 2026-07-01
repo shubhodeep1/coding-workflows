@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `w1-workspace-reuse-core`\n\nPlanning ref: `13e1844799412040561b832f15b33d9b5f8ce5f6` on `orchestrator/project-3042`  \nClarification mapping: no Q1/Q2 batch was required; the `/answer [auto-answered-by-orchestrator]` comment only confirmed continuation.\n\n## Automation / wiring\n- Change type: add one shared helper script and wire it into existing workflows.\n- Entry points:\n  - `.github/workflows/implement.yml` (`issue_comment` `/approved` path)\n  - `.github/workflows/validate.yml` (reusable validate workflow, consumed by `workflow-templates/ai-validate.yml`)\n- No new supervisor.\n- No DB work.\n- No pending-removal registry entry expected: `scripts/workspace_init.sh` is a permanent helper, not a single-use or long-running script.\n\n## Representative pattern to follow\nUse the existing \u201cthin workflow + shared shell helper + dedicated Python contract test\u201d pattern already used by `scripts/validate_editor_audit.sh` and `tests/test_validate_editor_audit.py`: keep branching/output logic in the helper, and keep YAML mostly declarative.\n\n## Files likely to change\n- `scripts/workspace_init.sh` **(new)**\n- `.github/workflows/implement.yml`\n- `.github/workflows/validate.yml`\n- `tests/test_workspace_init.py` **(new)**\n- `workflow-templates/ai-implement.yml` *(likely verify/no-op unless a workflow-call interface change becomes unavoidable)*\n- `workflow-templates/ai-validate.yml` *(same note as above)*\n\n## Planned implementation\n\n### 1) Add `scripts/workspace_init.sh`\nCreate a shared helper that owns the W1 core contract:\n\n- Accept a stable issue identifier:\n  - implement: issue number\n  - validate: tracking issue number\n- Sanitize it into `WORKSPACE_KEY` (`[A-Za-z0-9._-]`, everything else \u2192 `_`).\n- Derive `WORKSPACE_PATH` under `${RUNNER_TEMP}/workspaces/${WORKSPACE_KEY}`.\n- Compute or accept a conservative `WORKSPACE_FINGERPRINT`.\n- Emit reusable outputs/env values for workflows:\n  - `WORKSPACE_KEY`\n  - `WORKSPACE_PATH`\n  - `WORKSPACE_FINGERPRINT`\n  - cache key / restore-prefix values\n  - `CREATED_NOW`\n- Finalize restore semantics:\n  - exact-fingerprint restore \u21d2 `CREATED_NOW=false`\n  - prefix restore or miss \u21d2 `CREATED_NOW=true`\n- Materialize the freshly checked-out repo into `WORKSPACE_PATH` so the live checkout remains source-of-truth and the cache only reuses prior workspace state.\n\nKeep this helper limited to W1 core behavior only: no lifecycle hooks, no W3 safety-enforcement script, no maintenance workflow.\n\n### 2) Wire it into `.github/workflows/implement.yml`\n- Preserve the existing `Create runtime workspace` step name and current Semble/Serena env exports; existing tests inspect that block directly.\n- After the main repo checkout, add:\n  1. workspace metadata init\n  2. cache restore for `WORKSPACE_PATH`\n  3. workspace finalize/materialize step\n- Add `workspace_init.sh` to the support-script staging list so consumer repos receive it.\n- Switch post-checkout repo-sensitive steps to operate on `WORKSPACE_PATH` instead of assuming the default checkout dir.\n\n### 3) Wire it into `.github/workflows/validate.yml`\n- Keep `.github/actions/setup-runtime/action.yml` untouched; it is out of scope and should continue owning `RUNTIME_DIR`.\n- Add the same workspace init / cache restore / finalize flow in `validate.yml`.\n- Add `workspace_init.sh` to the validate support-file bootstrap list.\n- Point repo-sensitive steps at `WORKSPACE_PATH`, including:\n  - Serena preexist detection\n  - support-file staging\n  - Semble index build\n  - `bash scripts/validate_process.sh`\n  - validation artifact upload\n- Preserve validate\u2019s current exact-key-only hints safety by clearing or reinitializing stale workspace-carried validation state on non-exact restores.\n\n### 4) Wrapper templates\nPrefer repo-var/env-based wiring so no new `workflow_call` inputs are needed. If that holds, the two wrapper template files may remain functionally unchanged.\n\n## Data structures / interface changes\n- New internal helper contract: `WORKSPACE_KEY`, `WORKSPACE_PATH`, `WORKSPACE_FINGERPRINT`, cache key/restore prefixes, `CREATED_NOW`.\n- Likely new repo-var gate if the conservative rollout is kept from the Symphony plan: `WORKSPACE_REUSE_ENABLED` with a default of `false`.\n- No new public workflow inputs preferred.\n\n## Risks / edge cases\n- The Symphony plan\u2019s example fingerprint inputs (`package.json`, `package-lock.json`) do **not** exist on this ref; implementation must choose repo-appropriate fingerprint drivers instead of copying that literal example.\n- The full Symphony W1/W3 plan includes path guards, branch backend fallback, maintenance, and review wiring, but this issue explicitly scopes those out.\n- Prefix restores can carry stale generated state (`.serena/`, `.ai/validate-hints-cache`, `validation/`, etc.); non-exact restores must not let that state silently short-circuit current safety guarantees.\n- Existing out-of-scope contract tests already pin current workflow structure, especially implement\u2019s runtime step.\n- The cached workspace must never replace the fresh checkout as the canonical repo contents.\n\n## Testing considerations\nCreate `tests/test_workspace_init.py` as the main regression file.\n\nCover at least:\n- key sanitization / stable path derivation\n- exact restore \u21d2 `CREATED_NOW=false`\n- prefix restore \u21d2 `CREATED_NOW=true`\n- miss \u21d2 `CREATED_NOW=true`\n- workspace materialization refreshes source files from the fresh checkout\n- validate fallback when `tracking_issue` is absent or non-numeric\n\nAlso add lightweight workflow-contract assertions in that test file for:\n- both workflows staging `workspace_init.sh`\n- ordered cache key / restore-key wiring\n- downstream steps using `WORKSPACE_PATH`\n\nRecommended validation:\n- `pytest tests/test_workspace_init.py`\n- `pytest tests/test_implement_semble_contract.py tests/test_validate_semble_contract.py`\n\n## Conflicts found\n- `scripts/workspace_init.sh` and `tests/test_workspace_init.py` do not exist yet on this ref and must be created.\n- `workflow-templates/ai-implement.yml` and `workflow-templates/ai-validate.yml` are thin pass-through wrappers today, so \u201ckeep in sync\u201d may legitimately mean \u201cverify unchanged\u201d if no workflow-call interface changes are introduced.\n\n## Assumptions\n- This issue implements only the cache-backed W1 core path for implement/validate.\n- No branch backend, lifecycle hooks, safety checks, or maintenance workflow are included here.\n- Validate runs without a usable tracking issue should fall back to per-run/no-reuse behavior rather than sharing a cache across unrelated runs.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c78552a34635a5f88502883afc7624b1b84d2e2ba76c11ee26c50b99697827dd",
+  "lineage": {
+    "issue_number": 3062,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26843336472",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26843336472",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3062"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260602194511_bcb42bc2f6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3062,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26843336472"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3062",
+  "timestamps": {
+    "created_at": "2026-06-02T19:45:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

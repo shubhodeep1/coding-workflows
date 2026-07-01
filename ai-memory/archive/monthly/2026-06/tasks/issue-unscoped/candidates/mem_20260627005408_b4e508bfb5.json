@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"use append-only edits in `README.md`/`agents.md`\" / \"Stay inside the listed files and use **append-only edits** in `README.md`/`agents.md`.\"\n  expected_change_site: README.md variable tables and agents.md review-pipeline variable table\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: The `REVIEW_DIATAXIS_LENS_ENABLED` row is inserted at README.md line 78 between `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` and `REVIEW_PARSER_FAILOPEN` instead of at the end of the consumer-repo table. It is also inserted at README.md line 1067 between `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` and `REVIEW_PARSER_FAILOPEN` instead of at the end of the source-repo table.; The `REVIEW_DIATAXIS_LENS_ENABLED` row is inserted at agents.md line 504 between `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` (line 503) and `REVIEW_PARSER_FAILOPEN` (line 505) instead of at the end of the table.; The `REVIEW_DIATAXIS_LENS_ENABLED` row is inserted mid-table between `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` and `REVIEW_PARSER_FAILOPEN` in: - README.md line 78 (consumer vars table) - README.md line 1067 (source-repo vars table)  - agents.md line 504.; In `README.md` line 78 and line 1067, `REVIEW_DIATAXIS_LENS_ENABLED` is inserted mid-table between `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` and `REVIEW_PARSER_FAILOPEN`. In `agents.md` line 504, it is inserted between `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` and `REVIEW_PARSER_FAILOPEN`.\n- requirement: \"Stay inside the listed files\" / \"Stay inside the listed files and use **append-only edits** in `README.md`/`agents.md`.\"\n  expected_change_site: only `prompts/review-consolidator.txt`, `README.md`, `agents.md`, and `tests/test_render_prompt_review_judge_modes.py`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: The LAST RUN DIFF removes three entries from `.ai/.workspace_source_manifest.txt`: `docs/changelog-style.md`, `scripts/workflow_retro.py`, `tests/test_workflow_retro.py`.; The LAST RUN DIFF shows modifications to 8 files outside Phase M scope: `.ai/.workspace_source_manifest.txt`, `scripts/ai_memory.py`, `scripts/ai_memory_lib.py`, `scripts/files_touched_scope_guard.py`, `scripts/implement_commit_changes.sh`, `scripts/implement_diagnose_post_codex_failure.sh`, `scripts/label_helpers.sh`, and `scripts/render_prompt.py`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- README.md:78,1067 | severity=nit | confidence=5\n  PROBLEM: `REVIEW_DIATAXIS_LENS_ENABLED` was inserted into both README tables in the middle instead of appended at the bottom.\n  WHY: The review contract explicitly says to append new env vars to the BOTTOM of the table, and the row is placed between `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` and `REVIEW_PARSER_FAILOPEN` in both the consumer and source README tables.\n- agents.md:504 | severity=nit | confidence=5\n  PROBLEM: `REVIEW_DIATAXIS_LENS_ENABLED` was inserted into the review-pipeline variable table in the middle instead of appended at the bottom.\n  WHY: The contract requires append-only edits, but the row is placed between `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` and `REVIEW_PARSER_FAILOPEN`.\n- .ai/.workspace_source_manifest.txt | severity=nit | confidence=4\n  PROBLEM: The manifest was modified even though Phase M was supposed to stay inside the listed files.\n  WHY: The last-run diff removes `docs/changelog-style.md`, `scripts/workflow_retro.py`, and `tests/test_workflow_retro.py` from `.ai/.workspace_source_manifest.txt`, which is outside the declared Phase M file set.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- README.md:79,1068; agents.md:505 | severity=major | confidence=5\n  PROBLEM: `REVIEW_DIATAXIS_LENS_ENABLED` is inserted mid-table instead of being appended to the end of the README and agents variable tables.\n  WHY: This violates the explicit append-only contract and creates merge-conflict risk.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- README.md:78,1067; agents.md:504 | severity=major | confidence=5\n  PROBLEM: `REVIEW_DIATAXIS_LENS_ENABLED` was inserted in the middle of the README and agents tables instead of appended at the end.\n  WHY: The append-only contract is violated because the row appears between `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` and `REVIEW_PARSER_FAILOPEN` in all three tables.\n- .ai/.workspace_source_manifest.txt | severity=blocker | confidence=5\n  PROBLEM: The last-run diff touched files outside Phase M scope.\n  WHY: The diff shows modifications to eight out-of-scope files, and the editor summary claiming they were reverted is contradicted by commit `912feb4`, which shows they were added.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .ai/.workspace_source_manifest.txt | severity=major | confidence=5\n  PROBLEM: The change set includes out-of-scope file modifications.\n  WHY: Phase M was limited to `prompts/review-consolidator.txt`, `README.md`, `agents.md`, and `tests/test_render_prompt_review_judge_modes.py`, but the last run diff also touched unrelated scripts and the workspace source manifest.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "7341768fcc66966ea25ae9e9a0f7848875ac2f0c742a16189879e6f91ef9bcf7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3538,
+    "run_id": "28272372561",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28272372561",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260627005408_b4e508bfb5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3538,
+    "run_id": "28272372561"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-27T00:54:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

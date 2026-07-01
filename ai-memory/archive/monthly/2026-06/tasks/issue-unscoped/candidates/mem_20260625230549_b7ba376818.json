@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/slop_scan_local.py:23-28 | confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The heredoc regex allows trailing shell operators/arguments after the closing quote, so piped heredocs can be missed or mis-mapped.\n  WHY: A heredoc like `python3 - <<'PY'| cat` can shift the Python body offset mapping and leave code inside the heredoc unscanned.\n- scripts/slop_scan_local.py:401-445 | confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_extract_python_heredoc_blocks` strips leading tabs from heredoc body lines when `allow_tabs` is true.\n  WHY: Stripping tabs from shell heredocs can misalign line numbers and affect `_scan_python_block`, producing incorrect findings or offsets.\n- scripts/slop_scan_local.py:188 | confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_try_node_types` has no fallback for older Python versions where `ast.TryStar` does not exist.\n  WHY: Running on Python 3.9 or earlier can raise `AttributeError`, breaking compatibility on older CI runners.\n- scripts/slop_scan_local.py:180-184 | confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_is_docstring_expr` relies on direct `node.value` access and `ast.Str` handling without guarding for newer AST behavior.\n  WHY: Python 3.12+ compatibility can be impacted, potentially causing `AttributeError` or misclassification of docstrings.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Keep scope limited to the listed workflow, script, prompt, docs, and fixtures.\"\n  expected_change_site: documentation of the slop-scan detector contract and variables introduction order in README.md under the \"Optional `.github/ai` operator surfaces / deterministic v1 classifier table\" section\n  confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: README.md\u2019s table lists env vars alphabetically; `SLOP_SCAN_ENABLED` is under `REVIEW_APPROVAL_RUBRIC_ENABLED`, not appended after `REVIEW_LEDGER_RUBRIC_ENABLED`, breaking the insert-after-footnote contract for downstream updaters\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\nFile: scripts/slop_scan_local.py\nLine: 23-28 HEREDOC_START_RE regex\nCode: `\\bpython3\\b\\n[^\\n]*?\\n(?P<operator><<-?)\\n\\s*\\n(?P<quote>['\"])\\n(?P<tag>[A-Za-z_][A-Za-z0-9_]*)\\n(?P=quote)\\n(?:\\s+.*)?$`\nProblem: The heredoc matcher allows trailing arbitrary shell operators/arguments on the opening line that immediately follow the tag quote, which can cause the closing tag to be missed if the shell operator injects whitespace or characters between the tag and heredoc start.\nWhy it fails at runtime: If a PR changed a shell script with a heredoc like `python3 - <<'PY' | cat`, the regex will still match but the body capture starts one line later after `python3 - <<'PY'` and any trailing operator, which can lead to incorrect line offset mapping for Python code inside the heredoc.\nISSUE_CONFIDENCE: 4\n\nFile: scripts/slop_scan_local.py\nLine: 401-445 _extract_python_heredoc_blocks\nCode: Block capture uses `candidate = lines[cursor].lstrip(\"\\t\")` when allow_tabs is true, which strips leading tabs from heredoc body lines.\nProblem: Shell linters treat heredocs as \"here-documents and will-nohere\" literals, so stripping leading tabs for shell scripts interferes with shell formatting and can break validation expectations.\nWhy it fails at runtime: For heredoc bodies in shell scripts, reliance on tabs is significant. This can cause the scanner to mis-align line numbers and affect the later `_scan_python_block` context, producing incorrect findings or line offsets.\nISSUE_CONFIDENCE: 4\n\nFile: scripts/slop_scan_local.py\nLine: 188 _try_node_types\nCode: `return (ast.Try, try_star) if try_star is not None else (ast.Try,)`\nProblem: No fallback for older Python versions \u2264 3.10 where `ast.TryStar` does not exist.\nWhy it fails at runtime: This may cause AttributeError when running on Python 3.9 or earlier CI runners.\nISSUE_CONFIDENCE: 5\n\nFile: scripts/slop_scan_local.py\nLine: 180-184 _is_docstring_expr\nCode: Resilience to `ast.Constant` but direct access to `node.value` and `ast.Str` without guarding.\nProblem: Forward compatibility: in AST of Python 3.12+, `ast.Str` is folded into `ast.Constant`. This can raise AttributeError or misclassify docstrings if AST traversers rely on the old node types in newer environments.\nWhy it fails at runtime: Compatibility issues when the environment runs under Python 3.12+. Under older Python, it still works via AST backward compat.\nISSUE_CONFIDENCE: 4\n\nRequirement: \"Keep scope limited to the listed workflow, script, prompt, docs, and fixtures.\"\nExpected change site: documentation of the slop-scan detector contract and variables introduction order in README.md under the \"Optional `.github/ai` operator surfaces / deterministic v1 classifier table\" section.\nEvidence of absence: README.md\u2019s table lists env vars alphabetically; `SLOP_SCAN_ENABLED` is under `REVIEW_APPROVAL_RUBRIC_ENABLED`, not appended after `REVIEW_LEDGER_RUBRIC_ENABLED`, breaking the insert-after-footnote contract for downstream updaters.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "79c9066f1fa23951cb891f7ea337fdfe63e3393a206933826c5d5500c86c9b9e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3512,
+    "run_id": "28204487668",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28204487668",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260625230549_b7ba376818",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3512,
+    "run_id": "28204487668"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-25T23:05:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

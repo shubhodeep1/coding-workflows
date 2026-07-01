@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for #3024\n\nActions taken:\n- Audited the cited prompt/doc snippets on current HEAD `72fbe74549520e343c2497c3fce1e57e1833ac97` on `orchestrator/project-3024`.\n- Confirmed the checkout ref matches the integration-branch metadata.\n- Confirmed the remaining shipped-vs-plan gap is still centered on `prompts/mode-implement.txt` Goal 10 / Goal 12 language.\n\nClarification mapping:\n- No `Q1`/`Q2` questions were asked in clarify.\n- `/answer [auto-answered-by-orchestrator]` just confirms planning should proceed as written.\n\nAutomation / scheduler / DB impact:\n- No new scripts.\n- No workflow/scheduler wiring changes.\n- No supervisor changes.\n- No DB/index/env-var changes.\n\n1. Files likely to change\n\nMandatory:\n- `prompts/mode-implement.txt`\n  - Expand the `Code-style hints` block at `prompts/mode-implement.txt:51-57` so it fully lands the approved Goal 10 and Goal 12 wording.\n\nConditional, depending on re-audit result:\n- `docs/plans/apply-ai-tools-learnings-plan.md`\n  - If the re-audit is still not clean, keep this file canonical under `docs/plans/` and rewrite the top archival-audit note (`docs/plans/apply-ai-tools-learnings-plan.md:3-19`) with the exact remaining gaps.\n- `docs/completed/apply-ai-tools-learnings-plan.md`\n  - Create only if the post-edit re-audit is clean; use the closeout-summary style already used by `docs/completed/ai-code-review-learnings-plan.md`.\n- `docs/plans/apply-ai-tools-learnings-plan.md` (pointer form)\n  - If the canonical full plan moves to `docs/completed/`, leave a short pointer stub at the old path for link stability, following `docs/plans/integration-sync-resolver-self-heal-plan.md`.\n- `docs/ai-tools-future-improvements.md`\n  - Edit only if archival would otherwise leave the current companion-plan references (`lines 7-9` and `755-757`) misleading.\n\nAudit-only comparison set (read-only unless re-audit proves one is misleading):\n- `unattended_system_instructions.md`\n- `CLAUDE.md`\n- `prompts/review-reviewer-checklist.txt`\n- `prompts/mode-implement-diagnose.txt`\n- `prompts/mode-implement-repair.txt`\n- `prompts/mode-implement-repair-syntax.txt`\n\n2. Functions / modules / sections to implement\n\n- `prompts/mode-implement.txt`\n  - Replace the terse naming bullet with the fuller Goal 10 rule:\n    - descriptive function/variable names\n    - explicit ban on 1-2 character names except tight scopes\n    - preserve the \u201cunless the surrounding code has an established convention\u201d constraint where appropriate\n  - Replace the shortened flow bullet with the fuller Goal 12 rule:\n    - discovery pass\n    - todo/plan\n    - status update\n    - batch tool calls for edits\n    - reconcile/verify\n    - final summary\n    - explicit \u201cdo not start editing before discovery completes\u201d\n  - Preserve already-landed nearby rules: restriction narrowing, plan-divergence discipline, and no-inline-comments guidance.\n\n- Re-audit closeout logic\n  - Compare the now-edited prompt against the already-landed comparison set named in the issue.\n  - Decide archive vs. keep-open based on whether any planned item remains missing.\n\n- Archival packaging\n  - If clean: promote the plan to a completed-plan record with a closeout note/evidence snapshot.\n  - If not clean: keep it under `docs/plans/` and update the blocker note instead of archiving.\n\n3. Data structures affected\n\n- No runtime data structures or schemas.\n- Affected contracts are documentation/prompt contracts only:\n  - implementer prompt rules in `prompts/mode-implement.txt`\n  - archival-status / closeout sections in the plan doc\n  - companion-plan path references in docs if archival changes canonical location\n\n4. API or interface changes\n\n- No external API, workflow, CLI, or env-var changes.\n- Internal interface change only: the implement-phase prompt becomes stricter/more explicit for future runs.\n\n5. Potential risks / edge cases / conflicts\n\n- Current code confirms the issue\u2019s main claim: `prompts/mode-implement.txt:51-57` still lacks both the explicit short-name ban and the full flow rubric.\n- Do not regress nearby shipped rules while editing the prompt text.\n- Archival has a repo-local link-stability risk:\n  - multiple docs still reference `docs/plans/apply-ai-tools-learnings-plan.md`\n  - a pure move would leave stale/broken references\n  - lowest-risk fix is the existing pointer-stub pattern already used elsewhere\n- `docs/ai-tools-future-improvements.md` currently names the plan at `docs/plans/...`; if the canonical source moves, either preserve that path with a pointer or update the doc so it remains truthful.\n- Archive only if the re-audit is fully clean. If any load-bearing gap remains, the plan must stay under `docs/plans/`.\n\n6. Testing / verification considerations\n\n- Re-read `prompts/mode-implement.txt` after editing and verify it now explicitly contains:\n  - the 1-2-character-name ban with tight-scope exceptions\n  - the full discovery -> todo/plan -> status update -> batch tool calls -> reconcile -> summary cadence\n  - the explicit \u201cdo not start editing before discovery completes\u201d sentence\n- Re-audit the listed comparison-set files to confirm no other planned learning is still missing.\n- If archiving:\n  - confirm the completed copy is the canonical full record\n  - confirm the old `docs/plans/...` path still resolves correctly via pointer stub or equivalent\n  - confirm `docs/ai-tools-future-improvements.md` is still accurate if left untouched\n- Run `scripts/validate_changed_files_syntax.sh` from repo root.\n- Check `git diff --stat` to ensure the final change set stays limited to the prompt file plus only the docs required by the re-audit outcome.\n\nAssumptions:\n- No additional clarification is needed.\n- Follow existing completed-plan conventions for archive formatting and link stability.\n\nMissing-context notes:\n- None blocking.\n- No integration-branch mismatch.\n- No external documentation lookup is required for this task.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f5b95fcc794b303bd6c63ddeb9a49a73bbbb8bfc6d331d5858a27442d907c158",
+  "lineage": {
+    "issue_number": 3036,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26741162809",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26741162809",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3036"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260601073125_851cb323ed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3036,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26741162809"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3036",
+  "timestamps": {
+    "created_at": "2026-06-01T07:31:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

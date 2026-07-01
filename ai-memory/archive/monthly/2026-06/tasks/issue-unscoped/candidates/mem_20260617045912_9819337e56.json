@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_lib.py:3010-3021 | severity=high | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The `failure_is_safe_for_validation_dispatch` block can return `validation_dispatch_safe_despite_failures=True` for a wave issue that carries both `ai:closed` and a blocking failure label such as `ai:implementation-failed`.\n  WHY: If that mixed-label case occurs, validation can be dispatched against a wave already marked failed, which the reviewer says violates the intended closed-without-merge-only bypass.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"So `check-wave-status` now emits a narrower `validation_dispatch_safe_despite_failures` signal: it is true only when every failed issue is an adjudicated closed-without-merge case (live issue closed or `ai:closed`, with no blocking terminal-failure phase).\"\n  expected_change_site: scripts/orchestrate_lib.py:cmd_check_wave_status\n  confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  EVIDENCE: scripts/orchestrate_lib.py:cmd_check_wave_status computes `validation_dispatch_safe_despite_failures` with `phase not in VALIDATION_DISPATCH_BLOCKING_TERMINAL_PHASES` plus an explicit `\"ai:implementation-failed\" not in labels` guard, while `VALIDATION_DISPATCH_BLOCKING_TERMINAL_PHASES = TERMINAL_PHASES - {\"ai:closed\"}`; both reviewers say the mixed `ai:closed` + `ai:implementation-failed` case is not fully enforced.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: So check-wave-status now emits a narrower validation_dispatch_safe_despite_failures signal: it is true only when every failed issue is an adjudicated closed-without-merge case (live issue closed or ai:closed, with no blocking terminal-failure phase).\n  Expected change site: scripts/orchestrate_lib.py:cmd_check_wave_status (the loop computing validation_dispatch_safe_despite_failures)\n  Evidence of absence: The current implementation uses phase not in VALIDATION_DISPATCH_BLOCKING_TERMINAL_PHASES + explicit and \"ai:implementation-failed\" not in labels. VALIDATION_DISPATCH_BLOCKING_TERMINAL_PHASES excludes only \"ai:closed\" from TERMINAL_PHASES, leaving other terminal phases present; this allows a closed-without-merge issue that also carries ai:implementation-failed to be treated as safe when it should still block validate dispatch, creating a runtime mis-dispatch or potential deadlock risk.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_lib.py:3010-3021 | severity=MAJOR | confidence=4\n  File: scripts/orchestrate_lib.py\n  Line or code reference: lines 3010-3021 (the `failure_is_safe_for_validation_dispatch` block inside `cmd_check_wave_status`)\n  Problem: The condition can return `validation_dispatch_safe_despite_failures=True` (allowing validation dispatch) for a wave issue that carries both `ai:closed` *and* a blocking terminal phase label such as `ai:implementation-failed`.\n  Why it fails at runtime: A judge-fix-up that later acquires an explicit failure label would be treated as an \"adjudicated closed-without-merge\" case by the new gate. Validation would be dispatched against a wave the judge has already marked failed, violating the documented intent that only pure closed-without-merge issues bypass the `ANY_FAILED` guard. The `VALIDATION_DISPATCH_BLOCKING_TERMINAL_PHASES` set and the explicit label check do not correctly cover all combinations of `status == \"closed\"` + failure labels.\n- Requirement: \"So `check-wave-status` now emits a narrower `validation_dispatch_safe_despite_failures` signal: it is `true` only when every failed issue is an adjudicated closed-without-merge case (live issue closed or `ai:closed`, with no blocking terminal-failure phase).\"\n  Expected change site: `scripts/orchestrate_lib.py:cmd_check_wave_status` (the per-issue loop computing `validation_dispatch_safe_despite_failures`)\n  Evidence of absence: The implemented condition (`status == \"closed\" and (closed or ai:closed label) and phase not in VALIDATION_DISPATCH_BLOCKING_TERMINAL_PHASES and \"ai:implementation-failed\" not in labels`) combined with `VALIDATION_DISPATCH_BLOCKING_TERMINAL_PHASES = TERMINAL_PHASES - {\"ai:closed\"}` does not fully enforce \"with no blocking terminal-failure phase\" for all label combinations (e.g., an issue carrying both `ai:closed` and `ai:implementation-failed`). The consensus finding from the x-ai/grok-4.20 reviewer is valid; the gate is not yet exact.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "4af892aec41b74d243ceb1d47cf61241654ff623471670a70e750717f405f6dc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3374,
+    "run_id": "27665128765",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27665128765",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260617045912_9819337e56",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3374,
+    "run_id": "27665128765"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-17T04:59:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

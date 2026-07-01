@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply open-agents learnings to unattended prompts and reviewer scripts\",\"issues\":[{\"id\":\"explore-first-plan-implement\",\"title\":\"Add explore-first gates to the planning and implementation prompts\",\"priority\":1},{\"id\":\"model-family-reviewer-overlays\",\"title\":\"Add model-family reviewer overlays and renderer plumbing\",\"priority\":2},{\"id\":\"plan-six-step-readiness-gate\",\"title\":\"Add the six-step readiness gate to the planning prompt\",\"priority\":3},{\"id\":\"implement-verification-loop\",\"title\":\"Add explicit verification-loop discipline to the implement prompt\",\"priority\":3},{\"id\":\"implement-read-before-edit-guardrails\",\"title\":\"Add read-before-edit and no-surprise-edits guardrails to implement prompts\",\"priority\":4},{\"id\":\"validate-command-autodetect\",\"title\":\"Add project-script and package-manager autodetect rules to validation prompts\",\"priority\":2},{\"id\":\"bash-safety-heuristics\",\"title\":\"Add advisory bash safety heuristics to unattended system instructions\",\"priority\":2},{\"id\":\"agents-operational-lessons-section\",\"title\":\"Append a categorised operational lessons section to agents.md\",\"priority\":4},{\"id\":\"prompt-compaction-helper\",\"title\":\"Add an opt-in prompt compaction helper on top of the existing budget machinery\",\"priority\":5}],\"dependency_edges\":[{\"from\":\"explore-first-plan-implement\",\"to\":\"plan-six-step-readiness-gate\"},{\"from\":\"explore-first-plan-implement\",\"to\":\"implement-verification-loop\"},{\"from\":\"implement-verification-loop\",\"to\":\"implement-read-before-edit-guardrails\"},{\"from\":\"explore-first-plan-implement\",\"to\":\"prompt-compaction-helper\"},{\"from\":\"model-family-reviewer-overlays\",\"to\":\"prompt-compaction-helper\"},{\"from\":\"plan-six-step-readiness-gate\",\"to\":\"prompt-compaction-helper\"},{\"from\":\"implement-verification-loop\",\"to\":\"prompt-compaction-helper\"},{\"from\":\"implement-read-before-edit-guardrails\",\"to\":\"prompt-compaction-helper\"},{\"from\":\"validate-command-autodetect\",\"to\":\"prompt-compaction-helper\"},{\"from\":\"bash-safety-heuristics\",\"to\":\"prompt-compaction-helper\"},{\"from\":\"agents-operational-lessons-section\",\"to\":\"prompt-compaction-helper\"}]}",
+  "fingerprint": "c5fb6831491f737e93003b3c6e0e587a0f705402ea54c9fb41fcd808569221ad",
+  "lineage": {
+    "issue_number": 3376,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27734869215",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27734869215",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260618033746_804319d07e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3376,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27734869215"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply open-agents learnings to unattended prompts and reviewer scripts' into 9 issues (tracking #3376)",
+  "timestamps": {
+    "created_at": "2026-06-18T03:37:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

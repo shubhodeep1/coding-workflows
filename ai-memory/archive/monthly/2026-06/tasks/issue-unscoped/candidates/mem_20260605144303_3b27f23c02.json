@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add scripts/load_workflow_overlay.py and the strict workflow_overlay.v1 schema. Extend scripts/render_prompt.py so overlay prompt overrides flow through the S1 contract layer instead of ad-hoc prompt mutation. Wire overlay loading into clarify/plan/implement/review/validate reusable workflows. Keep the absent-file path a no-op; do not commit a default .github/ai/WORKFLOW.md file.\"\n  expected_change_site: All files listed in the linked issue + tests/test_workflow_overlay_core.py.\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: None \u2014 the last-run diff (and full PR diff) now contains the loader, strict schema, updated render_prompt.py (apply_workflow_overlay + legacy defaults + WorkflowOverlayError), loader invocations in all five workflows, the dedicated test suite covering absent no-op / unknown-key / null-rejection / replace-path-contract / mode-validation cases, and no default WORKFLOW.md file. All acceptance criteria are met.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "fe170ce609ab90a9e3322b0aa2934190f7fdf29d09a6c1701f0d7862d46dd3b8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3128,
+    "run_id": "27017928986",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27017928986",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260605144303_3b27f23c02",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3128,
+    "run_id": "27017928986"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-05T14:43:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

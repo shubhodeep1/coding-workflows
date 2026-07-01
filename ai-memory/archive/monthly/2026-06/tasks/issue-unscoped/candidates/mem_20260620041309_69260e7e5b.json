@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validate_semble_contract.py:82-98 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_manifest_required_prompts()` parses the workflow text with `json.JSONDecoder().raw_decode(...)` on a sliced substring, making the test brittle to formatting changes.\n  WHY: Small whitespace/layout changes can break parsing or return incomplete data, so the manifest contract test becomes fragile.\n- tests/test_validate_semble_contract.py:101-140 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: When `_missing_reference_path_from_error()` returns `None`, the hydration failure degrades into a generic `AssertionError` that does not surface the specific missing reference path or raw `PromptLoadError` context.\n  WHY: Reviewers disagreed on severity (MAJOR vs NIT), but all reported that future hydration failures are harder to diagnose because the original error context is obscured.\n- tests/test_validate_semble_contract.py:314-333 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `main()` reports collected failures by printing `::error::` lines, which the reviewer said may not reliably surface every failure to CI consumers.\n  WHY: The finding claims this reduces signal fidelity by making intermediate failures harder to see in large validation regressions.\n- tests/test_validate_semble_contract.py:108-170 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Creating the isolated workspace with `TemporaryDirectory()` and `contextlib.chdir()` may fail in the CI environment before the regression guard runs.\n  WHY: A tempdir/chdir failure would abort the test before exercising `hydrate_reference_placeholders()`, so a missing reference could slip through.\n- tests/test_validate_semble_contract.py:118-145 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The isolated `render_prompt` module can be left in `sys.modules` across same-process retries if hydration raises.\n  WHY: This can poison later reruns and cause nondeterministic validation outcomes.\n- tests/test_validate_semble_contract.py:66-79 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_import_render_prompt()` lacks a return type annotation despite returning `types.ModuleType`.\n  WHY: This is a typing/tooling issue with no runtime failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_validate_semble_contract.py:118-145 | severity=high | confidence=5\n  PROBLEM: The retry loop exits without cleaning up the isolated `render_prompt` module from `sys.modules` when `hydrate_reference_placeholders()` or `load_prompt()` raises an exception.\n  WHY: This can poison subsequent same-process invocations and produce nondeterministic validation outcomes.\n- tests/test_validate_semble_contract.py:66-79 | severity=low | confidence=5\n  PROBLEM: `_import_render_prompt()` lacks a return type annotation for code that clearly returns `types.ModuleType`.\n  WHY: This is a static typing/IDE support gap with no runtime failure.\n- tests/test_validate_semble_contract.py:82-98 | severity=critical | confidence=5\n  PROBLEM: JSON parsing uses `json.JSONDecoder().raw_decode(workflow_text[array_start:])` on an inline slice of workflow text, making it brittle to layout changes.\n  WHY: Small formatting differences unrelated to logic can cause the parser to fail or return incomplete data, making the test fragile.\n- tests/test_validate_semble_contract.py:108-169 | severity=high | confidence=5\n  PROBLEM: When `_missing_reference_path_from_error()` returns `None`, the exception path raises `AssertionError(f\"unexpected hydration failure for {rel}: {exc}\")` without indicating which prompt failed.\n  WHY: This makes diagnosing future reference hydration failures significantly harder for maintainers.\n- tests/test_validate_semble_contract.py:314-333 | severity=high | confidence=5\n  PROBLEM: Multiple exceptions are collected and each printed to stderr as `print(f\"::error::{failure}\", file=sys.stderr)`, but the reviewer claimed only the last failure is reliably surfaced as a `::error::` annotation.\n  WHY: This was reported as reducing CI signal fidelity and delaying root-cause diagnosis.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_validate_semble_contract.py:99-146 | severity=low | confidence=3\n  PROBLEM: `_missing_reference_path_from_error(str(exc))` silently drops error context by returning `None` when the regex fails to match, and the resulting `AssertionError` is generic.\n  WHY: A future `PromptLoadError` with a different message format will be harder to diagnose because the specific failed prompt/reference pair is not surfaced.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_validate_semble_contract.py:108-170 | severity=high | confidence=4\n  PROBLEM: The test creates a `TemporaryDirectory`, copies `render_prompt.py` and validate prompts into it, and uses `contextlib.chdir()`, which the reviewer said is risky in the isolated CI environment.\n  WHY: If temp setup fails, the regression guard aborts before exercising the hydration path, letting missing-reference regressions slip through.\n- tests/test_validate_semble_contract.py:101-140 | severity=low | confidence=3\n  PROBLEM: When `_missing_reference_path_from_error()` does not match, the test raises a generic `AssertionError` without a machine-readable prompt/reference clue.\n  WHY: A real hydration bug then produces an opaque failure that hides which prompt/reference pair is missing.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "02a30bbbd4646f256f268d5de4db5085f5241e93b97c10db074f5931039629c2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3407,
+    "run_id": "27858981635",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27858981635",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260620041309_69260e7e5b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3407,
+    "run_id": "27858981635"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 6 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-20T04:13:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

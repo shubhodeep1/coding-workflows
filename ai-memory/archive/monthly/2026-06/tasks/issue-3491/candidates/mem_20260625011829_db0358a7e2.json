@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- HEAD: `2d012ac090435496ad705814bbeba8afc9320f86`\n- Checked-out branch: `orchestrator/project-3490`\n- Integration branch metadata: `orchestrator/project-3490`\n- Integration branch mismatch: `false`\n\nClarification interpretation\n- No clarification questions were asked.\n- The `/answer [auto-answered-by-orchestrator]` comment adds no extra constraints beyond the issue body.\n\nAutomation / wiring impact\n- Change type: modifies an existing file only.\n- Scheduler / PR-push entry point changes: none.\n- New script or supervisor: none.\n- DB work / gate pattern: none.\n- `docs/scripts-pending-removal.md` update: not needed.\n\nImplementation plan\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt` \u2014 in-place edit to the existing smoke canary file.\n\n2. Functions or modules to implement\n- No code functions or modules.\n- Apply a minimal text edit so:\n  - line 1 remains `status: ok` (already matches current state)\n  - line 2 becomes exactly `decompose-run: 28140127475`\n\n3. Data structures affected\n- Single line-oriented text fixture/canary file.\n- Current observed contents start with:\n  - line 1: `status: ok`\n  - line 2: `run_id: 26151428977`\n  - line 3: `updated-by: ai-pipeline`\n\n4. API or interface changes\n- None.\n- No workflow, script, schema, or external interface changes.\n\n5. Potential risks / edge cases / conflicts\n- Non-blocking context note: the file currently has a third line not mentioned in the issue. The safest interpretation is to preserve it, because the task requires the smallest possible edit and only constrains lines 1-2.\n- Ensure the replacement is exact: `decompose-run: 28140127475` with no extra whitespace or different key name.\n- Do not recreate or reformat the file unnecessarily; only `tests/e2e_smoke_canary.txt` should appear in the diff.\n\n6. Testing considerations\n- Verify file existence after edit.\n- Verify the first two lines exactly, e.g. by checking:\n  - line 1 = `status: ok`\n  - line 2 = `decompose-run: 28140127475`\n- Verify no other repository files changed (`git diff --name-only` should list only `tests/e2e_smoke_canary.txt`).\n- No broader lint/typecheck/test/build run is needed for this smoke-task text change.\n\n7. Pre-execution self-check result\n- Scope is clear and limited to one existing file.\n- Ref context matches the issue\u2019s integration branch metadata.\n- No missing inputs, external dependencies, or unresolved clarification items.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "5d200b95b154a71f504e03d07492f652f74e013cb2c3159848cac52f60362758",
+  "lineage": {
+    "issue_number": 3491,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28140279948",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28140279948",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3491"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260625011829_db0358a7e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3491,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28140279948"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3491",
+  "timestamps": {
+    "created_at": "2026-06-25T01:18:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

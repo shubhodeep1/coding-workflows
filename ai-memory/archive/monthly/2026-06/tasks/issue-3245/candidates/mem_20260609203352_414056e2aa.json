@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for `tighten-review-linked-issue-fallbacks`\n\nPlanning ref\n- HEAD: `5dc71c0e8d1153069d64f8a17f5f54c89feaf440`\n- Checked-out branch: `orchestrator/project-3243`\n- Integration branch metadata: `orchestrator/project-3243`\n- Integration branch mismatch: none\n\nClarification status\n- No Q1/Q2 were asked in clarify.\n- `/answer [auto-answered-by-orchestrator]` adds no extra scope beyond the issue body.\n\nAutomation / wiring\n- Change type: extend existing workflow/support code; no manual script, no new workflow, no scheduler wiring change.\n- Entry points touched:\n  - `.github/workflows/review_autofix.yml`\n  - `scripts/review_collect_pr_metadata.sh`\n  - `scripts/review_rb_judge.sh`\n  - shared helper host for the parser (`scripts/gh_helpers.sh` is the smallest likely host)\n- New supervisor: none.\n- DB / migration gate: none.\n- `docs/scripts-pending-removal.md`: no entry expected.\n\nRepresentative contract to follow\n- Use `.github/workflows/issue_pr_status.yml` plus `tests/test_issue_pr_status_payload_fallback_contract.py` as the semantic oracle.\n- Preserve GraphQL `closingIssuesReferences` as the primary source.\n- Only the strict fallback stays actionable:\n  - current-repo closing-keyword refs (`close/fix/resolve` inflections + `#N`)\n  - current-repo issue URL/path refs\n- Do not reintroduce:\n  - bare `issue #N`\n  - bare `issues/N`\n  - colon forms like `Closes: #N`\n\nFiles likely to change\n- `.github/workflows/review_autofix.yml`\n- `scripts/review_rb_judge.sh`\n- `scripts/review_collect_pr_metadata.sh`\n- `scripts/gh_helpers.sh` (or equivalent already-allowed shared helper host)\n- Tests:\n  - `tests/test_review_autofix_phase_transition_contract.py`\n  - `tests/test_review_autofix_review_pipeline_contract.py`\n  - `tests/test_review_rb_judge_label_propagation.py`\n\nFunctions / modules to implement\n1. Add one shared strict fallback extractor in a support script.\n   - Input: repo + PR title/body text.\n   - Output: deduped numeric issue list for fallback use only.\n   - Keep current-repo scoping and fail-open behavior.\n\n2. Extend `scripts/review_collect_pr_metadata.sh`.\n   - Compute the strict fallback list once from `PR_META_FILE`.\n   - Export it as a new internal derived value for later review steps.\n   - Keep `LINKED_ISSUES_JSON` unchanged as the GraphQL-derived numbers-only cache.\n\n3. Update review-path consumers in `.github/workflows/review_autofix.yml`.\n   - `Dispatch standalone validate for orchestrator short-circuit issues`\n   - `Mark linked issues ready to merge`\n   - `Mark linked issues review-blocked (autofix exhaustion)`\n   - `Mark linked issues review-blocked (workflow failure)`\n   Each should use:\n   - GraphQL `closingIssuesReferences` first\n   - shared strict fallback second\n   - no inline broad regex copies\n\n4. Update `scripts/review_rb_judge.sh`.\n   - Reuse the same strict fallback semantics/source.\n   - Preserve `FIRST_ISSUE` / `FIRST_ISSUE_LABELS_JSON` behavior.\n   - Do not change canonical parent selection logic beyond removing false-positive numbers.\n\nData structures affected\n- `LINKED_ISSUES_JSON`: unchanged contract (`[{\"number\": N}, ...]` from GraphQL).\n- New internal fallback issue-number source: numbers only, reused by review steps/judge.\n- `issue_nodes_json` fallback objects in post-merge validate path should stay `{number, labels: null}`.\n- `FIRST_ISSUE` and `FIRST_ISSUE_LABELS_JSON`: unchanged contract.\n\nAPI / interface changes\n- No external API, CLI, label-name, env-name, or review-state contract changes.\n- Likely one new internal env/file contract for the derived fallback numbers only.\n\nRisks / edge cases\n- `BUG-002` is out of scope: do not change parent/canonical issue selection rules.\n- Preserve fallback ordering/dedupe behavior so `FIRST_ISSUE` semantics do not drift.\n- Keep payload-first behavior:\n  - use cached `PR_META_FILE` / `_pr_meta` first\n  - only fetch `pulls/{pr}` when cached text is unusable\n- Post-merge standalone validate runs in a separate job, so it cannot reuse codex-agent env directly; it must call the shared helper directly while staying fail-open if support checkout is unavailable.\n- Leave the unrelated smoke-test parser in `review_autofix.yml` alone unless a tiny mechanical reuse is obviously safe.\n\nTesting considerations\n- Extend `tests/test_review_autofix_phase_transition_contract.py`\n  - assert the target review_autofix steps no longer contain bare `issue #N` / `issues/N` fallback patterns\n  - assert they delegate to the shared parser / shared parsed-number source\n- Extend `tests/test_review_autofix_review_pipeline_contract.py`\n  - verify the metadata helper exports the new fallback source\n  - keep `LINKED_ISSUES_JSON == \"[]\"` on GraphQL miss\n- Rewrite `tests/test_review_rb_judge_label_propagation.py` fallback cases\n  - negative: bare `issue #41`, bare `issues/41`\n  - positive: strict closing-keyword refs and current-repo URL/path refs\n  - preserve the \u201ccached metadata before refetch\u201d assertions\n- Run targeted checks:\n  - `python3 tests/test_issue_pr_status_payload_fallback_contract.py`\n  - `python3 tests/test_review_autofix_phase_transition_contract.py`\n  - `python3 tests/test_review_autofix_review_pipeline_contract.py`\n  - `python3 tests/test_review_rb_judge_label_propagation.py`\n\nConflicts found\n- `tests/test_review_rb_judge_label_propagation.py` currently pins the old broad behavior (`Linked issue #41` / `Linked issue #52` as actionable). Those assertions conflict with the acceptance criteria and must be updated, not preserved.\n\nMissing-context note\n- The issue\u2019s `files_touched` allowlist is not visible in the planning prompt. The implementation should keep the shared helper in an already-allowed support file if that allowlist would block a new helper host.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "592d11d2e512f3a93f90a066c67488ab53de1d1a6890c1615ee285fc804bbbc6",
+  "lineage": {
+    "issue_number": 3245,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27233534937",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27233534937",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3245"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260609203352_414056e2aa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3245,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27233534937"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3245",
+  "timestamps": {
+    "created_at": "2026-06-09T20:33:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

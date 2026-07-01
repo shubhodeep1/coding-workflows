@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context:\n- HEAD: `56ff5b270613d547b6b389b13b8eae8e9b914c58`\n- Branch: `orchestrator/project-3376`\n- Integration branch metadata: `orchestrator/project-3376` (match)\n\nClarification mapping:\n- No `Q<ID>` questions were issued; `/answer [auto-answered-by-orchestrator]` only confirmed continuation.\n\n1. Files likely to change\n- `prompts/mode-plan.txt` \u2014 add a new read-only exploration block near the top, immediately after the current context-loading/preamble lines and before `{{REFERENCE_OUTPUT_CONTRACT}}`.\n- `prompts/mode-implement.txt` \u2014 add a new pre-edit exploration block in the top guidance area, and extend the later edit-flow guidance so it refers to the exploration log by name.\n\n2. Functions/modules to implement\n- `prompts/mode-plan.txt`\n  - Insert a titled `Read-only exploration sub-phase` block after the existing preamble (`Plan mode...` + untrusted-context guidance).\n  - Enumerate the required read-only operations: `grep`, `glob`, targeted file reads, manifest inspection, lockfile detection, and preview-only patch planning (`apply_patch -- preview` / non-writing patch preview wording).\n  - Add the explicit rule that no write-mode tools may be invoked during this sub-phase.\n- `prompts/mode-implement.txt`\n  - Insert a titled `Pre-edit exploration checklist` block early in the file (best fit: after the plan-divergence guidance and before `Test verification`).\n  - Reuse the same read-only operation list as `mode-plan.txt`.\n  - Add the rule that every file intended for editing must appear in the `exploration log` before the first `apply_patch`.\n  - Update the existing `Preferred flow: discovery pass -> ...` guidance so it explicitly references the `exploration log` by name rather than leaving discovery generic.\n\n3. Data structures affected\n- Prompt structure only:\n  - one new named section in `mode-plan.txt`\n  - one new named section in `mode-implement.txt`\n  - one named `exploration log` concept reused by the implement prompt\u2019s later editing guidance\n- No runtime data model, workflow state, MongoDB contract, or schema changes.\n\n4. API/interface changes\n- No GitHub API, workflow-template, consumer-repo, or database interface changes.\n- Prompt-contract change only:\n  - planning prompt gains a mandatory read-only exploration phase before plan emission\n  - implement prompt gains a mandatory exploration-log gate before editing begins\n\n5. Risks and edge cases\n- Keep the edit strictly additive: preserve `# tier: DEFAULT`, `{{SERENA_TOOL_HINTS}}`, `{{WORKFLOW_EDIT_RESTRICTION}}`, `{{REFERENCE_VERIFICATION_LOOP}}`, and `{{REFERENCE_OUTPUT_CONTRACT}}`.\n- Keep the read-only operation list aligned between both prompts; acceptance depends on the same exploration block content appearing in both places.\n- Ensure `mode-implement.txt` references `exploration log` by that exact name in a later editing rule, not only inside the new checklist.\n- Do not pull in wording or scope from item 2+ of `docs/plans/open-agents-learnings-plan.md`; this issue is item 1 only.\n- No factual issue/codebase conflicts found: both target files exist and the checked-out ref matches the orchestrator metadata.\n\n6. Testing considerations\n- Textual verification is sufficient:\n  - confirm both prompt files contain the new exploration block\n  - confirm `prompts/mode-plan.txt` includes the explicit no-write-mode-tools sentence\n  - confirm `prompts/mode-implement.txt` mentions the `exploration log` by name before first-edit guidance / `apply_patch`\n  - confirm no files outside `prompts/mode-plan.txt` and `prompts/mode-implement.txt` changed\n  - confirm surrounding frontmatter, placeholders, and output-contract text remain intact\n\nImplementation-time estimate: 15 minutes\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "6ae5efbfcb1179517c2132779060c0614316e543258a719d6c160055321ac598",
+  "lineage": {
+    "issue_number": 3377,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27735075564",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27735075564",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3377"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260618034216_0429e0032e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3377,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27735075564"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3377",
+  "timestamps": {
+    "created_at": "2026-06-18T03:42:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

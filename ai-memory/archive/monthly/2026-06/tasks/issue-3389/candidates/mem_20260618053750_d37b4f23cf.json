@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue #3389\n\nPlanning ref\n- HEAD: `56ff5b270613d547b6b389b13b8eae8e9b914c58`\n- Checked-out ref: `main`\n- Integration branch metadata is empty/unknown in the planning context, so there is no declared integration ref to compare against.\n\nClarification mapping\n- No `Q1`/`Q2` clarification questions were issued.\n- `/answer [auto-answered-by-clarify]` maps to: the task was already fully specified and needed no further answers.\n\nRepresentative contract inspected\n- `.github/workflows/test-and-mark-stable.yml:4398-4405` builds this alt-model smoke issue and already specifies `run_id: alt-${GITHUB_RUN_ID}`.\n- `tests/test_e2e_editor_smoke_canary.py:35-58,75-77` shows the canary content is treated as byte-exact, including newline behavior.\n- `tests/e2e_smoke_canary_spec.txt:1-3` confirms the 3-line canary shape.\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt` only.\n  - It already exists.\n  - Replace the current second line `run_id: 26151428977` with `run_id: alt-27738905093`.\n  - Preserve the file as exactly these three lines, with a trailing newline:\n    - `status: ok`\n    - `run_id: alt-27738905093`\n    - `updated-by: ai-pipeline`\n- No other files should change.\n\n2. Functions or modules to implement\n- None. This is a direct fixture/content overwrite, not a code-path change.\n- Related read-only contract references: `.github/workflows/test-and-mark-stable.yml`, `tests/test_e2e_editor_smoke_canary.py`, `tests/e2e_smoke_canary_spec.txt`.\n\n3. Data structures affected\n- One plain-text smoke-canary payload in `tests/e2e_smoke_canary.txt`.\n- The line-level contract remains:\n  - `status`\n  - `run_id`\n  - `updated-by`\n- No schema, env var, JSON, or API structure changes.\n\n4. API or interface changes\n- None.\n- The only observable change is the repository fixture content consumed by the E2E smoke task.\n\n5. Potential risks / edge cases\n- Content must be byte-exact: LF newlines, no extra spaces, no extra lines, trailing newline preserved.\n- Do not edit `tests/e2e_smoke_canary_spec.txt`; the issue explicitly limits scope to one existing file.\n- Avoid incidental edits to smoke helper scripts/tests that reference this file; they are contract references only.\n- Conflict detection: no issue-vs-code conflict found. The requested `alt-27738905093` format matches the upstream alt-model issue generator in `.github/workflows/test-and-mark-stable.yml:4398-4405`.\n\n6. Testing considerations\n- Verify the final diff is scoped to `tests/e2e_smoke_canary.txt` only.\n- Verify the file content matches the requested 3-line payload exactly, including the trailing newline.\n- No broader typecheck/lint/build changes are expected for this data-only update.\n\n7. Pre-execution self-check result\n- Scope is minimal and reversible.\n- The issue is fully specified.\n- Repository contract inspection supports the requested change and revealed no blockers.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "850cf5a49c99f2dfcab326348479633656dca3c4026df5d0d4354576ff8607b3",
+  "lineage": {
+    "issue_number": 3389,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27739008670",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27739008670",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3389"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260618053750_d37b4f23cf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3389,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27739008670"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3389",
+  "timestamps": {
+    "created_at": "2026-06-18T05:37:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

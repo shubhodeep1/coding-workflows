@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `f16831f959a63fe45cb71215df4313a09c8ad0ec` on `orchestrator/project-3285`\n\nActions taken:\n- Reviewed the current `tests/e2e_smoke_canary.txt`, the sibling canary `tests/e2e_smoke_canary_b.txt`, and the relevant smoke-task generator/prompt references in `.github/workflows/test-and-mark-stable.yml` and `scripts/review_apply_fixes.sh`.\n\nClarification status:\n- No `Q1`/`Q2` questions were needed.\n- The `/answer [auto-answered-by-orchestrator]` comment only confirms the issue was already fully specified.\n\nAutomation / wiring:\n- Existing file only; no new script.\n- No scheduler / workflow trigger changes.\n- No new supervisor.\n- No DB work or gating.\n- No `docs/scripts-pending-removal.md` entry.\n\nRepresentative reference:\n- Use `tests/e2e_smoke_canary_b.txt` as the format model; it already uses the target two-line `status` + `decompose-run` shape.\n\nFiles likely to change:\n- `tests/e2e_smoke_canary.txt` only.\n\nFunctions or modules to implement:\n- None.\n- This is a direct text-fixture update; safest implementation is a full rewrite of the small file rather than a partial edit that could leave stale legacy lines behind.\n\nData structures affected:\n- The plain-text canary record in `tests/e2e_smoke_canary.txt`.\n- Required target header:\n  - line 1: `status: ok`\n  - line 2: `decompose-run: 27328808462`\n- Current conflicting state is:\n  - line 1: `status: ok`\n  - line 2: `run_id: 26151428977`\n  - line 3: `updated-by: ai-pipeline`\n\nAPI or interface changes:\n- No external API changes.\n- Only the on-disk canary schema changes for this fixture: legacy `run_id`/`updated-by` content is replaced by the `decompose-run` header required by the issue.\n\nPotential risks / edge cases / conflicts:\n- This is not a no-op: line 1 already matches, but line 2 does not.\n- Safer interpretation is to normalize `tests/e2e_smoke_canary.txt` to the same two-line shape as `tests/e2e_smoke_canary_b.txt`; leaving the old third line would preserve mixed old/new schemas in one fixture.\n- Repo conflict to note: the decomposition generator already expects the new `decompose-run` format (`.github/workflows/test-and-mark-stable.yml:4022`), but some older smoke helper text still describes `tests/e2e_smoke_canary.txt` as a 3-line `run_id` file (for example `.github/workflows/test-and-mark-stable.yml:4629-4634` and `scripts/review_apply_fixes.sh:667-670`). Scope is explicitly one-file-only, so those references should remain untouched in this issue.\n- Keep the change surgical: no other files, no unrelated reformatting.\n\nTesting considerations:\n- Verify `tests/e2e_smoke_canary.txt` exists.\n- Verify its first line is exactly `status: ok`.\n- Verify its second line is exactly `decompose-run: 27328808462`.\n- Verify only `tests/e2e_smoke_canary.txt` is changed in `git diff --stat`.\n- If the file is normalized to match the sibling canary, also verify it is exactly the expected two-line file with a trailing newline.\n\nAssumptions made:\n- Treat the issue text as the effective `files_touched` allowlist: only `tests/e2e_smoke_canary.txt`.\n- Match the sibling canary\u2019s two-line format unless a hidden requirement proves the legacy third line must remain.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "434e23dce47b345c33f93fba72c842d3696b47bbd1cd54a080332d851469cda3",
+  "lineage": {
+    "issue_number": 3286,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27329021738",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27329021738",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3286"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260611065223_9f763f9e82",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3286,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27329021738"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3286",
+  "timestamps": {
+    "created_at": "2026-06-11T06:52:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

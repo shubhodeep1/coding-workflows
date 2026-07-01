@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"gstack learnings rollout for the unattended pipeline (Phases A\u2013P)\",\"issues\":[{\"id\":\"phase-a-plan-scope-mode\",\"title\":\"Phase A: add scope-mode + Boil the Lake plan contract\",\"priority\":1},{\"id\":\"phase-b-plan-reuse-audit\",\"title\":\"Phase B: add Search Before Building reuse-audit to planning\",\"priority\":1},{\"id\":\"phase-c-persona-prefixes\",\"title\":\"Phase C: prepend named specialist personas to core phase prompts\",\"priority\":2},{\"id\":\"phase-d-diagnose-trace-contract\",\"title\":\"Phase D: enforce traced evidence + hypothesis in implement-diagnose\",\"priority\":2},{\"id\":\"phase-e-plan-diagrams\",\"title\":\"Phase E: add optional data-flow/state-machine/failure-mode plan sections\",\"priority\":2},{\"id\":\"phase-k-slop-scan\",\"title\":\"Phase K: add fail-open slop-scan reviewer context\",\"priority\":1},{\"id\":\"phase-j-security-audit-workflow\",\"title\":\"Phase J: add the dedicated periodic security audit workflow\",\"priority\":1},{\"id\":\"phase-l-scope-lock-label\",\"title\":\"Phase L: add the per-issue ai:scope:<glob> scope-lock path\",\"priority\":2},{\"id\":\"phase-g-ai-memory-cli\",\"title\":\"Phase G: add review/prune/search/export ai-memory CLI commands\",\"priority\":3},{\"id\":\"phase-h-lessons-learned-records\",\"title\":\"Phase H: capture lessons-learned records from review and judge flows\",\"priority\":3},{\"id\":\"phase-f-workflow-retro\",\"title\":\"Phase F: add the weekly workflow retro summary path\",\"priority\":3},{\"id\":\"phase-i-review-tier-routing\",\"title\":\"Phase I: add lite/standard/full reviewer tier routing\",\"priority\":4},{\"id\":\"phase-n-changelog-style-guide\",\"title\":\"Phase N: add the CHANGELOG release-summary style guide\",\"priority\":5},{\"id\":\"phase-m-diataxis-docs-lens\",\"title\":\"Phase M: add the advisory Diataxis docs-coverage lens\",\"priority\":5},{\"id\":\"phase-p-agents-materiality-finding\",\"title\":\"Phase P: add the AGENTS.md materiality companion finding\",\"priority\":5},{\"id\":\"phase-o-shared-prompt-prelude\",\"title\":\"Phase O: refactor core prompts onto a shared prelude assembly path\",\"priority\":6}],\"dependency_edges\":[{\"from\":\"phase-a-plan-scope-mode\",\"to\":\"phase-b-plan-reuse-audit\"},{\"from\":\"phase-b-plan-reuse-audit\",\"to\":\"phase-c-persona-prefixes\"},{\"from\":\"phase-c-persona-prefixes\",\"to\":\"phase-d-diagnose-trace-contract\"},{\"from\":\"phase-c-persona-prefixes\",\"to\":\"phase-e-plan-diagrams\"},{\"from\":\"phase-e-plan-diagrams\",\"to\":\"phase-k-slop-scan\"},{\"from\":\"phase-k-slop-scan\",\"to\":\"phase-j-security-audit-workflow\"},{\"from\":\"phase-j-security-audit-workflow\",\"to\":\"phase-l-scope-lock-label\"},{\"from\":\"phase-l-scope-lock-label\",\"to\":\"phase-g-ai-memory-cli\"},{\"from\":\"phase-g-ai-memory-cli\",\"to\":\"phase-h-lessons-learned-records\"},{\"from\":\"phase-h-lessons-learned-records\",\"to\":\"phase-f-workflow-retro\"},{\"from\":\"phase-f-workflow-retro\",\"to\":\"phase-i-review-tier-routing\"},{\"from\":\"phase-i-review-tier-routing\",\"to\":\"phase-n-changelog-style-guide\"},{\"from\":\"phase-n-changelog-style-guide\",\"to\":\"phase-m-diataxis-docs-lens\"},{\"from\":\"phase-m-diataxis-docs-lens\",\"to\":\"phase-p-agents-materiality-finding\"},{\"from\":\"phase-p-agents-materiality-finding\",\"to\":\"phase-o-shared-prompt-prelude\"},{\"from\":\"phase-d-diagnose-trace-contract\",\"to\":\"phase-o-shared-prompt-prelude\"}]}",
+  "fingerprint": "733eff74fd937866e5edf7a8a0fbdd27a2bf30154255b2b191fb914f04efd420",
+  "lineage": {
+    "issue_number": 3496,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28142968687",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28142968687",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260625024023_40458f07e8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3496,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28142968687"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Decomposed project 'gstack learnings rollout for the unattended pipeline (Phases A\u2013P)' into 16 issues (tracking #3496)",
+  "timestamps": {
+    "created_at": "2026-06-25T02:40:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

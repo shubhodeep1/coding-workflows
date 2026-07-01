@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_slop_scan_local.py:21-27,133-161 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The fallback temporary-directory logic creates `.slop-scan-local-*` under `REPO_ROOT`, so the test suite fails with `PermissionError` in read-only CI workspaces.\n  WHY: Both reviewers observed the same runtime failure when no writable temp directory is available.\n- tests/test_slop_scan_local.py:146-148 | severity=low | confidence=[4]\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `main()` does not handle `_temporary_test_dir()` failures gracefully, so the run aborts with an unhelpful `PermissionError` instead of skipping or emitting a clearer error.\n  WHY: The exception propagates directly from tempdir creation, leaving the test runner without recovery or diagnostics.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add the two plan-specified fixtures and a focused detector test\" plus wiring so the detector runs in CI (Phase K acceptance criteria from linked issue #3511)\n  expected_change_site: tests/test_slop_scan_local.py (test harness + main() entrypoint) and supporting CI wiring\n  confidence=[5]\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: The fixtures and detector tests exist, but they cannot actually run in the target environment because `_temporary_test_dir()` / tmp_path fallback hits `PermissionError` and non-determinism in the current CI workspace.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_slop_scan_local.py:21-27,147 | severity=high | confidence=5\n  PROBLEM: The fallback tempdir path creates hidden directories (`.slop-scan-local-*`) directly under `REPO_ROOT` when system temp is unavailable, which fails in read-only workspaces.\n  WHY: Running the test file produces `PermissionError` when it tries to create `/home/runner/work/_temp/workspaces/3512-28195813652-1/.slop-scan-local-*`.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_slop_scan_local.py:21-27,133-161 | severity=high | confidence=5\n  PROBLEM: The test suite fails with `PermissionError` when `_temporary_test_dir()` falls back to creating `.slop-scan-local-*` under `REPO_ROOT`, because the workspace is not writable.\n  WHY: The current fallback assumes repo-root write access, so the tests cannot run in restricted CI environments without a writable temp directory.\n- tests/test_slop_scan_local.py:146-148 | severity=low | confidence=4\n  PROBLEM: The test execution loop does not handle `_temporary_test_dir()` creation failure, so the run crashes with an unhelpful `PermissionError` instead of degrading gracefully.\n  WHY: When `tempfile.TemporaryDirectory` fails, the exception propagates with no skip or clearer diagnostic.\n- Requirement: \"Add the two plan-specified fixtures and a focused detector test\"\n  Expected change site: tests/test_slop_scan_local.py\n  Evidence of absence: The fixtures and detector tests exist, BUT the tests cannot actually run in the target environment due to temp directory permission issues.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: \"Add the two plan-specified fixtures and a focused detector test\" plus wiring so the detector runs in CI (Phase K acceptance criteria from linked issue #3511).\n  Expected change site: tests/test_slop_scan_local.py (the test harness + main() entrypoint) and supporting CI wiring.\n  Evidence of absence: The test file and CI wiring are now present and the detector functions correctly on the fixtures, but the four tmp_path tests + `_temporary_test_dir()` fallback create uncleaned directories under the workspace root and hit `PermissionError` / non-determinism in the current CI workspace.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "1e94cace6b4804c7be7e8eb5fc3c2a147d0e6ef15f89a4d225b7a0340efcd259",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3512,
+    "run_id": "28195813652",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28195813652",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260625202638_579504b644",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3512,
+    "run_id": "28195813652"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-25T20:26:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

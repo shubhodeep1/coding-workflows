@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_force_tick_repository_env.py:122-127 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The assertion on env[\"REPOSITORY\"] is whitespace-sensitive even though GitHub Actions expressions are whitespace-insensitive, so valid formatting variants can fail the test.\n  WHY: Reviewers rated this from NIT to MAJOR; use the highest severity because the issue is real but severity disagreed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Line or code reference: line 127\n  Problem: The assertion `assert \"${{ github.repository }}\" in str(env[\"REPOSITORY\"])` is a raw substring match on exact whitespace.\n  Why it fails at runtime: GitHub Actions expression syntax is whitespace-insensitive, so spacing variations like `${{github.repository}}` or `${{  github.repository  }}` would make the test fail even though the env binding remains correct.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Line or code reference: 122\n  Problem: The assertion `assert \"${{ github.repository }}\" in str(env[\"REPOSITORY\"])` is whitespace-sensitive, but GitHub Actions expressions are whitespace-insensitive.\n  Why it fails at runtime: Valid forms like `${{github.repository}}` or `${{  github.repository  }}` would fail this test even though the workflow would function correctly.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Line or code reference: 116-119, 123-126\n  Problem: The assertion error messages reference incorrect placeholder text (`$shubhodeep1/coding-workflows`) instead of `${REPOSITORY}`.\n  Why it fails at runtime: When the test fails, the error message is confusing and harder to understand because the variable name does not match what the test is checking.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Code: Line 122-125 (assert \"${{ github.repository }}\" in str(env[\"REPOSITORY\"]))\n  Problem: The assertion performs a whitespace-sensitive substring check on a GitHub Actions expression, making the test brittle to formatting changes.\n  Why it fails at runtime: GitHub Actions expressions are whitespace-insensitive, so valid forms `${{github.repository}}` or `${{  github.repository  }}` would cause the test to fail even though they are functionally equivalent.\n  ISSUE_CONFIDENCE: 5\n  SEVERITY: MAJOR\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Code: Lines 116-119 (error messages mentioning placeholder text)\n  Problem: Assertion error messages reference incorrect placeholder text (`$shubhodeep1/coding-workflows` is shown instead of `${REPOSITORY}`).\n  Why it fails at runtime: This makes debugging failures confusing and harder to understand since the variable name does not match.\n  ISSUE_CONFIDENCE: 5\n  SEVERITY: NIT\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Line or code reference: Line 122\n  Problem: The assertion `assert \"${{ github.repository }}\" in str(env[\"REPOSITORY\"])` requires exact whitespace matching for a GitHub Actions expression, but GitHub Actions expressions are whitespace-insensitive.\n  Why it fails at runtime: Valid forms like `${{github.repository}}` or `${{  github.repository  }}` would fail this test even though they are functionally equivalent.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Line or code reference: Lines 116-119 and 123-126\n  Problem: The assertion error messages contain `$shubhodeep1/coding-workflows` instead of the intended `${REPOSITORY}` reference.\n  Why it fails at runtime: When the test fails, the error message will show confusing placeholder text that does not match the actual variable being tested, making debugging difficult.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Line or code reference: 122\n  Problem: The assertion `assert \"${{ github.repository }}\" in str(env[\"REPOSITORY\"])` performs a strict substring match that depends on exact whitespace inside the GitHub Actions expression.\n  Why it fails at runtime: The value resolved from the YAML `env:` block could legitimately contain `${{github.repository}}` or `${{  github.repository  }}`, and the test would reject both valid forms.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Line or code reference: 109\n  Problem: The assertion error message at line 110 contains `f\"step {name!r} no longer references ${{REPOSITORY}} in its run\"` which embeds the literal text `${{REPOSITORY}}` rather than the shell variable `${REPOSITORY}` that the guard is checking for.\n  Why it fails at runtime: If this guard triggers, the message is misleading because it shows a GitHub Actions expression placeholder instead of the actual shell variable name the test scans for.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Line or code reference: 114\n  Problem: The assertion error message at line 115 says `f\"step {name!r} references ${{REPOSITORY}} under set -u\"`.\n  Why it fails at runtime: When the assertion fires, the error message cites the wrong token, making it harder for a maintainer to understand which reference is unbound.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Line or code reference: test_named_force_tick_steps_bind_repository() lines 122-127 (the final assertion)\n  Problem: Strict substring match on exact spacing inside a GitHub expression.\n  Why it fails at runtime: The test will raise AssertionError on any whitespace variation (`${{github.repository}}`, `${{  github.repository  }}`, etc.) even though the workflow is semantically identical and the variable binding still works.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "595701069a0bcc82b0917ce8fa47db0ce260746720564deaa70e109f91145f28",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3459,
+    "run_id": "27998742899",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27998742899",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260623033406_9f58f7beb2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3459,
+    "run_id": "27998742899"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-23T03:34:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

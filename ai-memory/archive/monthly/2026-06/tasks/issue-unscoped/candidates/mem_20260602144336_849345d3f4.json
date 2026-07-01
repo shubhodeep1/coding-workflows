@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:lines ~8369\u20138429, workflow_run_cache_load + loops in build_active_issue_set / cancel_zombie_runs_for_issue | severity=low | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The previous autofix introduced workflow_run_cache_load (global KEY on raw JSON string) and array-based fresh_run_rows.\n  WHY: It does not; the hot path is now O(N) with cache hits after first parse, and the reviewer explicitly frames this as a historical issue fixed.\n- .github/workflows/implement.yml:read_codex_stall_guard_state + `elif [ -s ... ]` branch ~1932\u20131945 in LAST_RUN_DIFF | severity=low | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Status file containing an unrecognized state (or unreadable/empty) now triggers the explicit `::warning::` and leaves stall_state empty, so `codex_stall_guard_kill_detected` stays false.\n  WHY: It does not fail; the reviewer says this is the intended \"fail observable, non-fatal\" design after the prior round, with rc=137 inference removed and outer `timeout` still firing on rc=124.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Tests cover the new implement/poller behavior without broadening into force-tick or concurrency-cap logic.\"\n  expected_change_site: .github/workflows/ci.yml, in the test execution block\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  EVIDENCE: tests/test_codex_stall_guard_poller.py exists and contains focused contract tests, but it is not referenced in any .github/workflows/*.yml file; CI uses explicit per-test `python3 tests/<file>.py` allowlists rather than test discovery, so the new test will not run automatically.\n- requirement: \"Files in scope (stay inside this set): scripts/orchestrate_poll_process.sh, .github/workflows/implement.yml, .github/workflows/orchestrate_poll.yml, tests/test_codex_stall_guard_poller.py\"\n  expected_change_site: scripts/render_prompt.sh\n  confidence=[5]\n  flagged_by: [minimax_minimax-m2_5]\n  EVIDENCE: The last autofix run modified scripts/render_prompt.sh, which is not in the issue's file scope list; the original PR diff does not contain changes to render_prompt.sh, but last_run_diff.patch shows render_prompt.sh modifications.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- (No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:lines ~8369\u20138429, workflow_run_cache_load + loops in build_active_issue_set / cancel_zombie_runs_for_issue | severity=low | confidence=[4]\n  PROBLEM: The previous autofix introduced workflow_run_cache_load (global KEY on raw JSON string) and array-based fresh_run_rows.\n  WHY: It does not; the hot path is now O(N) with cache hits after first parse, and the reviewer explicitly frames this as a historical issue fixed.\n- .github/workflows/implement.yml:read_codex_stall_guard_state + `elif [ -s ... ]` branch ~1932\u20131945 in LAST_RUN_DIFF | severity=low | confidence=[4]\n  PROBLEM: Status file containing an unrecognized state (or unreadable/empty) now triggers the explicit `::warning::` and leaves stall_state empty, so `codex_stall_guard_kill_detected` stays false.\n  WHY: It does not fail; the reviewer says this is the intended \"fail observable, non-fatal\" design after the prior round, with rc=137 inference removed and outer `timeout` still firing on rc=124.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5940572cbbf88c6e9487e9782dd1277759ef760d672d23100e8804511e5a505e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3056,
+    "run_id": "26826609498",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26826609498",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260602144336_849345d3f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3056,
+    "run_id": "26826609498"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-02T14:43:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

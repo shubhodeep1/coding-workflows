@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context\n- HEAD: `c90ee7c85858db2cbec6e85ce2e1167eb7f9fe09`\n- Checked-out branch: `orchestrator/project-3472`\n- Integration branch metadata: `orchestrator/project-3472`\n- Integration branch mismatch: `false`\n\nClarification summary\n- No clarification questions were required; the `/answer [auto-answered-by-orchestrator]` comment only confirmed continuation.\n\nActions taken\n- Reviewed the current retrieve CLI path in `scripts/ai_memory.py`, the retrieval result builder in `scripts/ai_memory_lib.py`, the existing standalone AI-memory CLI tests in `tests/test_ai_memory_processed_command_entry.py`, and the `memory_retrieve` shell wrapper callsite to confirm scope and output contracts.\n\nAssumptions / missing context\n- The prompt did not include the explicit `files_touched` allowlist; this plan assumes edits are limited to the files listed below.\n- To avoid prompt-format churn, the human-readable `AI MEMORY CONTEXT` text/file output should stay unchanged unless a test proves a structured addition is unavoidable.\n- For short-circuit retrieve paths that never load retrieval profiles, `token_budget` should be emitted as `null` rather than guessed.\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/ai_memory_lib.py`\n- `scripts/ai_memory.py`\n- `tests/test_ai_memory_processed_command_entry.py`\n\nLikely unchanged\n- `scripts/memory_helpers.sh`\n- workflow YAML files\n- docs/README files\n\n2. Functions or modules to implement\n- `scripts/ai_memory_lib.py`\n  - Extend `RetrievalResult` with additive retrieve metadata needed by the CLI, specifically `token_budget` and a zero-hit classification field such as `miss_reason`.\n  - Update `retrieve_memory_context()` to populate `token_budget` from the already-resolved budget and to mark the enabled zero-hit case only when no eligible scored records survive loading, validation, and filters.\n  - Keep the existing selection algorithm intact; do not change retrieval strategy.\n\n- `scripts/ai_memory.py`\n  - Update `cmd_retrieve()` so the retrieve JSON payload and `AI_MEMORY_TELEMETRY` both include the new additive fields.\n  - Preserve current branch behavior for:\n    - successful hit\n    - enabled zero-hit\n    - `AI_MEMORY_ENABLED=false`\n    - missing memory branch / unavailable branch\n    - other `MemoryGitError` fail-open paths\n  - Keep current fields and meanings unchanged; add fields only.\n\n3. Data structures affected\n- `RetrievalResult` dataclass in `scripts/ai_memory_lib.py`\n- Retrieve JSON payload emitted by `cmd_retrieve()`\n- Retrieve telemetry entry emitted by `AI_MEMORY_TELEMETRY`\n\nNot expected to change\n- CLI flags\n- retrieve context text format written to the memory-context file\n\n4. API or interface changes\n- Additive retrieve fields:\n  - `token_budget`\n    - integer on enabled retrieve paths\n    - `null` on disabled/unavailable short-circuit paths\n  - `miss_reason`\n    - recommended stable values:\n      - `null` on successful hits\n      - `no_eligible_records` on enabled zero-hit\n      - `disabled` when AI memory is off\n      - `branch_unavailable` when the memory branch is missing\n      - `git_error` for other git-read fail-open paths\n- Existing keys such as `ok`, `enabled`, `role`, `records_selected`, `record_ids`, `estimated_tokens`, `keyword_method`, and `warning` should keep their current names and semantics.\n- Preserve the current `warning` asymmetry on unavailable paths:\n  - JSON keeps human-readable warning text\n  - telemetry keeps its existing warning code behavior\n\n5. Potential risks or edge cases\n- Do not change retrieval strategy, keyword extraction strategy, plain fallback behavior, or any skip-after-miss behavior; those are explicitly out of scope.\n- Do not change the prompt-facing `AI MEMORY CONTEXT` layout unless absolutely necessary; prompt-rendering changes are contract-sensitive in this repo.\n- Zero-hit classification must not accidentally fire for token-budget overflow or `--max` truncation; current logic already guarantees at least one selected record whenever any eligible scored record exists.\n- Disabled/unavailable paths currently do not resolve a retrieval profile; using `null` for `token_budget` is the safest additive representation.\n\n6. Testing considerations\n- Extend `tests/test_ai_memory_processed_command_entry.py` in place; do not add a new harness.\n- Reuse the existing fail-open getter test style already present in `test_new_get_cli_fails_open_on_memory_git_error`.\n- Add retrieve coverage for:\n  - successful enabled retrieve with `--output-file`, asserting:\n    - JSON stdout remains parseable\n    - new fields are present\n    - telemetry stays on stderr\n    - output file still contains the existing context text\n  - enabled zero-hit retrieve, preferably against a real empty temp memory root, asserting:\n    - `records_selected == 0`\n    - `estimated_tokens == 0`\n    - `token_budget` is present\n    - `miss_reason == \"no_eligible_records\"`\n  - disabled retrieve, asserting stable additive fields plus `status: disabled` context output\n  - branch-unavailable retrieve, asserting stable additive fields plus preserved `warning` handling and `status: unavailable` context output\n- Run before closing:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_processed_command_entry.py`\n\n7. Conflicts found\n- No factual conflicts found between the issue description and the current ref.\n\nPLAN_SELF_CHECK: WARNING: The explicit `files_touched` allowlist was not included in the planning prompt; implementation should confirm that edits stay within the three files listed above.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "8679ec6f8ee2c0767de3322945ca67988e7ae28786fdf24f0548284ebe64a1dd",
+  "lineage": {
+    "issue_number": 3473,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28003167751",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28003167751",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3473"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260623050015_8d7dd78b12",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3473,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28003167751"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3473",
+  "timestamps": {
+    "created_at": "2026-06-23T05:00:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

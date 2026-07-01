@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- HEAD: `a002b7d74e31eb3864534c9d65ef03e586bd35f9`\n- Checked-out branch: `orchestrator/project-3351`\n- Integration branch metadata: `orchestrator/project-3351`\n- Branch mismatch: none\n\nClarification interpretation\n- No `Q<ID>` clarification questions were issued, so there is no question-to-answer mapping to resolve.\n- The `/answer [auto-answered-by-orchestrator]` comment only confirms planning should proceed on the current issue text.\n\nActions taken\n- Inspected the named prompt/workflow surfaces and the current prompt-render / plan-output tests.\n- Ran the existing targeted plan-output test and review/judge prompt-render test; both pass on this ref.\n\nConflict check\n- Much of Phase C is already present on this branch: `prompts/mode-plan.txt` already has a self-check section, `.github/workflows/plan.yml` already exposes `PLAN_SELF_CHECK_ENABLED` and counts PASS/WARNING/BLOCKER, the review/judge prompts already carry explicit severity guidance, and `prompts/mode-implement.txt` already has a commit-discipline section.\n- Because of that, implementation should be delta-only: tighten exact parsing / compatibility wording only where the current branch is still short of the issue contract, and avoid prompt reflow.\n\nImplementation plan\n\n1. Files likely to change\n- Expected:\n  - `.github/workflows/plan.yml`\n  - `tests/test_plan_clarify_blocked_output.py`\n- Likely only if wording drift remains after audit:\n  - `prompts/mode-plan.txt`\n  - `prompts/references/severity-classification.txt`\n  - `prompts/mode-judge.txt`\n  - `prompts/mode-judge-review-blocked.txt`\n  - `tests/test_render_prompt_review_judge_modes.py`\n  - `tests/test_review_rereview_and_approval_rubric.py`\n  - `prompts/mode-implement.txt`\n  - `tests/test_implement_post_codex_recovery.py`\n- Audit-only / probably unchanged:\n  - `prompts/review-reviewer-checklist.txt`\n  - `prompts/review-consolidator.txt`\n\n2. Functions or modules to implement\n- In `.github/workflows/plan.yml`, update the model-facing self-check wording in the embedded planning instructions if it has drifted from `prompts/mode-plan.txt`.\n- In `.github/workflows/plan.yml`\u2019s `Parse planning output` step, normalize the self-check result into an exact state from sanitized output:\n  - PASS = exact standalone pass line\n  - WARNING = one or more warning lines, no blocker lines\n  - BLOCKER = one or more blocker lines\n  - malformed/mixed = observability-only, still fail-open unless a blocker is present\n- Preserve the existing fail-open rule: only BLOCKER reopens clarification, and only when `PLAN_SELF_CHECK_ENABLED` is truthy.\n- Keep blocked-output detection ahead of clarification/self-check routing.\n- For review/judge prompt surfaces, make the severity aliasing explicit without renaming existing schemas:\n  - reviewer/judge summaries stay `BLOCKER|MAJOR|NIT`\n  - consolidator output stays `blocker|high|med|low`\n  - `high == MAJOR`, `med|low == NIT`, `blocker == BLOCKER` when interpreting prior/consolidated evidence\n- For `prompts/mode-implement.txt`, only touch the commit-discipline section if the current wording still misses any item from Phase C; preserve the explicit non-regression note about `[ai-autofix]`.\n\n3. Data structures affected\n- Plan workflow step outputs in `plan.yml`:\n  - existing count outputs should remain\n  - an additive normalized self-check state/output is acceptable if needed for exact parsing\n- Prompt-level severity vocabulary and alias table across review/judge surfaces\n- No DB contracts, memory-write structures, or install-profile data\n\n4. API or interface changes\n- No external API changes\n- Internal workflow behavior remains additive/fail-open:\n  - PASS and WARNING continue to allow normal plan posting\n  - BLOCKER alone can reopen clarification when `PLAN_SELF_CHECK_ENABLED=true`\n- Any new workflow outputs should be additive, not a rename/removal of current keys\n\n5. Potential risks or edge cases\n- Mixed self-check output (`PASS` plus `WARNING`/`BLOCKER`) could be over-gated if treated as hard failure; keep it warning-only unless blocker lines exist.\n- Unterminated code fences must not hide blocker lines; keep the current sanitized parse path intact.\n- `PLAN_SELF_CHECK_ENABLED=false` must suppress the reopen path even if blocker lines are present.\n- Review-blocked judge prompts already ingest prior ledger rows with `severity=high|low`; alias wording must clarify interpretation without changing consolidator output format.\n- Commit-discipline wording must not bleed into review-autofix\u2019s existing `[ai-autofix]` / `[judge-fix]` conventions.\n\n6. Testing considerations\n- Extend `tests/test_plan_clarify_blocked_output.py` with PASS / WARNING / BLOCKER / malformed cases and enabled-vs-disabled gate behavior.\n- Keep `python3 tests/test_plan_clarify_blocked_output.py` green after the parser change.\n- Extend `tests/test_render_prompt_review_judge_modes.py` to pin the backward-compatible alias wording in the rendered review/judge prompts.\n- If judge prompt wording changes around prior-round severity interpretation, also run `python3 tests/test_review_rereview_and_approval_rubric.py`.\n- If `prompts/mode-implement.txt` changes, add or extend direct string assertions in `tests/test_implement_post_codex_recovery.py`.\n- Avoid broader repo validators unless the pinned toolchain is installed; the prompt/render tests are the cheapest authoritative checks for this phase.\n\nAssumptions\n- The real plan-output consumer on this ref is the `Parse planning output` step inside `.github/workflows/plan.yml`; no separate `scripts/plan_process.sh` needs to be introduced.\n- The existing fail-open consolidator parser behavior for missing severity remains intentionally out of scope and should be preserved.\n\nMissing-context notes\n- I did not inspect unrelated workflow files because the issue explicitly limits scope to Phase C prompt/parser deltas.\n- The branch already contains most of the requested Phase C text, so the implementation should optimize for minimal diff rather than broad prompt edits.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "80e243aa4728961fc08b2fa5e5662d30ad9e0f7765a5d8ab79d923f074ddff9f",
+  "lineage": {
+    "issue_number": 3355,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27593211841",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27593211841",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3355"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260616040614_3346a3545e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3355,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27593211841"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3355",
+  "timestamps": {
+    "created_at": "2026-06-16T04:06:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

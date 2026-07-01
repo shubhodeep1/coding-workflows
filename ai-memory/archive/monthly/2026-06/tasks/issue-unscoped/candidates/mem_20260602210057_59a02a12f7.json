@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Keep the matching listed wrapper files in sync... Files in scope: workflow-templates/ai-implement.yml, workflow-templates/ai-validate.yml\"\n  expected_change_site: workflow-templates/ai-implement.yml and workflow-templates/ai-validate.yml\n  confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  EVIDENCE: No modification to wrapper templates in PR DIFF or LAST RUN DIFF\n- requirement: \"Files in scope (stay inside this set): `scripts/workspace_init.sh`, `.github/workflows/implement.yml`, `.github/workflows/validate.yml`, `workflow-templates/ai-implement.yml`, `workflow-templates/ai-validate.yml`, `tests/test_workspace_init.py`\"\n  expected_change_site: workflow-templates/ai-implement.yml and workflow-templates/ai-validate.yml\n  confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: Neither `workflow-templates/ai-implement.yml` nor `workflow-templates/ai-validate.yml` appears in the changed files list; the LAST RUN DIFF also does not touch these files.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: \"Keep the matching listed wrapper files in sync... Files in scope: workflow-templates/ai-implement.yml, workflow-templates/ai-validate.yml\"\n  Expected change site: workflow-templates/ai-implement.yml and workflow-templates/ai-validate.yml\n  Evidence of absence: No modification to wrapper templates in PR DIFF or LAST RUN DIFF\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Requirement: \"Files in scope (stay inside this set): `scripts/workspace_init.sh`, `.github/workflows/implement.yml`, `.github/workflows/validate.yml`, `workflow-templates/ai-implement.yml`, `workflow-templates/ai-validate.yml`, `tests/test_workspace_init.py`\"\n  Expected change site: `workflow-templates/ai-implement.yml` and `workflow-templates/ai-validate.yml`\n  Evidence of absence: The PR changed files list contains 7 files: `.github/workflows/ci.yml`, `.github/workflows/implement.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/validate.yml`, `scripts/workspace_init.sh`, `tests/test_workspace_init.py`. Neither `workflow-templates/ai-implement.yml` nor `workflow-templates/ai-validate.yml` appears in the changed files list. The LAST RUN DIFF also does not touch these files.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: \"Add `scripts/workspace_init.sh`. Wire reusable workspace initialization into implement and validate. [...] Files in scope (stay inside this set): `scripts/workspace_init.sh`, `.github/workflows/implement.yml`, `.github/workflows/validate.yml`, `workflow-templates/ai-implement.yml`, `workflow-templates/ai-validate.yml`, `tests/test_workspace_init.py`\"\n  Expected change site: workflow-templates/ai-implement.yml and workflow-templates/ai-validate.yml\n  Evidence of absence: No diff hunk (in PR DIFF or LAST RUN DIFF) touches either workflow-templates/*.yml file; the reusable wrappers were not updated to forward WORKSPACE_REUSE_ENABLED (or related outputs/inputs) despite explicit scope/guardrails in the linked issue.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "896854649ffaf244d084dc5c18d5f4c3d7593c33bd1767143e74322e345ebc83",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3065,
+    "run_id": "26847252046",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26847252046",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260602210057_59a02a12f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3065,
+    "run_id": "26847252046"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-02T21:00:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

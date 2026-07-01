@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3070,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3070\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3071\",\"pr_number\":3071,\"branch\":\"ai/issue-3070\",\"run_id\":\"26858517903\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/26858517903\",\"changed_files\":[\".github/workflows/implement.yml\",\"ai-memory/schemas/run_ledger_entry.v1.json\",\"scripts/ledger_emit_substate.sh\",\"scripts/memory_helpers.sh\",\"scripts/render_prompt.sh\",\"scripts/review_apply_fixes.sh\",\"scripts/review_conflict_resolve.sh\",\"scripts/review_rb_judge.sh\",\"scripts/review_run_reviewers.sh\",\"scripts/self_heal_validation.sh\",\"scripts/validate_process.sh\",\"tests/test_run_substate_ledger.py\"]}",
+  "fingerprint": "c600e1653454829f098550245dc8a605d0223d44e8fb568594006d077ed436ed",
+  "lineage": {
+    "issue_number": 3070,
+    "parent_ids": [],
+    "pr_number": 3071,
+    "run_id": "26858517903",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26858517903",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3071"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260603020736_bff79acd78",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3070,
+    "level": "run",
+    "pr_number": 3071,
+    "run_id": "26858517903"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3070: https://github.com/shubhodeep1/coding-workflows/pull/3071",
+  "timestamps": {
+    "created_at": "2026-06-03T02:07:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

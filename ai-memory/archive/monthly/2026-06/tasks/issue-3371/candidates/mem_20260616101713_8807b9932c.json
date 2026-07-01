@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3371,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3371\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3373\",\"pr_number\":3373,\"branch\":\"ai/issue-3371\",\"run_id\":\"27610143393\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/27610143393\",\"changed_files\":[\"docs/INVENTORY.md\",\"tests/inventory_parity.py\"]}",
+  "fingerprint": "34850a2b40188e1c177b59b808cbf5ef074888e376ed69d2d4235e584b0e314f",
+  "lineage": {
+    "issue_number": 3371,
+    "parent_ids": [],
+    "pr_number": 3373,
+    "run_id": "27610143393",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27610143393",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3373"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260616101713_8807b9932c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3371,
+    "level": "run",
+    "pr_number": 3373,
+    "run_id": "27610143393"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3371: https://github.com/shubhodeep1/coding-workflows/pull/3373",
+  "timestamps": {
+    "created_at": "2026-06-16T10:17:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

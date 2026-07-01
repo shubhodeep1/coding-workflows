@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `a89fac4eaeab4b2202ac632fe2b8c701f4dec365` on `orchestrator/project-3042`\n\nRepresentative pattern to follow:\n- `scripts/workspace_init.sh`\n- `tests/test_workspace_init.py`\nThese already define the workspace env contract and the repo\u2019s preferred style for shell-helper contract tests plus workflow-step assertions.\n\nFiles likely to change\n- `scripts/workspace_safety_check.sh` [new]\n- `.github/workflows/implement.yml`\n- `.github/workflows/review_autofix.yml`\n- `scripts/validate_process.sh`\n- `scripts/review_apply_fixes.sh`\n- `scripts/review_conflict_resolve.sh`\n- `tests/test_workspace_safety_check.py` [new]\n\nFunctions / modules to implement\n- `scripts/workspace_safety_check.sh`\n  - Add a small env-driven guard that:\n    - returns 0 immediately unless `WORKSPACE_REUSE_ENABLED` is truthy\n    - validates `WORKSPACE_KEY` against `^[A-Za-z0-9._-]+$`\n    - resolves `${RUNNER_TEMP}/workspaces` and `WORKSPACE_PATH` canonically\n    - verifies the resolved `WORKSPACE_PATH` stays under the workspace root\n    - verifies `pwd -P` matches the resolved `WORKSPACE_PATH`\n    - emits `workspace_safety_violation` and exits 78 on any enabled-path violation\n- `.github/workflows/implement.yml`\n  - Stage `workspace_safety_check.sh` with the other fetched support scripts\n  - Invoke it immediately before each Codex launch in this workflow:\n    - main implementation attempt\n    - post-Codex repair attempt\n    - issue-summary Codex call\n- `.github/workflows/review_autofix.yml`\n  - Add the helper to the bootstrap script manifest(s)\n  - Add it to the late re-stage path used before conflict resolution so `review_conflict_resolve.sh` can still find it after cleanup\n- `scripts/validate_process.sh`\n  - Hook the guard into `run_validate_codex_attempt()` so both discover and diagnose launches are covered\n  - Preserve fail-open legacy behavior by letting the helper no-op when workspace reuse is off\n  - Treat exit 78 as a hard stop, not a retryable Codex failure\n- `scripts/review_apply_fixes.sh`\n  - Hook the guard into `run_editor_codex_attempt()`\n  - Ensure a guard failure aborts the editor flow instead of being retried / downgraded into fallback summary handling\n- `scripts/review_conflict_resolve.sh`\n  - Run the guard before each resolver Codex attempt inside the retry loop\n  - Treat exit 78 as terminal for the run, not as another retryable resolver failure\n- `tests/test_workspace_safety_check.py`\n  - Add direct helper tests\n  - Add static contract checks for the new implement/review staging/invocation points that are in scope\n\nData structures affected\n- Environment-variable contract only:\n  - `WORKSPACE_REUSE_ENABLED`\n  - `WORKSPACE_PATH`\n  - `WORKSPACE_KEY`\n  - `RUNNER_TEMP`\n- Support-script fetch lists in `implement.yml` and `review_autofix.yml`\n- Exit-status / stderr contract:\n  - message token: `workspace_safety_violation`\n  - exit code: `78`\n- No persisted schema, API payload, or memory contract changes\n\nAPI / interface changes\n- New internal helper: `scripts/workspace_safety_check.sh`\n- Codex-launching paths gain a new preflight invariant when workspace reuse is enabled\n- Legacy non-W1 paths remain a no-op because the helper exits successfully when reuse is disabled or absent\n\nRisks / edge cases\n- Main behavioral risk: current retry loops would otherwise treat a non-zero guard exit like a normal Codex failure; the implementation should short-circuit exit 78 instead of retrying\n- `WORKSPACE_KEY` is normally sanitized by `workspace_init.sh`, so the invalid-key case is mostly a tamper/miswire guard; tests should inject bad env directly\n- Canonical path checks should use resolved paths plus `pwd -P`, not raw strings, to avoid symlink false negatives/positives\n- The implement workflow has 3 Codex launches, not 1; the repair and summary launches are easy to miss\n- Conflict note: `.github/workflows/validate.yml` currently has an explicit fetched-script list that includes `workspace_init.sh` and `validate_process.sh` but not the new helper. That file is outside this issue\u2019s allowlist, so consumer-repo validate bootstrapping may still need follow-up unless the existing validate path already picks up new helpers another way\n\nAssumptions\n- On a reuse-enabled path, missing/invalid workspace safety inputs should fail closed with exit 78 rather than silently bypass\n- Exit 78 should be treated as a safety violation, not as a retryable model/runtime error\n\nTesting considerations\n- Create `tests/test_workspace_safety_check.py` in the same direct-run style as `tests/test_workspace_init.py`\n- Cover at least:\n  - helper exists and is executable\n  - gated no-op when `WORKSPACE_REUSE_ENABLED=false`\n  - workspace-root escape fails with `workspace_safety_violation` and exit 78\n  - invalid `WORKSPACE_KEY` fails with `workspace_safety_violation` and exit 78\n  - `pwd -P` / `WORKSPACE_PATH` mismatch fails on enabled paths\n  - static assertions that:\n    - `implement.yml` stages the helper and guards all in-scope Codex launches\n    - `review_autofix.yml` bootstraps/restages the helper for editor/resolver paths\n    - `validate_process.sh`, `review_apply_fixes.sh`, and `review_conflict_resolve.sh` contain the guard hook at their shared Codex call sites\n\nMissing-context note\n- The only material scope mismatch is validate bootstrap staging in `.github/workflows/validate.yml`; everything else needed for W3 appears to fit inside the requested file set.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "2e7709a8b77ce772e1694e7c7c09c76a13318dbe312e04335d1e61663f11ae90",
+  "lineage": {
+    "issue_number": 3094,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26976217485",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26976217485",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3094"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260604200828_888857a13c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3094,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26976217485"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3094",
+  "timestamps": {
+    "created_at": "2026-06-04T20:08:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1\nWhich workflow/component should be changed?\nChoices:\nA. Clarify / plan workflow behavior\nB. Implement / review_autofix behavior\nC. Orchestrate / validate behavior\nD. Another specific workflow, script, or file \u2014 name the exact target. (RECOMMENDED)\nQ2\nWhat kind of improvement do you want in that target area?\nChoices:\nA. Fix a bug or regression \u2014 describe the current behavior and the expected behavior. (RECOMMENDED)\nB. Reduce runtime / cost / API usage \u2014 describe what is too slow or expensive.\nC. Reduce noise / retries / alerts \u2014 describe which messages or loops are undesirable.\nD. Improve docs / usability / maintainability \u2014 describe what is confusing or hard to use.\nE. Other \u2014 describe the exact behavior that should change. (RECOMMENDED)\nQ3\nWhat concrete example or acceptance check should planning use?\nChoices:\nA. A specific failing workflow run, issue, PR, or log snippet (from this repo or a consumer repo) that should no longer fail. (RECOMMENDED)\nB. A measurable target (for example: faster runtime, fewer alerts, or fewer API calls).\nC. A before/after example of the expected output, comment, label, or file change.\nD. No concrete example available.",
+  "fingerprint": "089f62b0c0a39affa84b41c3e49afb05f794e7a0bba2c59e19a2b97e964f17b8",
+  "lineage": {
+    "issue_number": 3236,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27136456658",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27136456658",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260608120904_f1f2d717eb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3236,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27136456658"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #3236 needs clarification",
+  "timestamps": {
+    "created_at": "2026-06-08T12:09:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

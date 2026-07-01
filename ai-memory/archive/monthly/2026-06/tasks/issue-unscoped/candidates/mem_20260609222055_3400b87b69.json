@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1506-1512 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5]\n  PROBLEM: The helper only matches scheme-ful GitHub issue URLs and misses scheme-less `github.com/owner/repo/issues/N` references that the issue-status contract treats as valid.\n  WHY: Both reviewers report the fallback parser regresses linked-issue detection for bare GitHub URLs, so it can fail where the documented contract would match.\n- scripts/review_collect_pr_metadata.sh:181-212 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The temp-file JSON accumulation path can leave `_fallback_json_tmp` behind because cleanup is only handled on the success path and is gated by the `-s` check.\n  WHY: The reviewer identified two cleanup omissions in the same temp-file flow, which can leave empty or partially used temp files on disk.\n- scripts/review_collect_pr_metadata.sh:181 (prior) / 174 (after last_run_diff) | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The old body-text fallback accumulated issue objects by repeatedly invoking `jq` inside the loop.\n  WHY: The reviewer flagged unnecessary subprocess overhead on every metadata collection as a performance issue.\n- scripts/review_collect_pr_metadata.sh:129 (prior) / 131 (after last_run_diff) | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The whitespace check used a subshell `printf '%s' | tr -d '[:space:]'`.\n  WHY: The reviewer flagged the extra process spawning as avoidable per-run overhead.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/gh_helpers.sh: lines 1511-1512 (the `extract_repo_scoped_issue_refs_from_text` Python patterns) | confidence=2\n  PROBLEM: The shared strict fallback helper matches `https?://github.com/owner/repo/issues/N` (with scheme) but does NOT match `github.com/owner/repo/issues/N` (scheme-less).\n  WHY: The PR claims to align with the `issue_pr_status.yml` contract, which matches both forms, so a scheme-less URL in a PR body would no longer be detected.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_collect_pr_metadata.sh: Lines 181-212 (temp-file accumulation logic) | confidence=4\n  PROBLEM: Missing cleanup guard if tmp file creation succeeds but later steps fail.\n  WHY: The code accumulates issue objects to a temp file, then runs `jq -s '.'` on it; if any later step fails before removal, the temp file may be left behind.\n- scripts/review_collect_pr_metadata.sh: Line 208 `rm -f \"${_fallback_json_tmp}\"` | confidence=4\n  PROBLEM: Only removed inside the `if [ -s \"${_fallback_json_tmp}\" ]` block.\n  WHY: If `_fallback_json_tmp` is created but remains empty or fails the `-s` check, it won't be removed in this section.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/gh_helpers.sh: lines 1506-1508 (extract_repo_scoped_issue_refs_from_text function) | confidence=4\n  PROBLEM: The helper's URL pattern `rf\"\\bhttps?://github\\.com/{repo_re}/issues/(\\d+)\\b\"` does not match scheme-less references like `github.com/owner/repo/issues/123`.\n  WHY: When a PR title or body contains `github.com/owner/repo/issues/123` without an `https://` or `http://` prefix, the helper will not detect it as a linked issue even though `issue_pr_status.yml` treats it as valid.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_collect_pr_metadata.sh: 181 (prior) / 174 (after last_run_diff) | confidence=3\n  PROBLEM: The old body-text fallback accumulated issue objects by repeatedly calling `jq --argjson` inside a while-read loop.\n  WHY: The reviewer identified unnecessary process overhead on every review run because the cost scales linearly with the number of fallback issues.\n- scripts/review_collect_pr_metadata.sh: 129 (prior) / 131 (after last_run_diff) | confidence=2\n  PROBLEM: The whitespace test used `printf '%s' | tr -d '[:space:]'` in a subshell.\n  WHY: The reviewer identified two extra processes on every metadata collection as avoidable overhead.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "dd470184544e02a41ce50737fcb60a61e2c2d7a1cc7f0a17db99ba2492caf60e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3255,
+    "run_id": "27237790963",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27237790963",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260609222055_3400b87b69",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3255,
+    "run_id": "27237790963"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-09T22:20:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for `bff7a8ae671ca64f0949109e7a0550945d17ef4d` on `orchestrator/project-3323` (integration-branch metadata matches checkout)\n\nClarification mapping\n- No `Q1`/`Q2` questions were asked.\n- `/answer [auto-answered-by-orchestrator]` only confirmed continuation.\n\nActions taken\n- Reviewed `scripts/check_integration_pr_readiness.py`, `tests/test_check_integration_pr_readiness.py`, and the caller step in `.github/workflows/integration-pr-readiness.yml`.\n- Verified the issue description matches the code: the unchecked-sub-issues branch currently emits `::error::` annotations while still returning success after posting the commit status.\n\nAssumptions\n- \u201cIntentional advisory path\u201d refers only to the branch where some tracked sub-issues are still unchecked.\n- The zero-checkbox fail-closed path and commit-status-post failure path should remain true error paths.\n\nMissing-context notes\n- No explicit `files_touched` allowlist was included in the prompt, so this plan keeps scope to the script and its dedicated tests.\n\nConflicts\n- No issue/code conflicts found.\n\n## 1. Files likely to change\n- `scripts/check_integration_pr_readiness.py`\n  - Narrow edit in `main()`\u2019s unchecked-sub-issues branch (currently around lines 248\u2013259).\n- `tests/test_check_integration_pr_readiness.py`\n  - Add/assert stderr severity expectations for the intentional not-ready path.\n  - Tighten coverage so the true fail-closed path stays error-level.\n- No workflow YAML changes expected; `.github/workflows/integration-pr-readiness.yml` already uses the correct CLI surface.\n\n## 2. Functions or modules to implement\n- `scripts/check_integration_pr_readiness.py::main`\n  - Replace only the `::error::` annotations in the \u201cunchecked sub-issues remain\u201d branch with advisory-level annotations (`::warning::` and/or `::notice::`).\n  - Keep all readiness decisions unchanged:\n    - same `failure` commit status for unchecked items\n    - same context name `orchestrator/integration-pr-not-ready`\n    - same override-label behavior\n    - same exit code (`0`) for the intentional not-ready case\n  - Leave `_post_commit_status_or_error()` unchanged so real posting failures still emit `::error::` and return non-zero.\n- `tests/test_check_integration_pr_readiness.py`\n  - Update `test_main_fails_when_any_tracking_checkbox_remains_unchecked` (or add a sibling test) to capture stderr and assert the branch is advisory, not error-level.\n  - Strengthen the zero-checkbox test so that branch still explicitly behaves like an error-level fail-closed path.\n\n## 3. Data structures affected\n- No persistent data/schema changes.\n- No change to the commit-status payload shape:\n  - `context`\n  - `state`\n  - `description`\n  - `target_url`\n- Only the human-facing GitHub Actions annotation strings change severity in the unchecked-items advisory path.\n\n## 4. API or interface changes\n- No CLI argument changes for `scripts/check_integration_pr_readiness.py`.\n- No workflow interface changes.\n- No change to override label semantics (`ai:override-incomplete-merge`).\n\n## 5. Potential risks or edge cases\n- Do not accidentally downgrade true errors:\n  - zero-checkbox fail-closed branch\n  - commit-status POST failure branch\n- Do not change readiness policy:\n  - checkbox parsing\n  - unchecked-item preview text/truncation\n  - status context name\n  - status success/failure mapping\n- Keep annotation output on stderr; only the severity token should change.\n\n## 6. Testing considerations\n- Run the dedicated unit test already wired in CI:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_integration_pr_readiness.py`\n- Confirm:\n  - unchecked sub-issues => rc `0`, posted `failure` status unchanged, advisory annotation(s) instead of `::error::`\n  - zero checkbox items => rc `0`, posted `failure` status unchanged, still error-level\n  - commit-status POST failure => rc `1`, still emits the existing readiness-posting error\n- Existing orchestrator/poller coverage already protects the readiness status context/payload, so broader workflow changes should not be needed.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "07a3b73b07b5d09df37707de431019573d1d0b68e45cb03ae1fe8d5ca5fb4c3a",
+  "lineage": {
+    "issue_number": 3329,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27468419065",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27468419065",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3329"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260613134550_e6d5235352",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3329,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27468419065"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3329",
+  "timestamps": {
+    "created_at": "2026-06-13T13:45:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

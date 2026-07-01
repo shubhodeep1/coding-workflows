@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_slop_scan_local.py:21-33 | severity=major | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: `_temporary_test_dir()` can still raise an uncaught `PermissionError` in the fallback `TemporaryDirectory(prefix=prefix, dir=fallback_dir)` path, crashing the tmp_path-dependent tests when neither fallback directory is writable.\n  WHY: The fallback `TemporaryDirectory` call sits outside the `try/except`; runtime reports show 4 tests erroring with `PermissionError`, and severity disagreement exists because three reviewers marked MAJOR while one marked NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add the two plan-specified fixtures and a focused detector test.\"\n  expected_change_site: tests/test_slop_scan_local.py, tests/fixtures/slop_scan/, .github/workflows/ci.yml\n  confidence=[5]\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_20]\n  EVIDENCE: None \u2014 fixtures, test module, CI wiring, and workflow-level slop-scan integration are all present; x-ai additionally notes the detector test runs via explicit `main()` harness + CI allowlist and that no repo-wide lint gate was added.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_slop_scan_local.py:21-33 | severity=MAJOR | confidence=5\n  PROBLEM: The fallback `tempfile.TemporaryDirectory(prefix=prefix, dir=fallback_dir)` path is outside the `try/except`, so `_temporary_test_dir()` can raise an uncaught `PermissionError` when the chosen fallback directory is unwritable. (2 related items)\n  WHY: In this runner, `os.access()` can return true even though directory creation still fails, and the helper has no graceful degradation path when both `REPO_ROOT` and `RUNNER_TEMP` are unavailable.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_slop_scan_local.py:21-33 | severity=MAJOR | confidence=5\n  PROBLEM: The fallback `tempfile.TemporaryDirectory(prefix=prefix, dir=fallback_dir)` call is outside the `try/except`, so an unwritable fallback directory can still raise `PermissionError` and fail the tmp_path tests.\n  WHY: Running `python3 tests/test_slop_scan_local.py` shows 4 tests erroring with `PermissionError`; the tests that do not require `_temporary_test_dir()` pass.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_slop_scan_local.py:21-33 | severity=NIT | confidence=3\n  PROBLEM: The final `return tempfile.TemporaryDirectory(prefix=prefix, dir=fallback_dir)` is not wrapped in its own try/except, so a `PermissionError` can still bubble out if the fallback directory becomes unavailable or unwritable after the initial check.\n  WHY: If the primary temp fails and `os.access(REPO_ROOT, os.W_OK | os.X_OK)` is true, the second `TemporaryDirectory` call can still raise `PermissionError`, causing the four tmp_path-dependent tests to fail at CI runtime.\n- Requirement: \"Add the two plan-specified fixtures and a focused detector test.\"\n  Expected change site: tests/test_slop_scan_local.py, tests/fixtures/slop_scan/, .github/workflows/ci.yml\n  Evidence of absence: None \u2014 fixtures, test module, CI wiring, and workflow-level slop-scan integration are all present. The one remaining TODO noted by editors was a typed-exception catch-loss detector; this was explicitly deferred by the previous editor run.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_slop_scan_local.py:21-33 | severity=MAJOR | confidence=4\n  PROBLEM: The fallback branch still risks `PermissionError` in runner environments if `RUNNER_TEMP` is unavailable or if `tempfile.TemporaryDirectory(..., dir=fallback_dir)` fails after the permission check.\n  WHY: Multiple reviewers reproduced `PermissionError: [Errno 13]` when the workspace root is read-only, and the test harness crashes instead of skipping or emitting a clear sentinel.\n- Requirement: \"Add the two plan-specified fixtures and a focused detector test. Keep scope limited to the listed workflow, script, prompt, docs, and fixtures; do not introduce a repo-wide lint gate or a second review path.\"\n  Expected change site: tests/test_slop_scan_local.py + wiring in .github/workflows/ci.yml (and supporting updates in review_autofix.yml, agents.md, README.md, consolidator prompt)\n  Evidence of absence: All deliverables are now present \u2014 fixtures exist, the detector test runs via explicit `main()` harness + CI allowlist, slop-scan wiring is fail-open with sentinel, runtime artifact is cleaned before commit, and consolidator applies the \u201cwhat NOT to fix\u201d guard. No repo-wide lint gate was added.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "0d326823422af609700e8b9a0a78f8257251e3d52be834aeccdec74906c9f86d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3512,
+    "run_id": "28198765264",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28198765264",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260625211649_02461d6d19",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3512,
+    "run_id": "28198765264"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-25T21:16:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:entire file (mode only) | severity=medium | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: File mode changed from 644 to 755 with zero content change.\n  WHY: It violates linked-issue #3085's \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file\" constraint and persists outside the last autofix run.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file\"\n  expected_change_site: N/A \u2014 constraint violation, not missing implementation\n  confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_20]\n  EVIDENCE: PR diff shows `scripts/files_touched_scope_guard.py` (mode change from 100644 to 100755 with no content diff) in addition to `tests/e2e_smoke_canary.txt`; the extraneous change remains after the last autofix run.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file\"\n  Expected change site: N/A \u2014 constraint violation, not missing implementation\n  Evidence of absence: PR DIFF shows two changed files: `tests/e2e_smoke_canary.txt` (correct) and `scripts/files_touched_scope_guard.py` (mode change from 100644 to 100755 with no content diff). The second file is out of scope for Issue #3085. The last run diff did not remove this out-of-scope change.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/files_touched_scope_guard.py:entire file (mode only) | severity=unstate\ufeffd | confidence=unstate\ufeffd\n  PROBLEM: File mode changed from 644 to 755 (executable) with zero content change vs. prior state.\n  WHY: Violates linked-issue #3085 constraint (\"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file\") and smoke-test's explicit guard; this change was not in LAST_RUN_DIFF (which only restored canary) and persists from earlier PR diff.\n- Requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\" and \"Overwrite the entire file... exactly these three lines... no more, no less, with a trailing newline.\"\n  Expected change site: tests/e2e_smoke_canary.txt only (no other files per constraints).\n  Evidence of absence: PR_CHANGED_FILES lists scripts/files_touched_scope_guard.py (mode-only change present in ORIGINAL_PR_DIFF and still reflected in current ls -l); canary now matches exactly (verified via cat) but non-canary file was touched earlier.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "38c65f7c887452100411a0aa4219cb1048ae0f9f1036c5a2b75c2d3fa59844b9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3089,
+    "run_id": "26943683069",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26943683069",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260604094900_75edec692b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3089,
+    "run_id": "26943683069"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-04T09:49:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

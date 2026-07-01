@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n- HEAD `35279b2bd7da492edc3c87b4fc8862c1e5bc7475` on `orchestrator/project-3408`.\n- Integration branch metadata also says `orchestrator/project-3408`; mismatch is false.\n\nClarification interpretation\n- No Q1/Q2 clarification batch was asked.\n- `/answer [auto-answered-by-orchestrator]` adds no new scope; proceed on the stated parity-repair task.\n\nAssumption\n- Treat `.github/ai/label_contract.v1.json` as the canonical source. `scripts/ai_labels.py::cmd_sync_labels()` reads from it already, and the `ai:destructive-blocked` wording in `.github/workflows/implement.yml` already matches the contract, so the smallest safe fix is to align the shell mirror to the contract.\n\n1. Files likely to change\n- `scripts/label_helpers.sh`\n  - Update `_AI_LABEL_DESCS[\"ai:resolver-escalated\"]` to exactly:\n    `Integration resolver hit escape threshold; redispatch pauses until PR head changes`\n  - Update `_AI_LABEL_DESCS[\"ai:destructive-blocked\"]` to exactly:\n    `Implementation blocked for mass/destructive deletions; redispatch waits for human review`\n- No change expected to `.github/ai/label_contract.v1.json`, `scripts/ai_labels.py`, or tests.\n\n2. Functions/modules to implement\n- `scripts/label_helpers.sh::ensure_label_exists()` remains unchanged logically; only its backing `_AI_LABEL_DESCS` mirror entries change.\n- Leave `scripts/ai_labels.py::cmd_sync_labels()` unchanged; it is the reader of the canonical contract, not the bug source.\n\n3. Data structures affected\n- Shell associative array `_AI_LABEL_DESCS`.\n- Contract JSON `labels` map is verification-only.\n- Preserve existing label names and colors (`b60205` for both labels).\n\n4. API or interface changes\n- None.\n- Preserve `ensure_label_exists <label_name> [repo]`.\n- Preserve sync-label dry-run semantics and output shape.\n\n5. Potential risks / edge cases\n- This is byte-for-byte parity work: punctuation, wording, tense, and separator differences will still fail parity.\n- `tests/test_ai_labels.py` parses `label_helpers.sh` with regex, so keep the existing one-line `[\"label\"]=\"description\"` entry format.\n- Do not \u201cfix\u201d this by moving the contract to the shell wording; that would create unnecessary churn because other code paths already align with the contract text.\n\n6. Testing considerations\n- Run `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_labels.py`.\n- Run the CI-equivalent dry-run smoke:\n  `PYTHONDONTWRITEBYTECODE=1 python3 scripts/ai_labels.py sync-labels --contract-file .github/ai/label_contract.v1.json --repo \"${GITHUB_REPOSITORY}\" --dry-run`\n  and verify the JSON shape stays `created|updated|unchanged|errors`.\n- No test edits should be needed.\n\nConflicts noted\n- Confirmed current repo divergence: colors already match, but descriptions differ between `.github/ai/label_contract.v1.json` and `scripts/label_helpers.sh` for `ai:resolver-escalated` and `ai:destructive-blocked`.\n\nMissing-context notes\n- None.\n\nPre-execution self-check\n- Scope is isolated, branch context matches, and no external/private input is required.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "6881b092fd04d7d0f6af5824bce4dce4d994834079e5a017ba1a23d831b709a8",
+  "lineage": {
+    "issue_number": 3422,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27921624585",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27921624585",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3422"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260622000141_3b82333c1b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3422,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27921624585"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3422",
+  "timestamps": {
+    "created_at": "2026-06-22T00:01:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

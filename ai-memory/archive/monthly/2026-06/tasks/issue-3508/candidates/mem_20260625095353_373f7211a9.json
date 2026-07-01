@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref:\n- `5e3783bbc24ffb2c94845e9a9d3d458d2f2688b0`\n- Branch: `orchestrator/project-3496`\n- Integration metadata matches the checked-out ref.\n\nClarification mapping:\n- No Q1/Q2 were asked.\n- `/answer [auto-answered-by-orchestrator]` only confirmed continuation.\n\nAutomation / wiring:\n- Change type: existing prompt + existing diagnose prompt-scaffolding + existing test only.\n- Existing entrypoint: `.github/workflows/implement.yml` \u2192 `scripts/implement_diagnose_post_codex_failure.sh` \u2192 `prompts/mode-implement-diagnose.txt`.\n- New scheduler wiring: none.\n- New supervisor: none.\n- DB gate / migration work: n/a.\n- `docs/scripts-pending-removal.md`: no entry needed.\n\nActions reviewed:\n- Reviewed the current diagnose prompt, the diagnose caller\u2019s fallback/static prompt text, the current diagnose round-trip test, and the existing Phase D design note.\n\nRepresentative pattern to follow:\n- `tests/test_implement_post_codex_recovery.py::test_diagnose_prompt_contract_round_trip_and_fixup_metadata` is the best existing end-to-end contract pattern for this path.\n\nConflicts detected:\n- `DIAGNOSE_TRACE_REQUIRED` is referenced by the issue/design note, but there is no current repo wiring for it in the prompt contract, workflow env, or diagnose script.\n- The design note\u2019s literal `BLOCKED: insufficient diagnostic evidence` idea conflicts with the current caller, which expects exactly one JSON object and extracts it by `status`.\n- `scripts/implement_diagnose_post_codex_failure.sh` still hardcodes the old four-key schema in its fallback/raw prompt scaffolding; changing only `prompts/mode-implement-diagnose.txt` would leave contradictory instructions, and the current diagnose test harness exercises that script path.\n\nImplementation plan\n\n1. Files likely to change\n- `prompts/mode-implement-diagnose.txt`\n  - Add the Iron Law rules.\n  - Require traced evidence + stated hypothesis before fix proposals.\n  - Extend the JSON schema with `evidence_trace` and `hypothesis`.\n- `scripts/implement_diagnose_post_codex_failure.sh`\n  - Update only the diagnose prompt scaffolding strings (fallback prompt + generic static-prefix key list) so the assembled prompt matches the new schema.\n  - Do **not** change parsing, retry behavior, labels, or log-prefix handling.\n- `tests/test_implement_post_codex_recovery.py`\n  - Add one narrow diagnose-contract regression beside the existing round-trip test.\n- Intentionally not changing unless scope expands:\n  - `.github/workflows/implement.yml`\n  - `prompts/mode-implement-diagnose-continuation.txt`\n  - `prompts/contracts/mode-implement-diagnose.yml`\n  - README/docs\n\n2. Functions / modules to implement\n- In `prompts/mode-implement-diagnose.txt`:\n  - Add an explicit \u201cIron Law of Investigation\u201d rule block.\n  - Require every fix proposal to include:\n    - a traced evidence path\n    - a stated hypothesis supported by that trace\n  - Keep the insufficiency path inside the existing JSON contract (`infeasible` + diagnosis), not raw `BLOCKED:` prose.\n  - Add stop-at-3 escalation guidance as prompt text only; do not alter actual repair-loop behavior.\n- In the same prompt\u2019s issue-body requirements:\n  - Require trace/hypothesis to appear inside each `fix_issues[].body`, because downstream implement runs only see the created issue body.\n- In `scripts/implement_diagnose_post_codex_failure.sh`:\n  - Align the fallback heredoc and generic static-prefix schema summary with the new top-level fields.\n  - Leave `extract_last_json_with_key`, `needs_fixes` handling, and fix-up issue creation logic unchanged.\n- In `tests/test_implement_post_codex_recovery.py`:\n  - Add a targeted test that verifies the assembled diagnose prompt contains the new contract language.\n  - Feed a synthetic diagnose JSON containing `evidence_trace` and `hypothesis` and assert those fields survive result extraction without breaking existing fix-up creation.\n\n3. Data structures affected\n- Diagnose JSON gains two top-level fields:\n  - `evidence_trace`: array of `{file, line, function, observation}` entries\n  - `hypothesis`: string\n- Existing fields remain unchanged:\n  - `status`\n  - `diagnosis`\n  - `fix_issues`\n  - `harness_fixes`\n\n4. API / interface changes\n- Internal model-output contract only:\n  - diagnose JSON now includes `evidence_trace` and `hypothesis`\n- No GitHub API changes.\n- No workflow input/output changes.\n- No env-var rename/addition planned in this phase.\n\n5. Potential risks / edge cases\n- A raw `BLOCKED:` output would be treated as diagnose failure by the current caller; keep output JSON-only.\n- If the new fields live only at top level and are not echoed into each fix-up issue body, the cold-start follow-up issue loses the trace/hypothesis context.\n- There is no current machine-readable retry-count input, so \u201cstop at 3 failed fixes\u201d must stay guidance tied to the already-exhausted diagnose entrypoint, not a new counter/state feature.\n- Do not rename existing keys/statuses/log prefixes; downstream shell/JQ logic still depends on them.\n\n6. Testing considerations\n- Primary targeted test:\n  - `tests/test_implement_post_codex_recovery.py`\n- Verify:\n  - assembled stdin prompt contains Iron Law + `evidence_trace` + `hypothesis` + stop-at-3 guidance\n  - result JSON preserves extra top-level fields\n  - existing `fix_issues`-driven issue creation still works unchanged\n- Secondary cheap regression:\n  - core prompt render tests if placeholder structure is touched\n\nAssumptions made\n- \u201cKeep `DIAGNOSE_TRACE_REQUIRED=true`\u201d means hard-require trace/hypothesis in this phase without introducing new toggle plumbing.\n- \u201cPrompt-only\u201d allows prompt-assembly string edits inside `scripts/implement_diagnose_post_codex_failure.sh`, but forbids changing retry behavior, statuses, labels, or log prefixes.\n\nMissing-context notes\n- I did not inspect `pre_assembled_static.txt` per the planning instructions; this plan is based on the explicit prompt file plus the tested script fallback/static-prefix path.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e10b0794ee4110207c32474c3d85e6df40b281802f609f434ab4c5f5e29a9fd9",
+  "lineage": {
+    "issue_number": 3508,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28161595810",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28161595810",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3508"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260625095353_373f7211a9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3508,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28161595810"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3508",
+  "timestamps": {
+    "created_at": "2026-06-25T09:53:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

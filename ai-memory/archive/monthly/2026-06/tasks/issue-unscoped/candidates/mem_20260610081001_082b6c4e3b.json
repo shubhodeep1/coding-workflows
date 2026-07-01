@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `.github/workflows/test-and-mark-stable.yml`:1184-1213 | flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The ISO-8601 regex validation is applied only in the jq extraction, but subsequent usage in `wait-review` (lines 1383-1429) doesn't validate that the stored timestamp is actually correctly formatted before using it in date comparisons with `created_at` and `updated_at`.\n  WHY: Malformed non-empty values could still cause the `in_progress` filtering logic to malfunction.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- `.github/workflows/test-and-mark-stable.yml`:1184-1213\n  PROBLEM: The ISO-8601 regex validation is applied only in the jq extraction, but subsequent usage in `wait-review` (lines 1383-1429) doesn't validate that the stored timestamp is actually correctly formatted before using it in date comparisons with `created_at` and `updated_at`.\n  WHY: The jq filter `select(type == \"string\" and test(\"^[0-9]{4}-[0-9]{2}-[0-`\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "6d309f50b9015dc0740b56d4aab66ada602abdf3666c83350b92f3fa83b8dff6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3271,
+    "run_id": "27260525159",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27260525159",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260610081001_082b6c4e3b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3271,
+    "run_id": "27260525159"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-10T08:10:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

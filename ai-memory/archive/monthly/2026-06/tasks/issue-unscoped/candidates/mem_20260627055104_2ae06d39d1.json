@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:84,1113 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` is listed in both the detailed Variables table and the Required Variables summary table.\n  WHY: Multiple reviewers reported this as a documentation duplication / convention issue, and the highest reported severity was NIT rather than a runtime defect.\n- agents.md:~539-543 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` row is placed mid-table in `agents.md` instead of being appended at the bottom.\n  WHY: This violates the append-at-bottom documentation convention the reviewer says is used to reduce merge-conflict churn.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: README.md\n  Line or code reference: Lines 84, 1113\n  Problem: The consensus finding claims duplicate entries for `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` in the detailed Variables table (line 84) and Required Variables summary table (line 1113) is a false positive. This pattern is consistent with existing documentation - other flags like `AGENTS_MD_MATERIALITY_ENABLED`, `AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED`, `AGENTS_MD_MATERIALITY_MODEL`, and `AGENTS_MD_MATERIALITY_REASONING` also appear in both tables. The two tables are not mutually exclusive in practice.\n  Why it fails at runtime: Not a runtime issue. This is documentation convention alignment, not a defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: README.md\n  Line or code reference: Line 84 (in the detailed Variables table) and Line 1113 (in the Required Variables summary table)\n  Problem: Duplicate entry for REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED exists in both tables\n  Why it fails at runtime: Documentation redundancy - creates maintenance burden and violates the convention of avoiding duplicate rows per the consensus findings from pass-1 reviewers. The row appears at line 84 in the detailed table and was also added at line 1113 in the summary table.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: README.md and agents.md\n  Line or code reference: README.md ~line 1113 (Required Variables table row); agents.md ~line 541 (review-pipeline variable table row)\n  Problem: The `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` row appears in both the detailed Variables table (README.md ~line 84, agents.md ~line 540) and the Required Variables summary table (README.md ~line 1110+). This was flagged in pass-1 by moonshotai_kimi-k2_5. Verified: the row is present in both tables in the current diff. Other existing variables (e.g. REVIEW_LEDGER_PATH, REVIEW_CONSOLIDATOR_ENABLED) follow the same dual-table pattern, so this appears to be established repo convention rather than a bug. The README anchor `<!-- anchor:required-variables-table -->` was respected \u2014 the row was appended at the bottom of that table in the last run.\n  Why it fails at runtime: No runtime failure. The variable is wired correctly in review_autofix.yml (global env and codex-agent job env, both with fallback `|| 'true'`), consumed correctly in review_consolidate.sh, and documented accurately. This is a documentation-formatting observation only.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: README.md\n  Line or code reference: required-variables table (around line 1113 in current PR diff)\n  Problem: The flag `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` appears in the detailed variables list early in the document and again near the bottom of the \"Required Variables\" summary table.\n  Why it fails at runtime: This creates unnecessary duplication that violates the explicit `<!-- anchor:required-variables-table -->` contract (new rows must be appended at the bottom to avoid merge conflicts on parallel PRs). The last-run autofix already attempted to tidy wording but left the ordering violation intact.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- File: agents.md\n  Line or code reference: review-variable table (lines ~539-543)\n  Problem: The new flag is placed mid-table rather than at the bottom, breaking cross-documentation consistency with README.md\u2019s append-at-bottom convention.\n  Why it fails at runtime: Future parallel edits to the operator-visible tables become prone to deterministic 3-way merge conflicts.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "0ab81e4a073f90b096e1cd40aafe273d502604ecf8a32d497574f126e9791d20",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3541,
+    "run_id": "28279322464",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28279322464",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260627055104_2ae06d39d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3541,
+    "run_id": "28279322464"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-27T05:51:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

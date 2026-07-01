@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:4705-4714 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The extracted script depends on `GITHUB_REPOSITORY` at runtime, but the workflow step env block does not pass it through.\n  WHY: Without `GITHUB_REPOSITORY`, the `gh api`/`gh pr merge` calls resolve an empty repository path and fail with invalid URL errors.\n- scripts/review_enable_auto_merge.sh:72 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `ENABLE_AUTO_MERGE` is compared to `\"true\"` without validating that the repo variable exists in the runtime environment.\n  WHY: If the variable is missing, the helper exits early without the intended warning path.\n- scripts/review_enable_auto_merge.sh:~96\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The labels-failure warning text is inconsistent with the repository context used for the API call.\n  WHY: That can mislead operators reading the failure log about which repository was queried.\n- scripts/review_enable_auto_merge.sh:139 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The helper mixes `${GITHUB_REPOSITORY}` shell variables with `${{ github.repository }}` workflow syntax in surrounding references/comments.\n  WHY: The inconsistency is confusing and could lead to subtle copy/paste mistakes or documentation drift.\n- scripts/review_enable_auto_merge.sh:189-195 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The forward-merge suppression warning hardcodes `promote-main-to-stable.yml` details in the helper.\n  WHY: Those repository-specific references reduce portability if the helper is reused in another repo.\n- scripts/review_enable_auto_merge.sh:147-154\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The PR metadata fetch result is used to derive `_orch_pr_head_ref` without a visible success check before that value is consumed.\n  WHY: If the API call fails or returns empty data, later logic may operate on an empty head ref and misclassify the PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:4705-4714 | severity=BLOCKER | confidence=5\n  PROBLEM: The extracted script expects `GITHUB_REPOSITORY` and `PR_NUMBER` environment variables, but the workflow step's env block does not pass them.\n  WHY: When the script runs, `${GITHUB_REPOSITORY}` will be empty/unset, causing `gh api` calls like `repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels` to fail with invalid URL errors.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_enable_auto_merge.sh:1-232 | severity=NIT | confidence=5\n  PROBLEM: The new script `scripts/review_enable_auto_merge.sh` successfully extracts the large inline decision tree from `.github/workflows/review_autofix.yml` into a dedicated helper script.\n  WHY: This follows the stated requirement to refactor without changing policy or semantics.\n- scripts/review_enable_auto_merge.sh:~96\n  PROBLEM: The code queries labels paginated endpoint for repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels with per_page=100, but then uses ${{ github.repository }} in the error message instead of the $GITHUB_REPOSITORY variable that was used in the actual API call.\n  WHY: This mismatch could confuse operators when reading logs about API failures, since the error message would reference a different repository structure than what was actually queried.\n- scripts/review_enable_auto_merge.sh:72 | severity=MAJOR | confidence=4\n  PROBLEM: While the variable ${ENABLE_AUTO_MERGE} is referenced correctly throughout the script, the workflow context reveals this variable is set from ${vars.ENABLE_AUTO_MERGE}, which relies on GitHub's repo variable system. There's no fallback or validation that this variable exists and has the expected value before the comparison.\n  WHY: If ENABLE_AUTO_MERGE is not set in the environment, this comparison will treat unset as false, but the script assumes it's set and exits early without the intended warning message.\n- scripts/review_enable_auto_merge.sh:139 | severity=NIT | confidence=4\n  PROBLEM: In the new script, the `gh` commands use $-repo \"${GITHUB_REPOSITORY}\" but the workflow step and some inline comments still reference ${{ github.repository }}.\n  WHY: For shell scripts sourced from workflow steps, these forms should be equivalent, but it creates confusion in documentation and could lead to subtle bugs if used inconsistently.\n- scripts/review_enable_auto_merge.sh:189-195 | severity=NIT | confidence=3\n  PROBLEM: The forward merge PR handling correctly uses FORWARD_MERGE_FALLBACK_AUTO_MERGE to gate behavior. However, the error handling in the else branch references promote-main-to-stable.yml paths that should probably be generic in this helper script.\n  WHY: The script hardcodes references to `promote-main-to-stable.yml`, which is a consumer repository workflow file name.\n- scripts/review_enable_auto_merge.sh:147-154\n  PROBLEM: The PR metadata retrieval uses `repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}` but then extracts `_orch_pr_head_ref` without checking if the command succeeded before using the variable.\n  WHY: If the command fails before `_orch_pr_head_ref` is derived, later logic can proceed with an empty head ref.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "04d23f0aeb609c728fecf48b22f72ef1f7033d8662a01a22c4bd87c740f51cbf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3348,
+    "run_id": "27473815396",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27473815396",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260613180630_afb17b3c64",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3348,
+    "run_id": "27473815396"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-13T18:06:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

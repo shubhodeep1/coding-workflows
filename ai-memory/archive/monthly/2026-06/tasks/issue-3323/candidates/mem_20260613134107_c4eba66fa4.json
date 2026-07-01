@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply the safe subset of workflow-optimization-2026-06-13 recommendations\",\"issues\":[{\"id\":\"implement-commit-script-and-issue-cache\",\"title\":\"Extract implement commit logic and reuse cached issue metadata\",\"priority\":1},{\"id\":\"clarify-respond-cache-and-script-extract\",\"title\":\"Cache clarify-respond issue context and extract parse/post logic\",\"priority\":2},{\"id\":\"review-linked-issue-batching\",\"title\":\"Batch fallback linked-issue hydration in review PR metadata collection\",\"priority\":3},{\"id\":\"review-autofix-check-runs-extract\",\"title\":\"Extract review_autofix check-run context collection from YAML\",\"priority\":2},{\"id\":\"review-autofix-auto-merge-extract\",\"title\":\"Extract review_autofix auto-merge decision tree from YAML\",\"priority\":4},{\"id\":\"stable-smoke-helper-dedupe\",\"title\":\"Deduplicate test-and-mark-stable GH API and dispatch/watch helpers\",\"priority\":3},{\"id\":\"workflow-gh-retry-helper-unification\",\"title\":\"Replace inline gh retry helpers across release and poll workflows\",\"priority\":4},{\"id\":\"integration-readiness-log-severity\",\"title\":\"Downgrade intentional readiness advisory logs from error severity\",\"priority\":5},{\"id\":\"workflow-optimization-2026-06-13-closeout\",\"title\":\"Close out workflow-optimization-2026-06-13 analysis doc\",\"priority\":10}],\"dependency_edges\":[{\"from\":\"review-autofix-check-runs-extract\",\"to\":\"review-autofix-auto-merge-extract\"},{\"from\":\"stable-smoke-helper-dedupe\",\"to\":\"workflow-gh-retry-helper-unification\"},{\"from\":\"implement-commit-script-and-issue-cache\",\"to\":\"workflow-optimization-2026-06-13-closeout\"},{\"from\":\"clarify-respond-cache-and-script-extract\",\"to\":\"workflow-optimization-2026-06-13-closeout\"},{\"from\":\"review-linked-issue-batching\",\"to\":\"workflow-optimization-2026-06-13-closeout\"},{\"from\":\"review-autofix-check-runs-extract\",\"to\":\"workflow-optimization-2026-06-13-closeout\"},{\"from\":\"review-autofix-auto-merge-extract\",\"to\":\"workflow-optimization-2026-06-13-closeout\"},{\"from\":\"stable-smoke-helper-dedupe\",\"to\":\"workflow-optimization-2026-06-13-closeout\"},{\"from\":\"workflow-gh-retry-helper-unification\",\"to\":\"workflow-optimization-2026-06-13-closeout\"},{\"from\":\"integration-readiness-log-severity\",\"to\":\"workflow-optimization-2026-06-13-closeout\"}]}",
+  "fingerprint": "e7fb3d12060edf5855bab57b03e7a9e2471d10a65ba2b2dbe19409b73addd43a",
+  "lineage": {
+    "issue_number": 3323,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27468191755",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27468191755",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260613134107_c4eba66fa4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3323,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27468191755"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply the safe subset of workflow-optimization-2026-06-13 recommendations' into 9 issues (tracking #3323)",
+  "timestamps": {
+    "created_at": "2026-06-13T13:41:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

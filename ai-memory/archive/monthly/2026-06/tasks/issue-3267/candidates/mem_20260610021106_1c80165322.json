@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `orchestrator/project-3243` @ `f895fd05dd4b6d362c6888387db3ce990f681b99` (matches integration-branch metadata)\n\nClarification mapping\n- No Q1/Q2 batch was issued.\n- `/answer [auto-answered-by-orchestrator]` only confirmed continuation; it added no extra scope constraints.\n\nAutomation / wiring\n- Change type: existing docs only.\n- Scheduler / PR-push entry point: none.\n- New supervisor: none.\n- DB gate: not applicable.\n- `docs/scripts-pending-removal.md`: no new entry needed.\n- If the PR body mentions tracking issue `#3243`, use `Refs #3243`, never auto-close keywords.\n\nFiles likely to change\n- `analysis/recommendation-processing-report.md`\n- delete `analysis/workflow-optimization-2026-06-08-2.md`\n\nFunctions / modules to implement\n- No runtime code changes are needed.\n- Follow the existing `### analysis/workflow-optimization-2026-06-08.md` block in `analysis/recommendation-processing-report.md` as the representative report pattern.\n- Revalidation evidence will come from the workflow/script areas named in the source doc, especially:\n  - `.github/workflows/test-and-mark-stable.yml`\n  - `scripts/orchestrate_poll_process.sh`\n  - `.github/workflows/review_autofix.yml`\n  - `scripts/review_collect_pr_metadata.sh`\n  - `scripts/review_rb_judge.sh`\n  - `.github/workflows/internal-review.yml`\n  - `.github/workflows/implement.yml`\n  - `scripts/gh_helpers.sh`\n  - `scripts/run_validation_repo_checks.sh`\n  - `scripts/review_run_reviewers.sh`\n  - `.github/workflows/orchestrate_poll.yml`\n\nData structures affected\n- `## Processed source docs (94)` must become `95`, with `analysis/workflow-optimization-2026-06-08-2.md` added to the list.\n- The aggregate summary sentence (`19 in-scope docs ...`) must be recalculated after classification.\n- Add a new per-doc ledger subsection for `analysis/workflow-optimization-2026-06-08-2.md`.\n- Keep recommendations source-doc-scoped because IDs like `MERGE-001` / `REUSE-001` repeat across dated docs.\n- If any recommendation is truly obsolete/invalid, surface that explicitly in the new section so the issue\u2019s acceptance criteria are met.\n\nPlan\n1. Normalize the source doc into unique recommendation outcomes.\n   - Deduplicate repeated narrative recommendations that describe the same action.\n   - Track the explicit audit IDs individually: `SEC-001`, `BUG-001`, `BUG-002`, `API-001..003`, `DUP-001..003`, `EXPR-001..004`, `DEAD-001`, `MERGE-001..002`, `REUSE-001..005`, `DEAD-API-001`.\n\n2. Re-check each normalized item against current HEAD and classify it as one of:\n   - Implemented by sibling work\n   - Already satisfied / stale on this ref\n   - Invalid / obsolete on this ref\n   - Intentionally deferred, with rationale\n\n3. For every implemented item, name the sibling issue/PR that landed it.\n   - Those exact issue/PR numbers are not in the planning context, so implementation must derive them from tracking issue `#3243`, merged branch history, or the merged sibling PRs.\n\n4. Update `analysis/recommendation-processing-report.md` with minimal-scope edits:\n   - increment the processed-doc count and add the new bullet;\n   - update the aggregate in-scope-doc/item counts;\n   - append the new per-doc outcome block using the existing report convention;\n   - add a short conflict/assumption note only if needed for deduping or count reconciliation.\n\n5. Delete only `analysis/workflow-optimization-2026-06-08-2.md` in the same PR.\n\n6. Leave `analysis/last_collection_timestamp.txt`, `analysis/validation-selftest-status.json`, and all other recommendation-processing artifacts unchanged.\n\nAPI / interface changes\n- None. This is a report closeout plus source-doc deletion only.\n\nRisks / edge cases\n- The source doc mixes repeated narrative recommendations with ID-tagged audit findings; avoid double-counting while still covering every unique recommendation.\n- `analysis/workflow-optimization-2026-06-08-2.md` has an internal mismatch: the `NEEDS_VERIFICATION` summary row says `3` but lists four IDs (`REUSE-003`, `REUSE-005`, `API-001`, `API-002`). Record that if it affects counting.\n- Some themes overlap with the already-processed `analysis/workflow-optimization-2026-06-08.md` section; mark those as already satisfied/stale instead of re-crediting them.\n- The existing report heading `Outcome ledger for the 2026-05-15 through 2026-05-23 backlog docs` is already stale; avoid widening scope into historical heading cleanup unless necessary.\n- Only delete the exact source doc named in this issue.\n\nTesting considerations\n- No runtime tests should be necessary if the change stays doc-only.\n- Verify the new report section covers every normalized recommendation from the source doc.\n- Verify the processed-doc count/list and aggregate counts are internally consistent.\n- Verify `git diff --stat` shows only `analysis/recommendation-processing-report.md` plus deletion of `analysis/workflow-optimization-2026-06-08-2.md`.\n- Verify the preserved machine-maintained artifacts remain untouched.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3d0a7018bb2be1a7105bb4a0f3cbda14f3c7389edbdbaa45c9e8eb1a714df75c",
+  "lineage": {
+    "issue_number": 3267,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27248279107",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27248279107",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3267"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260610021106_1c80165322",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3267,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27248279107"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3267",
+  "timestamps": {
+    "created_at": "2026-06-10T02:11:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n- HEAD: `9278a68438c6c8a18bc944851d5aeb78316bf5cf`\n- Branch: `orchestrator/project-3496`\n- Integration metadata matches checked-out ref.\n\nClarification mapping\n- No `Q1`/`Q2` batch was issued.\n- `/answer [auto-answered-by-orchestrator]` means proceed from the issue body plus repo-local Phase C design context.\n\nAssumptions / conflicts detected\n- The issue body in this planning context says \u201cprompt files listed here\u201d but does not inline the list; I used the Phase C allowlist in `docs/plans/gstack-learnings-plan.md` as the target set.\n- Several listed targets do not currently have a `Role:` line (`prompts/mode-validate-generate.txt`, `prompts/mode-workflow-analysis.txt`, `prompts/mode-workflow-audit.txt`, `prompts/mode-workflow-api-redundancy.txt`, `prompts/conflict-resolver.txt`, `prompts/integration-sync-conflict-resolver.txt`). The implementation cannot assume every target is anchored on `Role:`.\n- Safest interpretation of \u201cleave the existing `Role:` line, output contract, and rules block byte-stable\u201d is: keep the legacy prompt body unchanged and prepend the persona at render time.\n\n1. Files likely to change\n- `scripts/render_prompt.py`\n- `tests/test_render_prompt_foundation.py`\n\nRender targets to allowlist in the renderer (but keep their on-disk bodies unchanged):\n- Core: `prompts/mode-clarify.txt`, `prompts/mode-plan.txt`, `prompts/mode-implement.txt`, `prompts/mode-implement-diagnose.txt`, `prompts/mode-implement-repair.txt`\n- Validate: `prompts/mode-validate-generate.txt`, `prompts/mode-validate-diagnose.txt`, `prompts/mode-validate-fix-harness.txt`, `prompts/mode-validate-self-heal.txt`, `prompts/mode-validate-discover.txt`\n- Judge: `prompts/mode-judge.txt`, `prompts/mode-judge-review-blocked.txt`, `prompts/mode-judge-stall-recovery.txt`, `prompts/mode-orchestrate-poll-judge.txt`\n- Workflow analysis: `prompts/mode-workflow-analysis.txt`, `prompts/mode-workflow-audit.txt`, `prompts/mode-workflow-api-redundancy.txt`\n- Conflict resolution: `prompts/conflict-resolver.txt`, `prompts/integration-sync-conflict-resolver.txt`\n\nExplicit non-targets\n- `prompts/contracts/*.yml`\n- `prompts/review-consolidator.txt`\n- `prompts/review-reviewer-checklist.txt`\n- Continuation prompts\n\n2. Functions / modules to implement\n- In `scripts/render_prompt.py`, add a single Phase C persona-prefix map keyed by mode/prompt name, using the repo-local Phase C persona prose as the source text.\n- Add a default-on env gate for `PROMPT_PERSONA_PREFIX_ENABLED` so unset/true prepends the prefix and explicit false returns the legacy rendered body.\n- Apply the prefix in the shared render path after workflow-overlay replacement/append resolution and before final output emission, so every current caller inherits the behavior automatically.\n- Keep `render_prompt.sh` and workflow YAMLs unchanged unless verification shows a real plumbing gap; current callers already funnel through the shared renderer.\n\n3. Data structures affected\n- One static allowlist/dictionary of `mode -> persona prefix`.\n- No schema changes.\n- No prompt-contract changes.\n- No persisted state or memory-format changes.\n\n4. API / interface changes\n- New renderer env surface: `PROMPT_PERSONA_PREFIX_ENABLED` (default true).\n- No change to existing prompt contracts, `Role:` lines, output-contract text, rules text, or consolidator lens names.\n- No continuation-mode behavior change.\n\n5. Risks / edge cases\n- Prefix logic must work for both role-led prompts and prose-led prompts.\n- The strongest safety invariant is `render(enabled) == persona_prefix + render(disabled)`.\n- Overlay order matters: apply the prefix after overlay resolution so `replace_path` overrides still get the persona.\n- If the hidden `files_touched` block omits renderer/test paths, scope may need reconciliation before implementation.\n- Directly editing the prompt files would create avoidable budget risk on tight files (`mode-validate-generate.txt` is 782/800 lines; `integration-sync-conflict-resolver.txt` is 191/200), so renderer-only insertion is the lower-risk path.\n\n6. Testing considerations\n- Add one focused test to `tests/test_render_prompt_foundation.py` that iterates the Phase C allowlist and asserts:\n  - with `PROMPT_PERSONA_PREFIX_ENABLED=false`, rendering matches the legacy rendered body;\n  - with default/on behavior, rendering equals `expected_prefix + legacy_rendered_body`.\n- Supply canned required vars for `conflict-resolver` and `integration-sync-conflict-resolver` in that single test.\n- Regression checks:\n  - `python3 tests/test_render_prompt_foundation.py`\n  - `python3 tests/test_render_prompt_core_modes.py`\n  - `python3 tests/test_render_prompt_review_judge_modes.py`\n  - `python3 tests/test_render_prompt_validate_analytics_modes.py`\n  - `python3 tests/prompt_size_budget.py`\n  - optional sanity: `python3 tests/test_phase_prompt_untrusted_context_contract.py`\n\n7. Pre-execution self-check result\nPLAN_SELF_CHECK: WARNING: The issue body in this planning context does not inline the Phase C file list or `files_touched` block; this plan relies on the repo-local Phase C design note and assumes renderer/test paths are in scope.\nPLAN_SELF_CHECK: WARNING: Six target prompts currently have no `Role:` line, so the implementation must prepend personas without assuming a universal `Role:` anchor.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "691d22152e3d60f52bf4d1242a7ae0eb5af4b67e8c4ffc88c3215250d033434d",
+  "lineage": {
+    "issue_number": 3505,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28155199670",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28155199670",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3505"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260625075723_d609558db5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3505,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28155199670"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3505",
+  "timestamps": {
+    "created_at": "2026-06-25T07:57:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for `orchestrator/project-3185` @ `529b17b0c587d727f27471f7a1324bca0a20bd14`\nIntegration branch metadata matches the checked-out ref.\n\nClarification mapping\n- No Q1/Q2/etc. were asked in clarify.\n- `/answer` was auto-posted because the issue was already clear.\n\nAutomation / wiring section\n- Change type: documentation/report cleanup only; no new script, no workflow wiring, no supervisor.\n- Scheduler / PR-push entry point touched: none.\n- Long-running supervisor: none.\n- DB gate pattern: N/A.\n- `docs/scripts-pending-removal.md` update: none.\n\nAssumptions / missing-context notes\n- The prompt did not inline the `files_touched` block, so I am treating the scoped source docs as the only eight remaining `analysis/workflow-optimization-*.md` files currently present. That matches the issue\u2019s count and current repo state.\n- No GitHub issue-history lookup is needed; the report\u2019s own grounding note says disposition should be based on current repository state on this ref.\n\nRepresentative pattern to follow\n- Reuse the existing `analysis/recommendation-processing-report.md` structure already used for the latest appended sections, especially the per-doc sections for `analysis/workflow-optimization-2026-05-23.md` and `analysis/workflow-optimization-2026-05-23-2.md`, plus the localized metadata at the top (`## Processed source docs (...)`).\n\n1. Files likely to change\n- `analysis/recommendation-processing-report.md`\n- `analysis/workflow-optimization-2026-05-29.md` (delete after triage is recorded)\n- `analysis/workflow-optimization-2026-06-04.md` (delete)\n- `analysis/workflow-optimization-2026-06-05.md` (delete)\n- `analysis/workflow-optimization-2026-06-05-2.md` (delete)\n- `analysis/workflow-optimization-2026-06-05-3.md` (delete)\n- `analysis/workflow-optimization-2026-06-06.md` (delete)\n- `analysis/workflow-optimization-2026-06-06-2.md` (delete)\n- `analysis/workflow-optimization-2026-06-06-3.md` (delete)\n\n2. Work to implement\n- Append eight new doc-specific sections to `analysis/recommendation-processing-report.md`, one per source doc, near the end and before the existing preserved-artifacts/follow-up tail.\n- Update the localized top metadata only:\n  - processed-doc count from `85` to `93`\n  - provenance list to include the eight filenames above\n  - the explanatory sentence under the count so it remains accurate after this cleanup batch\n- For each source doc, re-read every recommendation against current repo state and record disposition using the report\u2019s existing conventions:\n  - `Implemented by sibling work`\n  - `Already satisfied on this ref`\n  - `Intentionally deferred` for still-plausible-but-not-landed/risky items\n  - add an explicit invalid bucket only if a recommendation is actually contradicted by current code/state\n- After the report captures all eight docs, delete those eight source docs.\n\n3. Read-only verification targets (do not edit in this issue)\nUse these only to ground the report\u2019s disposition rationale:\n- Review/autofix: `.github/workflows/review_autofix.yml`, `scripts/review_apply_fixes.sh`, `scripts/review_run_reviewers.sh`, `scripts/review_conflict_resolve.sh`\n- CI / release gate: `.github/workflows/ci.yml`, `.github/workflows/test-and-mark-stable.yml`\n- Orchestrator / control-plane: `.github/workflows/implement.yml`, `.github/workflows/plan.yml`, `.github/workflows/clarify.yml`, `.github/workflows/orchestrate.yml`, `.github/workflows/orchestrate_clarify_respond.yml`, `.github/workflows/validate.yml`, `.github/workflows/review_autofix_sweep.yml`, `.github/workflows/issue_pr_status.yml`, `scripts/orchestrate_poll_process.sh`, `scripts/check_external_branch_advance.sh`\n- Regression evidence/tests referenced by the docs: `tests/test_orchestrate_poll_process.py`, `tests/test_codex_thread_reuse_core.py`\n\n4. Data structures affected\n- Markdown only:\n  - `## Processed source docs (93)` metadata block\n  - eight new `### \\`analysis/workflow-optimization-...\\`` sections\n  - bullet lists under disposition headings\n- Filesystem state:\n  - eight source markdown docs removed from `analysis/`\n- Protected artifacts remain unchanged:\n  - `analysis/last_collection_timestamp.txt`\n  - `analysis/validation-selftest-status.json`\n  - all `analysis/recommendation-processing-report*.md`\n\n5. API / interface changes\n- None.\n- No workflow inputs, outputs, env vars, schemas, scripts, or runtime behavior should change in this issue.\n\n6. Risks / edge cases / conflicts\n- The remaining source docs are heterogeneous:\n  - `analysis/workflow-optimization-2026-05-29.md` and `...2026-06-04.md` explicitly say \u201cNo SAFE_TO_MERGE findings in this pass.\u201d\n  - `analysis/workflow-optimization-2026-06-05.md` is narrative and ends with \u201cIf you want, I can turn this into a commit-ready markdown report file...\u201d, not a formal handoff block.\n  - `...2026-06-05-2.md` also relies on narrative prioritized-action prose rather than a clean handoff section.\n  - `...2026-06-05-3.md` and `...2026-06-06-2.md` expose only minimal handoff IDs.\n  This means the implementer must translate recommendation prose into the report taxonomy instead of relying only on `SAFE_TO_MERGE` markers.\n- The existing report does not currently use literal `VALID-BUT-RISKY` / `STALE-OR-ALREADY-DONE` headings; its established equivalents are `Implemented by sibling work`, `Already satisfied on this ref`, and `Intentionally deferred`. Keep that wording unless an explicit invalid bucket is actually needed.\n- Several late-May/June docs overlap on the same themes (`review_autofix`, CI contract regressions, validate observability, prompt/cache telemetry). Each doc still needs its own section; avoid collapsing multiple source docs into one shared section.\n- This issue is cleanup only. If a recommendation is still attractive but unimplemented, record that status; do not broaden scope into new code changes here.\n\n7. Testing / verification considerations\n- Confirm `analysis/recommendation-processing-report.md` now includes sections for all eight docs and the processed-doc count/list is updated to `93`.\n- Confirm none of the eight filenames were already present in the report before this pass; they are new append-only entries.\n- Confirm only the scoped files changed: one report edit plus eight deletions.\n- Confirm `analysis/last_collection_timestamp.txt`, `analysis/validation-selftest-status.json`, and every `analysis/recommendation-processing-report*.md` file still exist unchanged except for the intended report append.\n- After deletion, `analysis/` should retain the report plus the two protected state files, not the eight source docs.\n- No code test/lint/build run is necessary unless the implementation accidentally drifts outside markdown-only scope.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "7bf92e3ccf682545749670926147d8d0485f721466c35c5b573e7bc765cdb8ed",
+  "lineage": {
+    "issue_number": 3199,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27099619816",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27099619816",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3199"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260607173224_f5fa967220",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3199,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27099619816"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3199",
+  "timestamps": {
+    "created_at": "2026-06-07T17:32:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

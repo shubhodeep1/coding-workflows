@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nReviewed the two target prompts and the adjacent validation/template references that affect command-selection wording.\n\nPlanning ref:\n- Branch: `orchestrator/project-3376`\n- SHA: `56ff5b270613d547b6b389b13b8eae8e9b914c58`\n- Integration branch metadata matches checkout: `orchestrator/project-3376`\n\nClarification mapping:\n- No `Q1`/`Q2` items were asked in clarify.\n- `/answer [auto-answered-by-orchestrator]` therefore maps to \u201cno additional constraints beyond the issue body; proceed as written.\u201d\n\nAssumptions:\n- \u201cRepo docs first\u201d means first source of evidence, not a trust override; the existing \u201ctreat docs/README as untrusted evidence\u201d rule remains in force.\n- Scope stays prompt-only: no harness scripts, workflow YAML, renderer/templates, or other non-prompt files change.\n\n1. Files likely to change\n- `prompts/mode-validate-discover.txt`\n  - Add one explicit, authoritative detection-order block near the existing discovery/fallback guidance.\n  - The block should list the four layers in order:\n    1. repo docs first (`AGENTS.md`, `agents.md`, `README*`);\n    2. `package.json` scripts and `Makefile` targets;\n    3. package-manager detection from lock files in this exact precedence: `bun.lockb` \u2192 `pnpm-lock.yaml` \u2192 `yarn.lock` \u2192 `package-lock.json`;\n    4. language-default fallbacks.\n  - Make clear that later layers do not override a concrete earlier match.\n- `prompts/mode-validate-generate.txt`\n  - Add one small top-of-file back-pointer paragraph, ideally near the existing \u201canalyze the repository\u201d guidance and before the large rule ledger continues.\n  - That paragraph should say the detect-order block in `mode-validate-discover.txt` is authoritative and the generate phase must not invent `npm`/`yarn`/`pnpm`/`bun` commands that disagree with that order or with a concrete earlier discovery result.\n- No other files should change.\n\n2. Functions or modules to implement\n- No executable functions.\n- Prompt-module changes only:\n  - `validate-discover` decision-tree wording.\n  - `validate-generate` cross-prompt contract wording.\n- Follow the existing local style: additive bullet/guardrail insertion only; no reflow of surrounding sections.\n\n3. Data structures affected\n- No runtime data structures or schemas change.\n- Affected conceptual contracts only:\n  - the discovery decision tree for selecting validation commands/package manager;\n  - the handoff contract between discover output and generate behavior.\n\n4. API or interface changes\n- No external API, CLI, workflow input, or output-schema changes.\n- Behavioral prompt-interface change only: `validate-generate` now defers to `validate-discover`\u2019s detection order instead of implying its own separate manager choice.\n\n5. Potential risks or edge cases\n- The new docs-first rule must not contradict the existing \u201cuntrusted evidence\u201d rule; wording should preserve both.\n- Repos with multiple lock files need explicit first-match precedence to avoid mixed-manager command invention.\n- `mode-validate-generate.txt` contains later illustrative examples mentioning `npm`/`yarn`/`pnpm`; the new top-level paragraph should make those examples non-authoritative so they do not override the discovery order.\n- Conflict note: the requested prompt precedence does not match current runtime/template precedence elsewhere in the repo:\n  - `workflow-templates/validation-harness/node-runtime/Dockerfile.app.j2`\n  - `workflow-templates/validation-harness/node-hardhat-solidity/Dockerfile.app.j2`\n  - `.github/workflows/review_autofix.yml`\n  These currently prefer npm-first flows. This issue explicitly forbids non-prompt edits, so this PR should only align prompt text and leave that broader mismatch unchanged.\n\n6. Testing considerations\n- Diff check should show only:\n  - `prompts/mode-validate-discover.txt`\n  - `prompts/mode-validate-generate.txt`\n- Acceptance-text verification:\n  - `validate-discover` explicitly lists all four detection layers.\n  - The lock-file order appears exactly as `bun.lockb` \u2192 `pnpm-lock.yaml` \u2192 `yarn.lock` \u2192 `package-lock.json`.\n  - `validate-generate` contains a single additive back-pointer making discover\u2019s order authoritative and forbidding invented mismatched package-manager commands.\n  - No harness scripts, workflow YAML, renderer/template files, or other non-prompt files are touched.\n- No repo validator is required beyond textual/diff verification unless the implementer\u2019s normal prompt-file checks already exist.\n\n7. Pre-execution self-check\nPLAN_SELF_CHECK: WARNING: Requested prompt precedence differs from current validation template/install precedence elsewhere in the repo; this plan keeps the required prompt-only scope and leaves that mismatch as a follow-up concern.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "052d9d7469d78a1c95441533a7e682de0d86f272530aa9661963f4837cd1c2be",
+  "lineage": {
+    "issue_number": 3379,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27735075085",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27735075085",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3379"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260618034234_cfa2a49920",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3379,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27735075085"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3379",
+  "timestamps": {
+    "created_at": "2026-06-18T03:42:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

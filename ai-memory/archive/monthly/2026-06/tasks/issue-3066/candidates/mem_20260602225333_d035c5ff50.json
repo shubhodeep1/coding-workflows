@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3066,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3066\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3069\",\"pr_number\":3069,\"branch\":\"ai/issue-3066\",\"run_id\":\"26852265106\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/26852265106\",\"changed_files\":[\".github/workflows/review_autofix.yml\",\".github/workflows/workspace-cache-maintenance.yml\",\"docs/scripts-pending-removal.md\",\"scripts/memory_helpers.sh\",\"scripts/render_prompt.sh\",\"tests/test_workspace_cache_maintenance.py\"]}",
+  "fingerprint": "bfb3bf30a182790db256c02369e416379490a35892a3748b1d90c8703f00e1c9",
+  "lineage": {
+    "issue_number": 3066,
+    "parent_ids": [],
+    "pr_number": 3069,
+    "run_id": "26852265106",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26852265106",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3069"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260602225333_d035c5ff50",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3066,
+    "level": "run",
+    "pr_number": 3069,
+    "run_id": "26852265106"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3066: https://github.com/shubhodeep1/coding-workflows/pull/3069",
+  "timestamps": {
+    "created_at": "2026-06-02T22:53:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

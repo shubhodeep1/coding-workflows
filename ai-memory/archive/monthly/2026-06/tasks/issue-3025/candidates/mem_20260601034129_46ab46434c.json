@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-3024` @ `b6d95bfd42f5ae77ec860edaa55794eea89ba53e`  \nIntegration metadata matches checkout: `orchestrator/project-3024` (no mismatch)\n\nClarification mapping: no Q1/Q2 were asked; the only answer was the orchestrator auto-post `/answer [auto-answered-by-orchestrator]`, so there are no additional human constraints beyond the issue body.\n\n## Automation / wiring summary\n- Change type: modify existing prompt files only.\n- Scheduler / PR-push wiring: none.\n- New supervisor: none.\n- DB gate pattern: none.\n- `docs/scripts-pending-removal.md` entry: none.\n\n## Scope summary\nUse `prompts/mode-implement.txt` as the canonical prompt, then add only short cross-references in the diagnose/repair trio. This fits the issue\u2019s \u201cone prompt family, one rollout\u201d budget and avoids duplicating the full rule set.\n\n## Files likely to change\n1. `prompts/mode-implement.txt`\n   - Current relevant areas:\n     - conflict-detection block at lines 12-14\n     - restriction block at lines 21-24\n     - dependency/lockfile discipline at lines 32-40\n     - data-file output discipline starts at line 42\n   - Planned edits:\n     - narrow the blanket governance-doc ban so `ai_pipeline.md` stays forbidden, while `unattended_system_instructions.md` / `CLAUDE.md` become editable only when explicitly named by the approved plan or `files_touched` scope\n     - add the new `Plan-divergence discipline` paragraph immediately after the conflict-detection block\n     - add the `Code-style hints` subsection between dependency/lockfile discipline and data-file output discipline\n\n2. `prompts/mode-implement-diagnose.txt`\n   - Insert a short plan-divergence cross-reference near the policy section, most naturally after `Self-contained fix-up` and before `Output contract`.\n\n3. `prompts/mode-implement-repair.txt`\n   - Insert the same short cross-reference after the scope/allow-list paragraph and before `Category-specific repair recipes`.\n\n4. `prompts/mode-implement-repair-syntax.txt`\n   - Insert the same short cross-reference after `Validation target` and before `Category-specific repair recipes`.\n\nNo files should be created, deleted, or renamed.\n\n## Functions / modules to implement\nNo runtime functions are involved; this is prompt-contract work. The implementer should update these prompt modules/sections:\n\n- `mode-implement.txt`\n  - governance-doc restriction wording\n  - new `Plan-divergence discipline` prose\n  - new `Code-style hints` prose:\n    - descriptive naming\n    - no inline comments unless requested or the \u201cwhy\u201d is non-obvious\n    - implementation flow: discovery \u2192 note divergence \u2192 batch edits \u2192 reconcile \u2192 final summary\n\n- diagnose/repair trio\n  - add a short cross-reference back to the canonical rule in `prompts/mode-implement.txt`\n  - do not duplicate the full Phase 4 prose\n\n## Data structures affected\n- No runtime data structures, schemas, env vars, or APIs change.\n- The only structured artifact in scope is the existing JSON schema text in `prompts/mode-implement-diagnose.txt`; it must remain unchanged.\n- Effective contract change is behavioral: the implement-family prompts will now explicitly require surfacing material plan/codebase divergence and will narrowly permit governance-doc edits only when explicitly in scope.\n\n## API / interface changes\n- No external API changes.\n- No CLI, workflow, or env-var interface changes.\n- Internal prompt-interface change only:\n  - implementation prompt becomes less absolute about `unattended_system_instructions.md` / `CLAUDE.md`, but only behind explicit scope gates\n  - diagnose/repair prompts gain a canonical-reference rule for divergence handling\n\n## Conflict notes\n1. The source-of-truth Phase 6 wording talks about surfacing plan divergence in output, but `prompts/mode-implement-diagnose.txt` currently requires exactly one JSON object and forbids extra text. The implementation must preserve that schema and surface divergence inside existing JSON fields/body text rather than inventing a new field or free-text line.\n2. `prompts/mode-implement.txt` currently has no markdown subsection headings; \u201cadd a subsection\u201d should be implemented as a local titled prose block, not a broader format refactor.\n\n## Risks / edge cases\n- The narrowed restriction must not create a general self-modifying loophole:\n  - `ai_pipeline.md` remains always forbidden\n  - `unattended_system_instructions.md` and `CLAUDE.md` are only allowed when explicitly named in the approved plan or explicit `files_touched` scope\n  - no broad \u201cgovernance docs\u201d wording\n- Preserve existing placeholders/tokens verbatim:\n  - `{{SERENA_TOOL_HINTS}}` in all four files\n  - `{{WORKFLOW_EDIT_RESTRICTION}}` in `mode-implement.txt`\n- Preserve existing output-contract/schema text, especially:\n  - `Output: repository changes only.`\n  - the JSON schema block in `mode-implement-diagnose.txt`\n- Keep edits additive/local; do not rename headings, placeholders, or surrounding policy labels.\n- Stay inside the four-file scope only; do not touch `unattended_system_instructions.md`, `CLAUDE.md`, or `prompts/review-reviewer-checklist.txt` in this issue.\n\n## Testing / verification considerations\n- `git diff --name-only` should show only:\n  - `prompts/mode-implement.txt`\n  - `prompts/mode-implement-diagnose.txt`\n  - `prompts/mode-implement-repair.txt`\n  - `prompts/mode-implement-repair-syntax.txt`\n- `git diff --check` for whitespace/regression hygiene.\n- Grep verification:\n  - `{{SERENA_TOOL_HINTS}}` still present in all four files\n  - `{{WORKFLOW_EDIT_RESTRICTION}}` still present in `mode-implement.txt`\n  - new `Code-style hints` block present in `mode-implement.txt`\n  - new `Plan-divergence discipline` text present in all required files\n  - restriction text still leaves `ai_pipeline.md` forbidden and scopes the `unattended_system_instructions.md` / `CLAUDE.md` exception\n- Manual diff review to confirm no output-contract/schema wording was removed or renamed.\n\n## Assumptions\n- This issue only changes prompt text; no downstream parser/workflow changes are needed here.\n- The scoped allowance can rely on the existing approved-plan / `files_touched` concepts already referenced by the implement prompt family.\n\n## Missing-context notes\n- No human clarification answers were provided; scope is derived entirely from the issue body and the checked-out repo state.\n- No issue/codebase path mismatch was found in the requested four-file scope.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "268adf2f2e71154acc6e6094a313388321b4936467b29c8fbd1e5e3109cf0e9d",
+  "lineage": {
+    "issue_number": 3025,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26733780869",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26733780869",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3025"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260601034129_46ab46434c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3025,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26733780869"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3025",
+  "timestamps": {
+    "created_at": "2026-06-01T03:41:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

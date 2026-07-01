@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:82-95 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The Python fallback encoder uses `print()`, which appends a trailing newline and was reported to produce a malformed branch-protection lookup URL when `jq -sRr '@uri'` is unavailable.\n  WHY: Reviewers reported that the malformed protection path can 404 and send branch-protection resolution down the wrong path; deepseek_deepseek-v4-pro, minimax_minimax-m2_5, and qwen_qwen3_6-plus disputed the runtime impact because bash `$(...)` strips trailing newlines, so the issue is disputed but the reported bug is the same.\n- scripts/pr_checks_lib.sh:92 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The fallback encoder depends on `python3` from `$PATH`; if that command is missing or broken, `protection_ref` stays empty and slash-containing refs fall through to the legacy `*` required-check mode.\n  WHY: That changes branch-protection behavior for refs like `release/v1`, which can block merges that should pass or permit merges that should be blocked instead of using the intended encoded branch-protection context list.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: support slash-containing base refs via both the jq `@uri` helper and a Python fallback\n  expected_change_site: scripts/pr_checks_lib.sh:_pr_required_check_names_for_base and tests/test_pr_checks_lib_required_filter.py:test_branch_protection_lookup_falls_back_to_python_encoder\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The Python fallback still emits a trailing newline (`print()` without `end=''`), and the jq-failure test does not assert on stdout, so the malformed URL case is not covered.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: scripts/pr_checks_lib.sh | Lines 82-95 | severity=major | confidence=4\n  PROBLEM: When the jq `@uri` helper is unavailable, the fallback Python encoder `print()` adds a trailing newline that can become part of the branch-protection lookup URL.\n  WHY: That malformed protection path can cause GitHub API requests to 404 and make the resolver fall back incorrectly instead of respecting branch-protection required contexts.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: scripts/pr_checks_lib.sh  | Line or code reference: lines 87-88 | severity=MAJOR | confidence=4\n  PROBLEM: The Python fallback encoder uses `print()` which appends a trailing newline to the URL-encoded branch name, causing the GitHub branch-protection API call to 404 and bypass branch-protection required checks.\n  WHY: When `jq -sRr '@uri'` fails, the fallback outputs `release%2Fv1\\n`; that newline is interpolated into `repos/${repo}/branches/${protection_ref}/protection`, producing a malformed URL and falling back to `ORCH_FINAL_MERGE_REQUIRED_CHECKS` instead of branch-protection contexts.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: scripts/pr_checks_lib.sh | Line or code reference: Lines 86-88 (Python fallback encoder using `print()`) | severity=NIT | confidence=5\n  PROBLEM: The Python fallback uses `print(urllib.parse.quote_from_bytes(...))` which outputs a trailing newline.\n  WHY: Bash command substitution `$(...)` strips trailing newlines, so `protection_ref` is clean in practice; this is not a runtime bug, but it is worth noting as a future risk if the output were ever reused directly.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/pr_checks_lib.sh:92 | Line or code reference: `protection_ref=\"$(printf '%s' \"${base_ref}\" | python3 -c '...')\"` | severity=MAJOR | confidence=4\n  PROBLEM: The fall-back Python encoder is invoked via the default `python3` on `$PATH`; if that binary is unavailable or broken, `protection_ref` stays empty and slash-containing refs fall through to the legacy `*` required-check mode.\n  WHY: A protected branch such as `release/v1` would then silently lose its branch-protection required-check list and use `*` instead of the intended encoded ref, which can block or permit merges incorrectly.\n- Requirement: The PR summary and the new test file explicitly claim support for slash-containing base refs via both the jq `@uri` helper and a Python fallback.\n  Expected change site: scripts/pr_checks_lib.sh:_pr_required_check_names_for_base (the fallback block that was added in the last-run diff) and tests/test_pr_checks_lib_required_filter.py:test_branch_protection_lookup_falls_back_to_python_encoder.\n  Evidence of absence: The Python fallback still emits a trailing newline (the `print()` without `end=''`); the test that simulates a jq failure does not actually assert on stdout (it only checks the final gate rc/reason).\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "6253b95d02f1b837004f5191e1b8d5f03b99a9f5a35380a2a677cc064a16c2e8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3484,
+    "run_id": "28083293818",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28083293818",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260624082622_f4822bee1b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3484,
+    "run_id": "28083293818"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-24T08:26:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

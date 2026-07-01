@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nActions taken:\n- Reviewed item 2 in `docs/plans/open-agents-learnings-plan.md` plus the current prompt-render and reviewer-prompt flow in `scripts/render_prompt.sh`, `scripts/render_prompt.py`, and `scripts/review_run_reviewers.sh`.\n- Clarification mapping: no Q-IDs were asked; the auto `/answer [auto-answered-by-orchestrator]` leaves the original scope unchanged.\n- Ref check: HEAD `56ff5b270613d547b6b389b13b8eae8e9b914c58` on `orchestrator/project-3376`, which matches the integration-branch metadata.\n\nAssumptions:\n- Keep the PR limited to the six listed paths only.\n- Keep the feature reviewer-only; do not wire `MODEL_FAMILY_OVERLAY` into editor, judge, summariser, workflows, docs, or templates.\n- Follow existing additive patterns already used for prompt assets and placeholder shims.\n\nImplementation plan\n\n1. Files likely to change\n- `prompts/overlays/gpt.txt` [new]\n- `prompts/overlays/claude.txt` [new]\n- `prompts/overlays/gemini.txt` [new]\n- `prompts/overlays/other.txt` [new]\n- `scripts/render_prompt.sh`\n- `scripts/review_run_reviewers.sh`\n\n2. Functions/modules to implement\n- In `scripts/render_prompt.sh`:\n  - add explicit `MODEL_FAMILY_OVERLAY` handling next to the existing workflow/SEMBLE/SERENA placeholder branches\n  - resolve it from `${MODEL_FAMILY_OVERLAY}` with an empty-string default\n  - pass it through `append_render_var` even when unset/empty so a caller using `{{MODEL_FAMILY_OVERLAY}}` never leaves the placeholder unresolved\n  - add matching legacy/sentinel comments alongside the existing placeholder contract comments\n\n- In `scripts/review_run_reviewers.sh`:\n  - add a small model-family resolver for reviewer slugs:\n    - `openai/*` -> `gpt.txt`\n    - `anthropic/*` -> `claude.txt`\n    - `google/*` or `*/gemini-*` -> `gemini.txt`\n    - everything else -> `other.txt`\n  - add overlay-file lookup using the same support-path fallback style already used for reviewer prompt assets\n  - read the chosen overlay file body and export `MODEL_FAMILY_OVERLAY` before rendering that reviewer\u2019s prompt\n  - add the reviewer-side placeholder insertion point so the overlay is appended only in the reviewer flow\n  - make prompt rendering per reviewer slot (or per reviewer-specific prompt copy), not once globally before fan-out\n\n3. Overlay contents to land\n- `gpt.txt`: persistence, critical thinking between steps, concise final reply\n- `claude.txt`: `todo_write` discipline, mark-complete-per-item, unattended no-STOP-and-ASK bridge\n- `gemini.txt`: keep non-tool prose short, get to action quickly, preserve expected severity labels\n- `other.txt`: minimal fallback covering severity-label format and \u201cno clarification questions\u201d\n\n4. Data structures / internal contracts affected\n- new optional env var contract: `MODEL_FAMILY_OVERLAY` as a string payload\n- new slug-to-overlay mapping logic in reviewer setup\n- new prompt asset directory contents under `prompts/overlays/`\n- no DB/schema/workflow-input/API shape changes\n\n5. API or interface changes\n- backward-compatible internal renderer extension: `scripts/render_prompt.sh` now understands `{{MODEL_FAMILY_OVERLAY}}`\n- no existing placeholder names are removed or renamed\n- no new callers beyond reviewer prompt assembly\n\n6. Two-commit execution order\n- Commit 1: add `prompts/overlays/*.txt` plus the dormant `MODEL_FAMILY_OVERLAY` branch in `scripts/render_prompt.sh`\n- Commit 2: wire reviewer-family selection in `scripts/review_run_reviewers.sh`, add the reviewer-side placeholder insertion, and render/export the selected overlay per reviewer slot\n\n7. Risks and edge cases\n- Empty-overlay regression: `render_prompt.py` turns a standalone empty placeholder into a blank line, so the reviewer insertion point must preserve byte-identical output when the overlay is empty/unset.\n- Shared-render bug: the current reviewer-body render happens before model fan-out; if left global, every reviewer would inherit the same overlay.\n- Parallel isolation: reviewer workers run concurrently, so overlay contents and any rendered prompt temp files must stay slot-local.\n- Path fallback: overlay lookup should follow existing support-root/support-prompts fallback behavior, not repo-root-only assumptions.\n- Coverage skew: the current default reviewer roster is third-party-only, so normal review runs naturally exercise `other.txt`; GPT/Claude/Gemini paths need targeted smoke coverage.\n\n8. Testing considerations\n- Regression smoke for commit 1: confirm an existing prompt with no new placeholder still renders identically before/after the shell-shim change.\n- Reviewer-path smoke for commit 2: force representative reviewer slugs and inspect rendered reviewer prompt output for one GPT-family, one Claude-family, one Gemini-family, and one fallback model.\n- Negative smoke: verify no literal `{{MODEL_FAMILY_OVERLAY}}` survives in rendered reviewer prompts and no extra blank line appears when the overlay is intentionally empty.\n- Rerun the existing `render_prompt` regression coverage in `tests/test_judge_semble_prefetch_contract.py` if the pinned test environment is available.\n- Do not plan on adding new test files in this PR; `files_touched` excludes tests.\n\nConflicts / codebase notes\n- No integration-ref conflict found.\n- `prompts/overlays/` does not exist yet and must be created by the four new files.\n- Current reviewer prompt rendering is structurally incompatible with per-family overlays unless the render step becomes reviewer-specific.\n\nMissing-context notes\n- No blocker. The needed family-specific overlay guidance is present in the referenced plan item.\n\nPre-execution self-check\nPLAN_SELF_CHECK: WARNING: The allowed file scope excludes test files, so verification of the new overlay path must rely on existing suites plus targeted smoke unless scope is broadened.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a2b52f61bd2f906f30cbd84b9271aac04f826f616f3ee81b5def2e1027f8ce83",
+  "lineage": {
+    "issue_number": 3378,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27735075072",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27735075072",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3378"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260618034423_45f32a321f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3378,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27735075072"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3378",
+  "timestamps": {
+    "created_at": "2026-06-18T03:44:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

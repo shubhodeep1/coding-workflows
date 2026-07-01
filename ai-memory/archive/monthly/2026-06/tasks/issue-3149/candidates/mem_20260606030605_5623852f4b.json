@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. What exact part of this repository should change?\nChoices:\nA. One specific workflow under `.github/workflows/` \u2014 reply with its filename (RECOMMENDED)\nB. One specific script, prompt, or helper file \u2014 reply with its repo path (RECOMMENDED)\nC. A broader area only \u2014 name the phase/feature (for example: clarify, plan, implement, review, orchestrate, validate)\nQ2. What kind of improvement do you want in that area?\nChoices:\nA. Fix a broken or incorrect behavior (RECOMMENDED)\nB. Improve reliability, performance, or cost without changing the visible behavior\nC. Add or change behavior\nQ3. What concrete detail can you provide so the change is testable? You may answer with multiple letters (for example: `B+C`).\nChoices:\nA. A failing workflow run, PR, issue number, or error message\nB. A short \u201ccurrent behavior \u2192 desired behavior\u201d description (RECOMMENDED)\nC. A specific acceptance check or success criterion (RECOMMENDED)",
+  "fingerprint": "83557875bf5d974aacd5481be9d6a67e55d263631557940588eb196218881d3d",
+  "lineage": {
+    "issue_number": 3149,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27050809856",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27050809856",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260606030605_5623852f4b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3149,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27050809856"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #3149 needs clarification",
+  "timestamps": {
+    "created_at": "2026-06-06T03:06:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

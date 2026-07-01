@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nActions taken\n- Verified the unsafe state read is still present in `.github/workflows/plan.yml` inside `Auto-approve clear plan`.\n- Checked `scripts/gh_helpers.sh` to confirm `_safe_gh_jq` is the repo\u2019s intended safe `gh api --jq` wrapper for `|| echo` fallback cases.\n- Checked one inline fallback example and the repo\u2019s existing workflow-contract test style.\n\nImplementation plan for `plan-auto-approve-safe-state`\n\nPlanning ref\n- HEAD: `719b917c48703b731b1c33ca8e777bfe295db07d`\n- Branch: `orchestrator/project-3185`\n- Integration metadata: `orchestrator/project-3185`\n- Integration branch mismatch: no\n\nClarification mapping\n- No `Q1`/`Q2` questions were issued.\n- `/answer [auto-answered-by-orchestrator]` only confirmed continuation; no unresolved clarification remains.\n\nAutomation / wiring\n- Change type: modify existing workflow only; no new script.\n- Entry point: `.github/workflows/plan.yml`, `/answer`-driven plan run, step `Auto-approve clear plan`.\n- New supervisor: none.\n- DB gate pattern: none.\n- `docs/scripts-pending-removal.md`: no entry needed.\n\nFiles likely to change\n- `.github/workflows/plan.yml`\n  - Replace the raw `gh_retry gh api ... --jq '.state // \"open\"' ... || echo \"open\"` issue-state read in `Auto-approve clear plan` with a `_safe_gh_jq`-based read.\n  - Preserve the current behavior: `auto_approved=false` default, closed-issue early exit, `AUTO_IMPLEMENT_ON_CLEAR_PLAN` gate, 3-second sleep, `/approved [auto-approved-by-plan]` body, and `auto_approved=true` only after the comment posts.\n  - If the step continues to `source scripts/gh_helpers.sh 2>/dev/null || true`, add a local `_safe_gh_jq` fallback that matches the shared helper\u2019s \u201cno stdout on failure\u201d contract.\n- `tests/test_plan_auto_approve_safe_state_contract.py` (new, preferred)\n  - Add a focused workflow-contract test for the `Auto-approve clear plan` step.\n\nFunctions/modules to implement\n- The shell block for `Auto-approve clear plan` in `.github/workflows/plan.yml`.\n- A small test helper in the new pytest file to extract that step and assert the safe lookup pattern.\n\nRepresentative pattern to follow\n- Source of truth: `scripts/gh_helpers.sh::_safe_gh_jq`.\n- For test style: follow the string-contract approach used in `tests/test_issue_pr_status_payload_fallback_contract.py`.\n\nData structures affected\n- Transient shell vars: `CURRENT_STATE`, `normalized_flag`.\n- Existing step output: `steps.auto_approve.outputs.auto_approved`.\n- No new env vars, labels, schemas, or persisted records.\n\nAPI or interface changes\n- No user-visible interface change.\n- Same GitHub REST endpoint: `repos/${{ github.repository }}/issues/${ISSUE_NUMBER}`.\n- Preserve existing env var names, step id/output names, and `/approved` comment semantics.\n\nRisks / edge cases / conflicts\n- Main risk: using `_safe_gh_jq` without defining it when `gh_helpers.sh` fails to source would turn this into a `command not found` failure.\n- Do **not** copy the thin `_safe_gh_jq() { gh api \"$@\"; }` shim for this step; this path still depends on `|| echo \"open\"` fallback semantics, so it needs the temp-file/no-stdout-on-failure behavior.\n- Preserve the current fail-open fallback to `\"open\"` on lookup failure; do not change auto-approval policy.\n- Searches will also show `.codex-workflow-src/.github/workflows/plan.yml`, but `.codex-workflow-src/` is gitignored workspace material, not committed source.\n- Other raw `gh api --jq` state reads exist elsewhere, but they are out of scope for this issue.\n\nTesting considerations\n- Add/run a focused pytest contract test, e.g.:\n  - `python -m pytest tests/test_plan_auto_approve_safe_state_contract.py`\n- Test assertions should cover:\n  - `_safe_gh_jq` is used for the issue-state fetch,\n  - the old direct `gh_retry gh api ... --jq` state-read pattern is absent from that step,\n  - the closed-issue short-circuit still occurs before posting `/approved`,\n  - the `auto_approved` output/comment anchors remain unchanged.\n\nAssumptions\n- The desired behavior on API lookup failure remains the current fail-open behavior: treat unknown state as `\"open\"` and continue.\n- Adding a narrow regression test is acceptable within the requested local scope.\n\nMissing-context notes\n- No additional human clarification was needed.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4bf4c8f5573d067fac8c61adace48dc860fe647ca64f9608833d845552f7fe48",
+  "lineage": {
+    "issue_number": 3187,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27079631752",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27079631752",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3187"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260607015646_ac28681695",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3187,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27079631752"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3187",
+  "timestamps": {
+    "created_at": "2026-06-07T01:56:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

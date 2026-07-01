@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3503,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3503\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3504\",\"pr_number\":3504,\"branch\":\"ai/issue-3503\",\"run_id\":\"28148545517\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/28148545517\",\"changed_files\":[\"prompts/contracts/mode-plan.yml\",\"prompts/mode-plan.txt\",\"tests/test_plan_reuse_audit_contract.py\"]}",
+  "fingerprint": "4134b40dc4bfb40402a6f958ceb6ce25637dfa09cb4e2ef060a437fca240a8d7",
+  "lineage": {
+    "issue_number": 3503,
+    "parent_ids": [],
+    "pr_number": 3504,
+    "run_id": "28148545517",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28148545517",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3504"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260625052305_f3b429c048",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3503,
+    "level": "run",
+    "pr_number": 3504,
+    "run_id": "28148545517"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3503: https://github.com/shubhodeep1/coding-workflows/pull/3504",
+  "timestamps": {
+    "created_at": "2026-06-25T05:23:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

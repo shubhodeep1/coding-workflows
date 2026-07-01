@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nPlanning ref context\n- Branch: `orchestrator/project-3427`\n- Commit: `87458f70ee4a8d8478b8e7f248269823be604393`\n- Integration branch metadata: `orchestrator/project-3427`\n- Integration branch mismatch: `false`\n- Estimated implementation time: <10 minutes\n\nAutomation / wiring impact\n- Change type: modify one existing file only.\n- Scheduler / PR-push wiring: none.\n- New long-running supervisor: none.\n- DB work / gate pattern: not applicable.\n- `docs/scripts-pending-removal.md` entry: not applicable.\n\nClarification interpretation\n- No `Q1`/`Q2` clarification questions were asked.\n- The `/answer [auto-answered-by-orchestrator]` comment adds no new requirements; the issue body remains authoritative.\n- Assumption: because no explicit `files_touched` block is shown, `tests/e2e_smoke_canary.txt` is the sole allowed path. That matches the issue\u2019s \u201cDo not modify any other file\u201d constraint.\n\nRepresentative existing pattern\n- `tests/e2e_smoke_canary_b.txt` already uses the intended decomposed-canary format:\n  - `status: ok`\n  - `decompose-run: <id>`\n\nFiles likely to change\n- `tests/e2e_smoke_canary.txt` only\n\nFunctions or modules to implement\n- None; this is a direct text-file edit.\n- Update `tests/e2e_smoke_canary.txt` so:\n  - line 1 remains exactly `status: ok`\n  - line 2 becomes exactly `decompose-run: 27922954497`\n- Current observed content starts with:\n  - `status: ok`\n  - `run_id: 26151428977`\n  - `updated-by: ai-pipeline`\n- Smallest safe implementation is a surgical line-2 replacement only; do not reflow or broaden the edit.\n\nData structures affected\n- One on-disk text canary record in `tests/e2e_smoke_canary.txt`\n- Effective field change:\n  - key changes from `run_id` to `decompose-run`\n  - value changes to `27922954497`\n- Under the minimal-scope interpretation, any later lines stay unchanged.\n\nAPI or interface changes\n- No workflow/API/module interface changes.\n- File-local text contract for `tests/e2e_smoke_canary.txt` shifts to the decomposed format already seen in `tests/e2e_smoke_canary_b.txt`.\n\nConflicts detected\n- The target file currently uses `run_id:` rather than `decompose-run:`.\n- Existing smoke-test contract files currently encode a different format:\n  - `tests/e2e_smoke_canary_spec.txt` expects:\n    - `status: ok`\n    - `run_id: __RUN_ID__`\n    - `updated-by: ai-pipeline`\n  - `tests/test_e2e_editor_smoke_canary.py` asserts byte-for-byte equality against that 3-line spec.\n- Because this issue explicitly forbids modifying other files, the plan keeps scope to `tests/e2e_smoke_canary.txt` and treats the spec/test mismatch as a surfaced risk, not a scope-expansion trigger.\n\nPotential risks and edge cases\n- Exact spelling, casing, colon spacing, and numeric value on lines 1-2 matter.\n- Do not touch sibling canary files, specs, or tests even though they reference the older `run_id` format.\n- Avoid full-file rewrites or accidental line-ending changes when a single-line edit is enough.\n- Preserve existing unrelated content unless a later validation decision explicitly requires otherwise.\n\nTesting considerations\n- Verify `tests/e2e_smoke_canary.txt` exists.\n- Verify its first two lines are exactly:\n  - `status: ok`\n  - `decompose-run: 27922954497`\n- Verify the diff touches only `tests/e2e_smoke_canary.txt`.\n- If validation runs the current smoke-spec test, expect a visible mismatch against the existing 3-line `run_id` spec; surface that as the known repo/issue contract conflict.\n\nPre-execution self-check\nPLAN_SELF_CHECK: WARNING: Current smoke spec/test files still enforce a 3-line `run_id` contract, so this one-file issue intentionally diverges from existing repo test expectations.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "711837e6754f26efa81560d34912e4510372bf26705c1752310ea68ba51ee2a7",
+  "lineage": {
+    "issue_number": 3428,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27923062375",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27923062375",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3428"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260622005555_200f95dcee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3428,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27923062375"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3428",
+  "timestamps": {
+    "created_at": "2026-06-22T00:55:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `a8d65d985521e08d1c6bfdf9177569726fc4f091` on `orchestrator/project-3272` (matches the issue\u2019s integration-branch metadata).\n\nClarification mapping:\n- No `Q1`/`Q2` questions were asked in clarify.\n- `/answer [auto-answered-by-orchestrator]` adds no new requirements; it just confirms proceeding with the issue scope as written.\n\nAutomation / wiring:\n- Change type: modify existing code only.\n- Scheduler / PR-push wiring: none.\n- New script or supervisor: none.\n- DB / migration gate: none.\n- `docs/scripts-pending-removal.md`: no entry needed.\n\nConflict check:\n- No blocking conflict between the issue description and current code.\n- Repo-wide text matches also appear in `analysis/*.md`, but live code aligns with the issue: `list_run_log_excerpts()` exists only as a definition in `scripts/collect_workflow_logs.py`, and the stale direct patch is in `tests/test_collect_workflow_logs.py`.\n\nFiles likely to change:\n- `scripts/collect_workflow_logs.py`\n- `tests/test_collect_workflow_logs.py`\n\nFunctions / modules to update:\n1. `scripts/collect_workflow_logs.py`\n- Remove `list_run_log_excerpts()`, which is only a thin wrapper over `_fetch_run_log_archive()` plus `extract_log_excerpts()`.\n- Do not refactor surrounding collector logic; runtime call sites already use `_fetch_run_log_archive()` directly.\n\n2. `tests/test_collect_workflow_logs.py`\n- Update `test_main_reuses_cached_snapshot_on_304_and_skips_jobs_and_logs()` so it patches the real runtime seam (`_fetch_run_log_archive`) instead of the removed wrapper.\n- Keep the test\u2019s intent the same: cached rows with both `log_excerpts` and `cost_telemetry` must skip log fetching entirely.\n- Use `test_main_refetches_cached_logs_when_cost_telemetry_is_missing()` as the representative existing pattern for how this file already monkeypatches `_fetch_run_log_archive` directly.\n\nData structures affected:\n- No schema changes.\n- Preserve existing shapes for:\n  - cached repo payloads (`rows_snapshot`, `logs_seen_set`, etc.)\n  - per-run `log_excerpts`\n  - per-run `cost_telemetry`\n  - generated report JSON\n- Test-local call counters can stay, but the `\"logs\"` counter should now represent `_fetch_run_log_archive` calls.\n\nAPI / interface changes:\n- Internal Python module surface shrinks by removing `list_run_log_excerpts()`.\n- No CLI, workflow, cache-format, or report-format changes.\n- `_fetch_run_log_archive(repo, run_id, *, token, cache=None)` remains the runtime contract the tests should fake.\n\nRisks / edge cases:\n- Preserve the cache fast-path: when cached `log_excerpts` and cached `cost_telemetry` are both present, neither jobs nor log archive fetches should run.\n- Preserve the re-fetch path when cached cost telemetry is missing.\n- Do not change excerpt generation shape or missing-archive/failure handling.\n- Keep the change minimal: do not expand cleanup to other helpers such as `extract_log_excerpts()`.\n\nTesting considerations:\n- Run the targeted module in the repo\u2019s pinned environment:\n  - `pytest tests/test_collect_workflow_logs.py`\n- Useful focused smoke checks before the full module:\n  - `test_main_reuses_cached_snapshot_on_304_and_skips_jobs_and_logs`\n  - `test_main_refetches_cached_logs_when_cost_telemetry_is_missing`\n- Verify unchanged behavior for:\n  - cached snapshot reuse\n  - refetch when cost telemetry is absent\n  - log excerpt shape\n  - existing soft-fail behavior around log archive retrieval\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "735e2fe74ba321aa2e590bfeb3338e5e3da36411ebd3843a7ac969615c10c555",
+  "lineage": {
+    "issue_number": 3277,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27319395632",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27319395632",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3277"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260611022159_2e14c0e293",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3277,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27319395632"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3277",
+  "timestamps": {
+    "created_at": "2026-06-11T02:21:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

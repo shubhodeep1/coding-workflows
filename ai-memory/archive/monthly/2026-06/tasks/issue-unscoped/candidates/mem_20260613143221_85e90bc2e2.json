@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_check_integration_pr_readiness.py:283 | severity=low | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The test asserts `::error::` never appears in stderr, which is broader than the intended advisory-path assertion.\n  WHY: The assertion is only safe for the current fixture and becomes brittle if another error annotation appears from a different branch.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Scope: change only the human-facing annotations so intentional advisory output uses warning/notice-level logging instead of error-level logging\" and \"stay inside `files_touched` and avoid unrelated readiness-policy edits\"\n  expected_change_site: .ai/.workspace_source_manifest.txt\n  confidence=5\n  flagged_by: [minimax_minimax-m2_5, mistralai_mistral-small-2603, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  EVIDENCE: The PR adds `analysis/workflow-optimization-2026-06-13.md` to `.ai/.workspace_source_manifest.txt`, which is outside the scoped files/touched set and unrelated to the readiness annotation change.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- TASK_GAP\n  Requirement: \"Scope: change only the human-facing annotations so intentional advisory output uses warning/notice-level logging instead of error-level logging.\"\n  Expected change site: scripts/check_integration_pr_readiness.py\n  Evidence of absence: The core implementation correctly changes `::error::[integration-pr-readiness]` to `::warning::[integration-pr-readiness]` and `::error::To merge anyway` to `::notice::To merge anyway`. All acceptance criteria are met: status context `orchestrator/integration-pr-not-ready` is preserved, success/failure decisions unchanged, override-label semantics intact, exit-code behavior unchanged.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- TASK_GAP\n  Requirement: Scope limited to change only the human-facing annotations in scripts/check_integration_pr_readiness.py\n  Expected change site: Only scripts/check_integration_pr_readiness.py and test files referenced for this change\n  Evidence of absence: PR includes change to .ai/.workspace_source_manifest.txt adding analysis/workflow-optimization-2026-06-13.md which is outside the specified scope\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- TASK_GAP\n  Requirement: \"Scope: change only the human-facing annotations so intentional advisory output uses warning/notice-level logging instead of error-level logging.\" Constraints: \"stay inside `files_touched` and avoid unrelated readiness-policy edits.\"\n  Expected change site: scripts/check_integration_pr_readiness.py only\n  Evidence of absence: The PR adds `analysis/workflow-optimization-2026-06-13.md` to `.ai/.workspace_source_manifest.txt` \u2014 this is an unrelated metadata addition not required to fulfill the issue's acceptance criteria. The issue explicitly constrains scope to \"change only the human-facing annotations\" and \"stay inside `files_touched`\". While the manifest entry itself is benign (no runtime impact), it is a scope drift: the analysis file is not mentioned in the issue, and this PR was not tasked with updating the workspace manifest.\n  ISSUE_CONFIDENCE: 4\n- tests/test_check_integration_pr_readiness.py:283 | severity=low | confidence=3\n  PROBLEM: The test uses a blanket `::error::` negation, which is broader than the intended advisory-path assertion.\n  WHY: The assertion is only safe for the current fixture and becomes brittle if another error annotation appears from a different branch.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- TASK_GAP\n  Requirement: Scope: change only the human-facing annotations so intentional advisory output uses warning/notice-level logging instead of error-level logging. Constraints: stay inside `files_touched` and avoid unrelated readiness-policy edits.\n  Expected change site: scripts/check_integration_pr_readiness.py (the unchecked sub-issues advisory path) and tests/test_check_integration_pr_readiness.py (to cover new output)\n  Evidence of absence: The core fix is present (lines 253-257 of check_integration_pr_readiness.py now emit ::warning:: + ::notice::; tests assert exact new strings and confirm no stray ::error::). However, .ai/.workspace_source_manifest.txt was modified to add analysis/workflow-optimization-2026-06-13.md (outside files_touched and unrelated to annotations), violating the explicit \"stay inside `files_touched`\" and \"avoid unrelated\" constraints from both the linked issue and PR intent. Copilot review comment (line 100 in manifest) flags the exact same extraneous change.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "ffce8c1ef18b24bb6d4408d6b652be69c45caf1b1842b074f195a2efdf164dc3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3330,
+    "run_id": "27468635096",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27468635096",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260613143221_85e90bc2e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3330,
+    "run_id": "27468635096"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-13T14:32:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

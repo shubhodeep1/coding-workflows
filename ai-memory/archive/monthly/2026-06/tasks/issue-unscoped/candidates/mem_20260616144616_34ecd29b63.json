@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/inventory_parity.py:47 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `TRACKED_REFERENCE_PATTERNS` scripts regex is reported to fail on valid `./scripts/...` references because of the negative lookbehind/optional-prefix interaction.\n  WHY: The reviewer says the pattern should match `./scripts/...` but does not at runtime, which would let documentation drift go undetected.\n- tests/inventory_parity.py:47 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The scripts path boundary/extraction logic is fragile around optional `./` prefixes and example-like text, and may drop or over-report tracked references in secondary documents.\n  WHY: The reviewer reports edge-prefix and code-span cases that can weaken the drift-control gate even when common cases still pass.\n- tests/inventory_parity.py:95-100 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `normalize_reference()` strips `./` after extraction, which the reviewer says can affect reference integrity for inventory parity checks.\n  WHY: The reviewer argues normalization should not be applied post-extraction because it reduces fidelity for `./scripts/...` references.\n- tests/inventory_parity.py:120-138 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: `EXAMPLE_PREFIX_RE.search(line_without_code_spans[:match.start()])` scans too much preceding text and can skip valid script references when example wording appears earlier in the same line.\n  WHY: One reviewer gave a concrete same-line false-negative example, and another identified the same prefix-scanning behavior in the helper.\n- tests/inventory_parity.py:161-165 | severity=high | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The same example-prefix check in `parse_secondary_document()` can skip later valid code-span references when earlier text in the line contains example wording.\n  WHY: The reviewer says a line with multiple code spans can cause later tracked paths to be incorrectly filtered out.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/inventory_parity.py:127-133 | severity=high | confidence=4\n  PROBLEM: The `EXAMPLE_PREFIX_RE.search(line_without_code_spans[:match.start()])` check incorrectly skips valid script references when an example phrase appears earlier in the same line.\n  WHY: This causes false negatives in the inventory parity validation and can let drifted or invalid script references go undetected.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/inventory_parity.py:47 | confidence=5\n  PROBLEM: The second regex pattern `(?<![A-Za-z0-9_./-])(?:\\./)?scripts/[A-Za-z0-9_./-]+` is reported to fail to match valid `./scripts/...` references.\n  WHY: The reviewer says the pattern is intended to match both `scripts/...` and `./scripts/...`, but the current interaction between the lookbehind and optional prefix prevents valid documentation references from being extracted.\n- tests/inventory_parity.py:95-100 | confidence=4\n  PROBLEM: `normalize_reference()` strips `./` from `./scripts/...` after extraction, which the reviewer says needs to be applied earlier for canonical matching.\n  WHY: The reviewer argues post-extraction normalization can skew inventory parity checks and reduce reference integrity.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/inventory_parity.py:120-138 | severity=high | confidence=4\n  PROBLEM: `EXAMPLE_PREFIX_RE.search(line_without_code_spans[:match.start()])` checks all text before a match, not just immediate context, so earlier example wording can suppress later valid references on the same line.\n  WHY: The reviewer gives an example where a later `scripts/new.sh` reference is skipped because earlier prose on the line includes example text.\n- tests/inventory_parity.py:161-165 | severity=high | confidence=4\n  PROBLEM: The same prefix-scanning issue exists in `parse_secondary_document()` for code spans, so later valid references can be filtered out.\n  WHY: The reviewer says a line with multiple code spans can have later tracked paths incorrectly skipped due to earlier example wording.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/inventory_parity.py:47 | severity=high | confidence=4\n  PROBLEM: The scripts/ regex and surrounding path-extraction logic are fragile around optional `./` prefixes and example-like code spans.\n  WHY: The reviewer says secondary-document parsing could silently drop or over-report tracked surface references, weakening the drift-control gate.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "c5470e6f112aa6f8bf81b2629de980d7b9ae90af31b28982b001d4e7a2a7518e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3354,
+    "run_id": "27623251162",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27623251162",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260616144616_34ecd29b63",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3354,
+    "run_id": "27623251162"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-16T14:46:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

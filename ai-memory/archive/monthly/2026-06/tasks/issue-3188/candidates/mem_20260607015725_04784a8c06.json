@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nRef / clarification\n- Planning ref: `719b917c48703b731b1c33ca8e777bfe295db07d` on `orchestrator/project-3185`; this matches the issue\u2019s integration-branch metadata.\n- Clarification mapping: no `Q1`/`Q2` questions were asked; the auto `/answer` only confirmed continuation.\n\nActions taken\n- Reviewed the self-repo guard sites in `.github/workflows/implement.yml`, the issue-metadata/body fallback in `scripts/implement_diagnose_post_codex_failure.sh`, the shared GitHub JSON helper in `scripts/gh_helpers.sh`, and the focused implement tests already covering these paths.\n\nAutomation / wiring\n- Change type: modify existing workflow/script logic only; no new script or workflow.\n- Entry point: existing implement flow in `.github/workflows/implement.yml` (`/approved` \u2192 implement); no scheduler or PR-push wiring changes.\n- Supervisor: none.\n- DB gate / migration: none.\n- `docs/scripts-pending-removal.md`: no entry needed.\n\nTime budget\n- Estimated implementation + verification: 20\u201335 minutes.\n\nConflict detected\n- The issue text says \u201cone self-repo guard,\u201d but current `.github/workflows/implement.yml` still has three wildcard `*/coding-workflows` checks tied to the same logical decision: `Stage workflow support files`, `Preflight destructive-commit guard`, and `Commit changes`. I\u2019m treating all three as in scope so the workflow does not keep mixed self-repo behavior.\n\nFiles likely to change\n- `.github/workflows/implement.yml`\n- `scripts/implement_diagnose_post_codex_failure.sh`\n- `tests/test_implement_post_codex_recovery.py`\n- Possibly `tests/test_implement_semble_contract.py` if the stage-block contract assertion is added there\n\nFunctions / modules to implement\n- In `.github/workflows/implement.yml`:\n  - Replace the wildcard self-repo check in `Stage workflow support files` with the exact canonical comparison already used earlier in the workflow (`shubhodeep1/coding-workflows`).\n  - Apply the same exact comparison in the duplicated `Preflight destructive-commit guard` and `Commit changes` blocks so staging and commit filtering stay consistent.\n  - Reuse the existing `wf_source=\"shubhodeep1/coding-workflows\"` pattern; do not rename env vars or change the commit-filtering contract.\n- In `scripts/implement_diagnose_post_codex_failure.sh`:\n  - Keep `issue_meta_matches_issue` as the first-choice path for both labels and body.\n  - Add one shared fallback issue-JSON fetch/cache when `ISSUE_META_FILE` is absent, mismatched, or unreadable.\n  - Derive both `ISSUE_LABELS_JSON` and `ISSUE_BODY_FILE` from that same fallback payload.\n  - Route the body fallback through the safe helper path already available in `scripts/gh_helpers.sh` instead of a later raw `gh api` read.\n\nData structures affected\n- Shell variables / temp artifacts only:\n  - `is_self_repo`\n  - `ISSUE_META_FILE`\n  - `ISSUE_LABELS_JSON`\n  - `ISSUE_BODY_FILE`\n  - likely one temporary shared fallback issue-JSON file or in-memory payload inside the diagnose script\n- No persisted schema, label contract, memory schema, or PR-body format changes.\n\nAPI / interface changes\n- No user-facing API, CLI, workflow input, or schema changes.\n- Internal behavior only:\n  - self-repo detection becomes exact-repo equality instead of suffix matching,\n  - the diagnose script should use at most one shared `GET /repos/{repo}/issues/{issue_number}` fallback fetch on the uncached path.\n- No env var renames, output-key changes, or broader API consolidation.\n\nPotential risks / edge cases\n- All three self-repo guards need to move together; changing only one would leave inconsistent canonical-vs-consumer behavior.\n- The real canonical repo must still get self-repo behavior, but forks/mirrors named `*/coding-workflows` should stop being trusted as source-of-truth.\n- The diagnose fallback must preserve today\u2019s fail-open semantics:\n  - invalid/truncated JSON must not poison cached files,\n  - label extraction should still degrade to `[]`,\n  - body extraction should still degrade to empty text.\n- Preserve the fast path when a valid `ISSUE_BODY_FILE` already exists; do not force a refetch in that case.\n- Keep scope narrow: no force-tick, orchestrator, or unrelated GitHub API batching work.\n\nTesting considerations\n- Update/add workflow contract assertions so the implement step blocks expect the exact canonical repo comparison in:\n  - `Stage workflow support files`\n  - `Preflight destructive-commit guard`\n  - `Commit changes`\n- Extend the diagnose-script tests to cover:\n  - matching `ISSUE_META_FILE` supplies both labels and body without extra issue fetches,\n  - missing/invalid cached metadata triggers exactly one shared `/issues/{n}` fetch used for both labels and body.\n- The existing diagnose test harness already records issue queries, so it should be sufficient to assert call-count behavior with a small harness extension for `ISSUE_META_FILE` cases.\n- Run a shell syntax check for `scripts/implement_diagnose_post_codex_failure.sh` and the focused Python tests covering the implement workflow blocks and post-Codex diagnose path (`tests/test_implement_post_codex_recovery.py`, plus the stage-block contract test file if touched). If the repo\u2019s pinned Python test environment is not installed locally, treat local results as unverified and rely on CI.\n\nAssumptions\n- `CONSIST-001` scope includes the full set of duplicated wildcard self-repo checks in `implement.yml`, not just one physical occurrence.\n- The preferred safe fallback in the diagnose script is reuse of the existing GitHub helper path rather than introducing any new interface or dependency.\n\nMissing context\n- None blocking beyond the wording/code mismatch noted above.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "7b283d1d41a5ab4b60eef3dd98d34a7bfafd573ca7c0e88c870a092713aa70e9",
+  "lineage": {
+    "issue_number": 3188,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27079633339",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27079633339",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3188"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260607015725_04784a8c06",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3188,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27079633339"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3188",
+  "timestamps": {
+    "created_at": "2026-06-07T01:57:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

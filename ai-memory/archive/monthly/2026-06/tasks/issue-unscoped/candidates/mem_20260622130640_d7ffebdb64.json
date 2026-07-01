@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/write_guard.sh:25-35 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5]\n  PROBLEM: `write_guard_sanitize_log_value()` returns no stdout for empty or whitespace-only input, so `$(...)` callers can emit malformed `WRITE_GUARD_*` log lines with empty fields.\n  WHY: Reviewers disagreed on whether the empty-output parity is acceptable, but the reported runtime effect is broken structured-log tokenization for empty/whitespace values, and the highest reported severity was blocker/critical.\n- .github/workflows/implement.yml:3658-3671 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: `gh label create 'ai:destructive-blocked'` no longer passes `--color 'b60205'`, so first-time label creation uses GitHub's default color instead of the project standard.\n  WHY: Reviewers ranged from nit to major, but the create path is still missing the required color flag and the edit fallback only runs if creation fails, so the label is left uncorrected on the happy path.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update the write-guard log sanitization to produce shell-escaped, single-token values for all fields (including paths that may contain whitespace or control characters) while preserving fail-open WRITE_GUARD_CONFIG_ERROR behavior and the stable LOG_PREFIX contract.\"\n  expected_change_site: scripts/write_guard.sh (the sanitize helper) + all call sites that embed its output in WRITE_GUARD_* log lines\n  confidence=[1-5]\n  flagged_by: [moonshotai_kimi-k2_5]\n  EVIDENCE: `write_guard_sanitize_log_value` returns early without printing on zero-length input in `scripts/write_guard.sh`, and `scripts/dev/test_write_guard.sh` asserts escaped output for that path but the implementation has no branch that emits an escaped empty token.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/write_guard.sh:25-35 | severity=high | confidence=5\n  PROBLEM: The function returns early without printing anything when input is empty or whitespace-only, so command substitution callers receive an empty expansion and log lines can lose the expected value token.\n  WHY: Structured log parsers and `grep -o 'WRITE_GUARD_.*'` consumers can see inconsistent field tokenization on the empty-path case.\n- .github/workflows/implement.yml:3658-3667 | severity=high | confidence=5\n  PROBLEM: The `gh label create 'ai:destructive-blocked'` call is missing `--color 'b60205'`, while the `gh label edit` call immediately below it includes it.\n  WHY: On first-time setup where the label doesn't exist, the label will be created with GitHub's default color rather than the project's standard red.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/write_guard.sh:26-33 | severity=critical | confidence=5\n  PROBLEM: `write_guard_sanitize_log_value()` returns early with `return 0` on empty/whitespace-only input, but callers expect it to return a shell-escaped value via stdout.\n  WHY: When the sanitized path is empty/whitespace, `config=$(write_guard_sanitize_log_value \"${write_guard_config_log_path}\")` expands to nothing, producing malformed `WRITE_GUARD_CONFIG_ERROR` log lines and breaking structured-log parsers.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/implement.yml:3661-3663 | severity=high | confidence=5\n  PROBLEM: The `gh label create 'ai:destructive-blocked'` command is missing the required `--color 'b60205'` parameter while the subsequent `gh label edit` command includes it.\n  WHY: When the label doesn't already exist, `gh label create` will create it without the red color (b60205), causing the label to have an inconsistent appearance.\n- scripts/write_guard.sh:27-33 | severity=high | confidence=5\n  PROBLEM: The `write_guard_sanitize_log_value()` function returns early without printing any output when the input is empty or whitespace-only.\n  WHY: Callers using `$(write_guard_sanitize_log_value \"...\")` will receive an empty expansion, producing malformed log entries like `config=` instead of a properly escaped empty value.\n- Requirement: \"Update the write-guard log sanitization to produce shell-escaped, single-token values for all fields (including paths that may contain whitespace or control characters) while preserving fail-open WRITE_GUARD_CONFIG_ERROR behavior and the stable LOG_PREFIX contract.\"\n  Expected change site: scripts/write_guard.sh (the sanitize helper) + all call sites that embed its output in WRITE_GUARD_* log lines\n  Evidence of absence: The new `write_guard_sanitize_log_value` returns early without printing on zero-length input (the very case the test assertions now target with escaped patterns like `\\<no-match\\>`), so `config=$(...)` expands to nothing. The test assertions in scripts/dev/test_write_guard.sh expect escaped output (`pattern=\\<no-match\\>`, `value=false\\ line\\ break`), but the implementation has no branch ensuring an empty token is still emitted when the sanitized value is empty.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/implement.yml:3659-3671 | severity=low | confidence=4\n  PROBLEM: The `gh label create 'ai:destructive-blocked'` call is missing `--color 'b60205'`, so first-time creation will use GitHub's default color instead of the project standard.\n  WHY: The create command will not fail, but the label will be created with a default color and the `gh label edit` fallback only runs if creation fails.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "e588eecdb993e12519a10e90e74dfd5357da65eb7297da7bca42b541c8ff5565",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3456,
+    "run_id": "27952400400",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27952400400",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260622130640_d7ffebdb64",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3456,
+    "run_id": "27952400400"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-22T13:06:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

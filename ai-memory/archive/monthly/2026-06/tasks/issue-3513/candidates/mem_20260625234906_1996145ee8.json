@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3513,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3513\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3514\",\"pr_number\":3514,\"branch\":\"ai/issue-3513\",\"run_id\":\"28207005148\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/28207005148\",\"changed_files\":[\".github/ai/label_contract.v1.json\",\".github/workflows/ci.yml\",\".github/workflows/internal-clarify.yml\",\".github/workflows/mark-stable.yml\",\".github/workflows/security-audit.yml\",\".github/workflows/test-and-mark-stable.yml\",\"README.md\",\"agents.md\",\"docs/INVENTORY.md\",\"prompts/contracts/mode-security-audit.yml\",\"prompts/mode-security-audit.txt\",\"scripts/label_helpers.sh\",\"scripts/security_audit.sh\",\"scripts/security_audit_fp_exclusions.json\",\"tests/test_ai_labels.py\",\"tests/test_phase_prompt_untrusted_context_contract.py\",\"tests/test_render_prompt_foundation.py\",\"tests/test_render_prompt_validate_analytics_modes.py\",\"tests/test_security_audit_workflow_contract.py\",\"tests/test_workflow_checkout_integration_ref_audit.py\"]}",
+  "fingerprint": "26780553e14e2c543568f0d137a456bc0849fc8d5d6068feaa45d11457986da8",
+  "lineage": {
+    "issue_number": 3513,
+    "parent_ids": [],
+    "pr_number": 3514,
+    "run_id": "28207005148",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28207005148",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3514"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260625234906_1996145ee8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3513,
+    "level": "run",
+    "pr_number": 3514,
+    "run_id": "28207005148"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3513: https://github.com/shubhodeep1/coding-workflows/pull/3514",
+  "timestamps": {
+    "created_at": "2026-06-25T23:49:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

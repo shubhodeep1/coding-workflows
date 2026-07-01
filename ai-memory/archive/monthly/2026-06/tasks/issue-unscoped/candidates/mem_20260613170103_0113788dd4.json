@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_pr_check_runs_context.py:256-275 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: `_fetch_log_tail()` can leave `out` uninitialized and then read it on an exception path, causing `NameError`/`UnboundLocalError`.\n  WHY: Reviewers disagreed on severity/validity (blocker vs major vs safe), but the shared root cause is the same uninitialized local on the tail-fetch path.\n- scripts/collect_pr_check_runs_context.py:210-262 | severity=low | confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `_fetch_log_tail()` assigns `blob_url` only in the HTTPError handler, so the later `if not blob_url:` check can still trigger an unnecessary `UnboundLocalError`.\n  WHY: The broader `try/except` masks the exception and returns `\"\"`, but control flow still depends on avoidable exception-driven behavior.\n- scripts/collect_pr_check_runs_context.py:46-185 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The self-run exclusion only matches the singular `/job/` form in `details_url`, so a future `/jobs/` variant would stop filtering the current workflow run.\n  WHY: That would let the wait loop include its own in-progress check-run and potentially hang until timeout.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/collect_pr_check_runs_context.py:260-275 | severity=critical | confidence=5\n  PROBLEM: Unbound variable `out` causes NameError when exceptions occur in the tail-fetching code path.\n  WHY: The `except` block returns without assigning `out`, and the later use site reads `out` after that path.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/collect_pr_check_runs_context.py:210-262 | severity=low | confidence=5\n  PROBLEM: `blob_url` is assigned only inside the HTTPError path, so the later `if not blob_url:` check can raise `UnboundLocalError`.\n  WHY: The broader `try/except` catches it and returns `\"\"`, but the code still relies on an unnecessary exception bounce.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/collect_pr_check_runs_context.py:256-263 | severity=high | confidence=4\n  PROBLEM: `out` is only assigned on the successful response path, so an unexpected exception can leave it unbound when the function later reads it.\n  WHY: That can surface as `UnboundLocalError`; reviewers disagreed on severity/validity, but the root cause is the same latent uninitialized-local bug.\n- scripts/collect_pr_check_runs_context.py:46-185 | severity=low | confidence=3\n  PROBLEM: The self-run exclusion only matches `/job/` in `details_url`, not a `/jobs/` variant.\n  WHY: A GitHub URL shape change would stop filtering the current workflow run and could make the poll loop wait on itself until timeout.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "19ba3abb0f388cb311c3409ab97056ccee6063b23cf84d4767e7cca7bf511bff",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3332,
+    "run_id": "27472366027",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27472366027",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260613170103_0113788dd4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3332,
+    "run_id": "27472366027"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-13T17:01:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3293,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3293\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3296\",\"pr_number\":3296,\"branch\":\"ai/issue-3293\",\"run_id\":\"27389224919\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/27389224919\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"scripts/stage_workflow_support.sh\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "07df6ab70c18afb931c1c27b2cb50c9a6748dad2ff19371d8cbb6e51f5cf4478",
+  "lineage": {
+    "issue_number": 3293,
+    "parent_ids": [],
+    "pr_number": 3296,
+    "run_id": "27389224919",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27389224919",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3296"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260612015436_2ee8c8a9bf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3293,
+    "level": "run",
+    "pr_number": 3296,
+    "run_id": "27389224919"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3293: https://github.com/shubhodeep1/coding-workflows/pull/3296",
+  "timestamps": {
+    "created_at": "2026-06-12T01:54:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

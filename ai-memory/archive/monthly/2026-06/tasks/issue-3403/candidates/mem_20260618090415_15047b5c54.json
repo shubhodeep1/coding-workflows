@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n- Commit: `6d62bca9a5ad606cbca9e2f8299dc0e2349ff188`\n- Branch: `orchestrator/project-3376`\n- Integration branch metadata: matched (`orchestrator/project-3376`)\n\nActions taken\n- Reviewed `scripts/openrouter_prompt_cache.py`, the existing `## Prompt Caching (OpenRouter + Codex)` README section, and the current prompt-budget precedent in `tests/prompt_size_budget.py` plus the repo\u2019s shared `~4 chars/token` budgeting convention.\n\nClarification mapping\n- No `Q1`/`Q2` clarification questions were asked.\n- The `/answer [auto-answered-by-orchestrator]` comment only confirmed continuation, so the issue body is sufficient to plan from.\n\nAutomation / rollout contract\n- Change type: extend existing code only (`scripts/openrouter_prompt_cache.py`), add one new pytest file, add one small README note.\n- Scheduler / PR-push wiring: none; this stays dormant/opt-in and does not rewire existing callers.\n- New supervisor: none.\n- DB work / gate pattern: none.\n- `docs/scripts-pending-removal.md`: no entry needed.\n- Rollout-order guardrail: keep this PR limited to the helper/default/docs/tests only so item 9 remains the terminal rollout step; do not adopt the helper in any current caller here.\n\nCodebase conflict check\n- No blocking mismatch between the issue and the repo.\n- `tests/test_prompt_compaction.py` is absent on this ref and should be created; that matches the requested scope.\n\nFiles likely to change\n- `scripts/openrouter_prompt_cache.py`\n- `tests/test_prompt_compaction.py` (new file)\n- `README.md` (small additive note inside the existing `## Prompt Caching (OpenRouter + Codex)` section only)\n\nFunctions / modules to implement\n- `scripts/openrouter_prompt_cache.py`\n  - Add a pure `compact_if_over_budget(sections, budget_tokens)` helper.\n  - Keep it additive and side-effect-free: no caller rewiring, no cache-breakpoint behavior changes.\n  - Define the tuple contract in the docstring: ordered `(tier, label, body)` tuples, with retained sections returned in original order.\n  - Use the repo\u2019s existing approximate token math (`~4 chars/token`) rather than introducing a new tokenizer dependency.\n  - Add an env-backed default for `OPENROUTER_PROMPT_BUDGET_TOKENS` (`160000`) alongside the helper path, but keep it opt-in for future callers only.\n  - Reuse existing local integer-parsing helpers where possible instead of adding a parallel parsing primitive.\n- `tests/test_prompt_compaction.py`\n  - Add focused pytest coverage for:\n    - empty input\n    - under-budget passthrough\n    - tier-3-first dropping before higher-priority tiers\n    - extreme over-budget case that leaves only tier-1 sections\n- `README.md`\n  - Add the smallest possible note in the Prompt Caching section documenting `OPENROUTER_PROMPT_BUDGET_TOKENS` and that the helper/default is dormant unless a caller explicitly opts in.\n  - Do not rework anchors, surrounding tables, or unrelated sections.\n\nData structures affected\n- Ordered section tuples: `(tier, label, body)`\n- Filtered return value of the same tuple shape after compaction\n- Env-var string \u2192 integer default budget resolution for `OPENROUTER_PROMPT_BUDGET_TOKENS`\n- Important distinction: do not conflate this section-priority tiering with prompt-file frontmatter tiers like `# tier: DEFAULT|LARGE|XL`\n\nAPI / interface changes\n- New callable helper in `scripts/openrouter_prompt_cache.py`: `compact_if_over_budget(sections, budget_tokens)`\n- New documented env var: `OPENROUTER_PROMPT_BUDGET_TOKENS` (default `160000`)\n- No current workflow, shell, or Python caller behavior changes in this PR\n\nPotential risks / edge cases\n- Preserve purity: no in-place mutation of caller-provided sections.\n- Preserve stable survivor order after dropping lower-priority tiers.\n- Same-tier dropping behavior should be deterministic and documented, since the issue defines tier priority but not a secondary tie-break rule.\n- Tier compaction should stop at the tier-1 floor; the acceptance case expects an extreme over-budget result where tier-1 sections remain.\n- Keep the budgeting rule thin and local; do not import heavy modules or add a competing prompt-budget framework.\n- README is a hot file, so the doc change should stay narrowly additive.\n\nTesting considerations\n- Primary validation target: `pytest tests/test_prompt_compaction.py`\n- Keep test bodies sized so the `~4 chars/token` heuristic makes the expected drop behavior deterministic.\n- No caller-integration tests are needed in this PR because the helper remains dormant and no workflow is rewired.\n- No changes are needed to `tests/prompt_size_budget.py`; it is reference context, not the target validator for this issue.\n\nAssumptions\n- `tier=1` is highest priority; larger tier numbers are lower priority.\n- The repo\u2019s existing approximate token heuristic is the intended \u201cthin wrapper\u201d discipline here.\n- README documentation for the new env var should live only in the existing Prompt Caching section for this scoped change.\n\nMissing-context notes\n- None; the issue body and auto-confirmed continuation are sufficient for an implementation-ready plan.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e851f04ae2666b97c84fb1ee6f2ff3a683912f65ff8eb3f83cf76ea2bbf3ab30",
+  "lineage": {
+    "issue_number": 3403,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27748497407",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27748497407",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3403"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260618090415_15047b5c54",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3403,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27748497407"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3403",
+  "timestamps": {
+    "created_at": "2026-06-18T09:04:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

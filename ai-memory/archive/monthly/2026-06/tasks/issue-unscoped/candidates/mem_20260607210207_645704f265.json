@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:1703 | severity=low | confidence=[4]\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The quoted `2>/dev/null` token is passed as an argument to `_safe_gh_jq`, so it does not actually suppress `gh api` stderr.\n  WHY: The fail-open behavior still works, but the redirection is ineffective and misleading, so failed `gh api` output can still reach the workflow logs.\n- .github/workflows/plan.yml:1683-1702 | severity=low | confidence=[2]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_safe_gh_jq` passes through unvalidated command-line arguments to `gh api` without sanitization or strict argument validation.\n  WHY: If untrusted input ever reaches this wrapper, the helper can forward manipulated arguments into `gh api`, creating a potential injection or argument-manipulation hazard.\n- .github/workflows/plan.yml:1683-1702 | severity=low | confidence=[1]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The helper does not validate that the temporary file path exists or that `mktemp` produced a usable path.\n  WHY: If the temp directory is inaccessible or full, the workflow can fail unexpectedly instead of gracefully handling the path-creation failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/plan.yml:1683-1702 | severity=low | confidence=[2]\n  PROBLEM: The `_safe_gh_jq` helper passes through unvalidated command-line arguments to `gh api` without sanitization or strict argument validation.\n  WHY: If untrusted input ever reaches this wrapper, the helper can forward manipulated arguments into `gh api`, creating a potential injection or argument-manipulation hazard.\n- .github/workflows/plan.yml:1683-1702 | severity=low | confidence=[1]\n  PROBLEM: The helper does not validate that the temporary file path exists or that `mktemp` produced a usable path.\n  WHY: If the temp directory is inaccessible or full, the workflow can fail unexpectedly instead of gracefully handling the path-creation failure.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/plan.yml:1683-1702 | severity=low | confidence=[2]\n  PROBLEM: The helper relies on `gh api` and passes through unvalidated command-line arguments without sanitization or strict argument validation.\n  WHY: While `gh api` is trusted, forwarding unvalidated arguments can become an injection or argument-manipulation risk if the helper is reused with untrusted input.\n- .github/workflows/plan.yml:1683-1702 | severity=low | confidence=[1]\n  PROBLEM: The helper does not verify that the path template exists on the filesystem or validate that the temporary file can be actually created.\n  WHY: If the temporary directory is full or inaccessible, the workflow may fail or behave unpredictably rather than gracefully degrading with the error diagnostic already implemented.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/plan.yml:1703 | severity=low | confidence=[4]\n  PROBLEM: The `2>/dev/null` token is passed as a literal argument to `_safe_gh_jq` instead of acting as a shell redirection.\n  WHY: As a result, stderr from failed `gh api` calls is not actually suppressed, so the hardening intent is only partially achieved and the token is misleading to readers.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5d44eb6395779bd18e2f92cbaeeba1c58e530013c97dbaaaa14693b7769618a9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3207,
+    "run_id": "27103961004",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27103961004",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260607210207_645704f265",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3207,
+    "run_id": "27103961004"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-07T21:02:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

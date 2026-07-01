@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:299-306 | severity=medium | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The stdin-redirect regex only matches the braced `${VAR}` form and misses equivalent bash forms like `\"$VAR\"` or `$VAR`.\n  WHY: A behavior-preserving refactor can make the test report a false positive, recreating the brittle-grep failure mode this PR is meant to eliminate.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:316-324 | severity=medium | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The helper-detection and helper-call regexes only match exact `local VARNAME=\"$1\"` / `\"${attempt_prompt_file}\"` forms and miss valid bash variations such as `local -r`, unquoted `$1`, or other equivalent helper syntax.\n  WHY: Behavior-preserving refactors can make `fed_via_helper`/`fed_directly` evaluate false and trigger a false-positive assertion, recreating the brittle test failure the change was supposed to eliminate.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:299 | severity=unspecified | confidence=5\n  PROBLEM: The stdin-redirect regex requires double-quoted, braced `${VAR}` form and does not match equivalent unbraced/quoted bash forms.\n  WHY: If a future refactor uses `< \"$prompt_file\"` instead of `< \"${prompt_file}\"`, `re.findall` returns `[]` and the test falsely asserts \"No stdin redirect found.\"\n- tests/test_review_autofix_editor_noop_cascade_contract.py:316 | severity=unspecified | confidence=5\n  PROBLEM: The helper-detection regex matches only bare `local VARNAME=\"$1\"` and misses common bash variations like `local -r VARNAME=\"$1\"`, `local -ri VARNAME=\"$1\"`, and `local VARNAME=$1`.\n  WHY: A future refactor that keeps the same behavior but changes the helper declaration syntax will make `re.search` return `None` and the assertion fire as a false positive.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:304-306 | severity=unspecified | confidence=4\n  PROBLEM: The stdin-redirect regex pattern requires braces around the variable name and does not match semantically identical forms like `< \"$prompt_file\"` or `< $prompt_file`.\n  WHY: A common bash simplification in a future refactor would make the test report a false positive, recreating the brittle-grep problem the PR aims to solve.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:316-317 | severity=unspecified | confidence=5\n  PROBLEM: The `fed_via_helper` regex pattern matches only `local varname=\"$1\"` exactly and does not handle `local -r varname=\"$1\"`, `local varname=$1`, or `local \"varname\"=\"$1\"`.\n  WHY: If the helper is updated with a normal bash best-practice variation, the test will fail as a false positive, which is the exact scenario the PR description warns about.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:316-317 | PROBLEM: The `fed_via_helper` detection uses strict regexes that won't match common bash variations like `local -r prompt_file=\"$1\"`, `local prompt_file=$1`, or `prompt_file=\"$1\"`.\n  WHY: Equivalent bash forms preserving the cache-busting behavior would make `fed_via_helper=False` and trigger a false positive assertion.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:306,316,317 | severity=unspecified | confidence=4\n  PROBLEM: The regex patterns in `test_review_apply_fixes_has_per_attempt_cache_busting_nonce` are brittle to common bash syntax variations that preserve the intended cache-busting behavior.\n  WHY: A future refactor that changes brace/quote/flag style while keeping the behavior the same would make the test fire as a false positive.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:306-324 | severity=unspecified | confidence=5\n  PROBLEM: The three regex patterns in the test are overly strict and require exact brace syntax, double quotes, no `-r` flag, and specific whitespace.\n  WHY: Equivalent bash forms or whitespace variations will make `fed_via_helper=False` and `fed_directly=False`, firing the assert and recreating the brittle false-positive the PR was written to eliminate.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "523c4bbdea1947eab74cc2c8a91f889f3f0ee227135c99579858ce6580ba7778",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3159,
+    "run_id": "27052021324",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27052021324",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260606042104_432897100a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3159,
+    "run_id": "27052021324"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-06T04:21:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

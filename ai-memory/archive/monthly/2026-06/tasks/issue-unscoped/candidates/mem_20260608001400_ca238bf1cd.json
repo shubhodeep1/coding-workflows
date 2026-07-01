@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The overlay contract test in test_workflow_overlay_core.py must assert that the helper\u2019s non-validate code path (review_autofix invocations without positional args) actually hits the review-specific stage_review_runtime_support() function.\n  expected_change_site: test_workflow_overlay_core.py assertions that currently search workflow text and helper ownership\n  confidence=[3]\n  flagged_by: [mistralai_mistral-small-2603, minimax_minimax-m2_5]\n  EVIDENCE: The test asserts helper invocation in review_autofix.yml and helper-side overlay wiring, but it does not assert that the helper\u2019s default code path is stage_review_runtime_support() nor that the no-arg call shape in review_autofix.yml routes to that function; it could still pass if the helper text only contains the overlay string in a comment.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: tests/test_workflow_overlay_core.py\n  Line or code reference: lines 317-340\n  Problem: The pass-1 cross-pollination finding from mistral claims the test lacks a positive assertion that the helper routes to the review workflow's overlay loading logic; this is incorrect.\n  Why it fails at runtime: N/A \u2014 this is a finding rebuttal, not a defect.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- The consensus finding from the cross-pollination summary is valid. While the test now verifies that the workflow calls `scripts/stage_workflow_support.sh` and that the helper text contains overlay-related strings, it does NOT verify that the helper will actually route to the `stage_review_runtime_support` function when invoked without arguments. This is a test completeness gap, not a runtime correctness issue.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_workflow_overlay_core.py:319-349\n  Requirement: The overlay contract test in test_workflow_overlay_core.py must assert that the helper\u2019s non-validate code path (review_autofix invocations without positional args) actually hits the review-specific stage_review_runtime_support() function.\n  Expected change site: test_workflow_overlay_core.py assertions that currently search workflow text and helper ownership\n  Evidence of absence: The test asserts helper invocation in review_autofix.yml and asserts overlay wiring inside stage_workflow_support.sh, but it does not assert that the helper\u2019s default code path is stage_review_runtime_support() nor that the no-arg call shape in review_autofix.yml routes to that function. The test assertion for files changed in lines 314-328 covers helper invocation, but not the routing/function path itself.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "f2c857f706afcdb012d395ab15ba7cc53e57c6969815e145e8b7e7fe302e9657",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3210,
+    "run_id": "27108341101",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27108341101",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260608001400_ca238bf1cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3210,
+    "run_id": "27108341101"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-08T00:14:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_retro.py:line ~550 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `load_ai_memory_run_events()` reads the entire `events.jsonl` file into memory, which can spike memory usage on large ledgers.\n  WHY: In the weekly-retro workflow, a large `ai-memory` ledger can exhaust RAM or slow the job, reducing retro reliability.\n- scripts/workflow_retro.py:lines ~543-569, ~434-503 | severity=medium | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `fetch_merged_pull_requests` and `load_ai_memory_run_events` can both return empty data without any validation or fallback policy change in this PR.\n  WHY: If both inputs are empty, Codex must synthesize the retro from only summary/cost telemetry, risking low-quality output and misleading downstream decisions.\n- .github/workflows/workflow-log-analysis.yml:lines 474-502 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: No validation is performed after `gh issue list \u2026` before iterating over `candidates`.\n  WHY: If the GraphQL response shape changes or includes malformed entries, the Python selector can process invalid data and post or refresh an incorrect weekly retro comment.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Implement Phase F only. [...] without [...] workflow-template expansion in this phase unless an in-tree call site proves it is required.\"\n  expected_change_site: workflow-templates/ (or explicit gate in profile manifests)\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The PR diff touches only source-repo files (.github/workflows/workflow-log-analysis.yml, agents.md, tests, scripts, prompts, label_contract, pending-removal doc); no workflow-template or profile changes were made, and the implementation explicitly preserves the existing non-retro path (`if: github.event_name != 'schedule'` guards).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/workflow_retro.py:line ~550 | confidence=4\n  PROBLEM: `load_ai_memory_run_events()` reads the entire `events.jsonl` file into memory via `read_text().splitlines()`, which can cause a memory spike on large ledger files.\n  WHY: In the weekly-retro workflow, a large `ai-memory` ledger can exhaust RAM or slow the retro job, impacting reliability.\n- scripts/workflow_retro.py:lines ~543-569, ~434-503 | confidence=3\n  PROBLEM: `fetch_merged_pull_requests` and `load_ai_memory_run_events` can both return empty data without validation or fallback policy changes in this PR.\n  WHY: If both calls return empty data, the retro prompt fed to Codex lacks concrete content and must synthesize from only summary/cost telemetry, risking low-quality output and misleading downstream decisions.\n- .github/workflows/workflow-log-analysis.yml:lines 474-502 | confidence=4\n  PROBLEM: No validation is performed after `gh issue list \u2026` before iterating over `candidates`.\n  WHY: If the GraphQL response shape changes or includes malformed entries, the downstream Python script may fail ungracefully or process invalid data, leading to a bad tracker selection and an incorrect weekly retro comment.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- TASK_GAP\n  Requirement: \"Implement Phase F only. [...] without [...] workflow-template expansion in this phase unless an in-tree call site proves it is required.\"\n  Expected change site: workflow-templates/ (or explicit gate in profile manifests)\n  Evidence of absence: The PR diff touches only source-repo files (.github/workflows/workflow-log-analysis.yml, agents.md, tests, scripts, prompts, label_contract, pending-removal doc); no workflow-template or profile changes were made, and the implementation explicitly preserves the existing non-retro path (`if: github.event_name != 'schedule'` guards).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "ef9b739d37237a7d4310a2ac93cf06bf493e7d68fe8a45441a6a921dd50348b9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3532,
+    "run_id": "28245666151",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28245666151",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260626153250_3130e7efcb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3532,
+    "run_id": "28245666151"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-26T15:32:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

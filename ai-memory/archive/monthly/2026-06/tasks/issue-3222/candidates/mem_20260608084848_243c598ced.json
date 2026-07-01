@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply the validated safe subset from workflow-optimization-2026-06-08\",\"issues\":[{\"id\":\"restore-timeout-prelude-staging-contract\",\"title\":\"Restore the timeout-prelude staging contract in review_autofix.yml\",\"priority\":1},{\"id\":\"review-telemetry-cache-and-semble-accuracy\",\"title\":\"Make review telemetry accurately report prompt-cache usage and test-only Semble fallbacks\",\"priority\":2},{\"id\":\"phase-skip-gate-telemetry\",\"title\":\"Add explicit skip/gate telemetry to opaque phase workflows\",\"priority\":2},{\"id\":\"validate-cache-action-hygiene\",\"title\":\"Finish the remaining validate cache-action and cache-path cleanup\",\"priority\":2},{\"id\":\"workflow-optimization-2026-06-08-closeout\",\"title\":\"Record the 2026-06-08 workflow-optimization triage and remove the processed source doc\",\"priority\":4}],\"dependency_edges\":[{\"from\":\"restore-timeout-prelude-staging-contract\",\"to\":\"workflow-optimization-2026-06-08-closeout\"},{\"from\":\"review-telemetry-cache-and-semble-accuracy\",\"to\":\"workflow-optimization-2026-06-08-closeout\"},{\"from\":\"phase-skip-gate-telemetry\",\"to\":\"workflow-optimization-2026-06-08-closeout\"},{\"from\":\"validate-cache-action-hygiene\",\"to\":\"workflow-optimization-2026-06-08-closeout\"}]}",
+  "fingerprint": "7f18ef8c1a2caff6cbeb0c05d16566be480dfcd21727c76fccac0b2669b28ecf",
+  "lineage": {
+    "issue_number": 3222,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27125785095",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27125785095",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260608084848_243c598ced",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3222,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27125785095"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply the validated safe subset from workflow-optimization-2026-06-08' into 5 issues (tracking #3222)",
+  "timestamps": {
+    "created_at": "2026-06-08T08:48:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

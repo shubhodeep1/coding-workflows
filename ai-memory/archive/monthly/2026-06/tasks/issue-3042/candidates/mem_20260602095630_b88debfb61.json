@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Implement the Symphony-inspired orchestrator improvements and archive the plan after verified completion\",\"issues\":[{\"id\":\"s1-renderer-foundation\",\"title\":\"S1: add the strict prompt renderer foundation and shim\",\"priority\":1},{\"id\":\"s1-core-mode-contracts\",\"title\":\"S1: add strict contracts for core clarify/orchestrate/repair modes\",\"priority\":2},{\"id\":\"s1-review-judge-contracts\",\"title\":\"S1: add strict contracts for review, judge, and conflict prompts\",\"priority\":2},{\"id\":\"s1-validate-analytics-contracts\",\"title\":\"S1: add strict contracts for validate and workflow-analysis prompts\",\"priority\":2},{\"id\":\"s2-stall-guard-scripts\",\"title\":\"S2: add the Codex event-idle stall guard to the shell entrypoints\",\"priority\":1},{\"id\":\"s2-stall-guard-implement-poller\",\"title\":\"S2: wire the stall guard into implement and the poller backstop\",\"priority\":2},{\"id\":\"s3-force-tick\",\"title\":\"S3: add the force-tick helper and replace ad-hoc phase-end dispatches\",\"priority\":3},{\"id\":\"s5-state-concurrency-caps\",\"title\":\"S5: add per-state concurrency caps to orchestrator dispatch\",\"priority\":3},{\"id\":\"w1-workspace-reuse-core\",\"title\":\"W1: add reusable workspace initialization for implement and validate\",\"priority\":4},{\"id\":\"w1-review-workspace-cache-maintenance\",\"title\":\"W1: extend review workspace reuse and add cache maintenance\",\"priority\":5},{\"id\":\"w2-workspace-hooks\",\"title\":\"W2: add workspace lifecycle hooks for implement and validate\",\"priority\":5},{\"id\":\"w4-run-substate-ledger\",\"title\":\"W4: add run-substate ledger events for Codex-invoking paths\",\"priority\":6},{\"id\":\"w3-workspace-safety\",\"title\":\"W3: enforce workspace filesystem-safety invariants\",\"priority\":7},{\"id\":\"s4-thread-reuse-core\",\"title\":\"S4: add continuation-thread reuse for implement and validate flows\",\"priority\":8},{\"id\":\"s4-thread-reuse-review-conflict\",\"title\":\"S4: add continuation-thread reuse for review apply-fixes and conflict resolution\",\"priority\":9},{\"id\":\"u1-overlay-core\",\"title\":\"U1: add the WORKFLOW overlay loader for non-orchestrator workflows\",\"priority\":9},{\"id\":\"u1-overlay-orchestrator\",\"title\":\"U1: add WORKFLOW overlay loading to orchestrator workflows\",\"priority\":10},{\"id\":\"u2-runtime-blocker-check\",\"title\":\"U2: add blocker-aware runtime dispatch checks\",\"priority\":4},{\"id\":\"u3-state-snapshot\",\"title\":\"U3: publish the per-tick orchestrator state snapshot artifact\",\"priority\":10},{\"id\":\"archive-pr-body-tracking-ref\",\"title\":\"Add tracking-issue references to orchestrator-managed implement PR bodies\",\"priority\":10},{\"id\":\"symphony-closeout-audit-archive\",\"title\":\"Audit the Symphony rollout, update docs, and archive the plan truthfully\",\"priority\":10}],\"dependency_edges\":[{\"from\":\"s1-renderer-foundation\",\"to\":\"s1-core-mode-contracts\"},{\"from\":\"s1-renderer-foundation\",\"to\":\"s1-review-judge-contracts\"},{\"from\":\"s1-renderer-foundation\",\"to\":\"s1-validate-analytics-contracts\"},{\"from\":\"s2-stall-guard-scripts\",\"to\":\"s2-stall-guard-implement-poller\"},{\"from\":\"s2-stall-guard-implement-poller\",\"to\":\"s3-force-tick\"},{\"from\":\"s2-stall-guard-implement-poller\",\"to\":\"s5-state-concurrency-caps\"},{\"from\":\"s3-force-tick\",\"to\":\"w1-workspace-reuse-core\"},{\"from\":\"s1-renderer-foundation\",\"to\":\"w1-review-workspace-cache-maintenance\"},{\"from\":\"w1-workspace-reuse-core\",\"to\":\"w1-review-workspace-cache-maintenance\"},{\"from\":\"s3-force-tick\",\"to\":\"w1-review-workspace-cache-maintenance\"},{\"from\":\"w1-workspace-reuse-core\",\"to\":\"w2-workspace-hooks\"},{\"from\":\"s2-stall-guard-scripts\",\"to\":\"w4-run-substate-ledger\"},{\"from\":\"w2-workspace-hooks\",\"to\":\"w4-run-substate-ledger\"},{\"from\":\"w4-run-substate-ledger\",\"to\":\"w3-workspace-safety\"},{\"from\":\"w1-review-workspace-cache-maintenance\",\"to\":\"w3-workspace-safety\"},{\"from\":\"s1-core-mode-contracts\",\"to\":\"s4-thread-reuse-core\"},{\"from\":\"s1-validate-analytics-contracts\",\"to\":\"s4-thread-reuse-core\"},{\"from\":\"w3-workspace-safety\",\"to\":\"s4-thread-reuse-core\"},{\"from\":\"s4-thread-reuse-core\",\"to\":\"s4-thread-reuse-review-conflict\"},{\"from\":\"s1-review-judge-contracts\",\"to\":\"s4-thread-reuse-review-conflict\"},{\"from\":\"s1-renderer-foundation\",\"to\":\"u1-overlay-core\"},{\"from\":\"s1-core-mode-contracts\",\"to\":\"u1-overlay-core\"},{\"from\":\"s1-review-judge-contracts\",\"to\":\"u1-overlay-core\"},{\"from\":\"s1-validate-analytics-contracts\",\"to\":\"u1-overlay-core\"},{\"from\":\"s5-state-concurrency-caps\",\"to\":\"u1-overlay-core\"},{\"from\":\"w1-review-workspace-cache-maintenance\",\"to\":\"u1-overlay-core\"},{\"from\":\"w2-workspace-hooks\",\"to\":\"u1-overlay-core\"},{\"from\":\"s4-thread-reuse-core\",\"to\":\"u1-overlay-core\"},{\"from\":\"u1-overlay-core\",\"to\":\"u1-overlay-orchestrator\"},{\"from\":\"s5-state-concurrency-caps\",\"to\":\"u2-runtime-blocker-check\"},{\"from\":\"u1-overlay-orchestrator\",\"to\":\"u3-state-snapshot\"},{\"from\":\"u2-runtime-blocker-check\",\"to\":\"u3-state-snapshot\"},{\"from\":\"w4-run-substate-ledger\",\"to\":\"u3-state-snapshot\"},{\"from\":\"u1-overlay-core\",\"to\":\"archive-pr-body-tracking-ref\"},{\"from\":\"s4-thread-reuse-review-conflict\",\"to\":\"symphony-closeout-audit-archive\"},{\"from\":\"u3-state-snapshot\",\"to\":\"symphony-closeout-audit-archive\"},{\"from\":\"archive-pr-body-tracking-ref\",\"to\":\"symphony-closeout-audit-archive\"}]}",
+  "fingerprint": "00d1b84536cb3f178fd326fe62f801f3e466e37036522ba3d481b0b4cf5fa26a",
+  "lineage": {
+    "issue_number": 3042,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26811038266",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26811038266",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260602095630_b88debfb61",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3042,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26811038266"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Implement the Symphony-inspired orchestrator improvements and archive the plan after verified completion' into 21 issues (tracking #3042)",
+  "timestamps": {
+    "created_at": "2026-06-02T09:56:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

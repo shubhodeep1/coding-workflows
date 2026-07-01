@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1386 | severity=medium | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `shell: bash` declaration is added at job-step level and is redundant/orphaned relative to the step\u2019s `run:` block.\n  WHY: The `run:` starts on the next line, so the shell directive has no standalone effect in the workflow syntax.\n- .github/workflows/review_autofix.yml:1387-1431 | severity=medium | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `apt-get` fallback path assumes `apt-get` is available on all non-Windows runners.\n  WHY: On self-hosted or container runners using non-Debian distros or images where `apt-get` is absent, the tool probes set `missing_tools` and the script exits immediately with unsuitable diagnostics.\n- .github/workflows/review_autofix.yml:1417-1425 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: When `apt-get update` or `apt-get install` fails, the fallback branch still treats the failure as terminal and exits the workflow.\n  WHY: The change improves observability but does not add retry/backoff or suppress non-fatal sources, so transient apt-source failures remain brittle.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/review_autofix.yml:1386 | confidence=5\n  PROBLEM: The shell declaration is added at job-step level, which affects only the subsequent script in the same step, not the entire job.\n  WHY: In GitHub Actions, `shell:` must be specified either at the job level (for all steps) or at the individual step level; a standalone `shell: bash` line without a corresponding `run:` does nothing in the workflow syntax.\n- .github/workflows/review_autofix.yml:1387-1431 | confidence=3\n  PROBLEM: The apt-get fallback oracle (`apt-get` available, `sudo` available, root vs non-root) assumes apt-get is available on all non-Windows runners.\n  WHY: On self-hosted or container runners using non-Debian distros or images where apt-get is absent (e.g., alpine-based images, custom images), the tool probes set `missing_tools`, then `apt-get` is missing and the script errors out immediately with unsuitable diagnostics to CI logs.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/review_autofix.yml:1417-1425 | severity=high | confidence=4\n  PROBLEM: When `apt-get update` or `apt-get install` fails, the script prints a diagnostic but still exits the workflow on the original apt rc.\n  WHY: The change adds observability but not retry/backoff or source suppression, so transient repository failures remain terminal on the fallback path.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "0bf22811e2985a9f9790d547b934a332c55e363616759b5859a553844af1c51c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3500,
+    "run_id": "28150266504",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28150266504",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260625064527_e48619224d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3500,
+    "run_id": "28150266504"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-25T06:45:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

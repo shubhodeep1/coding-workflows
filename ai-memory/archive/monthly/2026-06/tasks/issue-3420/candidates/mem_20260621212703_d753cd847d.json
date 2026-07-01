@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation Plan\n\nPlanning ref context\n- HEAD: `9aed13b859effc1700388dd5507cc1afd68b370b`\n- Checked-out ref: `orchestrator/project-3408`\n- Integration branch metadata: `orchestrator/project-3408`\n- Ref mismatch blocker: none\n\nAutomation / wiring summary\n- Change type: modify existing workflow/config/tests only; no new script or supervisor.\n- Existing entry point to extend: `.github/workflows/plan.yml` on the current `/answer`-driven planning path; enforce the guard inside that workflow before any plan/clarification comment is posted.\n- DB/scheduler/removal-registry impact: none.\n\nClarification mapping\n- No `Q1`/`Q2` questions were asked.\n- `/answer [auto-answered-by-orchestrator]` only confirms \u201cproceed with the issue as written\u201d; it adds no extra scope.\n\nActions taken / representative pattern\n- Inspected `.github/ai/write_guards.v1.json`, `.github/workflows/plan.yml`, `scripts/write_guard.sh`, `scripts/validate_process.sh`, `scripts/dev/test_write_guard.sh`, and `.github/workflows/ci.yml`.\n- Representative pattern to mirror: the validate write-guard flow in `scripts/validate_process.sh`, because it snapshots workspace state before and after the guarded operation instead of allowlisting all bootstrap artifacts.\n\n1. Files likely to change\n- `.github/ai/write_guards.v1.json`\n  - Add `phases.plan`.\n  - Keep the policy tight; do not broadly allow `scripts/**`.\n- `.github/workflows/plan.yml`\n  - Add `WRITE_GUARDS_ENABLED` to the job env.\n  - Add `write_guard.sh` to the staged support-script list.\n  - Capture a post-bootstrap/pre-Codex workspace snapshot, capture a second snapshot after Codex returns, derive changed/new/deleted repo paths, and run `write_guard_check plan ...` before `Parse planning output`.\n  - Fail the job immediately on a guard violation so no clarification or final plan comment is posted afterward.\n- `scripts/dev/test_write_guard.sh`\n  - Add plan-phase pass/block/bypass coverage.\n- `README.md` (likely)\n  - Update the `WRITE_GUARDS_ENABLED` docs to include the plan phase if the variable-usage table is meant to stay authoritative.\n\n2. Functions or modules to implement\n- Reuse `write_guard_check` from `scripts/write_guard.sh` unchanged; it already supports arbitrary phase names, empty candidate lists, bypass logging, and config fallback through `.codex-workflow-src`.\n- In `plan.yml`, add inline snapshot/diff logic modeled on validate\u2019s pre/post capture flow, with scratch files kept under `RUNTIME_DIR` or `mktemp` so the guard logic itself does not create repo writes.\n- Place the guard before any comment-posting branch, not only before `Post implementation plan`.\n\n3. Data structures affected\n- `write_guards.v1.json` gains a new `phases.plan` object with:\n  - `allowed_globs`\n  - `blocked_globs`\n  - `conditional_blocked_globs`\n- Plan runtime scratch data gains temporary pre/post snapshot files and a derived candidate-path list.\n- Internal env contract expands so `WRITE_GUARDS_ENABLED` is consumed by the plan workflow too.\n\n4. API or interface changes\n- No external API changes.\n- Internal workflow behavior changes:\n  - plan emits existing `WRITE_GUARD_BLOCK` / `WRITE_GUARD_BYPASS_ENV` logs when applicable,\n  - and fails before posting plan output if Codex wrote outside policy.\n- If `README.md` is updated, the documented consumer-facing variable matrix expands to include plan.\n\n5. Risks, edge cases, and conflicts\n- Conflict: the governing goal in `docs/plans/complete-squad-improvements-plan.md:47-50` requires plan coverage, but the detailed N4 wiring section only named implement/review/validate; the shipped config matches that incomplete wiring.\n- False-positive risk: a raw post-Codex worktree scan would include bootstrap artifacts (`scripts/*`, `ai-memory/schemas/*`, `unattended_system_instructions.md`, `ai_pipeline.md`, `.codex-workflow-src/**`, `pre_assembled_static.txt`). Use post-bootstrap vs post-Codex diffing instead.\n- Safety risk: broad allowlists like `scripts/**` would let plan-time edits hit real source files in this repo.\n- Placement risk: if the guard is added only near `Post implementation plan`, clarification/blocker comments could still be posted after an out-of-policy write.\n- Config edge case: the guard config requires a non-empty `allowed_globs` array, while the normal guarded plan window should ideally produce zero repo writes. Encode that deliberately rather than widening the allowlist.\n\n6. Testing considerations\n- Extend `scripts/dev/test_write_guard.sh` with plan-phase cases for:\n  - normal empty/no-repo-write pass,\n  - out-of-policy failure with `WRITE_GUARD_BLOCK`,\n  - `WRITE_GUARDS_ENABLED=false` bypass with `WRITE_GUARD_BYPASS_ENV`.\n- Use a clearly disallowed repo path (for example `README.md`) for the failure case so the new `plan` policy is exercised directly.\n- `.github/workflows/ci.yml` likely does not need changes because it already runs `bash scripts/dev/test_write_guard.sh`.\n- Do not add a new standalone smoke script; keep verification inside the existing shell test and CI hook.\n\nAssumptions\n- The safest implementation is to guard only writes introduced after plan bootstrap/preparation, not every helper file created earlier in the job.\n- `README.md` should be updated if the repo treats its variable table as the source of truth.\n- No change to `scripts/write_guard.sh` itself is required for this issue.\n\nMissing-context notes\n- No additional clarification is needed.\n- The only implementation detail left to choose is the exact sentinel/narrow pattern used for the `plan` allowlist when the intended normal state is \u201cno repo writes.\u201d\n\n7. Pre-execution self-check result\n- Branch context is valid; integration metadata matches the checked-out ref.\n- Scope stays within the requested files plus optional README docs.\n- No private inputs or missing scalar values are required.\n- Existing repo CI already covers the write-guard shell harness entry point.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "33ccd0c103456a472cab3cc27f52acf2c157793ef2192c358385b7e1c8fe4427",
+  "lineage": {
+    "issue_number": 3420,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27917846585",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27917846585",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3420"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260621212703_d753cd847d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3420,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27917846585"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3420",
+  "timestamps": {
+    "created_at": "2026-06-21T21:27:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

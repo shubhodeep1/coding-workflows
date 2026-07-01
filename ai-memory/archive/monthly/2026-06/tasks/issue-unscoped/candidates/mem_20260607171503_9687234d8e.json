@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1618-6525 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The early and late PR-state guards handle `_safe_gh_jq` stderr differently, so one path suppresses stderr diagnostics while the other leaves them visible.\n  WHY: This is a low-severity observability inconsistency rather than a functional failure; reviewers agreed both guards still resolve `pr_state` identically on API failure, so the difference is only in logging visibility.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Re-read both current guard blocks in .github/workflows/review_autofix.yml before editing. Switch both state reads to the safe helper pattern (`gh_retry _safe_gh_jq ...`) and only branch on validated `open|closed|merged` values. Preserve existing env var names and downstream meaning, especially PR_CLOSED. Keep the change local to the state-guard behavior; no linked-issue, check-run, metadata-helper, or reviewer-profile changes in this issue. Guardrails: On API failure, do not implicitly treat the PR as definitely open or definitely closed.\n  expected_change_site: .github/workflows/review_autofix.yml (early guard ~line 1615 and late guard near \"Check PR state before failure alerts\")\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: Both guards now correctly use `_safe_gh_jq` (with fallback to 'null'), perform merged detection via `.merged_at` or `.merged`, filter strictly with `grep -xE 'open|closed|merged'`, set `PR_CLOSED=true` only for terminal states, and the diff remained strictly local (aside from the prior editor's cleanup of the stray manifest and executable-bit reversion).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/review_autofix.yml:1618 and 6521 | severity=low | confidence=4\n  PROBLEM: The two PR-state guards maintain inconsistent stderr handling for `_safe_gh_jq` despite both using the safe helper pattern.\n  WHY: When GitHub API temporarily fails or PR_NUMBER is invalid, stderr visibility differs between the early guard and late guard, causing inconsistent diagnostics; the functional path remains equivalent.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/review_autofix.yml:1619 vs 6525 | severity=low | confidence=4\n  PROBLEM: Both PR-state guards use `_safe_gh_jq` and branch correctly on validated `open|closed|merged` values, but handle `gh_retry` stderr differently.\n  WHY: The late guard suppresses `gh_retry` warnings and retry diagnostics with `2>/dev/null`, while the early guard leaves those diagnostics visible, creating non-identical logging across equivalent guard paths.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/review_autofix.yml:1619 and 6522 | severity=low | confidence=4\n  PROBLEM: The `_safe_gh_jq` call in the late guard includes `2>/dev/null` while the early guard does not, so the two equivalent PR-state guards emit different diagnostics.\n  WHY: On transient GitHub API errors the early guard can surface stderr from `_safe_gh_jq` while the late guard suppresses it, so operator-visible logging differs even though the branching logic is otherwise identical.\nRequirement: Re-read both current guard blocks in .github/workflows/review_autofix.yml before editing. Switch both state reads to the safe helper pattern (`gh_retry _safe_gh_jq ...`) and only branch on validated `open|closed|merged` values. Preserve existing env var names and downstream meaning, especially PR_CLOSED. Keep the change local to the state-guard behavior; no linked-issue, check-run, metadata-helper, or reviewer-profile changes in this issue. Guardrails: On API failure, do not implicitly treat the PR as definitely open or definitely closed.\nExpected change site: .github/workflows/review_autofix.yml (early guard ~line 1615 and late guard near \"Check PR state before failure alerts\")\nEvidence of absence: Both guards now correctly use `_safe_gh_jq` (with fallback to 'null'), perform merged detection via `.merged_at` or `.merged`, filter strictly with `grep -xE 'open|closed|merged'`, set `PR_CLOSED=true` only for terminal states, and the diff remained strictly local (aside from the prior editor's cleanup of the stray manifest and executable-bit reversion). The linked issue #3197 is fully delivered; the remaining stderr inconsistency is a minor polish item already surfaced by pass-1 reviewers.\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "d6524a99c02586ce6a1a5b048605edaf27c84d1b398673fa5c9d41f5ac71e170",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3198,
+    "run_id": "27098575184",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27098575184",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260607171503_9687234d8e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3198,
+    "run_id": "27098575184"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-07T17:15:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

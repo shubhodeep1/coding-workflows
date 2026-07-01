@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_verify_integration_fingerprints_post_capture_evolution.py:line 337 | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The assertion checks stdout for `FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1`, but the production code emits that marker to stderr.\n  WHY: Because `_run_verifier` returns separate stdout/stderr buffers and the test inspects `out` (stdout), the assertion is vacuously true and would not catch the marker being emitted on stderr.\n- agents.md:~200 | confidence=[4]\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The new log prefix `FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1` is not documented in the stable log prefixes list in agents.md.\n  WHY: agents.md treats stable log prefixes as contractual for workflow-log-analysis and API-hygiene reporting, so adding a new prefix without documenting it is a backward-compatibility break.\n- scripts/verify_integration_fingerprints.py:lines 496-523 | confidence=[2]\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `_captured_at_to_epoch` does not explicitly handle all valid ISO-8601 timezone-offset formats in `captured_at`.\n  WHY: If `captured_at` arrives with a non-UTC offset, the parser may fail or misinterpret the timestamp, causing the post-capture-evolution defense to fail closed incorrectly.\n- scripts/verify_integration_fingerprints.py:lines 608-612 | confidence=[2]\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The `except Exception` block in `_is_must_contain_post_capture_evolution_false_positive` is overly broad and swallows unexpected exceptions.\n  WHY: It can suppress interrupt/system-exit behavior during `subprocess.run()` and return `None` instead of propagating the signal.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: tests/test_verify_integration_fingerprints_post_capture_evolution.py\n  Line or code reference: line 337\n  Problem: The assertion \"FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1\" not in out checks stdout for a marker that the production code at scripts/verify_integration_fingerprints.py line 1209 emits to stderr via file=sys.stderr.\n  Why it fails at runtime: The test guards against the defense incorrectly emitting the post-capture-evolution marker on a genuine [ai-merge-resolve] resolver regression. Checking the wrong stream means the assertion provides no actual protection. A future code change that accidentally emits the marker on stderr for resolver regressions (for example, a refactoring that weakens the commit_epoch > captured_epoch comparison or the subject prefix match) would pass this test undetected. The correct assertion should be \"FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1\" not in _err.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: agents.md\n  Line: ~200 (stable log prefixes section)\n  Problem: The new log prefix `FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1` emitted by the code is not documented in the stable log prefixes list in agents.md. According to agents.md \u00a721: \"Stable log prefixes (contractual) \u2014 Workflow-log-analysis and API-hygiene reporting depend on these stable log prefixes. Renames are breaking unless an alongside-old shim is documented and shipped.\"\n  Why it fails at runtime: The code correctly emits this prefix in scripts/verify_integration_fingerprints.py at line 1210:\n  ```\n  print(\n      f\"::warning::FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1 \"\n      ...\n  )\n  ```\n  However, agents.md only documents:\n  - FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1\n  - FINGERPRINT_STATE_SELFHEAL_V1\n  - PRE_EXISTING_FINGERPRINT_DRIFT_V1\n  - FINGERPRINT_TIER_DOWNGRADED_V1\n  - FINGERPRINT_QUARANTINED_V1\n\n  The new prefix should be added to maintain the contractual stability of log prefixes for workflow-log-analysis and API-hygiene reporting.\n\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: scripts/verify_integration_fingerprints.py\n  Line or code reference: lines 496-523, function `_captured_at_to_epoch`\n  Problem: The function parses ISO-8601 timestamps but does not handle all valid ISO-8601 formats that might appear in `captured_at`. Specifically, it only handles the trailing 'Z' case for UTC, but timestamps with explicit timezone offsets like `+05:00` or `-08:00` are passed through to `fromisoformat()` without normalization.\n  Why it fails at runtime: If the orchestrator ever emits `captured_at` with a non-UTC offset (e.g., from a misconfigured runner or future code change), the parser may fail or misinterpret the timestamp, causing the post-capture-evolution defense to fail-closed incorrectly even when valid evolution data exists.\n  ISSUE_CONFIDENCE: 2\n- File: scripts/verify_integration_fingerprints.py\n  Line or code reference: lines 608-612 (the `except Exception` block)\n  Problem: The broad `except Exception` catch silently swallows all exceptions including `KeyboardInterrupt` and `SystemExit`, caching `None` and returning it. While these are unlikely in this subprocess context, the pattern is overly broad.\n  Why it fails at runtime: If the process receives an interrupt signal during the `subprocess.run()` call, the intended signal handling behavior is suppressed, and the function returns `None` (fail-closed) instead of allowing the signal to propagate.\n  ISSUE_CONFIDENCE: 2\n- File: scripts/verify_integration_fingerprints.py\n  Location: `_captured_at_to_epoch` function, lines 496-523\n  Issue: Limited ISO-8601 timezone handling\n  Suggested minimal fix: Add explicit handling for common timezone offset formats before the `fromisoformat` call, or document that only UTC timestamps are supported in the `captured_at` field contract.\n  Estimated lines changed: 3-5\n  HARDENING_RISK_SCORE: 1\n- File: scripts/verify_integration_fingerprints.py\n  Location: `_is_must_contain_post_capture_evolution_false_positive` function, lines 608-612\n  Issue: Overly broad exception handling\n  Suggested minimal fix: Change `except Exception:` to `except (OSError, subprocess.SubprocessError, ValueError):` to only catch expected failure modes while allowing unexpected system exceptions to propagate.\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "8c97f25e905674fdcae62f5450dc89bd79d3bdebcaa858f708d4be0a933ea6e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26930921359",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26930921359",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260604044910_e4b0ba8060",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26930921359"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-04T04:49:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

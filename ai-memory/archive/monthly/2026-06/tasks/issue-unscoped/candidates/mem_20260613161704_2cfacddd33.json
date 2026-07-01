@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/dispatch_and_watch_workflow_run.sh:~229-255 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The snapshot-only path can pass an empty or malformed `RUN_JSON` into `jq` instead of normalizing it to `{}`.\n  WHY: One reviewer reported a transient API failure can break observability here, while three others said the current guard or later autofix already handles it.\n- scripts/dispatch_and_watch_workflow_run.sh:~310-316 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_20]\n  PROBLEM: The final timeout branch unconditionally exits 1, so non-blocking dispatch/watch runs can still fail the job when they time out.\n  WHY: Two reviewers reported fail-open/snapshot-only observability checks can be turned into release-gate failures, while others argued those paths exit earlier and the timeout branch is only reached by blocking callers.\n- scripts/comprehensive_test_and_release_gh_api.sh:~9-30 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: `GH_API_SAFE_QUIET_STDERR` may leak from quiet-mode helper calls into later non-quiet calls in the same shell.\n  WHY: Two reviewers reported the leaked flag can suppress downstream `::error::` output, while three others said inline environment assignment scopes the variable to the invoked function and it does not persist.\n- scripts/dispatch_and_watch_workflow_run.sh:34-59 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, mistralai_mistral-small-2603]\n  PROBLEM: `conclusion_allowed` does not trim whitespace in the allowed-conclusions CSV, so `success, skipped` will not match `skipped`.\n  WHY: Multiple reviewers independently reported the space-padded CSV mismatch; one reviewer said current callers use no-space CSVs so the issue is latent.\n- scripts/dispatch_and_watch_workflow_run.sh:51-61 | severity=medium | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `conclusion_allowed` reuses `allowed` for both the array and the loop iterator.\n  WHY: One reviewer reported this as array-variable clobbering in the same function, distinct from whitespace handling.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/dispatch_and_watch_workflow_run.sh:315-316 | confidence=4\n  PROBLEM: The timeout exit path unconditionally runs `exit 1` without checking fail-open flags.\n  WHY: When dispatch/watch times out, non-blocking smoke checks like workflow-log-analysis can still fail the entire run.\n- scripts/dispatch_and_watch_workflow_run.sh:53-59 | confidence=3\n  PROBLEM: `conclusion_allowed` does not normalize whitespace in comma-separated allowed conclusions.\n  WHY: A CSV like `success, skipped` leaves a leading-space token that will not match `skipped`.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/dispatch_and_watch_workflow_run.sh:51-61 | confidence=5\n  PROBLEM: Array-variable clobbering and lack of whitespace normalization in comma-separated allowed conclusions.\n  WHY: Reusing `allowed` for both the array and the loop iterator collides at the bash name slot, and spaces after commas silently reject valid conclusions.\n- scripts/dispatch_and_watch_workflow_run.sh:34-51 | confidence=5\n  PROBLEM: `conclusion_allowed` does not normalize whitespace in allowed-conclusion CSV before comparison.\n  WHY: `\"success, skipped\"` yields a leading-space token that fails to match `skipped`.\n- scripts/comprehensive_test_and_release_gh_api.sh:9-30 | confidence=4\n  PROBLEM: `GH_API_SAFE_QUIET_STDERR` is set inside the helper but never unset afterward, risking quiet-mode leaking into subsequent non-quiet calls in the same shell session.\n  WHY: The reviewer reports later `gh_api_safe_print` calls can suppress `::error::` output.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/dispatch_and_watch_workflow_run.sh:~229-255 | confidence=4\n  PROBLEM: `RUN_JSON=\"$(gh_api_safe_quiet_print ...)\"` can still feed a truly empty/failed API response into `jq` instead of normalizing it to `{}`.\n  WHY: The reviewer says a transient network or 5xx response can break the snapshot-only observability path; other reviewers called this already guarded or false positive.\n- scripts/dispatch_and_watch_workflow_run.sh:~310-313 | confidence=4\n  PROBLEM: The final timeout branch unconditionally exits 1 even for non-blocking dispatch paths.\n  WHY: The reviewer says slow-but-successful observability dispatches can turn into release-gate failures; other reviewers said the branch is unreachable from snapshot-only/fail-open paths.\n- scripts/comprehensive_test_and_release_gh_api.sh:~9-30 | confidence=3\n  PROBLEM: `GH_API_SAFE_QUIET_STDERR` can leak into later non-quiet calls in the same sourced shell.\n  WHY: The reviewer says later `gh_api_safe_print` calls can drop `::error::` output; other reviewers said inline assignment scopes it correctly and does not persist.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "4d8ed890c3af7faa04e3833e8ca032e59cbc7499121905b1b8c3c5e41e2e61a9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3334,
+    "run_id": "27471142578",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27471142578",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260613161704_2cfacddd33",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3334,
+    "run_id": "27471142578"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-13T16:17:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

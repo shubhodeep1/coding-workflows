@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n- HEAD: `09de574a8ef552283c0b64f15ae50640408710bb`\n- Checked-out branch: `orchestrator/project-3185`\n- Integration metadata matches checkout: yes\n\nAutomation / wiring summary\n- Change type: modify existing workflow code only.\n- Existing entry point: `.github/workflows/plan.yml`, invoked by `.github/workflows/internal-plan.yml` on `/answer` issue comments.\n- New scheduler / PR-push wiring: none.\n- New script or supervisor: none.\n- DB gating / removal-registry work: not applicable.\n\nClarification mapping\n- No clarification questions were issued.\n- `/answer [auto-answered-by-orchestrator]` confirms the issue was considered sufficiently specified for planning.\n\nConflict check\n- No factual conflict detected.\n- The current branch still contains the unsafe state read in `.github/workflows/plan.yml`\u2019s `Auto-approve clear plan` step, matching the issue description.\n\nAssumptions\n- Preserve current auto-approve policy exactly.\n- Preserve existing env var names, step ids, output names, and `/approved [auto-approved-by-plan]` comment text.\n- Preserve the current fail-open behavior where an unreadable issue state falls back to `\"open\"`.\n\nMissing-context notes\n- None.\n\n1. Files likely to change\n- `.github/workflows/plan.yml`\n- A new narrow workflow contract test under `tests/`, likely `tests/test_plan_auto_approve_safe_state_fetch.py`\n- No change expected in `.github/workflows/internal-plan.yml` (wrapper only) or `scripts/gh_helpers.sh` (helper already exists)\n\n2. Functions or modules to implement\n- In `.github/workflows/plan.yml`, update the `Auto-approve clear plan` step only:\n  - keep the current `gh_helpers.sh` bootstrap,\n  - make `_safe_gh_jq` available in the step alongside the existing `gh_retry` bootstrap,\n  - replace the current `gh_retry gh api ... --jq '.state // \"open\"' || echo \"open\"` read with the safe helper path,\n  - leave the closed-issue early-exit, `AUTO_IMPLEMENT_ON_CLEAR_PLAN` gate, sleep, `/approved` post, and `auto_approved` output unchanged.\n- If a local `_safe_gh_jq` fallback is needed, follow the mktemp/suppress-stdout pattern already used in `implement.yml`, not a pass-through `gh api` wrapper.\n- Add a contract test that asserts the auto-approve step uses `_safe_gh_jq` for the issue-state lookup and still preserves the current output/comment strings.\n\n3. Data structures affected\n- Shell variable: `CURRENT_STATE`\n- Step output: `auto_approved`\n- Issue comment body: `/approved [auto-approved-by-plan] ...`\n- No schema, label, memory-record, or env-var changes\n\n4. API or interface changes\n- No external interface or policy change intended.\n- Same GitHub issue endpoint is used; only the shell helper path changes so failed `gh api --jq` calls cannot leak raw JSON into `CURRENT_STATE`.\n- No renames to outputs, env vars, labels, or workflow triggers.\n\n5. Potential risks or edge cases\n- `gh_retry` alone is not enough here because it can still allow failed-command stdout through; the safety fix must happen at `_safe_gh_jq`.\n- A fallback like `_safe_gh_jq() { gh api \"$@\"; }` would reintroduce the exact bug if `gh_helpers.sh` failed to source.\n- The `\"open\"` fallback must remain, or transient GitHub API failures would alter current control flow.\n- The `/approved` text and `auto_approved` behavior must stay unchanged because downstream plan/implement/stable-test flow depends on current semantics.\n\n6. Testing considerations\n- Add and run one narrow contract test for this step only:\n  - safe `_safe_gh_jq` issue-state fetch is present,\n  - `/approved [auto-approved-by-plan]` text is unchanged,\n  - `auto_approved` output handling is unchanged.\n- Run the adjacent plan-workflow contract smoke (`tests/test_plan_clarify_blocked_output.py`) as a minimal guard that surrounding `plan.yml` structure was not disturbed.\n- Broader workflow/e2e coverage should not be necessary for this localized hardening.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a4f6f585b2c7caf1f9437f1e1e36946b3f2ac4d87aa838504aa21d7389449567",
+  "lineage": {
+    "issue_number": 3204,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27102730836",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27102730836",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3204"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260607194506_597ad64b15",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3204,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27102730836"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3204",
+  "timestamps": {
+    "created_at": "2026-06-07T19:45:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

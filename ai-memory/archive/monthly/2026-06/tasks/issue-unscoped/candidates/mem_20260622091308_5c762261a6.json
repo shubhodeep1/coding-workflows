@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_update_workflows_guardrails.py:37-61 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The hardcoded `standard` list in `test_profile_manifests_match_contracts()` no longer matches `workflow-templates/profiles/standard.txt` because it omits `ai-sync-labels.yml`.\n  WHY: The CI lint step fails with `AssertionError` at `assert _manifest_lines(\"standard.txt\") == standard` after the manifest update added `ai-sync-labels.yml`, so the test cannot pass as written.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Complete remaining squad-workflow improvements (N1, P5a, P5b, N2, N4)\" with one independently mergeable PR per phase (explicit 5-PR rollout per #3408).\n  expected_change_site: One PR per phase (N1 \u2192 P5a \u2192 P5b \u2192 N2 \u2192 N4) with separate commits/merge.\n  confidence=5\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_20]\n  EVIDENCE: No diff hunk across ORIGINAL PR DIFF or LAST RUN DIFF splits the work; the PR description itself acknowledges bundling all phases together, and the original PR diff bundles label-sync wrapper, consumer-drift audit, helper extraction, repo_learnings, and write-guards into a single squash.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_update_workflows_guardrails.py:46-52 | severity=critical | confidence=5\n  PROBLEM: The hardcoded `standard` list does not include `ai-sync-labels.yml`.\n  WHY: The PR added `ai-sync-labels.yml` to `workflow-templates/profiles/standard.txt`, so `assert _manifest_lines(\"standard.txt\") == standard` fails because the manifest has 12 entries while the test still expects 11.\n- scripts/audit_consumer_drift.py:368\n  PROBLEM: Finding REJECTED: cross-pollination from x-ai/grok-4.20 claimed `urllib.request.urlopen(request, timeout=120)` construction with raw+json Accept handling issues.\n  WHY: Verified: `scripts/audit_consumer_drift.py` does not contain `urllib.request` or `urlopen` anywhere; it uses `gh api` via subprocess for all GitHub API calls, so the cited file:line is fabricated.\n- scripts/ai_memory_lib.py:2069\n  PROBLEM: Finding REJECTED: cross-pollination from x-ai/grok-4.20 claimed `max_records` validation runs after `memory_retrieve` already executes the query, so `--max=0` silently returns results.\n  WHY: Verified: the `max_records is not None and max_records < 1` guard runs BEFORE keyword extraction, record loading, scoring, and selection, so an invalid value raises `MemoryValidationError` immediately and no records are returned.\n- TASK_GAP:\n  Requirement: The cross-pollination TASK_GAP about requiring separate independently-mergeable phase PRs \u2014 the PR description states this is a \"Squash merge of orchestrator project #3408\" which is the standard orchestrator final-integration pattern.\n  Expected change site: The PR should be split into independently-mergeable PRs per phase as stated in the issue title.\n  Evidence of absence: The linked issue body was empty, so no task spec contradicts the squash-merge approach.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n- Requirement: The hardcoded `standard` list in `test_profile_manifests_match_contracts()` must match the updated `workflow-templates/profiles/standard.txt`.\n  Expected change site: tests/test_update_workflows_guardrails.py lines 46\u201356\n  Evidence of absence: The CI shows `AssertionError` at the line `assert _manifest_lines(\"standard.txt\") == standard` in `test_profile_manifests_match_contracts()` because `workflow-templates/profiles/standard.txt` now contains 6 lines while the `standard` list contains only 5 and the `ai-sync-labels.yml` entry is missing.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_update_workflows_guardrails.py:46-52 | severity=critical\n  PROBLEM: The test file `tests/test_update_workflows_guardrails.py` has a hardcoded `standard` profile list that is missing `ai-sync-labels.yml`.\n  WHY: `workflow-templates/profiles/standard.txt` contains `ai-sync-labels.yml`, but the `standard` list in `tests/test_update_workflows_guardrails.py` still ends at `review_rb_judge_dispatch.yml`, so the manifest comparison fails.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n- Requirement: The PR bundles five distinct phase areas (label-sync wrapper, consumer-drift audit, helper extraction/reno_learnings, write-guards, P5a-P5b squad improvements) into a single squash-merge PR for orchestrator project #3408.\n  Expected change site: The PR should be split into independently-mergeable PRs per phase as stated in the issue title.\n  Evidence of absence: No diff hunk across ORIGINAL PR DIFF or LAST RUN DIFF splits the work; the PR description itself acknowledges bundling all phases together.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_update_workflows_guardrails.py:37-61 | severity=critical | confidence=5\n  PROBLEM: The test's static `standard` list is now out of sync with `workflow-templates/profiles/standard.txt` (which now includes `ai-sync-labels.yml` as required by the standard profile contract).\n  WHY: The lint step (`PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_guardrails.py`) aborts with `AssertionError`, so the test can no longer pass after the manifest update introduced by this PR.\n- TASK_GAP:\n  Requirement: \"Complete remaining squad-workflow improvements (N1, P5a, P5b, N2, N4)\" with one independently mergeable PR per phase (explicit 5-PR rollout per #3408).\n  Expected change site: One PR per phase (N1 \u2192 P5a \u2192 P5b \u2192 N2 \u2192 N4) with separate commits/merge.\n  Evidence of absence: The original PR diff (and this subsequent autofix run) bundles label-sync wrapper, consumer-drift audit, helper extraction, repo_learnings, and write-guards into a single squash; no diff hunk splits the work.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "67110b209b52e7a9a85097fa1d80c039ea80244594e7fa829ae2b1cc584a7f29",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3411,
+    "run_id": "27939048393",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27939048393",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260622091308_5c762261a6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3411,
+    "run_id": "27939048393"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-22T09:13:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

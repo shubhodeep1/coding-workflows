@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nPlanning ref: `orchestrator/project-3243` (`5dc71c0e8d1153069d64f8a17f5f54c89feaf440`)\nClarification status: no Q1/Q2 were asked; `/answer [auto-answered-by-orchestrator]` just confirms proceed with the issue as written.\n\nActions taken\n- Inspected `.github/workflows/issue_pr_status.yml`, especially the fallback parser in `Update linked issue labels when PR closes` and the downstream merged-alert reuse path.\n- Inspected `tests/test_issue_pr_status_payload_fallback_contract.py` and the CI step that runs it.\n- Re-validated the external event contract against current GitHub docs.\n\nRe-validation / conflict note\n- The local repo is already built around `github.event.pull_request.*` on this path, and the shipped wrappers invoke the reusable workflow only on `pull_request.closed`. GitHub\u2019s current docs are internally mixed, though: the Actions reference still carries a blanket note that `pull_request` payloads are empty for merged PRs, while the same page also documents `pull_request.closed` workflows checking `github.event.pull_request.merged`, and the webhook reference still describes a required `pull_request` object. Treat that as a documentation ambiguity/risk note, not as a reason to keep the extra `/pulls/{PR_NUMBER}` fetch. ([docs.github.com](https://docs.github.com/actions/automating-your-workflow-with-github-actions/events-that-trigger-workflows))\n\n1. Files likely to change\n- `.github/workflows/issue_pr_status.yml`\n  - Narrow edit in the fallback block at lines `272-295`.\n- `tests/test_issue_pr_status_payload_fallback_contract.py`\n  - Update the payload-first contract assertions at lines `39-53`.\n- No wrapper/template changes planned:\n  - `workflow-templates/ai-issue-pr-status.yml`\n  - `.github/workflows/internal-issue-pr-status.yml`\n\n2. Functions or modules to implement\n- In `.github/workflows/issue_pr_status.yml`:\n  - Keep `PR_DATA=\"${PR_TITLE:-} ${PR_BODY:-}\"`.\n  - Delete the blank-payload check plus the fallback `gh_retry gh api \"repos/${REPOSITORY}/pulls/${PR_NUMBER}\" ...` read.\n  - Leave unchanged:\n    - the strict regex,\n    - branch-name issue fallback,\n    - `LOOKUP_ISSUE_NUMBERS` merge behavior,\n    - `export_orchestrator_issue_classification`,\n    - fail-open no-linked-issues exit,\n    - merged-alert classifier reuse.\n- In `tests/test_issue_pr_status_payload_fallback_contract.py`:\n  - Replace the current \u201cpayload before fallback fetch\u201d assertion with a \u201cpayload is the sole source; no PR refetch remains\u201d assertion.\n  - Preserve the existing assertions for payload env wiring, tightened regex semantics, and orchestrator-classifier export behavior.\n\n3. Data structures affected\n- No new data structures.\n- Existing shell/env contract stays the same:\n  - `PR_TITLE`, `PR_BODY`, `PR_DATA`\n  - `ISSUE_NUMBERS`, `LOOKUP_ISSUE_NUMBERS`, `CLOSING_ISSUE_NUMBERS`\n  - `TRACKING_ISSUES`, `MANAGED_ISSUES`, `ORCHESTRATOR_CLASSIFICATION_COMPLETE`\n- No label names or exported env var names should change.\n\n4. API or interface changes\n- Remove one REST read from the fallback path:\n  - `GET /repos/{owner}/{repo}/pulls/{PR_NUMBER}`\n- No changes to:\n  - regex surface,\n  - orchestrator classification exports,\n  - fail-open label/update behavior,\n  - downstream classifier contracts.\n\n5. Potential risks or edge cases\n- If GitHub ever delivers a truly blank `github.event.pull_request.title/body` for this `pull_request.closed` path, the workflow will now remain fail-open and report no linked issues instead of recovering via a live PR refetch; that is the intended tradeoff of this cleanup. ([docs.github.com](https://docs.github.com/actions/automating-your-workflow-with-github-actions/events-that-trigger-workflows))\n- The step already depends on other `github.event.pull_request.*` fields (`number`, `head.ref`, `base.ref`, `merged`), so this removes a redundant compensation path rather than adding a new event dependency.\n- Do not touch the merged-alert fallback at `.github/workflows/issue_pr_status.yml:577-600`; that is a separate incomplete-classifier safety path.\n- Do not broaden this into shared-helper extraction or other `issue_pr_status` cleanup.\n\n6. Testing considerations\n- Required targeted check:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_issue_pr_status_payload_fallback_contract.py`\n- Low-cost adjacent regression check, since CI runs them together in `.github/workflows/ci.yml:417-422`:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_label_helpers_phase_transition_contract.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_issue_pr_status_payload_fallback_contract.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_phase_transition_contract.py`\n- Diff review should confirm the only workflow logic removal is the fallback PR fetch, with the strict regex and classifier export lines unchanged.\n\nAssumptions\n- `/answer [auto-answered-by-orchestrator]` is sufficient confirmation to plan the scoped cleanup exactly as requested.\n- The implementation stays on `orchestrator/project-3243`; no wrapper changes are required.\n\nMissing-context notes\n- The issue references a `files_touched` allowlist, but that list was not included in the planning context. This plan assumes the reusable workflow and its dedicated contract test are within that allowlist.\n- If the hidden allowlist excludes the test file, the implementer should keep the workflow edit surgical and note the constraint rather than broadening scope.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0b09d14c3580674fa02abecb381986586207bd7a0f46fabfbd5a72775bd1accf",
+  "lineage": {
+    "issue_number": 3248,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27233528085",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27233528085",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3248"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260609203113_80f11f3cf4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3248,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27233528085"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3248",
+  "timestamps": {
+    "created_at": "2026-06-09T20:31:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

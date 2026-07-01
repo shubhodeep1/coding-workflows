@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `c97706613d2ad161d1f3928d06e58115a5874b20` on `orchestrator/project-3291` (matches integration metadata `orchestrator/project-3291`).\n\nClarification status: no Q1/Q2 batch existed; `/answer [auto-answered-by-orchestrator]` means proceed on the issue\u2019s stated scope.\n\nConflict to note before implementation:\n- `.github/workflows/orchestrate_clarify_respond.yml`\u2019s `Check orchestrator metadata` step on current HEAD does **not** use `source scripts/gh_helpers.sh 2>/dev/null || true` or `gh_retry`; the actual matching unsafe block in that workflow is `Fetch issue and tracking context`. I\u2019d treat that as a stale step-name reference from the issue and keep the fix limited to the real optional-source+`gh_retry` block plus the named failure-comment step.\n- There are other out-of-scope BUG-002-shaped blocks elsewhere on current HEAD (for example `plan.yml`\u2019s `Validate planning phase label` and `orchestrate.yml`\u2019s `Create Wave 1 issues only`). The regression test should stay step-scoped so this issue does not balloon into a repo-wide hardening sweep.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/clarify.yml`\n- `.github/workflows/plan.yml`\n- `.github/workflows/orchestrate.yml`\n- `.github/workflows/orchestrate_clarify_respond.yml`\n- `tests/test_workflow_gh_retry_fallback_contract.py` (new targeted contract test; name can vary)\n- `.github/workflows/ci.yml`\n\n2. Workflow blocks to harden\n- In `.github/workflows/clarify.yml`:\n  - `Fetch issue metadata`\n  - `Fetch issue comments`\n- In `.github/workflows/plan.yml`:\n  - `Fetch issue metadata`\n  - `Fetch issue comments`\n  - `Skip when issue already has a PR`\n  - `Comment on issue failure`\n- In `.github/workflows/orchestrate.yml`:\n  - `Create tracking issue`\n- In `.github/workflows/orchestrate_clarify_respond.yml`:\n  - `Fetch issue and tracking context` (current-code replacement for the stale `Check orchestrator metadata` reference)\n  - `Comment on issue failure`\n\nFor each targeted block:\n- Keep `source scripts/gh_helpers.sh 2>/dev/null || true`.\n- Immediately add the exact local fallback already used in `plan.yml`:\n  - `type gh_retry >/dev/null 2>&1 || gh_retry() { \"$@\"; }`\n- Do **not** add `_safe_gh_jq` unless that block actually calls `_safe_gh_jq` (none of the scoped blocks currently do).\n\n3. Representative existing pattern to reuse\n- Copy the exact `gh_retry` shim form already present in `plan.yml`\u2019s safe blocks (`Handle blocked planning output` / `Auto-approve clear plan`), rather than inventing a variant.\n\n4. Data structures / logic affected\n- No schema, API payload, label contract, or persistent data changes.\n- Only the inline shell helper contract inside targeted workflow `run:` blocks changes:\n  - before: optional helper source could leave `gh_retry` undefined\n  - after: missing helper source degrades to raw `gh ...` execution instead of `gh_retry: command not found`\n- New test module will likely use a small mapping of:\n  - workflow path\n  - step name\n  - whether `gh_retry` shim is required\n  - whether `_safe_gh_jq` shim must be absent\n\n5. API / interface changes\n- None externally.\n- GitHub API endpoints and CLI calls stay the same; only the local fail-open behavior changes when `gh_helpers.sh` is unavailable.\n\n6. Regression coverage\n- Add a focused workflow-contract test that:\n  - extracts each targeted step block by step name\n  - asserts the optional source line is still present\n  - asserts the exact `gh_retry` fallback shim is present\n  - asserts the shim appears before the first `gh_retry` call in that block\n  - asserts `_safe_gh_jq` shim is absent in these `gh_retry`-only blocks\n- Keep the test scoped to the targeted steps only; do not grep the whole repo for every optional-source block.\n- Wire the new test into `.github/workflows/ci.yml` near the existing workflow contract tests.\n\n7. Risks / edge cases\n- YAML/run-block edits are indentation-sensitive; keep changes surgical.\n- Don\u2019t replace with the `&>/dev/null` shim variant from other files; acceptance wants the existing `plan.yml` form.\n- Don\u2019t \u201cfix\u201d the stale `Check orchestrator metadata` reference by changing its behavior unless explicitly requested; current code there is a different pattern.\n- Don\u2019t broaden the regression test into a repo-wide enforcement pass, because current HEAD still has other out-of-scope occurrences.\n\n8. Testing considerations\n- Run the new targeted contract test directly.\n- Run the adjacent existing contract test `tests/test_plan_auto_approve_safe_state_fetch.py` as a sanity check for the shared shim pattern.\n- Let CI\u2019s existing YAML/actionlint gates catch workflow syntax regressions.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d557650f42dfd48fa7c68a447401132ba44adc8cb307e4a75e3163d36ec7755c",
+  "lineage": {
+    "issue_number": 3292,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27389052325",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27389052325",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3292"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260612014825_477d7a3059",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3292,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27389052325"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3292",
+  "timestamps": {
+    "created_at": "2026-06-12T01:48:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

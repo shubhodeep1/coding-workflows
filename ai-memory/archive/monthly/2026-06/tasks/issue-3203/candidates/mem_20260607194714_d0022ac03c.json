@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for issue #3185 / #3195 follow-up\n\nRef / clarification context\n- Planning ref: `09de574a8ef552283c0b64f15ae50640408710bb`\n- Checked-out branch: `orchestrator/project-3185`\n- Integration metadata matches the checked-out branch, so there is no integration-branch blocker.\n- Clarification mapping: no `Q1/Q2/...` questions were asked; `/answer [auto-answered-by-orchestrator]` means proceed with the issue body as written.\n\nAutomation / wiring summary\n- Change shape: add one new workflow support script and extend two existing workflows.\n- Existing PR-push entry point remains `.github/workflows/internal-review.yml` (`push` -> `resolve-claude-branch-pr` -> `review_autofix.yml`).\n- No new scheduler wiring.\n- No new supervisor.\n- No DB work / DB gate pattern.\n- Add `scripts/review_collect_pr_metadata.sh` to `docs/scripts-pending-removal.md` (fill the actual landing PR number/date during implementation).\n\nRepresentative patterns to follow\n- `scripts/review_conflict_prepare.sh`: pattern for extracting a long workflow step into a documented shell helper.\n- `scripts/post_review_comment.sh`: pattern for percent-encoding `HEAD_REF` in `pulls?state=open&head=...` lookups.\n\nFiles likely to change\n- `scripts/review_collect_pr_metadata.sh` (new)\n- `.github/workflows/review_autofix.yml`\n- `.github/workflows/internal-review.yml`\n- `docs/scripts-pending-removal.md`\n- `tests/test_review_autofix_review_pipeline_contract.py`\n- `tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py` (preferred existing CI-covered selector-contract surface, to avoid CI workflow churn)\n\nImplementation plan\n1. Create `scripts/review_collect_pr_metadata.sh` and move the current \u201cCollect PR metadata\u201d step logic into it.\n   - Preserve the no-PR synthetic path.\n   - Preserve PR payload / issue comments / reviews / review-comments collection.\n   - Preserve `PR_META_FILE` projection.\n   - Preserve linked-issue fetch + body-text fallback behavior.\n   - Preserve `LINKED_ISSUE_CONTEXT_FILE` and `PR_ALL_COMMENTS_CONTEXT_FILE` generation.\n   - Use env inputs (`GITHUB_REPOSITORY`, `GITHUB_ENV`, file-path vars, override vars) instead of GitHub-expression literals inside the script.\n\n2. Keep retry behavior compatible with the current inline step.\n   - Do not silently change the retry/backoff/output-file contract while extracting.\n   - If shared helpers are reused, they must preserve the current behavior seen by this step.\n\n3. Update `.github/workflows/review_autofix.yml`.\n   - Add `review_collect_pr_metadata.sh` to `REQUIRED_BOOTSTRAP_SCRIPTS` so consumer repos stage it into `SUPPORT_SCRIPTS_DIR`.\n   - Replace the long inline \u201cCollect PR metadata\u201d body with a thin `bash \"${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh\"` call.\n   - Keep downstream env/file names and step ordering stable.\n\n4. Update `.github/workflows/internal-review.yml` `resolve-claude-branch-pr`.\n   - Percent-encode `HEAD_REF` before the open-PR lookup.\n   - Source `base_ref` from `github.event.repository.default_branch` first.\n   - Fall back to the current repo GET / `main` behavior only when the event payload is empty.\n   - Keep `proceed`, `head_ref`, `head_sha`, and `base_ref` outputs unchanged.\n\n5. Add the registry entry in `docs/scripts-pending-removal.md`.\n   - Script path: `scripts/review_collect_pr_metadata.sh`\n   - Likely type: `long-running`\n   - Likely trigger: `permanent \u2014 review annually`\n   - Preflight checks should reference the live workflow caller(s) and the targeted regression tests.\n\nData structures / interfaces affected\n- JSON artifacts that must remain stable:\n  - `PR_PAYLOAD_FILE`\n  - `PR_META_FILE`\n  - `PR_ISSUE_COMMENTS_FILE`\n  - `PR_REVIEWS_FILE`\n  - `PR_REVIEW_COMMENTS_FILE`\n- Text/context artifacts that must remain stable:\n  - `LINKED_ISSUE_CONTEXT_FILE`\n  - `PR_ALL_COMMENTS_CONTEXT_FILE`\n- Env/output contracts that must remain stable:\n  - `LINKED_ISSUES_JSON`\n  - internal-review outputs `proceed`, `head_ref`, `head_sha`, `base_ref`\n- No public workflow input/output rename is planned.\n\nRisks and edge cases\n- The no-PR path must still fail if `HEAD_REF_OVERRIDE_INPUT` or `HEAD_SHA_OVERRIDE_INPUT` is missing.\n- The no-PR path must still emit empty discussion arrays and `AUTOFIX_NO_PR_METADATA_SYNTHESIZED`.\n- `LINKED_ISSUES_JSON` must stay GraphQL-first / numbers-only; body fallback should continue to affect only linked-issue context.\n- `HEAD_REF` values containing `&`, `#`, `+`, `%`, space, `?`, or `/` must no longer break the open-PR selector.\n- Forgetting the bootstrap-list update would break consumer repos even if the new script exists here.\n- `scripts/gh_helpers.sh` already has PR-context helpers, but they are not a drop-in replacement because this flow also needs `PR_REVIEWS_FILE` plus the synthetic no-PR mode.\n\nFocused regression coverage\n- Prefer extending existing CI-invoked tests instead of adding a new standalone test file.\n- In `tests/test_review_autofix_review_pipeline_contract.py`:\n  - assert that `review_autofix.yml` bootstraps `review_collect_pr_metadata.sh`\n  - assert that the \u201cCollect PR metadata\u201d step delegates to the helper\n  - add a mock-`gh` harness that executes `scripts/review_collect_pr_metadata.sh` for both:\n    - no-PR synthetic mode\n    - PR-backed fetch mode\n- In `tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py`:\n  - assert that `internal-review.yml` percent-encodes `HEAD_REF`\n  - assert that it prefers event `default_branch` before the repo GET fallback\n- Targeted validation:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py`\n\nConflicts detected\n- No factual conflict with the issue description: the cited inline metadata block in `review_autofix.yml` and the raw-`HEAD_REF` / repo-GET behavior in `internal-review.yml` are still present.\n\nAssumptions\n- Treat `scripts/review_collect_pr_metadata.sh` as a permanent workflow helper unless reviewers specify a sunset.\n- Keep the change surgical: no check-run collection, reviewer-tuning, or PR-state-guard work.\n\nMissing context\n- The exact landing PR number/date for `docs/scripts-pending-removal.md` is not knowable during planning and should be filled in during implementation.\n\nActions taken\n- Inspected the current `Collect PR metadata` workflow step, the `resolve-claude-branch-pr` step, the extracted-helper pattern in `scripts/review_conflict_prepare.sh`, the encoded head-ref query pattern in `scripts/post_review_comment.sh`, the removal-registry format, and the existing CI-invoked review contract tests.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b6d7443482977533b9db01756e0d9a9565cedb3178411703b666f51bb536dcef",
+  "lineage": {
+    "issue_number": 3203,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27102730456",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27102730456",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3203"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260607194714_d0022ac03c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3203,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27102730456"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3203",
+  "timestamps": {
+    "created_at": "2026-06-07T19:47:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

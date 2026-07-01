@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n- Branch: `orchestrator/project-3042`\n- HEAD: `b05e73782db7e91f018895f69a9d3d84dbff7b6b`\n- Integration branch match: yes\n\nClarification mapping\n- None. No Q1/Q2 were asked; `/answer [auto-answered-by-orchestrator]` only confirmed continuation.\n\nAutomation / wiring impact\n- Change type: create 8 prompt-contract YAML files and 1 focused test module; no new script/workflow/scheduler wiring.\n- Scheduler / PR-push entry point: none.\n- Supervisor: none.\n- DB work / gate: none.\n- Pending-removal registry entry: none.\n\nActions taken\n- Reviewed the shared strict-rendering path in `scripts/render_prompt.py` (`discover_contract_path`, `load_contract`, `validate_contract`).\n- Compared the existing contract shape in `prompts/contracts/mode-implement.yml` and `prompts/contracts/mode-plan.yml`.\n- Scanned the 8 target prompt templates for actual placeholders.\n- Reviewed the current render tests in `tests/test_render_prompt_foundation.py` and the existing Semble/Serena placeholder behavior coverage.\n\nRepresentative pattern to follow\n- Contract file shape: `prompts/contracts/mode-implement.yml` and `prompts/contracts/mode-plan.yml`\n- Runtime assertion style: `tests/test_render_prompt_foundation.py`\n- Placeholder-family behavior reference: `tests/test_judge_semble_prefetch_contract.py` for `SEMBLE_PREFETCH`\n\nFiles likely to change\n- `prompts/contracts/mode-validate-discover.yml` (new)\n- `prompts/contracts/mode-validate-generate.yml` (new)\n- `prompts/contracts/mode-validate-fix-harness.yml` (new)\n- `prompts/contracts/mode-validate-diagnose.yml` (new)\n- `prompts/contracts/mode-validate-self-heal.yml` (new)\n- `prompts/contracts/mode-workflow-analysis.yml` (new)\n- `prompts/contracts/mode-workflow-audit.yml` (new)\n- `prompts/contracts/mode-workflow-api-redundancy.yml` (new)\n- `tests/test_render_prompt_validate_analytics_modes.py` (new)\n\nImplementation plan\n1. Add the 8 missing contract files under `prompts/contracts/` using the existing minimal schema only:\n   - `required_vars: []` for all 8 modes.\n   - Validation modes with a live `{{SERENA_TOOL_HINTS}}` placeholder (`discover`, `fix-harness`, `diagnose`, `self-heal`):\n     - `optional_vars: { SERENA_TOOL_HINTS: \"\" }`\n     - `forbidden_vars: [WORKFLOW_EDIT_RESTRICTION, SEMBLE_PREFETCH]`\n   - `mode-validate-generate.yml`:\n     - `optional_vars: {}`\n     - `forbidden_vars: [WORKFLOW_EDIT_RESTRICTION, SERENA_TOOL_HINTS, SEMBLE_PREFETCH]`\n   - Workflow-analysis modes with a live `{{SEMBLE_PREFETCH}}` placeholder (`workflow-analysis`, `workflow-audit`, `workflow-api-redundancy`):\n     - `optional_vars: { SEMBLE_PREFETCH: \"\" }`\n     - `forbidden_vars: [WORKFLOW_EDIT_RESTRICTION, SERENA_TOOL_HINTS]`\n\n2. Add `tests/test_render_prompt_validate_analytics_modes.py` as a focused, table-driven runtime test module that:\n   - renders the real prompt files through the shared renderer,\n   - verifies pass cases for all 8 modes,\n   - verifies optional placeholder substitution for `SERENA_TOOL_HINTS` and `SEMBLE_PREFETCH`,\n   - verifies contract failures by binding temp prompt text to each mode via `--legacy-mode-name` and injecting a forbidden placeholder, asserting a non-zero exit plus `forbidden_present`.\n\n3. Include one explicit edge-case assertion for `mode-validate-self-heal.txt`:\n   - the standalone `{{SERENA_TOOL_HINTS}}` line must render/drop normally,\n   - the literal inline/backticked `{{SERENA_TOOL_HINTS}}` mention in the prose must remain untouched.\n\n4. Keep the change strictly inside the 9 scoped files; no renderer/workflow/script edits are needed because shared enforcement already exists.\n\nFunctions / modules to implement\n- No new production functions.\n- New test-module helpers only (for example: subprocess render helper, success/failure assertion helper, and per-mode case tables).\n\nData structures affected\n- New `PromptContract` payloads for 8 additional modes:\n  - `required_vars`\n  - `optional_vars`\n  - `forbidden_vars`\n- Test-side mode matrices grouping:\n  - Serena-backed validation modes\n  - Semble-prefetch workflow-analysis modes\n  - no-placeholder mode (`validate-generate`)\n\nAPI / interface changes\n- No user-visible API changes.\n- No workflow interface changes.\n- This extends the existing filename-based contract registry only: `prompts/contracts/<mode>.yml`.\n- Existing variable names remain unchanged: `SERENA_TOOL_HINTS`, `SEMBLE_PREFETCH`, `WORKFLOW_EDIT_RESTRICTION`.\n\nRisks / edge cases\n- `mode-validate-self-heal.txt` contains both a standalone placeholder and a literal inline `{{SERENA_TOOL_HINTS}}` reference; tests must guard against replacing the inline literal.\n- The fallback parser in `scripts/render_prompt.py` accepts only the minimal YAML subset; keep these contract files simple (no rich YAML features).\n- Do not invent non-empty `required_vars`; the scanned templates only justify optional/forbidden coverage for this issue.\n- `mode-validate-generate.txt` has no placeholders, so its contract should explicitly forbid the legacy standalone vars to catch accidental drift later.\n\nTesting considerations\n- Primary targeted check: `python3 tests/test_render_prompt_validate_analytics_modes.py`\n- Useful regression smoke after landing: `python3 tests/test_render_prompt_foundation.py`\n\nConflict / repo-state notes\n- `prompts/contracts/` currently contains only `mode-implement.yml` and `mode-plan.yml`; all 8 requested contract files are missing today.\n- `tests/test_render_prompt_validate_analytics_modes.py` is also missing today.\n- That matches the issue scope and is creation work, not a blocker.\n\nAssumptions\n- This issue is contract/test coverage only; no state-snapshot, overlay, or renderer-call-site work.\n- Empty `required_vars` across these 8 modes is intentional and derived from the current prompt placeholders, not an omission.\n\nMissing-context note\n- I did not fully trace every current consumer of `mode-validate-generate.txt` and `mode-validate-fix-harness.txt`; this plan assumes the existing shared renderer behavior is already sufficient and that the missing deliverables are the contracts plus focused coverage tests.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0849368148e5ed07c232a517c39972f50a18d256193a3d79eee0e5f557b20cd9",
+  "lineage": {
+    "issue_number": 3052,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26823596622",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26823596622",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3052"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260602134734_588fa11c71",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3052,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26823596622"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3052",
+  "timestamps": {
+    "created_at": "2026-06-02T13:47:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

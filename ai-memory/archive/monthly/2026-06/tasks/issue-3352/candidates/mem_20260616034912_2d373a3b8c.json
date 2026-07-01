@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for ref `orchestrator/project-3351` (`f1c42dd693ffeb4177d0f80e9d5cdd6776ed8362`)\n\nClarification mapping\n- No Q1/Q2 batch was issued.\n- `/answer [auto-answered-by-orchestrator]` adds no extra constraints beyond the issue body.\n\nCurrent-state readout\n- Phase B is already largely present on this ref: all 28 `prompts/mode-*.txt` / `prompts/review-*.txt` files already carry a tier marker, all four `prompts/references/*.txt` files exist, `scripts/render_prompt.py` already hydrates `REFERENCE_*` placeholders, `agents.md` / `unattended_system_instructions.md` already contain predicate roster lines, `docs/INVENTORY.md` plus both direct-run tests already exist, and `.github/workflows/ci.yml` already runs the two Phase-B checks.\n- Baseline acceptance is already green on this ref:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/prompt_size_budget.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/inventory_parity.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_foundation.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py`\n- Implementation should therefore be delta-only: verify first, then make no edits unless a narrow Phase-B mismatch is still found.\n\n1. Files likely to change\n- Expected outcome: no file changes on this ref.\n- If a hidden gap is found, keep edits inside:\n  - `prompts/mode-*.txt`, `prompts/review-*.txt`\n  - `prompts/references/output-contract.txt`\n  - `prompts/references/verification-loop.txt`\n  - `prompts/references/severity-classification.txt`\n  - `prompts/references/validate-output-contract.txt`\n  - `prompts/contracts/*.yml`\n  - `scripts/render_prompt.py` (primary), `scripts/render_prompt.sh` only if delegation/forwarding needs a narrow fix\n  - `agents.md`\n  - `unattended_system_instructions.md`\n  - `docs/INVENTORY.md`\n  - `tests/prompt_size_budget.py`\n  - `tests/inventory_parity.py`\n  - `tests/inventory_exemptions.txt`\n  - `.github/workflows/ci.yml`\n- Keep `docs/gsd-future-improvements.md` unchanged.\n\n2. Functions or modules to implement\n- If renderer work is needed, extend the existing path only:\n  - `scripts/render_prompt.py::_reference_file_name_for_placeholder`\n  - `scripts/render_prompt.py::_load_reference_placeholder_value`\n  - `scripts/render_prompt.py::hydrate_reference_placeholders`\n  - `scripts/render_prompt.py::main`\n- If budget/parity work is needed:\n  - `tests/prompt_size_budget.py::main`\n  - `tests/inventory_parity.py::parse_inventory`\n  - `tests/inventory_parity.py::collect_expected_paths`\n  - `tests/inventory_parity.py::main`\n- Representative patterns already exist in:\n  - `scripts/render_prompt.py` for reference-block hydration\n  - `prompts/contracts/mode-implement.yml`, `prompts/contracts/review-consolidator.yml`, `prompts/contracts/mode-validate-generate.yml` for placeholder allowlists\n  - `docs/INVENTORY.md` for section layout\n\n3. Data structures affected\n- First-line prompt tier metadata: `# tier: DEFAULT|LARGE|XL`\n- Prompt contract `optional_vars` for `REFERENCE_OUTPUT_CONTRACT`, `REFERENCE_VERIFICATION_LOOP`, `REFERENCE_SEVERITY_CLASSIFICATION`\n- `docs/INVENTORY.md` section rosters\n- Predicate lines:\n  - `LOG_PREFIX.name=...` in `agents.md`\n  - `BATCH_HELPER.name=...` in `agents.md` and `unattended_system_instructions.md`\n- No DB/index/model changes.\n\n4. API or interface changes\n- No external API or DB interface change is needed.\n- Internal renderer contract stays `render_prompt.sh -> render_prompt.py`; do not add a parallel include mechanism.\n- CI interface already expects the two direct-run Phase-B checks; keep those command shapes stable.\n\n5. Potential risks or edge cases\n- Conflict: the issue says \u201ctier-frontmatter,\u201d but the live repo/test contract uses a first-line `# tier:` marker, not YAML `---` frontmatter.\n- `mode-validate-generate` has special append behavior for `REFERENCE_OUTPUT_CONTRACT` via `prompts/references/validate-output-contract.txt`; do not duplicate or bypass it.\n- Any prompt placeholder change may also require a matching `prompts/contracts/*.yml` allowlist sync.\n- Conflict: the source plan text describes broader README/agents-backed inventory parity, but the shipped gate on this ref is `docs/INVENTORY.md`-centric and already passes. Avoid widening scope unless strictly required.\n- Shared-doc edits should be append-only under existing anchors.\n\n6. Testing considerations\n- If any Phase-B edit is made, rerun:\n  1. `PYTHONDONTWRITEBYTECODE=1 python3 tests/prompt_size_budget.py`\n  2. `PYTHONDONTWRITEBYTECODE=1 python3 tests/inventory_parity.py`\n  3. `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_foundation.py`\n  4. `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py`\n  5. `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py`\n  6. `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py`\n- If no files change after verification, stop there.\n\n7. Pre-execution self-check result\n- Assumption: a verification-only no-op is acceptable if the checked-out ref already satisfies the scoped Phase-B deliverables.\n- Missing-context notes: none; clarification was not required and integration metadata matches the checked-out ref.\n\nPLAN_SELF_CHECK: WARNING: The checked-out ref already appears Phase-B complete, so the safest implementation is a verification-first no-op unless a narrow regression is found.\nPLAN_SELF_CHECK: WARNING: \u201ctier-frontmatter\u201d in the issue text does not match the live first-line `# tier:` contract enforced by `tests/prompt_size_budget.py`; preserve codebase truth unless a coordinated format migration is explicitly required.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "2623ba0170bf4bec465f677124acdef8c9c10287c532e2ddf57620aa9514ace8",
+  "lineage": {
+    "issue_number": 3352,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27592644066",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27592644066",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3352"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260616034912_2d373a3b8c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3352,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27592644066"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3352",
+  "timestamps": {
+    "created_at": "2026-06-16T03:49:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

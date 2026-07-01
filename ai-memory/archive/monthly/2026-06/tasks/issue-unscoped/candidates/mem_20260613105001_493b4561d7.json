@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_memory_lib.py:1573 | severity=low | confidence=[4]\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: `scan_candidate_text_for_injection` is called twice for the same candidate text, once in `cmd_record_candidate` and once in `record_candidate`.\n  WHY: One reviewer treated this as an acceptable performance nit, but another flagged it as low severity; the duplicate scan repeats the same 14-regex work and join on every memory candidate write.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Wire the scan into the real write-candidate entrypoints in `scripts/ai_memory.py` and `scripts/ai_memory_lib.py`, verifying the concrete function names on current HEAD before editing.\n  expected_change_site: `scripts/ai_memory.py` and `scripts/ai_memory_lib.py` write-candidate entrypoints\n  confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: PR DIFF and LAST RUN DIFF do not show a scan call in `scripts/ai_memory.py` or `scripts/ai_memory_lib.py` under any function that writes a candidate record to preserve the advisory flag. The last-run changes only added a telemetry emission guard in `ai_memory.py` and left the core scanning logic unchanged, which contradicts the requirement to call `scan(record_body)` at write-candidate entrypoints. The `docs/plans/gsd-inspired-improvements-plan.md` plan explicitly mentions calling `scan` at \"every write_candidate\u2013shaped entrypoint \u2014 function names need verification on current HEAD.\"\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: Wire the scan into the real write-candidate entrypoints in `scripts/ai_memory.py` and `scripts/ai_memory_lib.py`, verifying the concrete function names on current HEAD before editing.\n  Expected change site: `scripts/ai_memory.py` and `scripts/ai_memory_lib.py` write-candidate entrypoints\n  Evidence of absence: PR DIFF and LAST RUN DIFF do not show a scan call in `scripts/ai_memory.py` or `scripts/ai_memory_lib.py` under any function that writes a candidate record to preserve the advisory flag. The last-run changes only added a telemetry emission guard in `ai_memory.py` and left the core scanning logic unchanged, which contradicts the requirement to call `scan(record_body)` at write-candidate entrypoints. The `docs/plans/gsd-inspired-improvements-plan.md` plan explicitly mentions calling `scan` at \"every write_candidate\u2013shaped entrypoint \u2014 function names need verification on current HEAD.\"\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/ai_memory_lib.py:1573\n  PROBLEM: `scan_candidate_text_for_injection` is called twice, once in `cmd_record_candidate` for telemetry and once in `record_candidate` for the flag.\n  WHY: The reviewer treated it as a remaining minor performance nit and accepted it as low impact.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/ai_memory_lib.py:1573 | severity=low | confidence=4\n  PROBLEM: Duplicate regex scan of the same candidate text (once in `cmd_record_candidate` in `ai_memory.py` for telemetry, once here for the flag).\n  WHY: Wastes CPU on 14 regexes and the join for every memory candidate write; negligible on current volumes but scales linearly with candidate volume.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5c2b7e1b5d5b641693380d165a6dc15797b59e709171ad68a3d65ee706a03823",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3319,
+    "run_id": "27463952389",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27463952389",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260613105001_493b4561d7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3319,
+    "run_id": "27463952389"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-13T10:50:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3316,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3316\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3317\",\"pr_number\":3317,\"branch\":\"ai/issue-3316\",\"run_id\":\"27457528038\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/27457528038\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/plan.yml\",\"prompts/mode-implement.txt\",\"prompts/mode-judge-review-blocked.txt\",\"prompts/mode-judge.txt\",\"prompts/mode-plan.txt\",\"prompts/references/severity-classification.txt\",\"prompts/review-consolidator.txt\",\"prompts/review-reviewer-checklist.txt\",\"scripts/render_prompt.py\",\"scripts/review_parse_consolidator.sh\",\"tests/fixtures/review_pipeline/consolidator_missing_severity.txt\",\"tests/test_plan_clarify_blocked_output.py\",\"tests/test_render_prompt_review_judge_modes.py\",\"tests/test_review_parse_consolidator.py\"]}",
+  "fingerprint": "24ca521917059db5a24ada2f0bb7e56cc511b67fdd4ab620cf779f2878ce2b98",
+  "lineage": {
+    "issue_number": 3316,
+    "parent_ids": [],
+    "pr_number": 3317,
+    "run_id": "27457528038",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27457528038",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3317"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260613052413_2ec1461aa4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3316,
+    "level": "run",
+    "pr_number": 3317,
+    "run_id": "27457528038"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3316: https://github.com/shubhodeep1/coding-workflows/pull/3317",
+  "timestamps": {
+    "created_at": "2026-06-13T05:24:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
