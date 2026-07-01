@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.9,
+  "details": "Recent merges frequently modified orchestrator, clarify, validate, and review workflows alongside shared scripts like render_prompt, label_helpers, and memory utilities. The lesson is to treat AI workflow behavior as a coupled system: a change in one stage often needs matching adjustments in adjacent stages and the shared contract layer. This matters whenever a run spans clarify/plan/implement/review transitions.",
+  "fingerprint": "e9046c6e319f0b623977507d17ade9b76ccf13243129b4690f74585f3cd0c2a4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28493517548",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28493517548",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3535",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3537",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3540",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3542",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3552",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3536",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3538",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3541",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3543",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3553"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260701042946_041815c5b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow orchestration changes usually require coordinated updates across multiple YAMLs, helper scripts, and label logic.",
+  "timestamps": {
+    "created_at": "2026-07-01T04:29:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
