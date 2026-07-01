@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow orchestration changes usually require coordinated updates across multiple YAMLs, helper scripts, and label logic.",
   "timestamps": {
     "created_at": "2026-07-01T04:29:46Z",
