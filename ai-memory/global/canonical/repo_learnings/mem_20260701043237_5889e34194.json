@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Scope guards and untrusted-context protections are important guardrails for AI-assisted workflows.",
   "timestamps": {
     "created_at": "2026-07-01T04:32:37Z",
