@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "Changes to files_touched scope guards and security-audit workflow contracts suggest the repo relies on defensive checks to keep generated actions within allowed bounds. Future planning should preserve these checks when expanding automation or adding new workflow entrypoints. This matters especially for anything that reads repo state, stages files, or consumes untrusted context.",
+  "fingerprint": "d21713a1bf14a7846343d125d522abbd65a8ac08674b81c8ec14b4a4d6f7e571",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28493517548",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28493517548",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3535",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3537",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3540",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3542",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3552",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3536",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3538",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3541",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3543",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3553"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260701043237_5889e34194",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Scope guards and untrusted-context protections are important guardrails for AI-assisted workflows.",
+  "timestamps": {
+    "created_at": "2026-07-01T04:32:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
