@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Contract and schema changes should be paired with schema tests and example fixtures to keep memory and audit pipelines stable.",
   "timestamps": {
     "created_at": "2026-07-01T04:30:43Z",
