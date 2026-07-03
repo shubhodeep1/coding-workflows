@@ -53,6 +53,12 @@ run_editor_codex_attempt() {
   local activity_file="$4"
   local status_file="$5"
 
+  # EDITOR_ATTEMPT_MODEL lets the retry loop switch the editor model per
+  # attempt (capacity-fallback to MODEL_EDITOR_FALLBACK on the final attempt;
+  # see the loop below and issue #3515). Default to MODEL_EDITOR so a direct
+  # call without the loop keeps the historical behaviour.
+  local editor_attempt_model="${EDITOR_ATTEMPT_MODEL:-${MODEL_EDITOR}}"
+
   if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
     bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
   fi
@@ -63,10 +69,10 @@ run_editor_codex_attempt() {
       --stdout-file "${stdout_file}" \
       --activity-file "${activity_file}" \
       --status-file "${status_file}" \
-      -- codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2>"${stderr_target}"
+      -- codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${editor_attempt_model}" --sandbox danger-full-access < "${prompt_file}" 2>"${stderr_target}"
   fi
 
-  exec codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" > "${stdout_file}" 2>"${stderr_target}"
+  exec codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${editor_attempt_model}" --sandbox danger-full-access < "${prompt_file}" > "${stdout_file}" 2>"${stderr_target}"
 }
 
 emit_context_budget_warn_for_prompt() {
@@ -1581,6 +1587,18 @@ while [ "${attempt}" -le 3 ]; do
       "$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
   } >> "${attempt_prompt_file}"
   emit_editor_substate "BuildingPrompt" "${attempt}"
+  # Capacity-fallback: on the final editor attempt (this loop caps at 3),
+  # switch the editor model to MODEL_EDITOR_FALLBACK — a different
+  # OpenRouter/OpenAI per-model TPM bucket — so a sustained gpt-5.4 saturation
+  # (issue #3515 / run 28640359211) can be ridden out. The fallback slug is
+  # declared in model_catalog_json (gpt-5.5), so apply_patch/verbosity
+  # resolution stays intact. run_editor_codex_attempt reads EDITOR_ATTEMPT_MODEL
+  # (inherited by the codex subshell below) and defaults to MODEL_EDITOR.
+  EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR}"
+  if [ "${attempt}" -ge 3 ] && [ -n "${MODEL_EDITOR_FALLBACK:-}" ] && [ "${MODEL_EDITOR_FALLBACK}" != "${MODEL_EDITOR}" ]; then
+    EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR_FALLBACK}"
+    echo "Final editor attempt: switching model to fallback ${EDITOR_ATTEMPT_MODEL} (primary ${MODEL_EDITOR} capacity-limited)."
+  fi
   # Run codex: stdout → tmp_output, stderr → FIFO (heartbeat reader).
   emit_editor_substate "LaunchingAgentProcess" "${attempt}"
   emit_editor_substate "InitializingSession" "${attempt}"
