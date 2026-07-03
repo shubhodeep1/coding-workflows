@@ -101,6 +101,14 @@ env:
     qwen/qwen3.6-plus
     x-ai/grok-4.20
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
+  # Capacity-fallback editor (autofix) model. On the final editor attempt
+  # scripts/review_apply_fixes.sh switches --model to this slug, which sits in
+  # a different OpenRouter/OpenAI per-model TPM bucket than the primary, so a
+  # sustained gpt-5.4 saturation (issue #3515 / run 28640359211) can be ridden
+  # out without a model change on the earlier attempts. Set to the primary
+  # slug (or clear it) to disable the switch. Inherited by review_apply_fixes.sh
+  # via the step environment.
+  MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.5' }}
   # Defaults to xhigh to match the repo-wide gpt-5.4 reasoning-level
   # policy. Override per-repo via vars.THINKING_LEVEL_REVIEWER; the smoke
   # path forces `low` separately in the "Detect smoke test" step.

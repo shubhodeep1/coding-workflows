@@ -14,6 +14,13 @@ name: AI Implement
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
+  # Capacity-fallback editor model. On the final implement attempt the retry
+  # loop points CODEX_THREAD_REUSE_MODEL at this slug, which sits in a
+  # different OpenRouter/OpenAI per-model TPM bucket than the primary, so a
+  # sustained gpt-5.4 saturation (issue #3515 / run 28640359211) can be ridden
+  # out without a model change on the earlier attempts. Set to the primary
+  # slug (or clear it) to disable the switch.
+  MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.5' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'xhigh' }}
   REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
@@ -2271,11 +2278,22 @@ jobs:
             emit_implement_substate "implement" "implement" "InitializingSession" "${attempt}" "${attempt_log_file}"
             emit_implement_substate "implement" "implement" "StreamingTurn" "${attempt}" "${attempt_log_file}"
             cmd_rc=0
+            # Capacity-fallback: on the final attempt switch the editor model
+            # to MODEL_EDITOR_FALLBACK (a different OpenRouter/OpenAI per-model
+            # TPM bucket) so a sustained gpt-5.4 saturation (issue #3515 / run
+            # 28640359211) can be ridden out. The fallback slug is declared in
+            # model_catalog_json (gpt-5.5), so apply_patch/verbosity resolution
+            # inside codex_thread_reuse.sh stays intact.
+            attempt_model="${MODEL_EDITOR}"
+            if [ "${attempt}" -eq "${max_attempts}" ] && [ -n "${MODEL_EDITOR_FALLBACK:-}" ] && [ "${MODEL_EDITOR_FALLBACK}" != "${MODEL_EDITOR}" ]; then
+              attempt_model="${MODEL_EDITOR_FALLBACK}"
+              echo "Final attempt: switching editor model to fallback ${attempt_model} (primary ${MODEL_EDITOR} capacity-limited)."
+            fi
             CODEX_THREAD_REUSE_STATE_KEY="implement" \
               CODEX_THREAD_REUSE_PROMPT_FILE="${PROMPT_FILE_TO_USE}" \
               CODEX_THREAD_REUSE_OUTPUT_FILE="${CODEX_OUTPUT_FILE}" \
               CODEX_THREAD_REUSE_PHASE="implement" \
-              CODEX_THREAD_REUSE_MODEL="${MODEL_EDITOR}" \
+              CODEX_THREAD_REUSE_MODEL="${attempt_model}" \
               CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK="true" \
               CODEX_THREAD_REUSE_LOG_FILE="${attempt_log_file}" \
               CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE="${RUNTIME_DIR}/codex_log.txt" \
