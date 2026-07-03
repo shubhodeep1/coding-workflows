@@ -423,7 +423,7 @@ emit_editor_substate() {
     --phase "review_apply_fixes"
     --mode "editor"
     --attempt "${attempt_number}"
-    --model "${MODEL_EDITOR:-}"
+    --model "${EDITOR_ATTEMPT_MODEL:-${MODEL_EDITOR:-}}"
     --pr-number "${PR_NUMBER:-}"
     --actor "${GITHUB_ACTOR:-codex-bot}"
     --repo-root "$(pwd)"
@@ -1450,7 +1450,8 @@ rm -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" 2>/dev/null || true
 # editor drain path stays aligned with the other extracted watchdog helpers.
 
 attempt=1
-while [ "${attempt}" -le 3 ]; do
+editor_max_attempts=3
+while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   # Early exit if PR was closed/merged (detected by reviewer or editor watchdog)
   if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
     echo "PR #${PR_NUMBER} was closed/merged — skipping editor."
@@ -1463,6 +1464,13 @@ while [ "${attempt}" -le 3 ]; do
   if [ "${remaining}" -lt "${EDITOR_MIN_ATTEMPT_SECS}" ]; then
     echo "Skipping editor attempt ${attempt}: only ${remaining}s remain before job deadline (need ${EDITOR_MIN_ATTEMPT_SECS}s minimum)."
     break
+  fi
+  # Capacity-fallback: on the final editor attempt switch the editor model to
+  # MODEL_EDITOR_FALLBACK so a sustained gpt-5.4 saturation can be ridden out.
+  EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR}"
+  if [ "${attempt}" -eq "${editor_max_attempts}" ] && [ -n "${MODEL_EDITOR_FALLBACK:-}" ] && [ "${MODEL_EDITOR_FALLBACK}" != "${MODEL_EDITOR}" ]; then
+    EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR_FALLBACK}"
+    echo "Final editor attempt: switching model to fallback ${EDITOR_ATTEMPT_MODEL} (primary ${MODEL_EDITOR} capacity-limited)."
   fi
   emit_editor_substate "PreparingWorkspace" "${attempt}"
   # Cap this attempt's wall time to the lesser of EDITOR_MAX_WALL
@@ -1587,18 +1595,6 @@ while [ "${attempt}" -le 3 ]; do
       "$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
   } >> "${attempt_prompt_file}"
   emit_editor_substate "BuildingPrompt" "${attempt}"
-  # Capacity-fallback: on the final editor attempt (this loop caps at 3),
-  # switch the editor model to MODEL_EDITOR_FALLBACK — a different
-  # OpenRouter/OpenAI per-model TPM bucket — so a sustained gpt-5.4 saturation
-  # (issue #3515 / run 28640359211) can be ridden out. The fallback slug is
-  # declared in model_catalog_json (gpt-5.5), so apply_patch/verbosity
-  # resolution stays intact. run_editor_codex_attempt reads EDITOR_ATTEMPT_MODEL
-  # (inherited by the codex subshell below) and defaults to MODEL_EDITOR.
-  EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR}"
-  if [ "${attempt}" -ge 3 ] && [ -n "${MODEL_EDITOR_FALLBACK:-}" ] && [ "${MODEL_EDITOR_FALLBACK}" != "${MODEL_EDITOR}" ]; then
-    EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR_FALLBACK}"
-    echo "Final editor attempt: switching model to fallback ${EDITOR_ATTEMPT_MODEL} (primary ${MODEL_EDITOR} capacity-limited)."
-  fi
   # Run codex: stdout → tmp_output, stderr → FIFO (heartbeat reader).
   emit_editor_substate "LaunchingAgentProcess" "${attempt}"
   emit_editor_substate "InitializingSession" "${attempt}"

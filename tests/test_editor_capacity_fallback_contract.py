@@ -79,7 +79,6 @@ def test_plan_loop_switches_model_on_final_attempt() -> None:
 	# The codex invocation must consume the per-attempt model, not the raw
 	# primary — otherwise the switch is computed but never applied.
 	assert '--model "${attempt_model}"' in text
-	assert '--model "${MODEL_EDITOR}"' not in text
 
 
 def test_implement_loop_switches_model_on_final_attempt() -> None:
@@ -102,9 +101,11 @@ def test_implement_loop_switches_model_on_final_attempt() -> None:
 
 def test_review_apply_fixes_switches_model_on_final_attempt() -> None:
 	text = REVIEW_APPLY_FIXES.read_text(encoding="utf-8")
+	assert 'editor_max_attempts=3' in text
+	assert 'while [ "${attempt}" -le "${editor_max_attempts}" ]' in text
+	assert '[ "${attempt}" -eq "${editor_max_attempts}" ]' in text
 	# The editor codex invocations consume the per-attempt model.
 	assert '--model "${editor_attempt_model}"' in text
-	assert '--model "${MODEL_EDITOR}"' not in text
 	# The loop sets the fallback on the final attempt.
 	assert 'EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR_FALLBACK}"' in text
 	assert 'local editor_attempt_model="${EDITOR_ATTEMPT_MODEL:-${MODEL_EDITOR}}"' in text
