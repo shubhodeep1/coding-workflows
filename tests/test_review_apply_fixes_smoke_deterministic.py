@@ -83,7 +83,9 @@ def test_editor_smoke_deterministic_block_present_and_gated() -> None:
 	# Block must run BEFORE the codex retry loop so the retry sees
 	# a clean tree.
 	deterministic_idx = src.index("Smoke-fixture deterministic editor pre-write")
-	loop_idx = src.index("attempt=1\nwhile [ \"${attempt}\" -le 3 ]")
+	loop_idx = src.index(
+		"attempt=1\neditor_max_attempts=3\nwhile [ \"${attempt}\" -le \"${editor_max_attempts}\" ]"
+	)
 	assert deterministic_idx < loop_idx, (
 		"Editor deterministic pre-write must run before the codex retry "
 		"loop — otherwise the model invocation can't observe the "
