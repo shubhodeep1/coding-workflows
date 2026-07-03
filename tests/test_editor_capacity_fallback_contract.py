@@ -109,3 +109,15 @@ def test_review_apply_fixes_switches_model_on_final_attempt() -> None:
 	# The loop sets the fallback on the final attempt.
 	assert 'EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR_FALLBACK}"' in text
 	assert 'local editor_attempt_model="${EDITOR_ATTEMPT_MODEL:-${MODEL_EDITOR}}"' in text
+
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	for func in test_funcs:
+		func()
+	print(f"OK: editor capacity-fallback contract holds ({len(test_funcs)} cases)")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

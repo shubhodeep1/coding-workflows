@@ -415,6 +415,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_smoke_deterministic.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_editor_capacity_fallback_contract.py
 
       - name: Review-blocked judge label propagation contract test
         run: |
