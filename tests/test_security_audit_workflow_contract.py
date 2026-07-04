@@ -236,6 +236,7 @@ def test_security_audit_workflow_wires_codex_and_audit_env() -> None:
 	assert "if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true'" in content
 	assert 'uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable' in content
 	assert 'scripts/write_codex_config.sh' in content
+	assert '--catalog-path "${SECURITY_AUDIT_SUPPORT_DIR:-.}/scripts/codex_model_catalog.json"' in content
 	assert 'OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}' in content
 	assert "SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}" in content
 	assert "SECURITY_AUDIT_CONFIDENCE_GATE: ${{ vars.SECURITY_AUDIT_CONFIDENCE_GATE || '8' }}" in content
