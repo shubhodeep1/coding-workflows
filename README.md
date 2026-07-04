@@ -922,7 +922,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `orchestrate_poll.yml` | `schedule` (every ~5 min) | Orchestrator progress poller + judge + auto-recovery. Polling cadence is driven entirely by the wrapper workflow's cron schedule; the legacy self-retrigger path (cooldown sleep + `workflow_dispatch` at end-of-run) and its rate-limit circuit-breaker gate have been removed. |
 | `update_workflows.yml` | `schedule` (daily), `repository_dispatch`, `workflow_dispatch` | Auto-updates existing and creates new workflow wrappers from upstream templates |
 | `workflow-log-analysis.yml` | `workflow_dispatch` (typically called from comprehensive-test-and-release / test-and-mark-stable smoke gates) | Periodic Codex audit of workflow runs (analyze, deep-audit, api-redundancy passes); see [`probably_unnecessary_but_read_if_stuck.md`](probably_unnecessary_but_read_if_stuck.md) for the runbook |
-| `check_failure_triage.yml` | `check_run.completed` (failure) | LLM diagnoses a failing PR check and opens an `ai:check-triage` issue for the pipeline to fix. Opt-in via `CHECK_FAILURE_TRIAGE_ENABLED`; see "Check Failure Triage Phase" below |
+| `check_failure_triage.yml` | `check_run.completed` (failure) | LLM diagnoses a failing PR check and opens an `ai:check-triage` issue for the pipeline to fix. On by default; disable via `CHECK_FAILURE_TRIAGE_ENABLED=false`; see "Check Failure Triage Phase" below |
 
 <!-- §Workflow Log Analysis And Improvement and §Workflow Log Analysis moved to ./probably_unnecessary_but_read_if_stuck.md — read it there if you need workflow-log-analysis pipeline runbook details (collector/analyzer contracts, phase behavior, env vars). -->
 
@@ -941,9 +941,9 @@ the way to a fix PR without human action.
 - **Trigger:** `check_run: completed` with a `failure` or `timed_out`
   conclusion, on a check associated with an open PR. The workflow file lives
   on the default branch (required for `check_run` events).
-- **Opt-in:** disabled unless the repo variable `CHECK_FAILURE_TRIAGE_ENABLED`
-  is `true`. While disabled the wrapper job is skipped immediately (no checkout
-  / no model call).
+- **On by default:** runs unless the repo variable `CHECK_FAILURE_TRIAGE_ENABLED`
+  is set to `false`. While disabled the wrapper job is skipped immediately (no
+  checkout / no model call).
 - **Same-repo guard:** fork-origin PRs are skipped before checkout / model
   execution, so `GH_PAT` and model credentials are never exposed to untrusted
   fork code.
@@ -1158,7 +1158,7 @@ the way to a fix PR without human action.
 | `SECURITY_AUDIT_FP_EXCLUSIONS` | `scripts/security_audit_fp_exclusions.json` | Editable JSON catalog of false-positive suppression rules for the security audit |
 | `REVIEW_DIATAXIS_LENS_ENABLED` | `true` | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined only (no separate workflow toggle yet): keep it `low` severity and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
-| `CHECK_FAILURE_TRIAGE_ENABLED` | `false` | Opt-in switch for the check-failure triage workflow. When `true`, a failing PR check is analysed by the diagnosis model, which opens an `ai:check-triage` issue for the pipeline to fix. Off by default. |
+| `CHECK_FAILURE_TRIAGE_ENABLED` | `true` | Switch for the check-failure triage workflow. On by default: a failing PR check is analysed by the diagnosis model, which opens an `ai:check-triage` issue for the pipeline to fix. Set to `false` to disable per repo. |
 | `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` | `3` | Max auto-fix generations in a single failure lineage before the chain is escalated (`ai:check-triage-escalated` + Telegram) instead of opening another issue. |
 | `WORKFLOW_CHECK_TRIAGE_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-5.4`) | Diagnosis model for check-failure triage. |
 | `THINKING_LEVEL_CHECK_TRIAGE` | `xhigh` | Reasoning effort for the check-failure triage diagnosis call. |
