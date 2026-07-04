@@ -115,7 +115,19 @@ if args[:2] == ["issue", "create"]:
 	print(f"https://github.com/{repo}/issues/{next_issue_number}")
 	sys.exit(0)
 
-if args[:2] in (["issue", "edit"], ["issue", "reopen"]):
+if args[:2] == ["issue", "edit"]:
+	repo = first_value("--repo") or "owner/repo"
+	if repo in state.get("issue_edit_fail_repos", []):
+		save()
+		sys.exit(1)
+	save()
+	sys.exit(0)
+
+if args[:2] == ["issue", "reopen"]:
+	repo = first_value("--repo") or "owner/repo"
+	if repo in state.get("issue_reopen_fail_repos", []):
+		save()
+		sys.exit(1)
 	save()
 	sys.exit(0)
 
@@ -397,6 +409,56 @@ def test_fanout_marks_repo_failed_when_label_creation_fails() -> None:
 	assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/active-repo status=failed" in proc.stdout
 	assert len(final_state.get("codex_calls", [])) == 1
 	assert final_state.get("issue_create_args", []) == []
+
+
+def test_fanout_marks_repo_failed_when_existing_tracker_reopen_or_edit_fails() -> None:
+	report = {
+		"runs": [
+			{
+				"repository": "owner/active-repo",
+				"run_id": 1,
+				"workflow_name": "Workflow 1",
+				"workflow_family": "review_autofix",
+				"conclusion": "success",
+				"duration_seconds": 60,
+				"created_at": _recent_iso(days_ago=1),
+			}
+		],
+		"summary": {},
+		"scope": {},
+		"errors": [],
+	}
+
+	for fail_key, tracker_state in (
+		("issue_reopen_fail_repos", "CLOSED"),
+		("issue_edit_fail_repos", "OPEN"),
+	):
+		state = {
+			fail_key: ["owner/active-repo"],
+			"issue_list_responses": [
+				[
+					{
+						"number": 9100,
+						"title": "AI Workflow Weekly Retro",
+						"body": "<!-- ai:retro-tracker:v1 -->\n# AI Workflow Weekly Retro\n",
+						"state": tracker_state,
+						"updatedAt": _recent_iso(days_ago=1),
+						"url": "https://github.com/owner/active-repo/issues/9100",
+					}
+				],
+			],
+		}
+		proc, final_state = _run_fanout(
+			state,
+			report=report,
+			consumer_repos=["owner/active-repo"],
+			extra_env={"GH_RETRY_MAX_ATTEMPTS": "1"},
+		)
+
+		assert proc.returncode == 1, proc.stderr
+		assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/active-repo status=failed" in proc.stdout
+		assert len(final_state.get("codex_calls", [])) == 1
+		assert final_state.get("comment_payloads", []) == []
 
 
 def main() -> int:

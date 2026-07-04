@@ -279,9 +279,9 @@ PY
 		FANOUT_TRACKER_NUMBER="${tracker_url##*/}"
 	else
 		if [ "$(printf '%s' "${FANOUT_TRACKER_STATE}" | tr '[:lower:]' '[:upper:]')" = "CLOSED" ]; then
-			gh_retry gh issue reopen "${FANOUT_TRACKER_NUMBER}" --repo "${target_repo}"
+			gh_retry gh issue reopen "${FANOUT_TRACKER_NUMBER}" --repo "${target_repo}" || return 1
 		fi
-		gh_retry gh issue edit "${FANOUT_TRACKER_NUMBER}" --repo "${target_repo}" --add-label "ai:retro" >/dev/null
+		gh_retry gh issue edit "${FANOUT_TRACKER_NUMBER}" --repo "${target_repo}" --add-label "ai:retro" >/dev/null || return 1
 	fi
 
 	local comment_marker="<!-- ai:workflow-retro:${week_label} -->"
