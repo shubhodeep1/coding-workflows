@@ -8,7 +8,7 @@ $ARGUMENTS
 
 2. **Read project context.** Always read `README.md`, `agents.md`, and `CLAUDE.md` at the repo root before drafting. If the task plausibly touches a MongoDB collection, also read every relevant `/db/contracts/*.yml` (per CLAUDE.md §10). If references in `$ARGUMENTS` point at issues / PRs / files / prior plans, fetch and read them in full — use `mcp__github__*` tools or the `gh` CLI for GitHub reads (see [Tool Access](#tool-access)), the `Read` tool for local files, and `Grep` / `Glob` to locate related code. Do not guess at code, env vars, or workflow inputs — read the source.
 
-3. **Clarify until zero items remain open.** Identify every ambiguity the task introduces — scope, behavior, edge cases, interfaces, data model, operational concerns, success criteria, propagation / consumer impact, rollout. Batch every blocking question in a single round using the [Clarification Format](#clarification-format) below. **Always include a question proposing the slug** (used for the filename and the branch name). Wait for the user's answers. **If any answer introduces new ambiguity, ask a follow-up batch — keep looping until every clarification item is resolved.** Do not proceed to step 4 while any question is still open: this command's contract is to ship a plan with zero open questions. Items that genuinely cannot be answered before drafting (e.g. an env value that only exists in prod, an integration result that depends on staging) are NOT recorded as open questions — surface them in the clarification round as proposed `## Risks & Mitigations` entries with `ACCEPTED — pending <discovery>` wording and have the user accept them explicitly before drafting.
+3. **Clarify until zero items remain open.** Identify every ambiguity the task introduces — scope, behavior, edge cases, interfaces, data model, operational concerns, success criteria, propagation / consumer impact, rollout. Batch every blocking question in a single round using the [Clarification Format](#clarification-format) below. **Do NOT ask the user to name, confirm, or choose the plan-doc filename or the PR branch** — derive the slug automatically from the task topic per the [Slug rules](#rules) below (both `docs/plans/<slug>-plan.md` and the branch `claude/write-plan-<slug>` are generated from it). Wait for the user's answers. **If any answer introduces new ambiguity, ask a follow-up batch — keep looping until every clarification item is resolved.** Do not proceed to step 4 while any question is still open: this command's contract is to ship a plan with zero open questions. Items that genuinely cannot be answered before drafting (e.g. an env value that only exists in prod, an integration result that depends on staging) are NOT recorded as open questions — surface them in the clarification round as proposed `## Risks & Mitigations` entries with `ACCEPTED — pending <discovery>` wording and have the user accept them explicitly before drafting.
 
 4. **Draft the plan.** Write a markdown plan to `docs/plans/<slug>-plan.md` following the structure in [Plan Structure](#plan-structure) below. Cite project constraints by section number where relevant (e.g. "§6 — renames are breaking unless the old name is preserved as an alias"). Surface every assumption you made and every risk you spotted. By the time you reach this step, there are no open questions left — step 3's loop must have resolved every one. Create the `docs/plans/` directory if it does not yet exist.
 
@@ -28,7 +28,7 @@ Follow CLAUDE.md §2 exactly. Stable IDs `Q1`, `Q2`, …; letter-only answers (`
 
 Common questions to consider in the first batch (skip any already unambiguously answered in `$ARGUMENTS`):
 
-- **Slug confirmation** — propose 2–3 slug candidates derived from the topic. Used for both `docs/plans/<slug>-plan.md` and the branch `claude/write-plan-<slug>`.
+- **Slug is NOT a question** — never ask the user to name, confirm, or choose the slug, the plan-doc filename, or the branch name. Derive the slug automatically from the task topic per the [Slug rules](#rules); it feeds both `docs/plans/<slug>-plan.md` and the branch `claude/write-plan-<slug>`.
 - **Scope** — which repo / module / service / runtime; prod vs staging vs dev.
 - **Backward compatibility** — does any existing identifier get renamed or removed? Per §6, those are breaking unless aliased.
 - **Data model** — collections touched, index changes, contract updates per §10.
@@ -40,17 +40,17 @@ Common questions to consider in the first batch (skip any already unambiguously 
 - **GitHub API hygiene** — if the plan adds new `gh api` / MCP calls, how they batch / reuse existing calls per §15.
 - **Phase breakdown** — propose how the work splits into independently-mergeable phases (count + one-line scope per phase). The plan is implemented by the AI orchestrator (unattended pipeline), and every merge lands in production directly, so each phase MUST be production-safe at merge time, independently mergeable, and complete on its own (see [Phases & Merge Strategy](#phases--merge-strategy)). If the task genuinely cannot be split, surface that as its own Q and have the user accept a single-phase plan explicitly.
 
-Add task-specific questions as needed. Skip empty rounds — if `$ARGUMENTS` is already exhaustive, ask only for slug confirmation and proceed.
+Add task-specific questions as needed. Skip empty rounds — if `$ARGUMENTS` is already exhaustive and unambiguous, ask nothing and proceed straight to drafting (the slug is always auto-derived, never asked).
 
 Example shape:
 
 ```
-**Q1: Which slug should this plan use?**
+**Q1: How should the new rate limiter roll out?**
 
 Choices:
-- **A** — `rate-limit-api` — short, action-focused (RECOMMENDED)
-- **B** — `add-rate-limiting-to-public-endpoints` — fully descriptive
-- **C** — User-supplied — reply with your own slug
+- **A** — Feature-flag dark launch, ramp gradually (RECOMMENDED)
+- **B** — Instant cutover on merge
+- **C** — Staging-only until manual sign-off
 
 Reply: `Q1: A`
 ```
@@ -165,7 +165,7 @@ Local file reads use `Read`. Local code search uses `Grep` / `Glob`. Git operati
 - **Honor §15 (GitHub API hygiene).** Plans that add `gh api` / MCP calls MUST justify the new call surface and explain how it batches / reuses existing calls.
 - **Clarify aggressively; never default silently.** Per §0 + §2 — when in doubt, ask. If the answers to the first batch open new ambiguities, ask a follow-up batch. The user provided "ask clarifying questions until its completely clear" as the contract — honor that.
 - **Zero open questions in the final plan.** Step 3 MUST loop until every clarification item is resolved before step 4 runs. The `## Open Questions` section has been removed from Plan Structure, PR Body Template, and Output Format — there is no slot to record unresolved items. Items that depend on future discovery are recorded as `ACCEPTED — pending <discovery>` entries under `## Risks & Mitigations`, and only after explicit user acceptance during the clarification round — they are not open questions.
-- **Slug rules.** Lowercase ASCII alphanumeric + hyphens, ≤ 60 chars, derived from the task topic. Always confirm the slug in the clarification batch — never auto-pick.
+- **Slug rules.** Lowercase ASCII alphanumeric + hyphens, ≤ 60 chars, derived **automatically** from the task topic — pick the most specific, action-focused phrase that captures the task (e.g. `rate-limit-public-api`, `fix-orchestrator-stall`). Auto-pick it yourself; never ask the user to name, confirm, or choose the slug, the plan-doc filename, or the branch name. (Branch-collision handling below still applies.)
 - **Branch collision.** If `claude/write-plan-<slug>` already exists on the remote (check via `mcp__github__list_branches` or `git ls-remote --heads origin claude/write-plan-<slug>`), append `-2`, `-3`, … to the slug. Never force-push.
 - **Default branch.** Resolve dynamically via `gh repo view --json defaultBranchRef -q .defaultBranchRef.name -R <owner>/<repo>`. Do not hardcode `main` — some consumer repos use a different default branch.
 - **Final chat reply.** Always emit the [Output Format](#output-format) — even when the PR is open and linked. The PR alone is not the user-facing report.
