@@ -577,10 +577,12 @@ def build_weekly_retro_payload(
         "Stall-reason counts come from collector excerpts and log summaries, not full logs for every run in the window.",
     ]
 
+    merged_pr_query_failed = False
     try:
         merged_prs = fetch_merged_pull_requests(repo=repo, since_utc=since_utc, until_utc=until_utc)
     except Exception as exc:  # noqa: BLE001
         warnings.append(f"Merged PR query failed open: {exc}")
+        merged_pr_query_failed = True
         merged_prs = []
 
     try:
@@ -664,10 +666,12 @@ def build_weekly_retro_payload(
             "week_label": _week_label(until_utc),
         },
         # Additive workflow_retro.v1 field: False marks a zero-activity window
-        # (no workflow runs and no merged PRs) so the caller can skip the LLM
-        # retro pass and the tracker comment for that week.
+        # only when activity is known. If the merged-PR query failed open,
+        # activity is unknown and the caller must not skip the retro.
         "has_activity": bool(
-            _to_int(summary.get("total_runs"), 0) > 0 or _to_int(summary.get("merged_pr_count"), 0) > 0
+            merged_pr_query_failed
+            or _to_int(summary.get("total_runs"), 0) > 0
+            or _to_int(summary.get("merged_pr_count"), 0) > 0
         ),
         "warnings": warnings,
         "data_gaps": data_gaps,

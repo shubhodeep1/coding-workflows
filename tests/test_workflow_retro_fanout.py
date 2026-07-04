@@ -48,9 +48,19 @@ def first_value(flag: str) -> str:
 state.setdefault("calls", []).append(args)
 
 if args[:2] == ["api", "graphql"] or (args[0] == "api" and "graphql" in args[1]):
-	# workflow_retro.py merged-PR fetch: fail so the script fails open.
+	if state.get("graphql_should_fail"):
+		save()
+		sys.exit(1)
 	save()
-	sys.exit(1)
+	print(json.dumps({
+		"data": {
+			"search": {
+				"pageInfo": {"hasNextPage": False, "endCursor": None},
+				"nodes": []
+			}
+		}
+	}))
+	sys.exit(0)
 
 if args[0] == "api":
 	method = first_value("-X") or "GET"

@@ -515,12 +515,46 @@ def test_build_weekly_retro_payload_flags_zero_activity_week() -> None:
 	assert payload["summary"]["merged_pr_count"] == 0
 
 
+def test_build_weekly_retro_payload_fails_open_on_merged_pr_query_error() -> None:
+	report = {
+		"runs": [],
+		"summary": {},
+		"scope": {"repositories": ["owner/repo"]},
+		"errors": [],
+	}
+
+	def _fake_load_ai_memory_run_events(*, repo_root: Path, since_utc, until_utc, memory_branch: str, memory_root_relative: str):
+		return []
+
+	with _patched_module_attrs(
+		workflow_retro,
+		fetch_merged_pull_requests=lambda **_: (_ for _ in ()).throw(RuntimeError("gh unavailable")),
+		load_ai_memory_run_events=_fake_load_ai_memory_run_events,
+	):
+		payload = workflow_retro.build_weekly_retro_payload(
+			report,
+			repo="owner/repo",
+			since_utc=workflow_retro._parse_iso8601("2026-06-19T09:00:00Z"),
+			until_utc=workflow_retro._parse_iso8601("2026-06-26T09:00:00Z"),
+			repo_root=REPO_ROOT,
+			memory_branch="ai-memory",
+			memory_root_relative="ai-memory",
+		)
+
+	assert payload["has_activity"] is True
+	assert payload["summary"]["total_runs"] == 0
+	assert payload["summary"]["merged_pr_count"] == 0
+	assert any("Merged PR query failed open" in item for item in payload["warnings"])
+
+
 def main() -> int:
 	test_main_writes_deterministic_weekly_retro_context()
 	test_main_fails_open_on_pr_and_ai_memory_reads()
 	test_fetch_merged_pull_requests_extends_search_end_day_but_post_filters_exact_window()
 	test_load_ai_memory_run_events_streams_ledger_files()
 	test_build_weekly_retro_payload_truncates_prompt_facing_lists()
+	test_build_weekly_retro_payload_flags_zero_activity_week()
+	test_build_weekly_retro_payload_fails_open_on_merged_pr_query_error()
 	return 0
 
 
