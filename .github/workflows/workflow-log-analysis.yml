@@ -40,9 +40,12 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
-  WORKFLOW_RETRO_ENABLED: ${{ vars.WORKFLOW_RETRO_ENABLED || 'false' }}
+  WORKFLOW_RETRO_ENABLED: ${{ vars.WORKFLOW_RETRO_ENABLED || 'true' }}
   WORKFLOW_RETRO_MODEL: ${{ vars.WORKFLOW_RETRO_MODEL || 'openai/gpt-5.4-mini' }}
   WORKFLOW_RETRO_REASONING: ${{ vars.WORKFLOW_RETRO_REASONING || 'medium' }}
+  # Skip the LLM retro pass and the tracker comment on weeks with zero
+  # workflow runs and zero merged PRs (log-only skip via WORKFLOW_RETRO_SKIP_V1).
+  WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY: ${{ vars.WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY || 'true' }}
   # GitHub does not interpolate vars into `on.schedule`, so this default must
   # stay aligned with the literal cron above. The job gate uses it to fail
   # closed if a future schedule is added without updating the retro path.
@@ -59,7 +62,7 @@ concurrency:
 
 jobs:
   collect-logs:
-    if: ${{ github.event_name != 'schedule' || ((vars.WORKFLOW_RETRO_ENABLED || 'false') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1')) }}
+    if: ${{ github.event_name != 'schedule' || ((vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -189,7 +192,7 @@ jobs:
 
   weekly-retro:
     needs: collect-logs
-    if: ${{ github.event_name == 'schedule' && (vars.WORKFLOW_RETRO_ENABLED || 'false') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1') }}
+    if: ${{ github.event_name == 'schedule' && (vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -309,8 +312,20 @@ jobs:
           echo "week_label=$(jq -r '.window.week_label' "${RETRO_JSON_FILE}")" >> "$GITHUB_OUTPUT"
           echo "window_since=$(jq -r '.window.since' "${RETRO_JSON_FILE}")" >> "$GITHUB_OUTPUT"
 
+          # No-activity gate: skip the LLM pass and the tracker comment when
+          # the window had zero workflow runs and zero merged PRs. Log-only —
+          # the WORKFLOW_RETRO_SKIP_V1 line in the run log is the sole trace.
+          retro_has_activity="$(jq -r 'if .has_activity == false then "false" else "true" end' "${RETRO_JSON_FILE}")"
+          if [ "${retro_has_activity}" != "true" ] && [ "${WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY:-true}" = "true" ]; then
+            echo "WORKFLOW_RETRO_SKIP_V1: repo=${GITHUB_REPOSITORY} week=$(jq -r '.window.week_label' "${RETRO_JSON_FILE}") reason=no_activity total_runs=$(jq -r '.summary.total_runs // 0' "${RETRO_JSON_FILE}") merged_prs=$(jq -r '.summary.merged_pr_count // 0' "${RETRO_JSON_FILE}")"
+            echo "retro_gate=skip_no_activity" >> "$GITHUB_OUTPUT"
+          else
+            echo "retro_gate=run" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run weekly retro pass
         id: retro
+        if: steps.retro_context.outputs.retro_gate == 'run'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
@@ -583,6 +598,13 @@ jobs:
 
           if [ ! -f scripts/tg_helpers.sh ]; then
             echo "::warning::scripts/tg_helpers.sh not found — skipping Telegram notification."
+            exit 0
+          fi
+
+          # A no-activity week is a silent skip (WORKFLOW_RETRO_SKIP_V1 in the
+          # run log is the trace) — not a failure worth a Telegram alert.
+          if [ "${{ steps.retro_context.outputs.retro_gate || '' }}" = "skip_no_activity" ]; then
+            echo "Weekly retro skipped for a no-activity week — no Telegram notification."
             exit 0
           fi
 

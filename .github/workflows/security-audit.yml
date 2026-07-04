@@ -6,6 +6,14 @@ name: Security Audit
     # Keep README's SECURITY_AUDIT_CRON row aligned with this value.
     - cron: "0 8 * * 0"
   workflow_dispatch: {}
+  # Consumer repos run this workflow through the synced
+  # workflow-templates/ai-security-audit.yml wrapper (called @stable).
+  workflow_call:
+    secrets:
+      GH_PAT:
+        required: false
+      OPENROUTER_API_KEY:
+        required: true
 
 permissions:
   contents: read
@@ -23,16 +31,71 @@ jobs:
       - name: Checkout default branch
         uses: actions/checkout@v5
         with:
-          fetch-depth: 1
+          # Full history: the incremental scope resolver in
+          # scripts/security_audit.sh diffs HEAD against the last audited
+          # commit recorded on the tracker issue body.
+          fetch-depth: 0
           ref: ${{ github.event.repository.default_branch }}
 
+      - name: Resolve workflow support ref
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            echo "SECURITY_AUDIT_IS_SOURCE_REPO=true" >> "$GITHUB_ENV"
+          else
+            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            echo "SECURITY_AUDIT_IS_SOURCE_REPO=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout workflow support source
+        if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true'
+        id: checkout_support_source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Checkout workflow support source fallback
+        if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true' && steps.checkout_support_source.outcome == 'failure'
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Stage audit support files
+        if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true'
+        run: |
+          set -euo pipefail
+          if [ ! -d .codex-workflow-src ]; then
+            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
+            exit 1
+          fi
+          SUPPORT_DIR="${RUNNER_TEMP}/security-audit-support"
+          mkdir -p "${SUPPORT_DIR}"
+          cp -r .codex-workflow-src/scripts "${SUPPORT_DIR}/scripts"
+          cp -r .codex-workflow-src/prompts "${SUPPORT_DIR}/prompts"
+          # Remove the support checkout so the audited tree stays exactly the
+          # consumer repository — the read-only Codex pass must never cite
+          # workflow-source files as consumer findings.
+          rm -rf .codex-workflow-src
+          echo "SECURITY_AUDIT_SUPPORT_DIR=${SUPPORT_DIR}" >> "$GITHUB_ENV"
+
       - name: Install Codex CLI
-        uses: ./.github/actions/install-codex
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
 
       - name: Create Codex config
         run: |
           set -euo pipefail
-          bash scripts/write_codex_config.sh \
+          bash "${SECURITY_AUDIT_SUPPORT_DIR:-.}/scripts/write_codex_config.sh" \
             --model "openai/gpt-5.4" \
             --reasoning xhigh
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
@@ -43,9 +106,11 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PYTHONDONTWRITEBYTECODE: "1"
-          SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'false' }}
+          SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}
           SECURITY_AUDIT_CONFIDENCE_GATE: ${{ vars.SECURITY_AUDIT_CONFIDENCE_GATE || '8' }}
           SECURITY_AUDIT_FP_EXCLUSIONS: ${{ vars.SECURITY_AUDIT_FP_EXCLUSIONS || 'scripts/security_audit_fp_exclusions.json' }}
+          SECURITY_AUDIT_SKIP_IF_UNCHANGED: ${{ vars.SECURITY_AUDIT_SKIP_IF_UNCHANGED || 'true' }}
+          SECURITY_AUDIT_INCREMENTAL: ${{ vars.SECURITY_AUDIT_INCREMENTAL || 'true' }}
         run: |
           set -euo pipefail
-          bash scripts/security_audit.sh
+          bash "${SECURITY_AUDIT_SUPPORT_DIR:-.}/scripts/security_audit.sh"

@@ -9,6 +9,7 @@ ai-orchestrate-poll.yml
 ai-orchestrate.yml
 ai-plan.yml
 ai-review.yml
+ai-security-audit.yml
 ai-sync-labels.yml
 ai-update-workflows.yml
 ai-validate.yml

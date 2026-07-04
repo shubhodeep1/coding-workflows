@@ -663,6 +663,12 @@ def build_weekly_retro_payload(
             "lookback_days": int((until_utc - since_utc).total_seconds() // 86400),
             "week_label": _week_label(until_utc),
         },
+        # Additive workflow_retro.v1 field: False marks a zero-activity window
+        # (no workflow runs and no merged PRs) so the caller can skip the LLM
+        # retro pass and the tracker comment for that week.
+        "has_activity": bool(
+            _to_int(summary.get("total_runs"), 0) > 0 or _to_int(summary.get("merged_pr_count"), 0) > 0
+        ),
         "warnings": warnings,
         "data_gaps": data_gaps,
         "bounded_lists": {

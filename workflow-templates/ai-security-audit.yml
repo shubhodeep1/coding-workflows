@@ -1,0 +1,18 @@
+# IMPORTANT: This file is managed by coding-workflows and may be overwritten
+# automatically when upstream templates change. To opt out of auto-updates,
+# set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
+name: AI Security Audit
+on:
+  schedule:
+    - cron: '0 8 * * 0'
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: security-audit-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  security-audit:
+    uses: shubhodeep1/coding-workflows/.github/workflows/security-audit.yml@stable
+    secrets: inherit

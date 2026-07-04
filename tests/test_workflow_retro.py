@@ -220,6 +220,7 @@ def test_main_writes_deterministic_weekly_retro_context() -> None:
 		markdown = markdown_path.read_text(encoding="utf-8")
 
 	assert payload["schema_version"] == "workflow_retro.v1"
+	assert payload["has_activity"] is True
 	assert payload["generated_at"] == "2026-06-26T09:00:00Z"
 	assert payload["repository"] == "owner/repo"
 	assert payload["window"]["week_label"] == "2026-W26"
@@ -478,6 +479,40 @@ def test_build_weekly_retro_payload_truncates_prompt_facing_lists() -> None:
 	assert "additional PR iteration row(s) omitted for brevity." in markdown
 	assert "additional merged PR(s) without review_autofix data omitted for brevity." in markdown
 	assert "additional workflow family row(s) omitted for brevity." in markdown
+
+
+def test_build_weekly_retro_payload_flags_zero_activity_week() -> None:
+	report = {
+		"runs": [],
+		"summary": {},
+		"scope": {"repositories": ["owner/repo"]},
+		"errors": [],
+	}
+
+	def _fake_fetch_merged_pull_requests(*, repo: str, since_utc, until_utc):
+		return []
+
+	def _fake_load_ai_memory_run_events(*, repo_root: Path, since_utc, until_utc, memory_branch: str, memory_root_relative: str):
+		return []
+
+	with _patched_module_attrs(
+		workflow_retro,
+		fetch_merged_pull_requests=_fake_fetch_merged_pull_requests,
+		load_ai_memory_run_events=_fake_load_ai_memory_run_events,
+	):
+		payload = workflow_retro.build_weekly_retro_payload(
+			report,
+			repo="owner/repo",
+			since_utc=workflow_retro._parse_iso8601("2026-06-19T09:00:00Z"),
+			until_utc=workflow_retro._parse_iso8601("2026-06-26T09:00:00Z"),
+			repo_root=REPO_ROOT,
+			memory_branch="ai-memory",
+			memory_root_relative="ai-memory",
+		)
+
+	assert payload["has_activity"] is False
+	assert payload["summary"]["total_runs"] == 0
+	assert payload["summary"]["merged_pr_count"] == 0
 
 
 def main() -> int:

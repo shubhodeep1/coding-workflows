@@ -49,18 +49,23 @@ def test_codex_jobs_use_heartbeat_wrapper() -> None:
 	assert "2> >(tee -a /tmp/workflow-weekly-retro-codex.log >&2)" in wf
 
 
-def test_weekly_retro_path_is_schedule_gated_and_default_off() -> None:
+def test_weekly_retro_path_is_schedule_gated_and_default_on() -> None:
 	wf = _workflow_text()
 	assert "schedule:" in wf
 	assert 'cron: "0 9 * * 1"' in wf
-	assert "WORKFLOW_RETRO_ENABLED: ${{ vars.WORKFLOW_RETRO_ENABLED || 'false' }}" in wf
+	assert "WORKFLOW_RETRO_ENABLED: ${{ vars.WORKFLOW_RETRO_ENABLED || 'true' }}" in wf
 	assert "WORKFLOW_RETRO_MODEL: ${{ vars.WORKFLOW_RETRO_MODEL || 'openai/gpt-5.4-mini' }}" in wf
 	assert "WORKFLOW_RETRO_REASONING: ${{ vars.WORKFLOW_RETRO_REASONING || 'medium' }}" in wf
 	assert "WORKFLOW_RETRO_CRON: ${{ vars.WORKFLOW_RETRO_CRON || '0 9 * * 1' }}" in wf
+	assert "WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY: ${{ vars.WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY || 'true' }}" in wf
 	assert "github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1')" in wf
-	assert "(vars.WORKFLOW_RETRO_ENABLED || 'false') == 'true'" in wf
-	assert "github.event_name != 'schedule' || ((vars.WORKFLOW_RETRO_ENABLED || 'false') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1'))" in wf
-	assert "github.event_name == 'schedule' && (vars.WORKFLOW_RETRO_ENABLED || 'false') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1')" in wf
+	assert "(vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true'" in wf
+	assert "github.event_name != 'schedule' || ((vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1'))" in wf
+	assert "github.event_name == 'schedule' && (vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1')" in wf
+	assert "retro_gate=skip_no_activity" in wf
+	assert "retro_gate=run" in wf
+	assert "if: steps.retro_context.outputs.retro_gate == 'run'" in wf
+	assert "WORKFLOW_RETRO_SKIP_V1:" in wf
 	assert '--json number,title,body,state,updatedAt,url > "${TRACKER_CANDIDATES_JSON}"' in wf
 	assert "selected_candidates.sort(" in wf
 	assert 'str(candidate.get("state") or "").upper() == "OPEN"' in wf
@@ -123,7 +128,7 @@ def main() -> int:
 	test_codex_retry_knobs_are_env_driven()
 	test_issue_context_failure_marker_and_label_contract_present()
 	test_codex_jobs_use_heartbeat_wrapper()
-	test_weekly_retro_path_is_schedule_gated_and_default_off()
+	test_weekly_retro_path_is_schedule_gated_and_default_on()
 	test_semble_wiring_is_consistent_across_four_codex_jobs()
 	return 0
 
