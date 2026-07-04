@@ -583,6 +583,25 @@ jobs:
           gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${TRACKER_NUMBER}/comments" --input "${TRACKER_COMMENT_PAYLOAD}" >/dev/null
           echo "Weekly retro comment posted on issue #${TRACKER_NUMBER}."
 
+      - name: Consumer retro fan-out
+        id: retro_fanout
+        # Runs whenever the retro context built, even if the source repo's own
+        # retro was skipped for no activity or failed — consumer activity is
+        # independent of source-repo activity. The collect-logs artifact
+        # already contains every consumer repo's runs, so per-consumer retros
+        # are posted centrally from here via GH_PAT (§14 repo scope).
+        if: ${{ !cancelled() && steps.retro_context.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED: ${{ vars.WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED || 'true' }}
+          MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
+          CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
+        run: |
+          set -euo pipefail
+          bash scripts/workflow_retro_fanout.sh
+
       - name: Send Telegram notification
         if: always()
         env:
