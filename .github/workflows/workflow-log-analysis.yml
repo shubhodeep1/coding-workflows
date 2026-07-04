@@ -86,9 +86,7 @@ jobs:
 
           declare -a repos=()
 
-          if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
-            repos+=("${GITHUB_REPOSITORY}")
-          elif [ -n "${OVERRIDE_INPUT//[[:space:]]/}" ]; then
+          if [ -n "${OVERRIDE_INPUT//[[:space:]]/}" ]; then
             IFS=',' read -r -a override_repos <<< "${OVERRIDE_INPUT}"
             for raw_repo in "${override_repos[@]}"; do
               repo="$(printf '%s' "${raw_repo}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"

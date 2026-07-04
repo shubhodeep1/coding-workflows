@@ -66,6 +66,9 @@ def test_weekly_retro_path_is_schedule_gated_and_default_on() -> None:
 	assert "retro_gate=run" in wf
 	assert "if: steps.retro_context.outputs.retro_gate == 'run'" in wf
 	assert "WORKFLOW_RETRO_SKIP_V1:" in wf
+	assert 'REPO_REGISTRY_PATH=".github/ai/consumer_repos.json"' in wf
+	assert 'if [ -n "${OVERRIDE_INPUT//[[:space:]]/}" ]; then' in wf
+	assert 'if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then' not in wf
 	assert '--json number,title,body,state,updatedAt,url > "${TRACKER_CANDIDATES_JSON}"' in wf
 	assert "selected_candidates.sort(" in wf
 	assert 'str(candidate.get("state") or "").upper() == "OPEN"' in wf

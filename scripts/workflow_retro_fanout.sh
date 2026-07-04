@@ -100,7 +100,7 @@ consumer_retro_enabled() {
 	if type _safe_gh_jq >/dev/null 2>&1; then
 		var_value="$(_safe_gh_jq "repos/${target_repo}/actions/variables/WORKFLOW_RETRO_ENABLED" --jq '.value' 2>/dev/null || echo "")"
 	else
-		var_value="$(gh api "repos/${target_repo}/actions/variables/WORKFLOW_RETRO_ENABLED" --jq '.value' 2>/dev/null || echo "")"
+		var_value="$(gh api "repos/${target_repo}/actions/variables/WORKFLOW_RETRO_ENABLED" 2>/dev/null | jq -r '.value // empty' 2>/dev/null || echo "")"
 	fi
 	if [ "${var_value}" = "null" ]; then
 		var_value=""
