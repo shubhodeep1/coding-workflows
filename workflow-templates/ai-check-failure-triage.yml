@@ -18,7 +18,7 @@ permissions:
 jobs:
   triage:
     if: >-
-      vars.CHECK_FAILURE_TRIAGE_ENABLED != 'false' &&
+      !contains(fromJson('["false"]'), vars.CHECK_FAILURE_TRIAGE_ENABLED) &&
       (github.event.check_run.conclusion == 'failure' ||
        github.event.check_run.conclusion == 'timed_out') &&
       github.event.check_run.pull_requests[0] != null &&

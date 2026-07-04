@@ -49,7 +49,7 @@ env:
 jobs:
   derive_check_name_key:
     if: >-
-      vars.CHECK_FAILURE_TRIAGE_ENABLED != 'false' &&
+      !contains(fromJson('["false"]'), vars.CHECK_FAILURE_TRIAGE_ENABLED) &&
       inputs.pr_number != '' &&
       contains(fromJson('["failure","timed_out"]'), inputs.check_conclusion) &&
       !contains(inputs.check_name, 'Check Failure Triage')
@@ -78,7 +78,7 @@ jobs:
     # name for direct callers that omit check_run_id.
     if: >-
       always() &&
-      vars.CHECK_FAILURE_TRIAGE_ENABLED != 'false' &&
+      !contains(fromJson('["false"]'), vars.CHECK_FAILURE_TRIAGE_ENABLED) &&
       inputs.pr_number != '' &&
       contains(fromJson('["failure","timed_out"]'), inputs.check_conclusion) &&
       !contains(inputs.check_name, 'Check Failure Triage')
