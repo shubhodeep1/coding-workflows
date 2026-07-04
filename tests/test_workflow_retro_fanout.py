@@ -57,8 +57,12 @@ if args[0] == "api":
 	path_arg = next((a for a in args[1:] if "/" in a and not a.startswith("-")), "")
 	if "actions/variables/WORKFLOW_RETRO_ENABLED" in path_arg:
 		var_map = state.get("consumer_var_responses", {})
+		error_map = state.get("consumer_var_stdout_errors", {})
 		repo = path_arg.split("/actions/")[0][len("repos/"):]
 		save()
+		if repo in error_map:
+			print(error_map[repo])
+			sys.exit(1)
 		if repo in var_map:
 			print(var_map[repo])
 			sys.exit(0)
@@ -313,6 +317,41 @@ def test_fanout_treats_null_repo_var_as_enabled_and_runs_outside_repo_root() -> 
 	assert proc.returncode == 0, proc.stderr
 	assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/active-repo week=" in proc.stdout
 	assert "status=posted tracker=#9200" in proc.stdout
+	assert "skipped_disabled" not in proc.stdout
+	assert len(final_state.get("codex_calls", [])) == 1
+
+
+def test_fanout_treats_failed_repo_var_lookup_as_enabled() -> None:
+	report = {
+		"runs": [
+			{
+				"repository": "owner/active-repo",
+				"run_id": 1,
+				"workflow_name": "Workflow 1",
+				"workflow_family": "review_autofix",
+				"conclusion": "success",
+				"duration_seconds": 60,
+				"created_at": _recent_iso(days_ago=1),
+			}
+		],
+		"summary": {},
+		"scope": {},
+		"errors": [],
+	}
+	state = {
+		"consumer_var_stdout_errors": {"owner/active-repo": '{"message":"rate limited"}'},
+		"issue_list_responses": [[]],
+		"next_issue_number": 9300,
+	}
+	proc, final_state = _run_fanout(
+		state,
+		report=report,
+		consumer_repos=["owner/active-repo"],
+	)
+
+	assert proc.returncode == 0, proc.stderr
+	assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/active-repo week=" in proc.stdout
+	assert "status=posted tracker=#9300" in proc.stdout
 	assert "skipped_disabled" not in proc.stdout
 	assert len(final_state.get("codex_calls", [])) == 1
 

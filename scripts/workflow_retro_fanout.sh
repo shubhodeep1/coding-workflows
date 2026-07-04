@@ -97,7 +97,11 @@ fanout_failed=0
 consumer_retro_enabled() {
 	local target_repo="$1"
 	local var_value=""
-	var_value="$(gh api "repos/${target_repo}/actions/variables/WORKFLOW_RETRO_ENABLED" --jq '.value' 2>/dev/null || echo "")"
+	if type _safe_gh_jq >/dev/null 2>&1; then
+		var_value="$(_safe_gh_jq "repos/${target_repo}/actions/variables/WORKFLOW_RETRO_ENABLED" --jq '.value' 2>/dev/null || echo "")"
+	else
+		var_value="$(gh api "repos/${target_repo}/actions/variables/WORKFLOW_RETRO_ENABLED" --jq '.value' 2>/dev/null || echo "")"
+	fi
 	if [ "${var_value}" = "null" ]; then
 		var_value=""
 	fi
