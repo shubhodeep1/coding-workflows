@@ -89,7 +89,12 @@ jobs:
           rm -rf .codex-workflow-src
           echo "SECURITY_AUDIT_SUPPORT_DIR=${SUPPORT_DIR}" >> "$GITHUB_ENV"
 
-      - name: Install Codex CLI
+      - name: Install Codex CLI (source repo)
+        if: env.SECURITY_AUDIT_IS_SOURCE_REPO == 'true'
+        uses: ./.github/actions/install-codex
+
+      - name: Install Codex CLI (consumer repos)
+        if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true'
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
 
       - name: Create Codex config

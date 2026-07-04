@@ -235,16 +235,18 @@ elif [ -n "${LAST_AUDITED_SHA}" ]; then
 			exit 0
 		fi
 		AUDIT_SCOPE_REASON="HEAD unchanged since last audit but SECURITY_AUDIT_SKIP_IF_UNCHANGED is disabled"
-	elif security_audit_flag_enabled "${SECURITY_AUDIT_INCREMENTAL}"; then
-		if git cat-file -e "${LAST_AUDITED_SHA}^{commit}" 2>/dev/null \
-			&& git merge-base --is-ancestor "${LAST_AUDITED_SHA}" "${HEAD_SHA}" 2>/dev/null; then
-			git diff --name-only "${LAST_AUDITED_SHA}..${HEAD_SHA}" > "${CHANGED_FILES_FILE}"
-			CHANGED_FILE_COUNT="$(grep -c . "${CHANGED_FILES_FILE}" || true)"
-			if [ "${CHANGED_FILE_COUNT}" -eq 0 ]; then
-				if security_audit_flag_enabled "${SECURITY_AUDIT_SKIP_IF_UNCHANGED}"; then
-					echo "security-audit: skipping — no content changes between ${LAST_AUDITED_SHA} and ${HEAD_SHA} (tracker=#${TRACKER_NUMBER})."
-					exit 0
-				fi
+		elif security_audit_flag_enabled "${SECURITY_AUDIT_INCREMENTAL}"; then
+			if git cat-file -e "${LAST_AUDITED_SHA}^{commit}" 2>/dev/null \
+				&& git merge-base --is-ancestor "${LAST_AUDITED_SHA}" "${HEAD_SHA}" 2>/dev/null; then
+				git diff --name-only "${LAST_AUDITED_SHA}..${HEAD_SHA}" > "${CHANGED_FILES_FILE}"
+				CHANGED_FILE_COUNT="$(grep -c . "${CHANGED_FILES_FILE}" 2>/dev/null || true)"
+				if ! [[ "${CHANGED_FILE_COUNT}" =~ ^[0-9]+$ ]]; then
+					AUDIT_SCOPE_REASON="could not count changed files since ${LAST_AUDITED_SHA}; falling back to a full audit"
+				elif [ "${CHANGED_FILE_COUNT}" -eq 0 ]; then
+					if security_audit_flag_enabled "${SECURITY_AUDIT_SKIP_IF_UNCHANGED}"; then
+						echo "security-audit: skipping — no content changes between ${LAST_AUDITED_SHA} and ${HEAD_SHA} (tracker=#${TRACKER_NUMBER})."
+						exit 0
+					fi
 				AUDIT_SCOPE_REASON="empty diff since last audit but SECURITY_AUDIT_SKIP_IF_UNCHANGED is disabled"
 			elif [ "${CHANGED_FILE_COUNT}" -gt "${SECURITY_AUDIT_INCREMENTAL_MAX_FILES}" ]; then
 				AUDIT_SCOPE_REASON="${CHANGED_FILE_COUNT} changed files exceed the incremental cap of ${SECURITY_AUDIT_INCREMENTAL_MAX_FILES}; falling back to a full audit"

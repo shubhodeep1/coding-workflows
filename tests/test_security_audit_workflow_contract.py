@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "security-audit.yml"
 INTERNAL_CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "internal-clarify.yml"
 SCRIPT_PATH = REPO_ROOT / "scripts" / "security_audit.sh"
+_SANITIZED_GIT_ENV_KEYS = ("BASH_ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX")
 
 
 def _write_exec(path: Path, body: str) -> None:
@@ -99,9 +100,8 @@ if args[:2] == ["issue", "reopen"]:
 save()
 print(f"unexpected gh args: {args}", file=sys.stderr)
 sys.exit(1)
-'''
+	'''
 	_write_exec(bin_dir / "gh", gh_script)
-	state_file.write_text("{}", encoding="utf-8")
 
 
 def _install_mock_codex(bin_dir: Path, state_file: Path) -> None:
@@ -138,7 +138,10 @@ def _run_security_audit(
 		_install_mock_codex(bin_dir, state_file)
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 
+		run_cwd = cwd or REPO_ROOT
 		env = os.environ.copy()
+		if Path(run_cwd) != REPO_ROOT:
+			env = {key: value for key, value in env.items() if key not in _SANITIZED_GIT_ENV_KEYS}
 		env.update(
 			{
 				"GH_TOKEN": "test-token",
@@ -153,8 +156,8 @@ def _run_security_audit(
 		)
 		env.update(extra_env or {})
 		proc = subprocess.run(
-			["bash", str(SCRIPT_PATH)],
-			cwd=cwd or REPO_ROOT,
+			["bash", "--noprofile", "--norc", str(SCRIPT_PATH)],
+			cwd=run_cwd,
 			env=env,
 			capture_output=True,
 			text=True,
@@ -168,7 +171,7 @@ def _git_fixture_repo(base_dir: Path) -> tuple[Path, str, str]:
 	"""Create a two-commit fixture repo; returns (repo_dir, first_sha, head_sha)."""
 	repo_dir = base_dir / "audited-repo"
 	repo_dir.mkdir(parents=True, exist_ok=True)
-	git_env = os.environ.copy()
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
 	git_env.update(
 		{
 			"GIT_AUTHOR_NAME": "t",
@@ -225,8 +228,11 @@ def test_security_audit_workflow_has_required_triggers_and_checkout_contract() -
 
 def test_security_audit_workflow_wires_codex_and_audit_env() -> None:
 	content = WORKFLOW_PATH.read_text(encoding="utf-8")
-	# Remote-form action reference so consumer-called runs resolve it without
-	# the workflow-source checkout in the workspace.
+	# Source-repo runs must keep using the local action so branch-local changes
+	# to install-codex stay testable; consumer-called runs use the stable ref.
+	assert "if: env.SECURITY_AUDIT_IS_SOURCE_REPO == 'true'" in content
+	assert 'uses: ./.github/actions/install-codex' in content
+	assert "if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true'" in content
 	assert 'uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable' in content
 	assert 'scripts/write_codex_config.sh' in content
 	assert 'OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}' in content
@@ -259,6 +265,8 @@ def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None
 	assert 'gh_retry gh issue comment' in content
 	assert 'gh_retry gh issue edit' in content
 	assert 'gh_retry gh issue reopen' in content
+	assert 'CHANGED_FILE_COUNT="$(grep -c . "${CHANGED_FILES_FILE}" 2>/dev/null || true)"' in content
+	assert 'if ! [[ "${CHANGED_FILE_COUNT}" =~ ^[0-9]+$ ]]; then' in content
 	assert 'marker_regex = re.compile(re.escape(followup_marker_prefix) + r"([^>]+) -->")' in content
 
 

@@ -12,6 +12,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${REPO_ROOT}"
+
 retro_fanout_flag_enabled() {
 	case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
 		1|true|yes|on)
@@ -32,8 +36,8 @@ fi
 : "${GH_TOKEN:?GH_TOKEN is required}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 
-WORKFLOW_LOG_REPORT_FILE="${WORKFLOW_LOG_REPORT_FILE:-workflow_log_report.json}"
-CONSUMER_REPOS_FILE="${CONSUMER_REPOS_FILE:-.github/ai/consumer_repos.json}"
+WORKFLOW_LOG_REPORT_FILE="${WORKFLOW_LOG_REPORT_FILE:-${REPO_ROOT}/workflow_log_report.json}"
+CONSUMER_REPOS_FILE="${CONSUMER_REPOS_FILE:-${REPO_ROOT}/.github/ai/consumer_repos.json}"
 WORKFLOW_RETRO_MODEL="${WORKFLOW_RETRO_MODEL:-openai/gpt-5.4-mini}"
 WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY="${WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY:-true}"
 MAX_CODEX_ATTEMPTS="${MAX_CODEX_ATTEMPTS:-3}"
@@ -59,9 +63,9 @@ if [ ! -f "${CONSUMER_REPOS_FILE}" ]; then
 fi
 
 # shellcheck disable=SC1091
-source scripts/gh_helpers.sh 2>/dev/null || true
+source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 # shellcheck disable=SC1091
-source scripts/label_helpers.sh
+source "${SCRIPT_DIR}/label_helpers.sh"
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
 TRACKER_TITLE="AI Workflow Weekly Retro"
@@ -94,6 +98,9 @@ consumer_retro_enabled() {
 	local target_repo="$1"
 	local var_value=""
 	var_value="$(gh api "repos/${target_repo}/actions/variables/WORKFLOW_RETRO_ENABLED" --jq '.value' 2>/dev/null || echo "")"
+	if [ "${var_value}" = "null" ]; then
+		var_value=""
+	fi
 	if [ -n "${var_value}" ] && ! retro_fanout_flag_enabled "${var_value}"; then
 		return 1
 	fi
@@ -114,12 +121,12 @@ run_consumer_retro() {
 	local selection_env="${FANOUT_RUNTIME_DIR}/${safe_slug}-selection.env"
 	local comments_json="${FANOUT_RUNTIME_DIR}/${safe_slug}-comments.json"
 
-	python3 scripts/workflow_retro.py \
+	python3 "${SCRIPT_DIR}/workflow_retro.py" \
 		--report "${WORKFLOW_LOG_REPORT_FILE}" \
 		--output "${ctx_file}" \
 		--json-output "${json_file}" \
 		--repo "${target_repo}" \
-		--repo-root "${GITHUB_WORKSPACE:-$PWD}" >/dev/null || return 1
+		--repo-root "${GITHUB_WORKSPACE:-${REPO_ROOT}}" >/dev/null || return 1
 
 	local week_label window_since has_activity
 	week_label="$(jq -r '.window.week_label' "${json_file}")"
@@ -137,7 +144,7 @@ run_consumer_retro() {
 	fi
 
 	local rendered_prompt
-	rendered_prompt="$(bash scripts/render_prompt.sh prompts/mode-workflow-analysis.txt)" || return 1
+	rendered_prompt="$(bash "${SCRIPT_DIR}/render_prompt.sh" "${REPO_ROOT}/prompts/mode-workflow-analysis.txt")" || return 1
 	{
 		echo "Mode: retro"
 		printf '%s\n' "${rendered_prompt}"
@@ -156,7 +163,7 @@ run_consumer_retro() {
 			sanitize_codex_prompt_file "${prompt_file}"
 		fi
 		set +e
-		bash scripts/codex_heartbeat.sh \
+		bash "${SCRIPT_DIR}/codex_heartbeat.sh" \
 			--phase workflow_weekly_retro \
 			--stdout-file "${body_file}" \
 			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${prompt_file}"
@@ -185,7 +192,10 @@ run_consumer_retro() {
 		previous_heading_line="${heading_line}"
 	done
 
-	ensure_label_exists "ai:retro" "${target_repo}"
+	# `run_consumer_retro` is invoked via `if ! run_consumer_retro ...`; in bash,
+	# that suppresses `set -e` inside the function body, so an unguarded failure
+	# here would silently continue instead of marking this repo failed.
+	ensure_label_exists "ai:retro" "${target_repo}" || return 1
 
 	cat > "${tracker_body_file}" <<EOF
 ${TRACKER_MARKER}

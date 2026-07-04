@@ -78,6 +78,10 @@ if args[0] == "api":
 
 if args[:2] == ["label", "create"]:
 	state.setdefault("label_create_args", []).append(args)
+	repo = first_value("--repo") or "owner/repo"
+	if repo in state.get("label_create_fail_repos", []):
+		save()
+		sys.exit(1)
 	save()
 	sys.exit(0)
 
@@ -155,6 +159,7 @@ def _run_fanout(
 	report: dict,
 	consumer_repos: list[str],
 	extra_env: dict | None = None,
+	run_from_temp_dir: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], dict]:
 	with tempfile.TemporaryDirectory(prefix="retro-fanout-test-") as td:
 		tmp_path = Path(td)
@@ -192,7 +197,7 @@ def _run_fanout(
 		env.update(extra_env or {})
 		proc = subprocess.run(
 			["bash", str(SCRIPT_PATH)],
-			cwd=REPO_ROOT,
+			cwd=tmp_path if run_from_temp_dir else REPO_ROOT,
 			env=env,
 			capture_output=True,
 			text=True,
@@ -274,6 +279,75 @@ def test_fanout_posts_active_repo_skips_idle_and_disabled_and_source() -> None:
 	payloads = "\n".join(final_state.get("comment_payloads", []))
 	assert "## Weekly Retro" in payloads
 	assert "<!-- ai:workflow-retro:" in payloads
+
+
+def test_fanout_treats_null_repo_var_as_enabled_and_runs_outside_repo_root() -> None:
+	report = {
+		"runs": [
+			{
+				"repository": "owner/active-repo",
+				"run_id": 1,
+				"workflow_name": "Workflow 1",
+				"workflow_family": "review_autofix",
+				"conclusion": "success",
+				"duration_seconds": 60,
+				"created_at": _recent_iso(days_ago=1),
+			}
+		],
+		"summary": {},
+		"scope": {},
+		"errors": [],
+	}
+	state = {
+		"consumer_var_responses": {"owner/active-repo": "null"},
+		"issue_list_responses": [[]],
+		"next_issue_number": 9200,
+	}
+	proc, final_state = _run_fanout(
+		state,
+		report=report,
+		consumer_repos=["owner/active-repo"],
+		run_from_temp_dir=True,
+	)
+
+	assert proc.returncode == 0, proc.stderr
+	assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/active-repo week=" in proc.stdout
+	assert "status=posted tracker=#9200" in proc.stdout
+	assert "skipped_disabled" not in proc.stdout
+	assert len(final_state.get("codex_calls", [])) == 1
+
+
+def test_fanout_marks_repo_failed_when_label_creation_fails() -> None:
+	report = {
+		"runs": [
+			{
+				"repository": "owner/active-repo",
+				"run_id": 1,
+				"workflow_name": "Workflow 1",
+				"workflow_family": "review_autofix",
+				"conclusion": "success",
+				"duration_seconds": 60,
+				"created_at": _recent_iso(days_ago=1),
+			}
+		],
+		"summary": {},
+		"scope": {},
+		"errors": [],
+	}
+	state = {
+		"label_create_fail_repos": ["owner/active-repo"],
+	}
+	proc, final_state = _run_fanout(
+		state,
+		report=report,
+		consumer_repos=["owner/active-repo"],
+		extra_env={"GH_RETRY_MAX_ATTEMPTS": "1"},
+	)
+
+	assert proc.returncode == 1, proc.stderr
+	assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/active-repo status=failed" in proc.stdout
+	assert len(final_state.get("codex_calls", [])) == 1
+	assert final_state.get("issue_create_args", []) == []
 
 
 def main() -> int:
