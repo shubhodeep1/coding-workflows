@@ -52,8 +52,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     completed` failures on a PR; the diagnosis model analyses the failing
     check's logs and opens a GitHub issue (label `ai:check-triage`) describing
     the root cause + suggested fix, which the clarify→…→review pipeline then
-    picks up. Opt-in per repo via `CHECK_FAILURE_TRIAGE_ENABLED`; never pushes
-    code itself. De-dupes one in-flight triage per repo+PR+check and caps the
+    picks up. On by default; disable per repo via
+    `CHECK_FAILURE_TRIAGE_ENABLED=false`; never pushes code itself. De-dupes one
+    in-flight triage per repo+PR+check and caps the
     auto-fix lineage at `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` generations
     (escalates with `ai:check-triage-escalated` + Telegram at the cap).
 
