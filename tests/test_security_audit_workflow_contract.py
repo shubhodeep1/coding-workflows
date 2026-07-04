@@ -12,6 +12,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "security-audit.yml"
 INTERNAL_CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "internal-clarify.yml"
 SCRIPT_PATH = REPO_ROOT / "scripts" / "security_audit.sh"
@@ -273,6 +274,11 @@ def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None
 def test_internal_clarify_skips_source_repo_tracker_issues() -> None:
 	content = INTERNAL_CLARIFY_PATH.read_text(encoding="utf-8")
 	assert "if: ${{ !contains(github.event.issue.labels.*.name, 'ai:security-audit') && !contains(github.event.issue.labels.*.name, 'ai:retro') }}" in content
+
+
+def test_clarify_skips_consumer_tracker_issues() -> None:
+	content = CLARIFY_PATH.read_text(encoding="utf-8")
+	assert "(github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro'))" in content
 
 
 def test_security_audit_gate_disabled_skips_without_side_effects() -> None:

@@ -215,6 +215,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/verify_integration_fingerprints.py` — Verify that an orchestrator integration-sync resolver run preserved merged sub-issue intent.
 - `scripts/watchdog_helpers.sh` — Shell helper for shared Codex watchdog utilities.
 - `scripts/workflow_retro.py` — Build weekly workflow-retro context from workflow-log-analysis telemetry.
+- `scripts/workflow_retro_fanout.sh` — Post weekly workflow retros to consumer repositories from the centralized fan-out job.
 - `scripts/workspace_init.sh` — Shell helper for workspace init.
 - `scripts/workspace_safety_check.sh` — Shell helper for workspace safety check.
 - `scripts/write_codex_config.sh` — write_codex_config.sh — central writer for ~/.codex/config.toml.
