@@ -109,7 +109,7 @@ RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${REPO}/actions/runs/${GITHUB_
 
 # --- Gates -----------------------------------------------------------------
 
-if [ "${ENABLED}" = "false" ]; then
+if [ "${ENABLED,,}" = "false" ]; then
 	log "skip reason=disabled (CHECK_FAILURE_TRIAGE_ENABLED=false) repo=${REPO}"
 	exit 0
 fi
