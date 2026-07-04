@@ -314,7 +314,8 @@ jobs:
           # the window had zero workflow runs and zero merged PRs. Log-only —
           # the WORKFLOW_RETRO_SKIP_V1 line in the run log is the sole trace.
           retro_has_activity="$(jq -r 'if .has_activity == false then "false" else "true" end' "${RETRO_JSON_FILE}")"
-          if [ "${retro_has_activity}" != "true" ] && [ "${WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY:-true}" = "true" ]; then
+          retro_skip_if_no_activity_normalized="$(printf '%s' "${WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY:-true}" | tr '[:upper:]' '[:lower:]')"
+          if [ "${retro_has_activity}" != "true" ] && [[ "${retro_skip_if_no_activity_normalized}" =~ ^(1|true|yes|on)$ ]]; then
             echo "WORKFLOW_RETRO_SKIP_V1: repo=${GITHUB_REPOSITORY} week=$(jq -r '.window.week_label' "${RETRO_JSON_FILE}") reason=no_activity total_runs=$(jq -r '.summary.total_runs // 0' "${RETRO_JSON_FILE}") merged_prs=$(jq -r '.summary.merged_pr_count // 0' "${RETRO_JSON_FILE}")"
             echo "retro_gate=skip_no_activity" >> "$GITHUB_OUTPUT"
           else
@@ -590,7 +591,7 @@ jobs:
         # are posted centrally from here via GH_PAT (§14 repo scope).
         if: ${{ !cancelled() && steps.retro_context.outcome == 'success' }}
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PYTHONDONTWRITEBYTECODE: "1"
           WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED: ${{ vars.WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED || 'true' }}

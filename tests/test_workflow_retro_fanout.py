@@ -255,6 +255,19 @@ def test_fanout_disabled_makes_no_calls() -> None:
 	assert state.get("codex_calls", []) == []
 
 
+def test_fanout_skips_cleanly_when_cross_repo_pat_is_missing() -> None:
+	proc, state = _run_fanout(
+		{},
+		report={"runs": [], "summary": {}, "scope": {}, "errors": []},
+		consumer_repos=["owner/active-repo"],
+		extra_env={"GH_TOKEN": ""},
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert "GH_TOKEN is empty; skipping consumer fan-out because cross-repo GH_PAT is unavailable." in proc.stdout
+	assert state.get("calls", []) == []
+	assert state.get("codex_calls", []) == []
+
+
 def test_fanout_posts_active_repo_skips_idle_and_disabled_and_source() -> None:
 	report = {
 		"runs": [
@@ -302,6 +315,11 @@ def test_fanout_posts_active_repo_skips_idle_and_disabled_and_source() -> None:
 	assert len(create_args) == 1
 	assert "ai:retro" in create_args[0]
 	assert "owner/active-repo" in create_args[0]
+	assert any(
+		call[:2] == ["api", "--paginate"]
+		and any("/comments?since=" in arg for arg in call)
+		for call in final_state.get("calls", [])
+	)
 	payloads = "\n".join(final_state.get("comment_payloads", []))
 	assert "## Weekly Retro" in payloads
 	assert "<!-- ai:workflow-retro:" in payloads

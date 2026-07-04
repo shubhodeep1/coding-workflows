@@ -33,8 +33,11 @@ if ! retro_fanout_flag_enabled "${WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED}"; then
 	exit 0
 fi
 
-: "${GH_TOKEN:?GH_TOKEN is required}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+if [ -z "${GH_TOKEN:-}" ]; then
+	echo "retro-fanout: GH_TOKEN is empty; skipping consumer fan-out because cross-repo GH_PAT is unavailable."
+	exit 0
+fi
 
 WORKFLOW_LOG_REPORT_FILE="${WORKFLOW_LOG_REPORT_FILE:-${REPO_ROOT}/workflow_log_report.json}"
 CONSUMER_REPOS_FILE="${CONSUMER_REPOS_FILE:-${REPO_ROOT}/.github/ai/consumer_repos.json}"
@@ -295,7 +298,8 @@ PY
 
 	# Query only the current retro window so the week-scoped comment upsert
 	# stays bounded even as the tracker grows over time.
-	gh_retry gh api "repos/${target_repo}/issues/${FANOUT_TRACKER_NUMBER}/comments?since=${window_since}&per_page=100" > "${comments_json}" || return 1
+	gh_retry gh api --paginate "repos/${target_repo}/issues/${FANOUT_TRACKER_NUMBER}/comments?since=${window_since}&per_page=100" \
+		| jq -s 'add // []' > "${comments_json}" || return 1
 
 	local existing_comment_id existing_comment_body
 	existing_comment_id="$(jq -r --arg marker "${comment_marker}" '([.[] | select(((.body // "") | contains($marker))) | {id: ((.id // 0) | tonumber), body: (.body // "")}] | sort_by(.id) | last | .id) // empty' "${comments_json}" 2>/dev/null || echo "")"
