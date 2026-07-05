@@ -12,9 +12,11 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "security-audit.yml"
 INTERNAL_CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "internal-clarify.yml"
 SCRIPT_PATH = REPO_ROOT / "scripts" / "security_audit.sh"
+_SANITIZED_GIT_ENV_KEYS = ("BASH_ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX")
 
 
 def _write_exec(path: Path, body: str) -> None:
@@ -85,6 +87,9 @@ if args[:2] == ["issue", "comment"]:
 
 if args[:2] == ["issue", "edit"]:
 	state.setdefault("issue_edit_args", []).append(args)
+	body_file = first_value("--body-file")
+	if body_file:
+		state.setdefault("issue_edit_bodies", []).append(Path(body_file).read_text(encoding="utf-8"))
 	save()
 	sys.exit(0)
 
@@ -96,9 +101,8 @@ if args[:2] == ["issue", "reopen"]:
 save()
 print(f"unexpected gh args: {args}", file=sys.stderr)
 sys.exit(1)
-'''
+	'''
 	_write_exec(bin_dir / "gh", gh_script)
-	state_file.write_text("{}", encoding="utf-8")
 
 
 def _install_mock_codex(bin_dir: Path, state_file: Path) -> None:
@@ -123,6 +127,8 @@ def _run_security_audit(
 	*,
 	enabled: bool = True,
 	codex_output: str = "[]",
+	extra_env: dict | None = None,
+	cwd: Path | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict]:
 	with tempfile.TemporaryDirectory(prefix="security-audit-test-") as td:
 		tmp_path = Path(td)
@@ -133,7 +139,10 @@ def _run_security_audit(
 		_install_mock_codex(bin_dir, state_file)
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 
+		run_cwd = cwd or REPO_ROOT
 		env = os.environ.copy()
+		if Path(run_cwd) != REPO_ROOT:
+			env = {key: value for key, value in env.items() if key not in _SANITIZED_GIT_ENV_KEYS}
 		env.update(
 			{
 				"GH_TOKEN": "test-token",
@@ -146,9 +155,10 @@ def _run_security_audit(
 				"SECURITY_AUDIT_ENABLED": "true" if enabled else "false",
 			}
 		)
+		env.update(extra_env or {})
 		proc = subprocess.run(
-			["bash", str(SCRIPT_PATH)],
-			cwd=REPO_ROOT,
+			["bash", "--noprofile", "--norc", str(SCRIPT_PATH)],
+			cwd=run_cwd,
 			env=env,
 			capture_output=True,
 			text=True,
@@ -156,6 +166,43 @@ def _run_security_audit(
 		)
 		final_state = json.loads(state_file.read_text(encoding="utf-8"))
 		return proc, final_state
+
+
+def _git_fixture_repo(base_dir: Path) -> tuple[Path, str, str]:
+	"""Create a two-commit fixture repo; returns (repo_dir, first_sha, head_sha)."""
+	repo_dir = base_dir / "audited-repo"
+	repo_dir.mkdir(parents=True, exist_ok=True)
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	git_env.update(
+		{
+			"GIT_AUTHOR_NAME": "t",
+			"GIT_AUTHOR_EMAIL": "t@example.invalid",
+			"GIT_COMMITTER_NAME": "t",
+			"GIT_COMMITTER_EMAIL": "t@example.invalid",
+		}
+	)
+
+	def _git(*args: str) -> str:
+		return subprocess.run(
+			["git", *args],
+			cwd=repo_dir,
+			env=git_env,
+			check=True,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+		).stdout.strip()
+
+	_git("init", "-q")
+	(repo_dir / "file_a.py").write_text("print('unchanged module')\nVALUE_A = 1\n", encoding="utf-8")
+	_git("add", "file_a.py")
+	_git("commit", "-q", "-m", "first commit")
+	first_sha = _git("rev-parse", "HEAD")
+	(repo_dir / "file_b.py").write_text("print('changed module')\nVALUE_B = 2\n", encoding="utf-8")
+	_git("add", "file_b.py")
+	_git("commit", "-q", "-m", "second commit")
+	head_sha = _git("rev-parse", "HEAD")
+	return repo_dir, first_sha, head_sha
 
 
 def _iso_utc_for_current_week(*, day_offset: int) -> str:
@@ -172,22 +219,44 @@ def test_security_audit_workflow_has_required_triggers_and_checkout_contract() -
 	content = WORKFLOW_PATH.read_text(encoding="utf-8")
 	assert 'schedule:' in content
 	assert 'workflow_dispatch: {}' in content
+	assert 'workflow_call:' in content
 	assert 'cron: "0 8 * * 0"' in content
 	assert 'uses: actions/checkout@v5' in content
 	assert 'ref: ${{ github.event.repository.default_branch }}' in content
+	# Full history is required by the incremental scope resolver.
+	assert 'fetch-depth: 0' in content
 
 
 def test_security_audit_workflow_wires_codex_and_audit_env() -> None:
 	content = WORKFLOW_PATH.read_text(encoding="utf-8")
+	# Source-repo runs must keep using the local action so branch-local changes
+	# to install-codex stay testable; consumer-called runs use the stable ref.
+	assert "if: env.SECURITY_AUDIT_IS_SOURCE_REPO == 'true'" in content
 	assert 'uses: ./.github/actions/install-codex' in content
+	assert "if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true'" in content
+	assert 'uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable' in content
 	assert 'scripts/write_codex_config.sh' in content
+	assert '--catalog-path "${SECURITY_AUDIT_SUPPORT_DIR:-.}/scripts/codex_model_catalog.json"' in content
 	assert 'OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}' in content
-	assert "SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'false' }}" in content
+	assert "SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}" in content
 	assert "SECURITY_AUDIT_CONFIDENCE_GATE: ${{ vars.SECURITY_AUDIT_CONFIDENCE_GATE || '8' }}" in content
 	assert (
 		"SECURITY_AUDIT_FP_EXCLUSIONS: ${{ vars.SECURITY_AUDIT_FP_EXCLUSIONS || 'scripts/security_audit_fp_exclusions.json' }}"
 	) in content
-	assert 'bash scripts/security_audit.sh' in content
+	assert "SECURITY_AUDIT_SKIP_IF_UNCHANGED: ${{ vars.SECURITY_AUDIT_SKIP_IF_UNCHANGED || 'true' }}" in content
+	assert "SECURITY_AUDIT_INCREMENTAL: ${{ vars.SECURITY_AUDIT_INCREMENTAL || 'true' }}" in content
+	assert 'bash "${SECURITY_AUDIT_SUPPORT_DIR:-.}/scripts/security_audit.sh"' in content
+
+
+def test_security_audit_consumer_template_calls_stable_reusable_workflow() -> None:
+	template_path = REPO_ROOT / "workflow-templates" / "ai-security-audit.yml"
+	content = template_path.read_text(encoding="utf-8")
+	assert "cron: '0 8 * * 0'" in content
+	assert 'workflow_dispatch: {}' in content
+	assert 'uses: shubhodeep1/coding-workflows/.github/workflows/security-audit.yml@stable' in content
+	assert 'secrets: inherit' in content
+	manifest = (REPO_ROOT / "workflow-templates" / "profiles" / "full.txt").read_text(encoding="utf-8")
+	assert "ai-security-audit.yml" in manifest.splitlines()
 
 
 def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None:
@@ -198,6 +267,8 @@ def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None
 	assert 'gh_retry gh issue comment' in content
 	assert 'gh_retry gh issue edit' in content
 	assert 'gh_retry gh issue reopen' in content
+	assert 'CHANGED_FILE_COUNT="$(grep -c . "${CHANGED_FILES_FILE}" 2>/dev/null || true)"' in content
+	assert 'if ! [[ "${CHANGED_FILE_COUNT}" =~ ^[0-9]+$ ]]; then' in content
 	assert 'marker_regex = re.compile(re.escape(followup_marker_prefix) + r"([^>]+) -->")' in content
 
 
@@ -206,12 +277,117 @@ def test_internal_clarify_skips_source_repo_tracker_issues() -> None:
 	assert "if: ${{ !contains(github.event.issue.labels.*.name, 'ai:security-audit') && !contains(github.event.issue.labels.*.name, 'ai:retro') }}" in content
 
 
+def test_clarify_skips_consumer_tracker_issues() -> None:
+	content = CLARIFY_PATH.read_text(encoding="utf-8")
+	assert "(github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro'))" in content
+
+
 def test_security_audit_gate_disabled_skips_without_side_effects() -> None:
 	proc, state = _run_security_audit({}, enabled=False)
 	assert proc.returncode == 0, proc.stderr
 	assert "SECURITY_AUDIT_ENABLED=false; skipping." in proc.stdout
 	assert state.get("calls", []) == []
 	assert state.get("codex_calls", []) == []
+
+
+def test_security_audit_skips_when_head_unchanged_since_last_audit() -> None:
+	head_sha = subprocess.run(
+		["git", "rev-parse", "HEAD"],
+		cwd=REPO_ROOT,
+		check=True,
+		capture_output=True,
+		text=True,
+		encoding="utf-8",
+	).stdout.strip()
+	state = {
+		"issue_list_responses": [
+			[
+				{
+					"number": 9000,
+					"title": "AI Security Audit Tracker",
+					"body": (
+						"<!-- ai:security-audit-tracker:v1 -->\n# AI Security Audit Tracker\n\n"
+						f"<!-- ai:security-audit-last-sha:{head_sha} -->\n"
+					),
+					"state": "OPEN",
+					"url": "https://github.com/owner/repo/issues/9000",
+				}
+			],
+		],
+	}
+	proc, final_state = _run_security_audit(state)
+	assert proc.returncode == 0, proc.stderr
+	assert f"skipping — HEAD {head_sha} unchanged since last audit (tracker=#9000)." in proc.stdout
+	assert final_state.get("codex_calls", []) == []
+	assert final_state.get("issue_comment_args", []) == []
+	assert final_state.get("issue_create_args", []) == []
+
+
+def test_security_audit_incremental_scope_drops_out_of_scope_findings() -> None:
+	codex_output = json.dumps(
+		[
+			{
+				"finding_id": "changed-file-finding",
+				"owasp_or_stride_category": "A05:2021-Security Misconfiguration",
+				"severity": "high",
+				"confidence": 9,
+				"file": "file_b.py",
+				"line": 1,
+				"exploit_scenario": "The newly added module prints without sanitising its constant.",
+				"recommendation": "Validate the constant before use.",
+			},
+			{
+				"finding_id": "unchanged-file-finding",
+				"owasp_or_stride_category": "A05:2021-Security Misconfiguration",
+				"severity": "high",
+				"confidence": 9,
+				"file": "file_a.py",
+				"line": 1,
+				"exploit_scenario": "This cites a file outside the incremental scope and must be dropped.",
+				"recommendation": "Do not surface this issue.",
+			},
+		],
+		ensure_ascii=True,
+	)
+	with tempfile.TemporaryDirectory(prefix="security-audit-fixture-") as fixture_td:
+		repo_dir, first_sha, head_sha = _git_fixture_repo(Path(fixture_td))
+		state = {
+			"issue_list_responses": [
+				[
+					{
+						"number": 9000,
+						"title": "AI Security Audit Tracker",
+						"body": (
+							"<!-- ai:security-audit-tracker:v1 -->\n# AI Security Audit Tracker\n\n"
+							f"<!-- ai:security-audit-last-sha:{first_sha} -->\n"
+						),
+						"state": "OPEN",
+						"url": "https://github.com/owner/repo/issues/9000",
+					}
+				],
+				[],
+			],
+		}
+		proc, final_state = _run_security_audit(
+			state,
+			codex_output=codex_output,
+			# Consumer-shaped run: support files resolve from the workflow
+			# source tree while the audited checkout is the fixture repo.
+			extra_env={"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT)},
+			cwd=repo_dir,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert "scope=incremental" in proc.stdout
+	assert "tracker=#9000 findings=1 followups_created=1" in proc.stdout
+	comment_bodies = "\n".join(final_state.get("issue_comment_bodies", []))
+	assert "Audit scope: incremental" in comment_bodies
+	assert f"`{first_sha}`..`{head_sha}`" in comment_bodies
+	assert "changed-file-finding" in comment_bodies
+	assert "unchanged-file-finding" not in comment_bodies
+	assert "Suppressed out-of-scope findings: 1" in comment_bodies
+	edit_bodies = "\n".join(final_state.get("issue_edit_bodies", []))
+	assert f"<!-- ai:security-audit-last-sha:{head_sha} -->" in edit_bodies
 
 
 def test_security_audit_filters_findings_and_caps_followups() -> None:
