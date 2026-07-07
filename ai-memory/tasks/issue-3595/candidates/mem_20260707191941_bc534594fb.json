@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-3579` @ `61b0f43828895eb875e87d9771bf6bc4c709da03`  \nIntegration branch check: matches metadata (`orchestrator/project-3579`)  \nClarification mapping: no Q1/Q2 were asked; `/answer [auto-answered-by-orchestrator]` is just a proceed signal, so there is no unresolved clarification dependency.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `analysis/recommendation-processing-report.md` processed-source-doc provenance + outcome-ledger convention  \nScope-mode justification: This is a doc-closeout task, not a workflow/code rollout. The existing report already contains the per-doc outcome ledger for `analysis/workflow-optimization-2026-06-25.md` through `...06-28.md`, and the repo already has the downstream fallback that uses `analysis/recommendation-processing-report.md` when no dated `workflow-optimization-*.md` files remain. The smallest correct change is therefore to finalize provenance inside the existing report, remove the now-stale \u201ctriaged in place\u201d note, and delete the four source docs in the same patch. That is the lowest-risk way to satisfy correctness/provenance requirements without broadening into workflow or test changes.\n\nFiles likely to change\n- `analysis/recommendation-processing-report.md`\n  - update `## Processed source docs (104)` to reflect the four newly retired docs (`104 -> 108`)\n  - add the four filenames to the processed-doc provenance list in chronological position\n  - keep the existing `## Outcome ledger for the 2026-06-25 through 2026-06-28 follow-up docs` section as the canonical final triage record; only tighten wording if needed for final archival state\n  - remove or rewrite the current footer note that says these four docs \u201cintentionally remain under `analysis/`\u201d and were excluded from the processed-doc count\n- `analysis/workflow-optimization-2026-06-25.md` \u2014 delete\n- `analysis/workflow-optimization-2026-06-26.md` \u2014 delete\n- `analysis/workflow-optimization-2026-06-27.md` \u2014 delete\n- `analysis/workflow-optimization-2026-06-28.md` \u2014 delete\n\nFunctions or modules to implement\n- None; this is a doc-only closeout.\n- Reuse the existing report structure:\n  - `## Processed source docs (...)`\n  - `## Outcome ledger for the 2026-06-25 through 2026-06-28 follow-up docs`\n  - `## Conflicts / assumptions recorded for follow-up`\n\nData structures affected\n- The processed-doc provenance count and ordered filename list in the report\n- The per-doc status buckets already used by the report for these docs:\n  - `Implemented by sibling work` = actioned\n  - `Already satisfied on this ref` = stale/already done\n  - `Intentionally deferred` = deferred/risky\n  - no invalid bucket is currently needed unless the final pass finds one truly missing\n- The footer/conflict note that currently records these docs as still live under `analysis/`\n- The on-disk `analysis/` file set after the four source docs are removed\n\nAPI/interface changes\n- None.\n- Operational note: after deletion, there should be no live `analysis/workflow-optimization-*.md` files left. `.github/workflows/comprehensive-test-and-release.yml` already has a fallback to `analysis/recommendation-processing-report.md`, so no workflow/interface edit is needed.\n\nRisks and edge cases\n- Conflict to resolve: the report already contains the 06-25..06-28 outcome ledger, but its footer still says those docs were intentionally excluded from `Processed source docs (104)` and left in place. That contradiction must be fixed in the same patch as the deletions.\n- Keep the update minimally invasive: do not rewrite older ledger sections or reshuffle historical provenance beyond inserting these four filenames and fixing the count.\n- Preserve filename provenance even after deleting the source docs.\n- `analysis/workflow-optimization-2026-06-25.md` is narrative-only; keep the existing short-label grouping style rather than inventing MERGE/REUSE IDs.\n- The 2026-06-26/27/28 source docs explicitly report `SAFE_TO_MERGE | 0`; do not reopen runtime changes just because the docs are being finalized.\n- Do not touch:\n  - `analysis/last_collection_timestamp.txt`\n  - `analysis/validation-selftest-status.json`\n  - any `analysis/recommendation-processing-report*.md` other than the main report requested here\n- Assumption: the issue\u2019s `files_touched` allowlist includes these five analysis paths; targeted repo reads did not reveal any required change outside them.\n\nTesting considerations\n- Verify the diff is limited to:\n  - one modified file: `analysis/recommendation-processing-report.md`\n  - four deleted files: the dated 2026-06-25..06-28 source docs\n- Verify the processed-doc header/count and provenance list include all four filenames exactly once.\n- Verify the 06-25..06-28 outcome-ledger section remains present in the report after deletion.\n- Verify repo-wide exact-name search for the four deleted filenames now hits only `analysis/recommendation-processing-report.md`.\n- Verify `find analysis -maxdepth 1 -name 'workflow-optimization-*.md'` returns no dated source docs after deletion.\n- No pinned-toolchain/unit-test changes are expected for this doc-only closeout unless CI has a repo-specific inventory/assertion check that directly snapshots the `analysis/` file list.\n\nPre-execution self-check result\n- Representative existing pattern reviewed: the current processed-doc provenance list plus the existing 06-25..06-28 outcome ledger in `analysis/recommendation-processing-report.md`.\n- Source-doc spot-check confirms the 2026-06-26, 2026-06-27, and 2026-06-28 appendices each record `SAFE_TO_MERGE | 0`, which supports keeping this as report finalization + deletion only.\n- Repo-wide exact-filename search found no code/test dependency on these four filenames outside the report.\n- Missing-context note: the prompt did not include the explicit `files_touched` list, so the plan assumes the five obvious analysis paths are permitted and sufficient.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "1d4b0cf6d34688fad4efce4161bdd67d3bc125451deebe1e657f252e8af37e60",
+  "lineage": {
+    "issue_number": 3595,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28892083586",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28892083586",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3595"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260707191941_bc534594fb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3595,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28892083586"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3595",
+  "timestamps": {
+    "created_at": "2026-07-07T19:19:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
