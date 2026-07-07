@@ -366,7 +366,7 @@ def _implement_commit_text() -> str:
 def _scope_alert_block_text() -> str:
 	text = _implement_text()
 	start = text.index('if [ -n "${SVB_REASON:-}" ]; then')
-	end = text.index("exit 1", start)
+	end = text.index("- name: Handle no-op implementation", start)
 	return text[start:end]
 
 
