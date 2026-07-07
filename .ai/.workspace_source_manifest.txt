@@ -616,6 +616,7 @@ tests/test_summarize_reviewer_consensus_sandbox_pin.py
 tests/test_summarize_unselected_runs.py
 tests/test_targeted_file_context.py
 tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py
+tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py
 tests/test_test_and_mark_stable_plan_polling_guard.py
 tests/test_truncate_to_utf8_byte_cap.py
 tests/test_update_workflows_guardrails.py

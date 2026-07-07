@@ -14,20 +14,28 @@ def _read_workflow() -> str:
 	return WORKFLOW.read_text(encoding="utf-8")
 
 
+def _slice_between(text: str, start_marker: str, end_marker: str) -> str:
+	start = text.find(start_marker)
+	assert start != -1, f"Missing marker: {start_marker}"
+	end = text.find(end_marker, start)
+	assert end != -1, f"Missing marker after {start_marker}: {end_marker}"
+	return text[start:end]
+
+
 def _closed_pr_existing_run_branch(wf: str) -> str:
-	start_marker = 'if [ "${PR_STATE}" = "closed" ]; then'
-	end_marker = '# PR is still open — exercise the close path end to end.'
-	start = wf.index(start_marker)
-	end = wf.index(end_marker, start)
-	return wf[start:end]
+	return _slice_between(
+		wf,
+		'PR #${PR_NUMBER} is already closed (head_sha=${PR_HEAD_SHA}); looking up the cancel-on-close run that fired for that closure.',
+		'# PR is still open — exercise the close path end to end.',
+	)
 
 
 def _existing_run_wait_loop(branch: str) -> str:
-	start_marker = 'while [ "${EXISTING_STATUS}" != "completed" ] && [ "$(date +%s)" -lt "${WAIT_DEADLINE}" ]; do'
-	end_marker = '\n            if [ "${EXISTING_STATUS}" != "completed" ]; then'
-	start = branch.index(start_marker)
-	end = branch.index(end_marker, start)
-	return branch[start:end]
+	return _slice_between(
+		branch,
+		'while [ "${EXISTING_STATUS}" != "completed" ] && [ "$(date +%s)" -lt "${WAIT_DEADLINE}" ]; do',
+		'if [ "${EXISTING_STATUS}" != "completed" ]; then',
+	)
 
 
 def test_closed_pr_wait_loop_fetches_existing_run_once_per_iteration() -> None:
