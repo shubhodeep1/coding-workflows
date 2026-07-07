@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Validate and land the safe subset of workflow-optimization recommendations (2026-06-25 to 2026-06-28)\",\"issues\":[{\"id\":\"triage-2026-06-25-28-workflow-optimization-docs\",\"title\":\"Triage the 2026-06-25 through 2026-06-28 workflow-optimization docs against current HEAD\",\"priority\":1},{\"id\":\"ci-inventory-parity-fail-fast\",\"title\":\"Move CI Inventory parity ahead of long coverage gates\",\"priority\":2},{\"id\":\"review-autofix-sweep-noop-fast-exit\",\"title\":\"Short-circuit review_autofix_sweep when there are zero PR candidates\",\"priority\":2},{\"id\":\"implement-scope-block-latch-verification\",\"title\":\"Verify ai:scope-blocked actually latches before claiming redispatch is blocked\",\"priority\":1},{\"id\":\"mark-stable-cancel-on-close-single-fetch\",\"title\":\"Fetch pre-existing cancel-on-close run state once per wait-loop iteration\",\"priority\":2},{\"id\":\"review-autofix-editor-changes-lost-dispatch-parity\",\"title\":\"Give editor-changes-lost redispatch the same fallback workflow chain as post-commit redispatch\",\"priority\":2},{\"id\":\"finalize-2026-06-25-28-recommendation-processing\",\"title\":\"Finalize the 2026-06-25 through 2026-06-28 recommendation ledger and remove the processed source docs\",\"priority\":4}],\"dependency_edges\":[{\"from\":\"triage-2026-06-25-28-workflow-optimization-docs\",\"to\":\"ci-inventory-parity-fail-fast\"},{\"from\":\"triage-2026-06-25-28-workflow-optimization-docs\",\"to\":\"review-autofix-sweep-noop-fast-exit\"},{\"from\":\"triage-2026-06-25-28-workflow-optimization-docs\",\"to\":\"implement-scope-block-latch-verification\"},{\"from\":\"triage-2026-06-25-28-workflow-optimization-docs\",\"to\":\"mark-stable-cancel-on-close-single-fetch\"},{\"from\":\"triage-2026-06-25-28-workflow-optimization-docs\",\"to\":\"review-autofix-editor-changes-lost-dispatch-parity\"},{\"from\":\"triage-2026-06-25-28-workflow-optimization-docs\",\"to\":\"finalize-2026-06-25-28-recommendation-processing\"},{\"from\":\"ci-inventory-parity-fail-fast\",\"to\":\"finalize-2026-06-25-28-recommendation-processing\"},{\"from\":\"review-autofix-sweep-noop-fast-exit\",\"to\":\"finalize-2026-06-25-28-recommendation-processing\"},{\"from\":\"implement-scope-block-latch-verification\",\"to\":\"finalize-2026-06-25-28-recommendation-processing\"},{\"from\":\"mark-stable-cancel-on-close-single-fetch\",\"to\":\"finalize-2026-06-25-28-recommendation-processing\"},{\"from\":\"review-autofix-editor-changes-lost-dispatch-parity\",\"to\":\"finalize-2026-06-25-28-recommendation-processing\"}]}",
+  "fingerprint": "7ef3e1de59ad51281e56d4e4a5c4d8c01d54c15218fae50d9a9d57df93a1e75a",
+  "lineage": {
+    "issue_number": 3579,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28861799228",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28861799228",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260707112219_21b0df7f1f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3579,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28861799228"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Validate and land the safe subset of workflow-optimization recommendations (2026-06-25 to 2026-06-28)' into 7 issues (tracking #3579)",
+  "timestamps": {
+    "created_at": "2026-07-07T11:22:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
