@@ -101,6 +101,11 @@ jobs:
           skipped_skip_ai=0
           failures=0
 
+          if [ "${total}" -eq 0 ]; then
+            echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
+            exit 0
+          fi
+
           # Snapshot active review-family runs once per workflow, then do
           # per-PR lookups locally so the sweep avoids N×2 workflow-run API
           # fanout while preserving the existing active-run skip semantics.
