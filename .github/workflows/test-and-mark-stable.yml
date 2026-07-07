@@ -3043,7 +3043,7 @@ jobs:
               sleep 5
               # Fetch once, then parse locally. A transient failure still
               # produces an empty string rather than malformed JSON for the
-              # next iteration to parse.
+              # local jq parses below.
               EXISTING_RUN_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null || echo "")
               EXISTING_STATUS=$(printf '%s' "${EXISTING_RUN_JSON}" | jq -r '.status // ""' 2>/dev/null || echo "")
               EXISTING_CONCLUSION=$(printf '%s' "${EXISTING_RUN_JSON}" | jq -r '.conclusion // ""' 2>/dev/null || echo "")
