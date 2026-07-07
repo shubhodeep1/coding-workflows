@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:All shell steps in ci.yml \u2014 look for invocations of the new test file | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The new regression test for the zero-candidate fast-exit path is not run by CI, so the contract has no automated coverage.\n  WHY: Without CI wiring, a future reintroduction of the active-run API fanout could pass CI unnoticed; reviewers disagreed between BLOCKER and MAJOR, so the merged severity is critical.\n- tests/test_review_autofix_sweep_zero_candidate_fast_exit.py:lines ~92-94 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The test originally searched for the closing `fi` from the start of the block, which is brittle if earlier `if` statements are added.\n  WHY: Anchoring the `fi` search to `guard_start` is needed to avoid false matches or parser failures when the workflow block changes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a focused regression test in the dedicated new test file listed below that asserts the zero-candidate path exits before the active-run snapshot logic.\"\n  expected_change_site: `.github/workflows/ci.yml` or other CI workflow that executes the test allowlist\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: `tests/test_review_autofix_sweep_zero_candidate_fast_exit.py` exists and passes, but `.github/workflows/ci.yml` does not reference it and uses explicit allowlisted `python3 tests/...` invocations instead.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\nFile:\n.github/workflows/ci.yml\nLine or code reference: All shell steps in ci.yml \u2014 look for invocations of the new test file\nProblem: The regression test added to verify the zero-candidate fast-exit path is not executed by any CI run, so automated validation of this optimization is absent.\nWhy it fails at runtime: A future code change could re-introduce the active-run API fanout on zero-candidate sweeps, but because `tests/test_review_autofix_sweep_zero_candidate_fast_exit.py` is not registered in CI, the regression would go unnoticed and CI would pass despite violating the intended optimization.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n\nFile:\ntests/test_review_autofix_sweep_zero_candidate_fast_exit.py\nLine or code reference: lexer block inside test_non_zero_path_still_snapshots_both_review_workflows (lines ~92-94)\nProblem: The early version of the test file used a fragile boundary search (`guard_end = block.find(\"\\n          fi\")`) from the start of the block, which could inadvertently bind to the first closing `fi` in the file if additional `if` statements were introduced earlier. This makes the parser brittle and could cause test failures or false positives.\nWhy it fails at runtime: During maintenance or when new logic is added near the top of the step block, the test might incorrectly parse sections of the workflow file, leading to false positives or test failures that obscure real issues in the fast-exit optimization.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n\nRequirement: \"Add a focused regression test in the dedicated new test file listed below that asserts the zero-candidate path exits before the active-run snapshot logic.\"\nExpected change site: Register the new test file in the CI allowlist so it is executed on every CI run.\nEvidence of absence: The PR diff and last run diff contain a new test file `tests/test_review_autofix_sweep_zero_candidate_fast_exit.py`, but ci.yml has no step that executes it. The discussion comments on PR #3586 also call this out as a missing hardening step. If the regression test does not run in CI, the guarantee that zero-candidate sweeps exit early before active-run API calls has no automated coverage.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\nRequirement: \"Add a focused regression test in the dedicated new test file listed below that asserts the zero-candidate path exits before the active-run snapshot logic.\"\nExpected change site: `.github/workflows/ci.yml` (or other CI workflow that executes the test allowlist)\nEvidence of absence: The new test file `tests/test_review_autofix_sweep_zero_candidate_fast_exit.py` was created and contains valid contract tests, but the CI workflow at `.github/workflows/ci.yml` uses explicit allowlisted `python3 tests/<file>.py` invocations (129 occurrences per the cross-pollination summary). No entry in the CI workflow invokes the new test file, so the regression test will never be executed in CI, leaving the zero-candidate fast-exit contract without automated coverage.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\nRequirement: \"Add a focused regression test in the dedicated new test file listed below that asserts the zero-candidate path exits before the active-run snapshot logic.\" (and stay inside `files_touched`)\nExpected change site: `tests/test_review_autofix_sweep_zero_candidate_fast_exit.py` (plus wiring in `.github/workflows/ci.yml` per Copilot/gemini/qwen consensus)\nEvidence of absence: The test file exists and passes (`python3 tests/test_review_autofix_sweep_zero_candidate_fast_exit.py` succeeds with all three contract assertions), but `.github/workflows/ci.yml` contains ~130 explicit `python3 tests/...` invocations and does not reference this file. A regression that re-introduces the API fan-out on zero-candidate sweeps would therefore pass CI unnoticed. The `files_touched` constraint from the orchestrator-managed task prevented the CI wiring change.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5a705700ff340b014b3834703d4846fb6f7759979243a17d1c8841ed45d14e5c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3591,
+    "run_id": "28867701877",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28867701877",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260707134047_792fb8f89e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3591,
+    "run_id": "28867701877"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-07T13:40:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
