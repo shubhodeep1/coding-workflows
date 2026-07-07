@@ -46,19 +46,24 @@ REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.
 # wedged integration branches still pick up resolver safety fixes
 # shipped on main. Entries staged only via this list fail open when
 # missing from both refs so older consumer script_refs still bootstrap cleanly.
-MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh review_conflict_prepare.sh"
+#
+# render_prompt.py is main-primary because it validates arbitrary embedded
+# PR-diff text before every reviewer/editor call. A false-positive in that
+# validator (e.g. a lone `${{` in the diff tripping the unmatched-delimiter
+# check, fixed on main by #3593) otherwise wedges the review of any in-flight
+# PR whose branch predates the fix — the very PR that surfaced the bug can
+# never carry the fix on its own branch. Sourcing it main-primary lets a
+# render_prompt fix on main immediately protect wedged branches, matching the
+# resolver-safety rationale above. It stays fail-open: some refs still ship a
+# self-contained render_prompt.sh, so when the backend is absent from both refs
+# bootstrap preserves that ref's bundled bash renderer instead of hard-failing.
+MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh review_conflict_prepare.sh render_prompt.py"
 # Optional bootstrap scripts: allowed to be missing from both
 # refs.  The bootstrap emits a warning and continues — callers
 # that depend on these must themselves tolerate absence.  Keep
 # this list empty unless a genuinely optional helper is added;
 # the default should always be "required".
-#
-# render_prompt.py is the Python backend for shim-adopting support
-# refs. Some refs still ship a self-contained render_prompt.sh, so
-# render_prompt.py MUST stay optional: when the checked-out support ref
-# lacks the backend, bootstrap should preserve that ref's bundled bash
-# renderer instead of hard-failing.
-OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh render_prompt.py"
+OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"
 for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
   src=".codex-workflow-src/scripts/${f}"
   if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
