@@ -3041,13 +3041,12 @@ jobs:
             WAIT_DEADLINE=$(( $(date +%s) + 600 ))
             while [ "${EXISTING_STATUS}" != "completed" ] && [ "$(date +%s)" -lt "${WAIT_DEADLINE}" ]; do
               sleep 5
-              # `gh api --jq` consumes the JSON inside gh, so a transient
-              # failure produces an empty string rather than malformed
-              # JSON for the next iteration to parse.
-              EXISTING_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
-                --jq '.status // ""' 2>/dev/null || echo "")
-              EXISTING_CONCLUSION=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
-                --jq '.conclusion // ""' 2>/dev/null || echo "")
+              # Fetch once, then parse locally. A transient failure still
+              # produces an empty string rather than malformed JSON for the
+              # local jq parses below.
+              EXISTING_RUN_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null || echo "")
+              EXISTING_STATUS=$(printf '%s' "${EXISTING_RUN_JSON}" | jq -r '.status // ""' 2>/dev/null || echo "")
+              EXISTING_CONCLUSION=$(printf '%s' "${EXISTING_RUN_JSON}" | jq -r '.conclusion // ""' 2>/dev/null || echo "")
               echo "  cancel-on-close run #${EXISTING_RUN_ID}: status=${EXISTING_STATUS:-?}, conclusion=${EXISTING_CONCLUSION:-?}"
             done
             if [ "${EXISTING_STATUS}" != "completed" ]; then
