@@ -5316,6 +5316,7 @@ jobs:
               caller_workflow="internal-review.yml"
             fi
             if [ "${caller_workflow}" != "review_autofix.yml" ]; then
+              echo "Direct dispatch failed; trying caller workflow: ${caller_workflow}"
               if gh workflow run "${caller_workflow}" \
                 --ref "${TARGET_BRANCH}" \
                 -f pr_number="${PR_NUMBER}" \
@@ -5323,6 +5324,18 @@ jobs:
                 echo "Dispatched ${caller_workflow} on ${TARGET_BRANCH} for PR #${PR_NUMBER}."
                 dispatched=true
               fi
+            else
+              for candidate in ai-review.yml internal-review.yml; do
+                echo "Direct dispatch failed; trying caller workflow: ${candidate}"
+                if gh workflow run "${candidate}" \
+                  --ref "${TARGET_BRANCH}" \
+                  -f pr_number="${PR_NUMBER}" \
+                  -f allow_workflow_edits="${ALLOW_WORKFLOW_EDITS}"; then
+                  echo "Dispatched ${candidate} on ${TARGET_BRANCH} for PR #${PR_NUMBER}."
+                  dispatched=true
+                  break
+                fi
+              done
             fi
           fi
 
