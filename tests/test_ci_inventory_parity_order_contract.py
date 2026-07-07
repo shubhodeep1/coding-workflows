@@ -16,7 +16,10 @@ INVENTORY_PARITY_COMMAND = "PYTHONDONTWRITEBYTECODE=1 python3 tests/inventory_pa
 
 
 def _workflow_lines() -> list[str]:
-	return CI_WF.read_text(encoding="utf-8").splitlines()
+	try:
+		return CI_WF.read_text(encoding="utf-8").splitlines()
+	except (OSError, UnicodeError) as exc:
+		raise AssertionError(f"Unable to read {CI_WF}: {type(exc).__name__}: {exc}") from exc
 
 
 def _step_start_line(lines: list[str], step_name: str) -> int:
@@ -24,7 +27,7 @@ def _step_start_line(lines: list[str], step_name: str) -> int:
 	for idx, line in enumerate(lines):
 		if line.lstrip() == marker:
 			return idx
-	assert False, f"Missing workflow step: {step_name} in {CI_WF}"
+	raise AssertionError(f"Missing workflow step: {step_name} in {CI_WF}")
 
 
 def _step_block(lines: list[str], step_name: str) -> str:
@@ -36,7 +39,7 @@ def _step_block(lines: list[str], step_name: str) -> str:
 		line_indent = len(line) - len(stripped)
 		if stripped and line_indent < indent:
 			break
-		if stripped.startswith("- name:") and line_indent == indent:
+		if stripped.startswith("- ") and line_indent == indent:
 			break
 		block.append(line)
 	return "\n".join(block)
