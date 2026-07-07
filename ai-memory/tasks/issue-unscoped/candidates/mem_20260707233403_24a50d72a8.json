@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_files_touched_scope_guard.py:397-400 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: `test_alert_step_handles_scope` still asserts the old ai:scope-blocked message text that the workflow no longer emits.\n  WHY: The exact literal was replaced in `.github/workflows/implement.yml`, so the assertion fails at runtime.\n- tests/test_files_touched_scope_guard.py:413-413 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: `test_scope_alert_step_verifies_latch_after_write` checks for a contiguous substring that is split across the YAML line continuation.\n  WHY: The extracted workflow text does not contain the exact `'\"${SCOPE_TG_LATCH_LINE}\")\"'` substring; one reviewer marked it major and the others blocker, so critical is the highest severity.\n- .github/workflows/implement.yml:3667-3668 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The `|| true` fallbacks around the label update commands can mask a failed write.\n  WHY: A transient GitHub API failure could pass silently until later verification, reducing error visibility.\n- .github/workflows/implement.yml:3682-3695 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The scope-block latch notification text and variable naming contain typo/wording issues around redispatch.\n  WHY: The message/variable wording is awkward and includes malformed `redispach`/redispatch text, which could confuse operators reading the Telegram notification.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add regression coverage that fails if the scope-block path ever drops back to best-effort writes without a confirmation read.\"\n  expected_change_site: tests/test_files_touched_scope_guard.py \u2014 test_scope_alert_step_verifies_latch_after_write\n  confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: `test_scope_alert_step_verifies_latch_after_write()` is present but its line-413 substring check does not match the current workflow text, and `test_alert_step_handles_scope()` still asserts the pre-rename `SCOPE_LATCH_COMMENT_LINE` message.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_files_touched_scope_guard.py:400-400 | severity=BLOCKER | confidence=5\n  PROBLEM: `test_alert_step_handles_scope` still asserts the old scope-block message text that the workflow no longer emits.\n  WHY: The literal was replaced in `.github/workflows/implement.yml`, so the assertion fails at runtime.\n- tests/test_files_touched_scope_guard.py:413-413 | severity=BLOCKER | confidence=5\n  PROBLEM: `test_scope_alert_step_verifies_latch_after_write` checks for a contiguous substring that is split by a YAML line continuation.\n  WHY: The extracted scope text does not contain the exact `'\"${SCOPE_TG_LATCH_LINE}\")\"'` substring, so the assertion raises `AssertionError`.\n- Requirement: \"Add regression coverage that fails if the scope-block path ever drops back to best-effort writes without a confirmation read.\"\n  Expected change site: tests/test_files_touched_scope_guard.py \u2014 test_scope_alert_step_verifies_latch_after_write\n  Evidence of absence: The test exists, but one assertion mismatches the current workflow text and the pre-existing scope assertion was left stale, so the coverage does not actually verify the latch-write behavior.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_files_touched_scope_guard.py:~413 | severity=MAJOR | confidence=5\n  PROBLEM: The test assertion checks for a contiguous substring pattern that does not appear in the workflow file.\n  WHY: The workflow YAML contains `\"${SCOPE_TG_LATCH_LINE}\" \\` with a line continuation, while the assertion expects the closing parenthesis immediately after the closing double-quote.\n- .github/workflows/implement.yml:3682-3695 | severity=NIT | confidence=3\n  PROBLEM: The Telegram warning line template contains a typo/malformed wording issue around the scope-block latch notification.\n  WHY: The wording includes awkward/malformed redispatch text and typoed variable naming in some places, which could confuse operators.\n- .github/workflows/implement.yml:3667-3668 | severity=NIT | confidence=2\n  PROBLEM: The `--remove-label 'ai:implementing'` and `--add-label 'ai:scope-blocked'` operations use `|| true` fallbacks.\n  WHY: A silent failure to apply the blocking label will not be detected by the write step itself, which can mask transient GitHub API failures.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_files_touched_scope_guard.py:400-400 | severity=BLOCKER | confidence=5\n  PROBLEM: `test_alert_step_handles_scope` asserts the old scope-block alert text that the PR replaced.\n  WHY: The literal string no longer exists anywhere in `.github/workflows/implement.yml`, so the assertion will fail at runtime.\n- tests/test_files_touched_scope_guard.py:413-413 | severity=BLOCKER | confidence=5\n  PROBLEM: `test_scope_alert_step_verifies_latch_after_write` asserts a contiguous substring that the workflow splits across a line continuation.\n  WHY: Python's `in` check will not match because `\"${SCOPE_TG_LATCH_LINE}\"` is followed by a backslash and newline before the closing `)\"`.\n- tests/test_files_touched_scope_guard.py:397-397 | severity=BLOCKER | confidence=5\n  PROBLEM: The existing test `test_alert_step_handles_scope` still checks the pre-PR wording for the scope-block label confirmation message.\n  WHY: The old `Confirmed ai:scope-blocked is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it.` text was replaced in the workflow, so the assertion fails.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5fb3c0e8a0ed3d70054195c7438c5c95a045fc50a660b23ac246ef4d6446ab72",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3600,
+    "run_id": "28900720009",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28900720009",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260707233403_24a50d72a8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3600,
+    "run_id": "28900720009"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-07T23:34:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
