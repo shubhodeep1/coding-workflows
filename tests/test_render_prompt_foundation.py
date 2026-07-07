@@ -436,6 +436,45 @@ def test_render_prompt_py_allows_literal_dot_field_expression() -> None:
 	assert proc.stdout == "docker inspect --format='{{.State.ExitCode}}'\n"
 
 
+def test_render_prompt_py_allows_dollar_prefixed_unmatched_open_delimiter() -> None:
+	# Regression: assembled reviewer/editor prompt bodies embed arbitrary PR diff
+	# text, which can carry a lone `${{` with no closing `}}` on the line (e.g. a
+	# test assertion checking only for the `${{` prefix substring). Such a
+	# GitHub Actions / shell literal must not be treated as an unmatched template
+	# placeholder delimiter — otherwise render_prompt.py exits 1 and the whole
+	# reviewer step fails (observed on PR #3592).
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_dollar_open_") as td:
+		prompt_file = Path(td) / "prompt.txt"
+		prompt_file.write_text(
+			'assert "SVB_REASON: ${{ steps.preflight_destructive_guard.outputs.scope_violation_blocked" in text\n',
+			encoding="utf-8",
+		)
+
+		proc = _run_render_prompt_py(prompt_file)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stderr == ""
+	assert proc.stdout == (
+		'assert "SVB_REASON: ${{ steps.preflight_destructive_guard.outputs.scope_violation_blocked" in text\n'
+	)
+
+
+def test_render_prompt_py_rejects_bare_unmatched_open_delimiter() -> None:
+	# Complement to the dollar-prefixed exemption above: a `{{` open delimiter
+	# that is NOT dollar-prefixed and has no closing `}}` is still a genuine
+	# template-syntax error and must keep failing.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_bare_open_") as td:
+		prompt_file = Path(td) / "prompt.txt"
+		prompt_file.write_text("stray {{ open delimiter with no close\n", encoding="utf-8")
+
+		proc = _run_render_prompt_py(prompt_file)
+
+	assert proc.returncode == 1
+	assert proc.stdout == ""
+	assert "Unsupported template syntax" in proc.stderr
+	assert "unmatched placeholder delimiter" in proc.stderr
+
+
 def test_render_prompt_py_allows_stray_closing_braces_in_prose() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_closing_braces_") as td:
 		prompt_file = Path(td) / "prompt.txt"
