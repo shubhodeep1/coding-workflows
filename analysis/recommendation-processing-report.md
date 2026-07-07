@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (104)
+## Processed source docs (108)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -107,6 +107,10 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-06-22-2.md`
 - `analysis/workflow-optimization-2026-06-22-3.md`
 - `analysis/workflow-optimization-2026-06-23.md`
+- `analysis/workflow-optimization-2026-06-25.md`
+- `analysis/workflow-optimization-2026-06-26.md`
+- `analysis/workflow-optimization-2026-06-27.md`
+- `analysis/workflow-optimization-2026-06-28.md`
 - `analysis/plan-workflow-log-analysis.md`
 - `analysis/e2e-smoke-failure-25126757724.md`
 
@@ -760,6 +764,6 @@ This four-doc batch mixes one narrative workflow-cost memo with three appendix-b
 - Tracking issue `#3243` treated `#3244` (`SEC-001`) as part of the safe subset, and current HEAD now matches that outcome: override checks are parsed into argv before execution, without `/bin/sh -c`, with regression coverage proving metacharacter suffixes are not executed.
 - PR `#3255` added `extract_repo_scoped_issue_refs_from_text` to `scripts/gh_helpers.sh`, and current HEAD retains that helper body while `.github/workflows/review_autofix.yml`, `scripts/review_collect_pr_metadata.sh`, and `scripts/review_rb_judge.sh` still reuse it for the strict repo-scoped fallback path.
 - `analysis/workflow-optimization-2026-06-11.md` repeated the same asks across Executive Summary / Speed / Cost / Reliability / AI Memory / GH API and mixed landed safe sub-changes with broader policy work, so this closeout classifies the named IDs once and splits the mixed repeated bullets under stable short labels instead of forcing one label across whole paragraphs.
-- With the earlier 2026-05-22/23 source docs, this pass's eight 2026-05-29/06-06 source docs, and `analysis/workflow-optimization-2026-06-08-2.md` now deleted, `.github/workflows/comprehensive-test-and-release.yml` will hit its existing fallback path to `analysis/recommendation-processing-report.md` on future runs.
+- With the earlier 2026-05-22/23 source docs, this pass's eight 2026-05-29/06-06 source docs, `analysis/workflow-optimization-2026-06-08-2.md`, and the 2026-06-25 through 2026-06-28 follow-up docs now deleted, `.github/workflows/comprehensive-test-and-release.yml` will hit its existing fallback path to `analysis/recommendation-processing-report.md` on future runs.
 - `analysis/workflow-optimization-2026-06-23.md` marked `REUSE-001` as `SAFE_TO_MERGE`, but current HEAD still shows `scripts/orchestrate_force_tick.sh` re-fetching `issues/${ISSUE_NUMBER}` after a successful PR lookup when `TRACKING_ISSUE` remains blank, so this closeout records that item as intentionally deferred rather than actioned.
-- `analysis/workflow-optimization-2026-06-25.md` through `analysis/workflow-optimization-2026-06-28.md` are triaged in place in this batch and intentionally remain under `analysis/`, so they were not added to the `Processed source docs (104)` deleted-doc provenance list/count.
+- `analysis/workflow-optimization-2026-06-25.md` through `analysis/workflow-optimization-2026-06-28.md` are now fully represented in the outcome ledger above, added to `Processed source docs (108)`, and deleted from `analysis/` on this ref.
