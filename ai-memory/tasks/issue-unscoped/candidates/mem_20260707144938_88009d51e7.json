@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:3043-3055 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: A transient failure of the single `gh api` call (or downstream `printf | jq`) leaves `EXISTING_RUN_JSON` empty, so the closed-PR wait loop keeps using the empty fallback until the timeout path is hit.\n  WHY: The loop condition remains true while `EXISTING_STATUS` stays empty, so the job can stall for the full 600-second deadline; this was reported as a MAJOR error-path regression.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/test-and-mark-stable.yml:3043-3055 | severity=high | confidence=4\n  PROBLEM: A transient failure of the single `gh api` call (or downstream `printf | jq`) leaves `EXISTING_RUN_JSON` empty; the loop continues with `EXISTING_STATUS` (and `EXISTING_CONCLUSION`) set to the empty fallback for all remaining iterations.\n  WHY: The loop condition stays true (empty != \"completed\") until the full 600 s `WAIT_DEADLINE` is hit, after which the timeout path is taken with `status=timeout`.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "6f24afd603dd00ebb9b2e8d078ad964042dd72781c3d07e08b0b569dcbd9a73e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3588,
+    "run_id": "28872272898",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28872272898",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260707144938_88009d51e7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3588,
+    "run_id": "28872272898"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-07-07T14:49:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
