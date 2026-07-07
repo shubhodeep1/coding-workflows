@@ -1,0 +1,1 @@
+{"dispatch_status": "pending", "last_attempt_payload": {"issue": 3581, "reason": "review-post-merge", "run_id": 28863300319, "source_workflow": "review_autofix"}, "last_attempted_timestamp": "2026-07-07T11:39:34Z", "last_dispatch_payload": null, "last_dispatch_timestamp": null, "schema_version": "force_tick.v1", "tracking_issue": 3579}
