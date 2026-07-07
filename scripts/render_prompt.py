@@ -20,6 +20,14 @@ except ImportError:  # pragma: no cover - dependency is optional
 
 PLACEHOLDER_PATTERN = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
 PLACEHOLDER_EXPRESSION_PATTERN = re.compile(r"\{\{(.*?)\}\}")
+# A `{{` opening delimiter that is immediately preceded by `$` (i.e. `${{`) is a
+# GitHub Actions expression / shell literal, not a template placeholder — the
+# same literal form already exempted by `_placeholder_expression_allowed_as_literal`
+# for balanced `${{ ... }}`. Assembled prompt bodies embed arbitrary PR diff text
+# that can carry a lone `${{` (e.g. a test assertion checking for the `${{`
+# prefix substring only), so the unmatched-delimiter residual check must skip
+# dollar-prefixed opens or it wrongly rejects the whole prompt.
+UNMATCHED_OPEN_DELIMITER_PATTERN = re.compile(r"(?<!\$)\{\{")
 STANDALONE_PLACEHOLDER_PATTERN = re.compile(r"^[ \t]*\{\{([A-Za-z0-9_]+)\}\}[ \t]*$")
 INCLUDE_DIRECTIVE_PATTERN = re.compile(r'^[ \t]*\{%[ \t]*include[ \t]+"([^"\n]+)"[ \t]*%\}[ \t]*$')
 VARIABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
@@ -751,7 +759,7 @@ def validate_supported_template_syntax(prompt_text: str, prompt_path: Path) -> N
 
 		residual_segments.append(line[last_end:])
 		residual_text = "".join(residual_segments)
-		if "{{" in residual_text:
+		if UNMATCHED_OPEN_DELIMITER_PATTERN.search(residual_text) is not None:
 			violations.append(
 				f"{prompt_path}:{line_number}: unmatched placeholder delimiter in {line.strip()!r}"
 			)
