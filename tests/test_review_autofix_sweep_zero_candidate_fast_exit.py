@@ -89,8 +89,11 @@ def test_non_zero_path_still_snapshots_both_review_workflows() -> None:
 	existing active-run snapshot helper and the loop over both review-family
 	workflows."""
 	block = _sweep_step_block(_review_autofix_sweep_text())
-	guard_end = block.find("\n          fi")
+	guard_start = block.find('if [ "${total}" -eq 0 ]; then')
+	assert guard_start != -1, "Missing zero-candidate fast-exit guard"
+	guard_end = block.find("\n          fi", guard_start)
 	assert guard_end != -1, "Could not locate end of zero-candidate fast-exit guard"
+	guard_end += len("\n          fi")
 	non_zero_path = block[guard_end:]
 
 	assert "snapshot_active_review_runs() {" in non_zero_path, (
