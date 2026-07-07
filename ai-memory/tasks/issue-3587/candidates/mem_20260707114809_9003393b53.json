@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `8b504fd23108a60ed6fa1c6ffb3ffa2f3860fa89` on `orchestrator/project-3579` (symbolic ref matches integration metadata; no branch mismatch).\n\nClarification mapping:\n- No Q1/Q2/Q3 were asked.\n- `/answer [auto-answered-by-orchestrator]` only confirms continuation; it adds no extra scope.\n\nScope-mode: Hold Scope\nReuse-audit: extends existing `Re-trigger review via workflow_dispatch` fallback chain in `.github/workflows/review_autofix.yml`\n\nScope-mode justification:\nThis is a surgical parity fix inside one existing workflow path plus its contract coverage. The safest/minimum change is to mirror the already-shipped post-commit redispatch chain inside the `editor-changes-lost` redispatch step and pin that parity in the existing review-pipeline contract suite. Extracting a shared helper or widening into other review/autofix cleanup would exceed the requested scope without improving correctness enough to justify the churn.\n\nCodebase parity check:\n- Confirmed on HEAD: the post-commit redispatch step already falls back through `ai-review.yml` and `internal-review.yml` when `caller_workflow` resolves to `review_autofix.yml`.\n- The `Re-dispatch review on editor-changes-lost` step currently stops after `review_autofix.yml` and the caller workflow, so the issue description matches the current code.\n\n1. Files likely to change\n- `.github/workflows/review_autofix.yml`\n  - Extend the `Re-dispatch review on editor-changes-lost` shell block so its dispatch order matches the existing post-commit `Re-trigger review via workflow_dispatch` block.\n  - Keep the existing peer-inflight dedupe, env writes, dispatch inputs, and warning text.\n- `tests/test_review_autofix_review_pipeline_contract.py`\n  - Add a source-level contract test that pins fallback-chain parity between the two redispatch steps.\n  - Register the new test in the file\u2019s `main()` runner so direct-script execution still covers it.\n\n2. Functions or modules to implement\n- Workflow step to update:\n  - `Re-dispatch review on editor-changes-lost` in `.github/workflows/review_autofix.yml`\n- Existing pattern to reuse:\n  - `Re-trigger review via workflow_dispatch` in the same workflow\n- Test helper/pattern to reuse:\n  - `_step_block(...)` in `tests/test_review_autofix_review_pipeline_contract.py`\n\n3. Data structures affected\n- Step-local shell state only:\n  - `dispatched`\n  - `caller_workflow`\n  - fallback candidate loop\n  - `CHANGES_LOST_REDISPATCHED`\n- No schema, prompt, label, or persisted-state changes.\n\n4. API or interface changes\n- None intended.\n- Preserve:\n  - workflow filenames: `review_autofix.yml`, `ai-review.yml`, `internal-review.yml`\n  - dispatch inputs: `pr_number`, `allow_workflow_edits`\n  - redispatch conditions/gates\n  - existing fail-open warning behavior\n\nData flow:\n1. `EDITOR_CHANGES_LOST=true` enters the recovery step.\n2. Existing peer-inflight dedupe runs unchanged.\n3. Dispatch attempts should become:\n   - `review_autofix.yml`\n   - caller workflow from `github.workflow_ref`\n   - if caller resolves to `review_autofix.yml`, then `ai-review.yml`\n   - then `internal-review.yml`\n4. If all attempts fail, keep the current warning and exhausted-path behavior.\n\nFailure modes:\n- Direct dispatch unavailable:\n  - Symptom: `review_autofix.yml` dispatch fails.\n  - Recovery: try caller wrapper, then `ai-review.yml` / `internal-review.yml` in the same special case as post-commit redispatch.\n- Peer run already active:\n  - Symptom: `CHANGES_LOST_REDISPATCHED=skipped_peer_inflight`.\n  - Recovery: let the peer run proceed; do not duplicate dispatch.\n- All dispatches fail:\n  - Symptom: existing editor-changes-lost warning path remains active.\n  - Recovery: fail open, no job failure, human/manual rerun remains available.\n\n5. Risks and edge cases\n- Only add `ai-review.yml` / `internal-review.yml` fallback when `caller_workflow == review_autofix.yml`; do not broaden behavior for distinct caller wrappers.\n- Preserve the current editor-changes-lost warning text; this path intentionally has different operator messaging from the post-commit path.\n- Preserve `-f pr_number` and `-f allow_workflow_edits` on every dispatch attempt.\n- Do not refactor into shared helpers or touch unrelated reviewer-tier/prompt-cache logic.\n\n6. Testing considerations\n- Extend `tests/test_review_autofix_review_pipeline_contract.py` with a focused parity assertion that both step blocks contain the same fallback-chain logic for:\n  - `caller_workflow` resolution\n  - `review_autofix.yml` direct attempt\n  - `ai-review.yml` then `internal-review.yml` fallback when caller resolves to `review_autofix.yml`\n  - preserved dispatch inputs\n- Make the test compare the relevant redispatch slice, not the full step blocks, because the surrounding logic differs.\n- Run the targeted contract suite after the edit:\n  - `python3 tests/test_review_autofix_review_pipeline_contract.py`\n  - or the repo\u2019s equivalent pinned-python test invocation\n\n7. Pre-execution self-check result\n- Ref check: PASS\n- Reuse check: PASS\n- Scope check: PASS, assuming the issue allowlist includes the named workflow and contract test\n- Conflict check: PASS (issue description matches current code)\n\nAssumptions made due to ambiguity\n- The intended \u201cexisting review pipeline contract test\u201d is `tests/test_review_autofix_review_pipeline_contract.py`.\n- No wrapper workflow or helper-script edits are expected; the requested fix is confined to the existing workflow block plus contract coverage.\n\nMissing-context notes\n- The prompt did not include the literal `files_touched:` block, so allowlist membership could not be verified directly.\n- The prompt says the contract test was \u201clisted below,\u201d but no explicit filename appeared in the supplied issue text.\n\nPLAN_SELF_CHECK: WARNING: the prompt omitted the literal `files_touched:` allowlist, so scope compliance is assumed for `.github/workflows/review_autofix.yml` and `tests/test_review_autofix_review_pipeline_contract.py`.\nPLAN_SELF_CHECK: WARNING: the supplied issue text did not explicitly name the \u201cexisting review pipeline contract test\u201d; this plan assumes `tests/test_review_autofix_review_pipeline_contract.py`.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "96d278299bcca35ddd95f81c0facf66d5537fc9ff1fe758572ebf86591db65c0",
+  "lineage": {
+    "issue_number": 3587,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28863548055",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28863548055",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3587"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260707114809_9003393b53",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3587,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28863548055"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3587",
+  "timestamps": {
+    "created_at": "2026-07-07T11:48:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
