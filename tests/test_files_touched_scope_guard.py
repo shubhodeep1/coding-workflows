@@ -397,7 +397,7 @@ def test_alert_step_handles_scope() -> None:
 	assert "Confirmed ai:scope-blocked is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it." in text
 	assert "::error::FAILED to latch ai:scope-blocked on #${ISSUE_NUMBER}; the redispatch block is NOT in effect. Apply it manually:" in text
 	assert "::warning::Could not verify ai:scope-blocked on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown." in text
-	assert r"The workflow attempted to apply \`ai:scope-blocked\`; verify that the label is present before relying on the \`Validate approval phase\` redispatch block." in text
+	assert r"The workflow attempted to label this issue \`ai:scope-blocked\`, but the follow-up label read failed. Future redispatch is **not confirmed blocked**; re-check the label manually before redispatch." in text
 	assert r"This issue is now labeled \`ai:scope-blocked\`" not in text
 	assert "Issue is now ai:scope-blocked." not in text
 	assert "SVB_REASON: ${{ steps.preflight_destructive_guard.outputs.scope_violation_blocked" in text
@@ -410,7 +410,7 @@ def test_scope_alert_step_verifies_latch_after_write() -> None:
 	assert "::error::FAILED to latch ai:scope-blocked" in scope_text
 	assert "::warning::Could not verify ai:scope-blocked" in scope_text
 	assert 'echo "${SCOPE_COMMIT_STATE} ${SCOPE_LATCH_STATUS_LINE}"' in scope_text
-	assert '"${SCOPE_TG_LATCH_LINE}")"' in scope_text
+	assert '"${SCOPE_TG_LATCH_LINE}"' in scope_text
 	assert "This issue is now labeled" not in scope_text
 
 
