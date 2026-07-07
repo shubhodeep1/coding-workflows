@@ -391,6 +391,15 @@ def test_alert_step_handles_scope() -> None:
 	text = _implement_text()
 	assert "scope_violation_blocked != ''" in text
 	assert "gh label create 'ai:scope-blocked'" in text
+	assert "gh label edit 'ai:scope-blocked'" in text
+	assert "SCOPE_BLOCK_LABEL_DESCRIPTION='Implementation blocked: staged files fell outside files_touched scope; human review required'" in text
+	assert "if scope_latched_labels=\"$(gh issue view \"${ISSUE_NUMBER}\" --repo \"${{ github.repository }}\" --json labels -q '.labels[].name' 2>/dev/null)\"; then" in text
+	assert "Confirmed ai:scope-blocked is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it." in text
+	assert "::error::FAILED to latch ai:scope-blocked on #${ISSUE_NUMBER}; the redispatch block is NOT in effect. Apply it manually:" in text
+	assert "::warning::Could not verify ai:scope-blocked on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown." in text
+	assert r"The workflow attempted to apply \`ai:scope-blocked\`; verify that the label is present before relying on the \`Validate approval phase\` redispatch block." in text
+	assert r"This issue is now labeled \`ai:scope-blocked\`" not in text
+	assert "Issue is now ai:scope-blocked." not in text
 	assert "SVB_REASON: ${{ steps.preflight_destructive_guard.outputs.scope_violation_blocked" in text
 
 
