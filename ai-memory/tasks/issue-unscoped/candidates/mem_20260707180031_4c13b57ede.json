@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:3670-3685 | severity=high | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The latch-verification logic can misreport the scope-block state when `gh issue view` output is malformed or unexpectedly formatted.\n  WHY: A transient API error or malformed response can cause the workflow to report a confirmed latch state without a reliable read-back, which violates the requirement to only claim success after confirmation.\n- .github/workflows/implement.yml:3655-3660 | severity=low | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The label ensure/edit compound can exit non-zero on the edit leg even when the label already exists, so the description is not guaranteed canonical.\n  WHY: Permission, rate-limit, or matching-description edge cases can leave the ensure step in a warning state and allow description drift relative to later verification.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Stay inside files_touched.\"\n  expected_change_site: .ai/.workspace_source_manifest.txt\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The PR diff adds 12 new entries to .ai/.workspace_source_manifest.txt (check_failure_triage.yml, internal-check-failure-triage.yml, workflow-optimization-2026-06-28.md, docs/deploy-activation/README.md, mode-check-failure-triage.txt x2, check_failure_triage.sh, workflow_retro_fanout.sh, test_editor_capacity_fallback_contract.py, test_workflow_retro_fanout.py, ai-check-failure-triage.yml, ai-security-audit.yml), which are unrelated to the scope-block latch task.\n- requirement: \"Mirror the destructive-block verification pattern for ai:scope-blocked: ensure the label exists, apply it to the issue, read back the issue labels, and only claim the redispatch latch is active when the read confirms it.\"\n  expected_change_site: scope violation block in .github/workflows/implement.yml (the step \"Scope violation \u2014 block + alert\")\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The implemented changes do NOT include the exact verification pattern present for destructive-block, despite task description requirement.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: \"Stay inside files_touched.\"\n  Expected change site: .ai/.workspace_source_manifest.txt (not a files_touched target; the issue's files_touched list covers .github/workflows/implement.yml, tests/test_files_touched_scope_guard.py, and tests/test_implement_post_codex_recovery.py only)\n  Evidence of absence: The PR diff adds 12 new entries to .ai/.workspace_source_manifest.txt (check_failure_triage.yml, internal-check-failure-triage.yml, workflow-optimization-2026-06-28.md, docs/deploy-activation/README.md, mode-check-failure-triage.txt x2, check_failure_triage.sh, workflow_retro_fanout.sh, test_editor_capacity_fallback_contract.py, test_workflow_retro_fanout.py, ai-check-failure-triage.yml, ai-security-audit.yml). These are auto-generated manifest entries for files unrelated to the scope-block latch task.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: Mirror the destructive-block verification pattern for ai:scope-blocked: ensure the label exists, apply it to the issue, read back the issue labels, and only claim the redispatch latch is active when the read confirms it.\n  Expected change site: scope violation block in .github/workflows/implement.yml (the step \"Scope violation \u2014 block + alert\")\n  Evidence of absence: The implemented changes do NOT include the exact verification pattern present for destructive-block, despite task description requirement.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/implement.yml\n  Line or code reference: 3670-3685 (the `if scope_latched_labels=...` block and subsequent `SCOPE_LATCH_*` variable assignments)\n  Problem: The verification branch assumes `gh issue view` always returns exactly one line of labels, so malformed or unexpected output can make the latch state be reported incorrectly.\n  Why it fails at runtime: A transient API error or malformed response can cause a false-positive or false-negative latch report instead of a confirmed read-back, violating the requirement to only claim success after verification.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- File: .github/workflows/implement.yml\n  Line or code reference: 3655-3660 (the `gh label create ... && ! gh label edit ...` compound command)\n  Problem: The label ensure/edit logic can exit non-zero on the edit leg even when the label already exists, so the description is not guaranteed canonical.\n  Why it fails at runtime: Permission, rate-limit, or already-matching-description edge cases can leave the ensure step in a warning state and allow description drift relative to the later verification.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "b5e41c204d064fa995d4516b4f40bec7875b7aae2de474de3b4a70082fbe7cd7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3592,
+    "run_id": "28884855632",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28884855632",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260707180031_4c13b57ede",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3592,
+    "run_id": "28884855632"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-07-07T18:00:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
