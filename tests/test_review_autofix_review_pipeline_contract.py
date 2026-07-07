@@ -3299,6 +3299,41 @@ def test_reject_verifier_bootstrap_and_stage_order_contract() -> None:
 	assert 'CONSOLIDATOR_REJECT_SCHEMA_ENABLED="${CONSOLIDATOR_REJECT_SCHEMA_ENABLED:-false}"' in apply_fixes
 
 
+def test_render_prompt_py_is_main_primary_so_validator_fixes_reach_wedged_branches() -> None:
+	# Regression guard: render_prompt.py validates arbitrary embedded PR-diff
+	# text before every reviewer/editor call. When it was branch-primary
+	# (staged from SCRIPT_REF), a false-positive fix landed on main (#3593 —
+	# lone `${{` in the diff tripping the unmatched-delimiter check) never
+	# reached an in-flight PR whose branch predated the fix, wedging that PR's
+	# review indefinitely (PR #3592, run 28888093412). It must be main-primary
+	# so a render_prompt fix on main immediately protects wedged branches.
+	stage_helper = _stage_helper_text()
+	main_primary_line = next(
+		(line for line in stage_helper.splitlines() if "MAIN_PRIMARY_BOOTSTRAP_SCRIPTS=" in line),
+		"",
+	)
+	optional_line = next(
+		(line for line in stage_helper.splitlines() if "OPTIONAL_BOOTSTRAP_SCRIPTS=" in line),
+		"",
+	)
+	required_line = next(
+		(line for line in stage_helper.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line),
+		"",
+	)
+	assert "render_prompt.py" in main_primary_line, (
+		"render_prompt.py must be in MAIN_PRIMARY_BOOTSTRAP_SCRIPTS so main-side "
+		"validator fixes reach wedged/in-flight PR branches"
+	)
+	assert "render_prompt.py" not in optional_line, (
+		"render_prompt.py must not be branch-primary in OPTIONAL_BOOTSTRAP_SCRIPTS"
+	)
+	# Regex word-boundary check so render_prompt.sh membership does not mask a
+	# stray render_prompt.py entry in the required (branch-primary) list.
+	assert re.search(r"\brender_prompt\.py\b", required_line) is None, (
+		"render_prompt.py must not be branch-primary in REQUIRED_BOOTSTRAP_SCRIPTS"
+	)
+
+
 def test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets() -> None:
 	stage_helper = _stage_helper_text()
 	assert "validation_history.v1.json" in stage_helper
@@ -3794,6 +3829,7 @@ def main() -> int:
 	test_reviewer_filter_harness_fails_open_when_disabled_missing_or_failing()
 	test_reviewer_filter_stat_harness_handles_brace_expansion_renames()
 	test_reject_verifier_bootstrap_and_stage_order_contract()
+	test_render_prompt_py_is_main_primary_so_validator_fixes_reach_wedged_branches()
 	test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain()
 	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()
