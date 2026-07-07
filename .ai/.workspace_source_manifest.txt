@@ -504,6 +504,7 @@ tests/test_audit_gate_template_atomicity.py
 tests/test_blocker_check.py
 tests/test_branch_rebuild.py
 tests/test_check_integration_pr_readiness.py
+tests/test_ci_inventory_parity_order_contract.py
 tests/test_codex_heartbeat.py
 tests/test_codex_skip_git_repo_check_contract.py
 tests/test_codex_stall_guard_poller.py

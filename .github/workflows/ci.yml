@@ -542,6 +542,16 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_truncate_to_utf8_byte_cap.py
 
+      - name: Inventory parity
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/inventory_parity.py
+
+      - name: Inventory parity order contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_inventory_parity_order_contract.py
+
       - name: Workflow log collector coverage gate
         run: |
           set -euo pipefail
@@ -587,11 +597,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/prompt_size_budget.py
-
-      - name: Inventory parity
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/inventory_parity.py
 
       - name: Prompt forbidden-token soft lint
         run: |
