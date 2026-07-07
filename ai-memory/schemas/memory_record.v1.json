@@ -196,10 +196,6 @@
         "superseded_at": {
           "type": ["string", "null"],
           "format": "date-time"
-        },
-        "prune_marked_at": {
-          "type": ["string", "null"],
-          "format": "date-time"
         }
       }
     }
