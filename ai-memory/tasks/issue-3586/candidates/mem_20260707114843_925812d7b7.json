@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nEvidence reviewed: inspected `.github/workflows/review_autofix_sweep.yml` and representative focused workflow-contract tests under `tests/`.\n\nPlanning ref: `8b504fd23108a60ed6fa1c6ffb3ffa2f3860fa89` on `orchestrator/project-3579` (`git symbolic-ref --short -q HEAD` = `orchestrator/project-3579`; integration branch metadata matches).\n\nAutomation / wiring.\n- Change type: extend an existing workflow and add one focused regression test; no new script.\n- Entry point: `.github/workflows/review_autofix_sweep.yml` (`schedule` cron `*/30 * * * *` and `workflow_dispatch`).\n- Supervisor: none.\n- DB gate: none.\n- `docs/scripts-pending-removal.md`: no entry needed.\n\nScope-mode: Hold Scope\nReuse-audit: extends `.github/workflows/review_autofix_sweep.yml`\u2019s existing active-run preflight and the focused workflow-contract test pattern used by `tests/test_review_autofix_last_run_diff_oscillation_guard.py`\nScope-mode justification:\nThis is a surgical hot-path optimization with an existing insertion point: the sweep already computes `total` and logs `AUTOFIX_SWEEP_START` before defining/calling the active-run snapshot helper. Holding scope preserves correctness, backward compatibility, and operational clarity by changing only the `total==0` branch and leaving all non-zero filtering/dispatch behavior intact. Per \u00a76 priorities, the slightly more complete in-scope variant is to keep the existing end-of-sweep summary vocabulary on the zero-candidate branch (emit the normal `AUTOFIX_SWEEP_END` counters, then exit) rather than a bare `exit 0`; that is only a few lines more but preserves observability. Do not expand this into post-filter or post-`[skip ai]` early exits; that would broaden semantics beyond the issue.\n\nClarification mapping.\n- No Q1+ clarification questions were issued; the auto-posted `/answer [auto-answered-by-orchestrator]` only confirmed continuation.\n\nFiles likely to change.\n- `.github/workflows/review_autofix_sweep.yml`\n- New focused test file under `tests/` matching `files_touched` if implementation metadata provides one; otherwise likely `tests/test_review_autofix_sweep_zero_candidate_fast_exit.py`\n\nFunctions or modules to implement.\n- In the `Enumerate open PRs and dispatch internal-review.yml` step (`.github/workflows/review_autofix_sweep.yml:70-215`), insert a `total==0` fast-exit immediately after `AUTOFIX_SWEEP_START` (`:95-96`) and before the active-run snapshot section (`:104-148`).\n- Keep `snapshot_active_review_runs()` unchanged for non-zero sweeps; the new branch should only make that helper and its GH API fan-out unreachable when there are zero candidates.\n- Add a dedicated Python contract test that reads this workflow step and asserts the zero-candidate guard appears before any active-run snapshot logic / workflow-runs GH API lookup, while the non-zero snapshot loop remains present.\n\nData structures affected.\n- Shell locals in the workflow step: `total`, summary counters (`dispatched`, `skipped_active`, `skipped_filter`, `skipped_skip_ai`, `failures`), and the `active_review_runs` associative array.\n- No schema, label, prompt, or helper-script contract changes.\n\nAPI/interface changes.\n- No workflow input, trigger, permission, or dispatch interface changes.\n- Internal behavior change only: zero-candidate sweeps stop before any `/actions/workflows/{workflow}/runs` reads; non-zero sweeps keep current GH API behavior.\n- Preserve existing sweep log vocabulary for observability.\n\nRisks and edge cases.\n- The guard must be placed before the active-run snapshot section itself, not merely before the per-PR loop.\n- A bare `exit 0` after `AUTOFIX_SWEEP_START` would drop the summary line and create log drift; preserve `AUTOFIX_SWEEP_END` on the fast path unless implementation context explicitly says otherwise.\n- Do not change non-zero behavior: `[skip ai]`, `HEAD_REF_FILTER`, dry-run logging, active-run skip semantics, and dispatch flow must remain unchanged.\n- Conflict note: the issue text says the dedicated new test file is \u201clisted below,\u201d but no filename appears in the planning context. Repo inspection found no existing `review_autofix_sweep`-specific test file, so the safe plan is to add a new focused contract test under `tests/`.\n\nTesting considerations.\n- Add a focused regression test in the new dedicated file rather than expanding a broad suite.\n- Assert, at minimum:\n  1. `AUTOFIX_SWEEP_START` still exists.\n  2. A `total==0` fast-exit branch appears after that start log and before the active-run snapshot section / any `/actions/workflows/.../runs` lookup.\n  3. The existing `snapshot_active_review_runs()` helper and the `internal-review.yml review_autofix.yml` loop remain in the non-zero path.\n  4. The zero-candidate branch emits the existing summary line if log vocabulary is preserved as planned.\n- Targeted verification: `python3 -m pytest tests/test_review_autofix_sweep_zero_candidate_fast_exit.py` (or the exact dedicated filename chosen to satisfy `files_touched`).\n\nPre-execution self-check result.\n- Ready: planning ref matches the orchestrator integration branch, the request is specific, and the change is confined to one workflow plus one focused regression test.\n- No external docs, credentials, new scheduler wiring, supervisor, or DB work are needed.\n\nPLAN_SELF_CHECK: WARNING: issue text references a \u201cdedicated new test file listed below,\u201d but no filename appears in the planning context; this plan assumes a new focused `tests/` contract file and is otherwise implementation-ready.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "44bdc66f9a3590a96b482eef7b1bbf8823749fe9bd7fd5cda5e17f4a7948d297",
+  "lineage": {
+    "issue_number": 3586,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28863547970",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28863547970",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3586"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260707114843_925812d7b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3586,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28863547970"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3586",
+  "timestamps": {
+    "created_at": "2026-07-07T11:48:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
