@@ -19,6 +19,11 @@ GENERATED_BANNER = (
 )
 
 
+def fail(message: str) -> None:
+	print(f"::error::FAIL: {message}", file=sys.stderr)
+	raise SystemExit(1)
+
+
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
 		description="Generate the Codex model reference markdown document."
@@ -34,11 +39,20 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_catalog(path: Path) -> list[dict[str, object]]:
-	with path.open("r", encoding="utf-8") as handle:
-		payload = json.load(handle)
+	try:
+		with path.open("r", encoding="utf-8") as handle:
+			payload = json.load(handle)
+	except FileNotFoundError:
+		fail(f"{path.as_posix()}: file not found")
+	except json.JSONDecodeError as exc:
+		fail(f"{path.as_posix()}: invalid JSON: {exc}")
+	except OSError as exc:
+		fail(f"{path.as_posix()}: {exc}")
+	if not isinstance(payload, dict):
+		fail(f"{path.as_posix()}: expected top-level object")
 	models = payload.get("models")
 	if not isinstance(models, list):
-		raise SystemExit(f"FAIL: {path.as_posix()}: expected top-level 'models' list")
+		fail(f"{path.as_posix()}: expected top-level 'models' list")
 	return models
 
 
@@ -53,37 +67,40 @@ def load_optional_overrides(path: Path) -> dict[str, dict[str, object]]:
 
 	try:
 		import yaml
-	except ModuleNotFoundError as exc:
-		raise SystemExit(
-			"FAIL: PyYAML is required when scripts/codex_model_catalog_overrides.yaml is present"
-		) from exc
+	except ModuleNotFoundError:
+		fail("PyYAML is required when scripts/codex_model_catalog_overrides.yaml is present")
 
-	with path.open("r", encoding="utf-8") as handle:
-		payload = yaml.safe_load(handle)
+	try:
+		with path.open("r", encoding="utf-8") as handle:
+			payload = yaml.safe_load(handle)
+	except yaml.YAMLError as exc:
+		fail(f"{path.as_posix()}: invalid YAML: {exc}")
+	except OSError as exc:
+		fail(f"{path.as_posix()}: {exc}")
 
 	if payload is None:
 		return {}
 	if not isinstance(payload, dict):
-		raise SystemExit(f"FAIL: {path.as_posix()}: expected top-level mapping")
+		fail(f"{path.as_posix()}: expected top-level mapping")
 
 	rows = payload.get("models", [])
 	if not isinstance(rows, list):
-		raise SystemExit(f"FAIL: {path.as_posix()}: expected 'models' to be a list")
+		fail(f"{path.as_posix()}: expected 'models' to be a list")
 
 	overrides_by_slug: dict[str, dict[str, object]] = {}
 	for index, row in enumerate(rows, start=1):
 		if not isinstance(row, dict):
-			raise SystemExit(f"FAIL: {path.as_posix()}: models[{index}] must be a mapping")
+			fail(f"{path.as_posix()}: models[{index}] must be a mapping")
 
 		slug = row.get("slug")
 		if not isinstance(slug, str) or not slug:
-			raise SystemExit(f"FAIL: {path.as_posix()}: models[{index}].slug must be a non-empty string")
+			fail(f"{path.as_posix()}: models[{index}].slug must be a non-empty string")
 		if slug in overrides_by_slug:
-			raise SystemExit(f"FAIL: {path.as_posix()}: duplicate override entry for slug {slug}")
+			fail(f"{path.as_posix()}: duplicate override entry for slug {slug}")
 
 		row_overrides = row.get("overrides") or {}
 		if not isinstance(row_overrides, dict):
-			raise SystemExit(f"FAIL: {path.as_posix()}: models[{index}].overrides must be a mapping")
+			fail(f"{path.as_posix()}: models[{index}].overrides must be a mapping")
 
 		notes = row.get("notes", "")
 		if notes is None:
@@ -153,13 +170,11 @@ def render_markdown(
 
 	for index, model in enumerate(models, start=1):
 		if not isinstance(model, dict):
-			raise SystemExit(f"FAIL: {CATALOG_PATH.as_posix()}: models[{index}] must be a mapping")
+			fail(f"{CATALOG_PATH.as_posix()}: models[{index}] must be a mapping")
 
 		slug = model.get("slug")
 		if not isinstance(slug, str) or not slug:
-			raise SystemExit(
-				f"FAIL: {CATALOG_PATH.as_posix()}: models[{index}].slug must be a non-empty string"
-			)
+			fail(f"{CATALOG_PATH.as_posix()}: models[{index}].slug must be a non-empty string")
 
 		known_slugs.append(slug)
 		override_entry = overrides_by_slug.get(slug)
@@ -175,8 +190,8 @@ def render_markdown(
 
 	unknown_override_slugs = sorted(set(overrides_by_slug) - set(known_slugs))
 	if unknown_override_slugs:
-		raise SystemExit(
-			"FAIL: scripts/codex_model_catalog_overrides.yaml: unknown slug(s): "
+		fail(
+			"scripts/codex_model_catalog_overrides.yaml: unknown slug(s): "
 			+ ", ".join(unknown_override_slugs)
 		)
 
@@ -184,13 +199,19 @@ def render_markdown(
 
 
 def write_output(path: Path, rendered_text: str) -> int:
-	path.write_text(rendered_text, encoding="utf-8")
+	try:
+		path.write_text(rendered_text, encoding="utf-8")
+	except OSError as exc:
+		fail(f"{path.as_posix()}: unable to write generated output: {exc}")
 	return 0
 
 
 def check_output(path: Path, rendered_text: str) -> int:
 	rendered_bytes = rendered_text.encode("utf-8")
-	existing_bytes = path.read_bytes() if path.exists() else b""
+	try:
+		existing_bytes = path.read_bytes() if path.exists() else b""
+	except OSError as exc:
+		fail(f"{path.as_posix()}: unable to read existing output: {exc}")
 	if existing_bytes == rendered_bytes:
 		return 0
 
@@ -205,6 +226,7 @@ def check_output(path: Path, rendered_text: str) -> int:
 	)
 	if diff_text:
 		sys.stderr.write(diff_text if diff_text.endswith("\n") else diff_text + "\n")
+	print(f"::error::FAIL: {path.as_posix()} is out of date; run make generate", file=sys.stderr)
 	return 1
 
 
