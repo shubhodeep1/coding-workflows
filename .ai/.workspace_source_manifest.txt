@@ -18,6 +18,7 @@
 .claude/commands/write-plan.md
 .claude/hooks/session-start.sh
 .claude/settings.json
+.github/ISSUE_TEMPLATE/structured-task.yml
 .github/actions/install-codex/action.yml
 .github/actions/run-soft-error-analyzer/action.yml
 .github/actions/setup-runtime/action.yml
@@ -77,6 +78,7 @@
 .yamllint.yml
 CHANGELOG.md
 CLAUDE.md
+Makefile
 README.md
 agents.md
 ai-memory/README.md
@@ -109,17 +111,23 @@ docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
 docs/awesome-cc-future-improvements.md
 docs/changelog-style.md
+docs/codex-model-reference.md
 docs/completed/ai-code-review-learnings-plan.md
 docs/completed/apply-ai-tools-learnings-plan.md
+docs/completed/complete-squad-improvements-plan.md
+docs/completed/gsd-inspired-improvements-plan.md
+docs/completed/gstack-learnings-plan.md
 docs/completed/integration-sync-resolver-self-heal-plan.md
 docs/completed/integration-sync-resolver-self-heal.md
 docs/completed/judge-loop-and-reissue-plan.md
 docs/completed/mcp-usage-monitoring-plan.md
+docs/completed/open-agents-learnings-plan.md
 docs/completed/orchestrator-validation-resilience-plan.md
 docs/completed/sub-issue-test-runs-spike.md
 docs/completed/symphony-inspired-improvements-plan.md
 docs/deploy-activation/README.md
 docs/gsd-future-improvements.md
+docs/how-it-works.md
 docs/plans/apply-ai-tools-learnings-plan.md
 docs/plans/awesome-claude-code-learnings-plan.md
 docs/plans/claude-code-tooling-learnings-plan.md
@@ -134,6 +142,7 @@ docs/plans/symphony-inspired-improvements-plan.md
 docs/postmortems/2026-05-18-project-2734-stall.md
 docs/scripts-pending-removal.md
 examples/ai-validate-hints.yml
+examples/awesome-cc-references.md
 examples/validation-fixtures/node-hardhat-solidity.yml
 examples/validation-fixtures/node-runtime.yml
 examples/validation-fixtures/python-mongo-flask.yml
@@ -279,6 +288,7 @@ scripts/check_integration_pr_readiness.py
 scripts/check_resolver_diff.sh
 scripts/check_workflow_script_refs.py
 scripts/clarify_data_provision_guard.py
+scripts/clarify_informal_detect.py
 scripts/codex_heartbeat.sh
 scripts/codex_helpers.sh
 scripts/codex_model_catalog.json
@@ -311,6 +321,7 @@ scripts/fixtures/issue-timeline/graphql_pr_with_comments_fixture.json
 scripts/fixtures/issue-timeline/graphql_timeline_fixture.json
 scripts/fixtures/issue-timeline/rest_pr_with_comments_fixture.json
 scripts/fixtures/issue-timeline/rest_timeline_fixture.json
+scripts/generate_codex_model_reference.py
 scripts/generate_symbol_diff_summary.py
 scripts/gh_helpers.sh
 scripts/git_ref_health_check.sh
@@ -401,6 +412,9 @@ tests/fixtures/editor_summaries/narrative_ledger_delete_status_edited.txt
 tests/fixtures/editor_summaries/narrative_none_status_edited.txt
 tests/fixtures/editor_summaries/narrative_real_edit_status_edited.txt
 tests/fixtures/editor_summaries/narrative_reference_clause_status_edited.txt
+tests/fixtures/informal_issues/clean_issue.json
+tests/fixtures/informal_issues/copy_pasted_template.json
+tests/fixtures/informal_issues/empty_body.json
 tests/fixtures/integration_fingerprints/pr1569_run_24872524074.json
 tests/fixtures/integration_ref_resolver/child_footer_backticks.json
 tests/fixtures/integration_ref_resolver/child_footer_plain.json
@@ -501,6 +515,7 @@ tests/test_blocker_check.py
 tests/test_branch_rebuild.py
 tests/test_check_integration_pr_readiness.py
 tests/test_ci_inventory_parity_order_contract.py
+tests/test_clarify_informal_detect.py
 tests/test_codex_heartbeat.py
 tests/test_codex_skip_git_repo_check_contract.py
 tests/test_codex_stall_guard_poller.py
@@ -660,6 +675,7 @@ tests/test_workspace_hooks.py
 tests/test_workspace_init.py
 tests/test_workspace_safety_check.py
 tests/test_write_codex_config.py
+tools/repo_tree/update_repo_tree.py
 unattended_system_instructions.md
 workflow-templates/.claude/commands/analyze-log.md
 workflow-templates/.claude/commands/apply-analysis.md
