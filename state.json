@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-07-08T08:59:13Z",
+  "tick_at": "2026-07-08T09:53:56Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,28 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 1
+    "tracking_issues": 0
   },
-  "tracking_issues": [
-    {
-      "current_wave": 0,
-      "issue_counts": {
-        "closed": 0,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 3579,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] Validate and land the safe subset of workflow-optimization recommendations (2026-06-25 to 2026-06-28)",
-      "total_waves": 0,
-      "wave_complete": false
-    }
-  ]
+  "tracking_issues": []
 }
