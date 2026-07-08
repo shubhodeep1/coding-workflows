@@ -1,0 +1,10 @@
+{
+	"body": "## Description\nplaceholder text\n\n## Steps to reproduce\npending details\n\n## Actual behavior\nn/a\n\n## Environment\nunknown",
+	"expected_score": 0.6,
+	"expected_signals": [
+		"template_paste",
+		"no_ask",
+		"no_acceptance"
+	],
+	"description": "Template-shaped issue body with placeholder text and no explicit ask or acceptance language."
+}
