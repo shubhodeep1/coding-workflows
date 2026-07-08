@@ -145,6 +145,70 @@ def test_check_emits_diff_on_drift() -> None:
 		assert "::error::FAIL: agents.md is out of date; run make generate" in stderr_text
 
 
+def test_write_excludes_directories_from_glob_matches() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		repo_root = Path(td)
+		_build_repo(
+			repo_root,
+			agents_text=(
+				"<!-- TREE:START id=workflows -->\n"
+				"placeholder\n"
+				"<!-- TREE:END id=workflows -->\n\n"
+				"<!-- TREE:START id=workflow_templates -->\n"
+				"placeholder\n"
+				"<!-- TREE:END id=workflow_templates -->\n"
+			),
+		)
+		_write_text(
+			repo_root / "tools" / "repo_tree" / "config.yaml",
+			"""trees:
+  - file: agents.md
+    marker_id: workflows
+    source_glob: ".github/workflows/*"
+  - file: agents.md
+    marker_id: workflow_templates
+    source_glob: "workflow-templates/*.yml"
+""",
+		)
+		(repo_root / ".github" / "workflows" / "nested-dir").mkdir(parents=True)
+
+		status, stdout_text, stderr_text = _run_tool(repo_root, "--write")
+		assert status == 0
+		assert stdout_text == ""
+		assert stderr_text == ""
+
+		updated_text = (repo_root / "agents.md").read_text(encoding="utf-8")
+		assert ".github/workflows/alpha.yml\n" in updated_text
+		assert ".github/workflows/zeta.yml\n" in updated_text
+		assert ".github/workflows/nested-dir\n" not in updated_text
+
+
+def test_write_duplicate_marker_ids_fail_with_exit_code_two() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		repo_root = Path(td)
+		_build_repo(
+			repo_root,
+			agents_text=(
+				"<!-- TREE:START id=workflows -->\n"
+				"old\n"
+				"<!-- TREE:END id=workflows -->\n\n"
+				"<!-- TREE:START id=workflows -->\n"
+				"old again\n"
+				"<!-- TREE:END id=workflows -->\n\n"
+				"<!-- TREE:START id=workflow_templates -->\n"
+				"old\n"
+				"<!-- TREE:END id=workflow_templates -->\n"
+			),
+		)
+
+		before_text = (repo_root / "agents.md").read_text(encoding="utf-8")
+		status, stdout_text, stderr_text = _run_tool(repo_root, "--write")
+		assert status == 2
+		assert stdout_text == ""
+		assert "duplicate TREE:START marker id=workflows" in stderr_text
+		assert (repo_root / "agents.md").read_text(encoding="utf-8") == before_text
+
+
 def test_duplicate_marker_ids_fail_with_exit_code_two() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		repo_root = Path(td)
@@ -183,6 +247,34 @@ def test_missing_marker_pair_fails_with_exit_code_two() -> None:
 		status, _stdout_text, stderr_text = _run_tool(repo_root, "--check")
 		assert status == 2
 		assert "missing TREE marker pair(s): workflow_templates" in stderr_text
+
+
+def test_check_rejects_invalid_marker_ids_in_config() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		repo_root = Path(td)
+		_build_repo(
+			repo_root,
+			agents_text=(
+				"<!-- TREE:START id=workflows -->\n"
+				"old\n"
+				"<!-- TREE:END id=workflows -->\n\n"
+				"<!-- TREE:START id=workflow_templates -->\n"
+				"old\n"
+				"<!-- TREE:END id=workflow_templates -->\n"
+			),
+		)
+		_write_text(
+			repo_root / "tools" / "repo_tree" / "config.yaml",
+			"""trees:
+  - file: agents.md
+    marker_id: .invalid
+    source_glob: ".github/workflows/*.yml"
+""",
+		)
+
+		status, _stdout_text, stderr_text = _run_tool(repo_root, "--check")
+		assert status == 1
+		assert "marker_id contains invalid characters: .invalid" in stderr_text
 
 
 def test_unmatched_start_or_end_fails_with_exit_code_two() -> None:

@@ -14,8 +14,9 @@ from typing import Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO_ROOT / "tools" / "repo_tree" / "config.yaml"
-MARKER_ID_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
-MARKER_PATTERN = re.compile(r"<!-- TREE:(START|END) id=([A-Za-z0-9_.-]+) -->")
+MARKER_ID_TOKEN = r"[A-Za-z0-9_](?:[A-Za-z0-9_.-]*[A-Za-z0-9_])?"
+MARKER_ID_PATTERN = re.compile(MARKER_ID_TOKEN)
+MARKER_PATTERN = re.compile(rf"<!-- TREE:(START|END) id=({MARKER_ID_TOKEN}) -->")
 
 EXIT_OK = 0
 EXIT_DIFF = 1
@@ -151,7 +152,7 @@ def group_specs_by_file(specs: Sequence[TreeSpec]) -> dict[str, list[TreeSpec]]:
 
 def expand_source_glob(source_glob: str, *, repo_root: Path) -> list[str]:
 	try:
-		matches = [path.relative_to(repo_root).as_posix() for path in repo_root.glob(source_glob) if path.exists()]
+		matches = [path.relative_to(repo_root).as_posix() for path in repo_root.glob(source_glob) if path.is_file()]
 	except (OSError, ValueError) as exc:
 		raise fail(f"tools/repo_tree/config.yaml: unable to expand source_glob {source_glob!r}: {exc}")
 	return sorted(set(matches))
