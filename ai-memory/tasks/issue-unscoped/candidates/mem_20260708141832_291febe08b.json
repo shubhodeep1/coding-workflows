@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Create a new top-level `Makefile` with `.PHONY: generate generate-check` and literal-TAB recipe bodies. `generate` must run both `python3 scripts/generate_codex_model_reference.py --write` and `python3 tools/repo_tree/update_repo_tree.py --write`; `generate-check` must run the same pair in `--check` mode.\n  expected_change_site: Makefile\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The original PR committed the exact Makefile with literal TABs (verified via `cat -A` and prior editor summaries). However, the LAST RUN DIFF, LAST RUN CHANGED FILES, and LAST COMMIT STAT show *only* edits to `docs/codex-model-reference.md` and `scripts/generate_codex_model_reference.py`. The Makefile itself was not touched in the last autofix run; the scope guard and Phase-2 contract were first satisfied in the base change but the task requires the Makefile to be part of the landed implementation.\n- requirement: The generated `docs/codex-model-reference.md` must contain the exact table columns from the plan (`slug`, `default_verbosity`, `support_verbosity`, `apply_patch_tool_type`, `notes`) with the generated-file banner mentioning both the catalog *and* `codex_model_catalog_overrides.yaml`.\n  expected_change_site: docs/codex-model-reference.md (and generator that produces it)\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The banner was updated in the most recent autofix iteration (LAST RUN DIFF confirms the addition of \"or scripts/codex_model_catalog_overrides.yaml\"). The table exactly matches the plan, notes correctly mark `(frozen)` overrides, and `make generate-check` passes cleanly on the committed artifact.\n- requirement: Edit `.github/workflows/ci.yml` to add a `Drift check (generated docs)` step immediately after the YAML lint step in the `lint` job; the step must run `make generate-check`. Surgical change only \u2014 no new env vars, no workflow-template edits, no consumer propagation.\n  expected_change_site: .github/workflows/ci.yml\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The step exists exactly as specified, runs after `yamllint`, uses the required `set -euo pipefail`, and introduces no extraneous changes.\n- requirement: Create temporary Phase-2 stub at `tools/repo_tree/update_repo_tree.py` that accepts `--write`/`--check` flags and exits successfully so the Makefile + CI contracts exist before Phase 3 replaces it.\n  expected_change_site: tools/repo_tree/update_repo_tree.py\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The stub is present, parses both flags, returns 0 unconditionally, is exercised by `make generate-check`, and retains the Phase-3 placeholder comment. No regression introduced by last-run edits.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Create a new top-level `Makefile` with `.PHONY: generate generate-check` and literal-TAB recipe bodies. `generate` must run both `python3 scripts/generate_codex_model_reference.py --write` and `python3 tools/repo_tree/update_repo_tree.py --write`; `generate-check` must run the same pair in `--check` mode.\n  Expected change site: Makefile (new file, lines 1-9)\n  Evidence of absence: The original PR committed the exact Makefile with literal TABs (verified via `cat -A` and prior editor summaries). However, the LAST RUN DIFF, LAST RUN CHANGED FILES, and LAST COMMIT STAT show *only* edits to `docs/codex-model-reference.md` and `scripts/generate_codex_model_reference.py`. The Makefile itself was not touched in the last autofix run; the scope guard and Phase-2 contract were first satisfied in the base change but the task requires the Makefile to be part of the landed implementation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: The generated `docs/codex-model-reference.md` must contain the exact table columns from the plan (`slug`, `default_verbosity`, `support_verbosity`, `apply_patch_tool_type`, `notes`) with the generated-file banner mentioning both the catalog *and* `codex_model_catalog_overrides.yaml`.\n  Expected change site: docs/codex-model-reference.md (and generator that produces it)\n  Evidence of absence: The banner was updated in the most recent autofix iteration (LAST RUN DIFF confirms the addition of \"or scripts/codex_model_catalog_overrides.yaml\"). The table exactly matches the plan, notes correctly mark `(frozen)` overrides, and `make generate-check` passes cleanly on the committed artifact.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: Edit `.github/workflows/ci.yml` to add a `Drift check (generated docs)` step immediately after the YAML lint step in the `lint` job; the step must run `make generate-check`. Surgical change only \u2014 no new env vars, no workflow-template edits, no consumer propagation.\n  Expected change site: .github/workflows/ci.yml (lines ~79-89)\n  Evidence of absence: The step exists exactly as specified, runs after `yamllint`, uses the required `set -euo pipefail`, and introduces no extraneous changes.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: Create temporary Phase-2 stub at `tools/repo_tree/update_repo_tree.py` that accepts `--write`/`--check` flags and exits successfully so the Makefile + CI contracts exist before Phase 3 replaces it.\n  Expected change site: tools/repo_tree/update_repo_tree.py\n  Evidence of absence: The stub is present, parses both flags, returns 0 unconditionally, is exercised by `make generate-check`, and retains the Phase-3 placeholder comment. No regression introduced by last-run edits.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "0058ed9eb506ed245d1acc0969da254dbf41e52cbc6c8158458e7d88c5495592",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3612,
+    "run_id": "28946564133",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28946564133",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260708141832_291febe08b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3612,
+    "run_id": "28946564133"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-07-08T14:18:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
