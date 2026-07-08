@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply awesome-claude-code learnings across prompts, generators, docs, and helper scripts\",\"issues\":[{\"id\":\"phase1_trust_boundary_lens\",\"title\":\"Phase 1: add implicit-execution trust-boundary lens to reviewer and judge prompts\",\"priority\":2},{\"id\":\"phase2_model_catalog_drift\",\"title\":\"Phase 2: generate codex model reference and enforce generated-doc drift checks\",\"priority\":1},{\"id\":\"phase3_repo_tree_drift\",\"title\":\"Phase 3: add repo-tree marker generation and agents.md drift checks\",\"priority\":2},{\"id\":\"phase4_informal_issue_detector\",\"title\":\"Phase 4: add the advisory informal-issue detector, fixtures, and clarify prompt guidance\",\"priority\":3},{\"id\":\"phase5_stable_id_convention\",\"title\":\"Phase 5: document and test the stable make_record_id convention\",\"priority\":3},{\"id\":\"phase6_override_conventions\",\"title\":\"Phase 6: add override files and frozen-row rendering conventions\",\"priority\":4},{\"id\":\"phase7_repo_root_id_helpers\",\"title\":\"Phase 7: add repo_root and generate_resource_id helper scripts\",\"priority\":5},{\"id\":\"phase8_state_machine_docs_issue_form\",\"title\":\"Phase 8: document the AI pipeline state machine and add the optional structured issue form\",\"priority\":4},{\"id\":\"phase9_awesome_cc_references\",\"title\":\"Phase 9: add the curated awesome-claude-code reference index\",\"priority\":8}],\"dependency_edges\":[{\"from\":\"phase2_model_catalog_drift\",\"to\":\"phase3_repo_tree_drift\"},{\"from\":\"phase3_repo_tree_drift\",\"to\":\"phase5_stable_id_convention\"},{\"from\":\"phase5_stable_id_convention\",\"to\":\"phase6_override_conventions\"},{\"from\":\"phase2_model_catalog_drift\",\"to\":\"phase6_override_conventions\"},{\"from\":\"phase6_override_conventions\",\"to\":\"phase7_repo_root_id_helpers\"}]}",
+  "fingerprint": "aba9f02ab6efea1da6bef199bb56c5a7876526fff2e447e63a7e8efd3d642ba7",
+  "lineage": {
+    "issue_number": 3601,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28933610113",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28933610113",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260708095834_71c5640dcc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3601,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28933610113"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply awesome-claude-code learnings across prompts, generators, docs, and helper scripts' into 9 issues (tracking #3601)",
+  "timestamps": {
+    "created_at": "2026-07-08T09:58:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
