@@ -71,12 +71,18 @@ def _read_issue_body_from_file(path: Path) -> str:
 
 
 def _read_issue_body_from_stdin(timeout_secs: float = 5.0) -> str:
+	if sys.stdin is None:
+		raise OSError("stdin is not available")
+	stdin_buffer = getattr(sys.stdin, "buffer", None)
+	if stdin_buffer is None:
+		raise OSError("stdin buffer is not available")
+
 	result: dict[str, object] = {}
 
 	def _reader() -> None:
 		try:
-			result["data"] = sys.stdin.buffer.read()
-		except BaseException as exc:  # pragma: no cover - defensive fail-open path.
+			result["data"] = stdin_buffer.read()
+		except Exception as exc:  # pragma: no cover - defensive fail-open path.
 			result["error"] = exc
 
 	thread = threading.Thread(target=_reader, daemon=True)
@@ -86,7 +92,7 @@ def _read_issue_body_from_stdin(timeout_secs: float = 5.0) -> str:
 		raise TimeoutError(f"stdin read exceeded {timeout_secs} seconds")
 
 	error = result.get("error")
-	if isinstance(error, BaseException):
+	if isinstance(error, Exception):
 		raise error
 
 	data = result.get("data", b"")
@@ -101,9 +107,10 @@ def _has_template_paste(body: str) -> bool:
 
 
 def _has_no_ask(body: str) -> bool:
-	if "?" in body:
+	clean_body = URL_RE.sub("", body)
+	if "?" in clean_body:
 		return False
-	first_words = WORD_RE.findall(body.lower())[:50]
+	first_words = WORD_RE.findall(clean_body.lower())[:50]
 	return not any(word in IMPERATIVE_VERBS for word in first_words)
 
 
@@ -121,9 +128,11 @@ def _has_pure_log_dump(body: str) -> bool:
 
 def _has_link_only(body: str) -> bool:
 	trimmed = body.strip()
-	if len(trimmed) >= 50:
+	urls = URL_RE.findall(trimmed)
+	if len(urls) != 1:
 		return False
-	return len(URL_RE.findall(trimmed)) == 1
+	remaining = URL_RE.sub("", trimmed).strip()
+	return len(remaining) < 50
 
 
 def _detect_signals(body: str) -> list[str]:
@@ -147,11 +156,11 @@ def main() -> int:
 			body = _read_issue_body_from_file(args.issue_body_file)
 		else:
 			body = _read_issue_body_from_stdin()
-	except (OSError, UnicodeError, TimeoutError, ValueError):
+		print(_render_output(_detect_signals(body)))
+	except Exception:
 		print(PARSE_ERROR_OUTPUT)
 		return 0
 
-	print(_render_output(_detect_signals(body)))
 	return 0
 
 
