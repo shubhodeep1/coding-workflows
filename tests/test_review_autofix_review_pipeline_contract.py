@@ -434,6 +434,25 @@ def _step_block(step_name: str) -> str:
 	raise AssertionError(f"Step not found in workflow: {step_name}")
 
 
+def _dispatch_fallback_chain_slice(step_name: str) -> str:
+	block = _step_block(step_name)
+	lines = block.splitlines()
+	needle = 'if [ "${caller_workflow}" != "review_autofix.yml" ]; then'
+	for idx, line in enumerate(lines):
+		if line.strip() != needle:
+			continue
+		start_indent = len(line) - len(line.lstrip(" "))
+		for end_idx in range(idx + 1, len(lines)):
+			candidate = lines[end_idx]
+			if candidate.strip() != "fi":
+				continue
+			end_indent = len(candidate) - len(candidate.lstrip(" "))
+			if end_indent == start_indent:
+				return textwrap.dedent("\n".join(lines[idx : end_idx + 1])).strip()
+		break
+	assert False, f"missing redispatch fallback chain in step: {step_name}"
+
+
 def _reviewer_iteration_scope_helper_block() -> str:
 	text = _reviewers_text()
 	start = text.index("# ── Reviewer iteration-scoping helpers")
@@ -3322,6 +3341,28 @@ def test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets
 	assert "revalidate_events.v1.json" in stage_helper
 
 
+def test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain() -> None:
+	post_commit_block = _step_block("Re-trigger review via workflow_dispatch")
+	changes_lost_block = _step_block("Re-dispatch review on editor-changes-lost")
+
+	for block in (post_commit_block, changes_lost_block):
+		assert 'if gh workflow run "review_autofix.yml" \\' in block
+		assert '-f pr_number="${PR_NUMBER}" \\' in block
+		assert '-f allow_workflow_edits="${ALLOW_WORKFLOW_EDITS}"; then' in block
+		assert 'caller_workflow="internal-review.yml"' in block
+
+	assert _dispatch_fallback_chain_slice("Re-trigger review via workflow_dispatch") == _dispatch_fallback_chain_slice(
+		"Re-dispatch review on editor-changes-lost"
+	)
+	assert (
+		'echo "CHANGES_LOST_REDISPATCHED=${dispatched}" >> "$GITHUB_ENV"' in changes_lost_block
+	)
+	assert (
+		'Could not dispatch review workflow for editor-changes-lost recovery. The next synchronize event or manual re-run is needed.'
+		in changes_lost_block
+	)
+
+
 def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 	block = _step_block("Append review pipeline iteration summary")
 	assert "### Review Pipeline — Iteration ${iteration_label}" in block
@@ -3790,6 +3831,7 @@ def main() -> int:
 	test_reject_verifier_bootstrap_and_stage_order_contract()
 	test_render_prompt_py_is_main_primary_so_validator_fixes_reach_wedged_branches()
 	test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
+	test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain()
 	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()
 	test_review_pipeline_slop_scan_wiring_is_flagged_fail_open_and_pre_commit_cleaned()
 	test_reviewer_and_consolidator_slop_scan_context_is_wired()

@@ -517,6 +517,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_plan_polling_guard.py
 
+      - name: Test-and-mark-stable closed-PR single-fetch regression test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py
+
       - name: Alt-model cleanup PR-selector contract test
         run: |
           set -euo pipefail
@@ -536,6 +541,21 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_truncate_to_utf8_byte_cap.py
+
+      - name: Inventory parity
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/inventory_parity.py
+
+      - name: Inventory parity order contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_inventory_parity_order_contract.py
+
+      - name: Review autofix sweep zero-candidate fast-exit contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_sweep_zero_candidate_fast_exit.py
 
       - name: Workflow log collector coverage gate
         run: |
@@ -582,11 +602,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/prompt_size_budget.py
-
-      - name: Inventory parity
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/inventory_parity.py
 
       - name: Prompt forbidden-token soft lint
         run: |

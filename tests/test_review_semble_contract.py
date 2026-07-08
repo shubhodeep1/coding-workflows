@@ -131,8 +131,16 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	stage_helper = _stage_helper_text()
 	init_block = _step_block(workflow, "Initialize runtime workspace")
 	preflight_block = _step_block(workflow, '"Preflight: Verify required files before reviewer invocation"')
+	main_primary_line = next(
+		(line for line in stage_helper.splitlines() if "MAIN_PRIMARY_BOOTSTRAP_SCRIPTS=" in line),
+		"",
+	)
 	required_bootstrap_line = next(
 		line for line in stage_helper.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
+	)
+	optional_bootstrap_line = next(
+		(line for line in stage_helper.splitlines() if "OPTIONAL_BOOTSTRAP_SCRIPTS=" in line),
+		"",
 	)
 
 	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}" in workflow
@@ -141,17 +149,15 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert 'helper=".codex-workflow-src-main/scripts/stage_workflow_support.sh"' in stage_step_block
 	assert 'WORKFLOW_SOURCE_REPO="shubhodeep1/coding-workflows" \\' in stage_step_block
 	assert 'bash "${helper}"' in stage_step_block
-	assert (
-		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh '
-		'review_conflict_prepare.sh"'
-	) in stage_helper
+	assert "render_prompt.py" in main_primary_line
 	# build_semble_wrapper.sh stays in the optional-bootstrap loop once the BM25
 	# wrapper was extracted to a shared script (semble 0.1.3 ships no
-	# index/query CLI). The Python render-prompt backend also stays optional so
-	# shim-adopting branches bootstrap without breaking main-based callers.
+	# index/query CLI). render_prompt.py is main-primary so validator fixes from
+	# main reach wedged/in-flight branches immediately.
 	assert "assemble_prompt.sh" in required_bootstrap_line
 	assert "render_prompt.py" not in required_bootstrap_line
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh render_prompt.py"' in stage_helper
+	assert "render_prompt.py" not in optional_bootstrap_line
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"' in stage_helper
 	assert (
 		"REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-\n"
 		"    codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh\n"

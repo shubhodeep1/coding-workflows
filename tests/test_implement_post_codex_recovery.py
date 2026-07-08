@@ -1568,6 +1568,26 @@ def test_destructive_guard_latch_verifies_label_applied() -> None:
 	assert ") && gh issue edit ${ISSUE_NUMBER} --repo ${{ github.repository }} --add-label ai:destructive-blocked" in destructive_block
 
 
+def test_scope_guard_latch_verifies_label_applied() -> None:
+	# RC-2 sibling regression guard: the scope-block latch must mirror the
+	# destructive-block verification contract instead of claiming success
+	# before GitHub confirms the issue label set.
+	destructive_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	assert "if scope_latched_labels=\"$(gh issue view \"${ISSUE_NUMBER}\" --repo \"${{ github.repository }}\" --json labels -q '.labels[].name' 2>/dev/null)\"; then" in destructive_block
+	assert "Confirmed ai:scope-blocked is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it." in destructive_block
+	assert "::error::FAILED to latch ai:scope-blocked on #${ISSUE_NUMBER}; the redispatch block is NOT in effect. Apply it manually: (gh label edit ai:scope-blocked --repo ${{ github.repository }} --color b60205 --description 'Implementation blocked: staged files fell outside files_touched scope; human review required' || gh label create ai:scope-blocked --repo ${{ github.repository }} --color b60205 --description 'Implementation blocked: staged files fell outside files_touched scope; human review required') && gh issue edit ${ISSUE_NUMBER} --repo ${{ github.repository }} --add-label ai:scope-blocked" in destructive_block
+	assert "::warning::Could not verify ai:scope-blocked on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown. Re-check manually: gh issue view ${ISSUE_NUMBER} --repo ${{ github.repository }} --json labels -q '.labels[].name'" in destructive_block
+	assert r"The workflow attempted to label this issue \`ai:scope-blocked\`, but verification failed, so the latch state is unknown. Re-check the issue labels manually before assuming the \`Validate approval phase\` redispatch block is active." in destructive_block
+	assert r"This issue is now labeled \`ai:scope-blocked\`" not in destructive_block
+	assert "Issue is now ai:scope-blocked." not in destructive_block
+	assert "SCOPE_BLOCK_LABEL_DESCRIPTION='Implementation blocked: staged files fell outside files_touched scope; human review required'" in destructive_block
+	assert destructive_block.count("--description \"${SCOPE_BLOCK_LABEL_DESCRIPTION}\"") == 2
+	assert "gh label create 'ai:scope-blocked' \\" in destructive_block
+	assert "gh label edit 'ai:scope-blocked' \\" in destructive_block
+	assert "|| gh label create ai:scope-blocked --repo ${{ github.repository }} --color b60205" in destructive_block
+	assert ") && gh issue edit ${ISSUE_NUMBER} --repo ${{ github.repository }} --add-label ai:scope-blocked" in destructive_block
+
+
 def test_destructive_guard_handler_covers_unsafe_fetched_manifest_rejections() -> None:
 	destructive_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
 	assert "unsafe-fetched-manifest" in destructive_block
