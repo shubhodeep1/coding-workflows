@@ -1,4 +1,4 @@
-<!-- GENERATED FILE: do not edit. Run `make generate` after editing scripts/codex_model_catalog.json. -->
+<!-- GENERATED FILE: do not edit. Run `make generate` after editing scripts/codex_model_catalog.json or scripts/codex_model_catalog_overrides.yaml. -->
 
 # Codex model reference
 

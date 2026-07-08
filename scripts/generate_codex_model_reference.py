@@ -15,7 +15,7 @@ OVERRIDES_PATH = REPO_ROOT / "scripts" / "codex_model_catalog_overrides.yaml"
 OUTPUT_PATH = REPO_ROOT / "docs" / "codex-model-reference.md"
 GENERATED_BANNER = (
 	"<!-- GENERATED FILE: do not edit. Run `make generate` after editing "
-	"scripts/codex_model_catalog.json. -->"
+	"scripts/codex_model_catalog.json or scripts/codex_model_catalog_overrides.yaml. -->"
 )
 
 
