@@ -5203,7 +5203,7 @@ jobs:
               fi
             else
               for candidate in ai-review.yml internal-review.yml; do
-                echo "Direct dispatch failed; trying caller workflow: ${candidate}"
+                echo "Direct dispatch failed; trying fallback workflow: ${candidate}"
                 if gh workflow run "${candidate}" \
                   --ref "${TARGET_BRANCH}" \
                   -f pr_number="${PR_NUMBER}" \
@@ -5326,7 +5326,7 @@ jobs:
               fi
             else
               for candidate in ai-review.yml internal-review.yml; do
-                echo "Direct dispatch failed; trying caller workflow: ${candidate}"
+                echo "Direct dispatch failed; trying fallback workflow: ${candidate}"
                 if gh workflow run "${candidate}" \
                   --ref "${TARGET_BRANCH}" \
                   -f pr_number="${PR_NUMBER}" \
