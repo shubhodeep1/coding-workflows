@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `67fc80fc92782d8b25e8a5e063cf671dbfe8ea1d` on `orchestrator/project-3601` (matches integration branch metadata).\n\nClarification mapping: no Q1/Q2 items were asked; `/answer [auto-answered-by-orchestrator]` only confirmed continuation.\n\nScope-mode: Hold Scope\nReuse-audit: extends `docs/plans/awesome-claude-code-learnings-plan.md` + `docs/awesome-cc-future-improvements.md`\nScope-mode justification: This is a one-file, doc-only Phase 9 follow-through. The parent plan already fixes the target file, section list, and entry format, and the issue explicitly forbids broadening beyond the curated reference doc. The smallest correct implementation is to create only `examples/awesome-cc-references.md`, reuse the parent plan\u2019s section structure, and reuse the existing future-improvements doc as the exclusion back-reference surface. Expanding into README/docs/test changes would add scope without improving correctness for this issue.\n\nAutomation/wiring impact:\n- Change type: new documentation file only.\n- Scheduler / PR-push entry point: none.\n- Long-running supervisor: none.\n- DB gate pattern: none.\n- `docs/scripts-pending-removal.md` entry: none.\n\nFiles likely to change.\n- `[new]` `examples/awesome-cc-references.md` \u2014 the only file to create.\n- No other files should change if the `files_touched` guard is present.\n\nFunctions or modules to implement.\n- No runtime functions or code modules.\n- Implement the document as four content modules:\n  1. Brief opening note that this is a curated orientation index, not vendored upstream content.\n  2. `Slash commands worth studying` section with 4\u20136 annotated entries.\n     - Seed mappings from the parent plan:\n       - `evaluate-repository` -> analogous local path: `prompts/mode-judge.txt`\n       - `create-prp` / `create-prd` -> analogous local path: `prompts/mode-plan.txt`\n       - `fix-github-issue` -> analogous local path: `prompts/mode-implement.txt`\n  3. `GitHub Actions templates worth comparing` section with annotated entries.\n     - Seed mappings from the parent plan:\n       - `ci-failure-auto-fix.yml` -> `.github/workflows/review_autofix.yml`\n       - `issue-triage.yml` -> `.github/workflows/clarify.yml`\n       - `pr-review-comprehensive.yml` -> `.github/workflows/review_autofix.yml`\n  4. `Knowledge guides for further reading` section with 3\u20135 annotated entries.\n     - Use the parent plan\u2019s candidate guide names and map each to the closest in-repo orientation artifact (likely `README.md`, `agents.md`, `unattended_system_instructions.md`, or the relevant `prompts/` file).\n  5. `Tooling we deliberately did NOT adopt and why` section.\n     - Reference the existing `docs/awesome-cc-future-improvements.md` categories called out by Phase 9:\n       - EX1 \u2014 SVG/ticker/README alternatives\n       - EX2 \u2014 catalog cloning\n       - EX3 \u2014 generic `pr-review`\n       - EX5 \u2014 cross-repo cooldown / sanctions enforcement\n     - Keep this section short and forward readers to the existing future-improvements doc instead of re-explaining the upstream material.\n\nData structures affected.\n- Markdown only; no runtime data, schema, contract, or workflow state changes.\n- Repeated entry structure for each resource:\n  - line 1: resource name + upstream link\n  - line 2: why it matters here\n  - line 3: analogous in-repo path + key difference\n- Repeated exclusion structure for each non-adopted category:\n  - category name\n  - one-sentence \u201cwhy not adopted here\u201d\n  - pointer to the matching section in `docs/awesome-cc-future-improvements.md`\n\nAPI/interface changes.\n- Adds one new human-facing example/reference document under `examples/`.\n- No CLI, workflow, schema, label, or external interface changes.\n\nRisks and edge cases.\n- `files_touched` was not explicitly shown in the planning context; implementation should assume the safe allowlist is only `examples/awesome-cc-references.md` and avoid all other edits.\n- The parent plan\u2019s entry counts are indicative, not absolute; better to ship fewer strong annotations than pad the doc with weak ones.\n- The three-line format is easy to accidentally break with tables or long bullets; keep entries compact and uniform.\n- The exclusions section must reference `docs/awesome-cc-future-improvements.md`, not duplicate its detail or vendor upstream prose.\n- Because `examples/` currently has no Markdown precedent on this ref, keep the layout simple and consistent with existing repo docs rather than inventing a new template system.\n- Any local \u201canalogous path\u201d named in the doc should be re-checked on this branch before finalizing so the references are not stale.\n\nTesting considerations.\n- Manual validation is the primary check; I did not find a repo-local markdown lint target in the quick search of workflows/package/pyproject/Makefile/scripts.\n- Re-read the finished file and confirm:\n  - every section contains annotated links, not raw lists\n  - every resource entry follows the three-line structure\n  - every upstream reference is a link, not vendored text\n  - every local analogous path exists on `orchestrator/project-3601`\n  - the exclusions section explicitly covers EX1/EX2/EX3/EX5 and points readers to `docs/awesome-cc-future-improvements.md`\n  - there are no `TODO`, `TBD`, or placeholder notes\n- Final scope check: only `examples/awesome-cc-references.md` should appear in the diff.\n\nConflicts detected.\n- None. `examples/awesome-cc-references.md` is currently absent, which matches the parent plan\u2019s `[new]` designation.\n\nAssumptions made due to ambiguity.\n- The approved scope guard permits creating `examples/awesome-cc-references.md`.\n- Phase 9\u2019s candidate resources in `docs/plans/awesome-claude-code-learnings-plan.md` are the canonical seed list for curation.\n\nMissing-context notes.\n- No explicit `files_touched` list was included in the planning context.\n- No existing `examples/*.md` reference doc exists on this ref, so structure should be borrowed from the repo\u2019s existing documentation tone rather than an examples-doc precedent.\n\nPre-execution self-check result.\n- Ref and integration metadata align.\n- Scope is implementation-ready and limited to one new file.\n- No private inputs or external credentials are required.\n- No code/schema/workflow coupling needs synchronized edits for this issue.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "056e2bfe2c7eefeca5dde841b32a2931eb9deff3b5a1e5bb4cbb673b494d5cb4",
+  "lineage": {
+    "issue_number": 3606,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28934105298",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28934105298",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3606"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260708100426_cd1ca865ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3606,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28934105298"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3606",
+  "timestamps": {
+    "created_at": "2026-07-08T10:04:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
