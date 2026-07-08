@@ -40,6 +40,17 @@ Rules:
   scoring formula", or "reframe acceptance criterion" alongside
   traditional options.
 
+Advisory signal: when the wrapper supplies a
+`CLARIFY_INFORMAL_SCORE: <float>; signals=<csv>` line at the top of the
+issue context, treat it as informational only. The score is a 0.0-to-1.0
+heuristic; the signals list names which of `template_paste`, `no_ask`,
+`no_acceptance`, `pure_log_dump`, `link_only` triggered. Do not refuse the
+issue based on the score, do not include the score in the user-visible
+Q-batch, and do not echo the literal `CLARIFY_INFORMAL_SCORE:` token back
+to the user. You may use a specific signal to focus a Q that needs asking
+(e.g. when `no_acceptance` is set, the acceptance-criteria Q is usually
+worth asking).
+
 Mandatory Question Format (when emitting `QUESTIONS:`):
 
 The planner's `CLARIFY` readiness-gate evidence expects this existing `Q1`/`Q2` question format.
