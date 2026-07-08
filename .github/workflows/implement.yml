@@ -3667,22 +3667,22 @@ jobs:
               --remove-label 'ai:implementing' 2>/dev/null || \
             gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
               --add-label 'ai:scope-blocked' 2>/dev/null || true
-            SCOPE_LATCH_COMMENT_LINE="The workflow attempted to apply \`ai:scope-blocked\`; verify that the label is present before relying on the \`Validate approval phase\` redispatch block. Once present, future redispatches of issue #${ISSUE_NUMBER} will be refused until a human removes the label."
-            SCOPE_LATCH_TG_LINE="The workflow attempted to apply ai:scope-blocked; verify that the label is present before relying on the Validate approval phase redispatch block."
+            SCOPE_LATCH_STATUS_LINE="The workflow attempted to label this issue \`ai:scope-blocked\`, but the follow-up label read failed. Future redispatch is **not confirmed blocked**; re-check the label manually before redispatch."
+            SCOPE_TG_LATCH_LINE="Could not verify ai:scope-blocked latch: gh issue view failed after the write attempt, so redispatch refusal is unknown until a human rechecks the label."
             if scope_latched_labels="$(gh issue view "${ISSUE_NUMBER}" --repo "${{ github.repository }}" --json labels -q '.labels[].name' 2>/dev/null)"; then
               if grep -qxF 'ai:scope-blocked' <<< "${scope_latched_labels}"; then
                 echo "Confirmed ai:scope-blocked is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it."
-                SCOPE_LATCH_COMMENT_LINE="Confirmed \`ai:scope-blocked\` is present. Future redispatches of issue #${ISSUE_NUMBER} will be refused until a human removes the label."
-                SCOPE_LATCH_TG_LINE="Confirmed ai:scope-blocked is latched; redispatch will be refused until a human removes it."
+                SCOPE_LATCH_STATUS_LINE="This issue is confirmed labeled \`ai:scope-blocked\`; the \`Validate approval phase\` step will refuse future redispatches of issue #${ISSUE_NUMBER} until a human removes the label."
+                SCOPE_TG_LATCH_LINE="Confirmed ai:scope-blocked latch: future redispatch of this exact issue ID will be refused until a human removes the label."
               else
                 echo "::error::FAILED to latch ai:scope-blocked on #${ISSUE_NUMBER}; the redispatch block is NOT in effect. Apply it manually: (gh label edit ai:scope-blocked --repo ${{ github.repository }} --color b60205 --description 'Implementation blocked: staged files fell outside files_touched scope; human review required' || gh label create ai:scope-blocked --repo ${{ github.repository }} --color b60205 --description 'Implementation blocked: staged files fell outside files_touched scope; human review required') && gh issue edit ${ISSUE_NUMBER} --repo ${{ github.repository }} --add-label ai:scope-blocked"
-                SCOPE_LATCH_COMMENT_LINE="The workflow attempted to apply \`ai:scope-blocked\`, but the follow-up read did not find it. The \`Validate approval phase\` redispatch block is **not** in effect until a human applies the label manually and confirms it is present."
-                SCOPE_LATCH_TG_LINE="FAILED to latch ai:scope-blocked; the redispatch block is NOT in effect until a human applies the label manually."
+                SCOPE_LATCH_STATUS_LINE="The workflow attempted to label this issue \`ai:scope-blocked\`, but the follow-up label read did **not** find it. Future redispatch is **not confirmed blocked**; reapply the label manually before redispatch."
+                SCOPE_TG_LATCH_LINE="FAILED to confirm ai:scope-blocked latch: redispatch refusal is NOT in effect until a human reapplies and rechecks the label."
               fi
             else
               echo "::warning::Could not verify ai:scope-blocked on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown. Re-check manually: gh issue view ${ISSUE_NUMBER} --repo ${{ github.repository }} --json labels -q '.labels[].name'"
-              SCOPE_LATCH_COMMENT_LINE="The workflow attempted to apply \`ai:scope-blocked\`, but verification failed, so the latch state is unknown. Re-check the issue labels manually before assuming the \`Validate approval phase\` redispatch block is active."
-              SCOPE_LATCH_TG_LINE="Could not verify ai:scope-blocked; the latch state is unknown and must be checked manually."
+              SCOPE_LATCH_STATUS_LINE="The workflow attempted to label this issue \`ai:scope-blocked\`, but verification failed, so the latch state is unknown. Re-check the issue labels manually before assuming the \`Validate approval phase\` redispatch block is active."
+              SCOPE_TG_LATCH_LINE="Could not verify ai:scope-blocked; the latch state is unknown and must be checked manually."
             fi
             {
               echo "${SCOPE_HEADER}"
@@ -3690,7 +3690,7 @@ jobs:
               echo "- ${SCOPE_COUNT_LABEL}: **${SVB_COUNT}**"
               echo "- Workflow run: ${RUN_URL}"
               echo
-              echo "${SCOPE_COMMIT_STATE} ${SCOPE_LATCH_COMMENT_LINE}"
+              echo "${SCOPE_COMMIT_STATE} ${SCOPE_LATCH_STATUS_LINE}"
               echo
               echo "${SCOPE_DETAIL_HEADING}"
               echo
@@ -3716,7 +3716,7 @@ jobs:
                 "out-of-scope paths: ${SVB_COUNT}" \
                 "run: ${RUN_URL}" \
                 "" \
-                "${SCOPE_LATCH_TG_LINE}" \
+                "${SCOPE_TG_LATCH_LINE}" \
                 "The orchestrator judge may still regenerate this task under a different issue number.")"
               curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
                 -d "chat_id=${TG_ADMIN_CHAT_ID}" \
