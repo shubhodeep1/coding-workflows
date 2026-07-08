@@ -552,6 +552,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_inventory_parity_order_contract.py
 
+      - name: Review autofix sweep zero-candidate fast-exit contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_sweep_zero_candidate_fast_exit.py
+
       - name: Workflow log collector coverage gate
         run: |
           set -euo pipefail

@@ -67,7 +67,11 @@ def test_inventory_parity_step_keeps_exact_command_text() -> None:
 
 
 def main() -> int:
-	tests = [value for key, value in sorted(globals().items()) if key.startswith("test_")]
+	tests = [
+		value
+		for key, value in sorted(globals().items())
+		if key.startswith("test_") and callable(value)
+	]
 	for test in tests:
 		test()
 	print(f"{len(tests)} passed")
