@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation Plan \u2014 Phase 8 (Theme H)\n\nPlanning ref: `67fc80fc92782d8b25e8a5e063cf671dbfe8ea1d` on `orchestrator/project-3601` (matches integration branch metadata).\n\nClarification mapping: no `Q1`+ questions were asked; `/answer [auto-answered-by-orchestrator]` means plan against the issue body as written.\n\nAutomation / scheduler impact:\n- Change type: docs + optional issue-form only; no scripts, workflows, or runtime handlers.\n- Scheduler / PR-push entry point: none.\n- Supervisor: none.\n- DB gate pattern: none.\n- `docs/scripts-pending-removal.md` update: none.\n\nScope-mode: Hold Scope\nReuse-audit: extends existing Phase 8 and current contract sources (`docs/plans/awesome-claude-code-learnings-plan.md`, `.github/ai/label_contract.v1.json`, `scripts/orchestrate_lib.py`, `README.md`, current workflow files`)\nScope-mode justification:\nThis request is explicitly docs/template-only and forbids runtime routing changes, so the safest complete plan is to stay inside the three named paths and document the current checked-in behavior faithfully. The only necessary \u201cexpansion\u201d is source-reading: the older Phase 8 prose is slightly stale versus today\u2019s repo state, so the implementation should follow the live label contract and workflow consumers rather than broadening into workflow or label-contract edits. That preserves correctness and backward compatibility without touching automation.\n\nCodebase conflicts to note:\n- The Phase 8 prose says to insert the README link after the list of 9 workflows, but the current `README.md` overview list has 10 entries.\n- `/clarify-now` appears in planning docs only; no checked-in runtime consumer exists on this ref.\n- The current issue-phase contract is richer than the older Phase 8 example: `ai:validated`, `ai:validation-fixing`, `ai:validation-recovery`, and `ai:needs-human` are now live issue-phase labels.\n- The live force-review title surface is `[force-review]` in `review_autofix.yml`; there is no unbracketed PR-title-token consumer on this ref.\n- `.github/ISSUE_TEMPLATE/` does not exist yet on this branch.\n\n1. Files likely to change\n- `docs/how-it-works.md` `[new]`\n- `.github/ISSUE_TEMPLATE/structured-task.yml` `[new]`\n- `README.md` `[edit]`\n- No runtime files should change in this phase.\n\n2. Functions or modules to implement\n- `docs/how-it-works.md`\n  - Add a pipeline-overview paragraph mapping the 12 phases from `agents.md` to their workflow files.\n  - Add a label-state-machine section grounded in the current issue-phase sources, with:\n    - Mermaid diagram\n    - ASCII fallback\n    - required happy path/error/validation branches from the issue\n    - brief note for newer live states if they are not all drawn inline\n  - Add a command-vocabulary table grounded in current consumers:\n    - `/reclarify` \u2192 `.github/workflows/clarify.yml`\n    - `/answer` \u2192 `.github/workflows/plan.yml`\n    - `/approved` \u2192 `.github/workflows/implement.yml`\n    - `[ai-autofix]` / `[force-review]` / `force-review` label \u2192 `.github/workflows/review_autofix.yml`\n    - `[judge-fix]` \u2192 `scripts/review_rb_judge.sh` + `review_autofix` retry tracking\n    - `[ai-merge-resolve]` \u2192 `scripts/review_conflict_resolve.sh`\n    - `/clarify-now` \u2192 include only with an explicit \u201cno current consumer found on this ref\u201d note unless implementation finds a checked-in consumer\n  - Add a stall-recovery-ladder reference pointing to `README.md`\u2019s `STALL_THRESHOLD_*` docs and `scripts/orchestrate_lib.py`\u2019s `STALL_RECOVERY_ACTIONS`.\n  - Add the source note citing the upstream inspiration and this repo\u2019s richer state machine.\n- `.github/ISSUE_TEMPLATE/structured-task.yml`\n  - Create the optional GitHub issue form from the Phase 8 spec.\n  - Keep `labels: [\"ai:clarification\"]`.\n  - Keep `[task]` title prefix informational only.\n  - Do not add `.github/ISSUE_TEMPLATE/config.yml`.\n- `README.md`\n  - Add only the single-line link to `docs/how-it-works.md` near the top of `## Overview`.\n\n3. Data structures affected\n- New markdown doc structure in `docs/how-it-works.md`.\n- New GitHub issue-form YAML object in `.github/ISSUE_TEMPLATE/structured-task.yml` (`name`, `description`, `title`, `labels`, `body[]`).\n- No runtime contract changes; `.github/ai/label_contract.v1.json` remains read-only source material.\n\n4. API or interface changes\n- Adds one optional \u201cStructured task\u201d issue form in the GitHub issue chooser.\n- Preserves the existing free-form issue path and current clarify-first routing.\n- Adds one README discoverability link to the new doc.\n- No workflow trigger, label-routing, or runtime interface changes.\n\n5. Potential risks or edge cases\n- Mermaid may not render everywhere; ASCII fallback must mirror it.\n- The doc must not imply `/clarify-now` is active runtime behavior when no consumer exists.\n- The doc must reflect current live issue-phase labels, not only the older Phase 8 subset.\n- The issue form must stay optional; adding config that suppresses blank issues would be scope creep.\n- `README.md` is a hot file; keep the diff surgical.\n\n6. Testing considerations\n- Re-read `docs/how-it-works.md` for all required sections and command rows.\n- Verify the state-machine section contains both Mermaid and ASCII.\n- Check command rows against the current consumers listed above.\n- Parse `.github/ISSUE_TEMPLATE/structured-task.yml` as valid YAML and confirm 2-space indentation.\n- Confirm `labels: [\"ai:clarification\"]` is preserved.\n- Confirm `README.md` adds exactly the intended `docs/how-it-works.md` link and nothing broader.\n- No runtime test changes are expected for this phase.\n\n7. Pre-execution self-check result\n- Current ref is aligned with the orchestrator integration branch.\n- The requested scope is implementable within the three named paths.\n- Known mismatches are non-blocking documentation-truthfulness issues, not blockers.\n\nPLAN_SELF_CHECK: WARNING: The Phase 8 README instruction is stale; `README.md` now has 10 overview entries, not 9.\nPLAN_SELF_CHECK: WARNING: `/clarify-now` is requested by the Phase 8 plan but no checked-in consumer exists on this ref; document it as unwired/reserved rather than inventing behavior.\nPLAN_SELF_CHECK: WARNING: The live issue-phase label set is richer than the older Phase 8 prose; use current checked-in sources for the state-machine doc.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a274ecf13cb7e3190af319be084e3df56e960d696def12ed1fb91c8dc27c12a4",
+  "lineage": {
+    "issue_number": 3605,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28934101966",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28934101966",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3605"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260708100824_7ab8f0ebb0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3605,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28934101966"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3605",
+  "timestamps": {
+    "created_at": "2026-07-08T10:08:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
