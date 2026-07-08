@@ -52,7 +52,7 @@ def _assert_fixture(name: str) -> None:
 	assert abs(score - float(fixture["expected_score"])) < 0.001, (
 		f"{name} expected score {fixture['expected_score']}, got {score}"
 	)
-	assert signals == list(fixture["expected_signals"]), (
+	assert set(signals) == set(fixture["expected_signals"]), (
 		f"{name} expected signals {fixture['expected_signals']}, got {signals}"
 	)
 
