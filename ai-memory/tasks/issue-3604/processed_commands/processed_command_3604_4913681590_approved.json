@@ -5,13 +5,27 @@
   "entry_id": "processed_command_3604_4913681590_approved",
   "issue_number": 3604,
   "metadata": {
+    "branch": "ai/issue-3604",
+    "changed_files": [
+      "prompts/mode-clarify.txt",
+      "scripts/clarify_informal_detect.py",
+      "tests/fixtures/informal_issues/clean_issue.json",
+      "tests/fixtures/informal_issues/copy_pasted_template.json",
+      "tests/fixtures/informal_issues/empty_body.json",
+      "tests/test_clarify_informal_detect.py"
+    ],
+    "issue_number": 3604,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3604",
+    "pr_number": 3609,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3609",
+    "run_attempt": "1",
+    "run_id": "28934600986",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/28934600986"
   },
   "run_attempt": 1,
   "run_id": "28934600986",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-07-08T10:08:53Z",
+  "status": "completed",
+  "timestamp": "2026-07-08T10:16:51Z",
   "workflow": "implement"
 }
