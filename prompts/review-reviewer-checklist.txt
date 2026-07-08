@@ -1,11 +1,11 @@
 # tier: DEFAULT
 REVIEWER CHECKLIST
 
-Before final output, organize your findings under the eight lens headings below in this exact order.
+Before final output, organize your findings under the nine lens headings below in this exact order.
 For each heading, emit either one or more findings using the matching issue format, or the literal word NONE if you found no qualifying issue under that lens.
 Keep reviewer output as plain text only. Do not emit JSON or change the reviewer bundle file format.
-Findings under the first seven lenses MUST include the repo-relative file path and the affected line or code reference.
-Findings under the eighth lens (TASK COMPLETENESS / INTENT GAPS) use the TASK_GAP format below and may cite an expected-but-absent change site instead of a file:line — absence of code is acceptable evidence for that lens only.
+Findings under the first eight lenses MUST include the repo-relative file path and the affected line or code reference.
+Findings under the ninth lens (TASK COMPLETENESS / INTENT GAPS) use the TASK_GAP format below and may cite an expected-but-absent change site instead of a file:line — absence of code is acceptable evidence for that lens only.
 
 SECURITY & INPUT VALIDATION
 WHAT TO FLAG
@@ -63,9 +63,15 @@ WHAT NOT TO FLAG
 - Requests to rename working internal symbols when no external contract is affected.
 - Backward-compatibility concerns that require assumptions about callers not evidenced in the repo or task context.
 
+IMPLICIT-EXECUTION & TRUST-BOUNDARY RISKS
+Review this lens only for workflow YAML, `.claude/*`, MCP config, `scripts/*` entry points, env-var defaults, and subprocess / watcher registration touched by the diff.
+Flag only concrete cases where changed code introduces implicit execution without a documented gate, kill switch, or invocation guard; expands effective state or capability scope beyond what the change declares; or creates a declared-vs-effective capability gap across those surfaces.
+Use the standard finding format from the first seven lenses when reporting an issue under this lens.
+Emit NONE when the diff does not touch those surfaces or when the touched surfaces are already properly gated and scoped.
+
 TASK COMPLETENESS / INTENT GAPS
 
-Under each non-empty heading from the first seven lenses, preserve this issue format:
+Under each non-empty heading from the first eight lenses, preserve this issue format:
 File:
 Line or code reference:
 Problem:
