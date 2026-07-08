@@ -81,23 +81,27 @@ def test_invalid_utf8_file_fails_open_with_parse_error_signal():
 	assert signals == ["parse_error"], f"expected parse_error signal, got {signals}"
 
 
-def test_query_string_url_still_counts_as_no_ask():
+def test_query_string_url_does_not_count_as_no_ask():
 	proc = _run_detector(["--issue-body-stdin"], input_text="https://example.com/search?q=term")
 
 	assert proc.returncode == 0, f"expected exit 0, got {proc.returncode}: {proc.stderr!r}"
-	_, signals = _parse_output(proc.stdout)
-	assert "no_ask" in signals, f"expected no_ask signal, got {signals}"
+	score, signals = _parse_output(proc.stdout)
+	assert score == 0.4, f"expected score 0.4, got {score}"
+	assert "no_ask" not in signals, f"did not expect no_ask signal, got {signals}"
+	assert "link_only" in signals, f"expected link_only signal, got {signals}"
 
 
-def test_long_single_url_still_counts_as_link_only():
+def test_long_single_url_does_not_count_as_link_only():
 	proc = _run_detector(
 		["--issue-body-stdin"],
 		input_text="https://github.com/shubhodeep1/coding-workflows/issues/3604#issuecomment-1234567890",
 	)
 
 	assert proc.returncode == 0, f"expected exit 0, got {proc.returncode}: {proc.stderr!r}"
-	_, signals = _parse_output(proc.stdout)
-	assert "link_only" in signals, f"expected link_only signal, got {signals}"
+	score, signals = _parse_output(proc.stdout)
+	assert score == 0.4, f"expected score 0.4, got {score}"
+	assert "no_ask" in signals, f"expected no_ask signal, got {signals}"
+	assert "link_only" not in signals, f"did not expect link_only signal, got {signals}"
 
 
 def test_missing_stdin_fails_open_with_parse_error_signal():

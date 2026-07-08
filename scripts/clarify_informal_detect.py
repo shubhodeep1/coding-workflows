@@ -107,10 +107,9 @@ def _has_template_paste(body: str) -> bool:
 
 
 def _has_no_ask(body: str) -> bool:
-	clean_body = URL_RE.sub("", body)
-	if "?" in clean_body:
+	if "?" in body:
 		return False
-	first_words = WORD_RE.findall(clean_body.lower())[:50]
+	first_words = WORD_RE.findall(body.lower())[:50]
 	return not any(word in IMPERATIVE_VERBS for word in first_words)
 
 
@@ -131,8 +130,7 @@ def _has_link_only(body: str) -> bool:
 	urls = URL_RE.findall(trimmed)
 	if len(urls) != 1:
 		return False
-	remaining = URL_RE.sub("", trimmed).strip()
-	return len(remaining) < 50
+	return len(trimmed) < 50
 
 
 def _detect_signals(body: str) -> list[str]:
