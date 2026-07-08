@@ -17,6 +17,8 @@ This repository contains reusable `workflow_call` workflows that power the full 
 9. **Update Workflows** — Automatically updates existing and creates new workflow wrappers in consumer repos when upstream templates change
 10. **Security Audit (source repo only)** — Weekly/manual default-branch OWASP Top 10 + STRIDE audit that records findings on a stable tracker issue and opens bounded follow-ups
 
+For the issue → PR pipeline state machine and the full command vocabulary, see [`docs/how-it-works.md`](docs/how-it-works.md).
+
 ### Memory System
 
 All active pipeline phases (clarify, plan, implement, review, orchestrate, validate) now integrate with the AI memory subsystem.  Workflows persist decisions, implementation plans, review findings, and validation results as candidate records to a dedicated `ai-memory` git branch.  Before constructing each LLM prompt, relevant prior context is retrieved from memory and injected between the static prompt prefix and the dynamic issue/PR content — preserving provider-side prompt-prefix caching while giving the model awareness of previous runs.
