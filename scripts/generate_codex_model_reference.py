@@ -58,11 +58,6 @@ def load_catalog(path: Path) -> list[dict[str, object]]:
 
 def load_optional_overrides(path: Path) -> dict[str, dict[str, object]]:
 	if not path.exists():
-		print(
-			"::warning::Optional overrides file not found: "
-			f"{path.relative_to(REPO_ROOT).as_posix()}; continuing with no overrides.",
-			file=sys.stderr,
-		)
 		return {}
 
 	try:
@@ -98,7 +93,9 @@ def load_optional_overrides(path: Path) -> dict[str, dict[str, object]]:
 		if slug in overrides_by_slug:
 			fail(f"{path.as_posix()}: duplicate override entry for slug {slug}")
 
-		row_overrides = row.get("overrides") or {}
+		row_overrides = row.get("overrides")
+		if row_overrides is None:
+			row_overrides = {}
 		if not isinstance(row_overrides, dict):
 			fail(f"{path.as_posix()}: models[{index}].overrides must be a mapping")
 
@@ -175,6 +172,8 @@ def render_markdown(
 		slug = model.get("slug")
 		if not isinstance(slug, str) or not slug:
 			fail(f"{CATALOG_PATH.as_posix()}: models[{index}].slug must be a non-empty string")
+		if slug in known_slugs:
+			fail(f"{CATALOG_PATH.as_posix()}: duplicate catalog entry for slug {slug}")
 
 		known_slugs.append(slug)
 		override_entry = overrides_by_slug.get(slug)
