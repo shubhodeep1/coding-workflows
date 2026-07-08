@@ -79,6 +79,11 @@ jobs:
           fi
           yamllint -s "${files[@]}"
 
+      - name: Drift check (generated docs)
+        run: |
+          set -euo pipefail
+          make generate-check
+
       - name: Install actionlint
         env:
           ACTIONLINT_VERSION: "1.7.12"

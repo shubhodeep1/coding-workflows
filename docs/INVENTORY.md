@@ -138,6 +138,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/fixtures/issue-timeline/graphql_timeline_fixture.json` — Fixture asset for graphql_timeline_fixture.json.
 - `scripts/fixtures/issue-timeline/rest_pr_with_comments_fixture.json` — Fixture asset for rest_pr_with_comments_fixture.json.
 - `scripts/fixtures/issue-timeline/rest_timeline_fixture.json` — Fixture asset for rest_timeline_fixture.json.
+- `scripts/generate_codex_model_reference.py` — Generate the Codex model reference markdown from the catalog and optional overrides.
 - `scripts/generate_symbol_diff_summary.py` — Generate a symbol-level diff summary from a unified diff and changed files list.
 - `scripts/gh_helpers.sh` — gh_helpers.sh — Rate-limit-aware GitHub API retry helpers.
 - `scripts/git_ref_health_check.sh` — Shell helper for git ref health check.
