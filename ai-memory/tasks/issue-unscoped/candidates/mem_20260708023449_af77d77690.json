@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Only claim that future redispatch is blocked when the follow-up read confirms the label is present; emit an explicit warning or error when the label is absent or unverifiable.\"\n  expected_change_site: .github/workflows/implement.yml scope-block handler near line 3667-3722\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Despite initialization of `SCOPE_LATCH_STATUS_LINE` and `SCOPE_TG_LATCH_LINE` inside the `if` block after successful label verification, these variables are still initialized BEFORE the `gh issue view` read attempt and then explicitly re-assigned in the `else` branch on read failure, making the intended read-failure messages not the single source of truth. The variables retain their initialization values during read failure, so the console and Telegram output do not accurately reflect the failed latch verification.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/implement.yml scope-block handler near line 3667-3722 | severity=MAJOR | confidence=5\n  PROBLEM: Variables are initialized before the `gh issue view` read attempt and then re-assigned on read failure, so the read-failure messaging is not the single source of truth.\n  WHY: The intended read-failure messages are not accurately reflected when the label verification fails, because the variables keep their initialization values instead of being set only after verification.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "a56993440cc614c03cc9e5d5f000600fe86565e3524a0e2f8d9f777c81b68ff9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3600,
+    "run_id": "28911240123",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28911240123",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260708023449_af77d77690",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3600,
+    "run_id": "28911240123"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-07-08T02:34:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
