@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/generate_codex_model_reference.py:61-72 | severity=high | confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: When `scripts/codex_model_catalog_overrides.yaml` is absent, the function returns `{}` silently with no logging or user-visible signal.\n  WHY: The missing signal makes drift-check behavior non-obvious to operators and leaves no indication that overrides were ever attempted to be loaded.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The banner should mention both inputs so the regeneration instructions are accurate.\n  expected_change_site: `scripts/generate_codex_model_reference.py` (GENERATED_BANNER constant at line 18-20)\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  EVIDENCE: `scripts/generate_codex_model_reference.py` line 18-20 reads `<!-- GENERATED FILE: do not edit. Run \\`make generate\\` after editing scripts/codex_model_catalog.json. -->` and does not mention `scripts/codex_model_catalog_overrides.yaml`; `docs/codex-model-reference.md` line 1 mirrors the same incomplete banner.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\nTASK_GAP 1:\nRequirement: The generated-file banner should accurately describe what triggers regeneration. The body paragraph in the generated doc already says \"This file is generated from `scripts/codex_model_catalog.json` and optional overrides in `scripts/codex_model_catalog_overrides.yaml`\", but the banner line only references the catalog JSON.\nExpected change site: `scripts/generate_codex_model_reference.py` line 18-20 (GENERATED_BANNER constant) and `docs/codex-model-reference.md` line 1 (rendered copy of the banner)\nEvidence of absence: The GENERATED_BANNER constant at line 18-20 reads `<!-- GENERATED FILE: do not edit. Run `make generate` after editing scripts/codex_model_catalog.json. -->` \u2014 it does not mention `scripts/codex_model_catalog_overrides.yaml`. The rendered artifact at `docs/codex-model-reference.md` line 1 carries the same incomplete text. The body paragraph at line 3 correctly names both inputs, so the gap is limited to the one-line banner.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/generate_codex_model_reference.py:61-72 | severity=MAJOR | confidence=4\n  PROBLEM: When `scripts/codex_model_catalog_overrides.yaml` is absent, the function returns `{}` silently with no logging or user-visible signal.\n  WHY: An operator editing the catalog later will not know why their overrides file (if created later) has no effect because there was zero indicator that overrides were ever attempted to be loaded.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\nTASK_GAP 1:\nRequirement: \"The banner should mention both inputs so the regeneration instructions are accurate\"\nExpected change site: scripts/generate_codex_model_reference.py (GENERATED_BANNER constant at line 20)\nEvidence of absence: The GENERATED_BANNER constant at line 20 reads: \"<!-- GENERATED FILE: do not edit. Run `make generate` after editing scripts/codex_model_catalog.json. -->\" - it only mentions scripts/codex_model_catalog.json and does not mention scripts/codex_model_catalog_overrides.yaml as an input that also requires regeneration when modified. The rendered banner in docs/codex-model-reference.md line 1 mirrors this incomplete instruction.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\nTASK_GAP 1:\nRequirement: \"Banner should mention both inputs so the regeneration instructions are accurate\" \u2014 generated-file banner only names `scripts/codex_model_catalog.json`, omitting `scripts/codex_model_catalog_overrides.yaml` when present.\nExpected change site: `scripts/generate_codex_model_reference.py` lines 18-20 (GENERATED_BANNER constant); reflected at `docs/codex-model-reference.md` line 1\nEvidence of absence: LAST RUN DIFF did not touch GENERATED_BANNER; the constant still reads `Run \\`make generate\\` after editing scripts/codex_model_catalog.json` with no mention of the optional overrides file. The second paragraph of the generated document already documents both inputs, but the banner line itself remains incomplete. Prior autofix editor intentionally deferred this as a nit.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "0039077c246cd466c71acfc0d5e8445b88b9e562a342756f8b1f51b63aedd134",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3612,
+    "run_id": "28943164583",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28943164583",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260708132552_d0b2147dff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3612,
+    "run_id": "28943164583"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-08T13:25:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
