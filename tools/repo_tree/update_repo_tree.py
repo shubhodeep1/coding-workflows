@@ -17,7 +17,9 @@ CONFIG_PATH = REPO_ROOT / "tools" / "repo_tree" / "config.yaml"
 MARKER_ID_TOKEN = r"[A-Za-z0-9_](?:[A-Za-z0-9_.-]*[A-Za-z0-9_])?"
 MARKER_ID_PATTERN = re.compile(MARKER_ID_TOKEN)
 MARKER_PATTERN = re.compile(rf"<!-- TREE:(START|END) id=({MARKER_ID_TOKEN}) -->")
-MARKER_COMMENT_HINT_PATTERN = re.compile(r"^\s*<!-- TREE:(START|END)\b.*-->\s*$")
+# Only TREE comment lines that still look like attempted marker declarations
+# should hard-fail; prose comments may mention TREE:START / TREE:END.
+MARKER_COMMENT_HINT_PATTERN = re.compile(r"^\s*<!-- TREE:(START|END)\s+id\s*=.*-->\s*$")
 
 EXIT_OK = 0
 EXIT_DIFF = 1
