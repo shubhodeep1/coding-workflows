@@ -17,6 +17,7 @@ CONFIG_PATH = REPO_ROOT / "tools" / "repo_tree" / "config.yaml"
 MARKER_ID_TOKEN = r"[A-Za-z0-9_](?:[A-Za-z0-9_.-]*[A-Za-z0-9_])?"
 MARKER_ID_PATTERN = re.compile(MARKER_ID_TOKEN)
 MARKER_PATTERN = re.compile(rf"<!-- TREE:(START|END) id=({MARKER_ID_TOKEN}) -->")
+MARKER_COMMENT_HINT_PATTERN = re.compile(r"^\s*<!-- TREE:(START|END)\b.*-->\s*$")
 
 EXIT_OK = 0
 EXIT_DIFF = 1
@@ -178,6 +179,11 @@ def parse_marker_spans(lines: Sequence[str], *, file_display: str) -> dict[str, 
 			line = line[:-1]
 		match = MARKER_PATTERN.fullmatch(line)
 		if match is None:
+			if MARKER_COMMENT_HINT_PATTERN.fullmatch(line):
+				raise fail(
+					f"{file_display}: malformed TREE marker line {index + 1}: {line.strip()}",
+					exit_code=EXIT_MARKER_ERROR,
+				)
 			continue
 
 		marker_kind, marker_id = match.groups()

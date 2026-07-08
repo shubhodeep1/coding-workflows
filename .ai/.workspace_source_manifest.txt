@@ -517,6 +517,7 @@ tests/test_check_integration_pr_readiness.py
 tests/test_ci_inventory_parity_order_contract.py
 tests/test_clarify_informal_detect.py
 tests/test_codex_heartbeat.py
+tests/test_update_repo_tree.py
 tests/test_codex_skip_git_repo_check_contract.py
 tests/test_codex_stall_guard_poller.py
 tests/test_codex_stall_guard_scripts.py
@@ -675,6 +676,7 @@ tests/test_workspace_hooks.py
 tests/test_workspace_init.py
 tests/test_workspace_safety_check.py
 tests/test_write_codex_config.py
+tools/repo_tree/config.yaml
 tools/repo_tree/update_repo_tree.py
 unattended_system_instructions.md
 workflow-templates/.claude/commands/analyze-log.md

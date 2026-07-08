@@ -277,6 +277,27 @@ def test_check_rejects_invalid_marker_ids_in_config() -> None:
 		assert "marker_id contains invalid characters: .invalid" in stderr_text
 
 
+def test_malformed_marker_lines_fail_with_exit_code_two() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		repo_root = Path(td)
+		_build_repo(
+			repo_root,
+			agents_text=(
+				"<!-- TREE:START id=workflows -->\n"
+				"old\n"
+				"<!-- TREE:END id=workflows -->\n\n"
+				"<!-- TREE:START id=.invalid -->\n\n"
+				"<!-- TREE:START id=workflow_templates -->\n"
+				"old\n"
+				"<!-- TREE:END id=workflow_templates -->\n"
+			),
+		)
+
+		status, _stdout_text, stderr_text = _run_tool(repo_root, "--check")
+		assert status == 2
+		assert "malformed TREE marker line 5" in stderr_text
+
+
 def test_unmatched_start_or_end_fails_with_exit_code_two() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		repo_root = Path(td)
