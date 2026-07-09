@@ -1438,7 +1438,12 @@ editor_prompt_rendered="$(mktemp)"
   # Pass SERENA_TOOL_HINTS through the same shared renderer so the
   # editor-only Serena guidance is injected without a second template
   # substitution path.
-  SEMBLE_PREFETCH="" SERENA_TOOL_HINTS="${EDITOR_SERENA_TOOL_HINTS}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"
+  # The editor body has already embedded the raw PR diff / reviewer findings,
+  # which can carry literal {{...}} / {%...%} tokens, so skip the strict
+  # template-syntax gate — otherwise render_prompt.py exits 1 and the editor
+  # step hard-fails (same class as the reviewer body render in
+  # review_run_reviewers.sh). Placeholder substitution still runs.
+  RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 SEMBLE_PREFETCH="" SERENA_TOOL_HINTS="${EDITOR_SERENA_TOOL_HINTS}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"
 ) > "${editor_prompt_rendered}"
 mv "${editor_prompt_rendered}" "${EDITOR_PROMPT_BODY_FILE}"
 

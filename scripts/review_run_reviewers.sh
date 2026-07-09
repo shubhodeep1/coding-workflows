@@ -2250,7 +2250,14 @@ _cleanup_prompt_budget
 reviewer_prompt_rendered="$(mktemp)"
 (
   cd "${SUPPORT_ROOT_DIR}"
-  bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${REVIEWER_PROMPT_BODY_FILE}"
+  # The reviewer body has already embedded the raw PR diff, comments and
+  # check-run context above. That untrusted content can carry literal
+  # {{...}} / {%...%} tokens (e.g. a diff that documents the prompt-templating
+  # system), so skip the strict template-syntax gate here — otherwise
+  # render_prompt.py exits 1 and every reviewer fails (observed on run
+  # 28936678508). Placeholder substitution still runs for the static
+  # scaffolding placeholders.
+  RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${REVIEWER_PROMPT_BODY_FILE}"
 ) > "${reviewer_prompt_rendered}"
 mv "${reviewer_prompt_rendered}" "${REVIEWER_PROMPT_BODY_FILE}"
 
@@ -2387,9 +2394,14 @@ prepare_reviewer_prompt_for_model() {
   fi
 
   model_prompt_rendered_file="${prompt_work_dir}/reviewer_prompt_${safe_name}.rendered.txt"
+  # model_prompt_file is a copy of the already-embedded reviewer prompt (raw PR
+  # diff + comments) with the {{MODEL_FAMILY_OVERLAY}} placeholder appended, so
+  # skip the strict syntax gate for the same reason as the base body render
+  # above — otherwise a diff carrying literal {{...}} / {%...%} tokens would
+  # fail this render and silently drop the model-family overlay.
   if ! (
     cd "${SUPPORT_ROOT_DIR:-.}"
-    MODEL_FAMILY_OVERLAY="${overlay_text}" bash "${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh" "${model_prompt_file}"
+    RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 MODEL_FAMILY_OVERLAY="${overlay_text}" bash "${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh" "${model_prompt_file}"
   ) > "${model_prompt_rendered_file}"; then
     rm -f "${model_prompt_file}" "${model_prompt_rendered_file}"
     if [ -n "${log_file}" ]; then
