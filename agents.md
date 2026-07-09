@@ -600,3 +600,80 @@ user-versus-contributor audience separation.
 **Validation harness Docker lifecycle**
 - Validation containers distinguish `/bin/sh -c` from `/bin/sh -lc`; shell choice is part of harness correctness, not a cosmetic variation. Pointers: `scripts/validation_lint.py`, `prompts/mode-validate-generate.txt`.
 - npm/yarn/pnpm wrapper shutdown handling and `mongosh` apt-repo constraints are harness invariants; keep the existing SIGTERM/exit-code and package-source rules intact. Pointers: `scripts/validate_driver.sh`, `prompts/mode-validate-fix-harness.txt`.
+
+## Repo-tree (auto-generated)
+
+Active workflow files (regenerate with `make generate`):
+
+<!-- TREE:START id=workflows -->
+```
+.github/workflows/audit_consumer_drift.yml
+.github/workflows/cancel_on_pr_close.yml
+.github/workflows/check_failure_triage.yml
+.github/workflows/ci.yml
+.github/workflows/clarify.yml
+.github/workflows/comprehensive-test-and-release.yml
+.github/workflows/drift-audit.yml
+.github/workflows/forward-merge-stable-to-main.yml
+.github/workflows/implement.yml
+.github/workflows/integration-pr-readiness.yml
+.github/workflows/internal-cancel-on-pr-close.yml
+.github/workflows/internal-check-failure-triage.yml
+.github/workflows/internal-clarify.yml
+.github/workflows/internal-implement.yml
+.github/workflows/internal-issue-pr-status.yml
+.github/workflows/internal-memory-maintenance.yml
+.github/workflows/internal-orchestrate-clarify-respond.yml
+.github/workflows/internal-orchestrate-poll.yml
+.github/workflows/internal-orchestrate.yml
+.github/workflows/internal-plan.yml
+.github/workflows/internal-review.yml
+.github/workflows/internal-validate.yml
+.github/workflows/issue_pr_status.yml
+.github/workflows/lint-plan-archival.yml
+.github/workflows/lint-pr-body-auto-close.yml
+.github/workflows/mark-stable.yml
+.github/workflows/memory_maintenance.yml
+.github/workflows/nightly-validation-selftest.yml
+.github/workflows/orchestrate.yml
+.github/workflows/orchestrate_clarify_respond.yml
+.github/workflows/orchestrate_poll.yml
+.github/workflows/plan.yml
+.github/workflows/promote-main-to-stable.yml
+.github/workflows/review_autofix.yml
+.github/workflows/review_autofix_sweep.yml
+.github/workflows/review_rb_judge_dispatch.yml
+.github/workflows/security-audit.yml
+.github/workflows/sync_ai_labels.yml
+.github/workflows/test-and-mark-stable.yml
+.github/workflows/update_workflows.yml
+.github/workflows/validate.yml
+.github/workflows/validation-improvements-intake.yml
+.github/workflows/validation-refresh.yml
+.github/workflows/workflow-log-analysis.yml
+.github/workflows/workspace-cache-maintenance.yml
+```
+<!-- TREE:END id=workflows -->
+
+Consumer-facing workflow templates (regenerate with `make generate`):
+
+<!-- TREE:START id=workflow_templates -->
+```
+workflow-templates/ai-cancel-on-pr-close.yml
+workflow-templates/ai-check-failure-triage.yml
+workflow-templates/ai-clarify.yml
+workflow-templates/ai-implement.yml
+workflow-templates/ai-issue-pr-status.yml
+workflow-templates/ai-memory-maintenance.yml
+workflow-templates/ai-orchestrate-clarify-respond.yml
+workflow-templates/ai-orchestrate-poll.yml
+workflow-templates/ai-orchestrate.yml
+workflow-templates/ai-plan.yml
+workflow-templates/ai-review.yml
+workflow-templates/ai-security-audit.yml
+workflow-templates/ai-sync-labels.yml
+workflow-templates/ai-update-workflows.yml
+workflow-templates/ai-validate.yml
+workflow-templates/review_rb_judge_dispatch.yml
+```
+<!-- TREE:END id=workflow_templates -->
