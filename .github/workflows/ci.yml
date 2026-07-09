@@ -157,6 +157,11 @@ jobs:
           set -euo pipefail
           ruff check --select E,F --ignore E501 scripts/*.py
 
+      - name: Repo-tree marker updater unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_repo_tree.py
+
       - name: Review Semble contract test
         run: |
           set -euo pipefail
