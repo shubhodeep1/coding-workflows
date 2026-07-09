@@ -81,6 +81,30 @@ uses it only when `PROMPT_PRELUDE_REFACTOR_ENABLED=true`. Default persona
 prefixes come from the checked-in JSON map at `prompts/_prelude_role_persona.txt`
 unless `PROMPT_PERSONA_PREFIX_ENABLED` is disabled.
 
+## Stable-ID convention
+
+- New AI-pipeline identifiers must be created through the canonical helper
+  `make_record_id(prefix)` in `scripts/ai_memory_lib.py`; do not hand-roll
+  new ID formats alongside it. The Phase 5 plan's
+  `scripts/ai_memory_lib.py:480` pointer is historical; follow the live
+  `make_record_id(prefix)` definition in that file.
+- The current format is contractual: `<prefix>_<YYYYMMDDHHMMSS>_<10hex>`.
+  The timestamp is UTC and the suffix is the first 10 lowercase hex characters
+  from a UUID4.
+- `make_record_id(prefix)` sanitizes the caller-supplied prefix through
+  `sanitize_segment(prefix, "mem")` before composing the ID. Today that
+  preserves ASCII letters, digits, and `_.:-`, replaces other runs with `_`,
+  trims leading/trailing `.` or `_`, preserves existing safe prefixes such as
+  `mem` and `run_event`, and falls back to `mem` for empty or invalid-only
+  inputs.
+- Example shapes: `mem_20260709041614_1f025339dd` and
+  `run_event_20260709041614_1f025339dd`.
+- This format is a compatibility contract. If a future change needs a new
+  stable-ID format, follow the §6 backward-compatibility rule: keep
+  `make_record_id(prefix)` emitting the current format, introduce the new
+  format via an alongside helper/alias so old IDs remain valid and existing
+  outputs stay stable, and update the contract test in the same change.
+
 ## Implement scope-lock label
 
 - When `SCOPE_LOCK_LABEL_ENABLED=true`, `implement.yml` recognizes one active

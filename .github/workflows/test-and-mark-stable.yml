@@ -3513,6 +3513,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_synthesise_smoke.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_semble_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_record_id_format_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_semble_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_driver_synthesised_filter.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_runner.py
