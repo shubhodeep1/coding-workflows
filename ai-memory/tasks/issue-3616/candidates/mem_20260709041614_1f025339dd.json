@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `35b2204660f8510e99995d0e94493140db2acba5` on `orchestrator/project-3601` (matches the integration-branch metadata).\n\nClarification mapping: no Q1/Q2 were issued; `/answer [auto-answered-by-orchestrator]` only confirms continuation, so the plan scope comes from the issue body.\n\nScope-mode: Hold Scope\nReuse-audit: extends `scripts/ai_memory_lib.py::make_record_id` and the existing ai-memory test loader pattern used by `tests/test_ai_memory_sync_reference_files.py`\nScope-mode justification: The request is already surgical: one hot-file documentation insertion plus one focused contract test, with an explicit \u201cno runtime behavior change\u201d constraint. Broadening into helper changes, schema changes, or wider workflow/docs cleanup would exceed the requested scope and increase risk without improving correctness. The safest complete implementation is to document the current helper behavior accurately on this ref and pin it with a dedicated test, while leaving `scripts/ai_memory_lib.py` unchanged.\n\nAssumptions:\n- The \u201cno runtime behavior change\u201d constraint takes precedence over stale prose in the upstream plan doc.\n- The stale `scripts/ai_memory_lib.py:480` reference should be interpreted as the existing `make_record_id(prefix)` helper on the current ref (now at line 564), not as a requirement to publish a known-wrong line number.\n\nMissing-context notes:\n- No blocking gaps remain; the only issues are stale source-plan references, called out below.\n\n1. Files likely to change\n- `agents.md` [edit] \u2014 insert `## Stable-ID convention` immediately after the existing `## Workflow architecture` section and before `## Implement scope-lock label`, leaving surrounding prose unchanged.\n- `tests/test_record_id_format_contract.py` [new] \u2014 add focused contract coverage for `make_record_id(prefix)`.\n\n2. Functions or modules to implement\n- `agents.md`\n  - Add a new `## Stable-ID convention` section that:\n    - names `make_record_id(prefix)` in `scripts/ai_memory_lib.py` as the canonical helper for new AI-pipeline identifiers;\n    - documents the current format as `<prefix>_<YYYYMMDDHHMMSS>_<10hex>` (UTC timestamp + 10-hex UUID fragment);\n    - documents the current sanitization/fallback path via `sanitize_segment(prefix, \"mem\")`;\n    - includes concrete examples using current in-repo prefixes (`mem`, `run_event`);\n    - states that the format is contractual and future format changes require an alongside alias/shim path plus a synchronous test update.\n- `tests/test_record_id_format_contract.py`\n  - Reuse the existing `ai_memory_lib` import-loader pattern from current ai-memory tests instead of changing runtime import paths.\n  - Add separate test coverage for:\n    - contractual current-prefix outputs (`mem`, `run_event`);\n    - sanitize/fallback edge cases (empty/whitespace/invalid-only prefixes falling back to `mem`, plus a mixed-case/space example that reflects the helper\u2019s actual current sanitization behavior).\n\n3. Data structures affected\n- No schema or persisted payload shape changes.\n- Contract surface only: the string layout used for existing AI-memory identifier fields such as `record_id` / `entry_id` remains unchanged but becomes explicitly documented and test-pinned.\n\n4. API or interface changes\n- No runtime API/interface changes.\n- Contributor-facing contract becomes explicit: new AI-pipeline identifiers must be created through `make_record_id(prefix)`.\n- No identifier renames, no alias removals, and no behavior changes outside new test coverage.\n\n5. Potential risks or edge cases\n- Conflict: the issue/plan references `scripts/ai_memory_lib.py:480`, but `make_record_id` is currently at line 564 on this ref.\n- Conflict: the source plan\u2019s sample prose says the prefix is lowercased and limited to `[a-z0-9_]`, but current `sanitize_segment` preserves case and allows `_.:-`; docs/tests must reflect actual runtime behavior to honor the \u201cno runtime change\u201d constraint.\n- Conflict: the source plan says insert before `## Models in use`, but this ref\u2019s next heading after `## Workflow architecture` is `## Implement scope-lock label`; use the actual current insertion point.\n- The new test should not use one full-string regex assertion for mixed-case/sanitized inputs, because those current outputs can legitimately differ from the lower-snake-case contract used by existing pipeline prefixes.\n- `scripts/ai_memory_lib.py` should remain untouched; the existing test-side loader pattern should avoid any import-path fix.\n\n6. Testing considerations\n- Add a focused pytest module only; do not widen into runtime/helper edits.\n- Pin the nominal contract with regex assertions on current approved prefixes (`mem`, `run_event`), e.g. `^[a-z0-9_]+_\\\\d{14}_[0-9a-f]{10}$`.\n- Pin sanitize/fallback behavior separately with `startswith(...)` or `rsplit(\"_\", 2)` so timestamp/UUID randomness does not make the test brittle.\n- Validation command: `python3 -m pytest tests/test_record_id_format_contract.py`.\n\n7. Pre-execution self-check result\n- Ref/integration metadata match: yes.\n- Scope can stay within the requested files: yes.\n- External docs, credentials, schema edits, and runtime helper changes: not needed.\n- Non-blocking source-plan mismatches were identified and accounted for in the plan.\n\nPLAN_SELF_CHECK: WARNING: the source-plan references are stale on this ref (`make_record_id` line number and lowercase-only sanitization prose), so implementation must pin the helper\u2019s current runtime behavior while keeping the edit set to `agents.md` plus the new focused test.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "acd29ee49d6e9c5f27894de5f76cd6b13ac4af726a6ec286f99abbc6549fff4a",
+  "lineage": {
+    "issue_number": 3616,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28993448061",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28993448061",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3616"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260709041614_1f025339dd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3616,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28993448061"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3616",
+  "timestamps": {
+    "created_at": "2026-07-09T04:16:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
