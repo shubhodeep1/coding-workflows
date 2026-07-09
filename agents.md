@@ -128,6 +128,20 @@ without renaming or removing the underlying identifier. To freeze
 a new value, add it to the appropriate overrides file with a
 `notes:` / `reason:` block explaining why.
 
+## Utility helpers
+
+- `scripts/repo_root.py` provides `repo_root()` and
+  `repo_root_from(start: Path)` for scripts and tests that need to
+  resolve the repository root by walking upward until they find both
+  `CLAUDE.md` and `.git/`.
+- `scripts/generate_resource_id.py` provides
+  `generate_id(prefix, salt=None)` as a wrapper around the live
+  `make_record_id(prefix)` helper in `scripts/ai_memory_lib.py`.
+  Unsalted calls delegate to `make_record_id(prefix)` unchanged;
+  salted calls preserve the same `<prefix>_<UTC timestamp>_<10 hex>`
+  shape while deriving the suffix from
+  `sha256(salt.encode("utf-8"))`, including the empty-string salt.
+
 ## Implement scope-lock label
 
 - When `SCOPE_LOCK_LABEL_ENABLED=true`, `implement.yml` recognizes one active
