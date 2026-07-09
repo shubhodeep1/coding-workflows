@@ -517,7 +517,6 @@ tests/test_check_integration_pr_readiness.py
 tests/test_ci_inventory_parity_order_contract.py
 tests/test_clarify_informal_detect.py
 tests/test_codex_heartbeat.py
-tests/test_update_repo_tree.py
 tests/test_codex_skip_git_repo_check_contract.py
 tests/test_codex_stall_guard_poller.py
 tests/test_codex_stall_guard_scripts.py
@@ -633,6 +632,7 @@ tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py
 tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py
 tests/test_test_and_mark_stable_plan_polling_guard.py
 tests/test_truncate_to_utf8_byte_cap.py
+tests/test_update_repo_tree.py
 tests/test_update_workflows_guardrails.py
 tests/test_validate_driver_synthesised_filter.py
 tests/test_validate_editor_audit.py
