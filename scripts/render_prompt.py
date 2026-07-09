@@ -125,6 +125,17 @@ def build_parser() -> argparse.ArgumentParser:
 		help="Treat the input file as already overlay-expanded and include-assembled",
 	)
 	parser.add_argument(
+		"--skip-syntax-validation",
+		action="store_true",
+		help=(
+			"Skip the strict unsupported-template-syntax gate. Use ONLY when the "
+			"input is an already-assembled prompt body that embeds untrusted "
+			"content (e.g. a reviewer/editor prompt body carrying raw PR-diff or "
+			"comment text with literal {{...}}/{%...%} tokens that must not be "
+			"treated as prompt-authoring errors). Placeholder substitution still runs."
+		),
+	)
+	parser.add_argument(
 		"--legacy-mode-name",
 		default=None,
 		help="Optional mode-name override for legacy shims",
@@ -1012,7 +1023,8 @@ def main(argv: list[str] | None = None) -> int:
 				mode_name=mode_name,
 			)
 			prompt_text = assemble_prompt_fragments(prompt_fragments)
-		validate_supported_template_syntax(prompt_text, prompt_path)
+		if not args.skip_syntax_validation:
+			validate_supported_template_syntax(prompt_text, prompt_path)
 		if args.assemble_only:
 			sys.stdout.write(prompt_text)
 			return 0

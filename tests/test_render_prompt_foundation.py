@@ -77,10 +77,12 @@ def _run_render_prompt_py(
 	variables: dict[str, str] | None = None,
 	env: dict[str, str] | None = None,
 	cwd: Path = REPO_ROOT,
+	extra_args: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
 	command = [sys.executable, str(RENDER_PROMPT_PY), str(prompt_file)]
 	for name, value in (variables or {}).items():
 		command.extend(["--var", f"{name}={value}"])
+	command.extend(extra_args or [])
 	return subprocess.run(
 		command,
 		cwd=str(cwd),
@@ -487,6 +489,95 @@ def test_render_prompt_py_allows_stray_closing_braces_in_prose() -> None:
 	assert proc.stdout == "Document the literal token }} for users.\n"
 
 
+# Body reproducing run 28936678508: an already-assembled reviewer/editor prompt
+# body that embeds raw PR-diff text documenting the prompt-templating system.
+# The embedded diff carries literal {{...}} / {{REFERENCE_*}} placeholder
+# expressions and a `{% include %}` tag, alongside a real static scaffolding
+# placeholder ({{WORKFLOW_EDIT_RESTRICTION}}) that must still be substituted.
+_EMBEDDED_DIFF_BODY = (
+	"Static scaffolding line.\n"
+	"{{WORKFLOW_EDIT_RESTRICTION}}\n"
+	"=== BEGIN embedded PR diff ===\n"
+	"+  The template accepts a `{{...}}` placeholder expression.\n"
+	"+  Reference blocks hydrate from `{{REFERENCE_OUTPUT_CONTRACT}}` names.\n"
+	'+  `{% include "_prelude_common.txt" %}` directives).\n'
+	"=== END embedded PR diff ===\n"
+)
+
+
+def test_render_prompt_py_hard_fails_on_embedded_diff_template_tokens_without_skip() -> None:
+	# Root cause of run 28936678508: without the opt-out, the strict gate treats
+	# the diff's literal template tokens as authoring errors and exits 1.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_embed_reject_") as td:
+		prompt_file = Path(td) / "reviewer_prompt_body.txt"
+		prompt_file.write_text(_EMBEDDED_DIFF_BODY, encoding="utf-8")
+
+		proc = _run_render_prompt_py(prompt_file)
+
+	assert proc.returncode == 1
+	assert proc.stdout == ""
+	assert "Unsupported template syntax" in proc.stderr
+	assert "{{...}}" in proc.stderr
+	assert "{% include" in proc.stderr
+
+
+def test_render_prompt_py_skip_syntax_validation_allows_embedded_diff_tokens() -> None:
+	# The fix: --skip-syntax-validation lets embedded diff tokens pass through
+	# untouched while still substituting the static scaffolding placeholder.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_embed_skip_") as td:
+		prompt_file = Path(td) / "reviewer_prompt_body.txt"
+		prompt_file.write_text(_EMBEDDED_DIFF_BODY, encoding="utf-8")
+
+		proc = _run_render_prompt_py(
+			prompt_file,
+			variables={"WORKFLOW_EDIT_RESTRICTION": "- Do not change CI workflows."},
+			extra_args=["--skip-syntax-validation"],
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stderr == ""
+	# Static placeholder substituted; embedded diff tokens preserved verbatim.
+	assert "- Do not change CI workflows.\n" in proc.stdout
+	assert "The template accepts a `{{...}}` placeholder expression." in proc.stdout
+	assert '`{% include "_prelude_common.txt" %}` directives).' in proc.stdout
+	assert "{{WORKFLOW_EDIT_RESTRICTION}}" not in proc.stdout
+
+
+def test_render_prompt_sh_skips_syntax_validation_when_env_opt_in_set() -> None:
+	# render_prompt.sh must forward the opt-out to render_prompt.py when
+	# RENDER_PROMPT_SKIP_SYNTAX_VALIDATION is truthy (the reviewer/editor
+	# post-embed render call sites set it), and keep the strict gate otherwise.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_sh_skip_") as td:
+		prompt_file = Path(td) / "reviewer_prompt_body.txt"
+		prompt_file.write_text(_EMBEDDED_DIFF_BODY, encoding="utf-8")
+
+		strict_proc = subprocess.run(
+			["bash", str(RENDER_PROMPT_SH), str(prompt_file)],
+			cwd=str(REPO_ROOT),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+		skip_env = _base_env()
+		skip_env["RENDER_PROMPT_SKIP_SYNTAX_VALIDATION"] = "1"
+		skip_proc = subprocess.run(
+			["bash", str(RENDER_PROMPT_SH), str(prompt_file)],
+			cwd=str(REPO_ROOT),
+			env=skip_env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert strict_proc.returncode == 1
+	assert "Unsupported template syntax" in strict_proc.stderr
+
+	assert skip_proc.returncode == 0, skip_proc.stderr
+	assert '`{% include "_prelude_common.txt" %}` directives).' in skip_proc.stdout
+
+
 def test_render_prompt_py_uses_checked_in_persona_source() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_persona_source_") as td:
 		repo_root = Path(td)
@@ -621,6 +712,9 @@ def main() -> int:
 	test_render_prompt_py_rejects_dot_prefixed_filter_expression()
 	test_render_prompt_py_allows_literal_dot_field_expression()
 	test_render_prompt_py_allows_stray_closing_braces_in_prose()
+	test_render_prompt_py_hard_fails_on_embedded_diff_template_tokens_without_skip()
+	test_render_prompt_py_skip_syntax_validation_allows_embedded_diff_tokens()
+	test_render_prompt_sh_skips_syntax_validation_when_env_opt_in_set()
 	test_render_prompt_py_uses_checked_in_persona_source()
 	test_apply_phase_c_persona_prefix_accepts_legacy_mode_name_only_call()
 	test_render_prompt_py_prepends_phase_c_persona_prefix_without_altering_legacy_body()
