@@ -571,6 +571,7 @@ tests/test_plan_reuse_audit_contract.py
 tests/test_plan_scope_mode_contract.py
 tests/test_pr_checks_lib_required_filter.py
 tests/test_prompt_compaction.py
+tests/test_record_id_format_contract.py
 tests/test_render_prompt_core_modes.py
 tests/test_render_prompt_foundation.py
 tests/test_render_prompt_review_judge_modes.py
@@ -580,7 +581,6 @@ tests/test_render_validation_templates_node_hardhat_regressions.py
 tests/test_render_validation_templates_node_runtime_regressions.py
 tests/test_render_validation_templates_repo_checks.py
 tests/test_retrigger_inflight_direct_fallback.py
-tests/test_record_id_format_contract.py
 tests/test_review_apply_fixes_smoke_deterministic.py
 tests/test_review_autofix_editor_noop_cascade_contract.py
 tests/test_review_autofix_failure_log_upload.py

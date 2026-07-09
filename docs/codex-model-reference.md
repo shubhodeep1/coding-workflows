@@ -18,7 +18,7 @@ Rows with pinned override fields are marked `(frozen)` in `notes`.
 | qwen/qwen3-coder-plus | null | false | freeform | — |
 | stepfun/step-3.5-flash | null | false | freeform | — |
 | openai/gpt-5-mini | null | false | freeform | — |
-| openai/gpt-5.4 | low | true | function | — |
+| openai/gpt-5.4 | low | true | function | apply_patch_tool_type was flipped from "freeform" to "function" on 2026-05-07 after the codex#11151 ablation suite identified freeform as the root cause of announce-without-emit failures on the OpenRouter Responses path. Do not auto-rewrite. (frozen) |
 | openai/gpt-5.5 | low | true | function | — |
 | openai/gpt-5.4-nano | null | false | freeform | — |
 | openai/gpt-5.4-mini | null | false | freeform | — |
