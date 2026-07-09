@@ -324,6 +324,7 @@ scripts/fixtures/issue-timeline/graphql_timeline_fixture.json
 scripts/fixtures/issue-timeline/rest_pr_with_comments_fixture.json
 scripts/fixtures/issue-timeline/rest_timeline_fixture.json
 scripts/generate_codex_model_reference.py
+scripts/generate_resource_id.py
 scripts/generate_symbol_diff_summary.py
 scripts/gh_helpers.sh
 scripts/git_ref_health_check.sh
@@ -351,6 +352,7 @@ scripts/pr_checks_lib.sh
 scripts/render_prompt.py
 scripts/render_prompt.sh
 scripts/render_validation_templates.py
+scripts/repo_root.py
 scripts/resolve_integration_ref.sh
 scripts/review_agents_md_materiality.sh
 scripts/review_apply_fixes.sh
@@ -538,6 +540,7 @@ tests/test_family_python_repo_checks.py
 tests/test_files_touched_scope_guard.py
 tests/test_fingerprint_quarantine.py
 tests/test_fingerprint_state_selfheal.py
+tests/test_generate_resource_id.py
 tests/test_implement_post_codex_recovery.py
 tests/test_implement_pr_body_tracking_refs.py
 tests/test_implement_semble_contract.py
@@ -582,6 +585,7 @@ tests/test_render_validation_templates.py
 tests/test_render_validation_templates_node_hardhat_regressions.py
 tests/test_render_validation_templates_node_runtime_regressions.py
 tests/test_render_validation_templates_repo_checks.py
+tests/test_repo_root_helper.py
 tests/test_retrigger_inflight_direct_fallback.py
 tests/test_review_apply_fixes_smoke_deterministic.py
 tests/test_review_autofix_editor_noop_cascade_contract.py
