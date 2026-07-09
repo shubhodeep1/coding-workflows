@@ -13,7 +13,10 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODULE_PATH = REPO_ROOT / "scripts" / "ai_memory_lib.py"
-CONTRACTUAL_RECORD_ID_PATTERN = re.compile(r"^(?P<prefix>[a-z0-9_]+)_(?P<timestamp>\d{14})_(?P<suffix>[0-9a-f]{10})$")
+CONTRACTUAL_RECORD_ID_PATTERN = re.compile(
+	r"^(?P<prefix>[A-Za-z0-9:-](?:[A-Za-z0-9_.:-]*"
+	r"[A-Za-z0-9:-])?)_(?P<timestamp>\d{14})_(?P<suffix>[0-9a-f]{10})$"
+)
 HEX_SUFFIX_PATTERN = re.compile(r"^[0-9a-f]{10}$")
 
 if str(REPO_ROOT) not in sys.path:
@@ -32,6 +35,7 @@ def _split_record_id(record_id: str) -> tuple[str, str, str]:
 
 
 def _assert_record_id_tail(record_id: str) -> tuple[str, str, str]:
+	assert CONTRACTUAL_RECORD_ID_PATTERN.fullmatch(record_id) is not None
 	prefix_part, timestamp_part, suffix_part = _split_record_id(record_id)
 	assert len(timestamp_part) == 14
 	assert timestamp_part.isdigit()
@@ -42,9 +46,8 @@ def _assert_record_id_tail(record_id: str) -> tuple[str, str, str]:
 @pytest.mark.parametrize("current_prefix", ("mem", "run_event"))
 def test_make_record_id_matches_contractual_regex_for_documented_prefixes(current_prefix: str) -> None:
 	record_id_value = ai_memory_lib.make_record_id(current_prefix)
-	match = CONTRACTUAL_RECORD_ID_PATTERN.fullmatch(record_id_value)
-	assert match is not None
-	assert match.group("prefix") == current_prefix
+	prefix_part, _, _ = _assert_record_id_tail(record_id_value)
+	assert prefix_part == current_prefix
 
 
 @pytest.mark.parametrize("fallback_prefix_input", ("", "   ", "!!!"))
@@ -54,7 +57,14 @@ def test_make_record_id_falls_back_to_mem_for_empty_whitespace_and_invalid_only_
 	assert prefix_part == "mem"
 
 
-def test_make_record_id_preserves_current_mixed_case_space_sanitization_behavior() -> None:
-	record_id_value = ai_memory_lib.make_record_id(" Run Event ")
+@pytest.mark.parametrize(
+	("prefix_input", "expected_prefix"),
+	(
+		(" Run Event ", "Run_Event"),
+		(" .Run.Event:part-1_ ", "Run.Event:part-1"),
+	),
+)
+def test_make_record_id_preserves_current_sanitization_behavior(prefix_input: str, expected_prefix: str) -> None:
+	record_id_value = ai_memory_lib.make_record_id(prefix_input)
 	prefix_part, _, _ = _assert_record_id_tail(record_id_value)
-	assert prefix_part == "Run_Event"
+	assert prefix_part == expected_prefix
