@@ -8,8 +8,6 @@ import re
 import sys
 from pathlib import Path
 
-import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODULE_PATH = REPO_ROOT / "scripts" / "ai_memory_lib.py"
@@ -43,28 +41,47 @@ def _assert_record_id_tail(record_id: str) -> tuple[str, str, str]:
 	return prefix_part, timestamp_part, suffix_part
 
 
-@pytest.mark.parametrize("current_prefix", ("mem", "run_event"))
-def test_make_record_id_matches_contractual_regex_for_documented_prefixes(current_prefix: str) -> None:
-	record_id_value = ai_memory_lib.make_record_id(current_prefix)
-	prefix_part, _, _ = _assert_record_id_tail(record_id_value)
-	assert prefix_part == current_prefix
+def test_make_record_id_matches_contractual_regex_for_documented_prefixes() -> None:
+	for current_prefix in ("mem", "run_event"):
+		record_id_value = ai_memory_lib.make_record_id(current_prefix)
+		prefix_part, _, _ = _assert_record_id_tail(record_id_value)
+		assert prefix_part == current_prefix, f"{current_prefix=} produced {prefix_part=}"
 
 
-@pytest.mark.parametrize("fallback_prefix_input", ("", "   ", "!!!"))
-def test_make_record_id_falls_back_to_mem_for_empty_whitespace_and_invalid_only_prefixes(fallback_prefix_input: str) -> None:
-	record_id_value = ai_memory_lib.make_record_id(fallback_prefix_input)
-	prefix_part, _, _ = _assert_record_id_tail(record_id_value)
-	assert prefix_part == "mem"
+def test_make_record_id_falls_back_to_mem_for_empty_whitespace_and_invalid_only_prefixes() -> None:
+	for fallback_prefix_input in ("", "   ", "!!!"):
+		record_id_value = ai_memory_lib.make_record_id(fallback_prefix_input)
+		prefix_part, _, _ = _assert_record_id_tail(record_id_value)
+		assert prefix_part == "mem", f"{fallback_prefix_input!r} produced {prefix_part=}"
 
 
-@pytest.mark.parametrize(
-	("prefix_input", "expected_prefix"),
-	(
+def test_make_record_id_preserves_current_sanitization_behavior() -> None:
+	for prefix_input, expected_prefix in (
 		(" Run Event ", "Run_Event"),
 		(" .Run.Event:part-1_ ", "Run.Event:part-1"),
-	),
-)
-def test_make_record_id_preserves_current_sanitization_behavior(prefix_input: str, expected_prefix: str) -> None:
-	record_id_value = ai_memory_lib.make_record_id(prefix_input)
-	prefix_part, _, _ = _assert_record_id_tail(record_id_value)
-	assert prefix_part == expected_prefix
+	):
+		record_id_value = ai_memory_lib.make_record_id(prefix_input)
+		prefix_part, _, _ = _assert_record_id_tail(record_id_value)
+		assert prefix_part == expected_prefix, f"{prefix_input!r} produced {prefix_part=}"
+
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

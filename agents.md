@@ -84,9 +84,10 @@ unless `PROMPT_PERSONA_PREFIX_ENABLED` is disabled.
 ## Stable-ID convention
 
 - New AI-pipeline identifiers must be created through the canonical helper
-  `make_record_id(prefix)` in `scripts/ai_memory_lib.py` (the Phase 5 plan
-  referenced this helper at `scripts/ai_memory_lib.py:480`); do not hand-roll
-  new ID formats alongside it.
+  `make_record_id(prefix)` in `scripts/ai_memory_lib.py`; do not hand-roll
+  new ID formats alongside it. The Phase 5 plan's
+  `scripts/ai_memory_lib.py:480` pointer is historical; follow the live
+  `make_record_id(prefix)` definition in that file.
 - The current format is contractual: `<prefix>_<YYYYMMDDHHMMSS>_<10hex>`.
   The timestamp is UTC and the suffix is the first 10 lowercase hex characters
   from a UUID4.
