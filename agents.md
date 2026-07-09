@@ -105,6 +105,29 @@ unless `PROMPT_PERSONA_PREFIX_ENABLED` is disabled.
   format via an alongside helper/alias so old IDs remain valid and existing
   outputs stay stable, and update the contract test in the same change.
 
+## Override conventions
+
+Two override files let maintainers pin specific catalog fields
+or prompt files as untouchable by future regenerators:
+
+- `scripts/codex_model_catalog_overrides.yaml` — per-model-slug
+  field overrides for `scripts/codex_model_catalog.json`. The
+  fields listed under each slug's `overrides:` block are merged
+  over the catalog defaults at render time by
+  `scripts/generate_codex_model_reference.py` and emitted with a
+  `(frozen)` marker in the generated `docs/codex-model-reference.md`.
+
+- `prompts/.overrides.yaml` — per-file freeze markers for any
+  prompt file under `prompts/`. Files listed with
+  `skip_validation: true` are excluded from any future automated
+  prompt-rewriter tooling.
+
+§6 implication: overrides are the canonical way to preserve
+intentional non-default values across future regenerations
+without renaming or removing the underlying identifier. To freeze
+a new value, add it to the appropriate overrides file with a
+`notes:` / `reason:` block explaining why.
+
 ## Implement scope-lock label
 
 - When `SCOPE_LOCK_LABEL_ENABLED=true`, `implement.yml` recognizes one active
