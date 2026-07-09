@@ -139,7 +139,8 @@ a new value, add it to the appropriate overrides file with a
   `make_record_id(prefix)` helper in `scripts/ai_memory_lib.py`.
   Unsalted calls delegate to `make_record_id(prefix)` unchanged;
   salted calls preserve the same `<prefix>_<UTC timestamp>_<10 hex>`
-  shape while deriving the suffix from `sha256(salt)`.
+  shape while deriving the suffix from
+  `sha256(salt.encode("utf-8"))`, including the empty-string salt.
 
 ## Implement scope-lock label
 

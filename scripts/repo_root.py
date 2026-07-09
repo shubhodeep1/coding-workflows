@@ -18,18 +18,30 @@ def _has_git_marker(candidate: Path) -> bool:
 		return True
 
 	# Some CI workspaces expose git metadata via GIT_DIR/GIT_WORK_TREE rather
-	# than a .git entry inside the writable work tree copy.
+	# than a .git entry inside the writable work tree copy. Relative
+	# GIT_WORK_TREE values are ambiguous outside git itself, so ignore them.
 	git_work_tree = os.environ.get("GIT_WORK_TREE", "").strip()
 	git_dir = os.environ.get("GIT_DIR", "").strip()
 	if not git_work_tree or not git_dir:
 		return False
 
 	try:
-		git_work_tree_path = Path(git_work_tree).resolve()
+		git_work_tree_path = Path(git_work_tree)
+		if not git_work_tree_path.is_absolute():
+			return False
+		git_work_tree_path = git_work_tree_path.resolve()
+		if not git_work_tree_path.is_dir():
+			return False
+
 		git_dir_path = Path(git_dir)
 		if not git_dir_path.is_absolute():
 			git_dir_path = (git_work_tree_path / git_dir_path).resolve()
-		return candidate.resolve() == git_work_tree_path and git_dir_path.exists()
+		else:
+			git_dir_path = git_dir_path.resolve()
+		if not git_dir_path.is_dir():
+			return False
+
+		return candidate.resolve() == git_work_tree_path and (git_dir_path / "HEAD").is_file()
 	except OSError:
 		return False
 

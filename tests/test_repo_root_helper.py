@@ -36,6 +36,25 @@ def _temporary_cwd(path: Path):
 		os.chdir(previous)
 
 
+@contextlib.contextmanager
+def _temporary_env(**replacements):
+	missing = object()
+	originals = {name: os.environ.get(name, missing) for name in replacements}
+	try:
+		for name, value in replacements.items():
+			if value is None:
+				os.environ.pop(name, None)
+			else:
+				os.environ[name] = value
+		yield
+	finally:
+		for name, value in originals.items():
+			if value is missing:
+				os.environ.pop(name, None)
+			else:
+				os.environ[name] = value
+
+
 def _run_cli(script_path: Path, *, cwd: Path) -> subprocess.CompletedProcess[str]:
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -57,6 +76,40 @@ def test_repo_root_resolves_real_repo_even_when_cwd_changes() -> None:
 
 def test_repo_root_from_nested_directory_resolves_repo_root() -> None:
 	assert repo_root_helper.repo_root_from(REPO_ROOT / "scripts") == REPO_ROOT
+
+
+def test_repo_root_from_git_env_fallback_accepts_real_git_dir() -> None:
+	with tempfile.TemporaryDirectory(prefix="repo-root-env-ok-") as tmpdir:
+		tmp_path = Path(tmpdir)
+		root = tmp_path / "workspace"
+		nested = root / "scripts" / "nested"
+		git_dir = tmp_path / "git-meta"
+		nested.mkdir(parents=True, exist_ok=True)
+		git_dir.mkdir(parents=True, exist_ok=True)
+		(root / "CLAUDE.md").write_text("# test\n", encoding="utf-8")
+		(git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+		with _temporary_env(GIT_WORK_TREE=str(root), GIT_DIR=str(git_dir)):
+			assert repo_root_helper.repo_root_from(nested) == root
+
+
+def test_repo_root_from_git_env_fallback_rejects_non_git_dir() -> None:
+	with tempfile.TemporaryDirectory(prefix="repo-root-env-bad-") as tmpdir:
+		tmp_path = Path(tmpdir)
+		root = tmp_path / "workspace"
+		nested = root / "scripts" / "nested"
+		bad_git_dir = tmp_path / "not-git"
+		nested.mkdir(parents=True, exist_ok=True)
+		bad_git_dir.mkdir(parents=True, exist_ok=True)
+		(root / "CLAUDE.md").write_text("# test\n", encoding="utf-8")
+
+		with _temporary_env(GIT_WORK_TREE=str(root), GIT_DIR=str(bad_git_dir)):
+			try:
+				repo_root_helper.repo_root_from(nested)
+			except RuntimeError:
+				return
+
+		raise AssertionError("Expected repo_root_from() to reject a non-git GIT_DIR fallback")
 
 
 def test_repo_root_from_markerless_tree_raises_clear_runtime_error() -> None:
