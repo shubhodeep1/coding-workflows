@@ -100,8 +100,10 @@ unless `PROMPT_PERSONA_PREFIX_ENABLED` is disabled.
 - Example shapes: `mem_20260709041614_1f025339dd` and
   `run_event_20260709041614_1f025339dd`.
 - This format is a compatibility contract. If a future change needs a new
-  stable-ID format, ship it with an alongside alias/shim path per the §6
-  backward-compatibility rule and update the contract test in the same change.
+  stable-ID format, follow the §6 backward-compatibility rule: keep
+  `make_record_id(prefix)` emitting the current format, introduce the new
+  format via an alongside helper/alias so old IDs remain valid and existing
+  outputs stay stable, and update the contract test in the same change.
 
 ## Implement scope-lock label
 
