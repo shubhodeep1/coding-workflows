@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The new section must document `scripts/ai_memory_lib.py:480` as the canonical helper\"\n  expected_change_site: agents.md \"Stable-ID convention\" section around lines 84-90\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: agents.md lines 87-89 currently state \"The Phase 5 plan's `scripts/ai_memory_lib.py:480` pointer is historical; follow the live `make_record_id(prefix)` definition in that file\", which contradicts the acceptance criteria requiring `scripts/ai_memory_lib.py:480` as the canonical helper location; the current text marks the reference as \"historical\" and directs readers to the live `make_record_id(prefix)` definition instead.\n- requirement: \"The contract test and docs must be wired into *all* test surfaces that run the release gate (ci.yml already covered; mark-stable.yml and test-and-mark-stable.yml were only partially addressed in prior rounds).\"\n  expected_change_site: .github/workflows/mark-stable.yml:278 and .github/workflows/test-and-mark-stable.yml:3514 (the test invocation block)\n  confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The last_run_diff and current PR diff show the test was added only to ci.yml in the original implementation; stable/release workflows still lacked it until the immediate-previous autofix pass.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: \"The new section must document `scripts/ai_memory_lib.py:480` as the canonical helper\"\n  Expected change site: agents.md \"Stable-ID convention\" section around lines 84-90\n  Evidence of absence: agents.md lines 87-89 currently state \"The Phase 5 plan's `scripts/ai_memory_lib.py:480` pointer is historical; follow the live `make_record_id(prefix)` definition in that file\", which contradicts the acceptance criteria requiring `scripts/ai_memory_lib.py:480` as the canonical helper location. The acceptance criteria explicitly says \"find . The new section must document `scripts/ai_memory_lib.py:480` as the canonical helper\"\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Requirement: \"The new section must document `scripts/ai_memory_lib.py:480` as the canonical helper\"\n  Expected change site: agents.md, \"## Stable-ID convention\" section, first bullet\n  Evidence of absence: The current text says \"The Phase 5 plan's `scripts/ai_memory_lib.py:480` pointer is historical; follow the live `make_record_id(prefix)` definition in that file\" \u2014 this contradicts the acceptance criteria which explicitly requires documenting `:480` as the canonical helper. The text marks the reference as \"historical\" and tells readers to follow the live definition instead, which is the opposite of affirming `:480` as canonical.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: The new section must document `scripts/ai_memory_lib.py:480` as the canonical helper (per Phase 5 acceptance criteria in linked issue #3616).\n  Expected change site: agents.md (## Stable-ID convention section, immediately after ## Workflow architecture).\n  Evidence of absence: Current text (lines 88-90) explicitly calls the `:480` pointer \"historical\" and directs readers to \"follow the live make_record_id(prefix) definition\". This contradicts the acceptance criteria's requirement to document `:480` as the canonical helper location. No diff hunk affirms the plan's exact reference.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n\n- Requirement: The contract test and docs must be wired into *all* test surfaces that run the release gate (ci.yml already covered; mark-stable.yml and test-and-mark-stable.yml were only partially addressed in prior rounds).\n  Expected change site: .github/workflows/mark-stable.yml:278 and .github/workflows/test-and-mark-stable.yml:3514 (the test invocation block).\n  Evidence of absence: The last_run_diff and current PR diff show the test was added only to ci.yml in the original implementation; stable/release workflows still lacked it until the immediate-previous autofix pass. The current state satisfies this, but the task gap persisted across multiple editor iterations.\n  SEVERITY: NIT (already satisfied in HEAD)\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "085aa11dbad55f3e22aa15afdcf053800cb9101f1bfc8410e91cc70a4edd148f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3617,
+    "run_id": "29001535792",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29001535792",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260709094418_79f232a79d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3617,
+    "run_id": "29001535792"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-09T09:44:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
