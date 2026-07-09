@@ -153,6 +153,7 @@ extracted/poller_stall.sh
 netwask/tier1-agent-suite.json
 path/to/your/workflow_script.sh
 probably_unnecessary_but_read_if_stuck.md
+prompts/.overrides.yaml
 prompts/_prelude_clarify_and_plan.txt
 prompts/_prelude_common.txt
 prompts/_prelude_common_large.txt
@@ -292,6 +293,7 @@ scripts/clarify_informal_detect.py
 scripts/codex_heartbeat.sh
 scripts/codex_helpers.sh
 scripts/codex_model_catalog.json
+scripts/codex_model_catalog_overrides.yaml
 scripts/codex_stall_guard.sh
 scripts/codex_thread_reuse.sh
 scripts/collect_pr_check_runs_context.py
