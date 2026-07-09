@@ -255,6 +255,18 @@ if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
 	RENDER_ARGS+=(--input-already-assembled)
 fi
 
+# Opt-in: callers rendering an already-assembled prompt body that embeds
+# untrusted content (reviewer/editor bodies carry raw PR-diff + comment text,
+# which can legitimately contain literal {{...}} / {%...%} tokens) set
+# RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 so those embedded tokens are not
+# mistaken for prompt-authoring errors and the whole render is not hard-failed.
+# Default (unset) keeps the strict syntax gate for every static template render.
+case "${RENDER_PROMPT_SKIP_SYNTAX_VALIDATION:-}" in
+	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
+		RENDER_ARGS+=(--skip-syntax-validation)
+		;;
+esac
+
 append_render_var "WORKFLOW_EDIT_RESTRICTION" "${WORKFLOW_EDIT_RESTRICTION_LINE}"
 append_render_var "SEMBLE_PREFETCH" "${SEMBLE_PREFETCH_BLOCK}"
 append_render_var "SERENA_TOOL_HINTS" "${SERENA_TOOL_HINTS_BLOCK}"
