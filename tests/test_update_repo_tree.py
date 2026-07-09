@@ -340,3 +340,15 @@ def test_unmatched_start_or_end_fails_with_exit_code_two() -> None:
 		status, _stdout_text, stderr_text = _run_tool(repo_root, "--check")
 		assert status == 2
 		assert "found before closing TREE:START id=workflows" in stderr_text
+
+
+def main() -> int:
+	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	for test in tests:
+		test()
+	print(f"{len(tests)} passed")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
