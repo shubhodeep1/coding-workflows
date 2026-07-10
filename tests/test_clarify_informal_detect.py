@@ -79,6 +79,7 @@ def test_invalid_utf8_file_fails_open_with_parse_error_signal():
 	score, signals = _parse_output(proc.stdout)
 	assert score == 0.0, f"expected parse-error score 0.0, got {score}"
 	assert signals == ["parse_error"], f"expected parse_error signal, got {signals}"
+	assert "emitting parse_error advisory signal" in proc.stderr
 
 
 def test_query_string_url_does_not_count_as_no_ask():
@@ -124,6 +125,7 @@ def test_missing_stdin_fails_open_with_parse_error_signal():
 	score, signals = _parse_output(proc.stdout)
 	assert score == 0.0, f"expected parse-error score 0.0, got {score}"
 	assert signals == ["parse_error"], f"expected parse_error signal, got {signals}"
+	assert "emitting parse_error advisory signal" in proc.stderr
 
 
 def main() -> int:

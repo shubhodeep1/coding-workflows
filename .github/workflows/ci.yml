@@ -171,6 +171,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_clarify_informal_detect.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_repo_root_helper.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_generate_resource_id.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_repo_tree.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_semble_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mcp_handshake_probe.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_setup_serena_toml.py

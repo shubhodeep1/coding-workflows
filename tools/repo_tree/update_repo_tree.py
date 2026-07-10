@@ -157,7 +157,7 @@ def expand_source_glob(source_glob: str, *, repo_root: Path) -> list[str]:
 	try:
 		matches = [path.relative_to(repo_root).as_posix() for path in repo_root.glob(source_glob) if path.is_file()]
 	except (OSError, ValueError) as exc:
-		raise fail(f"tools/repo_tree/config.yaml: unable to expand source_glob {source_glob!r}: {exc}")
+		raise fail(f"repo-tree config: unable to expand source_glob {source_glob!r}: {exc}")
 	return sorted(set(matches))
 
 

@@ -153,6 +153,7 @@ def render_markdown(
 	models: list[dict[str, object]], overrides_by_slug: dict[str, dict[str, object]]
 ) -> str:
 	known_slugs: list[str] = []
+	known_slug_set: set[str] = set()
 	lines = [
 		GENERATED_BANNER,
 		"",
@@ -172,10 +173,11 @@ def render_markdown(
 		slug = model.get("slug")
 		if not isinstance(slug, str) or not slug:
 			fail(f"{CATALOG_PATH.as_posix()}: models[{index}].slug must be a non-empty string")
-		if slug in known_slugs:
+		if slug in known_slug_set:
 			fail(f"{CATALOG_PATH.as_posix()}: duplicate catalog entry for slug {slug}")
 
 		known_slugs.append(slug)
+		known_slug_set.add(slug)
 		override_entry = overrides_by_slug.get(slug)
 		merged_model = merge_model(model, override_entry)
 		row = [
@@ -187,7 +189,7 @@ def render_markdown(
 		]
 		lines.append(f"| {' | '.join(row)} |")
 
-	unknown_override_slugs = sorted(set(overrides_by_slug) - set(known_slugs))
+	unknown_override_slugs = sorted(set(overrides_by_slug) - known_slug_set)
 	if unknown_override_slugs:
 		fail(
 			"scripts/codex_model_catalog_overrides.yaml: unknown slug(s): "

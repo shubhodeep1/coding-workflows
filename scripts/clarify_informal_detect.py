@@ -3,7 +3,8 @@
 
 This helper is intentionally advisory-only in Phase 4. It does not make
 workflow decisions; it emits one stdout line that a future wrapper can
-prepend to clarify context.
+prepend to clarify context. Fail-open read/parse paths emit
+`signals=parse_error` on stdout and warnings on stderr.
 """
 
 from __future__ import annotations
@@ -63,6 +64,7 @@ SIGNAL_CHECKS = (
 	("link_only", lambda body: _has_link_only(body)),
 )
 
+# Keep this sentinel in sync with the clarify prompt's documented signal list.
 PARSE_ERROR_OUTPUT = "CLARIFY_INFORMAL_SCORE: 0.000; signals=parse_error"
 
 
@@ -155,7 +157,20 @@ def main() -> int:
 		else:
 			body = _read_issue_body_from_stdin()
 		print(_render_output(_detect_signals(body)))
-	except Exception:
+	except TimeoutError as exc:
+		print(
+			f"::warning::clarify_informal_detect stdin read timed out: {exc}; "
+			"emitting parse_error advisory signal",
+			file=sys.stderr,
+		)
+		print(PARSE_ERROR_OUTPUT)
+		return 0
+	except Exception as exc:
+		print(
+			"::warning::clarify_informal_detect failed to read or parse issue body: "
+			f"{exc.__class__.__name__}; emitting parse_error advisory signal",
+			file=sys.stderr,
+		)
 		print(PARSE_ERROR_OUTPUT)
 		return 0
 

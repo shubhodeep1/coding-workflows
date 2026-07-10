@@ -66,7 +66,7 @@ WHAT NOT TO FLAG
 IMPLICIT-EXECUTION & TRUST-BOUNDARY RISKS
 Review this lens only for workflow YAML, `.claude/*`, MCP config, `scripts/*` entry points, env-var defaults, and subprocess / watcher registration touched by the diff.
 Flag only concrete cases where changed code introduces implicit execution without a documented gate, kill switch, or invocation guard; expands effective state or capability scope beyond what the change declares; or creates a declared-vs-effective capability gap across those surfaces.
-Use the standard finding format from the first seven lenses when reporting an issue under this lens.
+Use the standard finding format from the first eight lenses when reporting an issue under this lens.
 Emit NONE when the diff does not touch those surfaces or when the touched surfaces are already properly gated and scoped.
 
 TASK COMPLETENESS / INTENT GAPS
@@ -90,9 +90,9 @@ Severity is mandatory:
 - Every emitted finding and TASK_GAP entry MUST include `SEVERITY: BLOCKER|MAJOR|NIT`.
 - Findings without an explicit severity are invalid output and must be re-emitted with severity.
 
-Fabrication ban: For findings under the first seven lenses, every cited `File:` and `Line or code reference:` must exist on the current ref and must point to code that still contains the reported bug at review time. If you cannot verify the cited file, the cited lines, or the cited code reference exactly as written, drop the finding instead of guessing. Fabricated or unverifiable cites must not be emitted and must never be promoted to `FLOOR_MULTI_REVIEWER`.
+Fabrication ban: For findings under the first eight lenses, every cited `File:` and `Line or code reference:` must exist on the current ref and must point to code that still contains the reported bug at review time. If you cannot verify the cited file, the cited lines, or the cited code reference exactly as written, drop the finding instead of guessing. Fabricated or unverifiable cites must not be emitted and must never be promoted to `FLOOR_MULTI_REVIEWER`.
 
-How to apply the eighth lens:
+How to apply the ninth lens:
 Compare the LINKED ISSUE body and PR DESCRIPTION (the intent) against the PR DIFF and LAST RUN DIFF (the delivery). For each concrete deliverable named in the task that is not reflected anywhere in the diff, emit one TASK_GAP entry. "No diff hunk at the expected file/symbol" is sufficient evidence — the absence is the defect; do not skip a gap because there is no file:line to point at, and do not weaken it to "possible/might/could" language.
 This lens is required in BOTH full-context and scoped-context reviewer passes. In scoped passes, TASK_GAP findings may name files OUTSIDE the scoped reviewer focus set when the missing implementation belongs there — do not suppress a gap just because its expected site is outside the scope.
 Requirements that are explicitly out of scope (the issue says "follow-up" / "later PR" / "tracked separately") are not gaps; cite the disclaimer when skipping them.
