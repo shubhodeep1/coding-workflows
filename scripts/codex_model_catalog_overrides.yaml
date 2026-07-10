@@ -1,0 +1,16 @@
+# See agents.md "Override conventions" section.
+# Fields under `overrides:` for a given slug are merged over
+# catalog defaults at render time and emitted with a `(frozen)`
+# marker in docs/codex-model-reference.md. Any field listed here
+# is excluded from future automated rewrites of
+# scripts/codex_model_catalog.json.
+models:
+  - slug: openai/gpt-5.4
+    overrides:
+      apply_patch_tool_type: function
+    notes: |
+      apply_patch_tool_type was flipped from "freeform" to
+      "function" on 2026-05-07 after the codex#11151 ablation
+      suite identified freeform as the root cause of
+      announce-without-emit failures on the OpenRouter Responses
+      path. Do not auto-rewrite.

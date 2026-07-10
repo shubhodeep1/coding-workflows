@@ -15,6 +15,12 @@ Evaluation criteria:
 4. Is the project spec fully satisfied, or are there remaining gaps?
 5. Are there new issues that emerged from the implementation (missing error
    handling, incomplete migrations, broken cross-references)?
+6. Did any merged change introduce implicit execution on workflow YAML,
+   `.claude/*`, MCP config, `scripts/*` entry points, env-var defaults, or
+   subprocess / watcher registration without the corresponding gate, kill
+   switch, or invocation guard?
+7. Do the merged changes stay within their declared effective scope, or is
+   there declared-vs-effective capability drift across those same surfaces?
 
 Rules:
 - Cite specific files, functions, and line numbers inline next to each claim.

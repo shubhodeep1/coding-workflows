@@ -81,6 +81,67 @@ uses it only when `PROMPT_PRELUDE_REFACTOR_ENABLED=true`. Default persona
 prefixes come from the checked-in JSON map at `prompts/_prelude_role_persona.txt`
 unless `PROMPT_PERSONA_PREFIX_ENABLED` is disabled.
 
+## Stable-ID convention
+
+- New AI-pipeline identifiers must be created through the canonical helper
+  `make_record_id(prefix)` in `scripts/ai_memory_lib.py`; do not hand-roll
+  new ID formats alongside it. The Phase 5 plan's
+  `scripts/ai_memory_lib.py:480` pointer is historical; follow the live
+  `make_record_id(prefix)` definition in that file.
+- The current format is contractual: `<prefix>_<YYYYMMDDHHMMSS>_<10hex>`.
+  The timestamp is UTC and the suffix is the first 10 lowercase hex characters
+  from a UUID4.
+- `make_record_id(prefix)` sanitizes the caller-supplied prefix through
+  `sanitize_segment(prefix, "mem")` before composing the ID. Today that
+  preserves ASCII letters, digits, and `_.:-`, replaces other runs with `_`,
+  trims leading/trailing `.` or `_`, preserves existing safe prefixes such as
+  `mem` and `run_event`, and falls back to `mem` for empty or invalid-only
+  inputs.
+- Example shapes: `mem_20260709041614_1f025339dd` and
+  `run_event_20260709041614_1f025339dd`.
+- This format is a compatibility contract. If a future change needs a new
+  stable-ID format, follow the §6 backward-compatibility rule: keep
+  `make_record_id(prefix)` emitting the current format, introduce the new
+  format via an alongside helper/alias so old IDs remain valid and existing
+  outputs stay stable, and update the contract test in the same change.
+
+## Override conventions
+
+Two override files let maintainers pin specific catalog fields
+or prompt files as untouchable by future regenerators:
+
+- `scripts/codex_model_catalog_overrides.yaml` — per-model-slug
+  field overrides for `scripts/codex_model_catalog.json`. The
+  fields listed under each slug's `overrides:` block are merged
+  over the catalog defaults at render time by
+  `scripts/generate_codex_model_reference.py` and emitted with a
+  `(frozen)` marker in the generated `docs/codex-model-reference.md`.
+
+- `prompts/.overrides.yaml` — per-file freeze markers for any
+  prompt file under `prompts/`. Files listed with
+  `skip_validation: true` are excluded from any future automated
+  prompt-rewriter tooling.
+
+§6 implication: overrides are the canonical way to preserve
+intentional non-default values across future regenerations
+without renaming or removing the underlying identifier. To freeze
+a new value, add it to the appropriate overrides file with a
+`notes:` / `reason:` block explaining why.
+
+## Utility helpers
+
+- `scripts/repo_root.py` provides `repo_root()` and
+  `repo_root_from(start: Path)` for scripts and tests that need to
+  resolve the repository root by walking upward until they find both
+  `CLAUDE.md` and `.git/`.
+- `scripts/generate_resource_id.py` provides
+  `generate_id(prefix, salt=None)` as a wrapper around the live
+  `make_record_id(prefix)` helper in `scripts/ai_memory_lib.py`.
+  Unsalted calls delegate to `make_record_id(prefix)` unchanged;
+  salted calls preserve the same `<prefix>_<UTC timestamp>_<10 hex>`
+  shape while deriving the suffix from
+  `sha256(salt.encode("utf-8"))`, including the empty-string salt.
+
 ## Implement scope-lock label
 
 - When `SCOPE_LOCK_LABEL_ENABLED=true`, `implement.yml` recognizes one active
@@ -600,3 +661,80 @@ user-versus-contributor audience separation.
 **Validation harness Docker lifecycle**
 - Validation containers distinguish `/bin/sh -c` from `/bin/sh -lc`; shell choice is part of harness correctness, not a cosmetic variation. Pointers: `scripts/validation_lint.py`, `prompts/mode-validate-generate.txt`.
 - npm/yarn/pnpm wrapper shutdown handling and `mongosh` apt-repo constraints are harness invariants; keep the existing SIGTERM/exit-code and package-source rules intact. Pointers: `scripts/validate_driver.sh`, `prompts/mode-validate-fix-harness.txt`.
+
+## Repo-tree (auto-generated)
+
+Active workflow files (regenerate with `make generate`):
+
+<!-- TREE:START id=workflows -->
+```
+.github/workflows/audit_consumer_drift.yml
+.github/workflows/cancel_on_pr_close.yml
+.github/workflows/check_failure_triage.yml
+.github/workflows/ci.yml
+.github/workflows/clarify.yml
+.github/workflows/comprehensive-test-and-release.yml
+.github/workflows/drift-audit.yml
+.github/workflows/forward-merge-stable-to-main.yml
+.github/workflows/implement.yml
+.github/workflows/integration-pr-readiness.yml
+.github/workflows/internal-cancel-on-pr-close.yml
+.github/workflows/internal-check-failure-triage.yml
+.github/workflows/internal-clarify.yml
+.github/workflows/internal-implement.yml
+.github/workflows/internal-issue-pr-status.yml
+.github/workflows/internal-memory-maintenance.yml
+.github/workflows/internal-orchestrate-clarify-respond.yml
+.github/workflows/internal-orchestrate-poll.yml
+.github/workflows/internal-orchestrate.yml
+.github/workflows/internal-plan.yml
+.github/workflows/internal-review.yml
+.github/workflows/internal-validate.yml
+.github/workflows/issue_pr_status.yml
+.github/workflows/lint-plan-archival.yml
+.github/workflows/lint-pr-body-auto-close.yml
+.github/workflows/mark-stable.yml
+.github/workflows/memory_maintenance.yml
+.github/workflows/nightly-validation-selftest.yml
+.github/workflows/orchestrate.yml
+.github/workflows/orchestrate_clarify_respond.yml
+.github/workflows/orchestrate_poll.yml
+.github/workflows/plan.yml
+.github/workflows/promote-main-to-stable.yml
+.github/workflows/review_autofix.yml
+.github/workflows/review_autofix_sweep.yml
+.github/workflows/review_rb_judge_dispatch.yml
+.github/workflows/security-audit.yml
+.github/workflows/sync_ai_labels.yml
+.github/workflows/test-and-mark-stable.yml
+.github/workflows/update_workflows.yml
+.github/workflows/validate.yml
+.github/workflows/validation-improvements-intake.yml
+.github/workflows/validation-refresh.yml
+.github/workflows/workflow-log-analysis.yml
+.github/workflows/workspace-cache-maintenance.yml
+```
+<!-- TREE:END id=workflows -->
+
+Consumer-facing workflow templates (regenerate with `make generate`):
+
+<!-- TREE:START id=workflow_templates -->
+```
+workflow-templates/ai-cancel-on-pr-close.yml
+workflow-templates/ai-check-failure-triage.yml
+workflow-templates/ai-clarify.yml
+workflow-templates/ai-implement.yml
+workflow-templates/ai-issue-pr-status.yml
+workflow-templates/ai-memory-maintenance.yml
+workflow-templates/ai-orchestrate-clarify-respond.yml
+workflow-templates/ai-orchestrate-poll.yml
+workflow-templates/ai-orchestrate.yml
+workflow-templates/ai-plan.yml
+workflow-templates/ai-review.yml
+workflow-templates/ai-security-audit.yml
+workflow-templates/ai-sync-labels.yml
+workflow-templates/ai-update-workflows.yml
+workflow-templates/ai-validate.yml
+workflow-templates/review_rb_judge_dispatch.yml
+```
+<!-- TREE:END id=workflow_templates -->

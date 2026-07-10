@@ -106,9 +106,11 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/check_resolver_diff.sh` — Validate the output of the AI conflict-resolver step before committing.
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
 - `scripts/clarify_data_provision_guard.py` — Post-processing guard for orchestrate_clarify_respond.
+- `scripts/clarify_informal_detect.py` — Score clarify issue bodies for advisory informal-issue signals.
 - `scripts/codex_heartbeat.sh` — Shell helper for codex heartbeat.
 - `scripts/codex_helpers.sh` — Shell helper for Codex config assembly.
 - `scripts/codex_model_catalog.json` — JSON asset for codex_model_catalog.json.
+- `scripts/codex_model_catalog_overrides.yaml` — YAML asset for codex_model_catalog_overrides.yaml.
 - `scripts/codex_stall_guard.sh` — Shell helper for codex stall guard.
 - `scripts/codex_thread_reuse.sh` — Shell helper for codex thread reuse.
 - `scripts/collect_pr_check_runs_context.py` — Collect PR check-run context for review_autofix.
@@ -138,6 +140,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/fixtures/issue-timeline/graphql_timeline_fixture.json` — Fixture asset for graphql_timeline_fixture.json.
 - `scripts/fixtures/issue-timeline/rest_pr_with_comments_fixture.json` — Fixture asset for rest_pr_with_comments_fixture.json.
 - `scripts/fixtures/issue-timeline/rest_timeline_fixture.json` — Fixture asset for rest_timeline_fixture.json.
+- `scripts/generate_codex_model_reference.py` — Generate the Codex model reference markdown from the catalog and optional overrides.
+- `scripts/generate_resource_id.py` — Generate stable-format resource IDs via the ai-memory record-ID helper.
 - `scripts/generate_symbol_diff_summary.py` — Generate a symbol-level diff summary from a unified diff and changed files list.
 - `scripts/gh_helpers.sh` — gh_helpers.sh — Rate-limit-aware GitHub API retry helpers.
 - `scripts/git_ref_health_check.sh` — Shell helper for git ref health check.
@@ -165,6 +169,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/render_prompt.py` — Render prompt templates with optional mode contracts.
 - `scripts/render_prompt.sh` — Shell helper for render prompt.
 - `scripts/render_validation_templates.py` — Render validation harness templates from a slot manifest.
+- `scripts/repo_root.py` — Resolve the repository root from scripts and tests.
 - `scripts/resolve_integration_ref.sh` — Shell helper for resolve integration ref.
 - `scripts/review_agents_md_materiality.sh` — Shell helper for review agents md materiality.
 - `scripts/review_apply_fixes.sh` — Shell helper for review apply fixes.
