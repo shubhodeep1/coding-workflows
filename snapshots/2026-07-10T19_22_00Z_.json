@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-07-08T02:48:33Z",
+  "tick_at": "2026-07-10T19:22:00Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -27,10 +27,10 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 3579,
+      "number": 3601,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] Validate and land the safe subset of workflow-optimization recommendations (2026-06-25 to 2026-06-28)",
+      "title": "[Orchestrator] Apply awesome-claude-code learnings across prompts, generators, docs, and helper scripts",
       "total_waves": 0,
       "wave_complete": false
     }
