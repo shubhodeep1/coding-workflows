@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.89,
+  "details": "Updates to resource/record ID generation and related contract tests show that seemingly small format changes can break downstream consumers. When adding identifiers that are persisted, displayed, or parsed elsewhere, verify their exact shape with tests rather than assuming formatting stability.",
+  "fingerprint": "1387ee8b55d2b33a9a75b09ab643f320acbd1a9b965d35c76df8e58db6a27cf4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29155738729",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29155738729",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3616",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3618",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3621",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3623",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3625",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3617",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3620",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3622",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3624",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3626"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260711141826_36b9e0c672",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Repository-specific IDs and record formats are contracts worth testing explicitly.",
+  "timestamps": {
+    "created_at": "2026-07-11T14:18:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
