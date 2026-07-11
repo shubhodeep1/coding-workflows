@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3628,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3628\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3629\",\"pr_number\":3629,\"branch\":\"ai/issue-3628\",\"run_id\":\"29152267029\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/29152267029\",\"changed_files\":[\".github/workflows/ci.yml\",\".github/workflows/plan.yml\",\"README.md\",\"prompts/mode-plan.txt\",\"scripts/lint_plan_decisions.py\",\"tests/test_lint_plan_decisions.py\",\"tests/test_plan_scope_mode_contract.py\"]}",
+  "fingerprint": "4c29a66152ac1bcbdecf6a17830d21b23a9785d0a37f80fd1d90f23b63daa110",
+  "lineage": {
+    "issue_number": 3628,
+    "parent_ids": [],
+    "pr_number": 3629,
+    "run_id": "29152267029",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29152267029",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3629"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260711122210_fadaca16fd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3628,
+    "level": "run",
+    "pr_number": 3629,
+    "run_id": "29152267029"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3628: https://github.com/shubhodeep1/coding-workflows/pull/3629",
+  "timestamps": {
+    "created_at": "2026-07-11T12:22:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
