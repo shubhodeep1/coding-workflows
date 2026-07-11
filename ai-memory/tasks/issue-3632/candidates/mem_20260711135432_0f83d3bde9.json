@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nInterpreted clarification answers:\n- Q1: No clarification required; the auto-answer confirms the task is fully specified and planning can proceed.\n\nPlanning ref:\n- HEAD: `66dccd1b55f210d279c2b2eae7ea54c9a43320a1`\n- Branch: `main`\n\nScope-mode: Hold Scope\nReuse-audit: extends existing smoke-canary overwrite pattern\nScope-mode justification:\nThe issue is fully specified, limited to one existing file, and already matches an established repo pattern: several smoke/review helpers explicitly treat `tests/e2e_smoke_canary.txt` as a single-file overwrite target with exact three-line content. The safest plan is the minimum local change that updates only the `run_id` line to the requested value while preserving the required trailing newline. Under \u00a76 priorities, correctness and backward compatibility both favor a surgical overwrite over any broader workflow/test/doc changes.\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n2. Functions or modules to implement\n- No new functions or modules.\n- Implementation is a direct full-file overwrite of `tests/e2e_smoke_canary.txt`.\n\n3. Data structures affected\n- Plain-text canary file content only.\n- Target final content must be exactly:\n  - `status: ok`\n  - `run_id: 29154978313`\n  - `updated-by: ai-pipeline`\n- File must end with a trailing newline.\n\n4. API or interface changes\n- None.\n- No workflow, script, schema, or external interface changes.\n\n5. Risks and edge cases\n- The file already exists and currently contains the same 3-line structure with a different `run_id` (`26151428977`), so partial edits or appended content would violate the issue contract.\n- Must avoid touching any other file, despite many workflow/test references to this path in the repo.\n- Must preserve POSIX trailing newline and avoid introducing blank lines or whitespace drift.\n\n6. Testing considerations\n- Verify the file content matches the requested three lines exactly.\n- Verify line count remains 3.\n- Verify the file ends with a trailing newline.\n- Verify `git diff --stat` shows only `tests/e2e_smoke_canary.txt`.\n\n7. Pre-execution self-check result\n- Task is implementation-ready.\n- No missing inputs.\n- No codebase conflict: the file exists on `main` and is already used as the repo\u2019s smoke canary target.\n\nRepresentative reuse pattern:\n- `.github/workflows/test-and-mark-stable.yml` already contains the same overwrite-style canary instruction and `printf` pattern for `tests/e2e_smoke_canary.txt`.\n- `scripts/review_apply_fixes.sh` and `scripts/review_conflict_prepare.sh` also encode the same \u201coverwrite only this file with exact 3-line content\u201d pattern.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "cba6e33c78810d5468ceda21372bba0709d8c86366fdca0a76920146c634a946",
+  "lineage": {
+    "issue_number": 3632,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29155062059",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29155062059",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3632"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260711135432_0f83d3bde9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3632,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "29155062059"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3632",
+  "timestamps": {
+    "created_at": "2026-07-11T13:54:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
