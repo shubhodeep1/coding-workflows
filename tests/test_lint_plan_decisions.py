@@ -46,6 +46,15 @@ def test_complete_decision_record_emits_no_warning() -> None:
 		assert warnings == []
 
 
+def test_missing_plan_directory_emits_no_warning() -> None:
+	mod = _import_lint_module()
+	with tempfile.TemporaryDirectory() as temp_dir_name:
+		temp_root = Path(temp_dir_name)
+
+		assert mod.discover_plan_files(temp_root) == []
+		assert mod.lint_tree(temp_root) == []
+
+
 def test_missing_decisions_section_warns() -> None:
 	mod = _import_lint_module()
 	with tempfile.TemporaryDirectory() as temp_dir_name:
@@ -68,6 +77,20 @@ def test_decisions_section_without_valid_records_warns() -> None:
 
 		warnings = mod.lint_file(plan_path)
 		assert warnings == ["has `## Decisions` but no `### D<n> — <title>` decision records"]
+
+
+def test_markdown_field_variants_count_as_present() -> None:
+	mod = _import_lint_module()
+	with tempfile.TemporaryDirectory() as temp_dir_name:
+		temp_root = Path(temp_dir_name)
+		plan_path = _write_plan(
+			temp_root,
+			"field-variants.md",
+			"""# Plan\n\n## Decisions\n\n### D2 — Accept common markdown variants\n\n* **Chosen**: allow asterisk bullets and colon-outside-bold markers.\n+ **Alternatives considered:**\n  - Keep only the strict variant.\n- **Why** allow the dash bullet when the colon is omitted.\n""",
+		)
+
+		warnings = mod.lint_file(plan_path)
+		assert warnings == []
 
 
 def test_malformed_decision_heading_warns() -> None:
@@ -102,6 +125,20 @@ def test_missing_required_decision_fields_are_named() -> None:
 		]
 
 
+def test_field_without_inline_or_following_content_warns() -> None:
+	mod = _import_lint_module()
+	with tempfile.TemporaryDirectory() as temp_dir_name:
+		temp_root = Path(temp_dir_name)
+		plan_path = _write_plan(
+			temp_root,
+			"empty-field.md",
+			"""# Plan\n\n## Decisions\n\n### D8 — Reject empty field markers\n\n- **Chosen:**\n- **Alternatives considered:** compare alternatives here.\n- **Why:** explain the final choice here.\n""",
+		)
+
+		warnings = mod.lint_file(plan_path)
+		assert warnings == ["D8 — Reject empty field markers is missing required bullet(s): `Chosen`"]
+
+
 def test_multiple_malformed_records_emit_multiple_warnings() -> None:
 	mod = _import_lint_module()
 	with tempfile.TemporaryDirectory() as temp_dir_name:
@@ -117,6 +154,20 @@ def test_multiple_malformed_records_emit_multiple_warnings() -> None:
 			"D1 — First record is missing required bullet(s): `Alternatives considered`",
 			"decision heading `### Wrong heading` does not match required shape `### D<n> — <title>`",
 		]
+
+
+def test_fenced_code_block_heading_lines_do_not_truncate_decisions_section() -> None:
+	mod = _import_lint_module()
+	with tempfile.TemporaryDirectory() as temp_dir_name:
+		temp_root = Path(temp_dir_name)
+		plan_path = _write_plan(
+			temp_root,
+			"fenced-code.md",
+			"""# Plan\n\n## Decisions\n\n```md\n# Example heading inside code\n## Example subheading inside code\n```\n\n### D9 — Keep parsing after fenced code blocks\n\n- **Chosen:** continue scanning after code fences.\n- **Alternatives considered:** stop scanning at heading-like code lines.\n- **Why:** fenced code is content, not structure.\n\n## Risks\n\n- Minimal.\n""",
+		)
+
+		warnings = mod.lint_file(plan_path)
+		assert warnings == []
 
 
 def test_main_emits_structured_warnings_and_returns_zero() -> None:

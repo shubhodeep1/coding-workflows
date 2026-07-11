@@ -22,8 +22,9 @@ THIRD_LEVEL_HEADING_RE = re.compile(r"^\s{0,3}###[ \t]+(?P<title>\S(?:.*\S)?)\s*
 DECISION_HEADING_RE = re.compile(
 	r"^\s{0,3}###[ \t]+(?P<decision_id>D\d+)[ \t]+—[ \t]+(?P<title>\S(?:.*\S)?)\s*$"
 )
+FENCED_CODE_BLOCK_RE = re.compile(r"^\s{0,3}(?:```|~~~)")
 DECISION_FIELD_RE = re.compile(
-	r"^\s*-[ \t]+\*\*(?P<field>Chosen|Alternatives considered|Why):\*\*(?:[ \t].*)?$"
+	r"^\s*[-*+][ \t]+\*\*(?P<field>Chosen|Alternatives considered|Why)(?::)?\*\*(?::)?(?P<inline_value>[ \t]+.*)?$"
 )
 REQUIRED_DECISION_FIELDS = ("Chosen", "Alternatives considered", "Why")
 WARNING_PREFIX = "[lint_plan_decisions]"
@@ -31,7 +32,14 @@ WARNING_PREFIX = "[lint_plan_decisions]"
 
 def discover_plan_files(root: Path) -> list[Path]:
 	"""Return sorted `docs/plans/*.md` files under the given repository root."""
-	return sorted((root / "docs" / "plans").glob("*.md"))
+	plans_directory = root / "docs" / "plans"
+	if not plans_directory.is_dir():
+		return []
+	return sorted(plans_directory.glob("*.md"))
+
+
+def _is_fence_line(markdown_line: str) -> bool:
+	return FENCED_CODE_BLOCK_RE.match(markdown_line) is not None
 
 
 def _extract_decisions_section(markdown_text: str) -> str | None:
@@ -47,8 +55,15 @@ def _extract_decisions_section(markdown_text: str) -> str | None:
 		return None
 
 	section_end_index = len(lines)
+	inside_fenced_code_block = False
 	for index in range(section_start_index, len(lines)):
-		heading_match = SECTION_HEADING_RE.match(lines[index])
+		line = lines[index]
+		if _is_fence_line(line):
+			inside_fenced_code_block = not inside_fenced_code_block
+			continue
+		if inside_fenced_code_block:
+			continue
+		heading_match = SECTION_HEADING_RE.match(line)
 		if heading_match is not None:
 			section_end_index = index
 			break
@@ -60,9 +75,15 @@ def _split_decision_blocks(decisions_section_text: str) -> list[tuple[str, list[
 	blocks: list[tuple[str, list[str]]] = []
 	current_heading_line: str | None = None
 	current_block_lines: list[str] = []
+	inside_fenced_code_block = False
 
 	for line in decisions_section_text.splitlines():
-		if THIRD_LEVEL_HEADING_RE.match(line):
+		if _is_fence_line(line):
+			if current_heading_line is not None:
+				current_block_lines.append(line)
+			inside_fenced_code_block = not inside_fenced_code_block
+			continue
+		if not inside_fenced_code_block and THIRD_LEVEL_HEADING_RE.match(line):
 			if current_heading_line is not None:
 				blocks.append((current_heading_line, current_block_lines))
 			current_heading_line = line.strip()
@@ -75,6 +96,23 @@ def _split_decision_blocks(decisions_section_text: str) -> list[tuple[str, list[
 		blocks.append((current_heading_line, current_block_lines))
 
 	return blocks
+
+
+def _field_has_content(block_lines: list[str], start_index: int, inline_value: str | None) -> bool:
+	if inline_value is not None and inline_value.strip():
+		return True
+
+	inside_fenced_code_block = False
+	for following_line in block_lines[start_index + 1 :]:
+		if _is_fence_line(following_line):
+			inside_fenced_code_block = not inside_fenced_code_block
+			continue
+		if not inside_fenced_code_block and DECISION_FIELD_RE.match(following_line):
+			return False
+		if following_line.strip():
+			return True
+
+	return False
 
 
 def lint_file(plan_path: Path) -> list[str]:
@@ -97,12 +135,13 @@ def lint_file(plan_path: Path) -> list[str]:
 			)
 			continue
 
-		present_fields = {
-			field_match.group("field")
-			for line in block_lines
-			for field_match in [DECISION_FIELD_RE.match(line)]
-			if field_match is not None
-		}
+		present_fields: set[str] = set()
+		for index, line in enumerate(block_lines):
+			field_match = DECISION_FIELD_RE.match(line)
+			if field_match is None:
+				continue
+			if _field_has_content(block_lines, index, field_match.group("inline_value")):
+				present_fields.add(field_match.group("field"))
 		missing_fields = [
 			field_name for field_name in REQUIRED_DECISION_FIELDS if field_name not in present_fields
 		]
