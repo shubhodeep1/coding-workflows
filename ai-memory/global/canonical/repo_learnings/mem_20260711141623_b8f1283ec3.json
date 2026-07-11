@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Generated manifests and inventories are operationally sensitive and should be kept in sync with workflow changes.",
   "timestamps": {
     "created_at": "2026-07-11T14:16:23Z",
