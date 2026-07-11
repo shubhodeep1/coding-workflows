@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.91,
+  "details": "Multiple merged changes touched helper scripts and tests around root/path detection, indicating that repository-relative paths are a shared contract. When a workflow or script needs to locate files from different entrypoints, keep the logic in one helper and add regression tests for nested or edge-case execution contexts.",
+  "fingerprint": "ebdb620bc08e5c54812b1a4d523acf6f4400f2feb92cd277fe4b8f971473dfb3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29155738729",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29155738729",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3616",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3618",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3621",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3623",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3625",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3617",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3620",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3622",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3624",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3626"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260711141521_e34358d866",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Repo path handling should be centralized and tested, not reimplemented ad hoc.",
+  "timestamps": {
+    "created_at": "2026-07-11T14:15:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
