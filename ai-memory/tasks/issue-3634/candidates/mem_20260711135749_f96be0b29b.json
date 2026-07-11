@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `66dccd1b55f210d279c2b2eae7ea54c9a43320a1` on `orchestrator/project-3633` (matches integration-branch metadata).\n\nClarification mapping: no Q1/Q2 were asked; `/answer [auto-answered-by-orchestrator]` confirms the issue was already clear enough to plan.\n\nAutomation / wiring impact:\n- Change type: modify one existing fixture file only.\n- Scheduler / PR-push entry point: no new wiring; this stays within the existing implement flow after approval.\n- Long-running supervisor: none.\n- DB gate pattern: not applicable.\n- `docs/scripts-pending-removal.md`: not applicable.\n\nScope-mode: Hold Scope\nReuse-audit: extends existing `decompose-run` sibling-fixture pattern in `tests/e2e_smoke_canary_b.txt`\nScope-mode justification:\nThe issue is explicit, single-file, and already carries a strict `files_touched` boundary, so the safest plan is to hold scope to `tests/e2e_smoke_canary.txt` only. There is already an in-repo precedent for the requested `decompose-run:` format in `tests/e2e_smoke_canary_b.txt`, so no net-new structure is needed. Although the current repo-wide smoke contract for `tests/e2e_smoke_canary.txt` still centers on `run_id:`, broadening this task into script/spec/test updates would violate the stated acceptance criteria and the declared file scope; per the priority order (correctness, backward-compatibility, operational clarity), the right plan is the requested narrow edit plus explicit documentation of that contract mismatch.\n\nFiles likely to change.\n- `tests/e2e_smoke_canary.txt` only:\n  - set line 1 to exactly `status: ok`\n  - set line 2 to exactly `decompose-run: 29154978313`\n  - preserve the rest of the file content/newline formatting unless a direct file rewrite is required to achieve those exact first two lines\n\nFunctions or modules to implement.\n- None; this is a direct plain-text fixture edit.\n\nData structures affected.\n- The line-oriented key/value contents of `tests/e2e_smoke_canary.txt`\n- The first two keys become:\n  - `status`\n  - `decompose-run`\n\nAPI/interface changes.\n- No external API changes.\n- Internal fixture-contract change only: line 2 in `tests/e2e_smoke_canary.txt` changes from `run_id: ...` to `decompose-run: 29154978313`.\n\nConflicts detected.\n- The current file content is:\n  - line 1: `status: ok`\n  - line 2: `run_id: 26151428977`\n  - line 3: `updated-by: ai-pipeline`\n- The existing repo contract for `tests/e2e_smoke_canary.txt` still expects `run_id:` in multiple places, including `tests/e2e_smoke_canary_spec.txt:1-3`, `tests/test_e2e_editor_smoke_canary.py:35-58`, and `tests/test_review_apply_fixes_smoke_deterministic.py:159-188`, plus smoke-related shell helpers under `scripts/review_apply_fixes.sh`, `scripts/review_conflict_prepare.sh`, and `scripts/review_conflict_resolve.sh`.\n- A sibling fixture, `tests/e2e_smoke_canary_b.txt`, already uses `decompose-run:`, which is the closest existing precedent for the requested format.\n\nRisks and edge cases.\n- Do not accidentally delete or rewrite the current third line while fixing lines 1-2.\n- Preserve exact spelling, colon placement, and spacing on the first two lines.\n- Avoid any extra file changes; the issue explicitly limits scope to `tests/e2e_smoke_canary.txt`.\n- Downstream smoke validation may still treat `run_id:` as the canonical contract for this specific file.\n\nTesting considerations.\n- Re-read `tests/e2e_smoke_canary.txt` after editing and confirm the first two lines exactly match the requested values, in order.\n- Verify the diff is scoped to `tests/e2e_smoke_canary.txt` only.\n- If validation runs any existing canary/spec checks, watch specifically for failures caused by the current `run_id:`-based contract elsewhere in the repo; no compensating test/spec edits are in scope for this issue.\n\nPre-execution self-check result.\n- Scope is minimal and implementation-ready.\n- The branch/integration context is consistent (`orchestrator/project-3633`).\n- The only material concern is the documented mismatch between the requested one-file edit and the repo\u2019s existing `run_id:`-based smoke contract.\n\nPLAN_SELF_CHECK: WARNING: The requested one-file edit intentionally diverges from the repo's current `run_id:`-based contract for `tests/e2e_smoke_canary.txt`; implementation should stay in scope and let validation reveal whether downstream contract updates are intentionally deferred.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "af054d1d829194132da1b1dbf7e700a75ba8e727fea517f5cedba0c9f0676f63",
+  "lineage": {
+    "issue_number": 3634,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29155121297",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29155121297",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3634"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260711135749_f96be0b29b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3634,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "29155121297"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3634",
+  "timestamps": {
+    "created_at": "2026-07-11T13:57:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
