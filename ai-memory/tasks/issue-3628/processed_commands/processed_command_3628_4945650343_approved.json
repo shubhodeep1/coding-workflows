@@ -5,13 +5,28 @@
   "entry_id": "processed_command_3628_4945650343_approved",
   "issue_number": 3628,
   "metadata": {
+    "branch": "ai/issue-3628",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/plan.yml",
+      "README.md",
+      "prompts/mode-plan.txt",
+      "scripts/lint_plan_decisions.py",
+      "tests/test_lint_plan_decisions.py",
+      "tests/test_plan_scope_mode_contract.py"
+    ],
+    "issue_number": 3628,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3628",
+    "pr_number": 3629,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3629",
+    "run_attempt": "1",
+    "run_id": "29152267029",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/29152267029"
   },
   "run_attempt": 1,
   "run_id": "29152267029",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-07-11T12:14:52Z",
+  "status": "completed",
+  "timestamp": "2026-07-11T12:22:38Z",
   "workflow": "implement"
 }
