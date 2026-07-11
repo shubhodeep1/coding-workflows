@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: New script files under `scripts/` must be listed in `docs/INVENTORY.md`.\n  expected_change_site: `docs/INVENTORY.md` \u2014 `## Scripts` section, between `scripts/lint_plan_archival_completeness.py` and `scripts/lint_pr_body_auto_close.py`\n  confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  EVIDENCE: `grep lint_plan_decisions docs/INVENTORY.md` returns no matches; the PR/LAST RUN DIFF does not touch `docs/INVENTORY.md`; the Scripts section contains `scripts/lint_plan_archival_completeness.py` but not `scripts/lint_plan_decisions.py`; `tests/inventory_exemptions.txt` is empty and does not carve out this script; `tests/inventory_parity.py` in `.github/workflows/ci.yml` will fail when it detects the untracked script.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: New script files under scripts/ must be listed in docs/INVENTORY.md. This is a repo-wide CI-enforced contract via tests/inventory_parity.py (run in .github/workflows/ci.yml at line 583). The linked issue scope requirements explicitly name scripts/lint_plan_decisions.py as a deliverable. The sibling lint_plan_archival_completeness.py already appears in the inventory at line 154, establishing the pattern.\n  Expected change site: docs/INVENTORY.md \u2014 a new entry under the Scripts section, sorted alphabetically between the existing lint_plan_archival_completeness.py entry (line 154) and lint_pr_body_auto_close.py entry (line 155).\n  Evidence of absence: grep lint_plan_decisions docs/INVENTORY.md returns no matches. No diff hunk in the full PR diff or LAST RUN DIFF touches docs/INVENTORY.md. The exemption file tests/inventory_exemptions.txt is intentionally empty and does not carve out this script. Both Copilot bot reviews (entry[3] and entry[8]) flagged this gap in the prior round; the editor summary did not address it. The inventory parity gate at ci.yml:583 will fail when it detects an untracked script under scripts/.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: New script files under scripts/ must be listed in docs/INVENTORY.md (Scripts section) to satisfy `tests/inventory_parity.py` CI gate.\n  Expected change site: docs/INVENTORY.md \u2014 Scripts section (expected near lint_plan_archival_completeness.py)\n  Evidence of absence: grep -n 'lint_plan_decisions' docs/INVENTORY.md returns empty. The Scripts section lists scripts/lint_plan_archival_completeness.py but not scripts/lint_plan_decisions.py. No diff hunk in the PR touches docs/INVENTORY.md. CI gate tests/inventory_parity.py will fail when it detects the untracked script.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Requirement: \"New script files under `scripts/` must be listed in `docs/INVENTORY.md` (order is CI-enforced). This PR adds `scripts/lint_plan_decisions.py` but doesn't update the inventory, so the inventory parity gate is likely to fail.\"\n  Expected change site: `docs/INVENTORY.md` \u2014 Scripts section (near existing `lint_plan_archival_completeness.py` entry)\n  Evidence of absence: PR CHANGED FILES does not include `docs/INVENTORY.md`; `grep lint_plan_decisions docs/INVENTORY.md` returns no matches; the new script file `scripts/lint_plan_decisions.py` exists but no corresponding inventory entry was added in the LAST RUN DIFF or PR DIFF.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- Requirement: \"Add `scripts/lint_plan_decisions.py`\" \u2014 the linked issue explicitly names this file as a deliverable, and the repo convention enforced by `tests/inventory_parity.py` (run in `.github/workflows/ci.yml` at line 583) requires every new script under `scripts/` to be listed in `docs/INVENTORY.md`. The Copilot bot review comments (entry[3] and entry[8]) flagged this gap; the prior autofix editor summary did not address it.\n  Expected change site: `docs/INVENTORY.md` \u2014 `## Scripts` section, the new entry should be inserted between `scripts/lint_plan_archival_completeness.py` (existing line 154) and `scripts/lint_pr_body_auto_close.py` (existing line 155) to maintain alphabetical order.\n  Evidence of absence: `grep -n 'lint_plan_decisions' docs/INVENTORY.md` returns no matches. The PR DIFF and LAST RUN DIFF contain no diff hunk touching `docs/INVENTORY.md`. The `tests/inventory_exemptions.txt` file is empty and does not carve out this script. The `inventory_parity.py` gate will fail the CI lane when it detects the untracked script.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: \"Add `scripts/lint_plan_decisions.py` and `tests/test_lint_plan_decisions.py`.\" (Phase H scope requirements). The linked issue and acceptance criteria explicitly require the new linter to be listed in `docs/INVENTORY.md` (\"New script files under `scripts/` must be listed in `docs/INVENTORY.md` (order is CI-enforced)\"). `tests/inventory_parity.py` (run unconditionally in `.github/workflows/ci.yml`) enforces this for all production scripts.\n  Expected change site: `docs/INVENTORY.md` under the \"## Scripts\" section (immediately after `scripts/lint_plan_archival_completeness.py`).\n  Evidence of absence: `grep -n lint_plan_decisions docs/INVENTORY.md` returns nothing. No diff hunk in PR DIFF or LAST RUN DIFF touches `docs/INVENTORY.md`. The parity test fails with \"FAIL: docs/INVENTORY.md: Scripts: missing scripts/lint_plan_decisions.py\". Multiple prior-round reviewers (deepseek, mistralai, moonshotai, qwen, x-ai/grok-4.20, and both Copilot comments) flagged this exact gap; the editor summary did not address it. The linter itself, the CI wiring, the prompt update, and the contract test are all present and correct.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "156d14690b7ad9857d03276ab221e88805a0190f6dcc8af330ea4acffb4013b3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3629,
+    "run_id": "29166614601",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29166614601",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260711225322_0b02bf1125",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3629,
+    "run_id": "29166614601"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-11T22:53:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
