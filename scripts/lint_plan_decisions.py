@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Advisory lint for the `## Decisions` convention in `docs/plans/*.md`.
+
+This linter is intentionally fail-open: it emits structured warnings to
+stderr and always exits 0. Current rollout scope is limited to the live
+`docs/plans/*.md` planning corpus; legacy `docs/completed/*.md` files are
+out of scope for this advisory check.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+from typing import TextIO
+
+
+DECISIONS_HEADING_RE = re.compile(r"^\s{0,3}##[ \t]+Decisions\s*$")
+SECTION_HEADING_RE = re.compile(r"^\s{0,3}(?P<hashes>#{1,2})[ \t]+\S")
+THIRD_LEVEL_HEADING_RE = re.compile(r"^\s{0,3}###[ \t]+(?P<title>\S(?:.*\S)?)\s*$")
+DECISION_HEADING_RE = re.compile(
+	r"^\s{0,3}###[ \t]+(?P<decision_id>D\d+)[ \t]+—[ \t]+(?P<title>\S(?:.*\S)?)\s*$"
+)
+DECISION_FIELD_RE = re.compile(
+	r"^\s*-[ \t]+\*\*(?P<field>Chosen|Alternatives considered|Why):\*\*(?:[ \t].*)?$"
+)
+REQUIRED_DECISION_FIELDS = ("Chosen", "Alternatives considered", "Why")
+WARNING_PREFIX = "[lint_plan_decisions]"
+
+
+def discover_plan_files(root: Path) -> list[Path]:
+	"""Return sorted `docs/plans/*.md` files under the given repository root."""
+	return sorted((root / "docs" / "plans").glob("*.md"))
+
+
+def _extract_decisions_section(markdown_text: str) -> str | None:
+	lines = markdown_text.splitlines()
+	section_start_index: int | None = None
+
+	for index, line in enumerate(lines):
+		if DECISIONS_HEADING_RE.match(line):
+			section_start_index = index + 1
+			break
+
+	if section_start_index is None:
+		return None
+
+	section_end_index = len(lines)
+	for index in range(section_start_index, len(lines)):
+		heading_match = SECTION_HEADING_RE.match(lines[index])
+		if heading_match is not None:
+			section_end_index = index
+			break
+
+	return "\n".join(lines[section_start_index:section_end_index])
+
+
+def _split_decision_blocks(decisions_section_text: str) -> list[tuple[str, list[str]]]:
+	blocks: list[tuple[str, list[str]]] = []
+	current_heading_line: str | None = None
+	current_block_lines: list[str] = []
+
+	for line in decisions_section_text.splitlines():
+		if THIRD_LEVEL_HEADING_RE.match(line):
+			if current_heading_line is not None:
+				blocks.append((current_heading_line, current_block_lines))
+			current_heading_line = line.strip()
+			current_block_lines = []
+			continue
+		if current_heading_line is not None:
+			current_block_lines.append(line)
+
+	if current_heading_line is not None:
+		blocks.append((current_heading_line, current_block_lines))
+
+	return blocks
+
+
+def lint_file(plan_path: Path) -> list[str]:
+	"""Return advisory warnings for a single plan file."""
+	markdown_text = plan_path.read_text(encoding="utf-8", errors="replace")
+	decisions_section_text = _extract_decisions_section(markdown_text)
+	if decisions_section_text is None:
+		return ["missing `## Decisions` section"]
+
+	decision_blocks = _split_decision_blocks(decisions_section_text)
+	if not decision_blocks:
+		return ["has `## Decisions` but no `### D<n> — <title>` decision records"]
+
+	warnings: list[str] = []
+	for heading_line, block_lines in decision_blocks:
+		heading_match = DECISION_HEADING_RE.match(heading_line)
+		if heading_match is None:
+			warnings.append(
+				f"decision heading `{heading_line}` does not match required shape `### D<n> — <title>`"
+			)
+			continue
+
+		present_fields = {
+			field_match.group("field")
+			for line in block_lines
+			for field_match in [DECISION_FIELD_RE.match(line)]
+			if field_match is not None
+		}
+		missing_fields = [
+			field_name for field_name in REQUIRED_DECISION_FIELDS if field_name not in present_fields
+		]
+		if missing_fields:
+			missing_fields_rendered = ", ".join(f"`{field_name}`" for field_name in missing_fields)
+			warnings.append(
+				f"{heading_match.group('decision_id')} — {heading_match.group('title')} is missing required bullet(s): {missing_fields_rendered}"
+			)
+
+	return warnings
+
+
+def lint_tree(root: Path) -> list[tuple[Path, str]]:
+	"""Return `(path, warning)` pairs for every plan under `docs/plans/*.md`."""
+	results: list[tuple[Path, str]] = []
+	for plan_path in discover_plan_files(root):
+		for warning_text in lint_file(plan_path):
+			results.append((plan_path, warning_text))
+	return results
+
+
+def emit_warnings(warnings: list[tuple[Path, str]], stream: TextIO | None = None) -> None:
+	if stream is None:
+		stream = sys.stderr
+	for plan_path, warning_text in warnings:
+		print(
+			f"::warning file={plan_path.as_posix()}::{WARNING_PREFIX} {warning_text}",
+			file=stream,
+		)
+
+
+def main(argv: list[str] | None = None) -> int:
+	parser = argparse.ArgumentParser(description=__doc__)
+	parser.add_argument(
+		"--root",
+		type=Path,
+		default=Path("."),
+		help="Repository root containing docs/plans/*.md (default: current directory).",
+	)
+	args = parser.parse_args(argv)
+
+	emit_warnings(lint_tree(args.root))
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

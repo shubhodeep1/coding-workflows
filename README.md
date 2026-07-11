@@ -1171,6 +1171,7 @@ the way to a fix PR without human action.
 | `SECURITY_AUDIT_INCREMENTAL` | `true` | Diff-scope the audit to commits since the last audited commit; falls back to a full audit on first runs, history rewrites, or >200 changed files |
 | `WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY` | `true` | Skip the weekly retro LLM pass and tracker comment (log-only `WORKFLOW_RETRO_SKIP_V1` line) when the window had zero workflow runs and zero merged PRs. Applies to the source-repo retro and each consumer retro in the fan-out |
 | `WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED` | `true` | Run `scripts/workflow_retro_fanout.sh` after the source-repo retro: for every repo in `.github/ai/consumer_repos.json` (source repo excluded) it builds a per-repo retro from the already-collected `workflow_log_report.json`, honors the consumer's own `WORKFLOW_RETRO_ENABLED` repo var (one fail-open GET per consumer per week), skips no-activity repos, and posts to the consumer's `AI Workflow Weekly Retro` tracker issue via `GH_PAT`. Per-repo failures fail open (`WORKFLOW_RETRO_FANOUT_V1: … status=failed` warning); the step only fails when every attempted consumer fails |
+| `DOCS_DECISION_LINT_ENABLED` | `false` | Advisory CI surfacing switch for the plan-decisions linter. The linter still runs on `push` / `pull_request`, but warnings about missing or malformed `## Decisions` blocks in `docs/plans/*.md` are only replayed into CI logs and the step summary when this is `true`. |
 
 ## Semantic Cache (Clarification Only)
 

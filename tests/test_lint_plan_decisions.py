@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""Tests for scripts/lint_plan_decisions.py."""
+
+from __future__ import annotations
+
+import contextlib
+import importlib.util
+import io
+import sys
+import tempfile
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT_PATH = REPO_ROOT / "scripts" / "lint_plan_decisions.py"
+
+
+def _import_lint_module():
+	spec = importlib.util.spec_from_file_location("lint_plan_decisions", SCRIPT_PATH)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	sys.modules["lint_plan_decisions"] = module
+	spec.loader.exec_module(module)
+	return module
+
+
+def _write_plan(temp_root: Path, relative_name: str, markdown_text: str) -> Path:
+	plan_directory = temp_root / "docs" / "plans"
+	plan_directory.mkdir(parents=True, exist_ok=True)
+	plan_path = plan_directory / relative_name
+	plan_path.write_text(markdown_text, encoding="utf-8")
+	return plan_path
+
+
+def test_complete_decision_record_emits_no_warning() -> None:
+	mod = _import_lint_module()
+	with tempfile.TemporaryDirectory() as temp_dir_name:
+		temp_root = Path(temp_dir_name)
+		plan_path = _write_plan(
+			temp_root,
+			"valid-plan.md",
+			"""# Plan\n\n## Decisions\n\n### D1 — Keep the helper advisory\n\n- **Chosen:** add a warning-only linter.\n- **Alternatives considered:**\n  - **Fail closed** — rejected for rollout safety.\n- **Why:** current plans are legacy-heavy and need a bake-out window.\n\n## Risks and edge cases\n\n- Minimal.\n""",
+		)
+
+		warnings = mod.lint_file(plan_path)
+		assert warnings == []
+
+
+def test_missing_decisions_section_warns() -> None:
+	mod = _import_lint_module()
+	with tempfile.TemporaryDirectory() as temp_dir_name:
+		temp_root = Path(temp_dir_name)
+		plan_path = _write_plan(temp_root, "missing-decisions.md", "# Plan\n\n## Risks\n\n- None.\n")
+
+		warnings = mod.lint_file(plan_path)
+		assert warnings == ["missing `## Decisions` section"]
+
+
+def test_decisions_section_without_valid_records_warns() -> None:
+	mod = _import_lint_module()
+	with tempfile.TemporaryDirectory() as temp_dir_name:
+		temp_root = Path(temp_dir_name)
+		plan_path = _write_plan(
+			temp_root,
+			"no-records.md",
+			"""# Plan\n\n## Decisions\n\nIntro text only.\n\n## Risks\n\n- None.\n""",
+		)
+
+		warnings = mod.lint_file(plan_path)
+		assert warnings == ["has `## Decisions` but no `### D<n> — <title>` decision records"]
+
+
+def test_malformed_decision_heading_warns() -> None:
+	mod = _import_lint_module()
+	with tempfile.TemporaryDirectory() as temp_dir_name:
+		temp_root = Path(temp_dir_name)
+		plan_path = _write_plan(
+			temp_root,
+			"malformed-heading.md",
+			"""# Plan\n\n## Decisions\n\n### Decision one\n\n- **Chosen:** keep the old heading.\n- **Alternatives considered:** none.\n- **Why:** this should warn.\n""",
+		)
+
+		warnings = mod.lint_file(plan_path)
+		assert warnings == [
+			"decision heading `### Decision one` does not match required shape `### D<n> — <title>`"
+		]
+
+
+def test_missing_required_decision_fields_are_named() -> None:
+	mod = _import_lint_module()
+	with tempfile.TemporaryDirectory() as temp_dir_name:
+		temp_root = Path(temp_dir_name)
+		plan_path = _write_plan(
+			temp_root,
+			"missing-fields.md",
+			"""# Plan\n\n## Decisions\n\n### D7 — Leave legacy plans untouched\n\n- **Chosen:** avoid backfilling legacy docs in this phase.\n""",
+		)
+
+		warnings = mod.lint_file(plan_path)
+		assert warnings == [
+			"D7 — Leave legacy plans untouched is missing required bullet(s): `Alternatives considered`, `Why`"
+		]
+
+
+def test_multiple_malformed_records_emit_multiple_warnings() -> None:
+	mod = _import_lint_module()
+	with tempfile.TemporaryDirectory() as temp_dir_name:
+		temp_root = Path(temp_dir_name)
+		plan_path = _write_plan(
+			temp_root,
+			"multiple-warnings.md",
+			"""# Plan\n\n## Decisions\n\n### D1 — First record\n\n- **Chosen:** keep it additive.\n- **Why:** one field is missing on purpose.\n\n### Wrong heading\n\n- **Chosen:** malformed title shape.\n- **Alternatives considered:** none.\n- **Why:** should warn too.\n""",
+		)
+
+		warnings = mod.lint_file(plan_path)
+		assert warnings == [
+			"D1 — First record is missing required bullet(s): `Alternatives considered`",
+			"decision heading `### Wrong heading` does not match required shape `### D<n> — <title>`",
+		]
+
+
+def test_main_emits_structured_warnings_and_returns_zero() -> None:
+	mod = _import_lint_module()
+	with tempfile.TemporaryDirectory() as temp_dir_name:
+		temp_root = Path(temp_dir_name)
+		_write_plan(temp_root, "warning-plan.md", "# Plan\n")
+
+		stderr_buffer = io.StringIO()
+		with contextlib.redirect_stderr(stderr_buffer):
+			exit_code = mod.main(["--root", str(temp_root)])
+
+		stderr_text = stderr_buffer.getvalue()
+		assert exit_code == 0
+		assert "::warning file=" in stderr_text
+		assert "[lint_plan_decisions] missing `## Decisions` section" in stderr_text
+		assert "warning-plan.md" in stderr_text
+
+
+def main() -> int:
+	try:
+		import sys as _sys
+		_sys.stdout.reconfigure(line_buffering=True)
+	except Exception:
+		pass
+	test_functions = [value for key, value in sorted(globals().items()) if key.startswith("test_")]
+	passed = 0
+	failed = 0
+	for test_function in test_functions:
+		test_name = test_function.__name__
+		try:
+			test_function()
+			print(f"  PASS  {test_name}", flush=True)
+			passed += 1
+		except Exception as exc:
+			print(f"  FAIL  {test_name}: {exc}", flush=True)
+			failed += 1
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
