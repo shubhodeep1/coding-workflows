@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Merged updates to issue templates, workflow files, and docs appear together, which suggests CI behavior is tightly tied to documented user-facing flows. When changing automation entrypoints or acceptance criteria, update the docs and workflow definitions in the same run so the repository instructions match the actual pipeline.",
+  "fingerprint": "960fc0efeebadaa270dd930ce63dfb82bebb464231604a35b33da6db762ffa38",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29155738729",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29155738729",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3616",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3618",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3621",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3623",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3625",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3617",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3620",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3622",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3624",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3626"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260711141928_ad9cefd44a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Documentation and workflow YAML changes tend to be coupled with CI expectations.",
+  "timestamps": {
+    "created_at": "2026-07-11T14:19:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
