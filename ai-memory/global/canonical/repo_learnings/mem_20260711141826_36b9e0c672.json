@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Repository-specific IDs and record formats are contracts worth testing explicitly.",
   "timestamps": {
     "created_at": "2026-07-11T14:18:26Z",
