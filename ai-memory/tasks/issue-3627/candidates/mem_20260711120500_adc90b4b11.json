@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Learn-Claude-Code learnings \u2014 adopt Phases A\u2013H into the unattended pipeline\",\"issues\":[{\"id\":\"phase-h-decision-annotations-linter\",\"title\":\"Phase H \u2014 add the plan Decisions convention and advisory linter\",\"priority\":1},{\"id\":\"phase-d-events-jsonl-mirror\",\"title\":\"Phase D \u2014 add the append-only events.jsonl mirror for stable log prefixes\",\"priority\":2},{\"id\":\"phase-b-identity-recall\",\"title\":\"Phase B \u2014 inject identity recall blocks after prompt rendering\",\"priority\":3},{\"id\":\"phase-a-compaction-discipline\",\"title\":\"Phase A \u2014 document compaction discipline and add transcript archiving\",\"priority\":4},{\"id\":\"phase-e-nag-reminder-injection\",\"title\":\"Phase E \u2014 inject phase-specific nag reminders after silent rounds\",\"priority\":5},{\"id\":\"phase-c-task-state-mirror\",\"title\":\"Phase C \u2014 mirror orchestrator task state into per-task JSON files\",\"priority\":6},{\"id\":\"phase-f-worktree-registry\",\"title\":\"Phase F \u2014 add a worktree registry and garbage-collection helper\",\"priority\":7},{\"id\":\"phase-g-scenario-trace-renderer\",\"title\":\"Phase G \u2014 render replayable workflow scenario traces from collected logs\",\"priority\":8}],\"dependency_edges\":[{\"from\":\"phase-h-decision-annotations-linter\",\"to\":\"phase-d-events-jsonl-mirror\"},{\"from\":\"phase-d-events-jsonl-mirror\",\"to\":\"phase-b-identity-recall\"},{\"from\":\"phase-b-identity-recall\",\"to\":\"phase-a-compaction-discipline\"},{\"from\":\"phase-a-compaction-discipline\",\"to\":\"phase-e-nag-reminder-injection\"},{\"from\":\"phase-e-nag-reminder-injection\",\"to\":\"phase-c-task-state-mirror\"},{\"from\":\"phase-c-task-state-mirror\",\"to\":\"phase-f-worktree-registry\"},{\"from\":\"phase-f-worktree-registry\",\"to\":\"phase-g-scenario-trace-renderer\"}]}",
+  "fingerprint": "15a8f39fb9ef81ff07dbffdb7ceb107ac50c9c6b08a212137bffd3b9263cfdb0",
+  "lineage": {
+    "issue_number": 3627,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29151853575",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29151853575",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260711120500_adc90b4b11",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3627,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "29151853575"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Learn-Claude-Code learnings \u2014 adopt Phases A\u2013H into the unattended pipeline' into 8 issues (tracking #3627)",
+  "timestamps": {
+    "created_at": "2026-07-11T12:05:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
