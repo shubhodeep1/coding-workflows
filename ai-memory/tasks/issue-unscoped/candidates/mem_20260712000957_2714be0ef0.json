@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/lint_plan_decisions.py:98-129 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: `_field_has_content` treats bare list-marker lines as valid content, so an effectively empty required decision field can pass validation.\n  WHY: Reviewers reported the bug across inline and following-line variants, with severities ranging from NIT to MAJOR; it silently violates the non-empty-bullets contract.\n- scripts/lint_plan_decisions.py:98-114 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: There is no test covering the bare-marker variant where an empty required field is followed only by `-`, `*`, or `+` with no text.\n  WHY: Without that coverage, the `_field_has_content` regression can still slip through.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add `scripts/lint_plan_decisions.py` and `tests/test_lint_plan_decisions.py`\n  expected_change_site: docs/INVENTORY.md\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: `scripts/lint_plan_decisions.py` is added in the PR, but the PR context shows the linter script's entry is missing from the Scripts section of `docs/INVENTORY.md` in the running diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/lint_plan_decisions.py:line 112 (`if following_line.strip():`) inside `_field_has_content` (line 101) | severity=low | confidence=5\n  PROBLEM: `_field_has_content` treats a line containing only a bare list-marker character as valid field content.\n  WHY: A stripped marker such as `-`, `*`, or `+` is truthy in Python, so the function can incorrectly count an empty bullet as present.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/lint_plan_decisions.py:98-119 (`_field_has_content` function) | severity=high | confidence=5\n  PROBLEM: `_field_has_content` incorrectly treats bare list markers (`-`, `*`, `+`) as valid field content in two scenarios: inline_value containing only a bare marker, and following_line containing only a bare marker.\n  WHY: The checks return True for a lone marker, so the function can accept an empty required field.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: Add `scripts/lint_plan_decisions.py` and `tests/test_lint_plan_decisions.py`.\n  Expected change site: docs/INVENTORY.md\n  Evidence of absence: scripts/lint_plan_decisions.py is added in the PR, but the latest commit only registered the prior maintenance commit for INVENTORY; the PR context shows the linter script's entry is missing from the Scripts section of docs/INVENTORY.md in the running diff.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/lint_plan_decisions.py:98-114 (specifically line 112: `if following_line.strip(): return True`) | severity=high | confidence=5\n  PROBLEM: The function treats bare list-marker lines (`-`, `*`, `+` with no accompanying text) as valid field content.\n  WHY: A line like `  -` strips to `-`, which is truthy, so an empty required bullet is counted as present.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/lint_plan_decisions.py:~98\u2013114 (`if following_line.strip(): return True`) | severity=low | confidence=4\n  PROBLEM: `_field_has_content` treats a bare markdown bullet-marker line as valid field content.\n  WHY: A required field followed only by `-`, `*`, or `+` passes validation even though no actual content exists.\n- scripts/lint_plan_decisions.py:~98\u2013114 (same `if following_line.strip(): return True` path) | severity=low | confidence=4\n  PROBLEM: The tests do not cover the bare-marker variant where a lone `-`/`*`/`+` follows an empty required field.\n  WHY: Without such a test, the linter can still silently accept an effectively empty decision bullet.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/lint_plan_decisions.py:lines ~114-129 (the loop that does `if following_line.strip(): return True`) | severity=high | confidence=5\n  PROBLEM: A line containing only a list marker is treated as valid content for a required decision field, so an effectively empty field passes validation.\n  WHY: This undermines the \"non-empty bullets\" contract and can suppress warnings for malformed decision blocks.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "65164787c7c9c0e31072884ba80e7cba852947b7cb1b12d4790ad08558208f73",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3629,
+    "run_id": "29170824172",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29170824172",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260712000957_2714be0ef0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3629,
+    "run_id": "29170824172"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-12T00:09:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
