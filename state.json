@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-07-12T17:50:59Z",
+  "tick_at": "2026-07-12T18:14:58Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -36,7 +36,7 @@
     },
     {
       "current_wave": 4,
-      "integration_ahead_by": "10",
+      "integration_ahead_by": "11",
       "issue_counts": {
         "closed": 0,
         "done": 0,
