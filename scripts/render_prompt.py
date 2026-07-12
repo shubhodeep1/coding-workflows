@@ -223,10 +223,23 @@ def _resolve_include_path(current_path: Path, include_target: str) -> Path:
 	)
 
 
-def _assemble_prompt_fragment(fragment: PromptFragment, *, stack: tuple[Path, ...]) -> str:
+def _assemble_prompt_fragment(
+	fragment: PromptFragment,
+	*,
+	stack: tuple[Path, ...],
+	resolve_includes: bool = True,
+) -> str:
 	assembled_lines: list[str] = []
 	for raw_line in fragment.text.splitlines():
-		include_match = INCLUDE_DIRECTIVE_PATTERN.fullmatch(raw_line)
+		# When include resolution is disabled the input is an already-assembled
+		# prompt body that embeds untrusted content (raw PR diff + full changed-file
+		# text). Such a body can legitimately carry a standalone double-quoted
+		# `{% include "..." %}` line — that is the reviewed template's own source,
+		# not a prompt-fragment directive to expand. Scanning it would misparse the
+		# line, fail to find the target on disk, and hard-exit the reviewer/editor
+		# render (PromptAssemblyError: "Included prompt fragment not found"). Emit
+		# every line verbatim instead so the directive survives into the prompt.
+		include_match = None if not resolve_includes else INCLUDE_DIRECTIVE_PATTERN.fullmatch(raw_line)
 		if include_match is None:
 			assembled_lines.append(f"{raw_line}\n")
 			continue
@@ -239,14 +252,23 @@ def _assemble_prompt_fragment(fragment: PromptFragment, *, stack: tuple[Path, ..
 			_assemble_prompt_fragment(
 				PromptFragment(path=include_path, text=load_prompt(include_path)),
 				stack=(*stack, include_path),
+				resolve_includes=resolve_includes,
 			)
 		)
 	return "".join(assembled_lines)
 
 
-def assemble_prompt_fragments(fragments: tuple[PromptFragment, ...]) -> str:
+def assemble_prompt_fragments(
+	fragments: tuple[PromptFragment, ...],
+	*,
+	resolve_includes: bool = True,
+) -> str:
 	return "".join(
-		_assemble_prompt_fragment(fragment, stack=(fragment.path.resolve(),))
+		_assemble_prompt_fragment(
+			fragment,
+			stack=(fragment.path.resolve(),),
+			resolve_includes=resolve_includes,
+		)
 		for fragment in fragments
 	)
 
@@ -1022,7 +1044,18 @@ def main(argv: list[str] | None = None) -> int:
 				load_prompt(prompt_path),
 				mode_name=mode_name,
 			)
-			prompt_text = assemble_prompt_fragments(prompt_fragments)
+			# --skip-syntax-validation marks the input as an already-assembled body
+			# that embeds untrusted content (reviewer/editor bodies carry raw PR-diff
+			# and full changed-file text). Do not resolve `{% include "..." %}`
+			# directives over that body: a standalone double-quoted include line in a
+			# reviewed template is the diff's own content, not a fragment to expand,
+			# and treating it as one hard-fails the whole render. The strict `{{...}}`
+			# syntax gate is skipped for the same inputs a few lines below; this closes
+			# the matching gap for the `{% include %}` assembly pass.
+			prompt_text = assemble_prompt_fragments(
+				prompt_fragments,
+				resolve_includes=not args.skip_syntax_validation,
+			)
 		if not args.skip_syntax_validation:
 			validate_supported_template_syntax(prompt_text, prompt_path)
 		if args.assemble_only:
