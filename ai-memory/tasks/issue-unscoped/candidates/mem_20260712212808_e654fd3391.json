@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/transcript_archive.sh:98\u2013101 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The Python heredoc ends with a dead `then` return path after a successful archive write.\n  WHY: The same root cause was also reported as a nit in the error-paths section; the success path is effectively a no-op after the heredoc succeeds.\n- scripts/transcript_archive.sh:47\u2013116 | severity=high | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `archive_transcript` function writes archive files from tainted `run_id`, `phase`, and timestamp values without robust path sanitization.\n  WHY: The reviewer flagged a potential directory-traversal / filesystem-boundary-crossing attack surface if the guard is misconfigured or bypassed.\n- scripts/orchestrate_poll_process.sh:16885\u201316896 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `JUDGE_SUCCESS` block uses tab indentation that differs from the surrounding script style.\n  WHY: The code is syntactically valid, but the reviewer treated the indentation drift as a maintainability/style regression and marked it MAJOR.\n- scripts/render_prompt.sh:388\u2013398 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `PROMPT_PRELUDE_REFACTOR_ENABLED` block changed indentation from tab-prefix to space-prefix.\n  WHY: It still parses, but it deviates from the repo's shell indentation rules and was reported as a MAJOR style regression.\n- scripts/stage_workflow_support.sh:114\u2013142 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The indentation in the Python heredoc simplification loop is inconsistent.\n  WHY: The reviewer classified it as a NIT because it is cosmetic and can confuse maintainers even though the shell remains valid.\n- scripts/review_apply_fixes.sh:2083\u20132089 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The new `archive_transcript` call is not guarded by a success-of-previous-step check.\n  WHY: The reviewer said it may archive a failed or stale run if earlier steps fail.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add `tests/test_transcript_archive.sh` and `tests/test_header_render.sh`.\n  expected_change_site: repository root tests directory\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: No new test file `tests/test_transcript_archive.sh` or `tests/test_header_render.sh` is present in the PR changed files or in the file system; their presence would have been listed in `pr_changed_files.txt` and `pr_diff.patch` if they existed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/transcript_archive.sh:98\u2013101 | severity=MAJOR | confidence=5\n  PROBLEM: The Python heredoc ends with a dead `then` return path after a successful archive write. (2 related items)\n  WHY: The same root cause was also described as a NIT in the error-paths section; the success path is effectively a no-op after the heredoc succeeds.\n- scripts/transcript_archive.sh:47\u2013116 | severity=MAJOR | confidence=3\n  PROBLEM: The `archive_transcript` function calls out to an embedded Python heredoc via shell without validating the paths or outputs for safe path traversal and file system boundary crossing.\n  WHY: The function constructs arbitrary files under `.transcripts/` using user-tainted `run_id`, `phase`, and timestamps; the lack of robust sanitization opens a potential attack surface if the guard fails or is misconfigured.\n- scripts/orchestrate_poll_process.sh:16885\u201316896 | severity=MAJOR | confidence=4\n  PROBLEM: The `JUDGE_SUCCESS` block uses tab indentation that differs from the surrounding script style and from the rest of the `scripts/orchestrate_poll_process.sh` file.\n  WHY: While the tab is still valid shell syntax and executes correctly, it deviates from the repo\u2019s enforced shell scripting style and introduces visual noise.\n- scripts/render_prompt.sh:388\u2013398 | severity=MAJOR | confidence=4\n  PROBLEM: The `PROMPT_PRELUDE_REFACTOR_ENABLED` block changed indentation from tab-prefix to space-prefix, deviating from the repo\u2019s shell script style.\n  WHY: The script uses literal tabs before continued statements; the PR diff shows spaces instead, creating a style inconsistency.\n- scripts/stage_workflow_support.sh:114\u2013142 | severity=NIT | confidence=3\n  PROBLEM: The indentation in the Python heredoc simplification loop is inconsistent.\n  WHY: While subtler indentation drift is cosmetic only, the inconsistent use of tabs/spaces can confuse maintainers and lint warnings, even though the code is valid shell.\n- scripts/review_apply_fixes.sh:2083\u20132089 | severity=MAJOR | confidence=4\n  PROBLEM: The newly added `archive_transcript` call is not guarded by a success-of-previous-step check and may run even if the editor did not succeed.\n  WHY: The caller flow may call `archive_transcript` even when the `mv \"${tmp_output}\" \"${EDITOR_SUMMARY_FILE}\"` or preconditions fail, leading to archiving a failed run or stale file.\n- Requirement: Add `tests/test_transcript_archive.sh` and `tests/test_header_render.sh`.\n  Expected change site: repository root tests directory\n  Evidence of absence: No new test file `tests/test_transcript_archive.sh` or `tests/test_header_render.sh` is present in the PR changed files or in the file system; their presence would have been listed in `pr_changed_files.txt` and `pr_diff.patch` if they existed.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "69b0e9c581288e2958a2caea68d553ac36ea7fc9f7a479897a3f167412b51812",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3659,
+    "run_id": "29207507441",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29207507441",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260712212808_e654fd3391",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3659,
+    "run_id": "29207507441"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 7 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-07-12T21:28:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
