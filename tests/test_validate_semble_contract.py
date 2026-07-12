@@ -215,6 +215,7 @@ def test_validate_workflow_lists_semble_support_files_in_helper_manifest() -> No
 		"scripts/install_semble.sh",
 		"scripts/semble_helpers.sh",
 		"scripts/build_semble_wrapper.sh",
+		"scripts/transcript_archive.sh",
 	]
 	for snippet in required_snippets:
 		assert snippet in wf, f"validate.yml missing snippet: {snippet}"
@@ -225,6 +226,7 @@ def test_validate_workflow_lists_serena_support_files_in_helper_manifest() -> No
 	required_snippets = [
 		"UNATTENDED_PHASE: validate",
 		"EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}",
+		"UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}",
 		"SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}",
 		'- name: Initialize Serena runtime state',
 		'echo "SERENA_AVAILABLE=false"',
@@ -313,6 +315,7 @@ def test_validate_process_includes_serena_bootstrap_and_prompt_hooks() -> None:
 	assert 'filter_runtime_status_noise()' in text
 	assert "*' .serena/'*|*' .serena')" in text
 	assert 'current_hash="$(sha256sum .serena/project.yml' in text
+	assert 'source "${_validate_script_dir}/transcript_archive.sh"' in text
 	assert "git status --porcelain --untracked-files=all -- . ':!validation/**' | filter_runtime_status_noise | sort > \"${PRE_GENERATE_STATUS_FILE}\"" in text
 	assert "git status --porcelain --untracked-files=all -- . ':!validation/**' | filter_runtime_status_noise | sort > \"${POST_GENERATE_STATUS_FILE}\"" in text
 
@@ -325,8 +328,10 @@ def test_validate_process_includes_discover_and_diagnose_semble_hooks() -> None:
 	assert 'append_validate_semble_context()' in text
 	assert 'discover_semble_query="$(build_validate_discover_semble_query || true)"' in text
 	assert 'append_validate_semble_context "${discover_semble_query}" "${VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS}" "Validate Discover Context"' in text
+	assert 'archive_transcript "${GITHUB_RUN_ID:-local-run}" "validate-discover" "${DISCOVER_OUTPUT_FILE}"' in text
 	assert 'diagnose_semble_query="$(build_validate_diagnose_semble_query || true)"' in text
 	assert 'append_validate_semble_context "${diagnose_semble_query}" "${VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS}" "Validate Diagnose Context"' in text
+	assert 'archive_transcript "${GITHUB_RUN_ID:-local-run}" "validate-diagnose" "${DIAGNOSE_OUTPUT_FILE}"' in text
 
 
 def test_self_heal_includes_semble_and_serena_prompt_hooks() -> None:

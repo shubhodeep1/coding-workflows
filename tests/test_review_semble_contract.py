@@ -147,10 +147,12 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert "SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}" in workflow
 	assert "UNATTENDED_PHASE: review_autofix" in workflow
 	assert "EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}" in workflow
+	assert "UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}" in workflow
 	assert 'helper=".codex-workflow-src/scripts/stage_workflow_support.sh"' in stage_step_block
 	assert 'helper=".codex-workflow-src-main/scripts/stage_workflow_support.sh"' in stage_step_block
 	assert 'WORKFLOW_SOURCE_REPO="shubhodeep1/coding-workflows" \\' in stage_step_block
 	assert 'bash "${helper}"' in stage_step_block
+	assert 'Backfilled transcript_archive.sh into the runtime support bundle from ${backfill_src}' in stage_step_block
 	assert "render_prompt.py" in main_primary_line
 	# build_semble_wrapper.sh stays in the optional-bootstrap loop once the BM25
 	# wrapper was extracted to a shared script (semble 0.1.3 ships no
@@ -173,7 +175,9 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/${f}"' in preflight_block
 	assert "for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do" in stage_helper
 	assert "for f in emit_event.sh emit_event.py; do" in stage_helper
+	assert "for f in transcript_archive.sh; do" in stage_helper
 	assert 'Optional events mirror helper ${f} is unavailable in checked-out support sources; stable text-prefix mirroring remains disabled.' in stage_helper
+	assert 'Optional transcript archive helper ${f} is unavailable in checked-out support sources; transcript archiving remains disabled.' in stage_helper
 	assert 'Optional Serena support asset ${f} is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_helper
 	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"' in stage_helper
 	assert 'install -m 0644 "${serena_template_src}" "${SUPPORT_SCRIPTS_DIR}/templates/serena_project.yml.j2"' in stage_helper
@@ -373,9 +377,12 @@ def test_editor_targeted_file_context_and_prompt_render_path_passes_flags() -> N
 	assert '--semble-query-from "${EDITOR_SEMBLE_QUERY_FILE}"' in apply_fixes
 	assert '--semble-max-chunks "${SEMBLE_TARGETED_CONTEXT_MAX_CHUNKS:-6}"' in apply_fixes
 	assert "{{SERENA_TOOL_HINTS}}" in apply_fixes
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh"' in apply_fixes
+	assert '<compaction-rules>' in apply_fixes
 	assert 'EDITOR_SERENA_TOOL_HINTS=""' in apply_fixes
 	assert 'Serena hints:' in apply_fixes
 	assert 'SERENA_TOOL_HINTS="${EDITOR_SERENA_TOOL_HINTS}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"' in apply_fixes
+	assert 'archive_transcript "${GITHUB_RUN_ID:-local-run}" "review-editor" "${EDITOR_SUMMARY_FILE}"' in apply_fixes
 	assert "serena_runtime_noise_should_be_ignored()" in apply_fixes
 	assert "SERENA_PROJECT_PREEXISTED" in apply_fixes
 	assert "SERENA_PROJECT_BOOTSTRAP_HASH" in apply_fixes

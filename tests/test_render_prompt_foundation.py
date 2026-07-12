@@ -134,6 +134,14 @@ def test_render_prompt_sh_renders_implement_contract_defaults_and_env_values() -
 
 
 def test_render_prompt_sh_renders_header_with_empty_repo_learnings() -> None:
+	header_compaction_rules = (
+		"<compaction-rules>\n"
+		"If you compact context:\n"
+		"- Preserve the latest file-read result for every file still likely to be edited in this run.\n"
+		"- Preserve the exact structured-output contract, including required section headings and JSON/Q-ID schemas.\n"
+		"- When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side `.transcripts/<run_id>-<phase>-<ts>.json` archive instead of re-emitting raw transcript or tool-call history.\n"
+		"</compaction-rules>\n"
+	)
 	proc = subprocess.run(
 		["bash", str(RENDER_PROMPT_SH), str(REPO_ROOT / "prompts" / "header.txt")],
 		cwd=str(REPO_ROOT),
@@ -145,10 +153,21 @@ def test_render_prompt_sh_renders_header_with_empty_repo_learnings() -> None:
 
 	assert proc.returncode == 0, proc.stderr
 	assert proc.stderr == ""
-	assert proc.stdout == "Role: AI pipeline phase agent. Goal: produce the artefact described below.\n\n"
+	assert proc.stdout == (
+		"Role: AI pipeline phase agent. Goal: produce the artefact described below.\n\n\n"
+		+ header_compaction_rules
+	)
 
 
 def test_render_prompt_sh_renders_header_with_populated_repo_learnings() -> None:
+	header_compaction_rules = (
+		"<compaction-rules>\n"
+		"If you compact context:\n"
+		"- Preserve the latest file-read result for every file still likely to be edited in this run.\n"
+		"- Preserve the exact structured-output contract, including required section headings and JSON/Q-ID schemas.\n"
+		"- When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side `.transcripts/<run_id>-<phase>-<ts>.json` archive instead of re-emitting raw transcript or tool-call history.\n"
+		"</compaction-rules>\n"
+	)
 	proc = subprocess.run(
 		["bash", str(RENDER_PROMPT_SH), str(REPO_ROOT / "prompts" / "header.txt")],
 		cwd=str(REPO_ROOT),
@@ -168,6 +187,8 @@ def test_render_prompt_sh_renders_header_with_populated_repo_learnings() -> None
 		"Repository learnings from prior merged work:\n"
 		"- Prefer bounded prompt injections\n"
 		"- Keep memory extraction fail-open\n"
+		"\n"
+		+ header_compaction_rules
 	)
 
 
