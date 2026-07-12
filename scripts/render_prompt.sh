@@ -342,25 +342,6 @@ resolve_assembly_source_path()
 	printf '%s\n' "${prompt_path}"
 }
 
-resolve_prompt_root_dir()
-{
-	local prompt_path="$1"
-	local prompt_dir=""
-	local prompt_dir_name=""
-
-	prompt_dir="$(dirname -- "${prompt_path}")"
-	prompt_dir_name="$(basename -- "${prompt_dir}")"
-	if [ "${prompt_dir_name}" = "prompts" ]; then
-		printf '%s\n' "${prompt_dir}"
-		return 0
-	fi
-	if [ "${prompt_dir_name}" = "_templates" ] && [ "$(basename -- "$(dirname -- "${prompt_dir}")")" = "prompts" ]; then
-		printf '%s\n' "$(dirname -- "${prompt_dir}")"
-		return 0
-	fi
-	printf '%s\n' "${prompt_dir}"
-}
-
 collect_prompt_placeholders()
 {
 	local placeholder_source_file="$1"
@@ -411,7 +392,6 @@ ASSEMBLED_PROMPT_FILE=""
 				echo "assemble_prompt.sh not found for ${PROMPT_FILE}" >&2
 				exit 1
 			fi
-			PROMPT_ROOT_DIR="$(resolve_prompt_root_dir "${ASSEMBLY_SOURCE_FILE}")"
 			ASSEMBLED_PROMPT_FILE="$(mktemp "${TMPDIR:-/tmp}/.${PROMPT_BASENAME}.assembled.XXXXXX")"
 			trap cleanup_temp_files EXIT
 			"${ASSEMBLE_PROMPT_SH}" "${PROMPT_FILE}" > "${ASSEMBLED_PROMPT_FILE}"
@@ -486,7 +466,7 @@ while IFS= read -r placeholder_name; do
 	fi
 done < <(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")
 
-if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
+if [ -n "${ASSEMBLED_PROMPT_FILE}" ] || [ -n "${IDENTITY_RECALL_INJECTED_FILE:-}" ]; then
 	"${RENDER_ARGS[@]}"
 	exit 0
 fi

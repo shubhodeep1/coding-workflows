@@ -160,6 +160,20 @@ def test_parse_failure_is_fail_open_for_synthetic_malformed_prompt() -> None:
 		assert identity_proc.stderr.strip() == "IDENTITY_REINJECT_PARSE_FAIL: mode-malformed reason=metadata_extract_failed"
 
 
+def test_identity_only_path_cleans_tmpdir_temp_files() -> None:
+	with tempfile.TemporaryDirectory(prefix="identity_recall_tmpdir_") as td:
+		tmpdir = Path(td)
+		proc = _run_render(
+			REPO_ROOT / "prompts" / "mode-plan.txt",
+			env_overrides={
+				"TMPDIR": str(tmpdir),
+				"UNATTENDED_IDENTITY_REINJECT_ENABLED": "true",
+			},
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert list(tmpdir.iterdir()) == [], [path.name for path in tmpdir.iterdir()]
+
+
 def test_inline_prompt_uses_canonical_mode_metadata() -> None:
 	with tempfile.TemporaryDirectory(prefix="identity_recall_inline_") as td:
 		root = Path(td)
@@ -228,6 +242,7 @@ def main() -> int:
 	test_flag_on_renders_or_fails_open_per_prompt_shape()
 	test_wrapped_goal_paragraph_is_captured_in_full()
 	test_parse_failure_is_fail_open_for_synthetic_malformed_prompt()
+	test_identity_only_path_cleans_tmpdir_temp_files()
 	test_inline_prompt_uses_canonical_mode_metadata()
 	test_shared_prelude_path_injects_and_cleans_temp_files()
 	print("test_identity_recall_render.sh: PASS")
