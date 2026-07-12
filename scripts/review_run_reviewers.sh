@@ -1869,14 +1869,52 @@ fi
 
 # Initialise the prompt-input running-budget tracker.  Keeps cumulative
 # bytes across every _embed_input_file invocation in the heredoc below
-# under _PROMPT_BUDGET_TOTAL_BYTES (default 800KB ≈ 200k tokens at
-# ~4 bytes/token) so a single oversized input artifact (e.g. a 500KB
-# PR diff) can't blow past the reviewer model's context window. The
-# current default gpt-5.4 has a 272k standard context (lower than the
-# legacy editor default's 400k); 200k of inputs leaves room for the
-# static prefix (~10k tokens) and response budget (~30k tokens)
-# within the 272k window.
-_init_prompt_budget
+# under the budget passed to _init_prompt_budget so a single oversized
+# input artifact (e.g. a 500KB PR diff) can't blow past either the
+# reviewer model's context window OR codex-cli's hard stdin cap.
+#
+# codex-cli's `turn/start` imposes a hard 1,048,576-character stdin cap on
+# the WHOLE prompt.  The assembled reviewer prompt (see
+# assemble_reviewer_prompt) is `pre_assembled_static.txt` (unattended
+# system instructions + agents.md + trimmed README — ~190KB today and
+# growing) PLUS this reviewer template, the checklist, and memory/semble
+# context, all wrapped OUTSIDE the _embed_input_file budget, PLUS the
+# budgeted body.  The historical flat 800KB embed budget was sized against
+# a stale "static prefix ~10k tokens (~40KB)" assumption; once the static
+# prefix grew past ~190KB the assembled prompt for a large PR overshot the
+# 1,048,576-char cap and EVERY reviewer failed with
+# "turn/start ... Input exceeds the maximum length of 1048576 characters"
+# (run 29181029369 / PR #3643 — all 6 reviewers, ~100 min, then exit 1).
+#
+# Size the embed budget from the hard cap MINUS the measured static prefix
+# MINUS a reserve for the non-embedded scaffolding, so the total assembled
+# prompt stays under the cap regardless of how large the static docs grow.
+# Only ever tighten below the historical default — never widen past it.
+REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES="${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES:-1048576}"
+REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES="${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES:-175000}"
+REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES="${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES:-200000}"
+reviewer_static_prefix_bytes=0
+if [ -f ./pre_assembled_static.txt ]; then
+  reviewer_static_prefix_bytes="$(wc -c < ./pre_assembled_static.txt 2>/dev/null | tr -d '[:space:]' || printf '0')"
+fi
+if ! [[ "${reviewer_static_prefix_bytes}" =~ ^[0-9]+$ ]]; then
+  reviewer_static_prefix_bytes=0
+fi
+# Fail-safe: if the static prefix could not be measured, assume a
+# conservative large prefix so the budget still tightens rather than
+# silently reverting to the oversized flat default.
+if [ "${reviewer_static_prefix_bytes}" -le 0 ]; then
+  reviewer_static_prefix_bytes=200000
+fi
+reviewer_embed_budget_bytes=$(( REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES - reviewer_static_prefix_bytes - REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES ))
+if [ "${reviewer_embed_budget_bytes}" -lt "${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES}" ]; then
+  reviewer_embed_budget_bytes="${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES}"
+fi
+if [ "${reviewer_embed_budget_bytes}" -gt "${_PROMPT_BUDGET_TOTAL_BYTES:-800000}" ]; then
+  reviewer_embed_budget_bytes="${_PROMPT_BUDGET_TOTAL_BYTES:-800000}"
+fi
+echo "Reviewer prompt embed budget: ${reviewer_embed_budget_bytes} bytes (codex stdin cap ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}, measured static prefix ${reviewer_static_prefix_bytes}, scaffold reserve ${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES})."
+_init_prompt_budget "${reviewer_embed_budget_bytes}"
 {
   cat <<__REVIEWER_PROMPT__
 ${ITERATION_CONTEXT_BLOCK}
@@ -2462,6 +2500,25 @@ assemble_reviewer_prompt() {
 
 # Assemble the default (pass 1 / single-pass) prompt.
 assemble_reviewer_prompt "${REVIEWER_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"
+
+# Safety net: log the assembled reviewer prompt size and warn if it is at or
+# over codex-cli's hard `turn/start` stdin cap. The dynamic embed budget
+# above is sized to keep the total under the cap, but memory/semble context
+# and the untrusted-input blocks ride outside that budget, so surface any
+# residual overshoot here for diagnosis instead of only discovering it as
+# an opaque "Input exceeds the maximum length of 1048576 characters" per-
+# reviewer failure (run 29181029369 / PR #3643). Mirrors the equivalent
+# guard in scripts/review_rb_judge.sh.
+if [ -f "${REVIEWER_PROMPT_FILE}" ]; then
+  reviewer_prompt_assembled_bytes="$(wc -c < "${REVIEWER_PROMPT_FILE}" 2>/dev/null | tr -d '[:space:]' || printf '0')"
+  if ! [[ "${reviewer_prompt_assembled_bytes}" =~ ^[0-9]+$ ]]; then
+    reviewer_prompt_assembled_bytes=0
+  fi
+  echo "Reviewer prompt assembled size: ${reviewer_prompt_assembled_bytes} bytes (codex stdin cap: ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES})."
+  if [ "${reviewer_prompt_assembled_bytes}" -ge "${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}" ]; then
+    echo "::warning::Reviewer prompt is ${reviewer_prompt_assembled_bytes} bytes, at or over codex's ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}-character turn/start stdin cap. Reviewers will fail with 'Input exceeds the maximum length'. Lower REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES headroom or shrink pre_assembled_static.txt / memory / semble context."
+  fi
+fi
 
 # ── Reviewer failback / health helpers ──────────────────────────────
 REVIEWER_FAILBACK_CHAINS_FILE="${REVIEWER_FAILBACK_CHAINS_FILE:-${SUPPORT_SCRIPTS_DIR:-scripts}/reviewer_failback_chains.json}"
