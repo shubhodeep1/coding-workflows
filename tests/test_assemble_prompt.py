@@ -283,6 +283,7 @@ def test_render_prompt_sh_body_with_include_line_hard_fails_without_input_alread
 		)
 
 		env = _base_env()
+		env.pop("RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED", None)
 		env["RENDER_PROMPT_SKIP_SYNTAX_VALIDATION"] = "1"
 		env["MODEL_FAMILY_OVERLAY"] = "X"
 		proc = subprocess.run(
@@ -317,6 +318,7 @@ def test_render_prompt_sh_input_already_assembled_keeps_include_line_literal() -
 		)
 
 		env = _base_env()
+		env.pop("RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED", None)
 		env["RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED"] = "1"
 		env["RENDER_PROMPT_SKIP_SYNTAX_VALIDATION"] = "1"
 		env["MODEL_FAMILY_OVERLAY"] = "X"

@@ -2265,7 +2265,7 @@ reviewer_prompt_rendered="$(mktemp)"
   # fail to resolve, and hard-fail every reviewer with PromptAssemblyError
   # (observed on tele-funtoken-msg-scoring run 29182737982). The skip-syntax
   # gate alone does NOT cover this — include expansion runs before it.
-  RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED=1 RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${REVIEWER_PROMPT_BODY_FILE}"
+  RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED=1 RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 bash "${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh" "${REVIEWER_PROMPT_BODY_FILE}"
 ) > "${reviewer_prompt_rendered}"
 mv "${reviewer_prompt_rendered}" "${REVIEWER_PROMPT_BODY_FILE}"
 
