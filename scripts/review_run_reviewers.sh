@@ -2299,7 +2299,15 @@ reviewer_prompt_rendered="$(mktemp)"
   # render_prompt.py exits 1 and every reviewer fails (observed on run
   # 28936678508). Placeholder substitution still runs for the static
   # scaffolding placeholders.
-  RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${REVIEWER_PROMPT_BODY_FILE}"
+  #
+  # Also mark the body as already-assembled so render_prompt.py does NOT run
+  # include-assembly over it: a PR diff/context line like
+  # `{% include "_partials/site_footer.html" %}` (ubiquitous in template-driven
+  # consumer repos) would otherwise be parsed as a real prompt-fragment include,
+  # fail to resolve, and hard-fail every reviewer with PromptAssemblyError
+  # (observed on tele-funtoken-msg-scoring run 29182737982). The skip-syntax
+  # gate alone does NOT cover this — include expansion runs before it.
+  RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED=1 RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 bash "${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh" "${REVIEWER_PROMPT_BODY_FILE}"
 ) > "${reviewer_prompt_rendered}"
 mv "${reviewer_prompt_rendered}" "${REVIEWER_PROMPT_BODY_FILE}"
 
@@ -2440,10 +2448,12 @@ prepare_reviewer_prompt_for_model() {
   # diff + comments) with the {{MODEL_FAMILY_OVERLAY}} placeholder appended, so
   # skip the strict syntax gate for the same reason as the base body render
   # above — otherwise a diff carrying literal {{...}} / {%...%} tokens would
-  # fail this render and silently drop the model-family overlay.
+  # fail this render and silently drop the model-family overlay. Mark it as
+  # already-assembled too so an embedded `{% include "..." %}` diff line does
+  # not trigger include-assembly and hard-fail the render (run 29182737982).
   if ! (
     cd "${SUPPORT_ROOT_DIR:-.}"
-    RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 MODEL_FAMILY_OVERLAY="${overlay_text}" bash "${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh" "${model_prompt_file}"
+    RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED=1 RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 MODEL_FAMILY_OVERLAY="${overlay_text}" bash "${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh" "${model_prompt_file}"
   ) > "${model_prompt_rendered_file}"; then
     rm -f "${model_prompt_file}" "${model_prompt_rendered_file}"
     if [ -n "${log_file}" ]; then
