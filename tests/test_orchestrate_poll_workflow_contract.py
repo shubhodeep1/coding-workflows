@@ -61,6 +61,10 @@ def test_nag_reminder_assets_and_judge_wiring_are_present() -> None:
 	assert 'source scripts/nag_reminder.sh 2>/dev/null || true' in poller
 	assert 'judge_nag_block="$(maybe_inject_nag "orchestrate-poll-judge" "${judge_silent_rounds}")"' in poller
 	assert 'judge_json_candidate="$(extract_judge_json_with_status "${JUDGE_OUTPUT_FILE}")"' in poller
+	assert 'cleaned = re.sub(r"```(?:json)?\\s*", "", raw)' in poller
+	assert 'cleaned = re.sub(r"```\\s*$", "", cleaned, flags=re.MULTILINE)' in poller
+	assert 'cleaned = re.sub(r"```(?:json)?\\\\s*", "", raw)' not in poller
+	assert 'cleaned = re.sub(r"```\\\\s*$", "", cleaned, flags=re.MULTILINE)' not in poller
 
 
 def main() -> int:

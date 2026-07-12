@@ -191,8 +191,8 @@ def emit_if_valid(candidate: str) -> bool:
 if emit_if_valid(raw.strip()):
     raise SystemExit(0)
 
-cleaned = re.sub(r"```(?:json)?\\s*", "", raw)
-cleaned = re.sub(r"```\\s*$", "", cleaned, flags=re.MULTILINE)
+cleaned = re.sub(r"```(?:json)?\s*", "", raw)
+cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE)
 
 brace_depth = 0
 start = None

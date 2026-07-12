@@ -121,7 +121,7 @@ test_invalid_thresholds_clamp_to_three()
 	local raw=""
 	local actual=""
 
-	for raw in 0 11 abc ''; do
+	for raw in 0 11 abc '' 999999999999999999999999999999999999; do
 		actual="$({
 			(
 				export UNATTENDED_NAG_SILENT_ROUNDS="${raw}"
@@ -140,6 +140,26 @@ test_invalid_thresholds_clamp_to_three()
 		)
 	})"
 	assert_equals "5" "${actual}"
+}
+
+test_large_silent_round_values_still_trigger_reminders()
+{
+	local tmpdir="$1"
+	local stderr_file="${tmpdir}/stderr.txt"
+	local actual=""
+	local expected=$'<reminder>\nReminder body\n</reminder>'
+
+	actual="$({
+		(
+			export UNATTENDED_NAG_REMINDER_ENABLED=true
+			export UNATTENDED_NAG_SILENT_ROUNDS=3
+			source "${REPO_ROOT}/scripts/nag_reminder.sh"
+			maybe_inject_nag "review-editor" "999999999999999999999999999999999999" "Reminder body"
+		) 2>"${stderr_file}"
+	})"
+
+	assert_equals "${expected}" "${actual}"
+	assert_file_empty "${stderr_file}"
 }
 
 test_missing_prompt_fragment_fails_open()
@@ -172,6 +192,7 @@ with_temp_workspace test_flag_off_emits_nothing
 with_temp_workspace test_counter_below_threshold_emits_nothing
 with_temp_workspace test_threshold_emits_reminder_and_reset_path_is_empty
 with_temp_workspace test_invalid_thresholds_clamp_to_three
+with_temp_workspace test_large_silent_round_values_still_trigger_reminders
 with_temp_workspace test_missing_prompt_fragment_fails_open
 
 echo "test_nag_reminder.sh: PASS"

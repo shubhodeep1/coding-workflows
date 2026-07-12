@@ -29,12 +29,14 @@ nag_silent_round_threshold()
 		normalized="0"
 	fi
 
-	if [ "${normalized}" -lt 1 ] || [ "${normalized}" -gt 10 ]; then
-		printf '3\n'
-		return 0
-	fi
+	case "${normalized}" in
+		1|2|3|4|5|6|7|8|9|10)
+			printf '%s\n' "${normalized}"
+			return 0
+			;;
+	esac
 
-	printf '%s\n' "${normalized}"
+	printf '3\n'
 }
 
 _nag_reminder_prompt_file()
@@ -106,6 +108,10 @@ maybe_inject_nag()
 			if [ -z "${silent_rounds}" ]; then
 				silent_rounds="0"
 			fi
+			case "${silent_rounds}" in
+				0|1|2|3|4|5|6|7|8|9|10) ;;
+				*) silent_rounds="11" ;;
+			esac
 			;;
 	esac
 
