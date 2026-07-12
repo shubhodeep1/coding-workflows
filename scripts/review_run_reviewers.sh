@@ -1890,9 +1890,10 @@ fi
 # MINUS a reserve for the non-embedded scaffolding, so the total assembled
 # prompt stays under the cap regardless of how large the static docs grow.
 # Only ever tighten below the historical default — never widen past it.
-REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES="${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES:-1048576}"
-REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES="${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES:-175000}"
-REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES="${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES:-200000}"
+REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES="$(reviewer_parse_positive_int_env REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES 1048576)"
+REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES="$(reviewer_parse_positive_int_env REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES 175000)"
+REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES="$(reviewer_parse_positive_int_env REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES 200000)"
+_PROMPT_BUDGET_TOTAL_BYTES="$(reviewer_parse_positive_int_env _PROMPT_BUDGET_TOTAL_BYTES 800000)"
 reviewer_static_prefix_bytes=0
 if [ -f ./pre_assembled_static.txt ]; then
   reviewer_static_prefix_bytes="$(wc -c < ./pre_assembled_static.txt 2>/dev/null | tr -d '[:space:]' || printf '0')"
@@ -1907,11 +1908,14 @@ if [ "${reviewer_static_prefix_bytes}" -le 0 ]; then
   reviewer_static_prefix_bytes=200000
 fi
 reviewer_embed_budget_bytes=$(( REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES - reviewer_static_prefix_bytes - REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES ))
-if [ "${reviewer_embed_budget_bytes}" -lt "${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES}" ]; then
-  reviewer_embed_budget_bytes="${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES}"
+if [ "${reviewer_embed_budget_bytes}" -lt 0 ]; then
+  echo "::warning::Reviewer prompt static prefix (${reviewer_static_prefix_bytes}) plus scaffold reserve (${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES}) leaves negative embed headroom (${reviewer_embed_budget_bytes}) under codex stdin cap ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}; forcing embed budget to 0." >&2
+  reviewer_embed_budget_bytes=0
+elif [ "${reviewer_embed_budget_bytes}" -lt "${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES}" ]; then
+  echo "::warning::Reviewer embed budget floor ${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES} exceeds cap-safe headroom ${reviewer_embed_budget_bytes}; continuing with reduced embed budget to stay under codex stdin cap." >&2
 fi
-if [ "${reviewer_embed_budget_bytes}" -gt "${_PROMPT_BUDGET_TOTAL_BYTES:-800000}" ]; then
-  reviewer_embed_budget_bytes="${_PROMPT_BUDGET_TOTAL_BYTES:-800000}"
+if [ "${reviewer_embed_budget_bytes}" -gt "${_PROMPT_BUDGET_TOTAL_BYTES}" ]; then
+  reviewer_embed_budget_bytes="${_PROMPT_BUDGET_TOTAL_BYTES}"
 fi
 echo "Reviewer prompt embed budget: ${reviewer_embed_budget_bytes} bytes (codex stdin cap ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}, measured static prefix ${reviewer_static_prefix_bytes}, scaffold reserve ${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES})."
 _init_prompt_budget "${reviewer_embed_budget_bytes}"
@@ -2516,7 +2520,7 @@ if [ -f "${REVIEWER_PROMPT_FILE}" ]; then
   fi
   echo "Reviewer prompt assembled size: ${reviewer_prompt_assembled_bytes} bytes (codex stdin cap: ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES})."
   if [ "${reviewer_prompt_assembled_bytes}" -ge "${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}" ]; then
-    echo "::warning::Reviewer prompt is ${reviewer_prompt_assembled_bytes} bytes, at or over codex's ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}-character turn/start stdin cap. Reviewers will fail with 'Input exceeds the maximum length'. Lower REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES headroom or shrink pre_assembled_static.txt / memory / semble context."
+    echo "::warning::Reviewer prompt is ${reviewer_prompt_assembled_bytes} bytes, at or over codex's ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}-character turn/start stdin cap. Reviewers will fail with 'Input exceeds the maximum length'. Raise REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES to tighten the embed budget or shrink pre_assembled_static.txt / memory / semble context."
   fi
 fi
 
