@@ -274,3 +274,123 @@
 
 - **Top stall signals:** `Run reviewer models` context overflow in `review_autofix`; late strict-render CI failures; hosted-runner wait in recent poll/sweep/review runs; `poll` dominating otherwise successful orchestrator runs.
 - **Material data gaps:** only `35/676` runs with parsed deep-dive telemetry; `cache_hit_rate` unavailable; OpenRouter token/cache usage missing; no Serena traffic to evaluate; GH API call counts/retries/rate-limit sleeps not instrumented.
+
+## Deep Audit — Workflows & Scripts (2026-07-12)
+
+### Section 1: Bug & Correctness Sweep
+
+#### CONSIST-001
+- **File path:** `.github/workflows/review_autofix.yml:1029-1038,4515-4533,4704-4724,5585-5594`
+- **Severity:** Medium
+- **Category tag:** `consistency`
+- **Description:** `review_autofix.yml` has four phase-transition paths that add issue labels with raw `POST /labels` writes only. The deterministic-skip path adds `ai:ready-to-merge` at `1029-1038`, and three fallback `set_issue_phase_label_resilient` copies at `4515-4533`, `4704-4724`, and `5585-5594` do the same for `ai:ready-to-merge`, `ai:review-blocked`, and `ai:closed`. The canonical helper in `scripts/label_helpers.sh:166-217` instead reads current labels, removes all other AI phase labels, and writes the full replacement set. Because `scripts/orchestrate_lib.py:1315-1336,2073-2082` resolves phase by first-match priority, stale phase labels can remain hidden on the issue instead of being cleaned up, leaving raw label state inconsistent for any caller that checks label presence/absence directly.
+- **Recommended fix:** Route all issue phase transitions in `review_autofix.yml` through `scripts/label_helpers.sh:set_issue_phase_label_resilient`. If late-stage cleanup makes sourcing fragile, stage/copy `label_helpers.sh` once and keep only a thin bootstrap in YAML.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001
+- **File path:** `scripts/review_collect_pr_metadata.sh:209-226; scripts/gh_helpers.sh:735-900`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** On the normal PR path, `review_collect_pr_metadata.sh` fetches PR payload, PR issue comments, and PR review comments as separate logical reads, and adds a fourth logical read for top-level reviews when `REVIEW_BREAK_GLASS_ENABLED` is enabled. The repo already has a GraphQL-first batching helper, `gh_pr_with_all_comments()`, that consolidates PR metadata, issue comments, and review comments in one call and is already used in `scripts/review_rb_judge.sh:973-985` and `scripts/orchestrate_poll_process.sh:14776-14788`.
+- **Current call count:** `3` logical fetches on the common path; `4` when top-level reviews are enabled. `--paginate` can increase underlying HTTP call count further.
+- **Proposed call count:** `1` logical GraphQL fetch after extending the helper to also emit top-level reviews.
+- **Batching pattern to extend:** `scripts/gh_helpers.sh:761-900` — `gh_pr_with_all_comments <owner> <repo> <pr_number> [preloaded_meta_json]`
+- **Recommended fix:** Extend `gh_pr_with_all_comments()` to return a `reviews` array, then have `review_collect_pr_metadata.sh` persist `.meta`, `.comments`, `.review_comments`, and `.reviews` from that single payload instead of refetching each resource separately.
+
+#### API-002
+- **File path:** `scripts/orchestrate_poll_process.sh:11212-11223; scripts/orchestrate_poll_process.sh:10489-10513`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** The standalone stall-recovery discovery stage still loops over seven phase labels and runs `gh issue list --label ...` once per label before making a separate GraphQL marker fetch. This creates an 8-call discovery fan-out before candidate hydration, even though the same file already contains GraphQL batching helpers for related discovery work.
+- **Current call count:** `8` logical discovery calls in this path (`7` label scans + `1` marker GraphQL call).
+- **Proposed call count:** `1` logical GraphQL discovery call in the common case, with the current multi-call path kept only as a pagination fallback when any alias reports `hasNextPage=true`.
+- **Batching pattern to extend:** `scripts/orchestrate_poll_process.sh:10489-10513` — `_fetch_standalone_marker_issues_graphql`
+- **Recommended fix:** Extend `_fetch_standalone_marker_issues_graphql` (or replace it with a sibling helper) to return the seven phase buckets plus the existing marker buckets in one aliased GraphQL query, then union the issue numbers locally before `_fetch_candidate_issue_details_graphql`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path:** `scripts/gh_helpers.sh:532-545; .github/workflows/plan.yml:1991-2004; .github/workflows/implement.yml:4837-4847; .github/workflows/orchestrate.yml:1013-1026; scripts/check_failure_triage.sh:66-79; scripts/implement_diagnose_post_codex_failure.sh:52-62`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** `_safe_gh_jq` is duplicated in five non-canonical locations. The copies have already drifted: the canonical helper logs a `mktemp` failure before returning, while the `implement.yml` and `implement_diagnose_post_codex_failure.sh` copies silently return `1`.
+- **Recommended fix:** Keep `scripts/gh_helpers.sh::_safe_gh_jq` as the only implementation, with the existing “same args as `gh api`” signature. Update the workflow/script callers to source or stage `gh_helpers.sh` instead of embedding local copies.
+
+#### DUP-002
+- **File path:** `scripts/label_helpers.sh:130-217; scripts/validate_process.sh:1039-1147; scripts/orchestrate_poll_process.sh:2234-2352; scripts/review_rb_judge.sh:729-761; .github/workflows/review_autofix.yml:1029-1038,4495-4533,4691-4724,5576-5594`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** Label-creation and phase-swap logic is reimplemented across multiple scripts and workflows. The copies are no longer behaviorally identical: `label_helpers.sh` performs a full phase replacement, while several `review_autofix.yml` copies are add-only, which is the direct source of `CONSIST-001`.
+- **Recommended fix:** Make `scripts/label_helpers.sh` the only owner of `ensure_label_exists <label> <repo>` and `set_issue_phase_label_resilient <issue_number> <target_label> <repo>`. Update the listed callers to source/stage that helper instead of carrying inline variants.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001
+- **File path:** `.github/workflows/plan.yml:986-1274`
+- **Severity:** High
+- **Category tag:** `expression-limit`
+- **Estimated expression size:** `19,165` chars
+- **Headroom remaining:** `1,835` chars
+- **Description:** This interpolated `run:` block is already above the 85% risk threshold. It embeds a large planning prompt heredoc plus multiple `${{ }}` interpolations, so normal instruction growth can push it over GitHub’s 21,000-character limit and invalidate the workflow at parse time.
+- **Recommended fix:** Move the planning prompt body to a file under `prompts/` (for example `prompts/mode-plan.txt`) and keep the step as a thin wrapper that renders it with `scripts/render_prompt.sh`.
+
+#### EXPR-002
+- **File path:** `.github/workflows/implement.yml:3624-3869`
+- **Severity:** High
+- **Category tag:** `expression-limit`
+- **Estimated expression size:** `18,329` chars
+- **Headroom remaining:** `2,671` chars
+- **Description:** This interpolated `run:` block bundles the scope-block handler, destructive-commit handler, long inline comments, and Telegram payload assembly into one YAML scalar. It is already over the 18,000-character high-risk threshold.
+- **Recommended fix:** Extract this handler to a dedicated script (for example `scripts/implement_handle_blocked_commit.sh`) or split the scope-block and destructive-block branches into separate steps. The repo already uses this pattern in `scripts/implement_diagnose_post_codex_failure.sh`.
+
+#### EXPR-003
+- **File path:** `.github/workflows/memory_maintenance.yml:45-391`
+- **Severity:** Medium
+- **Category tag:** `expression-limit`
+- **Estimated expression size:** `15,152` chars
+- **Headroom remaining:** `5,848` chars
+- **Description:** This `run:` block includes two inline Python heredocs, OpenRouter request construction, and several `${{ }}` interpolations. It has crossed the 15,000-character medium-risk threshold, so incremental feature growth can push it into the high-risk band quickly.
+- **Recommended fix:** Extract the shell flow to `scripts/` and move the inline Python programs into dedicated Python modules or separate helper scripts.
+
+- No inline `if:` expression crossed the 15,000-character threshold in the audited workflows.
+- No workflow exceeded the 800 KB file-size risk threshold; the largest audited workflow was `.github/workflows/review_autofix.yml` at `354,374` characters.
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001
+- **File path:** `scripts/orchestrate_poll_process.sh:9253-9260,11299-11300`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `read_standalone_state_json()` is definition-only in repo-local search and is not used by the active standalone recovery loop, which parses state directly from cached `comments_json` at `11299-11300`. That leaves an unexercised paginated-comments helper in a hot file.
+- **Recommended fix:** Remove `read_standalone_state_json()` if it is truly obsolete, or switch the live path to use it and add coverage if the paginated fetch path is still intended.
+
+#### SHELL-001
+- **File path:** `scripts/implement_diagnose_post_codex_failure.sh:269-273`
+- **Severity:** Low
+- **Category tag:** `shellcheck`
+- **Description:** ShellCheck reports SC2015 on `[ "${_attempt}" -lt 3 ] && sleep 4 || true`. Under `set -euo pipefail`, the trailing `|| true` masks a failed or interrupted `sleep` and makes the retry control flow harder to reason about.
+- **Recommended fix:** Rewrite the tail as `if [ "${_attempt}" -lt 3 ]; then sleep 4; fi`.
+
+- No new `TODO`/`FIXME`/`HACK` markers were found in `.github/workflows/*.yml`, `scripts/*.sh`, or `scripts/*.py` during this pass.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | EXPR-001, EXPR-002 |
+| Medium | 6 | CONSIST-001, API-001, API-002, DUP-001, DUP-002, EXPR-003 |
+| Low | 2 | DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2 workflows | Medium |
+| API call optimization | 3 scripts | Medium |
+| Code modularization | 10 files | Large |
+| Expression size reduction | 3 workflows | Medium |
+| Medium/Low fixes | 2 scripts | Small |
