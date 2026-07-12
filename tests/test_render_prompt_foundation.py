@@ -578,6 +578,74 @@ def test_render_prompt_sh_skips_syntax_validation_when_env_opt_in_set() -> None:
 	assert '`{% include "_prelude_common.txt" %}` directives).' in skip_proc.stdout
 
 
+# Body reproducing the reviewer/editor include-assembly hard-fail (tele-funtoken
+# PRs shubhodeep1/tele-funtoken-msg-scoring#3548 -> _partials/site_footer.html,
+# shubhodeep1/tele-funtoken-msg-scoring#3549 -> _partials/header-cro-v2.html):
+# a reviewed template's full source is embedded verbatim in the already-assembled
+# body, so a STANDALONE double-quoted `{% include "..." %}` line appears on its
+# own line (not inside prose/backticks like _EMBEDDED_DIFF_BODY). That line
+# matches INCLUDE_DIRECTIVE_PATTERN; before the fix the include pass tried to
+# resolve it, failed to find the fragment on disk, and exited 1 for every
+# reviewer. Both quote styles are covered — the double-quoted form is the one
+# that reproduced in the field.
+_EMBEDDED_STANDALONE_INCLUDE_BODY = (
+	"Static scaffolding line.\n"
+	"{{WORKFLOW_EDIT_RESTRICTION}}\n"
+	"=== BEGIN changed file: templates/_partials/game_switcher.html ===\n"
+	'<div class="switcher">\n'
+	'{% include "_partials/header-cro-v2.html" %}\n'
+	"{% include '_partials/gtm_noscript.html' %}\n"
+	"</div>\n"
+	"=== END changed file ===\n"
+)
+
+
+def test_render_prompt_py_skip_syntax_validation_preserves_standalone_include_lines() -> None:
+	# Regression: an already-assembled reviewer/editor body rendered with
+	# --skip-syntax-validation must assemble successfully even when embedded
+	# changed-file content carries a standalone `{% include "..." %}` line.
+	# The include directive is the reviewed diff's own content and must survive
+	# into the prompt verbatim, not be resolved or hard-fail the render.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_standalone_include_") as td:
+		prompt_file = Path(td) / "reviewer_prompt_body.txt"
+		prompt_file.write_text(_EMBEDDED_STANDALONE_INCLUDE_BODY, encoding="utf-8")
+
+		proc = _run_render_prompt_py(
+			prompt_file,
+			variables={"WORKFLOW_EDIT_RESTRICTION": "- Do not change CI workflows."},
+			extra_args=["--skip-syntax-validation"],
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stderr == ""
+	assert "Included prompt fragment not found" not in proc.stderr
+	# Static placeholder substituted; both include quote styles preserved verbatim.
+	assert "- Do not change CI workflows.\n" in proc.stdout
+	assert '{% include "_partials/header-cro-v2.html" %}\n' in proc.stdout
+	assert "{% include '_partials/gtm_noscript.html' %}\n" in proc.stdout
+	assert "{{WORKFLOW_EDIT_RESTRICTION}}" not in proc.stdout
+
+
+def test_render_prompt_py_resolves_standalone_include_for_trusted_templates() -> None:
+	# The fix is scoped to the --skip-syntax-validation (untrusted-body) path:
+	# a trusted template rendered WITHOUT the opt-out must still resolve
+	# `{% include "..." %}` directives, and still hard-fail on a missing
+	# fragment. This locks in that the fix did not silently disable the
+	# include-assembly feature for real prompt templates.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_trusted_include_") as td:
+		prompts_dir = Path(td) / "prompts"
+		prompts_dir.mkdir(parents=True, exist_ok=True)
+		prompt_file = prompts_dir / "mode-sample.txt"
+		prompt_file.write_text('{% include "missing_fragment.txt" %}\n', encoding="utf-8")
+
+		proc = _run_render_prompt_py(prompt_file, cwd=Path(td))
+
+	assert proc.returncode == 1
+	assert proc.stdout == ""
+	assert "Included prompt fragment not found" in proc.stderr
+	assert "missing_fragment.txt" in proc.stderr
+
+
 def test_render_prompt_py_uses_checked_in_persona_source() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_persona_source_") as td:
 		repo_root = Path(td)
@@ -715,6 +783,8 @@ def main() -> int:
 	test_render_prompt_py_hard_fails_on_embedded_diff_template_tokens_without_skip()
 	test_render_prompt_py_skip_syntax_validation_allows_embedded_diff_tokens()
 	test_render_prompt_sh_skips_syntax_validation_when_env_opt_in_set()
+	test_render_prompt_py_skip_syntax_validation_preserves_standalone_include_lines()
+	test_render_prompt_py_resolves_standalone_include_for_trusted_templates()
 	test_render_prompt_py_uses_checked_in_persona_source()
 	test_apply_phase_c_persona_prefix_accepts_legacy_mode_name_only_call()
 	test_render_prompt_py_prepends_phase_c_persona_prefix_without_altering_legacy_body()
