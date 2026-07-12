@@ -99,7 +99,7 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
 
   What this means for operators: PRs that add or change templates carrying double-quoted `{% include %}` lines now pass AI Review instead of dying in the reviewer stage with an empty editor no-op. No configuration change is needed; the fix ships from `main` via the main-primary staging path.
 
-  For contributors: the single-quoted `{% include '...' %}` form never matched the double-quote-only `INCLUDE_DIRECTIVE_PATTERN`, so it slipped through before this fix — the real defect was scanning the untrusted body for include directives at all, not the quote style, so the regex was left unchanged and the scan is now skipped for untrusted bodies. Surfaced by `shubhodeep1/tele-funtoken-msg-scoring` PRs #3548 (`_partials/site_footer.html`) and #3549 (`_partials/header-cro-v2.html`).
+  For contributors: the single-quoted `{% include '...' %}` form never matched the double-quote-only `INCLUDE_DIRECTIVE_PATTERN`, so it slipped through before this fix — the real defect was scanning the untrusted body for include directives at all, not the quote style, so the regex was left unchanged and the scan is now skipped for untrusted bodies. Surfaced by `shubhodeep1/tele-funtoken-msg-scoring` PRs `shubhodeep1/tele-funtoken-msg-scoring#3548` (`_partials/site_footer.html`) and `shubhodeep1/tele-funtoken-msg-scoring#3549` (`_partials/header-cro-v2.html`).
 
 ## [v1.1.0] - 2026-03-22
 

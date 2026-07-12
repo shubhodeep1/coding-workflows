@@ -579,7 +579,8 @@ def test_render_prompt_sh_skips_syntax_validation_when_env_opt_in_set() -> None:
 
 
 # Body reproducing the reviewer/editor include-assembly hard-fail (tele-funtoken
-# PRs #3548 -> _partials/site_footer.html, #3549 -> _partials/header-cro-v2.html):
+# PRs shubhodeep1/tele-funtoken-msg-scoring#3548 -> _partials/site_footer.html,
+# shubhodeep1/tele-funtoken-msg-scoring#3549 -> _partials/header-cro-v2.html):
 # a reviewed template's full source is embedded verbatim in the already-assembled
 # body, so a STANDALONE double-quoted `{% include "..." %}` line appears on its
 # own line (not inside prose/backticks like _EMBEDDED_DIFF_BODY). That line
