@@ -263,14 +263,16 @@ def test_render_prompt_sh_flag_true_cleans_up_assembled_temp_file() -> None:
 	assert list((repo_root / "prompts").glob(".mode-sample.txt.assembled.*")) == []
 
 
-def test_render_prompt_sh_body_with_include_line_hard_fails_without_input_already_assembled() -> None:
-	# Guards the exposure directly: a reviewer/editor BODY that embeds a raw PR
-	# diff/context line `{% include "..." %}` is parsed as a real prompt-fragment
-	# include and hard-fails with PromptAssemblyError when include-assembly runs
-	# over it. RENDER_PROMPT_SKIP_SYNTAX_VALIDATION alone does NOT prevent this —
-	# include expansion happens before the syntax gate. (tele-funtoken run
-	# 29182737982.)
-	with tempfile.TemporaryDirectory(prefix="render_prompt_body_include_unfixed_") as td:
+def test_render_prompt_sh_body_with_include_line_preserved_with_skip_syntax_validation() -> None:
+	# Guards the shipped contract via the render_prompt.sh shim: a reviewer/editor
+	# BODY that embeds a raw PR diff/context line `{% include "..." %}` must survive
+	# verbatim when RENDER_PROMPT_SKIP_SYNTAX_VALIDATION is set — the env var marks
+	# the input as an already-composed untrusted body, so include-assembly is skipped
+	# and the standalone include line is treated as the diff's own content rather than
+	# a fragment to expand. Mirrors the direct-invocation coverage in
+	# tests/test_render_prompt_foundation.py for the bash entrypoint + env-var path.
+	# (Renderer behavior locked in by PR #3647.)
+	with tempfile.TemporaryDirectory(prefix="render_prompt_body_include_skip_syntax_") as td:
 		repo_root = Path(td)
 		_copy_prompt_runtime_scripts(repo_root)
 		body_file = repo_root / "reviewer_prompt_body.txt"
@@ -295,10 +297,12 @@ def test_render_prompt_sh_body_with_include_line_hard_fails_without_input_alread
 			timeout=60,
 		)
 
-	assert proc.returncode == 1
-	assert proc.stdout == ""
-	assert "Included prompt fragment not found" in proc.stderr
-	assert "_partials/site_footer.html" in proc.stderr
+	assert proc.returncode == 0, proc.stderr
+	assert "Included prompt fragment not found" not in proc.stderr
+	# Static placeholder substitution still runs for the trusted scaffolding.
+	assert "Reviewer body. Overlay: X\n" in proc.stdout
+	# The untrusted include line survives as literal text (never expanded).
+	assert ' {% include "_partials/site_footer.html" %}\n' in proc.stdout
 
 
 def test_render_prompt_sh_input_already_assembled_keeps_include_line_literal() -> None:
