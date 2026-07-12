@@ -79,6 +79,21 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
 - Updated review/autofix prompt assembly to inline pre-assembled static context directly into editor/reviewer prompts (removed runtime "read pre_assembled_static.txt first" round-trip instructions).
 - Updated README to remove all references to adaptive reasoning, reasoning schedules, and smoke test reasoning overrides.
 
+### Fixed
+- Reviewer and editor prompt renders no longer hard-fail when a PR diff embeds a template `{% include "..." %}` line. The review/autofix pipeline builds the reviewer and editor prompt bodies by concatenating the raw PR diff, comments, and reviewer findings, then runs them through `scripts/render_prompt.sh` for placeholder substitution. `render_prompt.py` was also expanding `{% include "..." %}` directives over that already-composed body, so a single context line such as `{% include "_partials/site_footer.html" %}` — ubiquitous in template-driven consumer repos (Jinja/Django/Nunjucks/Twig/Liquid all share the syntax) — was parsed as a real prompt-fragment include, failed to resolve under the prompt search path, and took the whole run down with `PromptAssemblyError`. This surfaced on consumer `tele-funtoken-msg-scoring` AI Review run `29182737982` (consumer PR 3548), where the reviewer step exited in ~1s and every downstream editor/commit step was skipped.
+
+  The three render sites that embed untrusted PR content now set the new opt-in `RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED=1` env var, which maps to `render_prompt.py --input-already-assembled` and skips include-assembly for that body while still rendering the static-scaffolding placeholders. The earlier `RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1` fix only silenced the `validate_supported_template_syntax` gate, which runs *after* include expansion, so it never covered this path.
+
+  | The numbers that matter | Value |
+  | --- | --- |
+  | New opt-in env var | `RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED` (default unset → include assembly unchanged) |
+  | Wired in `render_prompt.sh` | maps to `--input-already-assembled`, guarded against double-add |
+  | Body render sites fixed | `scripts/review_run_reviewers.sh` (reviewer base + model-family overlay), `scripts/review_apply_fixes.sh` (editor) |
+  | Regression tests | `tests/test_assemble_prompt.py` (unfixed body hard-fails; fixed body keeps the include line literal and still renders placeholders) |
+  | Trigger | consumer `tele-funtoken-msg-scoring` run `29182737982`, consumer PR 3548 |
+
+  What this means for operators: a consumer PR whose diff contains templating syntax no longer deterministically fails AI Review. No consumer-side change is required — the fix lives entirely in this library's shared prompt renderer and ships on the next `@stable` bump. Trusted `prompts/` template renders keep strict include assembly and still fail loudly on a genuine missing fragment, so real prompt-authoring typos are still caught (`tests/test_assemble_prompt.py` still asserts this).
+
 ### Added
 - `test-and-mark-stable.yml`: E2E smoke test workflow that exercises all pipeline phases
   (clarify → plan → implement → review/edit) before marking a version stable. Creates a

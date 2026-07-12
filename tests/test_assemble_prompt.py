@@ -263,6 +263,82 @@ def test_render_prompt_sh_flag_true_cleans_up_assembled_temp_file() -> None:
 	assert list((repo_root / "prompts").glob(".mode-sample.txt.assembled.*")) == []
 
 
+def test_render_prompt_sh_body_with_include_line_hard_fails_without_input_already_assembled() -> None:
+	# Guards the exposure directly: a reviewer/editor BODY that embeds a raw PR
+	# diff/context line `{% include "..." %}` is parsed as a real prompt-fragment
+	# include and hard-fails with PromptAssemblyError when include-assembly runs
+	# over it. RENDER_PROMPT_SKIP_SYNTAX_VALIDATION alone does NOT prevent this —
+	# include expansion happens before the syntax gate. (tele-funtoken run
+	# 29182737982.)
+	with tempfile.TemporaryDirectory(prefix="render_prompt_body_include_unfixed_") as td:
+		repo_root = Path(td)
+		_copy_prompt_runtime_scripts(repo_root)
+		body_file = repo_root / "reviewer_prompt_body.txt"
+		body_file.write_text(
+			"Reviewer body. Overlay: {{MODEL_FAMILY_OVERLAY}}\n"
+			"=== PR DIFF (untrusted) ===\n"
+			"@@ -1,3 +1,3 @@\n"
+			' {% include "_partials/site_footer.html" %}\n',
+			encoding="utf-8",
+		)
+
+		env = _base_env()
+		env.pop("RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED", None)
+		env["RENDER_PROMPT_SKIP_SYNTAX_VALIDATION"] = "1"
+		env["MODEL_FAMILY_OVERLAY"] = "X"
+		proc = subprocess.run(
+			["bash", str(repo_root / "scripts" / "render_prompt.sh"), str(body_file)],
+			cwd=str(repo_root),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode == 1
+	assert proc.stdout == ""
+	assert "Included prompt fragment not found" in proc.stderr
+	assert "_partials/site_footer.html" in proc.stderr
+
+
+def test_render_prompt_sh_input_already_assembled_keeps_include_line_literal() -> None:
+	# The fix: with RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED=1 the body is not
+	# re-run through include-assembly, so an embedded `{% include "..." %}` diff
+	# line survives verbatim while static-scaffolding placeholders still render.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_body_include_fixed_") as td:
+		repo_root = Path(td)
+		_copy_prompt_runtime_scripts(repo_root)
+		body_file = repo_root / "reviewer_prompt_body.txt"
+		body_file.write_text(
+			"Reviewer body. Overlay: {{MODEL_FAMILY_OVERLAY}}\n"
+			"=== PR DIFF (untrusted) ===\n"
+			"@@ -1,3 +1,3 @@\n"
+			' {% include "_partials/site_footer.html" %}\n',
+			encoding="utf-8",
+		)
+
+		env = _base_env()
+		env.pop("RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED", None)
+		env["RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED"] = "1"
+		env["RENDER_PROMPT_SKIP_SYNTAX_VALIDATION"] = "1"
+		env["MODEL_FAMILY_OVERLAY"] = "X"
+		proc = subprocess.run(
+			["bash", str(repo_root / "scripts" / "render_prompt.sh"), str(body_file)],
+			cwd=str(repo_root),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stderr == ""
+	# Placeholder substitution still runs for the static scaffolding.
+	assert "Reviewer body. Overlay: X\n" in proc.stdout
+	# The untrusted include line survives as literal text (never expanded).
+	assert ' {% include "_partials/site_footer.html" %}\n' in proc.stdout
+
+
 def main() -> int:
 	tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
 	for test_fn in tests:

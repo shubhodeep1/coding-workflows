@@ -1443,7 +1443,14 @@ editor_prompt_rendered="$(mktemp)"
   # template-syntax gate — otherwise render_prompt.py exits 1 and the editor
   # step hard-fails (same class as the reviewer body render in
   # review_run_reviewers.sh). Placeholder substitution still runs.
-  RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 SEMBLE_PREFETCH="" SERENA_TOOL_HINTS="${EDITOR_SERENA_TOOL_HINTS}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"
+  #
+  # Mark the body as already-assembled too: targeted_file_context.py can inline
+  # judge-prompt templates verbatim (see above) and the raw PR diff can carry a
+  # `{% include "..." %}` context line; either would otherwise trigger
+  # include-assembly and hard-fail the editor with PromptAssemblyError, the same
+  # defect that took down the reviewer step on run 29182737982. The skip-syntax
+  # gate does not cover include expansion, which runs before it.
+  RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED=1 RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 SEMBLE_PREFETCH="" SERENA_TOOL_HINTS="${EDITOR_SERENA_TOOL_HINTS}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"
 ) > "${editor_prompt_rendered}"
 mv "${editor_prompt_rendered}" "${EDITOR_PROMPT_BODY_FILE}"
 
