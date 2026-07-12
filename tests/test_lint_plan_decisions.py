@@ -9,6 +9,7 @@ import io
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -63,6 +64,18 @@ def test_missing_decisions_section_warns() -> None:
 
 		warnings = mod.lint_file(plan_path)
 		assert warnings == ["missing `## Decisions` section"]
+
+
+def test_read_error_emits_file_specific_warning() -> None:
+	mod = _import_lint_module()
+	with tempfile.TemporaryDirectory() as temp_dir_name:
+		temp_root = Path(temp_dir_name)
+		plan_path = _write_plan(temp_root, "unreadable.md", "# Plan\n")
+
+		with mock.patch.object(Path, "read_text", side_effect=PermissionError("denied")):
+			warnings = mod.lint_file(plan_path)
+
+		assert warnings == ["could not read plan file (PermissionError: denied)"]
 
 
 def test_decisions_section_without_valid_records_warns() -> None:
@@ -215,6 +228,31 @@ def test_main_emits_structured_warnings_and_returns_zero() -> None:
 		assert "::warning file=" in stderr_text
 		assert "[lint_plan_decisions] missing `## Decisions` section" in stderr_text
 		assert "warning-plan.md" in stderr_text
+
+
+def test_main_returns_zero_when_linting_raises_unexpected_exception() -> None:
+	mod = _import_lint_module()
+	stderr_buffer = io.StringIO()
+
+	with mock.patch.object(mod, "lint_tree", side_effect=PermissionError("denied")):
+		with contextlib.redirect_stderr(stderr_buffer):
+			exit_code = mod.main([])
+
+	stderr_text = stderr_buffer.getvalue()
+	assert exit_code == 0
+	assert "[lint_plan_decisions] unexpected linter failure (PermissionError: denied); continuing fail-open" in stderr_text
+
+
+def test_main_returns_zero_on_argument_parse_failure() -> None:
+	mod = _import_lint_module()
+	stderr_buffer = io.StringIO()
+
+	with contextlib.redirect_stderr(stderr_buffer):
+		exit_code = mod.main(["--not-a-real-flag"])
+
+	stderr_text = stderr_buffer.getvalue()
+	assert exit_code == 0
+	assert "[lint_plan_decisions] argument parsing failed with exit=2; continuing fail-open" in stderr_text
 
 
 def main() -> int:

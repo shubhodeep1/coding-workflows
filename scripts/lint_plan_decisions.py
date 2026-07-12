@@ -39,6 +39,29 @@ def discover_plan_files(root: Path) -> list[Path]:
 	return sorted(plans_directory.glob("*.md"))
 
 
+def _emit_advisory_warning(
+	warning_text: str, plan_path: Path | None = None, stream: TextIO | None = None
+) -> None:
+	candidate_streams: list[TextIO | None] = []
+	if stream is not None:
+		candidate_streams.append(stream)
+	candidate_streams.extend((sys.stderr, sys.__stderr__, sys.stdout, sys.__stdout__))
+	if plan_path is None:
+		formatted_warning = f"::warning::{WARNING_PREFIX} {warning_text}"
+	else:
+		formatted_warning = f"::warning file={plan_path.as_posix()}::{WARNING_PREFIX} {warning_text}"
+	used_stream_ids: set[int] = set()
+	for candidate_stream in candidate_streams:
+		if candidate_stream is None or id(candidate_stream) in used_stream_ids:
+			continue
+		used_stream_ids.add(id(candidate_stream))
+		try:
+			print(formatted_warning, file=candidate_stream)
+			return
+		except Exception:
+			continue
+
+
 def _is_fence_line(markdown_line: str) -> bool:
 	return FENCED_CODE_BLOCK_RE.match(markdown_line) is not None
 
@@ -123,7 +146,10 @@ def _field_has_content(block_lines: list[str], start_index: int, inline_value: s
 
 def lint_file(plan_path: Path) -> list[str]:
 	"""Return advisory warnings for a single plan file."""
-	markdown_text = plan_path.read_text(encoding="utf-8", errors="replace")
+	try:
+		markdown_text = plan_path.read_text(encoding="utf-8", errors="replace")
+	except Exception as exc:
+		return [f"could not read plan file ({exc.__class__.__name__}: {exc})"]
 	decisions_section_text = _extract_decisions_section(markdown_text)
 	if decisions_section_text is None:
 		return ["missing `## Decisions` section"]
@@ -163,20 +189,31 @@ def lint_file(plan_path: Path) -> list[str]:
 def lint_tree(root: Path) -> list[tuple[Path, str]]:
 	"""Return `(path, warning)` pairs for every plan under `docs/plans/*.md`."""
 	results: list[tuple[Path, str]] = []
-	for plan_path in discover_plan_files(root):
-		for warning_text in lint_file(plan_path):
+	try:
+		plan_paths = discover_plan_files(root)
+	except Exception as exc:
+		return [
+			(
+				root / "docs" / "plans",
+				f"could not enumerate plan files ({exc.__class__.__name__}: {exc})",
+			)
+		]
+	for plan_path in plan_paths:
+		try:
+			plan_warnings = lint_file(plan_path)
+		except Exception as exc:
+			results.append(
+				(plan_path, f"could not lint plan file ({exc.__class__.__name__}: {exc})")
+			)
+			continue
+		for warning_text in plan_warnings:
 			results.append((plan_path, warning_text))
 	return results
 
 
 def emit_warnings(warnings: list[tuple[Path, str]], stream: TextIO | None = None) -> None:
-	if stream is None:
-		stream = sys.stderr
 	for plan_path, warning_text in warnings:
-		print(
-			f"::warning file={plan_path.as_posix()}::{WARNING_PREFIX} {warning_text}",
-			file=stream,
-		)
+		_emit_advisory_warning(warning_text, plan_path=plan_path, stream=stream)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -187,9 +224,19 @@ def main(argv: list[str] | None = None) -> int:
 		default=Path("."),
 		help="Repository root containing docs/plans/*.md (default: current directory).",
 	)
-	args = parser.parse_args(argv)
+	try:
+		args = parser.parse_args(argv)
+	except SystemExit as exc:
+		if exc.code not in (0, None):
+			_emit_advisory_warning(f"argument parsing failed with exit={exc.code}; continuing fail-open")
+		return 0
 
-	emit_warnings(lint_tree(args.root))
+	try:
+		emit_warnings(lint_tree(args.root))
+	except Exception as exc:
+		_emit_advisory_warning(
+			f"unexpected linter failure ({exc.__class__.__name__}: {exc}); continuing fail-open"
+		)
 	return 0
 
 
