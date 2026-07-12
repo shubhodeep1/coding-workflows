@@ -251,9 +251,37 @@ RENDER_ARGS=(
 	--legacy-mode-name "${MODE_NAME}"
 )
 
+INPUT_ALREADY_ASSEMBLED_FLAG_ADDED=false
 if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
 	RENDER_ARGS+=(--input-already-assembled)
+	INPUT_ALREADY_ASSEMBLED_FLAG_ADDED=true
 fi
+
+# Opt-in: callers rendering an already-COMPOSED prompt body that embeds
+# untrusted content (reviewer/editor bodies concatenate raw PR-diff + comment
+# text, which can legitimately contain literal `{% include "..." %}` lines from
+# a template-driven consumer repo — Jinja/Django/Nunjucks/Twig/Liquid all use
+# that syntax) set RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED=1 so render_prompt.py
+# does NOT re-run include-assembly over that body. Without it, a diff/context
+# line like `{% include "_partials/site_footer.html" %}` is parsed as a real
+# prompt-fragment include, fails to resolve under the prompt search path, and
+# hard-fails the whole render with PromptAssemblyError (observed on
+# tele-funtoken-msg-scoring run 29182737982). This is distinct from
+# RENDER_PROMPT_SKIP_SYNTAX_VALIDATION below: the skip-syntax gate only silences
+# validate_supported_template_syntax and does NOT stop the earlier
+# assemble_prompt_fragments include expansion. Callers that embed untrusted
+# content may need this flag, RENDER_PROMPT_SKIP_SYNTAX_VALIDATION, or both,
+# depending on which failure mode they need to suppress. Placeholder
+# substitution for the static scaffolding still runs. Default (unset) keeps
+# include assembly for every trusted template render.
+case "${RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED:-}" in
+	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
+		if [ "${INPUT_ALREADY_ASSEMBLED_FLAG_ADDED}" != "true" ]; then
+			RENDER_ARGS+=(--input-already-assembled)
+			INPUT_ALREADY_ASSEMBLED_FLAG_ADDED=true
+		fi
+		;;
+esac
 
 # Opt-in: callers rendering an already-assembled prompt body that embeds
 # untrusted content (reviewer/editor bodies carry raw PR-diff + comment text,
