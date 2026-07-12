@@ -145,6 +145,8 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 
 	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}" in workflow
 	assert "SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}" in workflow
+	assert "UNATTENDED_PHASE: review_autofix" in workflow
+	assert "EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}" in workflow
 	assert 'helper=".codex-workflow-src/scripts/stage_workflow_support.sh"' in stage_step_block
 	assert 'helper=".codex-workflow-src-main/scripts/stage_workflow_support.sh"' in stage_step_block
 	assert 'WORKFLOW_SOURCE_REPO="shubhodeep1/coding-workflows" \\' in stage_step_block
@@ -170,6 +172,8 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert 'for f in ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do' in preflight_block
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/${f}"' in preflight_block
 	assert "for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do" in stage_helper
+	assert "for f in emit_event.sh emit_event.py; do" in stage_helper
+	assert 'Optional events mirror helper ${f} is unavailable in checked-out support sources; stable text-prefix mirroring remains disabled.' in stage_helper
 	assert 'Optional Serena support asset ${f} is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_helper
 	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"' in stage_helper
 	assert 'install -m 0644 "${serena_template_src}" "${SUPPORT_SCRIPTS_DIR}/templates/serena_project.yml.j2"' in stage_helper
@@ -216,6 +220,7 @@ def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() 
 	assert 'echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"' in index_block
 	assert "if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.SERENA_ENABLED == 'true'" in setup_serena_block
 	assert 'SERENA_FALLBACK_TARGET="review-autofix-editor" bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh"' in setup_serena_block
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/emit_event.sh" 2>/dev/null || true' in setup_serena_block
 	assert 'SERENA_FALLBACK target=review-autofix-editor reason=setup-failure' in setup_serena_block
 	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH=${serena_project_hash}" >> "$GITHUB_ENV"' in setup_serena_block
 	assert "if: always() && env.SERENA_ENABLED == 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'" in clear_serena_block

@@ -446,8 +446,19 @@ and shipped:
 - `SERENA_QUERY`
 - `SERENA_FALLBACK`
 - `SERENA_PROBE`
+- `EVENTS_EMIT`
+- `EVENTS_EMIT_FAIL`
 - `drift-audit:`
 - `CHECK_TRIAGE`
+
+When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
+`scripts/emit_event.py` append a fail-open JSONL mirror to
+`.events/run-<run_id>.jsonl` after the original stable text line (or
+`AI_PHASE_FAILURE_V1` comment marker) emits. The legacy text stream remains
+authoritative for current grep-based tooling, and helper-internal
+`EVENTS_EMIT*` diagnostics are not mirrored recursively. Phase D currently
+emits only `EVENTS_EMIT_FAIL` on helper-write problems; `EVENTS_EMIT` is a
+reserved additive success-path prefix for future use.
 
 LOG_PREFIX.name=LABEL_REPAIR
 LOG_PREFIX.name=LABEL_REPAIR_DIFF
@@ -513,6 +524,8 @@ LOG_PREFIX.name=SEMBLE_FALLBACK
 LOG_PREFIX.name=SERENA_QUERY
 LOG_PREFIX.name=SERENA_FALLBACK
 LOG_PREFIX.name=SERENA_PROBE
+LOG_PREFIX.name=EVENTS_EMIT
+LOG_PREFIX.name=EVENTS_EMIT_FAIL
 LOG_PREFIX.name=drift-audit:
 LOG_PREFIX.name=CHECK_TRIAGE
 

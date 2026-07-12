@@ -132,6 +132,7 @@ jobs:
       - name: Python syntax check
         run: |
           set -euo pipefail
+          python3 -m py_compile scripts/emit_event.py
           python3 -m py_compile scripts/ai_memory.py
           python3 -m py_compile scripts/ai_memory_lib.py
           python3 -m py_compile scripts/ai_context_utils.py
@@ -156,6 +157,13 @@ jobs:
         run: |
           set -euo pipefail
           ruff check --select E,F --ignore E501 scripts/*.py
+
+      - name: Event mirror shell tests
+        run: |
+          set -euo pipefail
+          bash tests/test_emit_event.sh
+          bash tests/test_emit_event_concurrent.sh
+          bash tests/test_log_prefix_regressions.sh
 
       - name: Review Semble contract test
         run: |

@@ -113,6 +113,18 @@ for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do
   install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
 done
 
+for f in emit_event.sh emit_event.py; do
+  src=".codex-workflow-src/scripts/${f}"
+  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+    src=".codex-workflow-src-main/scripts/${f}"
+  fi
+  if [ ! -f "${src}" ]; then
+    echo "::warning::Optional events mirror helper ${f} is unavailable in checked-out support sources; stable text-prefix mirroring remains disabled."
+    continue
+  fi
+  install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+done
+
 mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"
 serena_template_src=".codex-workflow-src/scripts/templates/serena_project.yml.j2"
 if [ ! -f "${serena_template_src}" ] && [ -f ".codex-workflow-src-main/scripts/templates/serena_project.yml.j2" ]; then
@@ -640,6 +652,9 @@ emit_optional_missing_notice()
 			;;
 		scripts/setup_serena.sh|scripts/serena_stats_emit.py|scripts/mcp_handshake_probe.py)
 			echo "Optional Serena support asset ${repo_path} not on ${ORIGINAL_SCRIPT_REF} yet; validation will continue without that helper."
+			;;
+		scripts/emit_event.sh|scripts/emit_event.py)
+			echo "Optional events mirror helper ${repo_path} not on ${ORIGINAL_SCRIPT_REF} yet; stable text-prefix mirroring remains disabled."
 			;;
 		scripts/templates/serena_project.yml.j2)
 			echo "Optional Serena template scripts/templates/serena_project.yml.j2 not on ${ORIGINAL_SCRIPT_REF} yet; validation will continue without Serena project templating."
