@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/lint_plan_decisions.py:142-158 | severity=high | confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `_field_has_content` returns `False` as soon as it hits any subsequent `DECISION_FIELD_RE` line, even when that line has valid inline content.\n  WHY: This causes spurious \"missing field\" warnings for earlier fields in common decision-record layouts where each required field is written on its own bullet with inline text.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Document `DOCS_DECISION_LINT_ENABLED=false` in `README.md` (append the new variable row under the existing variables-table anchor instead of reordering the table)\n  expected_change_site: README.md (under the variables table near the end-of-table anchor after the WORKFLOW_RETRO_* rows)\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  EVIDENCE: The new `DOCS_DECISION_LINT_ENABLED` row appears between the `WORKFLOW_RETRO_*` rows instead of being appended at the table's natural end anchor; it was inserted before the `## Semantic Cache` section.\n- requirement: \"Add `scripts/lint_plan_decisions.py` and `tests/test_lint_plan_decisions.py`.\"\n  expected_change_site: docs/INVENTORY.md (Scripts section)\n  confidence=4\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_20]\n  EVIDENCE: `scripts/lint_plan_decisions.py` is listed, but `tests/test_lint_plan_decisions.py` is absent despite being exercised in CI and named as a Phase-H deliverable.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement:\nDocument `DOCS_DECISION_LINT_ENABLED=false` in `README.md` (and keep changes minimal \u2014 append the new variable row under the existing variables-table anchor instead of reordering the table)\n  Expected change site: `README.md` (under the variables table near line 1171)\n  Evidence of absence:\nThe new `DOCS_DECISION_LINT_ENABLED` row was added, but it appears **between** the `WORKFLOW_RETRO_*` rows instead of being **appended** at the natural end-of-table anchor as required. The table now runs:\n- `WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY`\n- `WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED`\n- `DOCS_DECISION_LINT_ENABLED`\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/lint_plan_decisions.py:142-158 | severity=high | confidence=5\n  PROBLEM: The function returns `False` as soon as it encounters any subsequent `DECISION_FIELD_RE` line, even if that line carries valid inline content that should count as field content.\n  WHY: This makes the linter falsely report earlier fields as missing in common multi-field plan entries where each required field has inline text.\n- Requirement: \"Add `scripts/lint_plan_decisions.py` and `tests/test_lint_plan_decisions.py`.\"\n  Expected change site: `docs/INVENTORY.md` (Scripts section)\n  Evidence of absence: The PR diff and current `docs/INVENTORY.md` list `scripts/lint_plan_decisions.py` (added by a prior autofix iteration) but `tests/test_lint_plan_decisions.py` is not listed. The CI workflow already runs `python3 tests/test_lint_plan_decisions.py`, so the test file must be inventoried.\n  ISSUE_CONFIDENCE: 4\n  SEVERITY: NIT\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Document `DOCS_DECISION_LINT_ENABLED=false` in `README.md` (append the new variable row under the existing variables-table anchor instead of reordering the table).  \n  Expected change site: README.md (under the variables table near the end-of-table anchor after the WORKFLOW_RETRO_* rows).  \n  Evidence of absence: The row was added but the table order was changed (new entry inserted between WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED and Semantic Cache section instead of appended at the natural end-of-table anchor). This violates the explicit \"append under existing anchor / stay surgical / no reordering\" constraint in the linked issue #3628.  \n  SEVERITY: MAJOR  \n  ISSUE_CONFIDENCE: 5\n- Requirement: Add `tests/test_lint_plan_decisions.py` to the Scripts section of docs/INVENTORY.md.  \n  Expected change site: docs/INVENTORY.md (after the `lint_plan_decisions.py` entry).  \n  Evidence of absence: The linter script is listed but the dedicated test file (now exercised in ci.yml and participating in the CI contract) is absent despite being a named Phase-H deliverable. The inventory parity gate in tests/inventory_parity.py will flag this.  \n  SEVERITY: MAJOR  \n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "9aa56172f338e2b7849626235e809f9598bced3747411d6191e5fc5854d69b82",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3629,
+    "run_id": "29176063219",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29176063219",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260712032718_655c152223",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3629,
+    "run_id": "29176063219"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-12T03:27:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
