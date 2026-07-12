@@ -30,3 +30,5 @@ validation/
 # Workflow-fetched support-source checkouts (runtime-only, never committed)
 .codex-workflow-src/
 .codex-workflow-src-main/
+prompts/.*.identity.*
+prompts/.*.assembled.*
