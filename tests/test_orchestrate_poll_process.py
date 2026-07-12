@@ -12995,14 +12995,17 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in wf_body
 	assert (
 		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh '
-		'review_conflict_prepare.sh"'
+		'review_conflict_prepare.sh render_prompt.py"'
 	) in stage_helper_body
 	assert 'SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in stage_helper_body
 	assert 'SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"' in stage_helper_body
 	assert 'SUPPORT_SCRIPTS_DIR="scripts"' not in stage_helper_body
-	# render_prompt.py is staged optionally on main so shim branches resolve
-	# their backend (PR #3057); keep this list in sync with review_autofix.yml.
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh render_prompt.py"' in stage_helper_body
+	# render_prompt.py was moved out of OPTIONAL_BOOTSTRAP_SCRIPTS into
+	# MAIN_PRIMARY_BOOTSTRAP_SCRIPTS by PR #3594 so main-side validator fixes
+	# reach wedged branches (see the dedicated contract test in
+	# tests/test_review_autofix_review_pipeline_contract.py); keep this list in
+	# sync with review_autofix.yml and stage_workflow_support.sh.
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"' in stage_helper_body
 	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in stage_helper_body
 	assert "Bootstrapped ${f} from main snapshot (branch copy ignored)." in stage_helper_body
 	# The bootstrap still enumerates the script name in review_autofix.yml
