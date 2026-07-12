@@ -3423,7 +3423,18 @@ PY
   if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" "${edit_args[@]}" >/dev/null 2>"${_label_err_file}"; then
     updated_labels_json="$(echo "${plan_json}" | jq -c '.final // []' 2>/dev/null || echo "${labels_json}")"
     echo "LABEL_REPAIR issue=${issue_num} issue_state=${issue_state} pr_state=${pr_state:-none} pr_merged=${pr_merged}" >&2
+    emit_event "LABEL_REPAIR" \
+      "issue=${issue_num}" \
+      "issue_state=${issue_state}" \
+      "pr_state=${pr_state:-none}" \
+      "pr_merged=${pr_merged}"
     echo "LABEL_REPAIR_DIFF issue=${issue_num} before=$(echo "${labels_json}" | jq -c .) after=$(echo "${updated_labels_json}" | jq -c .) add=$(echo "${plan_json}" | jq -c '.add // []') remove=$(echo "${plan_json}" | jq -c '.remove // []')" >&2
+    emit_event "LABEL_REPAIR_DIFF" \
+      "issue=${issue_num}" \
+      "before=$(echo "${labels_json}" | jq -c .)" \
+      "after=$(echo "${updated_labels_json}" | jq -c .)" \
+      "add=$(echo "${plan_json}" | jq -c '.add // []')" \
+      "remove=$(echo "${plan_json}" | jq -c '.remove // []')"
     local _added_labels _removed_labels
     _added_labels="$(echo "${plan_json}" | jq -r '(.add // []) | join(",")')"
     _removed_labels="$(echo "${plan_json}" | jq -r '(.remove // []) | join(",")')"

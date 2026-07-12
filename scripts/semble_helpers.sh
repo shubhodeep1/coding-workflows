@@ -1,17 +1,35 @@
 #!/usr/bin/env bash
 # semble_helpers.sh — shared, sourceable Semble query helpers.
 
+_SEMBLE_HELPERS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
+if [ -f "${_SEMBLE_HELPERS_SCRIPT_DIR}/emit_event.sh" ]; then
+	# shellcheck disable=SC1091
+	source "${_SEMBLE_HELPERS_SCRIPT_DIR}/emit_event.sh"
+elif [ -f "scripts/emit_event.sh" ]; then
+	# shellcheck disable=SC1091
+	source scripts/emit_event.sh
+fi
+unset _SEMBLE_HELPERS_SCRIPT_DIR
+if ! type emit_event >/dev/null 2>&1; then
+	emit_event()
+	{
+		return 0
+	}
+fi
+
 _semble_log_event()
 {
 	local prefix="${1:?_semble_log_event: prefix required}"
 	local has_context="false"
 	local context_field=""
+	local -a emit_fields=()
 	shift || true
 	printf '%s' "${prefix}" >&2
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
 			context=*) has_context="true" ;;
 		esac
+		emit_fields+=("$1")
 		printf ' %s' "$1" >&2
 		shift
 	done
@@ -20,10 +38,12 @@ _semble_log_event()
 		context_field="${context_field#-}"
 		context_field="${context_field%-}"
 		if [ -n "${context_field}" ]; then
+			emit_fields+=("context=${context_field}")
 			printf ' context=%s' "${context_field}" >&2
 		fi
 	fi
 	printf '\n' >&2
+	emit_event "${prefix}" "${emit_fields[@]}"
 }
 
 _semble_target_slug()

@@ -106,6 +106,7 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
+analysis/workflow-optimization-2026-07-11.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
@@ -335,6 +336,7 @@ scripts/issue_attachment_bundle.py
 scripts/label_helpers.sh
 scripts/ledger_emit_substate.sh
 scripts/lint_plan_archival_completeness.py
+scripts/lint_plan_decisions.py
 scripts/lint_pr_body_auto_close.py
 scripts/load_workflow_overlay.py
 scripts/mark-stable.sh
@@ -548,6 +550,7 @@ tests/test_issue_pr_status_payload_fallback_contract.py
 tests/test_judge_semble_prefetch_contract.py
 tests/test_label_helpers_phase_transition_contract.py
 tests/test_lint_plan_archival_completeness.py
+tests/test_lint_plan_decisions.py
 tests/test_lint_pr_body_auto_close.py
 tests/test_mark_stable_release_tag_refspec_contract.py
 tests/test_mcp_handshake_probe.py

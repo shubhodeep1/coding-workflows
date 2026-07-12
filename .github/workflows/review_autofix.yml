@@ -93,6 +93,8 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  UNATTENDED_PHASE: review_autofix
+  EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
   REVIEWER_MODELS: |
     minimax/minimax-m2.5
     moonshotai/kimi-k2.5
@@ -3288,15 +3290,19 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/emit_event.sh" 2>/dev/null || true
+          type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
           if [ ! -f "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh" ]; then
             echo "::warning::Optional Serena bootstrap helper is unavailable at ${SUPPORT_SCRIPTS_DIR}/setup_serena.sh; leaving Serena disabled for this run."
             echo "SERENA_FALLBACK target=review-autofix-editor reason=setup-failure" >&2
+            emit_event "SERENA_FALLBACK" "target=review-autofix-editor" "reason=setup-failure"
             echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"
             exit 0
           fi
           if ! SERENA_FALLBACK_TARGET="review-autofix-editor" bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh"; then
             echo "::warning::Serena bootstrap helper failed; leaving Serena disabled for this run."
             echo "SERENA_FALLBACK target=review-autofix-editor reason=setup-failure" >&2
+            emit_event "SERENA_FALLBACK" "target=review-autofix-editor" "reason=setup-failure"
             echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"
           fi
           if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -f .serena/project.yml ]; then
@@ -5098,6 +5104,7 @@ jobs:
               || { [ "${AUTOFIX_SKIP_SELF_TRIGGERED:-false}" = "true" ] \
                 && [ "${continuation_enabled}" = "false" ]; }; }; then
             echo "AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation_enabled=${continuation_enabled} ledger_only=${is_ledger_only_commit}"
+            emit_event "AUTOFIX_DISPATCH_SKIPPED" "reason=self_triggered_autofix" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=post_commit_retrigger" "continuation_enabled=${continuation_enabled}" "ledger_only=${is_ledger_only_commit}"
             exit 0
           fi
 
@@ -5160,14 +5167,17 @@ jobs:
           elif type autofix_retrigger_has_inflight_peer >/dev/null 2>&1 \
             && autofix_retrigger_has_inflight_peer "${PR_NUMBER}" "${TARGET_BRANCH}" "${CURRENT_RUN_ID}"; then
             echo "AUTOFIX_DISPATCH_SKIPPED reason=sync_event_inflight pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger"
+            emit_event "AUTOFIX_DISPATCH_SKIPPED" "reason=sync_event_inflight" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=post_commit_retrigger"
             exit 0
           fi
 
           if [ "${is_continuation_dispatch}" = "true" ]; then
             echo "AUTOFIX_CONTINUATION_DISPATCH_ISSUED pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} settle_secs=${settle_secs} source=post_commit_retrigger"
             echo "AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation=true"
+            emit_event "AUTOFIX_DISPATCH_ISSUED" "reason=no_peer_detected" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=post_commit_retrigger" "continuation=true"
           else
             echo "AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger"
+            emit_event "AUTOFIX_DISPATCH_ISSUED" "reason=no_peer_detected" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=post_commit_retrigger"
           fi
 
           dispatched=false
@@ -5290,11 +5300,13 @@ jobs:
           if type autofix_retrigger_has_inflight_peer >/dev/null 2>&1 \
             && autofix_retrigger_has_inflight_peer "${PR_NUMBER}" "${TARGET_BRANCH}" "${CURRENT_RUN_ID}"; then
             echo "AUTOFIX_DISPATCH_SKIPPED reason=peer_inflight pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=editor_changes_lost_retrigger"
+            emit_event "AUTOFIX_DISPATCH_SKIPPED" "reason=peer_inflight" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=editor_changes_lost_retrigger"
             echo "CHANGES_LOST_REDISPATCHED=skipped_peer_inflight" >> "$GITHUB_ENV"
             exit 0
           fi
 
           echo "AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=editor_changes_lost_retrigger"
+          emit_event "AUTOFIX_DISPATCH_ISSUED" "reason=no_peer_detected" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=editor_changes_lost_retrigger"
 
           dispatched=false
 

@@ -223,6 +223,8 @@ def test_validate_workflow_lists_semble_support_files_in_helper_manifest() -> No
 def test_validate_workflow_lists_serena_support_files_in_helper_manifest() -> None:
 	wf = _workflow_text()
 	required_snippets = [
+		"UNATTENDED_PHASE: validate",
+		"EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}",
 		"SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}",
 		'- name: Initialize Serena runtime state',
 		'echo "SERENA_AVAILABLE=false"',
@@ -231,6 +233,8 @@ def test_validate_workflow_lists_serena_support_files_in_helper_manifest() -> No
 		"scripts/setup_serena.sh",
 		"scripts/serena_stats_emit.py",
 		"scripts/mcp_handshake_probe.py",
+		"scripts/emit_event.sh",
+		"scripts/emit_event.py",
 		"scripts/templates/serena_project.yml.j2",
 	]
 	for snippet in required_snippets:
