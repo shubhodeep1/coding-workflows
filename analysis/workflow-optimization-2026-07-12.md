@@ -394,3 +394,104 @@
 | Code modularization | 10 files | Large |
 | Expression size reduction | 3 workflows | Medium |
 | Medium/Low fixes | 2 scripts | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-07-12)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is proven equivalent and can be consolidated without changing retries, pagination, filters, auth, logging, or control flow. `NEEDS_VERIFICATION` means the overlap is plausible but static review did not prove semantic parity. `RISKY_SKIP` means this pass found overlap, but the call sits on a paginated, retry-sensitive, race-defensive, or otherwise non-auto-mergeable path that requires manual review.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — `RISKY_SKIP`
+- **File path and line ranges:** `.github/workflows/review_autofix.yml:514-525` and `.github/workflows/review_autofix.yml:579-584`
+- **Current call count:** up to `2` logical calls in one step on the duplicate path
+- **Proposed call count:** `1`
+- **Endpoint(s):** REST `GET /repos/{owner}/{repo}/pulls/{pull_number}/files`
+- **Evidence:** the same paginated `/files` fetch is issued twice with the same projection.
+  ```sh
+  pr_files_json=""
+  if ! pr_files_json="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename}]' 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+    pr_files_json=""
+  fi
+  ```
+  ```sh
+  if [ -z "${pr_files_json}" ] || [ "${pr_files_json}" = "[]" ]; then
+    if pr_files_json="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename}]' 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+      file_count="$(printf '%s' "${pr_files_json}" | jq 'length' 2>/dev/null || echo "${file_count:-0}")"
+    else
+      pr_files_json=""
+    fi
+  fi
+  ```
+  The second fetch is only reachable when `candidate_skip=true` and the earlier `pr_files_json` is absent/empty, so it is partly a duplicate and partly an implicit recovery path.
+- **Proposed fix:** in the same `run:` block, keep a tri-state sentinel such as `pr_files_fetch_state=not_fetched|ok_empty|ok_nonempty|failed`; reuse the first `/files` payload when it already ran, and only allow one live `/files` fetch in branches that truly skipped the doc-only probe. Preserve the existing `AUTOFIX_GATE_DET_SKIP_FILES_UNAVAILABLE` and `AUTOFIX_GATE_MATERIALITY_FILES_UNAVAILABLE` log keys.
+- **Safety rationale:** `RISKY_SKIP` because both calls use `--paginate`, and the second call currently changes behavior on the fail-open branch when the first fetch is unavailable.
+- **Downstream signal:** Do not auto-implement; manually prove that `not_fetched`, `empty`, and `failed` remain distinguishable and that existing log/output behavior is unchanged before collapsing to one `/files` fetch.
+
+#### MERGE-002 — `RISKY_SKIP`
+- **File path and line ranges:** `.github/workflows/clarify.yml:443-455` and `.github/workflows/clarify.yml:456-474`
+- **Current call count:** `2` logical calls when `SEMANTIC_CACHE_BACKEND != none`
+- **Proposed call count:** `1`
+- **Endpoint(s):** REST `GET /repos/{owner}/{repo}/issues/{issue_number}/comments`
+- **Evidence:** the step first fetches a bounded 50-comment view for prompt context, then refetches the same resource paginated for thread-history caching.
+  ```sh
+  gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+  ```
+  ```sh
+  if ! gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
+    | jq -r 'add // [] | .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"; then
+  ```
+- **Proposed fix:** inside the `Fetch issue comments` step, when semantic cache is enabled, fetch the paginated JSON once to a temp file and derive both outputs locally: `ISSUE_COMMENTS_FILE` from the first 50 sorted entries and `THREAD_HISTORY_FILE` from the full array. Keep the current cache-bypass sentinel path if the single fetch fails.
+- **Safety rationale:** `RISKY_SKIP` because the second call is paginated and the first intentionally preserves historical 50-comment prompt bounds.
+- **Downstream signal:** Do not auto-implement; manually verify exact ordering, truncation, and failure sentinel behavior before replacing the two-call flow with one paginated fetch.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — `NEEDS_VERIFICATION`
+- **File path and line ranges:** `scripts/review_collect_pr_metadata.sh:251-263,286-305,309-342` and `.github/workflows/review_autofix.yml:1911-1915`
+- **Current call count:** `2` logical calls on the linked-issue smoke-test path
+- **Proposed call count:** `1`
+- **Endpoint(s):**
+  - GraphQL `repository.pullRequest.closingIssuesReferences.nodes { number title body }`
+  - REST `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence:** the metadata collector already hydrates linked issue title/body and writes prompt context before the later smoke-test step refetches the linked issue title.
+  ```sh
+  if gh_retry "${_linked_tmp}" api graphql \
+    -f owner="${REPOSITORY_OWNER}" \
+    -f name="${REPOSITORY_NAME}" \
+    -F number="${PR_NUMBER}" \
+    -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
+    --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
+  ```
+  ```sh
+  lines.append(f"Issue #{num}: {title}")
+  if body:
+      lines.append(body)
+  ```
+  ```sh
+  ISSUE_NUM=$(echo "${PR_BODY}" | grep -oiPm1 '\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\s+(?:https?://[^[:space:]]+/${{ github.repository }}/issues/|#)\K\d+\b' || true)
+  if [ -n "${ISSUE_NUM:-}" ]; then
+    ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
+  fi
+  ```
+- **Proposed fix:** extend `scripts/review_collect_pr_metadata.sh` to export a compact `LINKED_ISSUE_TITLES_JSON` (or equivalent keyed file) from `_linked_context_raw`, not just `LINKED_ISSUES_JSON`; then update `.github/workflows/review_autofix.yml`’s smoke-test step to resolve `ISSUE_NUM` against that preloaded data before falling back to `_safe_gh_jq`.
+- **Safety rationale:** `NEEDS_VERIFICATION` because the earlier linked-issue data is available before the later call, but static review does not prove it always matches the smoke-test step’s regex-selected issue on non-default-base PRs.
+- **Downstream signal:** Verify on a review-autofix PR whose base is not the repo default branch that the preloaded linked-issue payload (including the body-text fallback path) always contains the same title the later REST issue lookup would read; only then remove the live `issues/{n}` fetch.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — the suggested batching crosses current `--paginate` comment/review fetches and optional `REVIEW_BREAK_GLASS_ENABLED` behavior, so parity must be checked manually before consolidation.
+- API-002: RISKY_SKIP — this is inside `scripts/orchestrate_poll_process.sh` stall-recovery discovery, which this audit contract explicitly excludes from auto-implementation.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | REUSE-001 |
+| RISKY_SKIP | 2 | MERGE-001, MERGE-002 |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
