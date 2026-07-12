@@ -1055,6 +1055,7 @@ jobs:
           2. Functions or modules to implement
           3. Data structures affected
           4. API or interface changes
+          4a. `## Decisions` — include a markdown section named exactly `## Decisions` with at least one decision record using the exact heading shape `### D<n> — <title>`. Each decision record must include non-empty bullets for `Chosen`, `Alternatives considered`, and `Why`. Add this section additively; do not rename or remove any existing required sections.
           5. Potential risks or edge cases
           6. Testing considerations
           7. A pre-execution self-check result

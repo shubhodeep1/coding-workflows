@@ -211,6 +211,31 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_archival_completeness.py
 
+      - name: Plan decisions lint unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_decisions.py
+
+      - name: Plan decisions advisory lint
+        continue-on-error: true
+        env:
+          DOCS_DECISION_LINT_ENABLED: ${{ vars.DOCS_DECISION_LINT_ENABLED || 'false' }}
+        run: |
+          set -euo pipefail
+          decision_lint_stderr="$(mktemp)"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_plan_decisions.py 2> "${decision_lint_stderr}"
+          if [ "${DOCS_DECISION_LINT_ENABLED}" = "true" ] && [ -s "${decision_lint_stderr}" ]; then
+            cat "${decision_lint_stderr}" >&2
+            {
+              echo "### Plan decision lint advisories"
+              echo
+              echo '```text'
+              cat "${decision_lint_stderr}"
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+          rm -f "${decision_lint_stderr}"
+
       - name: Integration PR readiness check unit tests
         # P3 from docs/postmortems/2026-05-18-project-2734-stall.md.
         # Pins the branch-name derivation + checkbox-counting logic

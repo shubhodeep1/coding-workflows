@@ -152,6 +152,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/label_helpers.sh` — label_helpers.sh — idempotent AI label creation helpers.
 - `scripts/ledger_emit_substate.sh` — Shell helper for ledger emit substate.
 - `scripts/lint_plan_archival_completeness.py` — Lint a PR that adds files under docs/completed/ for plan-archival completeness.
+- `scripts/lint_plan_decisions.py` — Advisory lint for the `## Decisions` convention in `docs/plans/*.md`.
 - `scripts/lint_pr_body_auto_close.py` — Lint PR title/body text (and optionally commit messages) for GitHub auto- close keywords that target ai:orchestrator-tracking issues.
 - `scripts/load_workflow_overlay.py` — Load .github/ai/WORKFLOW.md prompt overrides into $GITHUB_ENV.
 - `scripts/mark-stable.sh` — Mark the current stable branch as a released version.
