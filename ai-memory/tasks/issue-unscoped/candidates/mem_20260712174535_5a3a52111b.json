@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_assemble_prompt.py:297-308 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The rewritten test only checks `proc.stderr == \"\"` and no longer explicitly asserts that `\"Included prompt fragment not found\"` is absent, weakening the regression contract for the standalone include-line case.\n  WHY: The empty-stderr assertion still catches the error path, but the explicit guard from the original/foundation test was removed; some reviewers consider this functionally equivalent, but others flagged the lost contract coverage.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Rewrote the test to assert the shipped behavior: with RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1, the render succeeds (rc=0), the standalone `{% include ... %}` line survives verbatim, the static placeholder is still substituted, and no missing-fragment error is emitted.\"\n  expected_change_site: tests/test_assemble_prompt.py (test_render_prompt_sh_body_with_include_line_preserved_with_skip_syntax_validation)\n  confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: The test asserts `proc.stderr == \"\"` (line 301) but does NOT include the explicit negative assertion `\"Included prompt fragment not found\" not in proc.stderr` that the parallel foundation test at tests/test_render_prompt_foundation.py:621 uses; the original deleted test also had the explicit guard.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: \"Rewrote the test to assert the shipped behavior: with RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1, the render succeeds (rc=0), the standalone `{% include ... %}` line survives verbatim, the static placeholder is still substituted, and no missing-fragment error is emitted.\"\n  Expected change site: tests/test_assemble_prompt.py (test_render_prompt_sh_body_with_include_line_preserved_with_skip_syntax_validation)\n  Evidence of absence: The test asserts `proc.stderr == \"\"` (line 301) but does NOT include the explicit negative assertion `\"Included prompt fragment not found\" not in proc.stderr` that the parallel foundation test at tests/test_render_prompt_foundation.py:621 uses. While `proc.stderr == \"\"` is technically stronger (catches ANY stderr), the explicit string guard documents the specific security/safety contract being enforced.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_assemble_prompt.py:298-306 | severity=high | confidence=4\n  PROBLEM: The rewritten test no longer explicitly asserts that `\"Included prompt fragment not found\"` is absent from stderr, leaving only `proc.stderr == \"\"` as the guard.\n  WHY: The empty-stderr assertion still fails on the error path, but the specific contract assertion from the original test/foundation suite was removed, weakening regression coverage. (2 related items)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Requirement: \"Rewrote the test to assert the shipped behavior: ... no missing-fragment error is emitted.\"\n  Expected change site: `tests/test_assemble_prompt.py` in the function `test_render_prompt_sh_body_with_include_line_preserved_with_skip_syntax_validation`\n  Evidence of absence: The test asserts `proc.stderr == \"\"` (line 301) which implicitly covers this requirement, but does not include the explicit negative check `\"Included prompt fragment not found\" not in proc.stderr` that: (a) appeared in the parallel foundation test at `tests/test_render_prompt_foundation.py:622`, (b) explicitly documents which specific error message must not appear per PR #3647's contract change, and (c) was flagged by reviewers as the documentation of the regression being fixed. The autofix (last run diff) removed the explicit negative check in favor of the empty-stderr check. While functionally equivalent for this implementation, the explicit check serves as living documentation of the specific safety property.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_assemble_prompt.py:297-308 | severity=high | confidence=4\n  PROBLEM: The test asserts `proc.stderr == \"\"` but relies on the renderer contract for \"no missing-fragment error\" without an explicit negative assertion on the error string.\n  WHY: A future regression re-introducing the `PromptAssemblyError` for standalone `{% include %}` lines in reviewer bodies would now be caught only by the empty-stderr check; the explicit guard was present in the original test and in the parallel foundation test, so dropping it weakens regression coverage for the exact contract the PR claims to lock in.\n- Requirement: \"Rewrote the test to assert the shipped behavior: with RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1, the render succeeds (rc=0), the standalone `{% include ... %}` line survives verbatim, the static placeholder is still substituted, and no missing-fragment error is emitted.\"\n  Expected change site: tests/test_assemble_prompt.py (the renamed test function and its assertions)\n  Evidence of absence: The PR diff and LAST_RUN_DIFF assert rc=0, empty stderr, placeholder substitution, and include-line preservation, but do not assert the explicit \"no missing-fragment error\" part that the original (deleted) test, the foundation test, and the consensus reviewer findings all required. The negative error-string check was present in the pre-edit version and was removed without replacement.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "4d740bf2023b4287e7993e2322704d4fb092fb9a15db627e5ba26a68e6a46429",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3656,
+    "run_id": "29200968463",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29200968463",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260712174535_5a3a52111b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3656,
+    "run_id": "29200968463"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-12T17:45:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
