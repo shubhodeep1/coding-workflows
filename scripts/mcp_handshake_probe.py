@@ -10,30 +10,12 @@ import subprocess
 import sys
 import threading
 import time
-from pathlib import Path
 from typing import Any, Sequence
-
-_SCRIPT_DIR = Path(__file__).resolve().parent
-if str(_SCRIPT_DIR) not in sys.path:
-	sys.path.insert(0, str(_SCRIPT_DIR))
-try:
-	from emit_event import emit_event as _emit_event_helper
-except Exception:
-	_emit_event_helper = None
 
 
 REQUEST_ID: int = 1
 DEFAULT_TIMEOUT_SECONDS = 15.0
 STDERR_TAIL_LIMIT_BYTES = 65536
-
-
-def _mirror_event(prefix: str, **fields: object) -> None:
-	if _emit_event_helper is None:
-		return
-	try:
-		_emit_event_helper(prefix, **fields)
-	except Exception:
-		return
 
 
 class ProbeError(RuntimeError):
@@ -101,34 +83,21 @@ def _sanitize_log_value(value: Any) -> str:
 
 
 def _emit_probe_line(target: str, result: str, *, reason: str | None = None, detail: str | None = None, server_info: dict[str, Any] | None = None) -> None:
-	safe_target = _sanitize_log_value(target)
-	safe_result = _sanitize_log_value(result)
 	fields = [
 		"SERENA_PROBE",
-		f"target={safe_target}",
-		f"result={safe_result}",
+		f"target={_sanitize_log_value(target)}",
+		f"result={_sanitize_log_value(result)}",
 	]
-	event_fields: dict[str, object] = {
-		"target": safe_target,
-		"result": safe_result,
-	}
 	if reason:
-		safe_reason = _sanitize_log_value(reason)
-		fields.append(f"reason={safe_reason}")
-		event_fields["reason"] = safe_reason
+		fields.append(f"reason={_sanitize_log_value(reason)}")
 	if server_info:
 		name = server_info.get("name")
 		version = server_info.get("version")
 		if name:
-			safe_name = _sanitize_log_value(name)
-			fields.append(f"server_name={safe_name}")
-			event_fields["server_name"] = safe_name
+			fields.append(f"server_name={_sanitize_log_value(name)}")
 		if version:
-			safe_version = _sanitize_log_value(version)
-			fields.append(f"server_version={safe_version}")
-			event_fields["server_version"] = safe_version
+			fields.append(f"server_version={_sanitize_log_value(version)}")
 	sys.stderr.write(" ".join(fields) + "\n")
-	_mirror_event("SERENA_PROBE", **event_fields)
 	if detail:
 		sys.stderr.write(f"mcp_handshake_probe: {detail}\n")
 

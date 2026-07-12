@@ -391,6 +391,7 @@ jobs:
               "prompts/_prelude_role_persona.txt",
               "prompts/_prelude_serena.txt",
               "prompts/_prelude_output_contract.txt",
+              "prompts/_identity_recall.txt",
               "prompts/_templates/mode-validate-generate.txt",
               "prompts/_templates/mode-validate-diagnose.txt",
               "prompts/_templates/mode-validate-discover.txt",
@@ -417,6 +418,7 @@ jobs:
           EOF
 
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
+          echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           bash "${helper_path}" validate --manifest "${manifest_path}"
       - name: Initialize workspace metadata
         id: workspace_meta

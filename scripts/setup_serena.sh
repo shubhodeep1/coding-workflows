@@ -19,16 +19,6 @@ esac
 WORKSPACE_ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
 SERENA_TEMPLATE_PATH="${SCRIPT_DIR}/templates/serena_project.yml.j2"
 SERENA_PROJECT_PATH="${WORKSPACE_ROOT}/.serena/project.yml"
-if [ -f "${SCRIPT_DIR}/emit_event.sh" ]; then
-	# shellcheck disable=SC1091
-	source "${SCRIPT_DIR}/emit_event.sh"
-fi
-if ! type emit_event >/dev/null 2>&1; then
-	emit_event()
-	{
-		return 0
-	}
-fi
 
 log()
 {
@@ -52,30 +42,18 @@ emit_serena_fallback()
 	local reason="${1:-setup-failure}"
 	local target="${SERENA_FALLBACK_TARGET:-}"
 	local phase="${SERENA_FALLBACK_PHASE:-}"
-	local safe_target=""
-	local safe_reason=""
-	local safe_phase=""
 
 	if [ -z "${target}" ]; then
 		return 0
 	fi
 
-	safe_target="$(sanitize_log_value "${target}")"
-	safe_reason="$(sanitize_log_value "${reason}")"
-
 	printf 'SERENA_FALLBACK target=%s reason=%s' \
-		"${safe_target}" \
-		"${safe_reason}" >&2
+		"$(sanitize_log_value "${target}")" \
+		"$(sanitize_log_value "${reason}")" >&2
 	if [ -n "${phase}" ]; then
-		safe_phase="$(sanitize_log_value "${phase}")"
-		printf ' phase=%s' "${safe_phase}" >&2
+		printf ' phase=%s' "$(sanitize_log_value "${phase}")" >&2
 	fi
 	printf '\n' >&2
-	if [ -n "${safe_phase}" ]; then
-		emit_event "SERENA_FALLBACK" "target=${safe_target}" "reason=${safe_reason}" "phase=${safe_phase}"
-	else
-		emit_event "SERENA_FALLBACK" "target=${safe_target}" "reason=${safe_reason}"
-	fi
 }
 
 write_github_env()

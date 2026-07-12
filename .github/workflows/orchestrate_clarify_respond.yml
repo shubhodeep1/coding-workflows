@@ -338,6 +338,7 @@ jobs:
             --github-env "${GITHUB_ENV}"
 
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
+          echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
 
           # Model catalog: try script_ref first, fall back to local copy from checkout.
           catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
@@ -373,7 +374,7 @@ jobs:
             fi
             install -m 0644 "${src}" "${PROMPT_SOURCE}"
           fi
-          for prompt_support_asset in _prelude_common.txt _prelude_output_contract.txt _prelude_role_persona.txt _templates/mode-clarify-respond.txt; do
+          for prompt_support_asset in _identity_recall.txt _prelude_common.txt _prelude_output_contract.txt _prelude_role_persona.txt _templates/mode-clarify-respond.txt; do
             if [ ! -f "prompts/${prompt_support_asset}" ]; then
               src=".codex-workflow-src/prompts/${prompt_support_asset}"
               if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/${prompt_support_asset}" ]; then

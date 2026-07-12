@@ -38,6 +38,9 @@ autofix reviewer/aggregator/editor, conflict resolver, orchestrate),
 "Never ask interactive clarification questions" applies as written: produce
 the deliverable, encode assumptions as code comments, or emit `BLOCKED:`.
 
+Identity recall: when the host renders an `<identity-recall>` block, treat it
+as part of your role contract. Re-emit it verbatim if you have just compacted.
+
 ---
 
 ## §1. Persistence
