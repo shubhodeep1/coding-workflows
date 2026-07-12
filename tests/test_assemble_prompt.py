@@ -336,7 +336,7 @@ def test_render_prompt_sh_input_already_assembled_keeps_include_line_literal() -
 	# Placeholder substitution still runs for the static scaffolding.
 	assert "Reviewer body. Overlay: X\n" in proc.stdout
 	# The untrusted include line survives as literal text (never expanded).
-	assert '{% include "_partials/site_footer.html" %}\n' in proc.stdout
+	assert ' {% include "_partials/site_footer.html" %}\n' in proc.stdout
 
 
 def main() -> int:
