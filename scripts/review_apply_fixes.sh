@@ -49,6 +49,13 @@ fi
 if ! command -v archive_transcript >/dev/null 2>&1; then
   archive_transcript() { return 0; }
 fi
+if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/nag_reminder.sh" ]; then
+  # shellcheck source=/dev/null
+  source "${SUPPORT_SCRIPTS_DIR}/nag_reminder.sh" 2>/dev/null || true
+fi
+if ! command -v maybe_inject_nag >/dev/null 2>&1; then
+  maybe_inject_nag() { return 0; }
+fi
 
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
@@ -121,6 +128,13 @@ PY
   if [ -n "${warn_line}" ]; then
     printf '%s\n' "${warn_line}"
   fi
+}
+
+editor_output_has_apply_patch() {
+  local output_file="$1"
+
+  [ -s "${output_file}" ] || return 1
+  grep -Eiq '\*\*\* Begin Patch|(^|[^[:alnum:]_])apply_patch([^[:alnum:]_]|$)' "${output_file}"
 }
 
 lessons_learned_truthy() {
@@ -1630,6 +1644,7 @@ rm -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" 2>/dev/null || true
 
 attempt=1
 editor_max_attempts=3
+editor_silent_rounds=0
 while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   # Early exit if PR was closed/merged (detected by reviewer or editor watchdog)
   if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
@@ -1773,6 +1788,11 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
       "$(date +%s)" \
       "$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
   } >> "${attempt_prompt_file}"
+  editor_nag_block="$(maybe_inject_nag "review-editor" "${editor_silent_rounds}")"
+  if [ -n "${editor_nag_block}" ]; then
+    printf '\n%s\n' "${editor_nag_block}" >> "${attempt_prompt_file}"
+    editor_silent_rounds=0
+  fi
   emit_editor_substate "BuildingPrompt" "${attempt}"
   # Run codex: stdout → tmp_output, stderr → FIFO (heartbeat reader).
   emit_editor_substate "LaunchingAgentProcess" "${attempt}"
@@ -1833,6 +1853,12 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   rm -f "${stall_status_file}"
 
   emit_editor_substate "Finishing" "${attempt}" "${tmp_err}"
+
+  if editor_output_has_apply_patch "${tmp_output}"; then
+    editor_silent_rounds=0
+  else
+    editor_silent_rounds=$((editor_silent_rounds + 1))
+  fi
 
   case "${stall_state}" in
     observed)
