@@ -396,6 +396,7 @@ jobs:
             --github-env "${GITHUB_ENV}"
 
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
+          echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
 
           mkdir -p prompts prompts/_templates
           prompt_src=".codex-workflow-src/prompts/mode-orchestrate.txt"
@@ -408,7 +409,7 @@ jobs:
           fi
           install -m 0644 "${prompt_src}" prompts/mode-orchestrate.txt
 
-          for prompt_assembly_asset in _prelude_common.txt _prelude_role_persona.txt _prelude_output_contract.txt _templates/mode-orchestrate.txt; do
+          for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_role_persona.txt _prelude_output_contract.txt _templates/mode-orchestrate.txt; do
             asset_src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
             if [ ! -f "${asset_src}" ] && [ -f ".codex-workflow-src-main/prompts/${prompt_assembly_asset}" ]; then
               asset_src=".codex-workflow-src-main/prompts/${prompt_assembly_asset}"

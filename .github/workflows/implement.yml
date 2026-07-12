@@ -1020,6 +1020,7 @@ jobs:
             --github-env "${GITHUB_ENV}"
 
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
+          echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
 
           for f in unattended_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
@@ -1107,7 +1108,7 @@ jobs:
             fi
           done
 
-          for prompt_assembly_asset in _prelude_common.txt _prelude_serena.txt _prelude_output_contract.txt _templates/mode-implement-diagnose.txt _templates/mode-implement-diagnose-continuation.txt _templates/mode-implement-repair.txt _templates/mode-implement-repair-continuation.txt _templates/mode-validate-self-heal-continuation.txt; do
+          for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_serena.txt _prelude_output_contract.txt _templates/mode-implement-diagnose.txt _templates/mode-implement-diagnose-continuation.txt _templates/mode-implement-repair.txt _templates/mode-implement-repair-continuation.txt _templates/mode-validate-self-heal-continuation.txt; do
             if [ -f "prompts/${prompt_assembly_asset}" ]; then
               continue
             fi

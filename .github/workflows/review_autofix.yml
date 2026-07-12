@@ -1360,6 +1360,7 @@ jobs:
             exit 1
           fi
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
+          echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           CURRENT_REPOSITORY="${{ github.repository }}" \
           WORKFLOW_SOURCE_REPO="shubhodeep1/coding-workflows" \
           bash "${helper}"

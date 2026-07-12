@@ -202,6 +202,7 @@ jobs:
             echo "::error::Failed to checkout workflow support source"
             exit 1
           fi
+          echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           mkdir -p scripts
 
           _fetched=()
@@ -241,6 +242,9 @@ jobs:
           mkdir -p prompts
           if [ ! -f prompts/mode-check-failure-triage.txt ] && [ -f ".codex-workflow-src/prompts/mode-check-failure-triage.txt" ]; then
             install -m 0644 ".codex-workflow-src/prompts/mode-check-failure-triage.txt" prompts/mode-check-failure-triage.txt
+          fi
+          if [ ! -f prompts/_identity_recall.txt ] && [ -f ".codex-workflow-src/prompts/_identity_recall.txt" ]; then
+            install -m 0644 ".codex-workflow-src/prompts/_identity_recall.txt" prompts/_identity_recall.txt
           fi
 
           if [ "${{ github.repository }}" != "${wf_source}" ]; then

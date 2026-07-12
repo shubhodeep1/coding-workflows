@@ -310,6 +310,8 @@ scripts/dev/test_watchdog_helpers.sh
 scripts/dev/test_write_guard.sh
 scripts/dispatch_and_watch_workflow_run.sh
 scripts/drift_audit.sh
+scripts/emit_event.py
+scripts/emit_event.sh
 scripts/files_touched_scope_guard.py
 scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch
 scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-always-full.patch
@@ -536,6 +538,8 @@ tests/test_detect_editor_changes_lost.py
 tests/test_drift_audit_job.py
 tests/test_e2e_editor_smoke_canary.py
 tests/test_editor_capacity_fallback_contract.py
+tests/test_emit_event.sh
+tests/test_emit_event_concurrent.sh
 tests/test_family_node_runtime.py
 tests/test_family_python_mongo_flask.py
 tests/test_family_python_repo_checks.py
@@ -552,6 +556,7 @@ tests/test_label_helpers_phase_transition_contract.py
 tests/test_lint_plan_archival_completeness.py
 tests/test_lint_plan_decisions.py
 tests/test_lint_pr_body_auto_close.py
+tests/test_log_prefix_regressions.sh
 tests/test_mark_stable_release_tag_refspec_contract.py
 tests/test_mcp_handshake_probe.py
 tests/test_memory_maintenance_contract_noop.py
