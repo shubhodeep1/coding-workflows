@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:1914-1916 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The warning about the embed budget floor can be misread as if the floor is being enforced rather than bypassed.\n  WHY: The logic is correct, but the leading \"floor\" wording is ambiguous and could mislead operators troubleshooting why the budget is lower than expected.\n- scripts/review_run_reviewers.sh:1907-1918 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The floor-bypass warning path is effectively unreachable in normal operation, so operators will not get the diagnostic when the static prefix meaningfully reduces the budget.\n  WHY: Given the stated defaults, the computed headroom stays well above the floor unless the measured static prefix is unrealistically large, so the warning that documents the bypass seldom appears.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201c`scripts/review_run_reviewers.sh`: Size the reviewer embed budget dynamically = codex stdin cap \u2212 measured pre_assembled_static.txt size \u2212 a scaffold reserve, clamped to a floor and never widened above the historical 800 KB default.\u201d\n  expected_change_site: Budget-calculation block (\u2248 lines 1870-1920) plus post-assembly guard\n  confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The PR (and LAST RUN DIFF) implements the dynamic calculation correctly, but the unreachable floor-bypass warning means the \u201cclamped to a floor\u201d clause is not observable in practice; no test or comment exercises the negative-headroom path.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: scripts/review_run_reviewers.sh\n  Line or code reference: line 1916, the `elif` branch warning text\n  Problem: The `::warning::` text says \"Reviewer embed budget floor ${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES} exceeds cap-safe headroom ${reviewer_embed_budget_bytes}; continuing with reduced embed budget to stay under codex stdin cap.\" The phrase \"embed budget floor\" reads like a floor/minimum that is being applied, which contradicts the actual behavior \u2014 the code intentionally does NOT clamp up to the floor when that would cause the assembled prompt to exceed the codex stdin cap.\n  Why it fails at runtime: No runtime failure \u2014 the logic is correct and the warning is purely diagnostic. This is an operator-readability concern: the text could mislead someone troubleshooting sizing into thinking the floor was applied when it was not.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: scripts/review_run_reviewers.sh\n  Line or code reference: lines 1914-1915\n  Problem: The warning message uses \"floor\" in a way that can mislead operators. The message \"Reviewer embed budget floor ${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES} exceeds cap-safe headroom ${reviewer_embed_budget_bytes}; continuing with reduced embed budget to stay under codex stdin cap\" reads as if a floor is being enforced, but the code intentionally does NOT clamp up to the floor when it would exceed the cap.\n  Why it fails at runtime: Operators troubleshooting sizing issues may misread the warning and think the floor is being applied when it's actually being bypassed to stay under the cap, leading to confusion about why the embed budget is smaller than expected.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: scripts/review_run_reviewers.sh\n  Location: Line ~1916, the elif branch warning text\n  Problem: The warning string \"Reviewer embed budget floor ${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES} exceeds cap-safe headroom ${reviewer_embed_budget_bytes}; continuing with reduced embed budget to stay under codex stdin cap\" can be misread as if a floor is being enforced, but the code intentionally does NOT clamp up to the floor when it would exceed the cap.\n  Why: Operators troubleshooting sizing issues may misread the warning and think the floor is being applied when it is actually being bypassed to stay under the cap.\n  SEVERITY: NIT\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/review_run_reviewers.sh\n  Line or code reference: 1907-1918 (the negative-headroom and floor-bypass block)\n  Problem: The `elif [ \"${reviewer_embed_budget_bytes}\" -lt \"${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES}\" ]` path (and its warning) is now unreachable for any realistic `pre_assembled_static.txt` size.\n  Why it fails at runtime: The diagnostic that operators rely on to understand budget decisions will never appear when the budget is actually being reduced by the static-prefix measurement, so operators troubleshooting a still-too-large prompt get no signal that the floor was intentionally bypassed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: \u201c`scripts/review_run_reviewers.sh`: Size the reviewer embed budget dynamically = codex stdin cap \u2212 measured pre_assembled_static.txt size \u2212 a scaffold reserve, clamped to a floor and never widened above the historical 800 KB default.\u201d\n  Expected change site: Budget-calculation block (\u2248 lines 1870-1920) plus post-assembly guard\n  Evidence of absence: The PR (and LAST RUN DIFF) implements the dynamic calculation correctly, but the unreachable floor-bypass warning (see CORRECTNESS above) means the \u201cclamped to a floor\u201d clause is not observable in practice; no test or comment exercises the negative-headroom path.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "20ede5b2961232e49a8b99e8dc5f35fd7dfa17b1cafc0473d4fedf65cb87d42b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3644,
+    "run_id": "29186180813",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29186180813",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260712093050_94702418a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3644,
+    "run_id": "29186180813"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-12T09:30:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
