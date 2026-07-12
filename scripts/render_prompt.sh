@@ -269,10 +269,11 @@ fi
 # tele-funtoken-msg-scoring run 29182737982). This is distinct from
 # RENDER_PROMPT_SKIP_SYNTAX_VALIDATION below: the skip-syntax gate only silences
 # validate_supported_template_syntax and does NOT stop the earlier
-# assemble_prompt_fragments include expansion, so both flags are required for a
-# body that embeds untrusted content. Placeholder substitution for the static
-# scaffolding still runs. Default (unset) keeps include assembly for every
-# trusted template render.
+# assemble_prompt_fragments include expansion. Callers that embed untrusted
+# content may need this flag, RENDER_PROMPT_SKIP_SYNTAX_VALIDATION, or both,
+# depending on which failure mode they need to suppress. Placeholder
+# substitution for the static scaffolding still runs. Default (unset) keeps
+# include assembly for every trusted template render.
 case "${RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED:-}" in
 	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
 		if [ "${INPUT_ALREADY_ASSEMBLED_FLAG_ADDED}" != "true" ]; then
