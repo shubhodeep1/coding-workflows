@@ -237,7 +237,6 @@ inject_identity_recall_block()
 {
 	local prompt_input_file="$1"
 	local rendered_identity_block="$2"
-	local prompt_root_dir="$3"
 	local injected_file=""
 
 	injected_file="$(mktemp "${TMPDIR:-/tmp}/.${PROMPT_BASENAME}.identity.XXXXXX")"
@@ -269,6 +268,12 @@ cleanup_temp_files()
 	if [ -n "${ASSEMBLED_PROMPT_FILE:-}" ] && [ -f "${ASSEMBLED_PROMPT_FILE}" ]; then
 		rm -f "${ASSEMBLED_PROMPT_FILE}"
 	fi
+}
+
+emit_identity_reinject_parse_fail()
+{
+	local failure_reason="$1"
+	echo "IDENTITY_REINJECT_PARSE_FAIL: ${MODE_NAME} reason=${failure_reason}" >&2
 }
 
 resolve_render_prompt_py()
@@ -356,13 +361,6 @@ resolve_prompt_root_dir()
 	printf '%s\n' "${prompt_dir}"
 }
 
-cleanup_assembled_prompt()
-{
-	if [ -n "${ASSEMBLED_PROMPT_FILE:-}" ] && [ -f "${ASSEMBLED_PROMPT_FILE}" ]; then
-		rm -f "${ASSEMBLED_PROMPT_FILE}"
-	fi
-}
-
 collect_prompt_placeholders()
 {
 	local placeholder_source_file="$1"
@@ -430,24 +428,25 @@ if [ "${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}" = "true" ] && [[ "${MODE_N
 	IDENTITY_RECALL_MISSION=""
 	IDENTITY_RECALL_BLOCK=""
 
-	if IDENTITY_RECALL_CANONICAL_PROMPT="$(resolve_identity_source_prompt "${PROMPT_FILE}")" \
-		&& IDENTITY_RECALL_PHASE_NAME="$(resolve_identity_phase_name "${IDENTITY_RECALL_CANONICAL_PROMPT}")" \
-		&& IDENTITY_RECALL_METADATA="$(extract_identity_recall_metadata "${IDENTITY_RECALL_CANONICAL_PROMPT}")"; then
+	if ! IDENTITY_RECALL_CANONICAL_PROMPT="$(resolve_identity_source_prompt "${PROMPT_FILE}")"; then
+		emit_identity_reinject_parse_fail "canonical_prompt_missing"
+	elif ! IDENTITY_RECALL_PHASE_NAME="$(resolve_identity_phase_name "${IDENTITY_RECALL_CANONICAL_PROMPT}")"; then
+		emit_identity_reinject_parse_fail "phase_name_missing"
+	elif ! IDENTITY_RECALL_METADATA="$(extract_identity_recall_metadata "${IDENTITY_RECALL_CANONICAL_PROMPT}")"; then
+		emit_identity_reinject_parse_fail "metadata_extract_failed"
+	else
 		IDENTITY_RECALL_ROLE="$(printf '%s\n' "${IDENTITY_RECALL_METADATA}" | sed -n '1p')"
 		IDENTITY_RECALL_MISSION="$(printf '%s\n' "${IDENTITY_RECALL_METADATA}" | sed -n '2p')"
-		if [ -n "${IDENTITY_RECALL_PHASE_NAME}" ] && [ -n "${IDENTITY_RECALL_ROLE}" ] && [ -n "${IDENTITY_RECALL_MISSION}" ] \
-			&& IDENTITY_RECALL_BLOCK="$(render_identity_recall_block "${IDENTITY_RECALL_PHASE_NAME}" "${IDENTITY_RECALL_ROLE}" "${IDENTITY_RECALL_MISSION}")"; then
-			if inject_identity_recall_block "${RENDER_INPUT_FILE}" "${IDENTITY_RECALL_BLOCK}" "$(resolve_prompt_root_dir "${PROMPT_FILE}")"; then
-				RENDER_INPUT_FILE="${IDENTITY_RECALL_INJECTED_FILE}"
-				PLACEHOLDER_SOURCE_FILE="${RENDER_INPUT_FILE}"
-			else
-				echo "IDENTITY_REINJECT_PARSE_FAIL: ${MODE_NAME}" >&2
-			fi
+		if [ -z "${IDENTITY_RECALL_PHASE_NAME}" ] || [ -z "${IDENTITY_RECALL_ROLE}" ] || [ -z "${IDENTITY_RECALL_MISSION}" ]; then
+			emit_identity_reinject_parse_fail "identity_metadata_incomplete"
+		elif ! IDENTITY_RECALL_BLOCK="$(render_identity_recall_block "${IDENTITY_RECALL_PHASE_NAME}" "${IDENTITY_RECALL_ROLE}" "${IDENTITY_RECALL_MISSION}")"; then
+			emit_identity_reinject_parse_fail "render_failed"
+		elif ! inject_identity_recall_block "${RENDER_INPUT_FILE}" "${IDENTITY_RECALL_BLOCK}"; then
+			emit_identity_reinject_parse_fail "injection_failed"
 		else
-			echo "IDENTITY_REINJECT_PARSE_FAIL: ${MODE_NAME}" >&2
+			RENDER_INPUT_FILE="${IDENTITY_RECALL_INJECTED_FILE}"
+			PLACEHOLDER_SOURCE_FILE="${RENDER_INPUT_FILE}"
 		fi
-	else
-		echo "IDENTITY_REINJECT_PARSE_FAIL: ${MODE_NAME}" >&2
 	fi
 fi
 

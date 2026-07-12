@@ -127,7 +127,7 @@ def test_flag_on_renders_or_fails_open_per_prompt_shape() -> None:
 		else:
 			assert identity_proc.stdout == baseline.stdout, prompt_path.name
 			assert "<identity-recall>" not in identity_proc.stdout, prompt_path.name
-			assert identity_proc.stderr.strip() == f"IDENTITY_REINJECT_PARSE_FAIL: {prompt_path.stem}", identity_proc.stderr
+			assert identity_proc.stderr.strip() == f"IDENTITY_REINJECT_PARSE_FAIL: {prompt_path.stem} reason=metadata_extract_failed", identity_proc.stderr
 
 
 def test_wrapped_goal_paragraph_is_captured_in_full() -> None:
@@ -157,7 +157,7 @@ def test_parse_failure_is_fail_open_for_synthetic_malformed_prompt() -> None:
 		assert identity_proc.returncode == 0, identity_proc.stderr
 		assert identity_proc.stdout == baseline.stdout
 		assert "<identity-recall>" not in identity_proc.stdout
-		assert identity_proc.stderr.strip() == "IDENTITY_REINJECT_PARSE_FAIL: mode-malformed"
+		assert identity_proc.stderr.strip() == "IDENTITY_REINJECT_PARSE_FAIL: mode-malformed reason=metadata_extract_failed"
 
 
 def test_inline_prompt_uses_canonical_mode_metadata() -> None:
