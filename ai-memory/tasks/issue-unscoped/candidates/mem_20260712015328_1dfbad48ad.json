@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/lint_plan_decisions.py:182-197 | severity=major | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: main() does not catch exceptions around lint_tree() / emit_warnings(), so filesystem or runtime errors can propagate and make the linter exit non-zero.\n  WHY: Reviewers consistently reported that PermissionError, OSError, UnicodeDecodeError, and similar failures violate the documented \u201cexit 0 always\u201d / fail-open contract.\n- scripts/lint_plan_decisions.py:126-135 | severity=major | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: lint_file() does not catch filesystem/read/decode errors on plan files, so those exceptions can propagate and terminate the linter non-zero.\n  WHY: A PermissionError or stale/broken symlink during file read would surface as a traceback, violating the advisory linter\u2019s always-exit-0 contract.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add an example `## Decisions` block to **this plan** (`docs/plans/learn-claude-code-learnings-plan.md`, below) as the canonical reference.\"\n  expected_change_site: docs/plans/learn-claude-code-learnings-plan.md\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  EVIDENCE: PR DIFF and LAST RUN DIFF contain no changes or additions to docs/plans/learn-claude-code-learnings-plan.md; no canonical reference `## Decisions` section was introduced there; PR diff does not touch docs/plans/learn-claude-code-learnings-plan.md\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/lint_plan_decisions.py:185-193 | severity=MAJOR | confidence=5\n  PROBLEM: main() calls emit_warnings(lint_tree(args.root)) without any try/except wrapper, so filesystem or emission errors can propagate out.\n  WHY: Any filesystem error encountered during file discovery, file reading, or warning emission can cause a non-zero exit instead of the documented always-0 behavior.\n(No task gaps reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/lint_plan_decisions.py:182-193 | severity=MAJOR | confidence=5\n  PROBLEM: The main() function does not wrap emit_warnings(lint_tree(args.root)) in a try/except block, so unhandled filesystem or runtime exceptions can escape.\n  WHY: When filesystem errors occur, the exception propagates through SystemExit(main()) and produces a non-zero exit status, breaking the fail-open contract.\n(No task gaps reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/lint_plan_decisions.py:188-197 | severity=MAJOR | confidence=5\n  PROBLEM: The main() function lacks a try/except block to catch filesystem/runtime errors during linting or emission.\n  WHY: Unhandled exceptions such as PermissionError, OSError, IOError, UnicodeDecodeError, or UnboundLocalError can propagate and violate the \u201calways exit 0\u201d contract.\n- scripts/lint_plan_decisions.py:126-135 | severity=MAJOR | confidence=5\n  PROBLEM: lint_file uncaught filesystem errors on plan files can raise exceptions that propagate through main().\n  WHY: A traceback from the read or decode path would force a non-zero exit, contravening the advisory-only design.\n- Requirement: \"Add an example `## Decisions` block to **this plan** (`docs/plans/learn-claude-code-learnings-plan.md`, below) as the canonical reference.\"\n  Expected change site: docs/plans/learn-claude-code-learnings-plan.md\n  Evidence of absence: PR DIFF and LAST RUN DIFF contain no changes or additions to docs/plans/learn-claude-code-learnings-plan.md; no canonical reference `## Decisions` section was introduced there.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/lint_plan_decisions.py:188-197 | severity=MAJOR | confidence=5\n  PROBLEM: The main() function lacks exception handling, so any filesystem or runtime error can propagate and cause a non-zero exit code.\n  WHY: The Phase H contract explicitly requires the linter to always exit 0 and be fail-open, and unhandled exceptions violate that contract.\n- Requirement: \"Add an example `## Decisions` block to **this plan** (`docs/plans/learn-claude-code-learnings-plan.md`, below) as the canonical reference.\"\n  Expected change site: docs/plans/learn-claude-code-learnings-plan.md\n  Evidence of absence: PR diff does not touch docs/plans/learn-claude-code-learnings-plan.md; no ## Decisions section has been added to the canonical plan document as required by the Phase H task spec\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/lint_plan_decisions.py:182-195 | severity=MAJOR | confidence=5\n  PROBLEM: main() has no try/except guard, so unhandled exceptions from lint_tree, emit_warnings, argparse, or filesystem operations can propagate and cause a non-zero exit.\n  WHY: This violates the \u201cexit 0 always\u201d contract that this linter is built for.\n- Requirement: \"Add an example `## Decisions` block to this plan (`docs/plans/learn-claude-code-learnings-plan.md`, below) as the canonical reference.\"\n  Expected change site: docs/plans/learn-claude-code-learnings-plan.md\n  EVIDENCE: the file was NOT modified in this PR; the PR diff does not touch docs/plans/learn-claude-code-learnings-plan.md.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/lint_plan_decisions.py:182-197 | severity=MAJOR | confidence=5\n  PROBLEM: No try/except around lint_tree() + emit_warnings(), so filesystem/runtime exceptions can escape and make the linter exit non-zero.\n  WHY: PermissionError, OSError, UnicodeDecodeError, or other unexpected exceptions violate the Phase-H contract that the linter must always exit 0 and surface warnings only.\n(No task gaps reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "1ed1c96275bdfdec45d0497bdf9d28bc1fd95419ca5909aa0ab99878e0eeef4f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3629,
+    "run_id": "29173446014",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29173446014",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260712015328_1dfbad48ad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3629,
+    "run_id": "29173446014"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-12T01:53:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
