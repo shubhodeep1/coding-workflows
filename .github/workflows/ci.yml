@@ -170,6 +170,12 @@ jobs:
           set -euo pipefail
           bash tests/test_identity_recall_render.sh
 
+      - name: Prompt and transcript archive shell tests
+        run: |
+          set -euo pipefail
+          bash tests/test_header_render.sh
+          bash tests/test_transcript_archive.sh
+
       - name: Review Semble contract test
         run: |
           set -euo pipefail

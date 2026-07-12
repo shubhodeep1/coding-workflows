@@ -95,6 +95,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: review_autofix
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
+  UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
   REVIEWER_MODELS: |
     minimax/minimax-m2.5
     moonshotai/kimi-k2.5
@@ -1368,6 +1369,19 @@ jobs:
           SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
           SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
+
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" ]; then
+            backfill_src=".codex-workflow-src/scripts/transcript_archive.sh"
+            if [ ! -f "${backfill_src}" ] && [ -f ".codex-workflow-src-main/scripts/transcript_archive.sh" ]; then
+              backfill_src=".codex-workflow-src-main/scripts/transcript_archive.sh"
+            fi
+            if [ -f "${backfill_src}" ]; then
+              install -m 0755 "${backfill_src}" "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh"
+              echo "::notice::Backfilled transcript_archive.sh into the runtime support bundle from ${backfill_src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+            else
+              echo "::warning::Optional transcript archive helper transcript_archive.sh was not staged and could not be backfilled from .codex-workflow-src/scripts or .codex-workflow-src-main/scripts; transcript archiving remains disabled for this run."
+            fi
+          fi
 
           # Backfill the preflight-checked SUPPORT_SCRIPTS_DIR subset that the
           # branch-pinned staging helper did not stage. review_autofix.yml runs

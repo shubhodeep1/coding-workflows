@@ -126,6 +126,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/dev/test_watchdog_helpers.sh` — Shell regression tests for watchdog_helpers.sh.
 - `scripts/dev/test_write_guard.sh` — Shell regression tests for write_guard.sh.
 - `scripts/drift_audit.sh` — drift_audit.sh — Scan recent review/autofix logs for persistent fingerprint drift.
+- `scripts/emit_event.py` — Fail-open append-only JSONL mirror for stable workflow event prefixes.
+- `scripts/emit_event.sh` — emit_event.sh — fail-open append-only JSONL mirror helper.
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
 - `scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch` — Fixture asset for phase-a-anti-rules-noisy-pr.patch.
 - `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-always-full.patch` — Fixture asset for phase-b-risk-tier-always-full.patch.
@@ -207,6 +209,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/templates/serena_project.yml.j2` — Template asset for serena_project.yml.j2.
 - `scripts/templates/slot_manifest.schema.json` — Template asset for slot_manifest.schema.json.
 - `scripts/tg_helpers.sh` — tg_helpers.sh — Telegram message tracking & cleanup helpers.
+- `scripts/transcript_archive.sh` — transcript_archive.sh — fail-open JSON archive helper for captured phase output.
 - `scripts/truncate_to_utf8_byte_cap.py` — Truncate stdin to a UTF-8 byte cap on a codepoint boundary.
 - `scripts/validate_changed_files_syntax.sh` — Shell helper for validate changed files syntax.
 - `scripts/validate_driver.sh` — Shell helper for validate driver.

@@ -81,7 +81,9 @@ def test_stage_workflow_support_files_bootstraps_serena_assets() -> None:
 	stage_block = _step_run_text("Stage workflow support files")
 	assert "for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do" in stage_block
 	assert "for f in emit_event.sh emit_event.py; do" in stage_block
+	assert "for f in transcript_archive.sh; do" in stage_block
 	assert "Optional events mirror helper ${f} is unavailable" in stage_block
+	assert "Optional transcript archive helper ${f} is unavailable" in stage_block
 	assert 'mkdir -p scripts/templates' in stage_block
 	assert 'scripts/templates/serena_project.yml.j2' in stage_block
 	assert 'echo "scripts/templates/serena_project.yml.j2" >> "${FETCHED_MANIFEST}"' in stage_block
@@ -90,6 +92,16 @@ def test_stage_workflow_support_files_bootstraps_serena_assets() -> None:
 	assert 'git ls-files --error-unmatch -- "scripts/templates/serena_project.yml.j2"' in stage_block
 	assert "preserving caller-owned Serena template" in stage_block
 	assert "Serena bootstrap remains disabled" in stage_block
+
+
+def test_transcript_archive_helper_is_opt_in_and_wired_for_implement() -> None:
+	workflow = _workflow_text()
+	stage_block = _step_run_text("Stage workflow support files")
+	codex_block = _step_run_text("Run Codex implementation")
+	assert "UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}" in workflow
+	assert "for f in transcript_archive.sh; do" in stage_block
+	assert 'source scripts/transcript_archive.sh 2>/dev/null || true' in codex_block
+	assert 'archive_transcript "${GITHUB_RUN_ID:-local-run}" "implement" "${CODEX_OUTPUT_FILE}"' in codex_block
 
 
 def test_stage_workflow_support_files_bootstraps_optional_semble_assets() -> None:

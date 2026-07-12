@@ -42,6 +42,13 @@ fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
+if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" ]; then
+  # shellcheck source=/dev/null
+  source "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" 2>/dev/null || true
+fi
+if ! command -v archive_transcript >/dev/null 2>&1; then
+  archive_transcript() { return 0; }
+fi
 
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
@@ -1280,6 +1287,13 @@ regex substitutions on multi-line source — they exit 0 even when the
 regex misses, leaving the file unchanged.
 </completeness_contract>
 
+<compaction-rules>
+If you compact context:
+- Preserve the latest file-read result for every file still likely to be edited in this run.
+- Preserve the exact structured-output contract, including required section headings and JSON/Q-ID schemas.
+- When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side `.transcripts/<run_id>-<phase>-<ts>.json` archive instead of re-emitting raw transcript or tool-call history.
+</compaction-rules>
+
 FINAL RESPONSE FORMAT
 Plain text only.
 Output exactly these sections in this order:
@@ -2069,6 +2083,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
           mv "${tmp_output}" "${EDITOR_SUMMARY_FILE}"
           rm -f "${tmp_err}"
           rm -f "${attempt_prompt_file}"
+          archive_transcript "${GITHUB_RUN_ID:-local-run}" "review-editor" "${EDITOR_SUMMARY_FILE}"
           echo "Editor succeeded on attempt ${attempt}."
           emit_editor_substate "Succeeded" "${attempt}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err"
           emit_lessons_learned_for_out_of_plan_fix

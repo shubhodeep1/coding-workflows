@@ -29,6 +29,13 @@ if [ -f "scripts/memory_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/memory_helpers.sh
 fi
+if [ -f "scripts/transcript_archive.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/transcript_archive.sh 2>/dev/null || true
+fi
+if ! type archive_transcript >/dev/null 2>&1; then
+  archive_transcript() { return 0; }
+fi
 # shellcheck source=pr_checks_lib.sh
 # Shared PR check-runs merge gate (_pr_checks_completed /
 # _pr_required_check_names_for_base). Single source of truth shared with
@@ -16875,14 +16882,15 @@ ${PR_DIFF}
     fi
   done
 
-  if [ "${JUDGE_SUCCESS}" != "true" ]; then
-    echo "::error::Judge failed for tracking issue #${TRACKING_NUM}"
-    tg_notify "Orchestrator Judge failed for #${TRACKING_NUM}. Manual review needed." "CRITICAL"
-    continue
-  fi
+	  if [ "${JUDGE_SUCCESS}" != "true" ]; then
+	    echo "::error::Judge failed for tracking issue #${TRACKING_NUM}"
+	    tg_notify "Orchestrator Judge failed for #${TRACKING_NUM}. Manual review needed." "CRITICAL"
+	    continue
+	  fi
+	  archive_transcript "${GITHUB_RUN_ID:-local-run}" "judge" "${JUDGE_OUTPUT_FILE}"
 
-  # ---------------------------------------------------------------
-  # Parse judge output
+	  # ---------------------------------------------------------------
+	  # Parse judge output
   # ---------------------------------------------------------------
   JUDGE_JSON="$(python3 -c "
 import json, re, sys

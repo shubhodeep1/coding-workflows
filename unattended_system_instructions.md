@@ -627,3 +627,21 @@ project's planned phases never shipped (see
 CLAUDE.md and this §21 entry both exist to forbid this pattern; the
 script `scripts/lint_pr_body_auto_close.py` is the executable
 enforcement vehicle for both.
+
+---
+
+## §22. Context-Compaction Discipline
+
+These rules document what to preserve when the host compacts context for
+an unattended run. They do not replace the host's own compaction
+mechanics.
+
+- Preserve the latest `read` / file-read result for every file still
+  likely to be edited in the current rollout.
+- Preserve the structured-output contract verbatim across any compaction
+  summary, including required section headings, JSON keys, `Q<ID>`
+  question labels, and any exact `BLOCKED:` output requirement.
+- When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side
+  `.transcripts/<run_id>-<phase>-<ts>.json` archive to retain raw
+  transcript/output data instead of re-emitting raw transcript or
+  tool-call history into the compacted summary.

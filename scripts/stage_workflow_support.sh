@@ -114,17 +114,29 @@ for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do
   install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
 done
 
-for f in emit_event.sh emit_event.py; do
-  src=".codex-workflow-src/scripts/${f}"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-    src=".codex-workflow-src-main/scripts/${f}"
+	for f in emit_event.sh emit_event.py; do
+	  src=".codex-workflow-src/scripts/${f}"
+	  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+	    src=".codex-workflow-src-main/scripts/${f}"
   fi
   if [ ! -f "${src}" ]; then
     echo "::warning::Optional events mirror helper ${f} is unavailable in checked-out support sources; stable text-prefix mirroring remains disabled."
     continue
-  fi
-  install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
-done
+	  fi
+	  install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+	done
+
+	for f in transcript_archive.sh; do
+	  src=".codex-workflow-src/scripts/${f}"
+	  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+	    src=".codex-workflow-src-main/scripts/${f}"
+	  fi
+	  if [ ! -f "${src}" ]; then
+	    echo "::warning::Optional transcript archive helper ${f} is unavailable in checked-out support sources; transcript archiving remains disabled."
+	    continue
+	  fi
+	  install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+	done
 
 mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"
 serena_template_src=".codex-workflow-src/scripts/templates/serena_project.yml.j2"

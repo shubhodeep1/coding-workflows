@@ -29,12 +29,14 @@ def test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_asset
 	required_snippets = [
 		'helper_path="scripts/stage_workflow_support.sh"',
 		'bash "${helper_path}" validate --manifest "${manifest_path}"',
+		"UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}",
 		"scripts/assemble_prompt.sh",
 		"scripts/render_prompt.py",
 		"scripts/render_validation_templates.py",
 		"scripts/templates/slot_manifest.schema.json",
 		"scripts/validate_driver.sh",
 		"scripts/validate_process.sh",
+		"scripts/transcript_archive.sh",
 		"workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2",
 		"workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2",
 		"workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2",
@@ -149,6 +151,7 @@ def test_validate_workflow_bootstraps_codex_heartbeat_support() -> None:
 	for snippet in (
 		"CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}",
 		"CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}",
+		"UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}",
 		"scripts/codex_heartbeat.sh",
 		'helper_path="scripts/stage_workflow_support.sh"',
 	):

@@ -448,6 +448,7 @@ and shipped:
 - `SERENA_PROBE`
 - `EVENTS_EMIT`
 - `EVENTS_EMIT_FAIL`
+- `TRANSCRIPT_ARCHIVE_FAIL`
 - `IDENTITY_REINJECT_PARSE_FAIL`
 - `drift-audit:`
 - `CHECK_TRIAGE`
@@ -460,6 +461,12 @@ authoritative for current grep-based tooling, and helper-internal
 `EVENTS_EMIT*` diagnostics are not mirrored recursively. Phase D currently
 emits only `EVENTS_EMIT_FAIL` on helper-write problems; `EVENTS_EMIT` is a
 reserved additive success-path prefix for future use.
+
+When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`,
+`scripts/transcript_archive.sh` writes a fail-open JSON envelope under
+`.transcripts/<run_id>-<phase>-<ts>.json` from already-captured success-path
+output files. Archive helper problems never fail the caller; the helper emits
+only `TRANSCRIPT_ARCHIVE_FAIL` on mkdir/read/write/JSON-encode failures.
 
 LOG_PREFIX.name=LABEL_REPAIR
 LOG_PREFIX.name=LABEL_REPAIR_DIFF
@@ -527,6 +534,7 @@ LOG_PREFIX.name=SERENA_FALLBACK
 LOG_PREFIX.name=SERENA_PROBE
 LOG_PREFIX.name=EVENTS_EMIT
 LOG_PREFIX.name=EVENTS_EMIT_FAIL
+LOG_PREFIX.name=TRANSCRIPT_ARCHIVE_FAIL
 LOG_PREFIX.name=IDENTITY_REINJECT_PARSE_FAIL
 LOG_PREFIX.name=drift-audit:
 LOG_PREFIX.name=CHECK_TRIAGE

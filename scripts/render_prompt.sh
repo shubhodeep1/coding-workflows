@@ -385,17 +385,17 @@ RENDER_INPUT_FILE="${PROMPT_FILE}"
 PLACEHOLDER_SOURCE_FILE="${PROMPT_FILE}"
 ASSEMBLED_PROMPT_FILE=""
 
-	if [ "${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" = "true" ]; then
-		ASSEMBLY_SOURCE_FILE="$(resolve_assembly_source_path "${PROMPT_FILE}")"
-		if [ "${ASSEMBLY_SOURCE_FILE}" != "${PROMPT_FILE}" ] || [ "$(basename -- "$(dirname -- "${PROMPT_FILE}")")" = "_templates" ]; then
-			if ! ASSEMBLE_PROMPT_SH="$(resolve_assemble_prompt_sh)"; then
-				echo "assemble_prompt.sh not found for ${PROMPT_FILE}" >&2
-				exit 1
-			fi
-			ASSEMBLED_PROMPT_FILE="$(mktemp "${TMPDIR:-/tmp}/.${PROMPT_BASENAME}.assembled.XXXXXX")"
-			trap cleanup_temp_files EXIT
-			"${ASSEMBLE_PROMPT_SH}" "${PROMPT_FILE}" > "${ASSEMBLED_PROMPT_FILE}"
-			RENDER_INPUT_FILE="${ASSEMBLED_PROMPT_FILE}"
+if [ "${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" = "true" ]; then
+	ASSEMBLY_SOURCE_FILE="$(resolve_assembly_source_path "${PROMPT_FILE}")"
+	if [ "${ASSEMBLY_SOURCE_FILE}" != "${PROMPT_FILE}" ] || [ "$(basename -- "$(dirname -- "${PROMPT_FILE}")")" = "_templates" ]; then
+		if ! ASSEMBLE_PROMPT_SH="$(resolve_assemble_prompt_sh)"; then
+			echo "assemble_prompt.sh not found for ${PROMPT_FILE}" >&2
+			exit 1
+		fi
+		ASSEMBLED_PROMPT_FILE="$(mktemp "${TMPDIR:-/tmp}/.${PROMPT_BASENAME}.assembled.XXXXXX")"
+		trap cleanup_temp_files EXIT
+		"${ASSEMBLE_PROMPT_SH}" "${PROMPT_FILE}" > "${ASSEMBLED_PROMPT_FILE}"
+		RENDER_INPUT_FILE="${ASSEMBLED_PROMPT_FILE}"
 		PLACEHOLDER_SOURCE_FILE="${ASSEMBLED_PROMPT_FILE}"
 	fi
 fi

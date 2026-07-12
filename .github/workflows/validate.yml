@@ -54,6 +54,7 @@ name: AI Validate (Reusable)
 env:
   UNATTENDED_PHASE: validate
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
+  UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
   # Validate-generate / validate-diagnose / validate-discover are gpt-5.4
   # (research/synthesis); validate-fix-harness / validate-self-heal are
   # codex (file edits) — those phases override MODEL_EDITOR locally if
@@ -376,6 +377,7 @@ jobs:
               "scripts/setup_serena.sh",
               "scripts/serena_stats_emit.py",
               "scripts/mcp_handshake_probe.py",
+              "scripts/transcript_archive.sh",
               "scripts/emit_event.sh",
               "scripts/emit_event.py"
             ],

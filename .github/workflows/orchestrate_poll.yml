@@ -30,6 +30,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: orchestrate_poll
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
+  UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
   MODEL_EDITOR: ${{ vars.WORKFLOW_ORCHESTRATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
   # Defaults to xhigh to match the repo-wide gpt-5.4 reasoning-level
   # policy. Override per-repo via vars.THINKING_LEVEL_JUDGE.
@@ -387,6 +388,19 @@ jobs:
             fi
             if [ ! -f "${src}" ]; then
               echo "::notice::Optional events mirror helper ${f} is unavailable on ${SCRIPT_REF}; stable text-prefix mirroring remains disabled."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+          done
+
+          for f in transcript_archive.sh; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional transcript archive helper ${f} is unavailable on ${SCRIPT_REF}; transcript archiving remains disabled."
               continue
             fi
             install -m 0755 "${src}" "scripts/${f}"

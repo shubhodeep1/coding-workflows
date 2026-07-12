@@ -37,6 +37,16 @@ if ! type emit_event >/dev/null 2>&1; then
     return 0
   }
 fi
+if [ -f "${_validate_script_dir}/transcript_archive.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${_validate_script_dir}/transcript_archive.sh" 2>/dev/null || true
+fi
+if ! type archive_transcript >/dev/null 2>&1; then
+  archive_transcript()
+  {
+    return 0
+  }
+fi
 
 TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
 TRACKING_ISSUE_NUM=0
@@ -3049,6 +3059,7 @@ PY
       DISCOVER_SUCCESS=true
       HINTS_SOURCE="discovered"
       emit_validate_substate "validate_discover" "discover" "Succeeded" "${attempt}" "${DISCOVER_LOG_FILE}"
+      archive_transcript "${GITHUB_RUN_ID:-local-run}" "validate-discover" "${DISCOVER_OUTPUT_FILE}"
       break
     else
       DISCOVER_FAILURE_MODE="validator_rejected"
@@ -3753,6 +3764,7 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   elif extract_last_json_with_key "${DIAGNOSE_OUTPUT_FILE}" "status" "${DIAGNOSE_RESULT_FILE}"; then
     DIAGNOSE_SUCCESS=true
     emit_validate_substate "validate_diagnose" "diagnose" "Succeeded" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+    archive_transcript "${GITHUB_RUN_ID:-local-run}" "validate-diagnose" "${DIAGNOSE_OUTPUT_FILE}"
     break
   else
     DIAGNOSE_FAILURE_MODE="validator_rejected"
