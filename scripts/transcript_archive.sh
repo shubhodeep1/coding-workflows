@@ -37,9 +37,9 @@ archive_transcript()
 		return 0
 	fi
 
-	GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}" \
-	PYTHONDONTWRITEBYTECODE=1 \
-	python3 - "${run_id}" "${phase}" "${source_path}" <<'PY'
+	if ! GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}" \
+		PYTHONDONTWRITEBYTECODE=1 \
+		python3 - "${run_id}" "${phase}" "${source_path}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -55,7 +55,7 @@ CAP_BYTES = 50 * 1024 * 1024
 
 def fail(reason: str) -> None:
 	sys.stderr.write(f"TRANSCRIPT_ARCHIVE_FAIL: {reason}\n")
-	raise SystemExit(0)
+	raise SystemExit(1)
 
 
 def sanitize_segment(value: str, fallback: str) -> str:
@@ -105,8 +105,8 @@ try:
 except Exception as exc:  # pragma: no cover - shell contract test exercises fail-open behavior.
 	fail(f"run_id={run_id} phase={phase} source={source_path} reason={exc}")
 PY
-	if [ "$?" -ne 0 ]; then
-		_transcript_archive_fail "unexpected python failure run_id=${run_id} phase=${phase} source=${source_path}"
+	then
+		return 0
 	fi
 	return 0
 }
