@@ -86,6 +86,21 @@ Versioning follows [Semantic Versioning](https://semver.org/) per `docs/release-
   with the standard release process. Supports `skip_e2e`, `dry_run`, configurable
   `phase_timeout`, and testing against external repos via `test_repo`.
 
+### Fixed
+- Reviewer and editor runs no longer hard-fail when a reviewed PR touches a Jinja/HTML template that contains a standalone double-quoted `{% include "..." %}` line.
+
+  The AI Review and autofix pipelines embed the raw PR diff and the full content of changed files into the reviewer/editor prompt body, then render that body through `scripts/render_prompt.py` with `--skip-syntax-validation` set (the reviewer/editor call sites in `scripts/review_run_reviewers.sh` and `scripts/review_apply_fixes.sh`). That flag already suppressed the strict `{{...}}` syntax gate for embedded diff tokens, but the earlier `{% include "..." %}` assembly pass had no matching guard: a standalone double-quoted include line in a reviewed template matched `INCLUDE_DIRECTIVE_PATTERN`, was treated as a prompt-fragment directive, failed to resolve on disk, and exited the whole reviewer stage with `PromptAssemblyError: Included prompt fragment not found`. Because `render_prompt.py` is staged main-primary (`scripts/stage_workflow_support.sh`), the failure reached consumers pinned to `@stable` too. `render_prompt.py` now skips include resolution for the same already-assembled untrusted bodies the syntax gate already skips, emitting `{% include %}` lines verbatim so the reviewed diff survives into the prompt; include resolution for real prompt templates (rendered without the opt-out) is unchanged, including the hard-fail on a genuinely missing fragment.
+
+  | The numbers that matter | Value |
+  | --- | --- |
+  | File fixed | `scripts/render_prompt.py` (`assemble_prompt_fragments` / `_assemble_prompt_fragment` gain a `resolve_includes` flag; `main` passes `resolve_includes=not args.skip_syntax_validation`) |
+  | Trigger | a standalone double-quoted `{% include "..." %}` line in any reviewed template |
+  | Regression tests | `tests/test_render_prompt_foundation.py` — `test_render_prompt_py_skip_syntax_validation_preserves_standalone_include_lines`, `test_render_prompt_py_resolves_standalone_include_for_trusted_templates` |
+
+  What this means for operators: PRs that add or change templates carrying double-quoted `{% include %}` lines now pass AI Review instead of dying in the reviewer stage with an empty editor no-op. No configuration change is needed; the fix ships from `main` via the main-primary staging path.
+
+  For contributors: the single-quoted `{% include '...' %}` form never matched the double-quote-only `INCLUDE_DIRECTIVE_PATTERN`, so it slipped through before this fix — the real defect was scanning the untrusted body for include directives at all, not the quote style, so the regex was left unchanged and the scan is now skipped for untrusted bodies. Surfaced by `shubhodeep1/tele-funtoken-msg-scoring` PRs `shubhodeep1/tele-funtoken-msg-scoring#3548` (`_partials/site_footer.html`) and `shubhodeep1/tele-funtoken-msg-scoring#3549` (`_partials/header-cro-v2.html`).
+
 ## [v1.1.0] - 2026-03-22
 
 ### Fixed
