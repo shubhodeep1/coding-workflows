@@ -139,6 +139,36 @@ def test_field_without_inline_or_following_content_warns() -> None:
 		assert warnings == ["D8 — Reject empty field markers is missing required bullet(s): `Chosen`"]
 
 
+def test_bare_list_markers_do_not_count_as_field_content() -> None:
+	mod = _import_lint_module()
+	with tempfile.TemporaryDirectory() as temp_dir_name:
+		temp_root = Path(temp_dir_name)
+		plan_path = _write_plan(
+			temp_root,
+			"bare-markers.md",
+			"""# Plan\n\n## Decisions\n\n### D10 — Reject bare marker placeholders\n\n- **Chosen:** -\n- **Alternatives considered:**\n  +\n- **Why:** explain the final choice here.\n""",
+		)
+
+		warnings = mod.lint_file(plan_path)
+		assert warnings == [
+			"D10 — Reject bare marker placeholders is missing required bullet(s): `Chosen`, `Alternatives considered`"
+		]
+
+
+def test_terminal_empty_field_warns() -> None:
+	mod = _import_lint_module()
+	with tempfile.TemporaryDirectory() as temp_dir_name:
+		temp_root = Path(temp_dir_name)
+		plan_path = _write_plan(
+			temp_root,
+			"terminal-empty-field.md",
+			"""# Plan\n\n## Decisions\n\n### D11 — Reject terminal empty fields\n\n- **Chosen:** keep the linter advisory-only.\n- **Alternatives considered:** fail closed in CI.\n- **Why:**\n""",
+		)
+
+		warnings = mod.lint_file(plan_path)
+		assert warnings == ["D11 — Reject terminal empty fields is missing required bullet(s): `Why`"]
+
+
 def test_multiple_malformed_records_emit_multiple_warnings() -> None:
 	mod = _import_lint_module()
 	with tempfile.TemporaryDirectory() as temp_dir_name:

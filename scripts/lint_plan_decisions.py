@@ -28,6 +28,7 @@ DECISION_FIELD_RE = re.compile(
 )
 REQUIRED_DECISION_FIELDS = ("Chosen", "Alternatives considered", "Why")
 WARNING_PREFIX = "[lint_plan_decisions]"
+BARE_LIST_MARKER_VALUES = frozenset({"-", "*", "+"})
 
 
 def discover_plan_files(root: Path) -> list[Path]:
@@ -40,6 +41,11 @@ def discover_plan_files(root: Path) -> list[Path]:
 
 def _is_fence_line(markdown_line: str) -> bool:
 	return FENCED_CODE_BLOCK_RE.match(markdown_line) is not None
+
+
+def _has_meaningful_field_content(markdown_line: str) -> bool:
+	stripped_markdown_line = markdown_line.strip()
+	return bool(stripped_markdown_line) and stripped_markdown_line not in BARE_LIST_MARKER_VALUES
 
 
 def _extract_decisions_section(markdown_text: str) -> str | None:
@@ -99,7 +105,7 @@ def _split_decision_blocks(decisions_section_text: str) -> list[tuple[str, list[
 
 
 def _field_has_content(block_lines: list[str], start_index: int, inline_value: str | None) -> bool:
-	if inline_value is not None and inline_value.strip():
+	if inline_value is not None and _has_meaningful_field_content(inline_value):
 		return True
 
 	inside_fenced_code_block = False
@@ -109,7 +115,7 @@ def _field_has_content(block_lines: list[str], start_index: int, inline_value: s
 			continue
 		if not inside_fenced_code_block and DECISION_FIELD_RE.match(following_line):
 			return False
-		if following_line.strip():
+		if _has_meaningful_field_content(following_line):
 			return True
 
 	return False
