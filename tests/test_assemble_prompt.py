@@ -298,7 +298,7 @@ def test_render_prompt_sh_body_with_include_line_preserved_with_skip_syntax_vali
 		)
 
 	assert proc.returncode == 0, proc.stderr
-	assert "Included prompt fragment not found" not in proc.stderr
+	assert proc.stderr == ""
 	# Static placeholder substitution still runs for the trusted scaffolding.
 	assert "Reviewer body. Overlay: X\n" in proc.stdout
 	# The untrusted include line survives as literal text (never expanded).
