@@ -44,7 +44,7 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 fi
 if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" ]; then
   # shellcheck source=/dev/null
-  source "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh"
+  source "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" 2>/dev/null || true
 fi
 if ! command -v archive_transcript >/dev/null 2>&1; then
   archive_transcript() { return 0; }

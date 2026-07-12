@@ -39,7 +39,7 @@ if ! type emit_event >/dev/null 2>&1; then
 fi
 if [ -f "${_validate_script_dir}/transcript_archive.sh" ]; then
   # shellcheck disable=SC1091
-  source "${_validate_script_dir}/transcript_archive.sh"
+  source "${_validate_script_dir}/transcript_archive.sh" 2>/dev/null || true
 fi
 if ! type archive_transcript >/dev/null 2>&1; then
   archive_transcript()

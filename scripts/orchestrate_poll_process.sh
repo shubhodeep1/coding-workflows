@@ -31,7 +31,7 @@ if [ -f "scripts/memory_helpers.sh" ]; then
 fi
 if [ -f "scripts/transcript_archive.sh" ]; then
   # shellcheck disable=SC1091
-  source scripts/transcript_archive.sh
+  source scripts/transcript_archive.sh 2>/dev/null || true
 fi
 if ! type archive_transcript >/dev/null 2>&1; then
   archive_transcript() { return 0; }

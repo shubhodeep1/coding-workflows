@@ -377,7 +377,7 @@ def test_editor_targeted_file_context_and_prompt_render_path_passes_flags() -> N
 	assert '--semble-query-from "${EDITOR_SEMBLE_QUERY_FILE}"' in apply_fixes
 	assert '--semble-max-chunks "${SEMBLE_TARGETED_CONTEXT_MAX_CHUNKS:-6}"' in apply_fixes
 	assert "{{SERENA_TOOL_HINTS}}" in apply_fixes
-	assert 'source "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh"' in apply_fixes
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" 2>/dev/null || true' in apply_fixes
 	assert '<compaction-rules>' in apply_fixes
 	assert 'EDITOR_SERENA_TOOL_HINTS=""' in apply_fixes
 	assert 'Serena hints:' in apply_fixes

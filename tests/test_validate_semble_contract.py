@@ -315,7 +315,7 @@ def test_validate_process_includes_serena_bootstrap_and_prompt_hooks() -> None:
 	assert 'filter_runtime_status_noise()' in text
 	assert "*' .serena/'*|*' .serena')" in text
 	assert 'current_hash="$(sha256sum .serena/project.yml' in text
-	assert 'source "${_validate_script_dir}/transcript_archive.sh"' in text
+	assert 'source "${_validate_script_dir}/transcript_archive.sh" 2>/dev/null || true' in text
 	assert "git status --porcelain --untracked-files=all -- . ':!validation/**' | filter_runtime_status_noise | sort > \"${PRE_GENERATE_STATUS_FILE}\"" in text
 	assert "git status --porcelain --untracked-files=all -- . ':!validation/**' | filter_runtime_status_noise | sort > \"${POST_GENERATE_STATUS_FILE}\"" in text
 
