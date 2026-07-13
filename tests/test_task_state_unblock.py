@@ -89,6 +89,25 @@ def test_unblock_dependents_updates_only_changed_files() -> None:
 			_restore_task_state_root(previous_root, previous_flag)
 
 
+def test_unblock_dependents_rejects_symlinked_tasks_root() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		outside_root = root / "outside"
+		outside_root.mkdir()
+		(root / ".tasks").symlink_to(outside_root, target_is_directory=True)
+		previous_root, previous_flag = _set_task_state_root(root, enabled="true")
+		try:
+			stderr = io.StringIO()
+			with redirect_stderr(stderr):
+				assert task_state.unblock_dependents(1, "T2") == 0
+			assert (
+				f"TASK_STATE_WRITE_FAIL T2 refusing_to_traverse_symlink:{root / '.tasks'}"
+				in stderr.getvalue()
+			)
+		finally:
+			_restore_task_state_root(previous_root, previous_flag)
+
+
 def main() -> int:
 	test_funcs = [value for key, value in sorted(globals().items()) if key.startswith("test_") and callable(value)]
 	passed = 0

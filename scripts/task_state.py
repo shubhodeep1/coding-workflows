@@ -57,12 +57,21 @@ def _log_task_state_write_fail(issue_id: Any, reason: str) -> None:
 	print(f"TASK_STATE_WRITE_FAIL {issue_token} {reason_token}", file=sys.stderr)
 
 
+def _task_symlink_target(task_dir: Path) -> Path | None:
+	tasks_root = REPO_ROOT / TASKS_ROOT
+	if tasks_root.is_symlink():
+		return tasks_root
+	if task_dir.is_symlink():
+		return task_dir
+	return None
+
+
 def _atomic_write_json(path: Path, payload: Any, issue_id: Any) -> bool:
 	tmp_path: Path | None = None
 	try:
-		tasks_root = REPO_ROOT / TASKS_ROOT
-		if tasks_root.is_symlink() or (path.parent.exists() and path.parent.is_symlink()):
-			raise OSError(f"refusing_to_traverse_symlink:{path.parent}")
+		symlink_target = _task_symlink_target(path.parent)
+		if symlink_target is not None:
+			raise OSError(f"refusing_to_traverse_symlink:{symlink_target}")
 		path.parent.mkdir(parents=True, exist_ok=True)
 		if path.exists() and path.is_symlink():
 			raise OSError(f"refusing_to_overwrite_symlink:{path}")
@@ -176,6 +185,10 @@ def unblock_dependents(wave_id: Any, completed_issue_id: Any) -> int:
 	wave_dir = _task_wave_dir(wave_id, completed_issue_id)
 	safe_completed_issue_id = _task_segment(completed_issue_id, "issue_id", completed_issue_id)
 	if wave_dir is None or safe_completed_issue_id is None:
+		return 0
+	symlink_target = _task_symlink_target(wave_dir)
+	if symlink_target is not None:
+		_log_task_state_write_fail(completed_issue_id, f"refusing_to_traverse_symlink:{symlink_target}")
 		return 0
 	blocker_tokens = _candidate_blocker_tokens(wave_id, completed_issue_id)
 	count_unblocked = 0

@@ -207,6 +207,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/summarize_reviewer_consensus.sh` — ledger via codex-cli (model: openai/gpt-5.4-mini, reasoning: medium).
 - `scripts/summarize_unselected_runs.py` — Summarize unselected workflow runs via gpt-5.4-mini to widen analysis coverage.
 - `scripts/targeted_file_context.py` — Inline likely-to-be-edited files into the Codex prompt as a reference block so the editor doesn't waste budget reading them.
+- `scripts/task_state.py` — Mirror orchestrator wave-issue state into per-task JSON files and unblock mirrored dependents.
 - `scripts/templates/serena_project.yml.j2` — Template asset for serena_project.yml.j2.
 - `scripts/templates/slot_manifest.schema.json` — Template asset for slot_manifest.schema.json.
 - `scripts/tg_helpers.sh` — tg_helpers.sh — Telegram message tracking & cleanup helpers.

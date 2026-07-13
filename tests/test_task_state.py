@@ -133,7 +133,10 @@ def test_write_task_rejects_symlinked_tasks_root() -> None:
 			with redirect_stderr(stderr):
 				assert task_state.write_task(1, "issue-1", {"id": "issue-1", "status": "pending"}) is False
 			assert list(outside_root.iterdir()) == []
-			assert "TASK_STATE_WRITE_FAIL issue-1 refusing_to_traverse_symlink:" in stderr.getvalue()
+			assert (
+				f"TASK_STATE_WRITE_FAIL issue-1 refusing_to_traverse_symlink:{root / '.tasks'}"
+				in stderr.getvalue()
+			)
 		finally:
 			_restore_task_state_root(previous_root, previous_flag)
 
