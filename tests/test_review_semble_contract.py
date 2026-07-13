@@ -195,12 +195,23 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert 'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"' in stage_helper
 	assert 'nag reminders will fail open even when UNATTENDED_NAG_REMINDER_ENABLED=true.' in stage_helper
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/nag_reminder.sh" 2>/dev/null || true' in reviewers
+	assert 'nag_reminder_enabled() { return 1; }' in apply_fixes
+	assert 'nag_silent_round_threshold() { printf \'3\\n\'; }' in apply_fixes
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/nag_reminder.sh" 2>/dev/null || true' in apply_fixes
 	assert 'nag_reminder_enabled() { return 1; }' in reviewers
+	assert 'editor_nag_attempt_limit="$(nag_silent_round_threshold)"' in apply_fixes
+	assert 'if [ "${editor_nag_attempt_limit}" -gt "${editor_max_attempts}" ]; then' in apply_fixes
 	assert 'if cp "${EDITOR_PROMPT_FILE}" "${attempt_prompt_file}" 2>/dev/null; then' in apply_fixes
 	assert 'Could not create per-attempt editor prompt file for attempt ${attempt}; continuing with the base prompt.' in apply_fixes
 	assert 'editor_nag_counter_for_attempt=$((editor_silent_rounds + 1))' in apply_fixes
 	assert 'editor_nag_block="$(maybe_inject_nag "review-editor" "${editor_nag_counter_for_attempt}")"' in apply_fixes
+	assert 'reviewer_max_attempts=3' in reviewers
+	assert 'reviewer_nag_attempt_limit="$(nag_silent_round_threshold)"' in reviewers
+	assert 'while [ "${attempt}" -le "${reviewer_max_attempts}" ]; do' in reviewers
+	assert 'Reviewer ${model} failed after ${reviewer_max_attempts} attempts.' in reviewers
+	assert 'if [ "${reviewer_max_attempts}" -le 2 ]; then' in reviewers
+	assert 'fallback_model="${model}"' in reviewers
+	assert 'if [ "${reviewer_max_attempts}" -gt 3 ]; then' in reviewers
 	assert 'reviewer_nag_counter_for_attempt=$((reviewer_silent_rounds + 1))' in reviewers
 	assert 'reviewer_nag_block="$(maybe_inject_nag "review-reviewer" "${reviewer_nag_counter_for_attempt}")"' in reviewers
 	assert 'if [ "${REVIEWER_ATTEMPT_SILENT}" = "true" ] && nag_reminder_enabled; then' in reviewers

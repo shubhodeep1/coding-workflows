@@ -53,6 +53,12 @@ if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/nag_reminde
   # shellcheck source=/dev/null
   source "${SUPPORT_SCRIPTS_DIR}/nag_reminder.sh" 2>/dev/null || true
 fi
+if ! command -v nag_reminder_enabled >/dev/null 2>&1; then
+  nag_reminder_enabled() { return 1; }
+fi
+if ! command -v nag_silent_round_threshold >/dev/null 2>&1; then
+  nag_silent_round_threshold() { printf '3\n'; }
+fi
 if ! command -v maybe_inject_nag >/dev/null 2>&1; then
   maybe_inject_nag() { return 0; }
 fi
@@ -1644,6 +1650,12 @@ rm -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" 2>/dev/null || true
 
 attempt=1
 editor_max_attempts=3
+if nag_reminder_enabled; then
+  editor_nag_attempt_limit="$(nag_silent_round_threshold)"
+  if [ "${editor_nag_attempt_limit}" -gt "${editor_max_attempts}" ]; then
+    editor_max_attempts="${editor_nag_attempt_limit}"
+  fi
+fi
 editor_silent_rounds=0
 while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   # Early exit if PR was closed/merged (detected by reviewer or editor watchdog)

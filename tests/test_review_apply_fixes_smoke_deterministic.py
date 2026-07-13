@@ -84,7 +84,7 @@ def test_editor_smoke_deterministic_block_present_and_gated() -> None:
 	# a clean tree.
 	deterministic_idx = src.index("Smoke-fixture deterministic editor pre-write")
 	loop_idx = src.index(
-		"attempt=1\neditor_max_attempts=3\neditor_silent_rounds=0\nwhile [ \"${attempt}\" -le \"${editor_max_attempts}\" ]"
+		"editor_silent_rounds=0\nwhile [ \"${attempt}\" -le \"${editor_max_attempts}\" ]"
 	)
 	assert deterministic_idx < loop_idx, (
 		"Editor deterministic pre-write must run before the codex retry "
