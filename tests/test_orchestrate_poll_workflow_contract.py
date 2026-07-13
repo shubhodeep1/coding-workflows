@@ -74,12 +74,19 @@ def test_nag_reminder_assets_and_judge_wiring_are_present() -> None:
 	assert 'cleaned = re.sub(r"```\\\\s*$", "", cleaned, flags=re.MULTILINE)' not in poller
 
 
+def test_task_state_helper_and_flag_are_wired_into_poller_workflow() -> None:
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	assert "task_state.py" in wf
+	assert "ORCH_TASK_FILES_ENABLED: ${{ vars.ORCH_TASK_FILES_ENABLED || 'false' }}" in wf
+
+
 def main() -> int:
 	test_stall_control_env_defaults_are_declared()
 	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
 	test_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_nag_reminder_assets_and_judge_wiring_are_present()
+	test_task_state_helper_and_flag_are_wired_into_poller_workflow()
 	return 0
 
 

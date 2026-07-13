@@ -1859,7 +1859,27 @@ post_state_comment() {
     return 1
   fi
   rm -rf "${pack_dir}"
+  _mirror_task_state_files_from_state
   return 0
+}
+
+_mirror_task_state_files_from_state() {
+	if [ "${ORCH_TASK_FILES_ENABLED:-false}" != "true" ]; then
+		return 0
+	fi
+
+	local script_dir task_state_helper
+	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
+	task_state_helper="${script_dir}/task_state.py"
+	if [ ! -f "${task_state_helper}" ]; then
+		echo "TASK_STATE_WRITE_FAIL helper_missing task_state_py_not_staged" >&2
+		return 0
+	fi
+
+	if ! python3 "${task_state_helper}" mirror-state --state-file "${STATE_FILE}"; then
+		echo "TASK_STATE_WRITE_FAIL state_file mirror_state_command_failed" >&2
+	fi
+	return 0
 }
 
 # Posts a single V2 state-chunk comment to the tracking issue.  Unlike

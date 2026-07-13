@@ -294,6 +294,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state_unblock.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mcp_handshake_probe.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_setup_serena_toml.py

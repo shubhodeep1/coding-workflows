@@ -2163,6 +2163,36 @@ def is_terminal_wave_issue(
 	return terminal, status, source
 
 
+def _task_state_files_enabled() -> bool:
+	return os.environ.get("ORCH_TASK_FILES_ENABLED", "").strip().lower() == "true"
+
+
+def _log_task_state_write_fail(issue_id: Any, reason: str) -> None:
+	issue_token = str(issue_id or "unknown")
+	reason_token = " ".join(str(reason).split()) or "unknown"
+	print(f"TASK_STATE_WRITE_FAIL {issue_token} {reason_token}", file=sys.stderr)
+
+
+def _maybe_unblock_task_state_dependents(wave_id: Any, issue: dict[str, Any]) -> None:
+	if not _task_state_files_enabled():
+		return
+
+	completed_issue_id = issue.get("id")
+	if completed_issue_id in (None, ""):
+		return
+
+	try:
+		import task_state as task_state_module
+	except Exception as exc:
+		_log_task_state_write_fail(completed_issue_id, f"import_failed:{exc}")
+		return
+
+	try:
+		task_state_module.unblock_dependents(wave_id, completed_issue_id)
+	except Exception as exc:
+		_log_task_state_write_fail(completed_issue_id, f"unblock_failed:{exc}")
+
+
 # Phases whose stall clock is re-anchored to
 # `max(status_since_ts, headPushedAt_epoch)` when a linked-PR push
 # timestamp is available.  Currently only `ai:done` per Q2=A on the
@@ -2983,6 +3013,7 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 		return 0
 
 	wave = waves[current_wave_idx]
+	wave_id = wave.get("wave", current_wave_idx + 1)
 	all_merged = True
 	any_failed = False
 	validation_dispatch_safe_despite_failures = True
@@ -3021,6 +3052,12 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 			pr_state=pr_state if pr_state in ("open", "closed") else None,
 			pr_merged=pr_merged,
 		)
+		stored_status = issue.get("status")
+		if (
+			not is_terminal_wave_issue_status(stored_status)
+			and is_terminal_wave_issue_status(status)
+		):
+			_maybe_unblock_task_state_dependents(wave_id, issue)
 		if status == "review-blocked":
 			any_review_blocked = True
 		if status in ("closed", "implementation-failed"):

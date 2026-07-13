@@ -537,6 +537,18 @@ def _extract_latest_state(comments: list[dict]) -> dict:
 	raise AssertionError("No valid orchestrator state comment (V1 or V2) found")
 
 
+def _read_task_files(sandbox: Path) -> dict[str, dict]:
+	tasks_root = sandbox / ".tasks"
+	if not tasks_root.is_dir():
+		return {}
+
+	task_files: dict[str, dict] = {}
+	for task_file in sorted(tasks_root.glob("*/*.json")):
+		relative_path = task_file.relative_to(tasks_root).as_posix()
+		task_files[relative_path] = json.loads(task_file.read_text(encoding="utf-8"))
+	return task_files
+
+
 def _run_poller(
 	*,
 	state: dict,
@@ -679,10 +691,12 @@ def _run_poller(
 
 	with tempfile.TemporaryDirectory(prefix="poller-test-") as td:
 		tmp = Path(td)
+		sandbox = tmp / "sandbox"
 		bin_dir = tmp / "bin"
 		home_dir = tmp / "home"
 		runtime_dir = tmp / "runtime"
 		store_file = tmp / "gh_store.json"
+		_make_poller_sandbox(sandbox)
 		bin_dir.mkdir(parents=True)
 		home_dir.mkdir(parents=True)
 		runtime_dir.mkdir(parents=True)
@@ -2640,6 +2654,7 @@ sys.exit(proc.returncode)
 			["bash", str(POLLER_SCRIPT)],
 			cwd=str(REPO_ROOT),
 			env=env,
+			sandbox=sandbox,
 		)
 		if proc.returncode != 0:
 			raise AssertionError(
@@ -2653,6 +2668,7 @@ sys.exit(proc.returncode)
 		state_path = runtime_dir / "state.json"
 		result["latest_state"] = _extract_latest_state(tracking_issue["comments"])
 		result["state_on_disk"] = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else None
+		result["task_files"] = _read_task_files(sandbox)
 		result["tracking_labels"] = tracking_issue["labels"]
 		result["tracking_closed"] = tracking_issue.get("closed", False)
 		result["merge_calls"] = result.get("merge_calls", [])
@@ -2674,6 +2690,40 @@ sys.exit(proc.returncode)
 		result["actions_runs_fetch_count"] = int(result.get("actions_runs_fetch_count", 0))
 		result["actions_runs_if_none_match_count"] = int(result.get("actions_runs_if_none_match_count", 0))
 		return result
+
+
+def test_task_state_mirror_disabled_writes_no_task_files():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["depends_on"] = ["issue-0"]
+	state["waves"][0]["issues"][0]["reissue_depends_on"] = [501]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+	)
+	assert result["task_files"] == {}
+
+
+def test_task_state_mirror_enabled_writes_latest_wave_issue_payloads():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["depends_on"] = ["issue-0"]
+	state["waves"][0]["issues"][0]["reissue_depends_on"] = [501]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		env_overrides={"ORCH_TASK_FILES_ENABLED": "true"},
+	)
+	latest_issue_state = result["state_on_disk"]["waves"][0]["issues"][0]
+	assert result["latest_state"]["waves"][0]["issues"][0] == latest_issue_state
+	assert result["task_files"] == {
+		"1/issue-1.json": {
+			**latest_issue_state,
+			"schema_version": "task_state.v1.json",
+		}
+	}
 
 
 # ---------------------------------------------------------------------------

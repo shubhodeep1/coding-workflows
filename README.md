@@ -1940,3 +1940,9 @@ Consumer repos pin to `@stable` for automatic updates or exact tags for reproduc
 3. Promote to stable after validation
 
 See `docs/release-policy.md` for the full release process.
+
+## Task-state mirror flag
+
+- `ORCH_TASK_FILES_ENABLED` defaults to `false`.
+- When set to `true`, the orchestrator poller mirrors each managed wave issue into `.tasks/<wave>/<issue>.json` with `schema_version: "task_state.v1.json"`.
+- The mirror is additive only: chunked GitHub-comment state remains the authoritative read path, and `scripts/task_state.py` rewrites only the mirrored files when clearing `depends_on[]` / `reissue_depends_on[]` blockers.

@@ -446,6 +446,8 @@ and shipped:
 - `SERENA_QUERY`
 - `SERENA_FALLBACK`
 - `SERENA_PROBE`
+- `TASK_STATE_UNBLOCK`
+- `TASK_STATE_WRITE_FAIL`
 - `EVENTS_EMIT`
 - `EVENTS_EMIT_FAIL`
 - `NAG_REMINDER_LOAD_FAIL`
@@ -540,6 +542,8 @@ LOG_PREFIX.name=SEMBLE_FALLBACK
 LOG_PREFIX.name=SERENA_QUERY
 LOG_PREFIX.name=SERENA_FALLBACK
 LOG_PREFIX.name=SERENA_PROBE
+LOG_PREFIX.name=TASK_STATE_UNBLOCK
+LOG_PREFIX.name=TASK_STATE_WRITE_FAIL
 LOG_PREFIX.name=EVENTS_EMIT
 LOG_PREFIX.name=EVENTS_EMIT_FAIL
 LOG_PREFIX.name=NAG_REMINDER_LOAD_FAIL
@@ -770,3 +774,13 @@ workflow-templates/ai-validate.yml
 workflow-templates/review_rb_judge_dispatch.yml
 ```
 <!-- TREE:END id=workflow_templates -->
+
+## Task-state files (`.tasks/<wave>/<issue>.json`)
+
+- Feature flag: `ORCH_TASK_FILES_ENABLED` (default `false`). When disabled, `scripts/task_state.py` is a no-op and the poller writes only the authoritative chunked GitHub-comment state.
+- Schema: each mirrored file is a single issue payload plus `schema_version: "task_state.v1.json"`.
+- Layout: wave directory from `waves[].wave`, filename from the stable local wave issue `id` (for example `.tasks/1/issue-1.json`). Existing fields such as `github_issue`, `depends_on`, and `reissue_depends_on` are preserved verbatim inside the mirrored JSON.
+- Write path: `scripts/orchestrate_poll_process.sh::post_state_comment()` mirrors every successful authoritative checkpoint into `.tasks/` via atomic tmp-write + rename.
+- Unblock path: `scripts/task_state.py::unblock_dependents()` rewrites only the mirrored files, removing a completed issue from `depends_on[]` / `reissue_depends_on[]` and logging `TASK_STATE_UNBLOCK <wave> <completed> <count_unblocked>`.
+- Authority: `.tasks/` is mirror-only in Phase C. The chunked `ORCHESTRATOR_STATE_V2` / `STATE_FILE` path remains the sole read source until a future cut-over plan lands.
+- Fail-open logging: mirror write and unblock write failures log `TASK_STATE_WRITE_FAIL <issue> <reason>` and do not stop the poll loop.
