@@ -44,6 +44,14 @@ _SANDBOX_FILES = (
 )
 
 
+def _git_test_env() -> dict[str, str]:
+	"""Return a subprocess env without repo-scoped git/worktree overrides."""
+	env = os.environ.copy()
+	for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		env.pop(key, None)
+	return env
+
+
 def _make_poller_sandbox(target: Path) -> None:
 	"""Populate ``target`` with a minimal copy of the coding-workflows tree
 	the poller expects at runtime and initialize a throwaway git repo
@@ -63,12 +71,7 @@ def _make_poller_sandbox(target: Path) -> None:
 	context came from integration branch state rather than default-branch
 	state.
 	"""
-	git_env = os.environ.copy()
-	# GitHub Actions / review-autofix can export repo-scoped GIT_* vars
-	# that would otherwise redirect `git init` / `git add` / `git commit`
-	# into the outer checkout instead of this throwaway sandbox repo.
-	for _key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
-		git_env.pop(_key, None)
+	git_env = _git_test_env()
 	for rel in _SANDBOX_DIRS:
 		src = REPO_ROOT / rel
 		if src.exists():
@@ -534,6 +537,18 @@ def _extract_latest_state(comments: list[dict]) -> dict:
 	raise AssertionError("No valid orchestrator state comment (V1 or V2) found")
 
 
+def _read_task_files(sandbox: Path) -> dict[str, dict]:
+	tasks_root = sandbox / ".tasks"
+	if not tasks_root.is_dir():
+		return {}
+
+	task_files: dict[str, dict] = {}
+	for task_file in sorted(tasks_root.glob("*/*.json")):
+		relative_path = task_file.relative_to(tasks_root).as_posix()
+		task_files[relative_path] = json.loads(task_file.read_text(encoding="utf-8"))
+	return task_files
+
+
 def _run_poller(
 	*,
 	state: dict,
@@ -676,10 +691,12 @@ def _run_poller(
 
 	with tempfile.TemporaryDirectory(prefix="poller-test-") as td:
 		tmp = Path(td)
+		sandbox = tmp / "sandbox"
 		bin_dir = tmp / "bin"
 		home_dir = tmp / "home"
 		runtime_dir = tmp / "runtime"
 		store_file = tmp / "gh_store.json"
+		_make_poller_sandbox(sandbox)
 		bin_dir.mkdir(parents=True)
 		home_dir.mkdir(parents=True)
 		runtime_dir.mkdir(parents=True)
@@ -2637,6 +2654,7 @@ sys.exit(proc.returncode)
 			["bash", str(POLLER_SCRIPT)],
 			cwd=str(REPO_ROOT),
 			env=env,
+			sandbox=sandbox,
 		)
 		if proc.returncode != 0:
 			raise AssertionError(
@@ -2650,6 +2668,7 @@ sys.exit(proc.returncode)
 		state_path = runtime_dir / "state.json"
 		result["latest_state"] = _extract_latest_state(tracking_issue["comments"])
 		result["state_on_disk"] = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else None
+		result["task_files"] = _read_task_files(sandbox)
 		result["tracking_labels"] = tracking_issue["labels"]
 		result["tracking_closed"] = tracking_issue.get("closed", False)
 		result["merge_calls"] = result.get("merge_calls", [])
@@ -2671,6 +2690,96 @@ sys.exit(proc.returncode)
 		result["actions_runs_fetch_count"] = int(result.get("actions_runs_fetch_count", 0))
 		result["actions_runs_if_none_match_count"] = int(result.get("actions_runs_if_none_match_count", 0))
 		return result
+
+
+def test_task_state_mirror_disabled_writes_no_task_files():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["depends_on"] = ["issue-0"]
+	state["waves"][0]["issues"][0]["reissue_depends_on"] = [501]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+	)
+	assert result["task_files"] == {}
+
+
+def test_task_state_mirror_enabled_writes_latest_wave_issue_payloads():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["depends_on"] = ["issue-0"]
+	state["waves"][0]["issues"][0]["reissue_depends_on"] = [501]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		env_overrides={"ORCH_TASK_FILES_ENABLED": "true"},
+	)
+	latest_issue_state = result["state_on_disk"]["waves"][0]["issues"][0]
+	assert result["latest_state"]["waves"][0]["issues"][0] == latest_issue_state
+	assert result["task_files"] == {
+		"1/issue-1.json": {
+			**latest_issue_state,
+			"schema_version": "task_state.v1.json",
+		}
+	}
+
+
+def test_task_state_mirror_enabled_accepts_uppercase_flag_value():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["depends_on"] = ["issue-0"]
+	state["waves"][0]["issues"][0]["reissue_depends_on"] = [501]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		env_overrides={"ORCH_TASK_FILES_ENABLED": "TRUE"},
+	)
+	latest_issue_state = result["state_on_disk"]["waves"][0]["issues"][0]
+	assert result["task_files"] == {
+		"1/issue-1.json": {
+			**latest_issue_state,
+			"schema_version": "task_state.v1.json",
+		}
+	}
+
+
+def test_task_state_mirror_enabled_unblocks_dependents_after_checkpoint_mirror():
+	state = _base_state(status="in_progress")
+	state["total_issues"] = 2
+	state["issue_number_map"]["issue-2"] = 11
+	state["waves"][0]["issues"] = [
+		{"id": "issue-1", "github_issue": 10, "status": "merged"},
+		{
+			"id": "issue-2",
+			"github_issue": 11,
+			"status": "pending",
+			"depends_on": ["issue-1"],
+			"reissue_depends_on": [10, 999],
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 11: []},
+		env_overrides={"ORCH_TASK_FILES_ENABLED": "true"},
+	)
+	latest_issue_one_state, latest_issue_two_state = result["state_on_disk"]["waves"][0]["issues"]
+	assert result["task_files"] == {
+		"1/issue-1.json": {
+			**latest_issue_one_state,
+			"schema_version": "task_state.v1.json",
+		},
+		"1/issue-2.json": {
+			**latest_issue_two_state,
+			"depends_on": [],
+			"reissue_depends_on": [999],
+			"schema_version": "task_state.v1.json",
+		},
+	}
 
 
 # ---------------------------------------------------------------------------
@@ -13275,13 +13384,14 @@ def test_resolver_tooling_refresh_does_not_clobber_files_changed_on_integration_
 	try:
 		bare = tmp_root / "bare.git"
 		work = tmp_root / "work"
+		git_env = _git_test_env()
 		subprocess.run(
 			["git", "init", "--bare", "--quiet", str(bare)],
-			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 		)
 		subprocess.run(
 			["git", "init", "--quiet", str(work)],
-			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 		)
 		for k, v in [
 			("user.name", "test"),
@@ -13291,7 +13401,7 @@ def test_resolver_tooling_refresh_does_not_clobber_files_changed_on_integration_
 		]:
 			subprocess.run(
 				["git", "-C", str(work), "config", k, v],
-				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 			)
 		(work / "scripts").mkdir()
 		# scripts/check_resolver_diff.sh is a real entry in the
@@ -13302,7 +13412,7 @@ def test_resolver_tooling_refresh_does_not_clobber_files_changed_on_integration_
 		def _git(*args: str) -> None:
 			subprocess.run(
 				["git", "-C", str(work), *args],
-				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 			)
 
 		_git("checkout", "-B", "main")
@@ -13348,7 +13458,7 @@ def test_resolver_tooling_refresh_does_not_clobber_files_changed_on_integration_
 		runner.chmod(0o755)
 		result = subprocess.run(
 			["bash", str(runner)],
-			capture_output=True, text=True, timeout=60,
+			capture_output=True, text=True, timeout=60, env=git_env,
 		)
 		assert result.returncode == 0, (
 			"_refresh_integration_resolver_tooling fixture run failed before "
@@ -13359,12 +13469,12 @@ def test_resolver_tooling_refresh_does_not_clobber_files_changed_on_integration_
 		# is the bare repo. Fetch it via the clone to read.
 		subprocess.run(
 			["git", "-C", str(work), "fetch", "origin", "--quiet"],
-			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 		)
 		actual = subprocess.run(
 			["git", "-C", str(work), "show",
 			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
-			capture_output=True, text=True, check=True,
+			capture_output=True, text=True, check=True, env=git_env,
 		).stdout
 		assert actual == "# sub-issue v1\n", (
 			"_refresh_integration_resolver_tooling silently reverted a file "
@@ -13416,13 +13526,14 @@ def test_resolver_tooling_refresh_3way_merges_disjoint_edits_from_both_branches(
 	try:
 		bare = tmp_root / "bare.git"
 		work = tmp_root / "work"
+		git_env = _git_test_env()
 		subprocess.run(
 			["git", "init", "--bare", "--quiet", str(bare)],
-			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 		)
 		subprocess.run(
 			["git", "init", "--quiet", str(work)],
-			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 		)
 		for k, v in [
 			("user.name", "test"),
@@ -13432,7 +13543,7 @@ def test_resolver_tooling_refresh_3way_merges_disjoint_edits_from_both_branches(
 		]:
 			subprocess.run(
 				["git", "-C", str(work), "config", k, v],
-				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 			)
 		(work / "scripts").mkdir()
 		refresh_target = work / "scripts" / "check_resolver_diff.sh"
@@ -13448,7 +13559,7 @@ def test_resolver_tooling_refresh_3way_merges_disjoint_edits_from_both_branches(
 		def _git(*args: str) -> None:
 			subprocess.run(
 				["git", "-C", str(work), *args],
-				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 			)
 
 		_git("checkout", "-B", "main")
@@ -13507,7 +13618,7 @@ def test_resolver_tooling_refresh_3way_merges_disjoint_edits_from_both_branches(
 		runner.chmod(0o755)
 		result = subprocess.run(
 			["bash", str(runner)],
-			capture_output=True, text=True, timeout=60,
+			capture_output=True, text=True, timeout=60, env=git_env,
 		)
 		assert result.returncode == 0, (
 			"_refresh_integration_resolver_tooling 3-way merge fixture run "
@@ -13516,12 +13627,12 @@ def test_resolver_tooling_refresh_3way_merges_disjoint_edits_from_both_branches(
 		)
 		subprocess.run(
 			["git", "-C", str(work), "fetch", "origin", "--quiet"],
-			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 		)
 		actual = subprocess.run(
 			["git", "-C", str(work), "show",
 			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
-			capture_output=True, text=True, check=True,
+			capture_output=True, text=True, check=True, env=git_env,
 		).stdout
 		# After the 3-way merge, the integration branch's file must
 		# contain BOTH the main-side fix (line 1) AND the sub-issue
@@ -13581,13 +13692,14 @@ def test_resolver_tooling_refresh_3way_merge_falls_back_to_skip_on_conflict():
 	try:
 		bare = tmp_root / "bare.git"
 		work = tmp_root / "work"
+		git_env = _git_test_env()
 		subprocess.run(
 			["git", "init", "--bare", "--quiet", str(bare)],
-			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 		)
 		subprocess.run(
 			["git", "init", "--quiet", str(work)],
-			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 		)
 		for k, v in [
 			("user.name", "test"),
@@ -13597,7 +13709,7 @@ def test_resolver_tooling_refresh_3way_merge_falls_back_to_skip_on_conflict():
 		]:
 			subprocess.run(
 				["git", "-C", str(work), "config", k, v],
-				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 			)
 		(work / "scripts").mkdir()
 		refresh_target = work / "scripts" / "check_resolver_diff.sh"
@@ -13606,7 +13718,7 @@ def test_resolver_tooling_refresh_3way_merge_falls_back_to_skip_on_conflict():
 		def _git(*args: str) -> None:
 			subprocess.run(
 				["git", "-C", str(work), *args],
-				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 			)
 
 		_git("checkout", "-B", "main")
@@ -13647,19 +13759,19 @@ def test_resolver_tooling_refresh_3way_merge_falls_back_to_skip_on_conflict():
 		runner.chmod(0o755)
 		result = subprocess.run(
 			["bash", str(runner)],
-			capture_output=True, text=True, timeout=60,
+			capture_output=True, text=True, timeout=60, env=git_env,
 		)
 		assert result.returncode == 0, (
 			f"refresh exited non-zero\nstdout:{result.stdout}\nstderr:{result.stderr}"
 		)
 		subprocess.run(
 			["git", "-C", str(work), "fetch", "origin", "--quiet"],
-			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 		)
 		actual = subprocess.run(
 			["git", "-C", str(work), "show",
 			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
-			capture_output=True, text=True, check=True,
+			capture_output=True, text=True, check=True, env=git_env,
 		).stdout
 		# On conflict the function must SKIP — integration-branch content
 		# must be unchanged from the sub-issue version.
@@ -13698,13 +13810,14 @@ def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration
 	try:
 		bare = tmp_root / "bare.git"
 		work = tmp_root / "work"
+		git_env = _git_test_env()
 		subprocess.run(
 			["git", "init", "--bare", "--quiet", str(bare)],
-			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 		)
 		subprocess.run(
 			["git", "init", "--quiet", str(work)],
-			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 		)
 		for k, v in [
 			("user.name", "test"),
@@ -13714,7 +13827,7 @@ def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration
 		]:
 			subprocess.run(
 				["git", "-C", str(work), "config", k, v],
-				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 			)
 		(work / "scripts").mkdir()
 		refresh_target = work / "scripts" / "check_resolver_diff.sh"
@@ -13724,7 +13837,7 @@ def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration
 		def _git(*args: str) -> None:
 			subprocess.run(
 				["git", "-C", str(work), *args],
-				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 			)
 
 		_git("checkout", "-B", "main")
@@ -13768,7 +13881,7 @@ def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration
 		runner.chmod(0o755)
 		result = subprocess.run(
 			["bash", str(runner)],
-			capture_output=True, text=True, timeout=60,
+			capture_output=True, text=True, timeout=60, env=git_env,
 		)
 		assert result.returncode == 0, (
 			"_refresh_integration_resolver_tooling fixture run failed before "
@@ -13777,12 +13890,12 @@ def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration
 		)
 		subprocess.run(
 			["git", "-C", str(work), "fetch", "origin", "--quiet"],
-			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=git_env,
 		)
 		actual = subprocess.run(
 			["git", "-C", str(work), "show",
 			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
-			capture_output=True, text=True, check=True,
+			capture_output=True, text=True, check=True, env=git_env,
 		).stdout
 		assert actual == "# main v2 with toolchain fix\n", (
 			"_refresh_integration_resolver_tooling failed to refresh a "
@@ -13796,7 +13909,7 @@ def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration
 		added_actual = subprocess.run(
 			["git", "-C", str(work), "show",
 			 "origin/orchestrator/project-99:scripts/targeted_file_context.py"],
-			capture_output=True, text=True, check=True,
+			capture_output=True, text=True, check=True, env=git_env,
 		).stdout
 		assert added_actual == "# main-only helper\n", (
 			"_refresh_integration_resolver_tooling failed to refresh a "

@@ -139,6 +139,7 @@ jobs:
           python3 -m py_compile scripts/issue_attachment_bundle.py
           python3 -m py_compile scripts/generate_symbol_diff_summary.py
           python3 -m py_compile scripts/orchestrate_lib.py
+          python3 -m py_compile scripts/task_state.py
           python3 -m py_compile scripts/ai_labels.py
           python3 -m py_compile scripts/collect_workflow_logs.py
           python3 -m py_compile scripts/analyze_workflow_logs.py
@@ -204,6 +205,8 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state_unblock.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_force_tick.py

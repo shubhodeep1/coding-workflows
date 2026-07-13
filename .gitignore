@@ -33,3 +33,5 @@ validation/
 .codex-workflow-src-main/
 prompts/.*.identity.*
 prompts/.*.assembled.*
+
+.tasks/

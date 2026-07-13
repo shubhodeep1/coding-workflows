@@ -561,6 +561,137 @@ def test_check_wave_status_mixed_null_and_real_issues():
 	assert issues_by_id["task-a"]["status"] == "merged"
 	assert issues_by_id["task-b"]["status"] == "not_created"
 
+
+def test_check_wave_status_unblocks_task_state_dependents_on_first_terminal_transition():
+	import io
+	from contextlib import redirect_stderr, redirect_stdout
+
+	import task_state
+
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		previous_root = task_state.REPO_ROOT
+		previous_flag = os.environ.get("ORCH_TASK_FILES_ENABLED")
+		task_state.REPO_ROOT = root
+		os.environ["ORCH_TASK_FILES_ENABLED"] = "true"
+		try:
+			issue_one = {"id": "issue-1", "github_issue": 10, "status": "pending"}
+			issue_two = {
+				"id": "issue-2",
+				"github_issue": 11,
+				"status": "pending",
+				"depends_on": ["issue-1"],
+				"reissue_depends_on": [10, 999],
+			}
+			assert task_state.write_task(1, "issue-1", issue_one)
+			assert task_state.write_task(1, "issue-2", issue_two)
+
+			first_state = _make_state(
+				waves=[{"wave": 1, "issues": [dict(issue_one), dict(issue_two)]}],
+				current_wave=1,
+			)
+			with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as handle:
+				json.dump(first_state, handle)
+				first_state_path = handle.name
+
+			try:
+				first_stdout = io.StringIO()
+				first_stderr = io.StringIO()
+				with redirect_stdout(first_stdout), redirect_stderr(first_stderr):
+					assert orchestrate_lib.cmd_check_wave_status(
+						type("Args", (), {
+							"state_file": first_state_path,
+							"labels_json": json.dumps({"10": ["ai:merged"], "11": []}),
+						})()
+					) == 0
+			finally:
+				os.unlink(first_state_path)
+
+			assert json.loads(first_stdout.getvalue())["wave_complete"] is False
+			assert task_state.read_task(1, "issue-2") == {
+				"depends_on": [],
+				"github_issue": 11,
+				"id": "issue-2",
+				"reissue_depends_on": [999],
+				"schema_version": "task_state.v1.json",
+				"status": "pending",
+			}
+			assert "TASK_STATE_UNBLOCK 1 issue-1 1" in first_stderr.getvalue()
+
+			second_state = _make_state(
+				waves=[{"wave": 1, "issues": [{**issue_one, "status": "merged"}, dict(issue_two)]}],
+				current_wave=1,
+			)
+			with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as handle:
+				json.dump(second_state, handle)
+				second_state_path = handle.name
+
+			try:
+				second_stdout = io.StringIO()
+				second_stderr = io.StringIO()
+				with redirect_stdout(second_stdout), redirect_stderr(second_stderr):
+					assert orchestrate_lib.cmd_check_wave_status(
+						type("Args", (), {
+							"state_file": second_state_path,
+							"labels_json": json.dumps({"10": ["ai:merged"], "11": []}),
+						})()
+					) == 0
+			finally:
+				os.unlink(second_state_path)
+
+			assert json.loads(second_stdout.getvalue())["wave_complete"] is False
+			assert "TASK_STATE_UNBLOCK" not in second_stderr.getvalue()
+		finally:
+			task_state.REPO_ROOT = previous_root
+			if previous_flag is None:
+				os.environ.pop("ORCH_TASK_FILES_ENABLED", None)
+			else:
+				os.environ["ORCH_TASK_FILES_ENABLED"] = previous_flag
+
+
+def test_check_wave_status_task_state_failures_are_fail_open():
+	import io
+	from contextlib import redirect_stderr, redirect_stdout
+
+	import task_state
+
+	previous_flag = os.environ.get("ORCH_TASK_FILES_ENABLED")
+	original_unblock_dependents = task_state.unblock_dependents
+	os.environ["ORCH_TASK_FILES_ENABLED"] = "true"
+	try:
+		def _boom(_wave_id: object, _completed_issue_id: object) -> int:
+			raise RuntimeError("boom")
+
+		task_state.unblock_dependents = _boom
+		state = _make_state()
+		stdout_buffer = io.StringIO()
+		stderr_buffer = io.StringIO()
+		with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as handle:
+			json.dump(state, handle)
+			state_path = handle.name
+
+		try:
+			with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+				assert orchestrate_lib.cmd_check_wave_status(
+					type("Args", (), {
+						"state_file": state_path,
+						"labels_json": json.dumps({"10": ["ai:merged"], "11": ["ai:merged"]}),
+					})()
+				) == 0
+		finally:
+			os.unlink(state_path)
+
+		result = json.loads(stdout_buffer.getvalue())
+		assert result["wave_complete"] is True
+		assert result["project_complete"] is True
+		assert "TASK_STATE_WRITE_FAIL issue-1 unblock_failed:boom" in stderr_buffer.getvalue()
+	finally:
+		task_state.unblock_dependents = original_unblock_dependents
+		if previous_flag is None:
+			os.environ.pop("ORCH_TASK_FILES_ENABLED", None)
+		else:
+			os.environ["ORCH_TASK_FILES_ENABLED"] = previous_flag
+
 def test_detect_stalls_selects_run_stall_judge_at_trigger_threshold():
 	state = _make_state()
 	state["waves"][0]["issues"][0]["status"] = "in_progress"
