@@ -110,6 +110,16 @@ if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh" ]; then
   # shellcheck source=/dev/null
   source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"
 fi
+if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/nag_reminder.sh" ]; then
+  # shellcheck source=/dev/null
+  source "${SUPPORT_SCRIPTS_DIR:-scripts}/nag_reminder.sh" 2>/dev/null || true
+fi
+if ! command -v nag_reminder_enabled >/dev/null 2>&1; then
+  nag_reminder_enabled() { return 1; }
+fi
+if ! command -v maybe_inject_nag >/dev/null 2>&1; then
+  maybe_inject_nag() { return 0; }
+fi
 
 if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
   echo "LAST_RUN_DIFF_FILE is missing or empty; using placeholder context for this run."
@@ -3075,6 +3085,28 @@ reviewer_classify_retryable_failure() {
   return 1
 }
 
+reviewer_output_has_explicit_none() {
+  local output_file="$1"
+
+  [ -s "${output_file}" ] || return 1
+  grep -Eq '^[[:space:]]*NONE[[:space:]]*$' "${output_file}"
+}
+
+reviewer_output_has_findings() {
+  local output_file="$1"
+
+  [ -s "${output_file}" ] || return 1
+  if grep -Eq '^[[:space:]]*File:[[:space:]]*[^[:space:]].*$' "${output_file}" \
+    && grep -Eq '^[[:space:]]*Problem:[[:space:]]*[^[:space:]].*$' "${output_file}"; then
+    return 0
+  fi
+  if grep -Eq '^[[:space:]]*Requirement:[[:space:]]*[^[:space:]].*$' "${output_file}" \
+    && grep -Eq '^[[:space:]]*Evidence of absence:[[:space:]]*[^[:space:]].*$' "${output_file}"; then
+    return 0
+  fi
+  return 1
+}
+
 execute_reviewer_attempt() {
   local attempt_label="$1"
   local attempt_number="$2"
@@ -3097,11 +3129,15 @@ execute_reviewer_attempt() {
   local cpid=""
   local wd_iter=0
   local reviewer_codex_cmd=()
+  local reviewer_attempt_prompt_file=""
+  local reviewer_effective_prompt_file="${prompt_file}"
+  local reviewer_nag_block=""
 
   REVIEWER_ATTEMPT_OUTCOME="failed"
   REVIEWER_ATTEMPT_RETRYABLE_CLASS=""
   REVIEWER_ATTEMPT_WD_REASON=""
   REVIEWER_ATTEMPT_CMD_RC=0
+  REVIEWER_ATTEMPT_SILENT=true
 
   emit_reviewer_substate "PreparingWorkspace" "${attempt_number}"
 
@@ -3128,6 +3164,23 @@ execute_reviewer_attempt() {
   fi
 
   emit_reviewer_substate "BuildingPrompt" "${attempt_number}"
+  reviewer_attempt_prompt_file="${prompt_file}.attempt_${attempt_number}"
+  if cp "${prompt_file}" "${reviewer_attempt_prompt_file}" 2>/dev/null; then
+    reviewer_effective_prompt_file="${reviewer_attempt_prompt_file}"
+    # Prompt assembly happens before the current reviewer turn runs, so feed
+    # the projected consecutive-silent count for the attempt we are about
+    # to launch.
+    reviewer_nag_counter_for_attempt=$((reviewer_silent_rounds + 1))
+    reviewer_nag_block="$(maybe_inject_nag "review-reviewer" "${reviewer_nag_counter_for_attempt}")"
+    if [ -n "${reviewer_nag_block}" ]; then
+      printf '\n%s\n' "${reviewer_nag_block}" >> "${reviewer_effective_prompt_file}"
+      reviewer_silent_rounds=0
+    fi
+  else
+    reviewer_attempt_prompt_file=""
+    reviewer_effective_prompt_file="${prompt_file}"
+    echo "::warning::Reviewer slot ${slot_model} (${effective_model}) could not create attempt prompt copy on ${attempt_label}; continuing with the base prompt." | tee -a "${log_file}" >&2
+  fi
 
   tmp_output="$(mktemp)"
   tmp_stderr="$(mktemp)"
@@ -3202,7 +3255,7 @@ execute_reviewer_attempt() {
   wd_pid=$!
 
   if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
-    sanitize_codex_prompt_file "${prompt_file}"
+    sanitize_codex_prompt_file "${reviewer_effective_prompt_file}"
   fi
   emit_reviewer_substate "LaunchingAgentProcess" "${attempt_number}"
   emit_reviewer_substate "InitializingSession" "${attempt_number}"
@@ -3224,17 +3277,17 @@ execute_reviewer_attempt() {
       --stderr-file "${tmp_stderr}" \
       --activity-file "${hb_file}" \
       --status-file "${stall_status_file}" \
-      -- "${reviewer_codex_cmd[@]}" < "${prompt_file}" &
+      -- "${reviewer_codex_cmd[@]}" < "${reviewer_effective_prompt_file}" &
   elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
     "${CODEX_HEARTBEAT_HELPER}" \
       --phase review_run_reviewers \
       --stdout-file "${tmp_output}" \
       --stderr-file "${tmp_stderr}" \
       --activity-file "${hb_file}" \
-      -- "${reviewer_codex_cmd[@]}" < "${prompt_file}" &
+      -- "${reviewer_codex_cmd[@]}" < "${reviewer_effective_prompt_file}" &
   else
     (
-      exec "${reviewer_codex_cmd[@]}" < "${prompt_file}"
+      exec "${reviewer_codex_cmd[@]}" < "${reviewer_effective_prompt_file}"
     ) > "${tmp_output}" 2> >(
       while IFS= read -r line || [ -n "$line" ]; do
         printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
@@ -3260,6 +3313,10 @@ execute_reviewer_attempt() {
   fi
   rm -f "${stall_status_file}"
 
+  if reviewer_output_has_findings "${tmp_output}" || reviewer_output_has_explicit_none "${tmp_output}"; then
+    REVIEWER_ATTEMPT_SILENT=false
+  fi
+
   emit_reviewer_substate "Finishing" "${attempt_number}" "${tmp_stderr}"
   normalize_openrouter_usage "${tmp_stderr}" "review" "${output_prefix}" "${effective_model}" | tee -a "${log_file}" || true
 
@@ -3267,7 +3324,7 @@ execute_reviewer_attempt() {
     pr_closed_sentinel|pr_closed_api)
       cat "${tmp_stderr}" >> "${log_file}"
       echo "Reviewer slot ${slot_model} stopped — PR #${PR_NUMBER:-unknown} was closed/merged (reason: ${wd_reason})." | tee -a "${log_file}"
-      rm -f "${tmp_output}" "${tmp_stderr}"
+      rm -f "${tmp_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
       REVIEWER_ATTEMPT_OUTCOME="pr_closed"
       REVIEWER_ATTEMPT_WD_REASON="${wd_reason}"
       return 0
@@ -3286,11 +3343,22 @@ execute_reviewer_attempt() {
   esac
 
   if [ "${cmd_rc}" -eq 0 ] && [ -s "${tmp_output}" ]; then
+    if [ "${REVIEWER_ATTEMPT_SILENT}" = "true" ] && nag_reminder_enabled; then
+      cat "${tmp_stderr}" >> "${log_file}"
+      echo "Reviewer slot ${slot_model} (${effective_model}) produced no findings or explicit NONE on ${attempt_label}; retrying." | tee -a "${log_file}"
+      emit_reviewer_substate "Failed" "${attempt_number}" "${tmp_stderr}"
+      reviewer_silent_rounds=$((reviewer_silent_rounds + 1))
+      rm -f "${tmp_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
+      REVIEWER_ATTEMPT_OUTCOME="silent_retry"
+      REVIEWER_ATTEMPT_CMD_RC=0
+      return 0
+    fi
     cat "${tmp_stderr}" >> "${log_file}"
     mv "${tmp_output}" "${output_file}"
     echo "Reviewer slot ${slot_model} (${effective_model}) succeeded on ${attempt_label}." | tee -a "${log_file}"
     emit_reviewer_substate "Succeeded" "${attempt_number}" "${tmp_stderr}"
-    rm -f "${tmp_output}" "${tmp_stderr}"
+    reviewer_silent_rounds=0
+    rm -f "${tmp_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
     REVIEWER_ATTEMPT_OUTCOME="success"
     REVIEWER_ATTEMPT_CMD_RC=0
     return 0
@@ -3350,7 +3418,12 @@ execute_reviewer_attempt() {
       emit_reviewer_substate "Failed" "${attempt_number}" "${tmp_stderr}"
       ;;
   esac
-  rm -f "${tmp_output}" "${tmp_stderr}"
+  if [ "${REVIEWER_ATTEMPT_SILENT}" = "true" ]; then
+    reviewer_silent_rounds=$((reviewer_silent_rounds + 1))
+  else
+    reviewer_silent_rounds=0
+  fi
+  rm -f "${tmp_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
   return 0
 }
 # ── End reviewer failback / health helpers ─────────────────────────
@@ -3373,11 +3446,15 @@ run_reviewer() {
   local reviewer_pr_poll_interval_warn=0
   local reviewer_pr_poll_interval_raw_escaped=""
   local reviewer_watchdog_sleep="${reviewer_pr_poll_interval_default}"
+  local reviewer_max_attempts=3
+  local reviewer_nag_attempt_limit=""
   local attempt=1
   local circuit_breaker_enabled=false
   local base_reasoning=""
   local retry_reasoning=""
   local fallback_model=""
+  local fallback_attempt_label=""
+  local final_failure_message=""
   local final_retryable_class=""
   local reviewer_codex_root=""
   local reviewer_codex_home=""
@@ -3389,11 +3466,19 @@ run_reviewer() {
   local codex_bin=""
   local slot_model="${model}"
   local effective_model="${model}"
+  local reviewer_silent_rounds=0
 
   : > "${log_file}"
 
   if reviewer_circuit_breaker_enabled; then
     circuit_breaker_enabled=true
+  fi
+
+  if nag_reminder_enabled; then
+    reviewer_nag_attempt_limit="$(nag_silent_round_threshold)"
+    if [ "${reviewer_nag_attempt_limit}" -gt "${reviewer_max_attempts}" ]; then
+      reviewer_max_attempts="${reviewer_nag_attempt_limit}"
+    fi
   fi
 
   if [[ "${reviewer_pr_poll_interval_raw}" =~ ^[0-9]+$ ]]; then
@@ -3457,7 +3542,7 @@ run_reviewer() {
   fi
 
   if [ "${circuit_breaker_enabled}" != "true" ]; then
-    while [ "${attempt}" -le 3 ]; do
+    while [ "${attempt}" -le "${reviewer_max_attempts}" ]; do
       effective_model="${model}"
       if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
         if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
@@ -3479,6 +3564,8 @@ run_reviewer() {
           rm -rf "${reviewer_codex_home}" 2>/dev/null || true
           return 0
           ;;
+        silent_retry)
+          ;;
       esac
       attempt=$((attempt + 1))
       sleep 2
@@ -3486,7 +3573,7 @@ run_reviewer() {
 
     echo "Reviewer ${model} failed after retries." > "${output_file}"
     echo "failed" > "${status_file}"
-    echo "Reviewer ${model} failed after 3 attempts." | tee -a "${log_file}"
+    echo "Reviewer ${model} failed after ${reviewer_max_attempts} attempts." | tee -a "${log_file}"
     rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
     rm -rf "${reviewer_codex_home}" 2>/dev/null || true
     return 0
@@ -3514,6 +3601,8 @@ run_reviewer() {
       rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
       rm -rf "${reviewer_codex_home}" 2>/dev/null || true
       return 0
+      ;;
+    silent_retry)
       ;;
     retryable_failure)
       final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-retryable_failure}"
@@ -3555,6 +3644,8 @@ run_reviewer() {
         rm -rf "${reviewer_codex_home}" 2>/dev/null || true
         return 0
         ;;
+      silent_retry)
+        ;;
       retryable_failure)
         final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class}}"
         ;;
@@ -3573,15 +3664,23 @@ run_reviewer() {
   fallback_model="$(reviewer_failback_target_for_model "${model}" || true)"
   if [ -z "${fallback_model}" ]; then
     echo "REVIEWER_FAILBACK_UNMAPPED: ${model}" | tee -a "${log_file}"
-    reviewer_record_health_outcome "${model}" "retryable_failure" "" "${final_retryable_class}" "${log_file}"
-    printf 'Reviewer slot %s skipped after retryable failure (%s); no same-family failback mapping is available.\n' "${model}" "${final_retryable_class:-retryable_failure}" > "${output_file}"
-    echo "skipped_unmapped" > "${status_file}"
-    rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-    rm -rf "${reviewer_codex_home}" 2>/dev/null || true
-    return 0
+    if [ "${reviewer_max_attempts}" -le 2 ]; then
+      reviewer_record_health_outcome "${model}" "retryable_failure" "" "${final_retryable_class}" "${log_file}"
+      printf 'Reviewer slot %s skipped after retryable failure (%s); no same-family failback mapping is available.\n' "${model}" "${final_retryable_class:-retryable_failure}" > "${output_file}"
+      echo "skipped_unmapped" > "${status_file}"
+      rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+      rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+      return 0
+    fi
+    fallback_model="${model}"
+  else
+    echo "REVIEWER_FAILBACK: ${model} -> ${fallback_model} reason=${final_retryable_class:-retryable_failure}" | tee -a "${log_file}"
   fi
 
-  echo "REVIEWER_FAILBACK: ${model} -> ${fallback_model} reason=${final_retryable_class:-retryable_failure}" | tee -a "${log_file}"
+  fallback_attempt_label="attempt 3 (failback ${fallback_model})"
+  if [ "${fallback_model}" = "${model}" ]; then
+    fallback_attempt_label="attempt 3 (retry ${fallback_model})"
+  fi
   effective_model="${fallback_model}"
   if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
     if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
@@ -3589,7 +3688,7 @@ run_reviewer() {
     fi
     context_budget_warn_models_emitted="${context_budget_warn_models_emitted} ${effective_model}"
   fi
-  execute_reviewer_attempt "attempt 3 (failback ${fallback_model})" "3" "${base_reasoning}"
+  execute_reviewer_attempt "${fallback_attempt_label}" "3" "${base_reasoning}"
   case "${REVIEWER_ATTEMPT_OUTCOME}" in
     success)
       reviewer_record_health_outcome "${model}" "retryable_failure" "${fallback_model}" "${final_retryable_class}" "${log_file}"
@@ -3604,17 +3703,57 @@ run_reviewer() {
       rm -rf "${reviewer_codex_home}" 2>/dev/null || true
       return 0
       ;;
-    retryable_failure)
-      reviewer_record_health_outcome "${model}" "retryable_failure" "${fallback_model}" "${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class}}" "${log_file}"
+    silent_retry)
       ;;
-    *)
-      reviewer_record_health_outcome "${model}" "retryable_failure" "${fallback_model}" "${final_retryable_class}" "${log_file}"
+    retryable_failure)
+      final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class}}"
       ;;
   esac
 
-  echo "Reviewer ${model} failed after circuit-breaker failback." > "${output_file}"
+  if [ "${reviewer_max_attempts}" -gt 3 ]; then
+    attempt=4
+    while [ "${attempt}" -le "${reviewer_max_attempts}" ]; do
+      effective_model="${fallback_model}"
+      if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
+        if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
+          emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
+        fi
+        context_budget_warn_models_emitted="${context_budget_warn_models_emitted} ${effective_model}"
+      fi
+      execute_reviewer_attempt "attempt ${attempt} (extended retry ${fallback_model})" "${attempt}" "${base_reasoning}"
+      case "${REVIEWER_ATTEMPT_OUTCOME}" in
+        success)
+          reviewer_record_health_outcome "${model}" "retryable_failure" "${fallback_model}" "${final_retryable_class}" "${log_file}"
+          echo "success" > "${status_file}"
+          rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+          rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+          return 0
+          ;;
+        pr_closed)
+          echo "pr_closed" > "${status_file}"
+          rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+          rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+          return 0
+          ;;
+        silent_retry)
+          ;;
+        retryable_failure)
+          final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class}}"
+          ;;
+      esac
+      attempt=$((attempt + 1))
+      sleep 2
+    done
+  fi
+
+  reviewer_record_health_outcome "${model}" "retryable_failure" "${fallback_model}" "${final_retryable_class}" "${log_file}"
+  final_failure_message="Reviewer ${model} failed after circuit-breaker failback."
+  if [ "${reviewer_max_attempts}" -gt 3 ]; then
+    final_failure_message="Reviewer ${model} failed after ${reviewer_max_attempts} circuit-breaker attempts."
+  fi
+  echo "${final_failure_message}" > "${output_file}"
   echo "failed" > "${status_file}"
-  echo "Reviewer ${model} failed after circuit-breaker failback." | tee -a "${log_file}"
+  echo "${final_failure_message}" | tee -a "${log_file}"
   rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
   rm -rf "${reviewer_codex_home}" 2>/dev/null || true
   return 0

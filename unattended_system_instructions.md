@@ -645,3 +645,11 @@ mechanics.
   `.transcripts/<run_id>-<phase>-<ts>.json` archive to retain raw
   transcript/output data instead of re-emitting raw transcript or
   tool-call history into the compacted summary.
+
+---
+
+## §23. Reminder Re-engagement
+
+When the host injects a `<reminder>` block, treat it as an execution nudge,
+re-engage with the task immediately, and do not comment on the reminder
+itself in your output.

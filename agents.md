@@ -448,6 +448,7 @@ and shipped:
 - `SERENA_PROBE`
 - `EVENTS_EMIT`
 - `EVENTS_EMIT_FAIL`
+- `NAG_REMINDER_LOAD_FAIL`
 - `TRANSCRIPT_ARCHIVE_FAIL`
 - `IDENTITY_REINJECT_PARSE_FAIL`
 - `drift-audit:`
@@ -467,6 +468,13 @@ When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`,
 `.transcripts/<run_id>-<phase>-<ts>.json` from already-captured success-path
 output files. Archive helper problems never fail the caller; the helper emits
 only `TRANSCRIPT_ARCHIVE_FAIL` on mkdir/read/write/JSON-encode failures.
+
+When wrapper-level nag reminders are enabled,
+`scripts/nag_reminder.sh` loads phase-specific reminder text from
+`prompts/_nag_reminders.txt`. Reminder-asset lookup problems fail open: the
+caller continues without injection and the helper emits only
+`NAG_REMINDER_LOAD_FAIL` when the prompt fragment is missing, unreadable, or
+missing the requested phase key.
 
 LOG_PREFIX.name=LABEL_REPAIR
 LOG_PREFIX.name=LABEL_REPAIR_DIFF
@@ -534,6 +542,7 @@ LOG_PREFIX.name=SERENA_FALLBACK
 LOG_PREFIX.name=SERENA_PROBE
 LOG_PREFIX.name=EVENTS_EMIT
 LOG_PREFIX.name=EVENTS_EMIT_FAIL
+LOG_PREFIX.name=NAG_REMINDER_LOAD_FAIL
 LOG_PREFIX.name=TRANSCRIPT_ARCHIVE_FAIL
 LOG_PREFIX.name=IDENTITY_REINJECT_PARSE_FAIL
 LOG_PREFIX.name=drift-audit:

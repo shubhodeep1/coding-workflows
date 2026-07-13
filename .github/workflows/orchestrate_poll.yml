@@ -334,7 +334,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh; do
+          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -452,6 +452,17 @@ jobs:
             mkdir -p "$(dirname -- "prompts/${prompt_assembly_asset}")"
             install -m 0644 "${asset_src}" "prompts/${prompt_assembly_asset}"
           done
+
+          nag_prompt_src=".codex-workflow-src/prompts/_nag_reminders.txt"
+          if [ ! -f "${nag_prompt_src}" ] && [ -f ".codex-workflow-src-main/prompts/_nag_reminders.txt" ]; then
+            nag_prompt_src=".codex-workflow-src-main/prompts/_nag_reminders.txt"
+          fi
+          if [ -f "${nag_prompt_src}" ]; then
+            install -m 0644 "${nag_prompt_src}" "prompts/_nag_reminders.txt"
+          else
+            echo "::warning::Optional nag reminder prompt asset _nag_reminders.txt is unavailable on ${SCRIPT_REF}; nag reminders will fail open for this run."
+            rm -f prompts/_nag_reminders.txt
+          fi
 
           schema_src=".codex-workflow-src/.github/ai/orchestrate_schema.v1.json"
           if [ ! -f "${schema_src}" ] && [ -f ".codex-workflow-src-main/.github/ai/orchestrate_schema.v1.json" ]; then
@@ -602,6 +613,8 @@ jobs:
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
+          UNATTENDED_NAG_REMINDER_ENABLED: ${{ vars.UNATTENDED_NAG_REMINDER_ENABLED || 'false' }}
+          UNATTENDED_NAG_SILENT_ROUNDS: ${{ vars.UNATTENDED_NAG_SILENT_ROUNDS || '3' }}
           RUNTIME_BLOCKER_CHECK_ENABLED: ${{ vars.RUNTIME_BLOCKER_CHECK_ENABLED || 'true' }}
           ENABLE_VALIDATION: ${{ vars.ENABLE_VALIDATION || 'true' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}

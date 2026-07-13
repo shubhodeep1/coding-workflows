@@ -36,6 +36,10 @@ fi
 if ! type archive_transcript >/dev/null 2>&1; then
   archive_transcript() { return 0; }
 fi
+if [ -f "scripts/nag_reminder.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/nag_reminder.sh 2>/dev/null || true
+fi
 # shellcheck source=pr_checks_lib.sh
 # Shared PR check-runs merge gate (_pr_checks_completed /
 # _pr_required_check_names_for_base). Single source of truth shared with
@@ -151,6 +155,70 @@ fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
+if ! command -v nag_reminder_enabled >/dev/null 2>&1; then
+  nag_reminder_enabled() { return 1; }
+fi
+if ! command -v nag_silent_round_threshold >/dev/null 2>&1; then
+  nag_silent_round_threshold() { printf '3\n'; }
+fi
+if ! command -v maybe_inject_nag >/dev/null 2>&1; then
+  maybe_inject_nag() { return 0; }
+fi
+
+extract_judge_json_with_status() {
+  local output_file="$1"
+  local parsed_json=""
+
+  [ -s "${output_file}" ] || return 0
+  parsed_json="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${output_file}" <<'PY' 2>/dev/null || true
+import json
+import re
+import sys
+from pathlib import Path
+
+
+raw = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+
+def emit_if_valid(candidate: str) -> bool:
+    if not candidate:
+        return False
+    try:
+        data = json.loads(candidate)
+    except json.JSONDecodeError:
+        return False
+    status = data.get("status") if isinstance(data, dict) else None
+    if not isinstance(status, str) or not status:
+        return False
+    json.dump(data, sys.stdout)
+    return True
+
+
+if emit_if_valid(raw.strip()):
+    raise SystemExit(0)
+
+cleaned = re.sub(r"```(?:json)?\s*", "", raw)
+cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE)
+
+brace_depth = 0
+start = None
+for idx, ch in enumerate(cleaned):
+    if ch == "{":
+        if brace_depth == 0:
+            start = idx
+        brace_depth += 1
+    elif ch == "}":
+        brace_depth -= 1
+        if brace_depth == 0 and start is not None:
+            if emit_if_valid(cleaned[start:idx + 1]):
+                raise SystemExit(0)
+            start = None
+
+raise SystemExit(1)
+PY
+ )"
+  printf '%s' "${parsed_json}"
+}
 
 append_judge_semble_query_text() {
   local label="$1"
@@ -16865,18 +16933,49 @@ ${PR_DIFF}
 
   # Run judge via Codex
   JUDGE_SUCCESS=false
+  JUDGE_JSON=""
+  judge_silent_rounds=0
   max_attempts=2
+  if nag_reminder_enabled; then
+    judge_nag_attempt_limit="$(nag_silent_round_threshold)"
+    if [ "${judge_nag_attempt_limit}" -gt "${max_attempts}" ]; then
+      max_attempts="${judge_nag_attempt_limit}"
+    fi
+  fi
   for attempt in $(seq 1 "${max_attempts}"); do
+    judge_attempt_prompt_file="${JUDGE_PROMPT_FILE}.attempt_${attempt}"
+    judge_effective_prompt_file="${JUDGE_PROMPT_FILE}"
+    if cp "${JUDGE_PROMPT_FILE}" "${judge_attempt_prompt_file}" 2>/dev/null; then
+      judge_effective_prompt_file="${judge_attempt_prompt_file}"
+    else
+      echo "::warning::Could not create per-attempt judge prompt file for attempt ${attempt}; continuing with the base prompt." >&2
+    fi
+    # Prompt assembly happens before the current judge turn runs, so feed the
+    # projected consecutive-silent count for the attempt we are about to
+    # launch.
+    judge_nag_counter_for_attempt=$((judge_silent_rounds + 1))
+    judge_nag_block="$(maybe_inject_nag "orchestrate-poll-judge" "${judge_nag_counter_for_attempt}")"
+    if [ -n "${judge_nag_block}" ]; then
+      if [ "${judge_effective_prompt_file}" = "${judge_attempt_prompt_file}" ]; then
+        printf '\n%s\n' "${judge_nag_block}" >> "${judge_effective_prompt_file}"
+        judge_silent_rounds=0
+      fi
+    fi
     echo "Judge attempt ${attempt}/${max_attempts}..."
-    sanitize_codex_prompt_file "${JUDGE_PROMPT_FILE}"
+    sanitize_codex_prompt_file "${judge_effective_prompt_file}"
     # The pipeline may return 141 (SIGPIPE) when the prompt is larger
     # than the OS pipe buffer and codex closes stdin before cat finishes.
     # This is harmless — check the output file regardless of exit code.
-    cat "${JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
-    if grep -q '[^[:space:]]' "${JUDGE_OUTPUT_FILE}"; then
+    cat "${judge_effective_prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+    rm -f "${judge_attempt_prompt_file}"
+    judge_json_candidate="$(extract_judge_json_with_status "${JUDGE_OUTPUT_FILE}")"
+    if [ -n "${judge_json_candidate}" ]; then
+      JUDGE_JSON="${judge_json_candidate}"
       JUDGE_SUCCESS=true
+      judge_silent_rounds=0
       break
     fi
+    judge_silent_rounds=$((judge_silent_rounds + 1))
     if [ "${attempt}" -lt "${max_attempts}" ]; then
       sleep $(( 10 * attempt + RANDOM % 10 ))
     fi
@@ -16892,43 +16991,6 @@ ${PR_DIFF}
 	  # ---------------------------------------------------------------
 	  # Parse judge output
   # ---------------------------------------------------------------
-  JUDGE_JSON="$(python3 -c "
-import json, re, sys
-
-raw = open('${JUDGE_OUTPUT_FILE}', 'r').read()
-
-try:
-    data = json.loads(raw.strip())
-    json.dump(data, sys.stdout)
-    sys.exit(0)
-except json.JSONDecodeError:
-    pass
-
-cleaned = re.sub(r'\`\`\`(?:json)?\s*', '', raw)
-cleaned = re.sub(r'\`\`\`\s*$', '', cleaned, flags=re.MULTILINE)
-
-brace_depth = 0
-start = None
-for i, ch in enumerate(cleaned):
-    if ch == '{':
-        if brace_depth == 0:
-            start = i
-        brace_depth += 1
-    elif ch == '}':
-        brace_depth -= 1
-        if brace_depth == 0 and start is not None:
-            candidate = cleaned[start:i+1]
-            try:
-                data = json.loads(candidate)
-                json.dump(data, sys.stdout)
-                sys.exit(0)
-            except json.JSONDecodeError:
-                start = None
-
-print('Could not parse judge JSON', file=sys.stderr)
-sys.exit(1)
-" 2>/dev/null || echo "")"
-
   if [ -z "${JUDGE_JSON}" ]; then
     echo "::error::Could not parse judge output for #${TRACKING_NUM}"
     tg_notify "Orchestrator Judge output unparseable for #${TRACKING_NUM}. Manual review needed." "CRITICAL"
