@@ -188,11 +188,29 @@ test_missing_prompt_fragment_fails_open()
 	grep -q '^NAG_REMINDER_LOAD_FAIL: prompts/_nag_reminders.txt unavailable for phase review-editor$' "${stderr_file}"
 }
 
+test_prompt_lookup_skips_unset_support_dir_root_paths()
+{
+	local _tmpdir="$1"
+	local helper_path="${REPO_ROOT}/scripts/nag_reminder.sh"
+
+	grep -Fq '"${SUPPORT_PROMPTS_DIR:+${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt}"' "${helper_path}"
+	grep -Fq '"${SUPPORT_ROOT_DIR:+${SUPPORT_ROOT_DIR}/prompts/_nag_reminders.txt}"' "${helper_path}"
+	if grep -Fq '"${SUPPORT_PROMPTS_DIR:-}/_nag_reminders.txt"' "${helper_path}"; then
+		echo "unexpected root-level SUPPORT_PROMPTS_DIR fallback" >&2
+		exit 1
+	fi
+	if grep -Fq '"${SUPPORT_ROOT_DIR:-}/prompts/_nag_reminders.txt"' "${helper_path}"; then
+		echo "unexpected root-level SUPPORT_ROOT_DIR fallback" >&2
+		exit 1
+	fi
+}
+
 with_temp_workspace test_flag_off_emits_nothing
 with_temp_workspace test_counter_below_threshold_emits_nothing
 with_temp_workspace test_threshold_emits_reminder_and_reset_path_is_empty
 with_temp_workspace test_invalid_thresholds_clamp_to_three
 with_temp_workspace test_large_silent_round_values_still_trigger_reminders
 with_temp_workspace test_missing_prompt_fragment_fails_open
+with_temp_workspace test_prompt_lookup_skips_unset_support_dir_root_paths
 
 echo "test_nag_reminder.sh: PASS"

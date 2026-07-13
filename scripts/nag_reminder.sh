@@ -44,8 +44,8 @@ _nag_reminder_prompt_file()
 	local candidate=""
 
 	for candidate in \
-		"${SUPPORT_PROMPTS_DIR:-}/_nag_reminders.txt" \
-		"${SUPPORT_ROOT_DIR:-}/prompts/_nag_reminders.txt" \
+		"${SUPPORT_PROMPTS_DIR:+${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt}" \
+		"${SUPPORT_ROOT_DIR:+${SUPPORT_ROOT_DIR}/prompts/_nag_reminders.txt}" \
 		"${NAG_REMINDER_HELPER_ROOT_DIR}/prompts/_nag_reminders.txt" \
 		"prompts/_nag_reminders.txt" \
 		".codex-workflow-src/prompts/_nag_reminders.txt" \
