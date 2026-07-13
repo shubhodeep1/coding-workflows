@@ -15,6 +15,7 @@ from typing import Any
 TASK_STATE_SCHEMA_VERSION = "task_state.v1.json"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TASKS_ROOT = ".tasks"
+TASK_STATE_UNBLOCK_TERMINAL_STATUSES = frozenset({"merged", "closed", "skipped"})
 
 
 def _task_files_enabled() -> bool:
@@ -106,6 +107,14 @@ def _prune_blockers(blockers: Any, blocker_tokens: set[str]) -> tuple[Any, bool]
 	return filtered, filtered != blockers
 
 
+def _issue_is_unblock_terminal(issue: Any) -> bool:
+	if not isinstance(issue, dict):
+		return False
+	if issue.get("github_issue") in (None, ""):
+		return False
+	return str(issue.get("status") or "").strip() in TASK_STATE_UNBLOCK_TERMINAL_STATUSES
+
+
 def unblock_dependents(wave_id: Any, completed_issue_id: Any) -> int:
 	if not _task_files_enabled():
 		return 0
@@ -142,6 +151,7 @@ def mirror_state(state: dict[str, Any]) -> int:
 		return 0
 
 	written = 0
+	newly_terminal_issue_refs: list[tuple[Any, Any]] = []
 	for wave_index, wave in enumerate(state.get("waves", []), start=1):
 		if not isinstance(wave, dict):
 			continue
@@ -156,8 +166,14 @@ def mirror_state(state: dict[str, Any]) -> int:
 			if issue_id in (None, ""):
 				_log_task_state_write_fail(issue_id, f"missing_issue_id_for_wave_{wave_id}")
 				continue
+			previous_issue_payload = read_task(wave_id, issue_id)
 			if write_task(wave_id, issue_id, issue):
 				written += 1
+				if _issue_is_unblock_terminal(issue) and not _issue_is_unblock_terminal(previous_issue_payload):
+					newly_terminal_issue_refs.append((wave_id, issue_id))
+
+	for wave_id, issue_id in newly_terminal_issue_refs:
+		unblock_dependents(wave_id, issue_id)
 	return written
 
 

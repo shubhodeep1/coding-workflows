@@ -150,6 +150,49 @@ def test_mirror_state_cli_matches_state_issue_payloads() -> None:
 			_restore_task_state_root(previous_root, previous_flag)
 
 
+def test_mirror_state_unblocks_dependents_after_writing_newly_terminal_tasks() -> None:
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 101, "status": "merged"},
+					{
+						"id": "issue-2",
+						"github_issue": 102,
+						"status": "pending",
+						"depends_on": ["issue-1"],
+						"reissue_depends_on": [101, 999],
+					},
+				],
+			},
+		],
+	}
+
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		previous_root, previous_flag = _set_task_state_root(root, enabled="true")
+		try:
+			assert task_state.mirror_state(state) == 2
+			assert task_state.read_task(1, "issue-1") == {
+				"github_issue": 101,
+				"id": "issue-1",
+				"schema_version": "task_state.v1.json",
+				"status": "merged",
+			}
+			assert task_state.read_task(1, "issue-2") == {
+				"depends_on": [],
+				"github_issue": 102,
+				"id": "issue-2",
+				"reissue_depends_on": [999],
+				"schema_version": "task_state.v1.json",
+				"status": "pending",
+			}
+		finally:
+			_restore_task_state_root(previous_root, previous_flag)
+
+
 def main() -> int:
 	test_funcs = [value for key, value in sorted(globals().items()) if key.startswith("test_") and callable(value)]
 	passed = 0

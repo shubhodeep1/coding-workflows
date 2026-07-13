@@ -1876,6 +1876,11 @@ _mirror_task_state_files_from_state() {
 		return 0
 	fi
 
+	if [ -z "${STATE_FILE:-}" ] || [ ! -s "${STATE_FILE}" ]; then
+		echo "TASK_STATE_WRITE_FAIL state_file state_file_missing_or_empty" >&2
+		return 0
+	fi
+
 	if ! python3 "${task_state_helper}" mirror-state --state-file "${STATE_FILE}"; then
 		echo "TASK_STATE_WRITE_FAIL state_file mirror_state_command_failed" >&2
 	fi

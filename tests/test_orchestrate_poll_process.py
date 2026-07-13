@@ -2726,6 +2726,42 @@ def test_task_state_mirror_enabled_writes_latest_wave_issue_payloads():
 	}
 
 
+def test_task_state_mirror_enabled_unblocks_dependents_after_checkpoint_mirror():
+	state = _base_state(status="in_progress")
+	state["total_issues"] = 2
+	state["issue_number_map"]["issue-2"] = 11
+	state["waves"][0]["issues"] = [
+		{"id": "issue-1", "github_issue": 10, "status": "merged"},
+		{
+			"id": "issue-2",
+			"github_issue": 11,
+			"status": "pending",
+			"depends_on": ["issue-1"],
+			"reissue_depends_on": [10, 999],
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 11: []},
+		env_overrides={"ORCH_TASK_FILES_ENABLED": "true"},
+	)
+	latest_issue_one_state, latest_issue_two_state = result["state_on_disk"]["waves"][0]["issues"]
+	assert result["task_files"] == {
+		"1/issue-1.json": {
+			**latest_issue_one_state,
+			"schema_version": "task_state.v1.json",
+		},
+		"1/issue-2.json": {
+			**latest_issue_two_state,
+			"depends_on": [],
+			"reissue_depends_on": [999],
+			"schema_version": "task_state.v1.json",
+		},
+	}
+
+
 # ---------------------------------------------------------------------------
 # Tests: orchestrate poll validation lifecycle
 # ---------------------------------------------------------------------------
