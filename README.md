@@ -1177,6 +1177,8 @@ the way to a fix PR without human action.
 | `DOCS_DECISION_LINT_ENABLED` | `false` | Advisory CI surfacing switch for the plan-decisions linter. The linter still runs on `push` / `pull_request`, but warnings about missing or malformed `## Decisions` blocks in `docs/plans/*.md` are only replayed into CI logs and the step summary when this is `true`. |
 | `UNATTENDED_IDENTITY_REINJECT_ENABLED` | `false` | Opt-in prompt-render flag for the Phase B identity-recall block. When `true`, `scripts/render_prompt.sh` parses the canonical `prompts/mode-*.txt` role/goal opening paragraph and injects a rendered `<identity-recall>` block immediately after the opening paragraph of rendered phase prompts. Parse failures fail open: rendering continues unchanged and logs `IDENTITY_REINJECT_PARSE_FAIL`. |
 | `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED` | `false` | Opt-in Phase A archive flag. When `true`, the implement, orchestrate-poll judge, review editor, and validate discover/diagnose success paths wrap their captured Codex output files into fail-open `.transcripts/<run_id>-<phase>-<ts>.json` archives. Archive I/O failures do not fail the host phase; they only log `TRANSCRIPT_ARCHIVE_FAIL`. |
+| `UNATTENDED_NAG_REMINDER_ENABLED` | `false` | Opt-in wrapper-level `<reminder>` injection after repeated silent reviewer/editor/judge turns. When `false`, the wrappers keep the existing retry behavior unchanged. |
+| `UNATTENDED_NAG_SILENT_ROUNDS` | `3` | Consecutive silent-turn threshold before nag-reminder injection in the review editor, review reviewers, and orchestrate-poll judge paths. Invalid or out-of-range values clamp conservatively to `3`. |
 
 ## Semantic Cache (Clarification Only)
 
