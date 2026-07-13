@@ -2726,6 +2726,26 @@ def test_task_state_mirror_enabled_writes_latest_wave_issue_payloads():
 	}
 
 
+def test_task_state_mirror_enabled_accepts_uppercase_flag_value():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["depends_on"] = ["issue-0"]
+	state["waves"][0]["issues"][0]["reissue_depends_on"] = [501]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		env_overrides={"ORCH_TASK_FILES_ENABLED": "TRUE"},
+	)
+	latest_issue_state = result["state_on_disk"]["waves"][0]["issues"][0]
+	assert result["task_files"] == {
+		"1/issue-1.json": {
+			**latest_issue_state,
+			"schema_version": "task_state.v1.json",
+		}
+	}
+
+
 def test_task_state_mirror_enabled_unblocks_dependents_after_checkpoint_mirror():
 	state = _base_state(status="in_progress")
 	state["total_issues"] = 2

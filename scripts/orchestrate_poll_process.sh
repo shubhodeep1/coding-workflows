@@ -1864,7 +1864,9 @@ post_state_comment() {
 }
 
 _mirror_task_state_files_from_state() {
-	if [ "${ORCH_TASK_FILES_ENABLED:-false}" != "true" ]; then
+	local task_state_files_enabled
+	task_state_files_enabled="${ORCH_TASK_FILES_ENABLED:-false}"
+	if [ "${task_state_files_enabled,,}" != "true" ]; then
 		return 0
 	fi
 

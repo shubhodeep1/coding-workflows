@@ -22,8 +22,30 @@ def _task_files_enabled() -> bool:
 	return os.environ.get("ORCH_TASK_FILES_ENABLED", "").strip().lower() == "true"
 
 
-def _task_path(wave_id: Any, issue_id: Any) -> Path:
-	return REPO_ROOT / TASKS_ROOT / str(wave_id) / f"{issue_id}.json"
+def _task_segment(raw_value: Any, field_name: str, issue_id: Any) -> str | None:
+	segment = "" if raw_value is None else str(raw_value)
+	if segment in ("", ".", ".."):
+		_log_task_state_write_fail(issue_id, f"invalid_{field_name}:{segment or 'empty'}")
+		return None
+	if Path(segment).name != segment or "\\" in segment:
+		_log_task_state_write_fail(issue_id, f"invalid_{field_name}:{segment}")
+		return None
+	return segment
+
+
+def _task_wave_dir(wave_id: Any, issue_id: Any) -> Path | None:
+	safe_wave_id = _task_segment(wave_id, "wave_id", issue_id)
+	if safe_wave_id is None:
+		return None
+	return REPO_ROOT / TASKS_ROOT / safe_wave_id
+
+
+def _task_path(wave_id: Any, issue_id: Any) -> Path | None:
+	wave_dir = _task_wave_dir(wave_id, issue_id)
+	safe_issue_id = _task_segment(issue_id, "issue_id", issue_id)
+	if wave_dir is None or safe_issue_id is None:
+		return None
+	return wave_dir / f"{safe_issue_id}.json"
 
 
 def _log_task_state_write_fail(issue_id: Any, reason: str) -> None:
@@ -78,13 +100,18 @@ def write_task(wave_id: Any, issue_id: Any, state_dict: dict[str, Any]) -> bool:
 		_log_task_state_write_fail(issue_id, f"invalid_state_dict:{exc}")
 		return False
 	payload["schema_version"] = TASK_STATE_SCHEMA_VERSION
-	return _atomic_write_json(_task_path(wave_id, issue_id), payload, issue_id)
+	path = _task_path(wave_id, issue_id)
+	if path is None:
+		return False
+	return _atomic_write_json(path, payload, issue_id)
 
 
 def read_task(wave_id: Any, issue_id: Any) -> dict[str, Any] | None:
 	if not _task_files_enabled():
 		return None
 	path = _task_path(wave_id, issue_id)
+	if path is None:
+		return None
 	if not path.exists():
 		return None
 	return _load_task_payload(path, issue_id)
@@ -110,8 +137,6 @@ def _prune_blockers(blockers: Any, blocker_tokens: set[str]) -> tuple[Any, bool]
 def _issue_is_unblock_terminal(issue: Any) -> bool:
 	if not isinstance(issue, dict):
 		return False
-	if issue.get("github_issue") in (None, ""):
-		return False
 	return str(issue.get("status") or "").strip() in TASK_STATE_UNBLOCK_TERMINAL_STATUSES
 
 
@@ -119,12 +144,15 @@ def unblock_dependents(wave_id: Any, completed_issue_id: Any) -> int:
 	if not _task_files_enabled():
 		return 0
 
-	wave_dir = REPO_ROOT / TASKS_ROOT / str(wave_id)
+	wave_dir = _task_wave_dir(wave_id, completed_issue_id)
+	safe_completed_issue_id = _task_segment(completed_issue_id, "issue_id", completed_issue_id)
+	if wave_dir is None or safe_completed_issue_id is None:
+		return 0
 	blocker_tokens = _candidate_blocker_tokens(wave_id, completed_issue_id)
 	count_unblocked = 0
 
 	if wave_dir.is_dir() and blocker_tokens:
-		completed_issue_filename = f"{completed_issue_id}.json"
+		completed_issue_filename = f"{safe_completed_issue_id}.json"
 		for task_path in sorted(wave_dir.glob("*.json")):
 			if task_path.name == completed_issue_filename:
 				continue

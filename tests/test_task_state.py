@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import sys
 import tempfile
+from contextlib import redirect_stderr
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -88,6 +90,40 @@ def test_write_task_preserves_existing_file_on_replace_failure() -> None:
 			assert len(list(path.parent.glob("*.json"))) == 1
 		finally:
 			task_state.os.replace = original_replace
+			_restore_task_state_root(previous_root, previous_flag)
+
+
+def test_write_task_rejects_path_escape_issue_id() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		previous_root, previous_flag = _set_task_state_root(root, enabled="true")
+		try:
+			stderr = io.StringIO()
+			with redirect_stderr(stderr):
+				assert task_state.write_task(1, "../issue-1", {"id": "../issue-1", "status": "pending"}) is False
+			assert not (root / ".tasks").exists()
+			assert "TASK_STATE_WRITE_FAIL ../issue-1 invalid_issue_id:../issue-1" in stderr.getvalue()
+		finally:
+			_restore_task_state_root(previous_root, previous_flag)
+
+
+def test_unblock_dependents_rejects_path_escape_wave_id() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		previous_root, previous_flag = _set_task_state_root(root, enabled="true")
+		try:
+			assert task_state.write_task(1, "issue-1", {"id": "issue-1", "github_issue": 101, "status": "merged"})
+			stderr = io.StringIO()
+			with redirect_stderr(stderr):
+				assert task_state.unblock_dependents("../1", "issue-1") == 0
+			assert task_state.read_task(1, "issue-1") == {
+				"github_issue": 101,
+				"id": "issue-1",
+				"schema_version": "task_state.v1.json",
+				"status": "merged",
+			}
+			assert "TASK_STATE_WRITE_FAIL issue-1 invalid_wave_id:../1" in stderr.getvalue()
+		finally:
 			_restore_task_state_root(previous_root, previous_flag)
 
 
@@ -186,6 +222,41 @@ def test_mirror_state_unblocks_dependents_after_writing_newly_terminal_tasks() -
 				"github_issue": 102,
 				"id": "issue-2",
 				"reissue_depends_on": [999],
+				"schema_version": "task_state.v1.json",
+				"status": "pending",
+			}
+		finally:
+			_restore_task_state_root(previous_root, previous_flag)
+
+
+def test_mirror_state_unblocks_skipped_issue_without_github_issue() -> None:
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": None, "status": "skipped"},
+					{
+						"id": "issue-2",
+						"github_issue": 102,
+						"status": "pending",
+						"depends_on": ["issue-1"],
+					},
+				],
+			},
+		],
+	}
+
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		previous_root, previous_flag = _set_task_state_root(root, enabled="true")
+		try:
+			assert task_state.mirror_state(state) == 2
+			assert task_state.read_task(1, "issue-2") == {
+				"depends_on": [],
+				"github_issue": 102,
+				"id": "issue-2",
 				"schema_version": "task_state.v1.json",
 				"status": "pending",
 			}
