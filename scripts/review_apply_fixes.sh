@@ -1780,18 +1780,25 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   # fresh inference; the trailer is metadata the model is asked to
   # ignore.
   attempt_prompt_file="${EDITOR_PROMPT_FILE}.attempt_${attempt}"
-  cp "${EDITOR_PROMPT_FILE}" "${attempt_prompt_file}"
-  {
-    printf '\n[ignore — retry-attempt diagnostic only, not part of the task]\n'
-    printf 'retry_attempt=%d epoch=%s nonce=%s\n' \
-      "${attempt}" \
-      "$(date +%s)" \
-      "$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
-  } >> "${attempt_prompt_file}"
+  editor_effective_prompt_file="${EDITOR_PROMPT_FILE}"
+  if cp "${EDITOR_PROMPT_FILE}" "${attempt_prompt_file}" 2>/dev/null; then
+    editor_effective_prompt_file="${attempt_prompt_file}"
+    {
+      printf '\n[ignore — retry-attempt diagnostic only, not part of the task]\n'
+      printf 'retry_attempt=%d epoch=%s nonce=%s\n' \
+        "${attempt}" \
+        "$(date +%s)" \
+        "$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+    } >> "${editor_effective_prompt_file}"
+  else
+    echo "::warning::Could not create per-attempt editor prompt file for attempt ${attempt}; continuing with the base prompt." >&2
+  fi
   editor_nag_block="$(maybe_inject_nag "review-editor" "${editor_silent_rounds}")"
   if [ -n "${editor_nag_block}" ]; then
-    printf '\n%s\n' "${editor_nag_block}" >> "${attempt_prompt_file}"
-    editor_silent_rounds=0
+    if [ "${editor_effective_prompt_file}" = "${attempt_prompt_file}" ]; then
+      printf '\n%s\n' "${editor_nag_block}" >> "${editor_effective_prompt_file}"
+      editor_silent_rounds=0
+    fi
   fi
   emit_editor_substate "BuildingPrompt" "${attempt}"
   # Run codex: stdout → tmp_output, stderr → FIFO (heartbeat reader).
@@ -1800,7 +1807,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   emit_editor_substate "StreamingTurn" "${attempt}"
   (
     trap '' PIPE
-    PATH="${EDITOR_CODEX_PATH}" run_editor_codex_attempt "${attempt_prompt_file}" "${tmp_output}" "${_hb_fifo}" "${hb_file}" "${stall_status_file}"
+    PATH="${EDITOR_CODEX_PATH}" run_editor_codex_attempt "${editor_effective_prompt_file}" "${tmp_output}" "${_hb_fifo}" "${hb_file}" "${stall_status_file}"
   ) &
   codex_bg_pid=$!
   echo "${codex_bg_pid}" > "${codex_pid_file}"

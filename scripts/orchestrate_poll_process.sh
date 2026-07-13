@@ -16932,18 +16932,25 @@ ${PR_DIFF}
   max_attempts=2
   for attempt in $(seq 1 "${max_attempts}"); do
     judge_attempt_prompt_file="${JUDGE_PROMPT_FILE}.attempt_${attempt}"
-    cp "${JUDGE_PROMPT_FILE}" "${judge_attempt_prompt_file}"
+    judge_effective_prompt_file="${JUDGE_PROMPT_FILE}"
+    if cp "${JUDGE_PROMPT_FILE}" "${judge_attempt_prompt_file}" 2>/dev/null; then
+      judge_effective_prompt_file="${judge_attempt_prompt_file}"
+    else
+      echo "::warning::Could not create per-attempt judge prompt file for attempt ${attempt}; continuing with the base prompt." >&2
+    fi
     judge_nag_block="$(maybe_inject_nag "orchestrate-poll-judge" "${judge_silent_rounds}")"
     if [ -n "${judge_nag_block}" ]; then
-      printf '\n%s\n' "${judge_nag_block}" >> "${judge_attempt_prompt_file}"
-      judge_silent_rounds=0
+      if [ "${judge_effective_prompt_file}" = "${judge_attempt_prompt_file}" ]; then
+        printf '\n%s\n' "${judge_nag_block}" >> "${judge_effective_prompt_file}"
+        judge_silent_rounds=0
+      fi
     fi
     echo "Judge attempt ${attempt}/${max_attempts}..."
-    sanitize_codex_prompt_file "${judge_attempt_prompt_file}"
+    sanitize_codex_prompt_file "${judge_effective_prompt_file}"
     # The pipeline may return 141 (SIGPIPE) when the prompt is larger
     # than the OS pipe buffer and codex closes stdin before cat finishes.
     # This is harmless — check the output file regardless of exit code.
-    cat "${judge_attempt_prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+    cat "${judge_effective_prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
     rm -f "${judge_attempt_prompt_file}"
     judge_json_candidate="$(extract_judge_json_with_status "${JUDGE_OUTPUT_FILE}")"
     if [ -n "${judge_json_candidate}" ]; then
