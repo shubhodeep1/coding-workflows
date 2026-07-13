@@ -80,6 +80,16 @@ def test_task_state_helper_and_flag_are_wired_into_poller_workflow() -> None:
 	assert "ORCH_TASK_FILES_ENABLED: ${{ vars.ORCH_TASK_FILES_ENABLED || 'false' }}" in wf
 
 
+def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> None:
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	assert "worktree_registry.sh" in wf
+	assert "worktree_gc.sh" in wf
+	assert "ORCH_WORKTREE_REGISTRY_ENABLED: ${{ vars.ORCH_WORKTREE_REGISTRY_ENABLED || 'false' }}" in wf
+	assert "ORCH_WORKTREE_TTL_SECS: ${{ vars.ORCH_WORKTREE_TTL_SECS || '3600' }}" in wf
+	assert "- name: Run worktree registry GC" in wf
+	assert "run: bash scripts/worktree_gc.sh" in wf
+
+
 def main() -> int:
 	test_stall_control_env_defaults_are_declared()
 	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
@@ -87,6 +97,7 @@ def main() -> int:
 	test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_nag_reminder_assets_and_judge_wiring_are_present()
 	test_task_state_helper_and_flag_are_wired_into_poller_workflow()
+	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
 	return 0
 
 

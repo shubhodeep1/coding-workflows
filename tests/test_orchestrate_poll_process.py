@@ -10838,6 +10838,19 @@ def test_branch_rebuild_replay_configures_git_identity():
 	), "expected branch rebuild replay subshell to configure git identity before cherry-pick"
 
 
+def test_worktree_registry_is_wired_around_poller_worktree_lifecycles():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "worktree_registry_enabled()" in script
+	assert 'bash scripts/worktree_registry.sh register' in script
+	assert 'bash scripts/worktree_registry.sh deregister' in script
+	assert 'worktree_registry_register "$(basename -- "${wt}")" "${wt}" "${branch}" "project-${project}" "orchestrate-poll"' in script
+	assert 'worktree_registry_register "$(basename -- "${_ws}")" "${_ws}" "${int_sha}" "pr-${pr_num}" "orchestrate-poll"' in script
+	assert 'worktree_registry_register "$(basename -- "${_wh}")" "${_wh}" "${_tmp_branch}" "pr-${pr_num}" "orchestrate-poll"' in script
+	assert 'worktree_registry_register "$(basename -- "${wt}")" "${wt}" "refs/remotes/origin/${integration_branch}" "tracking-${TRACKING_NUM:-0}" "orchestrate-poll"' in script
+	assert 'worktree_registry_register "$(basename -- "${worktree_dir}")" "${worktree_dir}" "refs/remotes/origin/${integration_branch}" "pr-${final_pr}" "orchestrate-poll"' in script
+	assert script.count("write_state_snapshot_actions_runs_export || true") >= 2
+
+
 def test_integration_conflict_mergeable_payload_reuse_preserves_false_values():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert "if .mergeable != null then .mergeable else empty end" in script

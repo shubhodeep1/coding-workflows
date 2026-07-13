@@ -35,3 +35,4 @@ prompts/.*.identity.*
 prompts/.*.assembled.*
 
 .tasks/
+.worktrees/
