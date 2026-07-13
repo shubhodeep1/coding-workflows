@@ -93,11 +93,11 @@ _worktree_registry_emit()
 	local prefix="${1:-}"
 	shift || true
 
-	printf '%s' "${prefix}"
+	printf '%s' "${prefix}" >&2
 	if [ "$#" -gt 0 ]; then
-		printf ' %s' "$@"
+		printf ' %s' "$@" >&2
 	fi
-	printf '\n'
+	printf '\n' >&2
 	emit_event "${prefix}" "$@" >/dev/null 2>&1 || true
 }
 

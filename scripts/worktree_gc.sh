@@ -53,6 +53,11 @@ main()
 		exit 0
 	fi
 
+	if ! command -v jq >/dev/null 2>&1; then
+		echo "WORKTREE_GC removed=0 preserved=0 active_runs_available=false reason=jq_missing" >&2
+		exit 0
+	fi
+
 	local active_runs_file=""
 	local cleanup_file=""
 	local runtime_snapshot="${RUNTIME_DIR:-}/state_snapshot_actions_runs.json"

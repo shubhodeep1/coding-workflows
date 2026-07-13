@@ -179,6 +179,13 @@ jobs:
           bash tests/test_nag_reminder_phases.sh
           bash tests/test_transcript_archive.sh
 
+      - name: Worktree registry shell tests
+        run: |
+          set -euo pipefail
+          bash tests/test_worktree_registry.sh
+          bash tests/test_worktree_gc.sh
+          bash tests/test_worktree_name_validation.sh
+
       - name: Review Semble contract test
         run: |
           set -euo pipefail
