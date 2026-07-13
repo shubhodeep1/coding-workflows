@@ -27,6 +27,9 @@ def _task_segment(raw_value: Any, field_name: str, issue_id: Any) -> str | None:
 	if segment in ("", ".", ".."):
 		_log_task_state_write_fail(issue_id, f"invalid_{field_name}:{segment or 'empty'}")
 		return None
+	if len(segment) >= 2 and segment[1] == ":" and segment[0].isalpha():
+		_log_task_state_write_fail(issue_id, f"invalid_{field_name}:{segment}")
+		return None
 	if Path(segment).name != segment or "\\" in segment:
 		_log_task_state_write_fail(issue_id, f"invalid_{field_name}:{segment}")
 		return None
@@ -57,6 +60,9 @@ def _log_task_state_write_fail(issue_id: Any, reason: str) -> None:
 def _atomic_write_json(path: Path, payload: Any, issue_id: Any) -> bool:
 	tmp_path: Path | None = None
 	try:
+		tasks_root = REPO_ROOT / TASKS_ROOT
+		if tasks_root.is_symlink() or (path.parent.exists() and path.parent.is_symlink()):
+			raise OSError(f"refusing_to_traverse_symlink:{path.parent}")
 		path.parent.mkdir(parents=True, exist_ok=True)
 		if path.exists() and path.is_symlink():
 			raise OSError(f"refusing_to_overwrite_symlink:{path}")
@@ -134,6 +140,29 @@ def _prune_blockers(blockers: Any, blocker_tokens: set[str]) -> tuple[Any, bool]
 	return filtered, filtered != blockers
 
 
+def _blocker_tokens_from_values(blockers: Any) -> set[str]:
+	if not isinstance(blockers, list):
+		return set()
+	return {
+		str(blocker)
+		for blocker in blockers
+		if blocker not in (None, "") and str(blocker)
+	}
+
+
+def _issue_reference_tokens(issue: Any) -> set[str]:
+	if not isinstance(issue, dict):
+		return set()
+	tokens = set()
+	issue_id = issue.get("id")
+	if issue_id not in (None, ""):
+		tokens.add(str(issue_id))
+	github_issue = issue.get("github_issue")
+	if github_issue not in (None, ""):
+		tokens.add(str(github_issue))
+	return tokens
+
+
 def _issue_is_unblock_terminal(issue: Any) -> bool:
 	if not isinstance(issue, dict):
 		return False
@@ -179,7 +208,6 @@ def mirror_state(state: dict[str, Any]) -> int:
 		return 0
 
 	written = 0
-	newly_terminal_issue_refs: list[tuple[Any, Any]] = []
 	for wave_index, wave in enumerate(state.get("waves", []), start=1):
 		if not isinstance(wave, dict):
 			continue
@@ -187,6 +215,13 @@ def mirror_state(state: dict[str, Any]) -> int:
 		issues = wave.get("issues", [])
 		if not isinstance(issues, list):
 			continue
+		blocker_tokens_in_wave = set()
+		for issue in issues:
+			if not isinstance(issue, dict):
+				continue
+			blocker_tokens_in_wave.update(_blocker_tokens_from_values(issue.get("depends_on")))
+			blocker_tokens_in_wave.update(_blocker_tokens_from_values(issue.get("reissue_depends_on")))
+		terminal_issue_refs_to_unblock: list[tuple[Any, Any]] = []
 		for issue in issues:
 			if not isinstance(issue, dict):
 				continue
@@ -194,14 +229,16 @@ def mirror_state(state: dict[str, Any]) -> int:
 			if issue_id in (None, ""):
 				_log_task_state_write_fail(issue_id, f"missing_issue_id_for_wave_{wave_id}")
 				continue
-			previous_issue_payload = read_task(wave_id, issue_id)
 			if write_task(wave_id, issue_id, issue):
 				written += 1
-				if _issue_is_unblock_terminal(issue) and not _issue_is_unblock_terminal(previous_issue_payload):
-					newly_terminal_issue_refs.append((wave_id, issue_id))
+				if _issue_is_unblock_terminal(issue) and _issue_reference_tokens(issue) & blocker_tokens_in_wave:
+					terminal_issue_refs_to_unblock.append((wave_id, issue_id))
 
-	for wave_id, issue_id in newly_terminal_issue_refs:
-		unblock_dependents(wave_id, issue_id)
+		# The chunked orchestrator state stays authoritative and intentionally
+		# does not persist mirror-only blocker pruning, so every mirror pass must
+		# re-apply completed blockers that still appear in the authoritative state.
+		for current_wave_id, current_issue_id in terminal_issue_refs_to_unblock:
+			unblock_dependents(current_wave_id, current_issue_id)
 	return written
 
 

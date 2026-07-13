@@ -107,6 +107,37 @@ def test_write_task_rejects_path_escape_issue_id() -> None:
 			_restore_task_state_root(previous_root, previous_flag)
 
 
+def test_write_task_rejects_windows_drive_letter_issue_id() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		previous_root, previous_flag = _set_task_state_root(root, enabled="true")
+		try:
+			stderr = io.StringIO()
+			with redirect_stderr(stderr):
+				assert task_state.write_task(1, "C:issue-1", {"id": "C:issue-1", "status": "pending"}) is False
+			assert not (root / ".tasks").exists()
+			assert "TASK_STATE_WRITE_FAIL C:issue-1 invalid_issue_id:C:issue-1" in stderr.getvalue()
+		finally:
+			_restore_task_state_root(previous_root, previous_flag)
+
+
+def test_write_task_rejects_symlinked_tasks_root() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		outside_root = root / "outside"
+		outside_root.mkdir()
+		(root / ".tasks").symlink_to(outside_root, target_is_directory=True)
+		previous_root, previous_flag = _set_task_state_root(root, enabled="true")
+		try:
+			stderr = io.StringIO()
+			with redirect_stderr(stderr):
+				assert task_state.write_task(1, "issue-1", {"id": "issue-1", "status": "pending"}) is False
+			assert list(outside_root.iterdir()) == []
+			assert "TASK_STATE_WRITE_FAIL issue-1 refusing_to_traverse_symlink:" in stderr.getvalue()
+		finally:
+			_restore_task_state_root(previous_root, previous_flag)
+
+
 def test_unblock_dependents_rejects_path_escape_wave_id() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		root = Path(td)
@@ -217,6 +248,15 @@ def test_mirror_state_unblocks_dependents_after_writing_newly_terminal_tasks() -
 				"schema_version": "task_state.v1.json",
 				"status": "merged",
 			}
+			assert task_state.read_task(1, "issue-2") == {
+				"depends_on": [],
+				"github_issue": 102,
+				"id": "issue-2",
+				"reissue_depends_on": [999],
+				"schema_version": "task_state.v1.json",
+				"status": "pending",
+			}
+			assert task_state.mirror_state(state) == 2
 			assert task_state.read_task(1, "issue-2") == {
 				"depends_on": [],
 				"github_issue": 102,
