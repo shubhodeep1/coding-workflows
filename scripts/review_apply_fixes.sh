@@ -1793,7 +1793,11 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   else
     echo "::warning::Could not create per-attempt editor prompt file for attempt ${attempt}; continuing with the base prompt." >&2
   fi
-  editor_nag_block="$(maybe_inject_nag "review-editor" "${editor_silent_rounds}")"
+  # Prompt assembly happens before the current editor turn runs, so feed
+  # the projected consecutive-silent count for the attempt we are about
+  # to launch.
+  editor_nag_counter_for_attempt=$((editor_silent_rounds + 1))
+  editor_nag_block="$(maybe_inject_nag "review-editor" "${editor_nag_counter_for_attempt}")"
   if [ -n "${editor_nag_block}" ]; then
     if [ "${editor_effective_prompt_file}" = "${attempt_prompt_file}" ]; then
       printf '\n%s\n' "${editor_nag_block}" >> "${editor_effective_prompt_file}"

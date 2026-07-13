@@ -59,7 +59,12 @@ def test_nag_reminder_assets_and_judge_wiring_are_present() -> None:
 	assert "UNATTENDED_NAG_REMINDER_ENABLED: ${{ vars.UNATTENDED_NAG_REMINDER_ENABLED || 'false' }}" in wf
 	assert "UNATTENDED_NAG_SILENT_ROUNDS: ${{ vars.UNATTENDED_NAG_SILENT_ROUNDS || '3' }}" in wf
 	assert 'source scripts/nag_reminder.sh 2>/dev/null || true' in poller
-	assert 'judge_nag_block="$(maybe_inject_nag "orchestrate-poll-judge" "${judge_silent_rounds}")"' in poller
+	assert 'nag_reminder_enabled() { return 1; }' in poller
+	assert 'nag_silent_round_threshold() { printf \'3\\n\'; }' in poller
+	assert 'if nag_reminder_enabled; then' in poller
+	assert 'judge_nag_attempt_limit="$(nag_silent_round_threshold)"' in poller
+	assert 'judge_nag_counter_for_attempt=$((judge_silent_rounds + 1))' in poller
+	assert 'judge_nag_block="$(maybe_inject_nag "orchestrate-poll-judge" "${judge_nag_counter_for_attempt}")"' in poller
 	assert 'if cp "${JUDGE_PROMPT_FILE}" "${judge_attempt_prompt_file}" 2>/dev/null; then' in poller
 	assert 'Could not create per-attempt judge prompt file for attempt ${attempt}; continuing with the base prompt.' in poller
 	assert 'judge_json_candidate="$(extract_judge_json_with_status "${JUDGE_OUTPUT_FILE}")"' in poller

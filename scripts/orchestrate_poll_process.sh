@@ -155,6 +155,12 @@ fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
+if ! command -v nag_reminder_enabled >/dev/null 2>&1; then
+  nag_reminder_enabled() { return 1; }
+fi
+if ! command -v nag_silent_round_threshold >/dev/null 2>&1; then
+  nag_silent_round_threshold() { printf '3\n'; }
+fi
 if ! command -v maybe_inject_nag >/dev/null 2>&1; then
   maybe_inject_nag() { return 0; }
 fi
@@ -16930,6 +16936,12 @@ ${PR_DIFF}
   JUDGE_JSON=""
   judge_silent_rounds=0
   max_attempts=2
+  if nag_reminder_enabled; then
+    judge_nag_attempt_limit="$(nag_silent_round_threshold)"
+    if [ "${judge_nag_attempt_limit}" -gt "${max_attempts}" ]; then
+      max_attempts="${judge_nag_attempt_limit}"
+    fi
+  fi
   for attempt in $(seq 1 "${max_attempts}"); do
     judge_attempt_prompt_file="${JUDGE_PROMPT_FILE}.attempt_${attempt}"
     judge_effective_prompt_file="${JUDGE_PROMPT_FILE}"
@@ -16938,7 +16950,11 @@ ${PR_DIFF}
     else
       echo "::warning::Could not create per-attempt judge prompt file for attempt ${attempt}; continuing with the base prompt." >&2
     fi
-    judge_nag_block="$(maybe_inject_nag "orchestrate-poll-judge" "${judge_silent_rounds}")"
+    # Prompt assembly happens before the current judge turn runs, so feed the
+    # projected consecutive-silent count for the attempt we are about to
+    # launch.
+    judge_nag_counter_for_attempt=$((judge_silent_rounds + 1))
+    judge_nag_block="$(maybe_inject_nag "orchestrate-poll-judge" "${judge_nag_counter_for_attempt}")"
     if [ -n "${judge_nag_block}" ]; then
       if [ "${judge_effective_prompt_file}" = "${judge_attempt_prompt_file}" ]; then
         printf '\n%s\n' "${judge_nag_block}" >> "${judge_effective_prompt_file}"

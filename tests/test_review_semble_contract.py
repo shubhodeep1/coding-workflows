@@ -196,8 +196,14 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert 'nag reminders will fail open even when UNATTENDED_NAG_REMINDER_ENABLED=true.' in stage_helper
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/nag_reminder.sh" 2>/dev/null || true' in reviewers
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/nag_reminder.sh" 2>/dev/null || true' in apply_fixes
+	assert 'nag_reminder_enabled() { return 1; }' in reviewers
 	assert 'if cp "${EDITOR_PROMPT_FILE}" "${attempt_prompt_file}" 2>/dev/null; then' in apply_fixes
 	assert 'Could not create per-attempt editor prompt file for attempt ${attempt}; continuing with the base prompt.' in apply_fixes
+	assert 'editor_nag_counter_for_attempt=$((editor_silent_rounds + 1))' in apply_fixes
+	assert 'editor_nag_block="$(maybe_inject_nag "review-editor" "${editor_nag_counter_for_attempt}")"' in apply_fixes
+	assert 'reviewer_nag_counter_for_attempt=$((reviewer_silent_rounds + 1))' in reviewers
+	assert 'reviewer_nag_block="$(maybe_inject_nag "review-reviewer" "${reviewer_nag_counter_for_attempt}")"' in reviewers
+	assert 'if [ "${REVIEWER_ATTEMPT_SILENT}" = "true" ] && nag_reminder_enabled; then' in reviewers
 	assert 'echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"' in init_block
 	assert 'echo "EDITOR_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/editor_semble_query.txt"' in init_block
 	assert 'echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/conflict_resolver_semble_query.txt"' in init_block

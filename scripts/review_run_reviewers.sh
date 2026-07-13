@@ -114,6 +114,9 @@ if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/nag_reminder.sh" ]; then
   # shellcheck source=/dev/null
   source "${SUPPORT_SCRIPTS_DIR:-scripts}/nag_reminder.sh" 2>/dev/null || true
 fi
+if ! command -v nag_reminder_enabled >/dev/null 2>&1; then
+  nag_reminder_enabled() { return 1; }
+fi
 if ! command -v maybe_inject_nag >/dev/null 2>&1; then
   maybe_inject_nag() { return 0; }
 fi
@@ -3164,7 +3167,11 @@ execute_reviewer_attempt() {
   reviewer_attempt_prompt_file="${prompt_file}.attempt_${attempt_number}"
   if cp "${prompt_file}" "${reviewer_attempt_prompt_file}" 2>/dev/null; then
     reviewer_effective_prompt_file="${reviewer_attempt_prompt_file}"
-    reviewer_nag_block="$(maybe_inject_nag "review-reviewer" "${reviewer_silent_rounds:-0}")"
+    # Prompt assembly happens before the current reviewer turn runs, so feed
+    # the projected consecutive-silent count for the attempt we are about
+    # to launch.
+    reviewer_nag_counter_for_attempt=$((reviewer_silent_rounds + 1))
+    reviewer_nag_block="$(maybe_inject_nag "review-reviewer" "${reviewer_nag_counter_for_attempt}")"
     if [ -n "${reviewer_nag_block}" ]; then
       printf '\n%s\n' "${reviewer_nag_block}" >> "${reviewer_effective_prompt_file}"
       reviewer_silent_rounds=0
@@ -3336,7 +3343,7 @@ execute_reviewer_attempt() {
   esac
 
   if [ "${cmd_rc}" -eq 0 ] && [ -s "${tmp_output}" ]; then
-    if [ "${REVIEWER_ATTEMPT_SILENT}" = "true" ]; then
+    if [ "${REVIEWER_ATTEMPT_SILENT}" = "true" ] && nag_reminder_enabled; then
       cat "${tmp_stderr}" >> "${log_file}"
       echo "Reviewer slot ${slot_model} (${effective_model}) produced no findings or explicit NONE on ${attempt_label}; retrying." | tee -a "${log_file}"
       emit_reviewer_substate "Failed" "${attempt_number}" "${tmp_stderr}"
