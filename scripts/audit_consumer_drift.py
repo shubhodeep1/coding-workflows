@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,12 @@ from typing import Any
 
 
 REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+# Transient GitHub API failures (intermittent 5xx "Unicorn" HTML pages, secondary
+# rate limits, and network hiccups) are retried with exponential backoff before a
+# repository is declared errored, so a single flaky contents-API response no longer
+# inflates the drift audit's Error count into a spurious WARNING alert.
+DEFAULT_GH_API_MAX_ATTEMPTS = 4
+DEFAULT_GH_API_RETRY_BASE_SECONDS = 2.0
 STANDARD_MANAGED_HEADER = (
 	"# IMPORTANT: This file is managed by coding-workflows and may be overwritten",
 	"# automatically when upstream templates change. To opt out of auto-updates,",
@@ -301,6 +308,45 @@ def _is_not_found_response(stdout: str, stderr: str) -> bool:
 	)
 
 
+def _is_transient_fetch_failure(stdout: str, stderr: str, returncode: int) -> bool:
+	"""Return True when a failed gh api call looks transient and worth retrying.
+
+	Retryable signals are server-side 5xx responses (including GitHub's HTML
+	"Unicorn" error page), primary/secondary rate limits, and network-layer
+	hiccups. A definitive 404 (not-found) is never transient and short-circuits
+	so a missing consumer repo is not retried needlessly.
+	"""
+	if returncode == 0:
+		return False
+	if _is_not_found_response(stdout, stderr):
+		return False
+	combined = f"{stdout}\n{stderr}".lower()
+	transient_markers = (
+		"http 500",
+		"http 502",
+		"http 503",
+		"http 504",
+		"status code 500",
+		"status code 502",
+		"status code 503",
+		"status code 504",
+		"http 429",
+		"rate limit",
+		"was submitted too quickly",
+		"<!doctype html",
+		"unicorn",
+		"server error",
+		"timed out",
+		"timeout",
+		"connection reset",
+		"connection refused",
+		"could not resolve host",
+		"temporary failure in name resolution",
+		"eof occurred",
+	)
+	return any(marker in combined for marker in transient_markers)
+
+
 def _sanitize_log_value(value: str) -> str:
 	return re.sub(r"\s+", " ", value).strip()
 
@@ -312,19 +358,35 @@ class ConsumerDriftAuditor:
 		expected_templates: dict[str, str],
 		max_diff_lines: int,
 		executor: CommandExecutor | None = None,
+		gh_api_max_attempts: int = DEFAULT_GH_API_MAX_ATTEMPTS,
+		gh_api_retry_base_seconds: float = DEFAULT_GH_API_RETRY_BASE_SECONDS,
+		sleeper: Any = time.sleep,
 	) -> None:
 		self.expected_templates = expected_templates
 		self.max_diff_lines = max_diff_lines
 		self.executor = executor or CommandExecutor()
+		self.gh_api_max_attempts = max(1, gh_api_max_attempts)
+		self.gh_api_retry_base_seconds = gh_api_retry_base_seconds
+		self.sleeper = sleeper
 		self.workflow_dir_listing_cache: dict[str, set[str]] = {}
 		self.workflow_file_cache: dict[tuple[str, str], str | None] = {}
 
 	def _run_gh_api(self, endpoint: str, *, raw: bool = False) -> subprocess.CompletedProcess[str]:
 		accept = "application/vnd.github.raw+json" if raw else "application/vnd.github+json"
-		return self.executor.run(
-			["gh", "api", "-H", f"Accept: {accept}", endpoint],
-			check=False,
-		)
+		command = ["gh", "api", "-H", f"Accept: {accept}", endpoint]
+		proc = self.executor.run(command, check=False)
+		for attempt in range(1, self.gh_api_max_attempts):
+			if not _is_transient_fetch_failure(proc.stdout, proc.stderr, proc.returncode):
+				return proc
+			delay = self.gh_api_retry_base_seconds * (2 ** (attempt - 1))
+			print(
+				"DRIFT_SCAN_RETRY "
+				f"endpoint={endpoint} attempt={attempt}/{self.gh_api_max_attempts - 1} "
+				f"delay={delay:g}s detail={_sanitize_log_value(_compact_command_output(proc.stdout, proc.stderr))[:200]}"
+			)
+			self.sleeper(delay)
+			proc = self.executor.run(command, check=False)
+		return proc
 
 	def fetch_workflow_directory_listing(self, repository: str) -> set[str]:
 		cached = self.workflow_dir_listing_cache.get(repository)
