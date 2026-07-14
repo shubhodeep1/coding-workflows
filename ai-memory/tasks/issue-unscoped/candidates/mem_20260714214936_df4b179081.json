@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_semble_contract.py:212-213 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The test still asserts shell patterns removed from scripts/review_run_reviewers.sh, so it now fails with AssertionError.\n  WHY: The reviewers agree the last autofix removed `if [ \"${reviewer_max_attempts}\" -le 2 ]; then` and `fallback_model=\"${model}\"`, but the contract test was not updated, blocking CI.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Restored the unmapped-reviewer fail-open contract in `scripts/review_run_reviewers.sh` so unknown failback models write `skipped_unmapped` instead of retrying the same model a third time.\"\n  expected_change_site: tests/test_review_semble_contract.py\n  confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5]\n  EVIDENCE: Lines 212-213 still assert the old shell patterns (`if [ \"${reviewer_max_attempts}\" -le 2 ]` and `fallback_model=\"${model}\"`) that were removed from the reviewers script; the test file was not modified in the last run diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_semble_contract.py:212-213 | severity=BLOCKER | confidence=5\n  PROBLEM: The test at line 212 asserts `assert 'if [ \"${reviewer_max_attempts}\" -le 2 ]; then' in reviewers` and line 213 asserts `assert 'fallback_model=\"${model}\"' in reviewers`. Both patterns were removed from `scripts/review_run_reviewers.sh` by the last autofix run, which made the unmapped-failback path unconditionally skip unmapped models (always writing `skipped_unmapped` and returning early) instead of conditionally retrying the same model when `reviewer_max_attempts` exceeded 2.\n  WHY: The CI lint job runs `tests/test_review_semble_contract.py` and the assertions at lines 212-213 raise `AssertionError` because the shell patterns no longer appear in the reviewers script. This blocks all CI on the PR branch. The CI log confirms: `test_review_semble_contract.py:212` -> `AssertionError`.\n- Requirement: The autofix editor summary states \"Restored the unmapped-reviewer fail-open contract in `scripts/review_run_reviewers.sh` so unknown failback models write `skipped_unmapped` instead of retrying the same model a third time.\" The contract test `tests/test_review_semble_contract.py` must be updated to match the new behavior so CI passes.\n  Expected change site: tests/test_review_semble_contract.py lines 212-213\n  Evidence of absence: Lines 212-213 still assert the old shell patterns (`if [ \"${reviewer_max_attempts}\" -le 2 ]` and `fallback_model=\"${model}\"`) that were removed from the reviewers script. The test file was not modified in the LAST RUN DIFF at all \u2014 its last change was in the original PR diff (adding the nag-reminder assertions at lines 214-216). The new unmapped-failback behavior (unconditional `REVIEWER_FAILBACK_UNMAPPED` log, `skipped_unmapped` status, early return) is already present in `scripts/review_run_reviewers.sh` at lines 3664-3672, but the test does not verify it.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_semble_contract.py:212-213 | severity=BLOCKER | confidence=5\n  PROBLEM: The test asserts a shell pattern that was removed from scripts/review_run_reviewers.sh in the last autofix run, causing AssertionError and CI failure.\n  WHY: The last_run_diff.patch shows the conditional check `if [ \"${reviewer_max_attempts}\" -le 2 ]; then` and the subsequent `fallback_model=\"${model}\"` assignment were removed from the unmapped-failback branch in review_run_reviewers.sh (around line 3664), but the test contract was not updated to match the new behavior.\n- Requirement: \"Restored the unmapped-reviewer fail-open contract in `scripts/review_run_reviewers.sh` so unknown failback models write `skipped_unmapped` instead of retrying the same model a third time.\"\n  Expected change site: tests/test_review_semble_contract.py\n  Evidence of absence: The test file still contains the assertion `'if [ \"${reviewer_max_attempts}\" -le 2 ]; then' in reviewers` at line 212, but this pattern no longer exists in the updated review_run_reviewers.sh. The test was not updated to reflect the removal of the conditional retry path for unmapped models.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_review_semble_contract.py:212-213 | severity=BLOCKER | confidence=5\n  PROBLEM: The last autofix removed the `if [ \"${reviewer_max_attempts}\" -le 2 ]; then` conditional and `fallback_model=\"${model}\"` assignment from scripts/review_run_reviewers.sh, but the test still asserts both patterns exist via substring match.\n  WHY: The CI lint job runs this test and raises AssertionError at line 212, blocking all PR merges.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "904959778ee1447ee6bb64636f106206c456d31f42dd434bb5728c2239920c71",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3638,
+    "run_id": "29365933285",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29365933285",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260714214936_df4b179081",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3638,
+    "run_id": "29365933285"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-14T21:49:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
