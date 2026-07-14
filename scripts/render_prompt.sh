@@ -121,6 +121,7 @@ resolve_identity_source_prompt()
 	local prompt_dir=""
 	local prompt_dir_name=""
 	local candidate=""
+	local template_candidate=""
 	local -a candidates=()
 
 	prompt_basename="$(basename -- "${prompt_path}")"
@@ -134,6 +135,13 @@ resolve_identity_source_prompt()
 		candidate="$(dirname -- "${prompt_dir}")/${prompt_basename}"
 		if [ -f "${candidate}" ]; then
 			printf '%s\n' "${candidate}"
+			return 0
+		fi
+	fi
+	if [ "${prompt_dir_name}" = "prompts" ] && [ "${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" = "true" ]; then
+		template_candidate="${prompt_dir}/_templates/${prompt_basename}"
+		if [ -f "${template_candidate}" ]; then
+			printf '%s\n' "${template_candidate}"
 			return 0
 		fi
 	fi
@@ -182,11 +190,20 @@ text = prompt_path.read_text(encoding="utf-8")
 lines = text.splitlines()
 paragraph_lines = []
 started = False
+in_compaction_rules = False
 
 for raw_line in lines:
 	line = raw_line.strip()
 	if not started:
-		if not line or line.startswith("#"):
+		if in_compaction_rules:
+			if line == "</compaction-rules>":
+				in_compaction_rules = False
+			continue
+		if not line or line.startswith("#") or (line.startswith("{%") and line.endswith("%}")):
+			continue
+		if line.startswith("<compaction-rules>"):
+			if not line.endswith("</compaction-rules>"):
+				in_compaction_rules = True
 			continue
 		started = True
 	if not line:

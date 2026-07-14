@@ -71,10 +71,19 @@ def _run_render(
 def _opening_role_goal_shape(prompt_path: Path) -> bool:
 	paragraph_lines: list[str] = []
 	started = False
+	in_compaction_rules = False
 	for raw_line in prompt_path.read_text(encoding="utf-8").splitlines():
 		line = raw_line.strip()
 		if not started:
-			if not line or line.startswith("#"):
+			if in_compaction_rules:
+				if line == "</compaction-rules>":
+					in_compaction_rules = False
+				continue
+			if not line or line.startswith("#") or (line.startswith("{%") and line.endswith("%}")):
+				continue
+			if line.startswith("<compaction-rules>"):
+				if not line.endswith("</compaction-rules>"):
+					in_compaction_rules = True
 				continue
 			started = True
 		if not line:
