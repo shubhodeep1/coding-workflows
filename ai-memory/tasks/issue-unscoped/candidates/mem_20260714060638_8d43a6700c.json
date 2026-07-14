@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml:710-718 | severity=high | confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: New `ORCH_WORKTREE_REGISTRY_ENABLED` and `ORCH_WORKTREE_TTL_SECS` values are consumed without validation or hardening.\n  WHY: The reviewer warns that malformed env values can flow into downstream arithmetic or path handling, creating injection, overflow, or traversal risk.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Patch `scripts/review_conflict_resolve.sh` \u2026 to register after successful `git worktree add` and deregister before removal.\"\n  expected_change_site: `scripts/review_conflict_resolve.sh` (any `git worktree add` / `remove` site)\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5]\n  EVIDENCE: `scripts/review_conflict_resolve.sh` contains zero `git worktree add` or `git worktree remove` calls / zero references to \"worktree\" in the entire file\n- requirement: \"Validate inputs used to configure worktree cleanup in Phase F: ensure ORCH_WORKTREE_TTL_SECS parses to an integer within the documented 300..86400 range and clamp to 3600 on failure; ensure ORCH_WORKTREE_REGISTRY_ENABLED truthiness uses a hardened pattern.\"\n  expected_change_site: `.github/workflows/orchestrate_poll.yml / scripts/worktree_registry.sh _worktree_registry_ttl_secs()`\n  confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: No sanitization stub, guard, or hardening location is implemented around the new workflow env additions, and `_worktree_registry_ttl_secs()` consumes env-derived values without validation\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: \"Patch `scripts/review_conflict_resolve.sh` \u2026 to register after successful `git worktree add` and deregister before removal.\"\n  Expected change site: `scripts/review_conflict_resolve.sh` (any `git worktree add` / `remove` site)\n  Evidence of absence: `scripts/review_conflict_resolve.sh` contains zero `git worktree add` or `git worktree remove` calls \u2014 there is no worktree lifecycle to patch in that file.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: \"Patch `scripts/review_conflict_resolve.sh` \u2026 to register after successful `git worktree add` and deregister before removal.\"\n  Expected change site: `scripts/review_conflict_resolve.sh` (any `git worktree add` / `remove` site).\n  Evidence of absence: Verified that `scripts/review_conflict_resolve.sh` contains zero references to \"worktree\" in the entire file. The conflict resolver does not create or manage worktrees, so there is no worktree lifecycle to hook into.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/orchestrate_poll.yml:710-718 | severity=high | confidence=[4]\n  PROBLEM: New env vars in the poller workflow are forwarded into downstream GC logic without validation or hardened truthiness handling.\n  WHY: The reviewer says `ORCH_WORKTREE_TTL_SECS` is not range-checked and `ORCH_WORKTREE_REGISTRY_ENABLED` is not hardened, which can let malformed values reach arithmetic or path expansion.\n- Requirement: \"Validate inputs used to configure worktree cleanup in Phase F: ensure ORCH_WORKTREE_TTL_SECS parses to an integer within the documented 300..86400 range and clamp to 3600 on failure; ensure ORCH_WORKTREE_REGISTRY_ENABLED truthiness uses a hardened pattern. Add newline-separated sanitization of env-derived values at workflow entry point and/or at the helper entrypoint before numeric parsing.\"\n  Expected change site: `README.md` usage explanation / validation rules or workflow.yml env-default validation placeholder / scripts/worktree_registry.sh _worktree_registry_ttl_secs()\n  Evidence of absence: No sanitization stub, guard, or hardening location is natively implemented around the new workflow env additions or in `_ttl_secs` parsing reused from env vars.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- TASK_GAP_DEFERRED: `scripts/review_conflict_resolve.sh` and `review_rb_judge.sh` \u2014 the linked issue explicitly names only those two files for registry wiring; the former has no worktree lifecycle today. Not a gap.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "2ec3d8a5de2e5c912eeb1913d3bcc735e176add6e9487bfca57170118a282404",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3665,
+    "run_id": "29308154560",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29308154560",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260714060638_8d43a6700c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3665,
+    "run_id": "29308154560"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-14T06:06:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
