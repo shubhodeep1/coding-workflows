@@ -425,6 +425,74 @@ def test_transient_fetch_failure_recovers_after_retry() -> None:
 		executor.assert_consumed()
 
 
+def test_transient_fetch_failure_classifier_is_specific_and_covers_proxy_errors() -> None:
+	assert drift_audit._is_transient_fetch_failure(
+		"",
+		"gh: GET repos/octo/timeout-service/contents/.github/workflows: HTTP 403",
+		1,
+	) is False
+	assert drift_audit._is_transient_fetch_failure(
+		"",
+		"gh: GET repos/octo/rate-limiter/contents/.github/workflows: HTTP 400",
+		1,
+	) is False
+	assert drift_audit._is_transient_fetch_failure("", "gh: Bad Gateway", 1) is True
+	assert drift_audit._is_transient_fetch_failure("", "gh: API rate limit exceeded for 192.0.2.1", 1) is True
+
+
+def test_retry_parameters_are_normalized_and_retry_delay_is_capped() -> None:
+	endpoint = "repos/octo/flaky/contents/.github/workflows"
+	transient_failure = PlannedCall(
+		(
+			"gh",
+			"api",
+			"-H",
+			"Accept: application/vnd.github+json",
+			endpoint,
+		),
+		stderr="gh: upstream unavailable (HTTP 500)",
+		returncode=1,
+	)
+	executor = FakeExecutor(
+		[
+			transient_failure,
+			transient_failure,
+			transient_failure,
+			transient_failure,
+		]
+	)
+	slept: list[float] = []
+	auditor = drift_audit.ConsumerDriftAuditor(
+		expected_templates={},
+		max_diff_lines=1,
+		executor=executor,
+		gh_api_max_attempts=4.0,
+		gh_api_retry_base_seconds=20.0,
+		sleeper=slept.append,
+	)
+
+	assert auditor.gh_api_max_attempts == 4
+	assert auditor.gh_api_retry_base_seconds == 20.0
+	proc = auditor._run_gh_api(endpoint)
+
+	assert proc.returncode == 1
+	assert slept == [20.0, 30.0, 30.0]
+	executor.assert_consumed()
+
+
+def test_retry_parameters_fall_back_to_safe_defaults() -> None:
+	auditor = drift_audit.ConsumerDriftAuditor(
+		expected_templates={},
+		max_diff_lines=1,
+		executor=FakeExecutor([]),
+		gh_api_max_attempts="not-a-number",
+		gh_api_retry_base_seconds=-5,
+	)
+
+	assert auditor.gh_api_max_attempts == drift_audit.DEFAULT_GH_API_MAX_ATTEMPTS
+	assert auditor.gh_api_retry_base_seconds == 0.0
+
+
 def test_command_failure_is_recorded_without_aborting_other_repos() -> None:
 	with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-command-failure-") as td:
 		templates_dir = Path(td) / "workflow-templates"
@@ -505,6 +573,9 @@ def main() -> int:
 	test_multi_repo_drift_aggregates_into_summary()
 	test_repo_fetch_failure_is_recorded_after_exhausting_retries()
 	test_transient_fetch_failure_recovers_after_retry()
+	test_transient_fetch_failure_classifier_is_specific_and_covers_proxy_errors()
+	test_retry_parameters_are_normalized_and_retry_delay_is_capped()
+	test_retry_parameters_fall_back_to_safe_defaults()
 	test_command_failure_is_recorded_without_aborting_other_repos()
 	return 0
 

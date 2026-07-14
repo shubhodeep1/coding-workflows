@@ -24,6 +24,7 @@ REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # inflates the drift audit's Error count into a spurious WARNING alert.
 DEFAULT_GH_API_MAX_ATTEMPTS = 4
 DEFAULT_GH_API_RETRY_BASE_SECONDS = 2.0
+MAX_GH_API_RETRY_DELAY_SECONDS = 30.0
 STANDARD_MANAGED_HEADER = (
 	"# IMPORTANT: This file is managed by coding-workflows and may be overwritten",
 	"# automatically when upstream templates change. To opt out of auto-updates,",
@@ -322,6 +323,8 @@ def _is_transient_fetch_failure(stdout: str, stderr: str, returncode: int) -> bo
 		return False
 	combined = f"{stdout}\n{stderr}".lower()
 	transient_markers = (
+		"http 429",
+		"status code 429",
 		"http 500",
 		"http 502",
 		"http 503",
@@ -330,19 +333,34 @@ def _is_transient_fetch_failure(stdout: str, stderr: str, returncode: int) -> bo
 		"status code 502",
 		"status code 503",
 		"status code 504",
-		"http 429",
-		"rate limit",
+		"api rate limit exceeded",
+		"primary rate limit",
+		"secondary rate limit",
+		"rate limit exceeded",
+		"rate-limit exceeded",
 		"was submitted too quickly",
-		"<!doctype html",
-		"unicorn",
-		"server error",
-		"timed out",
-		"timeout",
+		"<title>unicorn",
+		"unicorn! &middot; github",
+		"internal server error",
+		"bad gateway",
+		"service unavailable",
+		"gateway timeout",
+		"client.timeout exceeded",
+		"connection timed out",
+		"read timed out",
+		"request timed out",
+		"operation timed out",
+		"timeout awaiting",
+		"context deadline exceeded",
 		"connection reset",
 		"connection refused",
+		"connection aborted",
+		"network is unreachable",
 		"could not resolve host",
 		"temporary failure in name resolution",
+		"no route to host",
 		"eof occurred",
+		"unexpected eof",
 	)
 	return any(marker in combined for marker in transient_markers)
 
@@ -365,8 +383,16 @@ class ConsumerDriftAuditor:
 		self.expected_templates = expected_templates
 		self.max_diff_lines = max_diff_lines
 		self.executor = executor or CommandExecutor()
-		self.gh_api_max_attempts = max(1, gh_api_max_attempts)
-		self.gh_api_retry_base_seconds = gh_api_retry_base_seconds
+		try:
+			normalized_max_attempts = int(float(gh_api_max_attempts))
+		except (TypeError, ValueError):
+			normalized_max_attempts = DEFAULT_GH_API_MAX_ATTEMPTS
+		try:
+			normalized_retry_base_seconds = float(gh_api_retry_base_seconds)
+		except (TypeError, ValueError):
+			normalized_retry_base_seconds = DEFAULT_GH_API_RETRY_BASE_SECONDS
+		self.gh_api_max_attempts = max(1, normalized_max_attempts)
+		self.gh_api_retry_base_seconds = max(0.0, normalized_retry_base_seconds)
 		self.sleeper = sleeper
 		self.workflow_dir_listing_cache: dict[str, set[str]] = {}
 		self.workflow_file_cache: dict[tuple[str, str], str | None] = {}
@@ -378,7 +404,10 @@ class ConsumerDriftAuditor:
 		for attempt in range(1, self.gh_api_max_attempts):
 			if not _is_transient_fetch_failure(proc.stdout, proc.stderr, proc.returncode):
 				return proc
-			delay = self.gh_api_retry_base_seconds * (2 ** (attempt - 1))
+			delay = min(
+				MAX_GH_API_RETRY_DELAY_SECONDS,
+				self.gh_api_retry_base_seconds * (2 ** (attempt - 1)),
+			)
 			print(
 				"DRIFT_SCAN_RETRY "
 				f"endpoint={endpoint} attempt={attempt}/{self.gh_api_max_attempts - 1} "
