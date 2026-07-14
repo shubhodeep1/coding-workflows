@@ -29,7 +29,7 @@ _validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_validate_script_dir}/write_guard.sh"
 if [ -f "${_validate_script_dir}/emit_event.sh" ]; then
   # shellcheck disable=SC1091
-  source "${_validate_script_dir}/emit_event.sh"
+  source "${_validate_script_dir}/emit_event.sh" 2>/dev/null || true
 fi
 if ! type emit_event >/dev/null 2>&1; then
   emit_event()
@@ -1672,30 +1672,39 @@ emit_phase_failure_marker()
   local failure_mode="$3"
   local attempt_count="$4"
   local failure_summary="$5"
-
-  if ! is_tracking_run; then
-    echo "::warning::AI_PHASE_FAILURE_V1 skipped: no tracking issue context (phase=${phase}, step=${failed_step_name})." >&2
-    emit_event "AI_PHASE_FAILURE_V1" \
-      "phase=${phase}" \
-      "failure_mode=${failure_mode}" \
-      "failed_step_name=${failed_step_name}" \
-      "attempt_count=${attempt_count}" \
-      "status=skipped" \
-      "reason=no_tracking_issue"
-    return 0
-  fi
-
   local timestamp
-  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
   local run_id="${GITHUB_RUN_ID:-}"
   local run_attempt="${GITHUB_RUN_ATTEMPT:-}"
   local run_url=""
   local workflow_name="${GITHUB_WORKFLOW:-AI Validate (Reusable)}"
   local workflow_file="validate.yml"
   local recommended_resume_action="retrigger_validate"
+
+  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if [ -n "${run_id}" ]; then
     run_url="$(_gh_url "actions/runs/${run_id}")"
+  fi
+
+  if ! is_tracking_run; then
+    echo "::warning::AI_PHASE_FAILURE_V1 skipped: no tracking issue context (phase=${phase}, step=${failed_step_name})." >&2
+    emit_event "AI_PHASE_FAILURE_V1" \
+      "schema_version=1" \
+      "phase=${phase}" \
+      "failure_mode=${failure_mode}" \
+      "failed_step_name=${failed_step_name}" \
+      "workflow_run_id=${run_id}" \
+      "workflow_run_attempt=${run_attempt}" \
+      "workflow_name=${workflow_name}" \
+      "workflow_file=${workflow_file}" \
+      "workflow_run_url=${run_url}" \
+      "repository=${GITHUB_REPOSITORY}" \
+      "tracking_issue=0" \
+      "attempt_count=${attempt_count}" \
+      "recommended_resume_action=${recommended_resume_action}" \
+      "timestamp=${timestamp}" \
+      "status=skipped" \
+      "reason=no_tracking_issue"
+    return 0
   fi
 
   local payload

@@ -18,14 +18,17 @@ esac
 _events_jsonl_enabled()
 {
 	case "${EVENTS_JSONL_ENABLED:-false}" in
-		[Tt][Rr][Uu][Ee]) return 0 ;;
+		1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy]) return 0 ;;
 		*) return 1 ;;
 	esac
 }
 
 _emit_event_shell_fail()
 {
-	printf 'EVENTS_EMIT_FAIL: %s\n' "$1" >&2
+	local emit_event_reason="${1:-unknown}"
+	emit_event_reason="${emit_event_reason//[[:space:]]/_}"
+	emit_event_reason="${emit_event_reason//=/_}"
+	printf 'EVENTS_EMIT_FAIL reason=%s\n' "${emit_event_reason}" >&2
 }
 
 emit_event()

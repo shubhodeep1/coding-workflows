@@ -136,6 +136,8 @@ def _field_has_content(block_lines: list[str], start_index: int, inline_value: s
 		if _is_fence_line(following_line):
 			inside_fenced_code_block = not inside_fenced_code_block
 			continue
+		if not inside_fenced_code_block and THIRD_LEVEL_HEADING_RE.match(following_line):
+			return False
 		if not inside_fenced_code_block and DECISION_FIELD_RE.match(following_line):
 			return False
 		if _has_meaningful_field_content(following_line):

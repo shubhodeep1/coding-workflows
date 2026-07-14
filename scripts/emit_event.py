@@ -12,10 +12,24 @@ from typing import Any
 
 
 _RESERVED_PREFIXES = frozenset({"EVENTS_EMIT", "EVENTS_EMIT_FAIL"})
+_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on", "y"})
 
 
 def _events_enabled() -> bool:
-	return os.getenv("EVENTS_JSONL_ENABLED", "").lower() == "true"
+	return os.getenv("EVENTS_JSONL_ENABLED", "").strip().lower() in _TRUTHY_VALUES
+
+
+def _sanitize_log_value(value: str) -> str:
+	sanitized_value = "_".join(value.replace("=", "_").split())
+	return sanitized_value or "unknown"
+
+
+def _sanitize_path_segment(raw_value: str, *, fallback: str) -> str:
+	sanitized_value = "".join(
+		character if character.isascii() and (character.isalnum() or character in "._-") else "_"
+		for character in raw_value
+	).strip("._")
+	return sanitized_value or fallback
 
 
 def _workspace_root() -> Path:
@@ -26,8 +40,9 @@ def _workspace_root() -> Path:
 
 
 def _events_path() -> Path:
-	run_id = os.getenv("GITHUB_RUN_ID") or "local"
-	return _workspace_root() / ".events" / f"run-{run_id}.jsonl"
+	raw_run_id = os.getenv("GITHUB_RUN_ID") or "local"
+	run_id_for_path = _sanitize_path_segment(raw_run_id, fallback="local")
+	return _workspace_root() / ".events" / f"run-{run_id_for_path}.jsonl"
 
 
 def _utc_now_rfc3339() -> str:
@@ -59,7 +74,7 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _emit_fail(reason: str) -> None:
-	sys.stderr.write(f"EVENTS_EMIT_FAIL: {reason}\n")
+	sys.stderr.write(f"EVENTS_EMIT_FAIL reason={_sanitize_log_value(reason)}\n")
 
 
 def emit_event(prefix: str, **fields: Any) -> bool:

@@ -882,6 +882,7 @@ jobs:
           # downstream tool output that may include invalid UTF-8.
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
@@ -1523,6 +1524,7 @@ jobs:
           # deep-audit prompt is UTF-8-clean before piping.
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
@@ -2022,6 +2024,7 @@ jobs:
           # API-redundancy prompt is UTF-8-clean before piping.
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""

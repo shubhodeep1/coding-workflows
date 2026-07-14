@@ -3664,18 +3664,14 @@ run_reviewer() {
   fallback_model="$(reviewer_failback_target_for_model "${model}" || true)"
   if [ -z "${fallback_model}" ]; then
     echo "REVIEWER_FAILBACK_UNMAPPED: ${model}" | tee -a "${log_file}"
-    if [ "${reviewer_max_attempts}" -le 2 ]; then
-      reviewer_record_health_outcome "${model}" "retryable_failure" "" "${final_retryable_class}" "${log_file}"
-      printf 'Reviewer slot %s skipped after retryable failure (%s); no same-family failback mapping is available.\n' "${model}" "${final_retryable_class:-retryable_failure}" > "${output_file}"
-      echo "skipped_unmapped" > "${status_file}"
-      rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-      rm -rf "${reviewer_codex_home}" 2>/dev/null || true
-      return 0
-    fi
-    fallback_model="${model}"
-  else
-    echo "REVIEWER_FAILBACK: ${model} -> ${fallback_model} reason=${final_retryable_class:-retryable_failure}" | tee -a "${log_file}"
+    reviewer_record_health_outcome "${model}" "retryable_failure" "" "${final_retryable_class}" "${log_file}"
+    printf 'Reviewer slot %s skipped after retryable failure (%s); no same-family failback mapping is available.\n' "${model}" "${final_retryable_class:-retryable_failure}" > "${output_file}"
+    echo "skipped_unmapped" > "${status_file}"
+    rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+    rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+    return 0
   fi
+  echo "REVIEWER_FAILBACK: ${model} -> ${fallback_model} reason=${final_retryable_class:-retryable_failure}" | tee -a "${log_file}"
 
   fallback_attempt_label="attempt 3 (failback ${fallback_model})"
   if [ "${fallback_model}" = "${model}" ]; then

@@ -21,7 +21,7 @@ SERENA_TEMPLATE_PATH="${SCRIPT_DIR}/templates/serena_project.yml.j2"
 SERENA_PROJECT_PATH="${WORKSPACE_ROOT}/.serena/project.yml"
 if [ -f "${SCRIPT_DIR}/emit_event.sh" ]; then
 	# shellcheck disable=SC1091
-	source "${SCRIPT_DIR}/emit_event.sh"
+	source "${SCRIPT_DIR}/emit_event.sh" 2>/dev/null || true
 fi
 if ! type emit_event >/dev/null 2>&1; then
 	emit_event()

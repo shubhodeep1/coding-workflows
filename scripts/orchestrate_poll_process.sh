@@ -19,6 +19,9 @@ if [ -f "scripts/gh_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/gh_helpers.sh
 fi
+if ! type emit_event >/dev/null 2>&1; then
+  emit_event() { return 0; }
+fi
 # shellcheck source=tg_helpers.sh
 if [ -f "scripts/tg_helpers.sh" ]; then
   # shellcheck disable=SC1091

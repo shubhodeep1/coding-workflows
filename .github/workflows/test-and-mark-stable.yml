@@ -3473,6 +3473,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_pr_body_auto_close.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_archival_completeness.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_decisions.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_integration_pr_readiness.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py

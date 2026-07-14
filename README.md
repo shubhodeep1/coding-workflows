@@ -1113,7 +1113,6 @@ the way to a fix PR without human action.
 | `ENABLE_LABEL_REPAIR_SWEEP` | `true` | Contract-defined gate for poller label-repair sweep. Current branch status: reserved (not consumed yet); `reconcile_managed_issue_labels` runs every poll cycle for current-wave managed issues. |
 | `LABEL_REPAIR_DRY_RUN` | `false` | Contract-defined dry-run mode for label repair. Current branch status: reserved (not consumed yet); label diffs are applied live when detected. |
 | `LABEL_REPAIR_MAX_ISSUES_PER_CYCLE` | `50` | Contract-defined cap for per-cycle label-repair mutations. Current branch status: reserved (not consumed yet); effective scope is the current-wave issue set. |
-| `EVENTS_JSONL_ENABLED` | `false` | Opt-in append-only JSONL mirror for stable workflow-event prefixes. When `true`, supported emitters append `.events/run-<GITHUB_RUN_ID\|local>.jsonl` under `GITHUB_WORKSPACE` after writing the original text line/comment marker; write failures emit `EVENTS_EMIT_FAIL` and fail open, so existing stderr/comment behavior remains authoritative. |
 | `SEMBLE_ENABLED` | `false` | Opt-in gate for Semble-backed context retrieval. Reusable workflows read this repo variable from the caller repo; the Semble install/index steps live in `.github/workflows/*.yml`, not in `workflow-templates/*.yml` wrapper copies. |
 | `REVIEW_FLOOR_RULES_ENABLED` | `1` | Enable floor-rule tagging; emits non-skippable `floor_tags.txt` findings before the editor runs. |
 | `REVIEW_FLOOR_KEYWORDS_FILE` | `(empty)` | Optional keyword-catalog override for `scripts/review_floor_rules.sh`; empty / missing / unreadable falls back to the built-in catalog. |
@@ -1183,6 +1182,7 @@ the way to a fix PR without human action.
 | `UNATTENDED_NAG_REMINDER_ENABLED` | `false` | Opt-in wrapper-level `<reminder>` injection after repeated silent reviewer/editor/judge turns. When `false`, the wrappers keep the existing retry behavior unchanged. |
 | `UNATTENDED_NAG_SILENT_ROUNDS` | `3` | Consecutive silent-turn threshold before nag-reminder injection in the review editor, review reviewers, and orchestrate-poll judge paths. Invalid or out-of-range values clamp conservatively to `3`. |
 | `WORKFLOW_LOG_SCENARIO_TRACE_ENABLED` | `false` | Enables the additive local-only `.ai/workflow_traces/<run_id>.scenario.json` renderer in `workflow-log-analysis.yml`; parseable runs emit `WORKFLOW_SCENARIO_TRACE_WRITTEN`, per-run parser drift fail-opens with `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL`. |
+| `EVENTS_JSONL_ENABLED` | `false` | Opt-in append-only JSONL mirror for stable workflow-event prefixes. When `true`, supported emitters append `.events/run-<GITHUB_RUN_ID\|local>.jsonl` under `GITHUB_WORKSPACE` after writing the original text line/comment marker; write failures emit `EVENTS_EMIT_FAIL` and fail open, so existing stderr/comment behavior remains authoritative. |
 
 ## Semantic Cache (Clarification Only)
 
