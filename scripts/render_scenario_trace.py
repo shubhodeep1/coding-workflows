@@ -163,6 +163,9 @@ def _maybe_int(value: Any) -> int | None:
 
 
 def _parse_tool_call_payload(raw: str) -> tuple[str, Any]:
+	if not raw.strip():
+		raise TraceParseError("tool_call payload is empty")
+
 	if _looks_like_json(raw):
 		payload = _parse_json(raw, context="tool_call payload")
 		if not isinstance(payload, dict):
