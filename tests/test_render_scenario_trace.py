@@ -141,6 +141,16 @@ def test_main_fail_open_on_malformed_run_and_keeps_parseable_run() -> None:
 					}
 				],
 			},
+			{
+				"run_id": 400,
+				"workflow_family": "implement",
+				"log_excerpts": [
+					{
+						"step_name": "Agent",
+						"excerpt": "2026-07-14T06:13:00Z unmarked log line",
+					}
+				],
+			},
 		],
 	}
 
@@ -158,9 +168,11 @@ def test_main_fail_open_on_malformed_run_and_keeps_parseable_run() -> None:
 		assert "WORKFLOW_SCENARIO_TRACE_WRITTEN: run_id=100 phase=plan" in stdout
 		assert "WORKFLOW_SCENARIO_TRACE_PARSE_FAIL: run_id=200 phase=implement reason=tool_call args is not valid JSON" in stdout
 		assert "WORKFLOW_SCENARIO_TRACE_PARSE_FAIL: run_id=300 phase=implement reason=tool_call payload is empty" in stdout
+		assert "WORKFLOW_SCENARIO_TRACE_PARSE_FAIL: run_id=400 phase=implement reason=log excerpts did not contain any supported scenario markers" in stdout
 		assert (output_dir / "100.scenario.json").is_file()
 		assert not (output_dir / "200.scenario.json").exists()
 		assert not (output_dir / "300.scenario.json").exists()
+		assert not (output_dir / "400.scenario.json").exists()
 
 
 def test_render_honors_run_id_filter_and_schema_version_stamp() -> None:

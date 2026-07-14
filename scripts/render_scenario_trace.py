@@ -297,6 +297,8 @@ def _parse_steps(log_excerpts: list[dict[str, str]]) -> list[dict[str, Any]]:
 		if finalized is not None:
 			steps.append(finalized)
 
+	if not saw_marker:
+		raise TraceParseError("log excerpts did not contain any supported scenario markers")
 	if saw_marker and not steps:
 		raise TraceParseError("marked excerpts did not yield any scenario steps")
 	return steps
@@ -369,9 +371,6 @@ def render(run_id: str | int | None, collector_output_path: str | Path, out_path
 				phase=phase,
 				reason=_one_line(exc),
 			)
-			continue
-
-		if not steps:
 			continue
 
 		payload = {

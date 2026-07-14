@@ -172,6 +172,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
 - `scripts/render_prompt.py` — Render prompt templates with optional mode contracts.
 - `scripts/render_prompt.sh` — Shell helper for render prompt.
+- `scripts/render_scenario_trace.py` — Render replayable workflow scenario traces from workflow-log collector excerpts.
 - `scripts/render_validation_templates.py` — Render validation harness templates from a slot manifest.
 - `scripts/repo_root.py` — Resolve the repository root from scripts and tests.
 - `scripts/resolve_integration_ref.sh` — Shell helper for resolve integration ref.
