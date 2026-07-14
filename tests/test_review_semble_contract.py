@@ -209,8 +209,10 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert 'reviewer_nag_attempt_limit="$(nag_silent_round_threshold)"' in reviewers
 	assert 'while [ "${attempt}" -le "${reviewer_max_attempts}" ]; do' in reviewers
 	assert 'Reviewer ${model} failed after ${reviewer_max_attempts} attempts.' in reviewers
-	assert 'if [ "${reviewer_max_attempts}" -le 2 ]; then' in reviewers
-	assert 'fallback_model="${model}"' in reviewers
+	assert 'echo "REVIEWER_FAILBACK_UNMAPPED: ${model}" | tee -a "${log_file}"' in reviewers
+	assert 'reviewer_record_health_outcome "${model}" "retryable_failure" "" "${final_retryable_class}" "${log_file}"' in reviewers
+	assert 'Reviewer slot %s skipped after retryable failure (%s); no same-family failback mapping is available.\\n' in reviewers
+	assert 'echo "skipped_unmapped" > "${status_file}"' in reviewers
 	assert 'if [ "${reviewer_max_attempts}" -gt 3 ]; then' in reviewers
 	assert 'reviewer_nag_counter_for_attempt=$((reviewer_silent_rounds + 1))' in reviewers
 	assert 'reviewer_nag_block="$(maybe_inject_nag "review-reviewer" "${reviewer_nag_counter_for_attempt}")"' in reviewers

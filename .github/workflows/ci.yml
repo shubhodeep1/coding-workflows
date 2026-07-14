@@ -255,6 +255,7 @@ jobs:
         run: |
           set -euo pipefail
           decision_lint_stderr="$(mktemp)"
+          trap 'rm -f "${decision_lint_stderr}"' EXIT
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_plan_decisions.py 2> "${decision_lint_stderr}"
           if [ "${DOCS_DECISION_LINT_ENABLED}" = "true" ] && [ -s "${decision_lint_stderr}" ]; then
             cat "${decision_lint_stderr}" >&2
