@@ -272,6 +272,24 @@ committing the corresponding file:
   `scripts/run_workspace_hook.sh`. Supported hook names are `after_create`,
   `before_run`, `after_run`, and `before_remove`; missing files are a no-op.
 
+## Workflow scenario traces
+
+- Flag: `WORKFLOW_LOG_SCENARIO_TRACE_ENABLED` (default `false`).
+- Renderer: `scripts/render_scenario_trace.py` runs downstream of
+  `workflow_log_collector.v2` inside `.github/workflows/workflow-log-analysis.yml`.
+- Output: local-only `.ai/workflow_traces/<run_id>.scenario.json` files. The
+  directory is gitignored and this phase does not upload or commit the traces.
+- Schema: top-level `schema_version`, `run_id`, `phase`, and ordered `steps[]`
+  with `schema_version: "workflow_scenario_trace.v1.json"`.
+- Step types: `user_message` / `assistant_text` (`ts`, `content`, `tokens`),
+  `tool_call` (`ts`, `name`, `args`), and `tool_result`
+  (`ts`, `output`, `exit_status`).
+- Parser markers are centralized in `scripts/render_scenario_trace.py` and
+  currently key off `>>> [model]`, `<<< [model]`, `[tool_call]`, and
+  `[tool_result]`.
+- Logging: successful writes emit `WORKFLOW_SCENARIO_TRACE_WRITTEN`; fail-open
+  per-run skips emit `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL`.
+
 ---
 
 ## Run-substate ledger + state-snapshot contract
@@ -392,6 +410,8 @@ and shipped:
 - `AUTOFIX_DISPATCH_ISSUED`
 - `AI_PHASE_FAILURE_V1`
 - `AI_PHASE_GATE_V1`
+- `WORKFLOW_SCENARIO_TRACE_WRITTEN`
+- `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL`
 - `JUDGE_INTERIM_PASS_OK`
 - `JUDGE_INTERIM_PASS_FAIL`
 - `JUDGE_INTERIM_PRIORS_MERGED`
@@ -497,6 +517,8 @@ LOG_PREFIX.name=AUTOFIX_DISPATCH_SKIPPED
 LOG_PREFIX.name=AUTOFIX_DISPATCH_ISSUED
 LOG_PREFIX.name=AI_PHASE_FAILURE_V1
 LOG_PREFIX.name=AI_PHASE_GATE_V1
+LOG_PREFIX.name=WORKFLOW_SCENARIO_TRACE_WRITTEN
+LOG_PREFIX.name=WORKFLOW_SCENARIO_TRACE_PARSE_FAIL
 LOG_PREFIX.name=JUDGE_INTERIM_PASS_OK
 LOG_PREFIX.name=JUDGE_INTERIM_PASS_FAIL
 LOG_PREFIX.name=JUDGE_INTERIM_PRIORS_MERGED

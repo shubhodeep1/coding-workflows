@@ -42,6 +42,7 @@ env:
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
   ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
+  WORKFLOW_LOG_SCENARIO_TRACE_ENABLED: ${{ vars.WORKFLOW_LOG_SCENARIO_TRACE_ENABLED || 'false' }}
   WORKFLOW_RETRO_ENABLED: ${{ vars.WORKFLOW_RETRO_ENABLED || 'true' }}
   WORKFLOW_RETRO_MODEL: ${{ vars.WORKFLOW_RETRO_MODEL || 'openai/gpt-5.4-mini' }}
   WORKFLOW_RETRO_REASONING: ${{ vars.WORKFLOW_RETRO_REASONING || 'medium' }}
@@ -1125,6 +1126,21 @@ jobs:
 
           echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
           echo "analysis_status=completed" >> "$GITHUB_OUTPUT"
+
+      - name: Render workflow scenario traces
+        if: steps.analyze.outputs.analysis_status == 'completed' && env.WORKFLOW_LOG_SCENARIO_TRACE_ENABLED == 'true'
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          # The renderer logs WORKFLOW_SCENARIO_TRACE_WRITTEN on successful
+          # writes and WORKFLOW_SCENARIO_TRACE_PARSE_FAIL on fail-open per-run
+          # skips. Traces stay local-only under the gitignored .ai/ path.
+          TRACE_OUTPUT_DIR=".ai/workflow_traces"
+          mkdir -p "${TRACE_OUTPUT_DIR}"
+          python3 scripts/render_scenario_trace.py \
+            --input workflow_log_report.json \
+            --output-dir "${TRACE_OUTPUT_DIR}"
 
       - name: Commit and push report
         id: commit_report
