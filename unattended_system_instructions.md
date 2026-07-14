@@ -642,7 +642,7 @@ mechanics.
   summary, including required section headings, JSON keys, `Q<ID>`
   question labels, and any exact `BLOCKED:` output requirement.
 - When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side
-  `.transcripts/<run_id>-<phase>-<ts>.json` archive to retain raw
+  `.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json` archive to retain raw
   transcript/output data instead of re-emitting raw transcript or
   tool-call history into the compacted summary.
 

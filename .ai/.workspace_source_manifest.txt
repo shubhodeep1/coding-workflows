@@ -359,6 +359,7 @@ scripts/post_review_comment.sh
 scripts/pr_checks_lib.sh
 scripts/render_prompt.py
 scripts/render_prompt.sh
+scripts/render_scenario_trace.py
 scripts/render_validation_templates.py
 scripts/repo_root.py
 scripts/resolve_integration_ref.sh
@@ -416,6 +417,8 @@ scripts/workflow_retro.py
 scripts/workflow_retro_fanout.sh
 scripts/workspace_init.sh
 scripts/workspace_safety_check.sh
+scripts/worktree_gc.sh
+scripts/worktree_registry.sh
 scripts/write_codex_config.sh
 scripts/write_guard.sh
 test_file.txt
@@ -599,6 +602,7 @@ tests/test_render_prompt_core_modes.py
 tests/test_render_prompt_foundation.py
 tests/test_render_prompt_review_judge_modes.py
 tests/test_render_prompt_validate_analytics_modes.py
+tests/test_render_scenario_trace.py
 tests/test_render_validation_templates.py
 tests/test_render_validation_templates_node_hardhat_regressions.py
 tests/test_render_validation_templates_node_runtime_regressions.py
@@ -699,6 +703,9 @@ tests/test_workflow_overlay_core.py
 tests/test_workflow_overlay_orchestrator.py
 tests/test_workflow_retro.py
 tests/test_workflow_retro_fanout.py
+tests/test_worktree_gc.sh
+tests/test_worktree_name_validation.sh
+tests/test_worktree_registry.sh
 tests/test_workspace_cache_maintenance.py
 tests/test_workspace_hooks.py
 tests/test_workspace_init.py

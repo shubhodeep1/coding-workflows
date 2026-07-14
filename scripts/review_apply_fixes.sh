@@ -1792,18 +1792,19 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   # fresh inference; the trailer is metadata the model is asked to
   # ignore.
   attempt_prompt_file="${EDITOR_PROMPT_FILE}.attempt_${attempt}"
-  editor_effective_prompt_file="${EDITOR_PROMPT_FILE}"
-  if cp "${EDITOR_PROMPT_FILE}" "${attempt_prompt_file}" 2>/dev/null; then
-    editor_effective_prompt_file="${attempt_prompt_file}"
+  attempt_prompt_file_ready=false
+  if cp "${EDITOR_PROMPT_FILE}" "${attempt_prompt_file}" 2>/dev/null \
+    || cat "${EDITOR_PROMPT_FILE}" > "${attempt_prompt_file}" 2>/dev/null; then
+    attempt_prompt_file_ready=true
     {
       printf '\n[ignore — retry-attempt diagnostic only, not part of the task]\n'
       printf 'retry_attempt=%d epoch=%s nonce=%s\n' \
         "${attempt}" \
         "$(date +%s)" \
         "$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
-    } >> "${editor_effective_prompt_file}"
+    } >> "${attempt_prompt_file}"
   else
-    echo "::warning::Could not create per-attempt editor prompt file for attempt ${attempt}; continuing with the base prompt." >&2
+    echo "::warning::Could not create per-attempt editor prompt file for attempt ${attempt}; failing closed instead of reusing the base prompt." >&2
   fi
   # Prompt assembly happens before the current editor turn runs, so feed
   # the projected consecutive-silent count for the attempt we are about
@@ -1811,8 +1812,8 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   editor_nag_counter_for_attempt=$((editor_silent_rounds + 1))
   editor_nag_block="$(maybe_inject_nag "review-editor" "${editor_nag_counter_for_attempt}")"
   if [ -n "${editor_nag_block}" ]; then
-    if [ "${editor_effective_prompt_file}" = "${attempt_prompt_file}" ]; then
-      printf '\n%s\n' "${editor_nag_block}" >> "${editor_effective_prompt_file}"
+    if [ "${attempt_prompt_file_ready}" = true ]; then
+      printf '\n%s\n' "${editor_nag_block}" >> "${attempt_prompt_file}"
       editor_silent_rounds=0
     fi
   fi
@@ -1823,7 +1824,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   emit_editor_substate "StreamingTurn" "${attempt}"
   (
     trap '' PIPE
-    PATH="${EDITOR_CODEX_PATH}" run_editor_codex_attempt "${editor_effective_prompt_file}" "${tmp_output}" "${_hb_fifo}" "${hb_file}" "${stall_status_file}"
+    PATH="${EDITOR_CODEX_PATH}" run_editor_codex_attempt "${attempt_prompt_file}" "${tmp_output}" "${_hb_fifo}" "${hb_file}" "${stall_status_file}"
   ) &
   codex_bg_pid=$!
   echo "${codex_bg_pid}" > "${codex_pid_file}"
