@@ -279,7 +279,7 @@ def test_multi_repo_drift_aggregates_into_summary() -> None:
 		executor.assert_consumed()
 
 
-def test_repo_fetch_failure_is_recorded_without_aborting_other_repos() -> None:
+def test_repo_fetch_failure_is_recorded_after_exhausting_retries() -> None:
 	with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-error-") as td:
 		templates_dir = Path(td) / "workflow-templates"
 		_write_templates(
@@ -289,19 +289,24 @@ def test_repo_fetch_failure_is_recorded_without_aborting_other_repos() -> None:
 			},
 		)
 
+		broken_listing = PlannedCall(
+			(
+				"gh",
+				"api",
+				"-H",
+				"Accept: application/vnd.github+json",
+				"repos/octo/broken/contents/.github/workflows",
+			),
+			stderr="gh: upstream unavailable (HTTP 500)",
+			returncode=1,
+		)
 		executor = FakeExecutor(
 			[
-				PlannedCall(
-					(
-						"gh",
-						"api",
-						"-H",
-						"Accept: application/vnd.github+json",
-						"repos/octo/broken/contents/.github/workflows",
-					),
-					stderr="gh: upstream unavailable (HTTP 500)",
-					returncode=1,
-				),
+				# A persistent transient 500 is retried up to the attempt ceiling
+				# before the repository is finally recorded as errored.
+				broken_listing,
+				broken_listing,
+				broken_listing,
 				PlannedCall(
 					(
 						"gh",
@@ -329,6 +334,8 @@ def test_repo_fetch_failure_is_recorded_without_aborting_other_repos() -> None:
 			expected_templates=_load_expected_templates(templates_dir),
 			max_diff_lines=5,
 			executor=executor,
+			gh_api_max_attempts=3,
+			sleeper=lambda _delay: None,
 		)
 		results = auditor.audit_repositories(["octo/broken", "octo/healthy"])
 		summary = drift_audit.summarize_results(results, ["ai-clarify.yml"])
@@ -344,7 +351,146 @@ def test_repo_fetch_failure_is_recorded_without_aborting_other_repos() -> None:
 			"error": 1,
 			"drift_items": 0,
 		}
+		broken_listing_calls = [
+			command
+			for command, _cwd, _check, _env in executor.seen
+			if command[-1] == "repos/octo/broken/contents/.github/workflows"
+		]
+		assert len(broken_listing_calls) == 3
 		executor.assert_consumed()
+
+
+def test_transient_fetch_failure_recovers_after_retry() -> None:
+	with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-retry-") as td:
+		templates_dir = Path(td) / "workflow-templates"
+		_write_templates(
+			templates_dir,
+			{
+				"ai-clarify.yml": STANDARD_HEADER + "name: AI Clarify\non:\n  workflow_dispatch: {}\n",
+			},
+		)
+
+		executor = FakeExecutor(
+			[
+				# GitHub's transient HTML "Unicorn" 500 page on the first attempt…
+				PlannedCall(
+					(
+						"gh",
+						"api",
+						"-H",
+						"Accept: application/vnd.github+json",
+						"repos/octo/flaky/contents/.github/workflows",
+					),
+					stdout="<!DOCTYPE html> <title>Unicorn! &middot; GitHub</title>",
+					returncode=1,
+				),
+				# …succeeds on retry, so the repository must not be flagged as errored.
+				PlannedCall(
+					(
+						"gh",
+						"api",
+						"-H",
+						"Accept: application/vnd.github+json",
+						"repos/octo/flaky/contents/.github/workflows",
+					),
+					stdout=json.dumps([{"name": "ai-clarify.yml", "type": "file"}]),
+				),
+				PlannedCall(
+					(
+						"gh",
+						"api",
+						"-H",
+						"Accept: application/vnd.github.raw+json",
+						"repos/octo/flaky/contents/.github/workflows/ai-clarify.yml",
+					),
+					stdout="name: AI Clarify\non:\n  workflow_dispatch: {}\n",
+				),
+			]
+		)
+
+		slept: list[float] = []
+		auditor = drift_audit.ConsumerDriftAuditor(
+			expected_templates=_load_expected_templates(templates_dir),
+			max_diff_lines=5,
+			executor=executor,
+			gh_api_max_attempts=4,
+			gh_api_retry_base_seconds=2.0,
+			sleeper=slept.append,
+		)
+		result = auditor.audit_repository("octo/flaky")
+
+		assert result.outcome == "match"
+		assert result.drift_items == []
+		assert slept == [2.0]
+		executor.assert_consumed()
+
+
+def test_transient_fetch_failure_classifier_is_specific_and_covers_proxy_errors() -> None:
+	assert drift_audit._is_transient_fetch_failure(
+		"",
+		"gh: GET repos/octo/timeout-service/contents/.github/workflows: HTTP 403",
+		1,
+	) is False
+	assert drift_audit._is_transient_fetch_failure(
+		"",
+		"gh: GET repos/octo/rate-limiter/contents/.github/workflows: HTTP 400",
+		1,
+	) is False
+	assert drift_audit._is_transient_fetch_failure("", "gh: Bad Gateway", 1) is True
+	assert drift_audit._is_transient_fetch_failure("", "gh: API rate limit exceeded for 192.0.2.1", 1) is True
+
+
+def test_retry_parameters_are_normalized_and_retry_delay_is_capped() -> None:
+	endpoint = "repos/octo/flaky/contents/.github/workflows"
+	transient_failure = PlannedCall(
+		(
+			"gh",
+			"api",
+			"-H",
+			"Accept: application/vnd.github+json",
+			endpoint,
+		),
+		stderr="gh: upstream unavailable (HTTP 500)",
+		returncode=1,
+	)
+	executor = FakeExecutor(
+		[
+			transient_failure,
+			transient_failure,
+			transient_failure,
+			transient_failure,
+		]
+	)
+	slept: list[float] = []
+	auditor = drift_audit.ConsumerDriftAuditor(
+		expected_templates={},
+		max_diff_lines=1,
+		executor=executor,
+		gh_api_max_attempts=4.0,
+		gh_api_retry_base_seconds=20.0,
+		sleeper=slept.append,
+	)
+
+	assert auditor.gh_api_max_attempts == 4
+	assert auditor.gh_api_retry_base_seconds == 20.0
+	proc = auditor._run_gh_api(endpoint)
+
+	assert proc.returncode == 1
+	assert slept == [20.0, 30.0, 30.0]
+	executor.assert_consumed()
+
+
+def test_retry_parameters_fall_back_to_safe_defaults() -> None:
+	auditor = drift_audit.ConsumerDriftAuditor(
+		expected_templates={},
+		max_diff_lines=1,
+		executor=FakeExecutor([]),
+		gh_api_max_attempts="not-a-number",
+		gh_api_retry_base_seconds=-5,
+	)
+
+	assert auditor.gh_api_max_attempts == drift_audit.DEFAULT_GH_API_MAX_ATTEMPTS
+	assert auditor.gh_api_retry_base_seconds == 0.0
 
 
 def test_command_failure_is_recorded_without_aborting_other_repos() -> None:
@@ -425,7 +571,11 @@ def main() -> int:
 	test_clean_match_normalizes_managed_header_and_trailing_whitespace()
 	test_missing_wrapper_is_reported_as_drift_without_extra_fetch()
 	test_multi_repo_drift_aggregates_into_summary()
-	test_repo_fetch_failure_is_recorded_without_aborting_other_repos()
+	test_repo_fetch_failure_is_recorded_after_exhausting_retries()
+	test_transient_fetch_failure_recovers_after_retry()
+	test_transient_fetch_failure_classifier_is_specific_and_covers_proxy_errors()
+	test_retry_parameters_are_normalized_and_retry_delay_is_capped()
+	test_retry_parameters_fall_back_to_safe_defaults()
 	test_command_failure_is_recorded_without_aborting_other_repos()
 	return 0
 
