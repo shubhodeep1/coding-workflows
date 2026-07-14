@@ -10104,6 +10104,17 @@ invoke_stall_judge() {
   local recovery_count="$3"
   local stall_minutes="$4"
   local local_id="${5:-}"
+  local _judge_state_file_ready="false"
+
+  if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+    _judge_state_file_ready="true"
+  elif [ -n "${STATE_FILE:-}" ] && [ -z "${local_id}" ]; then
+    if printf '{}\n' > "${STATE_FILE}" 2>/dev/null; then
+      _judge_state_file_ready="true"
+    else
+      echo "::warning::[stall-judge] could not initialize standalone STATE_FILE for issue #${issue_num}; replay cache and decision-streak backstops will not persist." >&2
+    fi
+  fi
 
   local fallback_action
   fallback_action="$(recovery_action_for_phase "${phase}" "${recovery_count}")"
@@ -10190,7 +10201,7 @@ invoke_stall_judge() {
   local _judge_cache_hit_action=""
   local _judge_cache_replay_count=0
   local _judge_force_escalate="false"
-  if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+  if [ "${_judge_state_file_ready}" = "true" ]; then
     _judge_last_conclusion="$(printf '%s' "${workflow_outcomes}" | jq -r '.[0].conclusion // ""' 2>/dev/null || echo "")"
     _judge_cacheable_comments="$(printf '%s' "${recent_comments}" | jq -c '[.[] | select(((.body // "") | startswith("## 🧑‍⚖️ Stall Judge")) | not)]' 2>/dev/null || echo '[]')"
     _judge_recent_comments_hash="$(printf '%s' "${_judge_cacheable_comments}" | sha256sum 2>/dev/null | awk '{print $1}')"
@@ -10408,7 +10419,7 @@ invoke_stall_judge() {
   # judge picks any non-escalate action so a one-off escalation cannot latch.
   # Threshold reuses MAX_JUDGE_REPLAY for parity with the input-hash cap.
   local _judge_escalate_streak=0
-  if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+  if [ "${_judge_state_file_ready}" = "true" ]; then
     if [ "${judge_action}" = "escalate_human" ]; then
       _judge_escalate_streak="$(jq -r --arg n "${issue_num}" '.judge_escalate_streak[$n] // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
       [[ "${_judge_escalate_streak}" =~ ^[0-9]+$ ]] || _judge_escalate_streak=0
@@ -10442,7 +10453,7 @@ invoke_stall_judge() {
   # Cache the fresh judge decision so future identical inputs replay it
   # rather than burning another LLM call. Skip when this run was itself
   # served from the cache (replay count was already bumped above).
-  if [ "${_judge_from_cache}" = "false" ] && [ -n "${_judge_cache_key}" ] && [ -n "${judge_action}" ] && [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+  if [ "${_judge_from_cache}" = "false" ] && [ -n "${_judge_cache_key}" ] && [ -n "${judge_action}" ] && [ "${_judge_state_file_ready}" = "true" ]; then
     jq --arg k "${_judge_cache_key}" --arg action "${judge_action}" \
       '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": $action, "replay_count": 0})' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true

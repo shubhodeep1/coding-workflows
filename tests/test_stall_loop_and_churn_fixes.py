@@ -295,6 +295,51 @@ def test_judge_escalate_streak_resets_on_non_escalate_decision(tmp_path):
 	assert r.stdout.strip() == "absent", r.stdout
 
 
+def test_judge_escalate_streak_initializes_missing_state_for_standalone_path(tmp_path):
+	"""Standalone stall recovery passes an empty local_id and can reach the
+	judge before any tracking state has created STATE_FILE. The scratch file
+	initialization must let the decision-streak backstop persist across ticks."""
+	state_file = tmp_path / "state.json"
+	script = textwrap.dedent(f"""
+		set -euo pipefail
+		export STATE_FILE='{state_file}'
+		export MAX_JUDGE_REPLAY=2
+		issue_num=3664
+		local_id=""
+		_judge_force_escalate="false"
+		for tick in 1 2; do
+			judge_action="escalate_human"
+			if [ -n "$STATE_FILE" ] && [ -f "$STATE_FILE" ]; then
+				_judge_state_file_ready="true"
+			elif [ -n "$STATE_FILE" ] && [ -z "$local_id" ]; then
+				printf '{{}}\n' > "$STATE_FILE"
+				_judge_state_file_ready="true"
+			else
+				_judge_state_file_ready="false"
+			fi
+			_judge_escalate_streak=$(jq -r --arg n "$issue_num" '.judge_escalate_streak[$n] // 0' "$STATE_FILE")
+			_judge_escalate_streak=$(( _judge_escalate_streak + 1 ))
+			jq --arg n "$issue_num" --argjson v "$_judge_escalate_streak" \
+				'.judge_escalate_streak = ((.judge_escalate_streak // {{}}) | .[$n] = $v)' \
+				"$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+			if [ "$judge_action" = "escalate_human" ] && \
+			   {{ [ "$_judge_force_escalate" = "true" ] || [ "$_judge_escalate_streak" -ge "$MAX_JUDGE_REPLAY" ]; }}; then
+				effective="escalate_human"
+			else
+				effective="retrigger_review"
+			fi
+			echo "tick=$tick ready=$_judge_state_file_ready streak=$_judge_escalate_streak effective=$effective"
+			done
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"bash failed: {r.stderr}"
+	assert r.stdout.strip().splitlines() == [
+		"tick=1 ready=true streak=1 effective=retrigger_review",
+		"tick=2 ready=true streak=2 effective=escalate_human",
+	]
+	assert json.loads(state_file.read_text())["judge_escalate_streak"]["3664"] == 2
+
+
 # ---------------------------------------------------------------------------
 # 2a: exponential backoff on integration conflict cooldown
 # ---------------------------------------------------------------------------
