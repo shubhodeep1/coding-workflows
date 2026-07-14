@@ -78,6 +78,19 @@ def test_weekly_retro_path_is_schedule_gated_and_default_on() -> None:
 	assert 'str(candidate.get("updatedAt") or "")' in wf
 
 
+def test_scenario_trace_renderer_is_flag_gated_and_local_only() -> None:
+	wf = _workflow_text()
+	assert "WORKFLOW_LOG_SCENARIO_TRACE_ENABLED: ${{ vars.WORKFLOW_LOG_SCENARIO_TRACE_ENABLED || 'false' }}" in wf
+	assert "- name: Render workflow scenario traces" in wf
+	assert "if: steps.analyze.outputs.analysis_status == 'completed' && env.WORKFLOW_LOG_SCENARIO_TRACE_ENABLED == 'true'" in wf
+	assert 'TRACE_OUTPUT_DIR=".ai/workflow_traces"' in wf
+	assert 'python3 scripts/render_scenario_trace.py \\' in wf
+	assert '--input workflow_log_report.json \\' in wf
+	assert '--output-dir "${TRACE_OUTPUT_DIR}"' in wf
+	assert "WORKFLOW_SCENARIO_TRACE_WRITTEN" in wf
+	assert "WORKFLOW_SCENARIO_TRACE_PARSE_FAIL" in wf
+
+
 def test_semble_wiring_is_consistent_across_four_codex_jobs() -> None:
 	# workflow-log-analysis.yml uses a deliberately different Semble
 	# integration pattern from the parity workflows (RUNNER_TEMP instead of
@@ -135,6 +148,7 @@ def main() -> int:
 	test_issue_context_failure_marker_and_label_contract_present()
 	test_codex_jobs_use_heartbeat_wrapper()
 	test_weekly_retro_path_is_schedule_gated_and_default_on()
+	test_scenario_trace_renderer_is_flag_gated_and_local_only()
 	test_semble_wiring_is_consistent_across_four_codex_jobs()
 	return 0
 

@@ -143,6 +143,7 @@ jobs:
           python3 -m py_compile scripts/ai_labels.py
           python3 -m py_compile scripts/collect_workflow_logs.py
           python3 -m py_compile scripts/analyze_workflow_logs.py
+          python3 -m py_compile scripts/render_scenario_trace.py
           python3 -m py_compile scripts/workflow_retro.py
           python3 -m py_compile scripts/semantic_cache.py
           python3 -m py_compile scripts/check_workflow_script_refs.py
@@ -636,6 +637,13 @@ jobs:
           python3 -m coverage erase
           python3 -m coverage run tests/test_analyze_workflow_logs.py
           python3 -m coverage report --include='scripts/analyze_workflow_logs.py' --fail-under=67
+
+      - name: Workflow scenario trace renderer coverage gate
+        run: |
+          set -euo pipefail
+          python3 -m coverage erase
+          PYTHONDONTWRITEBYTECODE=1 python3 -m coverage run tests/test_render_scenario_trace.py
+          python3 -m coverage report --include='scripts/render_scenario_trace.py' --fail-under=80
 
       - name: Workflow log analysis contract tests
         run: |
