@@ -10384,8 +10384,48 @@ invoke_stall_judge() {
   local judge_justification
   judge_action="$(echo "${judge_json}" | jq -r '.action // ""')"
   judge_justification="$(echo "${judge_json}" | jq -r '.justification // "no justification provided"')"
+
+  # Consecutive-judge-escalation backstop.  When the judge deliberately and
+  # repeatedly chooses escalate_human, honor it even while
+  # ENABLE_STALL_HUMAN_TERMINALIZATION is off — otherwise
+  # resolve_effective_stall_recovery_action downgrades escalate_human back to
+  # the ladder action (e.g. ai:done -> retrigger_review) on every tick and the
+  # issue loops forever without ever surfacing to a human.
+  #
+  # The input-hash replay cap (_judge_force_escalate, above) is meant to catch
+  # this, but its judge cache key includes head_sha and the retrigger_review
+  # action pushes an empty commit each cycle (see the empty-commit push in
+  # execute_stall_recovery_action).  That churns head_sha, changes the cache
+  # key every tick, and keeps replay_count pinned at 0 — so the input-hash
+  # backstop never engages against a head_sha-churning action.  This streak
+  # counter keys off the judge's *decision* instead of the input hash, so
+  # head_sha churn cannot defeat it.  Honoring escalate_human is benign: the
+  # escalate_human handler only adds ai:needs-human (the highest-priority phase
+  # label, which pauses further stall recovery for the issue) and sends a
+  # CRITICAL notification — it never closes or discards the PR.
+  #
+  # Streak persists in STATE_FILE keyed by issue; it resets to 0 whenever the
+  # judge picks any non-escalate action so a one-off escalation cannot latch.
+  # Threshold reuses MAX_JUDGE_REPLAY for parity with the input-hash cap.
+  local _judge_escalate_streak=0
+  if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+    if [ "${judge_action}" = "escalate_human" ]; then
+      _judge_escalate_streak="$(jq -r --arg n "${issue_num}" '.judge_escalate_streak[$n] // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
+      [[ "${_judge_escalate_streak}" =~ ^[0-9]+$ ]] || _judge_escalate_streak=0
+      _judge_escalate_streak=$(( _judge_escalate_streak + 1 ))
+      jq --arg n "${issue_num}" --argjson v "${_judge_escalate_streak}" \
+        '.judge_escalate_streak = ((.judge_escalate_streak // {}) | .[$n] = $v)' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    else
+      jq --arg n "${issue_num}" \
+        '.judge_escalate_streak = ((.judge_escalate_streak // {}) | del(.[$n]))' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    fi
+  fi
+
   local effective_action
-  if [ "${_judge_force_escalate}" = "true" ] && [ "${judge_action}" = "escalate_human" ]; then
+  if [ "${judge_action}" = "escalate_human" ] && \
+     { [ "${_judge_force_escalate}" = "true" ] || [ "${_judge_escalate_streak}" -ge "${MAX_JUDGE_REPLAY}" ]; }; then
     effective_action="escalate_human"
   else
     effective_action="$(normalize_stall_recovery_action "${phase}" "${recovery_count}" "${judge_action}")"

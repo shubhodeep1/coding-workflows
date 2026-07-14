@@ -218,6 +218,84 @@ def test_judge_cache_key_changes_when_recent_comments_change(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 1e: consecutive-judge-escalation backstop honors a repeated escalate_human
+#     decision even when head_sha churn defeats the input-hash replay cap.
+# ---------------------------------------------------------------------------
+
+def test_judge_escalate_streak_honors_escalate_after_max_replay(tmp_path):
+	"""Simulate the head_sha-churn loop: the judge keeps choosing
+	escalate_human but _judge_force_escalate never fires (empty-commit
+	retrigger churns head_sha -> fresh cache key every tick, replay_count
+	pinned at 0).  The decision-streak counter must accumulate across ticks
+	and flip effective_action to escalate_human on the MAX_JUDGE_REPLAY-th
+	consecutive escalation — with ENABLE_STALL_HUMAN_TERMINALIZATION off."""
+	state_file = tmp_path / "state.json"
+	state_file.write_text("{}")
+	# Mirrors the streak block + effective-action decision in
+	# invoke_stall_judge (orchestrate_poll_process.sh).
+	script = textwrap.dedent(f"""
+		set -euo pipefail
+		export STATE_FILE='{state_file}'
+		export MAX_JUDGE_REPLAY=2
+		issue_num=3664
+		# Input-hash replay cap never engages while head_sha churns.
+		_judge_force_escalate="false"
+		for tick in 1 2 3; do
+			judge_action="escalate_human"
+			_judge_escalate_streak=$(jq -r --arg n "$issue_num" '.judge_escalate_streak[$n] // 0' "$STATE_FILE")
+			[[ "$_judge_escalate_streak" =~ ^[0-9]+$ ]] || _judge_escalate_streak=0
+			_judge_escalate_streak=$(( _judge_escalate_streak + 1 ))
+			jq --arg n "$issue_num" --argjson v "$_judge_escalate_streak" \\
+				'.judge_escalate_streak = ((.judge_escalate_streak // {{}}) | .[$n] = $v)' \\
+				"$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+			if [ "$judge_action" = "escalate_human" ] && \\
+			   {{ [ "$_judge_force_escalate" = "true" ] || [ "$_judge_escalate_streak" -ge "$MAX_JUDGE_REPLAY" ]; }}; then
+				effective="escalate_human"
+			else
+				effective="retrigger_review"
+			fi
+			echo "tick=$tick streak=$_judge_escalate_streak effective=$effective"
+		done
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"bash failed: {r.stderr}"
+	lines = r.stdout.strip().splitlines()
+	# Tick 1: streak 1 < 2 -> still downgraded (avoids latching on a one-off).
+	# Tick 2: streak 2 >= 2 -> honored despite terminalization off.
+	# Tick 3: streak stays high -> stays honored (loop is broken).
+	assert lines == [
+		"tick=1 streak=1 effective=retrigger_review",
+		"tick=2 streak=2 effective=escalate_human",
+		"tick=3 streak=3 effective=escalate_human",
+	], lines
+
+
+def test_judge_escalate_streak_resets_on_non_escalate_decision(tmp_path):
+	"""A non-escalate judge decision clears the streak so a subsequent
+	one-off escalate_human is not immediately honored."""
+	state_file = tmp_path / "state.json"
+	# Pre-seed a streak as if the judge had escalated once already.
+	state_file.write_text(json.dumps({"judge_escalate_streak": {"3664": 1}}))
+	script = textwrap.dedent(f"""
+		set -euo pipefail
+		export STATE_FILE='{state_file}'
+		issue_num=3664
+		judge_action="retrigger_review"
+		if [ "$judge_action" = "escalate_human" ]; then
+			:
+		else
+			jq --arg n "$issue_num" \\
+				'.judge_escalate_streak = ((.judge_escalate_streak // {{}}) | del(.[$n]))' \\
+				"$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+		fi
+		jq -r --arg n "$issue_num" '.judge_escalate_streak[$n] // "absent"' "$STATE_FILE"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"bash failed: {r.stderr}"
+	assert r.stdout.strip() == "absent", r.stdout
+
+
+# ---------------------------------------------------------------------------
 # 2a: exponential backoff on integration conflict cooldown
 # ---------------------------------------------------------------------------
 
@@ -324,6 +402,8 @@ def test_production_script_contains_expected_fix_markers():
 	assert "judge_decision_cache" in body
 	assert "conflict_override_count" in body
 	assert "_judge_recent_comments_hash" in body
+	assert "judge_escalate_streak" in body
+	assert "_judge_escalate_streak" in body
 	assert "_list_integration_conflict_files" in body
 	assert "ACTUALLY_CREATED_COUNT" in body
 	assert "effective_cooldown" in body
