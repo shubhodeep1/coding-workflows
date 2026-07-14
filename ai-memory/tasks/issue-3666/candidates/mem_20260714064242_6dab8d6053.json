@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3666,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3666\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3669\",\"pr_number\":3669,\"branch\":\"ai/issue-3666\",\"run_id\":\"29311523429\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/29311523429\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/ci.yml\",\".github/workflows/workflow-log-analysis.yml\",\".gitignore\",\"README.md\",\"agents.md\",\"scripts/gh_helpers.sh\",\"scripts/mcp_handshake_probe.py\",\"scripts/render_prompt.sh\",\"scripts/render_scenario_trace.py\",\"scripts/semble_helpers.sh\",\"scripts/serena_stats_emit.py\",\"scripts/setup_serena.sh\",\"scripts/targeted_file_context.py\",\"tests/test_render_scenario_trace.py\",\"tests/test_workflow_log_analysis_failure_contract.py\"]}",
+  "fingerprint": "cad6e1937d54b2f2bbb18757aa2120689b76197903bc61be27ae2848e7ac41ba",
+  "lineage": {
+    "issue_number": 3666,
+    "parent_ids": [],
+    "pr_number": 3669,
+    "run_id": "29311523429",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29311523429",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3669"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260714064242_6dab8d6053",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3666,
+    "level": "run",
+    "pr_number": 3669,
+    "run_id": "29311523429"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3666: https://github.com/shubhodeep1/coding-workflows/pull/3669",
+  "timestamps": {
+    "created_at": "2026-07-14T06:42:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
