@@ -344,6 +344,54 @@ def test_judge_escalate_streak_initializes_missing_state_for_standalone_path(tmp
 	assert json.loads(standalone_state_file.read_text())["judge_escalate_streak"]["3664"] == 2
 
 
+def test_standalone_missing_override_file_does_not_reset_persisted_streak(tmp_path):
+	"""If the caller could not seed the standalone override file, the
+	judge helper must fail open for that tick instead of recreating a
+	blank file and clobbering the persisted streak state."""
+	standalone_state_file = tmp_path / "standalone_state.json"
+	standalone_state_file.write_text(json.dumps({"judge_escalate_streak": {"3664": 2}}))
+	tracking_state_file = tmp_path / "tracking_state.json"
+	tracking_state_file.write_text(json.dumps({"judge_escalate_streak": {"9999": 7}}))
+	missing_override_file = tmp_path / "missing_override.json"
+
+	script = textwrap.dedent(f"""
+		set -euo pipefail
+		export STATE_FILE='{tracking_state_file}'
+		local_id=""
+		issue_num=3664
+		_judge_state_file_ready="false"
+		_judge_state_file="$STATE_FILE"
+		_judge_state_file_from_override="false"
+		STALL_JUDGE_STATE_FILE_OVERRIDE='{missing_override_file}'
+		updated_state="$(cat '{standalone_state_file}')"
+
+		if [ -z "$local_id" ] && [ -n "${{STALL_JUDGE_STATE_FILE_OVERRIDE:-}}" ]; then
+			_judge_state_file="$STALL_JUDGE_STATE_FILE_OVERRIDE"
+			_judge_state_file_from_override="true"
+		fi
+
+		if [ -n "${{_judge_state_file:-}}" ] && [ -f "$_judge_state_file" ]; then
+			_judge_state_file_ready="true"
+		elif [ -n "${{_judge_state_file:-}}" ] && [ -z "$local_id" ] && [ "$_judge_state_file_from_override" != "true" ]; then
+			printf '{{}}\n' > "$_judge_state_file"
+			_judge_state_file_ready="true"
+		fi
+
+		if [ -f "$_judge_state_file" ]; then
+			updated_state="$(printf '%s' "$updated_state" | jq -c --slurpfile judge_state "$_judge_state_file" '.judge_escalate_streak = (($judge_state[0].judge_escalate_streak // {{}}) | if type == "object" then . else {{}} end)')"
+		fi
+
+		printf 'ready=%s file_exists=%s streak=%s tracking=%s\n' \
+			"$_judge_state_file_ready" \
+			"$( [ -f "$_judge_state_file" ] && echo yes || echo no )" \
+			"$(printf '%s' "$updated_state" | jq -r --arg n "$issue_num" '.judge_escalate_streak[$n] // "absent"')" \
+			"$(jq -r '.judge_escalate_streak["9999"] // "absent"' "$STATE_FILE")"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"bash failed: {r.stderr}"
+	assert r.stdout.strip() == "ready=false file_exists=no streak=2 tracking=7", r.stdout
+
+
 # ---------------------------------------------------------------------------
 # 2a: exponential backoff on integration conflict cooldown
 # ---------------------------------------------------------------------------
@@ -453,6 +501,7 @@ def test_production_script_contains_expected_fix_markers():
 	assert "_judge_recent_comments_hash" in body
 	assert "judge_escalate_streak" in body
 	assert "_judge_escalate_streak" in body
+	assert "_judge_state_file_from_override" in body
 	assert "STALL_JUDGE_STATE_FILE_OVERRIDE" in body
 	assert "_list_integration_conflict_files" in body
 	assert "ACTUALLY_CREATED_COUNT" in body

@@ -10107,14 +10107,16 @@ invoke_stall_judge() {
   local local_id="${5:-}"
   local _judge_state_file_ready="false"
   local _judge_state_file="${STATE_FILE:-}"
+  local _judge_state_file_from_override="false"
 
   if [ -z "${local_id}" ] && [ -n "${STALL_JUDGE_STATE_FILE_OVERRIDE:-}" ]; then
     _judge_state_file="${STALL_JUDGE_STATE_FILE_OVERRIDE}"
+    _judge_state_file_from_override="true"
   fi
 
   if [ -n "${_judge_state_file:-}" ] && [ -f "${_judge_state_file}" ]; then
     _judge_state_file_ready="true"
-  elif [ -n "${_judge_state_file:-}" ] && [ -z "${local_id}" ]; then
+  elif [ -n "${_judge_state_file:-}" ] && [ -z "${local_id}" ] && [ "${_judge_state_file_from_override}" != "true" ]; then
     if printf '{}\n' > "${_judge_state_file}" 2>/dev/null; then
       _judge_state_file_ready="true"
     else
