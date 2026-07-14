@@ -9209,19 +9209,19 @@ _extract_standalone_state_json_from_comments() {
     2>/dev/null || echo "")"
 
   if [ -z "${state_raw}" ] || [ "${state_raw}" = "null" ]; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{}}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
     return
   fi
 
   local extracted
   extracted="$(printf '%s' "${state_raw}" | sed -n "/^${STANDALONE_STATE_MARKER_OPEN}$/,/^${STANDALONE_STATE_MARKER_CLOSE}$/p" | sed '1d;$d')"
   if [ -z "${extracted}" ]; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{}}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
     return
   fi
 
   if ! echo "${extracted}" | jq -e . >/dev/null 2>&1; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{}}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
     return
   fi
 
@@ -9233,9 +9233,10 @@ _extract_standalone_state_json_from_comments() {
       stall_recovery_count: ((.stall_recovery_count // 0) | tonumber),
       phase_attempts: (if (.phase_attempts | type) == "object" then .phase_attempts else {} end),
       conflict_override_count: (if (.conflict_override_count | type) == "object" then .conflict_override_count else {} end),
+      judge_escalate_streak: (if (.judge_escalate_streak | type) == "object" then .judge_escalate_streak else {} end),
       updated_ts: ((.updated_ts // 0) | tonumber)
     }
-  ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{}}'
+  ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
 }
 
 # Fetch the issue comments once and return the latest standalone state
@@ -10105,11 +10106,16 @@ invoke_stall_judge() {
   local stall_minutes="$4"
   local local_id="${5:-}"
   local _judge_state_file_ready="false"
+  local _judge_state_file="${STATE_FILE:-}"
 
-  if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+  if [ -z "${local_id}" ] && [ -n "${STALL_JUDGE_STATE_FILE_OVERRIDE:-}" ]; then
+    _judge_state_file="${STALL_JUDGE_STATE_FILE_OVERRIDE}"
+  fi
+
+  if [ -n "${_judge_state_file:-}" ] && [ -f "${_judge_state_file}" ]; then
     _judge_state_file_ready="true"
-  elif [ -n "${STATE_FILE:-}" ] && [ -z "${local_id}" ]; then
-    if printf '{}\n' > "${STATE_FILE}" 2>/dev/null; then
+  elif [ -n "${_judge_state_file:-}" ] && [ -z "${local_id}" ]; then
+    if printf '{}\n' > "${_judge_state_file}" 2>/dev/null; then
       _judge_state_file_ready="true"
     else
       echo "::warning::[stall-judge] could not initialize standalone STATE_FILE for issue #${issue_num}; replay cache and decision-streak backstops will not persist." >&2
@@ -10192,7 +10198,7 @@ invoke_stall_judge() {
   # cached action instead of burning a fresh LLM call.  After
   # MAX_JUDGE_REPLAY consecutive replays without
   # progress, bypass the cache and escalate so the issue isn't stuck on a
-  # bad decision forever. The cache is only consulted when STATE_FILE
+  # bad decision forever. The cache is only consulted when the judge state file
   # exists; missing-state cycles fall through to the LLM path.
   local _judge_last_conclusion=""
   local _judge_cacheable_comments='[]'
@@ -10207,8 +10213,8 @@ invoke_stall_judge() {
     _judge_recent_comments_hash="$(printf '%s' "${_judge_cacheable_comments}" | sha256sum 2>/dev/null | awk '{print $1}')"
     _judge_cache_key="$(printf '%s|%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" "${_judge_recent_comments_hash}" | sha256sum 2>/dev/null | awk '{print $1}')"
     if [ -n "${_judge_cache_key}" ]; then
-      _judge_cache_hit_action="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].action // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
-      _judge_cache_replay_count="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].replay_count // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
+      _judge_cache_hit_action="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].action // ""' "${_judge_state_file}" 2>/dev/null || echo "")"
+      _judge_cache_replay_count="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].replay_count // 0' "${_judge_state_file}" 2>/dev/null || echo "0")"
       [[ "${_judge_cache_replay_count}" =~ ^[0-9]+$ ]] || _judge_cache_replay_count=0
       if [ -n "${_judge_cache_hit_action}" ] && [ "${_judge_cache_replay_count}" -ge "${MAX_JUDGE_REPLAY}" ]; then
         _judge_force_escalate="true"
@@ -10358,7 +10364,7 @@ invoke_stall_judge() {
     local _judge_replay_next=$(( _judge_cache_replay_count + 1 ))
     jq --arg k "${_judge_cache_key}" --argjson n "${_judge_replay_next}" \
       '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k].replay_count = $n)' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+      "${_judge_state_file}" > "${_judge_state_file}.tmp" 2>/dev/null && mv "${_judge_state_file}.tmp" "${_judge_state_file}" || rm -f "${_judge_state_file}.tmp" 2>/dev/null || true
   else
     for attempt in 1 2; do
       if [ -n "${MOCK_STALL_JUDGE_JSON:-}" ]; then
@@ -10415,22 +10421,22 @@ invoke_stall_judge() {
   # label, which pauses further stall recovery for the issue) and sends a
   # CRITICAL notification — it never closes or discards the PR.
   #
-  # Streak persists in STATE_FILE keyed by issue; it resets to 0 whenever the
+  # Streak persists in the judge state file keyed by issue; it resets to 0 whenever the
   # judge picks any non-escalate action so a one-off escalation cannot latch.
   # Threshold reuses MAX_JUDGE_REPLAY for parity with the input-hash cap.
   local _judge_escalate_streak=0
   if [ "${_judge_state_file_ready}" = "true" ]; then
     if [ "${judge_action}" = "escalate_human" ]; then
-      _judge_escalate_streak="$(jq -r --arg n "${issue_num}" '.judge_escalate_streak[$n] // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
+      _judge_escalate_streak="$(jq -r --arg n "${issue_num}" '.judge_escalate_streak[$n] // 0' "${_judge_state_file}" 2>/dev/null || echo "0")"
       [[ "${_judge_escalate_streak}" =~ ^[0-9]+$ ]] || _judge_escalate_streak=0
       _judge_escalate_streak=$(( _judge_escalate_streak + 1 ))
       jq --arg n "${issue_num}" --argjson v "${_judge_escalate_streak}" \
         '.judge_escalate_streak = ((.judge_escalate_streak // {}) | .[$n] = $v)' \
-        "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+        "${_judge_state_file}" > "${_judge_state_file}.tmp" 2>/dev/null && mv "${_judge_state_file}.tmp" "${_judge_state_file}" || rm -f "${_judge_state_file}.tmp" 2>/dev/null || true
     else
       jq --arg n "${issue_num}" \
         '.judge_escalate_streak = ((.judge_escalate_streak // {}) | del(.[$n]))' \
-        "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+        "${_judge_state_file}" > "${_judge_state_file}.tmp" 2>/dev/null && mv "${_judge_state_file}.tmp" "${_judge_state_file}" || rm -f "${_judge_state_file}.tmp" 2>/dev/null || true
     fi
   fi
 
@@ -10456,7 +10462,7 @@ invoke_stall_judge() {
   if [ "${_judge_from_cache}" = "false" ] && [ -n "${_judge_cache_key}" ] && [ -n "${judge_action}" ] && [ "${_judge_state_file_ready}" = "true" ]; then
     jq --arg k "${_judge_cache_key}" --arg action "${judge_action}" \
       '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k] = {"action": $action, "replay_count": 0})' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+      "${_judge_state_file}" > "${_judge_state_file}.tmp" 2>/dev/null && mv "${_judge_state_file}.tmp" "${_judge_state_file}" || rm -f "${_judge_state_file}.tmp" 2>/dev/null || true
   fi
 
   local judge_comment
@@ -11692,9 +11698,24 @@ PY
 
     case "${action}" in
       run_stall_judge)
+        local _std_judge_state_file=""
+        _std_judge_state_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/standalone_stall_judge_${issue_num}.XXXXXX.json" 2>/dev/null || true)"
+        if [ -z "${_std_judge_state_file}" ]; then
+          _std_judge_state_file="${TMPDIR:-/tmp}/standalone_stall_judge_${issue_num}.json"
+        fi
+        if ! printf '%s\n' "${updated_state}" > "${_std_judge_state_file}" 2>/dev/null; then
+          rm -f "${_std_judge_state_file}" 2>/dev/null || true
+          echo "::warning::[standalone-stall] could not seed standalone judge state file for issue #${issue_num}; judge streak persistence may be skipped this cycle." >&2
+        fi
+        STALL_JUDGE_STATE_FILE_OVERRIDE="${_std_judge_state_file}"
         if invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${elapsed_minutes}" ""; then
           took_action="true"
           action="${STALL_RECOVERY_EFFECTIVE_ACTION:-run_stall_judge}"
+        fi
+        unset STALL_JUDGE_STATE_FILE_OVERRIDE
+        if [ -f "${_std_judge_state_file}" ]; then
+          updated_state="$(printf '%s' "${updated_state}" | jq -c --slurpfile judge_state "${_std_judge_state_file}" '.judge_escalate_streak = (($judge_state[0].judge_escalate_streak // {}) | if type == "object" then . else {} end)' 2>/dev/null || echo "${updated_state}")"
+          rm -f "${_std_judge_state_file}" 2>/dev/null || true
         fi
         ;;
       retrigger_pipeline)
@@ -12029,6 +12050,7 @@ REISSUE_EOF
 			| .status_since_ts = $now
 			| .stall_recovery_count = 0
 			| .phase_attempts = {}
+			| .judge_escalate_streak = {}
 			| .updated_ts = $now
 		  ' 2>/dev/null || echo "${updated_state}")"
 		  write_standalone_state_json "${new_num}" "${new_state}" ""
