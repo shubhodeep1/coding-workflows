@@ -11,6 +11,14 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+	sys.path.insert(0, str(_SCRIPT_DIR))
+try:
+	from emit_event import emit_event as _emit_event_helper
+except Exception:
+	_emit_event_helper = None
+
 
 SERVER_KEYS = ("mcp_server", "server", "server_name", "mcpServer", "mcpServerName")
 TOOL_KEYS = ("tool", "tool_name", "toolName")
@@ -24,6 +32,15 @@ INT_FIELDS_RE = {
 	"ms": re.compile(r"(?:^|\s)(?:ms|duration_ms|elapsed_ms)=(?P<value>\d+)(?:\s|$)"),
 	"response_bytes": re.compile(r"(?:^|\s)(?:response_bytes|bytes|size_bytes)=(?P<value>\d+)(?:\s|$)"),
 }
+
+
+def _mirror_event(prefix: str, **fields: object) -> None:
+	if _emit_event_helper is None:
+		return
+	try:
+		_emit_event_helper(prefix, **fields)
+	except Exception:
+		return
 
 
 def _sanitize_log_value(value: Any) -> str:
@@ -131,8 +148,17 @@ def emit_rollups(target: str, rollups: dict[str, dict[str, int]]) -> None:
 		key=lambda name: (-rollups[name]["calls"], -rollups[name]["response_bytes"], name),
 	):
 		entry = rollups[tool]
+		safe_tool = _sanitize_log_value(tool)
 		sys.stderr.write(
-			f"SERENA_QUERY target={safe_target} tool={_sanitize_log_value(tool)} calls={entry['calls']} response_bytes={entry['response_bytes']} ms={entry['ms']}\n"
+			f"SERENA_QUERY target={safe_target} tool={safe_tool} calls={entry['calls']} response_bytes={entry['response_bytes']} ms={entry['ms']}\n"
+		)
+		_mirror_event(
+			"SERENA_QUERY",
+			target=safe_target,
+			tool=safe_tool,
+			calls=entry["calls"],
+			response_bytes=entry["response_bytes"],
+			ms=entry["ms"],
 		)
 
 
