@@ -22,6 +22,22 @@ if [ "${_GH_HELPERS_LOADED:-}" = "1" ]; then
 fi
 _GH_HELPERS_LOADED=1
 
+_GH_HELPERS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
+if [ -f "${_GH_HELPERS_SCRIPT_DIR}/emit_event.sh" ]; then
+	# shellcheck disable=SC1091
+	source "${_GH_HELPERS_SCRIPT_DIR}/emit_event.sh"
+elif [ -f "scripts/emit_event.sh" ]; then
+	# shellcheck disable=SC1091
+	source scripts/emit_event.sh
+fi
+unset _GH_HELPERS_SCRIPT_DIR
+if ! type emit_event >/dev/null 2>&1; then
+	emit_event()
+	{
+		return 0
+	}
+fi
+
 # ---------------------------------------------------------------
 # _is_gh_rate_limit — detect rate-limit text in stderr / body.
 # Returns 0 (true) if the text indicates a rate limit.
@@ -1220,6 +1236,13 @@ autofix_retrigger_has_inflight_peer()
 	peer_path=$(printf '%s' "${peer_info}" | awk '{print $3}')
 
 	echo "AUTOFIX_PEER_CHECK pr=${pr_number:-?} branch=${head_branch} current_run=${current_run_id:-?} peer_count=${peer_count:-0} peer_run=${peer_run:--} peer_path=${peer_path:--}"
+	emit_event "AUTOFIX_PEER_CHECK" \
+		"pr=${pr_number:-?}" \
+		"branch=${head_branch}" \
+		"current_run=${current_run_id:-?}" \
+		"peer_count=${peer_count:-0}" \
+		"peer_run=${peer_run:--}" \
+		"peer_path=${peer_path:--}"
 
 	if [ "${peer_count:-0}" -gt 0 ] 2>/dev/null; then
 		return 0

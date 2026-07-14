@@ -711,7 +711,6 @@ jobs:
         run: bash scripts/orchestrate_poll_process.sh
 
       - name: Run worktree registry GC
-        if: steps.find_tracking.outputs.has_work == 'true'
         run: bash scripts/worktree_gc.sh
 
       - name: Build state snapshot

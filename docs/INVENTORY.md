@@ -229,6 +229,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/workflow_retro_fanout.sh` — Post weekly workflow retros to consumer repositories from the centralized fan-out job.
 - `scripts/workspace_init.sh` — Shell helper for workspace init.
 - `scripts/workspace_safety_check.sh` — Shell helper for workspace safety check.
+- `scripts/worktree_gc.sh` — Fail-open stale worktree registry cleanup helper.
+- `scripts/worktree_registry.sh` — Atomic worktree registry helper with register, deregister, list, and GC subcommands.
 - `scripts/write_codex_config.sh` — write_codex_config.sh — central writer for ~/.codex/config.toml.
 - `scripts/write_guard.sh` — Shell helper for write-guard policy enforcement.
 
