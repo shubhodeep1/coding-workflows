@@ -190,11 +190,20 @@ text = prompt_path.read_text(encoding="utf-8")
 lines = text.splitlines()
 paragraph_lines = []
 started = False
+in_compaction_rules = False
 
 for raw_line in lines:
 	line = raw_line.strip()
 	if not started:
+		if in_compaction_rules:
+			if line == "</compaction-rules>":
+				in_compaction_rules = False
+			continue
 		if not line or line.startswith("#") or (line.startswith("{%") and line.endswith("%}")):
+			continue
+		if line.startswith("<compaction-rules>"):
+			if not line.endswith("</compaction-rules>"):
+				in_compaction_rules = True
 			continue
 		started = True
 	if not line:
