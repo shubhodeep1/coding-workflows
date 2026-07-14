@@ -775,7 +775,11 @@ on a weekly cron plus manual `workflow_dispatch`. The audit reads the live
 fetches each consumer's installed `.github/workflows/ai-*.yml` wrappers via
 the GitHub contents API, diffs them against this repo's checked-in
 [`workflow-templates/ai-*.yml`](workflow-templates/), and reports drift
-read-only — it never writes to consumer repositories.
+read-only — it never writes to consumer repositories. Transient GitHub API
+failures (intermittent 5xx "Unicorn" pages, rate limits, and network hiccups)
+are retried with exponential backoff before a repository is recorded as an
+error, so a single flaky contents-API response no longer inflates the audit's
+error count into a spurious alert.
 
 #### Install profiles
 
