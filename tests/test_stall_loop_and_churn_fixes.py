@@ -218,6 +218,181 @@ def test_judge_cache_key_changes_when_recent_comments_change(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 1e: consecutive-judge-escalation backstop honors a repeated escalate_human
+#     decision even when head_sha churn defeats the input-hash replay cap.
+# ---------------------------------------------------------------------------
+
+def test_judge_escalate_streak_honors_escalate_after_max_replay(tmp_path):
+	"""Simulate the head_sha-churn loop: the judge keeps choosing
+	escalate_human but _judge_force_escalate never fires (empty-commit
+	retrigger churns head_sha -> fresh cache key every tick, replay_count
+	pinned at 0).  The decision-streak counter must accumulate across ticks
+	and flip effective_action to escalate_human on the MAX_JUDGE_REPLAY-th
+	consecutive escalation — with ENABLE_STALL_HUMAN_TERMINALIZATION off."""
+	state_file = tmp_path / "state.json"
+	state_file.write_text("{}")
+	# Mirrors the streak block + effective-action decision in
+	# invoke_stall_judge (orchestrate_poll_process.sh).
+	script = textwrap.dedent(f"""
+		set -euo pipefail
+		export STATE_FILE='{state_file}'
+		export MAX_JUDGE_REPLAY=2
+		issue_num=3664
+		# Input-hash replay cap never engages while head_sha churns.
+		_judge_force_escalate="false"
+		for tick in 1 2 3; do
+			judge_action="escalate_human"
+			_judge_escalate_streak=$(jq -r --arg n "$issue_num" '.judge_escalate_streak[$n] // 0' "$STATE_FILE")
+			[[ "$_judge_escalate_streak" =~ ^[0-9]+$ ]] || _judge_escalate_streak=0
+			_judge_escalate_streak=$(( _judge_escalate_streak + 1 ))
+			jq --arg n "$issue_num" --argjson v "$_judge_escalate_streak" \\
+				'.judge_escalate_streak = ((.judge_escalate_streak // {{}}) | .[$n] = $v)' \\
+				"$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+			if [ "$judge_action" = "escalate_human" ] && \\
+			   {{ [ "$_judge_force_escalate" = "true" ] || [ "$_judge_escalate_streak" -ge "$MAX_JUDGE_REPLAY" ]; }}; then
+				effective="escalate_human"
+			else
+				effective="retrigger_review"
+			fi
+			echo "tick=$tick streak=$_judge_escalate_streak effective=$effective"
+		done
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"bash failed: {r.stderr}"
+	lines = r.stdout.strip().splitlines()
+	# Tick 1: streak 1 < 2 -> still downgraded (avoids latching on a one-off).
+	# Tick 2: streak 2 >= 2 -> honored despite terminalization off.
+	# Tick 3: streak stays high -> stays honored (loop is broken).
+	assert lines == [
+		"tick=1 streak=1 effective=retrigger_review",
+		"tick=2 streak=2 effective=escalate_human",
+		"tick=3 streak=3 effective=escalate_human",
+	], lines
+
+
+def test_judge_escalate_streak_resets_on_non_escalate_decision(tmp_path):
+	"""A non-escalate judge decision clears the streak so a subsequent
+	one-off escalate_human is not immediately honored."""
+	state_file = tmp_path / "state.json"
+	# Pre-seed a streak as if the judge had escalated once already.
+	state_file.write_text(json.dumps({"judge_escalate_streak": {"3664": 1}}))
+	script = textwrap.dedent(f"""
+		set -euo pipefail
+		export STATE_FILE='{state_file}'
+		issue_num=3664
+		judge_action="retrigger_review"
+		if [ "$judge_action" = "escalate_human" ]; then
+			:
+		else
+			jq --arg n "$issue_num" \\
+				'.judge_escalate_streak = ((.judge_escalate_streak // {{}}) | del(.[$n]))' \\
+				"$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+		fi
+		jq -r --arg n "$issue_num" '.judge_escalate_streak[$n] // "absent"' "$STATE_FILE"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"bash failed: {r.stderr}"
+	assert r.stdout.strip() == "absent", r.stdout
+
+
+def test_judge_escalate_streak_initializes_missing_state_for_standalone_path(tmp_path):
+	"""Standalone stall recovery must persist the judge-escalation streak
+	across separate poll ticks, even though each tick gets a fresh scratch
+	STATE_FILE. The persistent source of truth is the standalone state JSON,
+	not the per-tick runtime file."""
+	standalone_state_file = tmp_path / "standalone_state.json"
+	standalone_state_file.write_text(json.dumps({"judge_escalate_streak": {}}))
+
+	tick_script = textwrap.dedent(f"""
+		set -euo pipefail
+		export MAX_JUDGE_REPLAY=2
+		issue_num=3664
+		judge_action="escalate_human"
+		_judge_force_escalate="false"
+		STATE_FILE="$1"
+		STANDALONE_STATE_FILE='{standalone_state_file}'
+
+		printf '%s\n' "$(cat "$STANDALONE_STATE_FILE")" > "$STATE_FILE"
+		_judge_escalate_streak=$(jq -r --arg n "$issue_num" '.judge_escalate_streak[$n] // 0' "$STATE_FILE")
+		[[ "$_judge_escalate_streak" =~ ^[0-9]+$ ]] || _judge_escalate_streak=0
+		_judge_escalate_streak=$(( _judge_escalate_streak + 1 ))
+		jq --arg n "$issue_num" --argjson v "$_judge_escalate_streak" \
+			'.judge_escalate_streak = ((.judge_escalate_streak // {{}}) | .[$n] = $v)' \
+			"$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+		jq -c --slurpfile judge_state "$STATE_FILE" \
+			'.judge_escalate_streak = (($judge_state[0].judge_escalate_streak // {{}}) | if type == "object" then . else {{}} end)' \
+			"$STANDALONE_STATE_FILE" > "$STANDALONE_STATE_FILE.tmp" && mv "$STANDALONE_STATE_FILE.tmp" "$STANDALONE_STATE_FILE"
+		if [ "$judge_action" = "escalate_human" ] && \
+		   {{ [ "$_judge_force_escalate" = "true" ] || [ "$_judge_escalate_streak" -ge "$MAX_JUDGE_REPLAY" ]; }}; then
+			effective="escalate_human"
+		else
+			effective="retrigger_review"
+		fi
+		echo "streak=$_judge_escalate_streak effective=$effective"
+	""")
+
+	first_runtime_state = tmp_path / "tick1_state.json"
+	second_runtime_state = tmp_path / "tick2_state.json"
+	tick_script_path = tmp_path / "tick.sh"
+	tick_script_path.write_text(tick_script)
+	r1 = _run_bash(f"bash '{tick_script_path}' '{first_runtime_state}'", cwd=tmp_path)
+	assert r1.returncode == 0, f"tick1 bash failed: {r1.stderr}"
+	r2 = _run_bash(f"bash '{tick_script_path}' '{second_runtime_state}'", cwd=tmp_path)
+	assert r2.returncode == 0, f"tick2 bash failed: {r2.stderr}"
+	assert r1.stdout.strip() == "streak=1 effective=retrigger_review"
+	assert r2.stdout.strip() == "streak=2 effective=escalate_human"
+	assert json.loads(standalone_state_file.read_text())["judge_escalate_streak"]["3664"] == 2
+
+
+def test_standalone_missing_override_file_does_not_reset_persisted_streak(tmp_path):
+	"""If the caller could not seed the standalone override file, the
+	judge helper must fail open for that tick instead of recreating a
+	blank file and clobbering the persisted streak state."""
+	standalone_state_file = tmp_path / "standalone_state.json"
+	standalone_state_file.write_text(json.dumps({"judge_escalate_streak": {"3664": 2}}))
+	tracking_state_file = tmp_path / "tracking_state.json"
+	tracking_state_file.write_text(json.dumps({"judge_escalate_streak": {"9999": 7}}))
+	missing_override_file = tmp_path / "missing_override.json"
+
+	script = textwrap.dedent(f"""
+		set -euo pipefail
+		export STATE_FILE='{tracking_state_file}'
+		local_id=""
+		issue_num=3664
+		_judge_state_file_ready="false"
+		_judge_state_file="$STATE_FILE"
+		_judge_state_file_from_override="false"
+		STALL_JUDGE_STATE_FILE_OVERRIDE='{missing_override_file}'
+		updated_state="$(cat '{standalone_state_file}')"
+
+		if [ -z "$local_id" ] && [ -n "${{STALL_JUDGE_STATE_FILE_OVERRIDE:-}}" ]; then
+			_judge_state_file="$STALL_JUDGE_STATE_FILE_OVERRIDE"
+			_judge_state_file_from_override="true"
+		fi
+
+		if [ -n "${{_judge_state_file:-}}" ] && [ -f "$_judge_state_file" ]; then
+			_judge_state_file_ready="true"
+		elif [ -n "${{_judge_state_file:-}}" ] && [ -z "$local_id" ] && [ "$_judge_state_file_from_override" != "true" ]; then
+			printf '{{}}\n' > "$_judge_state_file"
+			_judge_state_file_ready="true"
+		fi
+
+		if [ -f "$_judge_state_file" ]; then
+			updated_state="$(printf '%s' "$updated_state" | jq -c --slurpfile judge_state "$_judge_state_file" '.judge_escalate_streak = (($judge_state[0].judge_escalate_streak // {{}}) | if type == "object" then . else {{}} end)')"
+		fi
+
+		printf 'ready=%s file_exists=%s streak=%s tracking=%s\n' \
+			"$_judge_state_file_ready" \
+			"$( [ -f "$_judge_state_file" ] && echo yes || echo no )" \
+			"$(printf '%s' "$updated_state" | jq -r --arg n "$issue_num" '.judge_escalate_streak[$n] // "absent"')" \
+			"$(jq -r '.judge_escalate_streak["9999"] // "absent"' "$STATE_FILE")"
+	""")
+	r = _run_bash(script, cwd=tmp_path)
+	assert r.returncode == 0, f"bash failed: {r.stderr}"
+	assert r.stdout.strip() == "ready=false file_exists=no streak=2 tracking=7", r.stdout
+
+
+# ---------------------------------------------------------------------------
 # 2a: exponential backoff on integration conflict cooldown
 # ---------------------------------------------------------------------------
 
@@ -324,6 +499,10 @@ def test_production_script_contains_expected_fix_markers():
 	assert "judge_decision_cache" in body
 	assert "conflict_override_count" in body
 	assert "_judge_recent_comments_hash" in body
+	assert "judge_escalate_streak" in body
+	assert "_judge_escalate_streak" in body
+	assert "_judge_state_file_from_override" in body
+	assert "STALL_JUDGE_STATE_FILE_OVERRIDE" in body
 	assert "_list_integration_conflict_files" in body
 	assert "ACTUALLY_CREATED_COUNT" in body
 	assert "effective_cooldown" in body
