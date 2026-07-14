@@ -165,6 +165,32 @@ if ! command -v maybe_inject_nag >/dev/null 2>&1; then
   maybe_inject_nag() { return 0; }
 fi
 
+worktree_registry_enabled() {
+	_is_truthy "${ORCH_WORKTREE_REGISTRY_ENABLED:-false}"
+}
+
+worktree_registry_register() {
+	local name="${1:-}"
+	local path="${2:-}"
+	local branch="${3:-}"
+	local task_id="${4:-}"
+	local owner_phase="${5:-orchestrate-poll}"
+
+	worktree_registry_enabled || return 0
+	[ -n "${name}" ] || return 0
+	[ -f "scripts/worktree_registry.sh" ] || return 0
+	bash scripts/worktree_registry.sh register "${name}" "${path}" "${branch}" "${task_id}" "${owner_phase}" || true
+}
+
+worktree_registry_deregister() {
+	local name="${1:-}"
+
+	worktree_registry_enabled || return 0
+	[ -n "${name}" ] || return 0
+	[ -f "scripts/worktree_registry.sh" ] || return 0
+	bash scripts/worktree_registry.sh deregister "${name}" || true
+}
+
 extract_judge_json_with_status() {
   local output_file="$1"
   local parsed_json=""
@@ -983,11 +1009,13 @@ _record_merge_conflict_telemetry()
 				sleep 1
 				continue
 			fi
+			worktree_registry_register "$(basename -- "${wt}")" "${wt}" "${branch}" "project-${project}" "orchestrate-poll"
 		else
 			# Orphan init: produce a fresh branch locally.
 			if ! git worktree add --quiet --detach "${wt}" "$(git rev-parse HEAD 2>/dev/null || echo "")" 2>/dev/null; then
 				return 0
 			fi
+			worktree_registry_register "$(basename -- "${wt}")" "${wt}" "${branch}" "project-${project}" "orchestrate-poll"
 			( cd "${wt}" && git checkout --quiet --orphan "${branch}" && git rm -rf --quiet . 2>/dev/null || true ) || true
 		fi
 		mkdir -p "${wt}/${mem_root}/orchestrator"
@@ -1004,6 +1032,7 @@ _record_merge_conflict_telemetry()
 			git commit --quiet -m "orchestrator: merge-conflict telemetry (${project}/${pr_a}↔${pr_b})" 2>/dev/null || exit 1
 			git push --quiet origin "${branch}:${branch}" 2>/dev/null || exit 2
 		) || push_rc=$?
+		worktree_registry_deregister "$(basename -- "${wt}")"
 		git worktree remove --force "${wt}" 2>/dev/null || true
 		if [ "${push_rc}" -eq 0 ]; then
 			echo "  [merge-probe] telemetry append: recorded conflict for ${project} PR #${pr_a}↔#${pr_b} (${#paths[@]} path(s)) to ${branch}/${mem_root}/orchestrator/merge_conflicts.jsonl"
@@ -1126,6 +1155,7 @@ _sync_integration_and_rebase_subissue()
 		local _ws=""
 		_ws="$(mktemp -d -t premerge-int-sync.XXXXXX 2>/dev/null)" || _ws=""
 		if [ -n "${_ws}" ] && git worktree add --quiet --detach "${_ws}" "${int_sha}" 2>/dev/null; then
+			worktree_registry_register "$(basename -- "${_ws}")" "${_ws}" "${int_sha}" "pr-${pr_num}" "orchestrate-poll"
 			if (cd "${_ws}" && \
 				git -c user.email="orchestrator@coding-workflows" \
 				    -c user.name="orchestrator" \
@@ -1144,6 +1174,7 @@ _sync_integration_and_rebase_subissue()
 				(cd "${_ws}" && git merge --abort >/dev/null 2>&1) || true
 				echo "  [premerge-rebase] ${integration_branch}: ${default_branch} cannot merge cleanly (textual conflicts); skipping step 1 for PR #${pr_num}, integration-sync resolver will handle."
 			fi
+			worktree_registry_deregister "$(basename -- "${_ws}")"
 			git worktree remove --force "${_ws}" >/dev/null 2>&1 || true
 		elif [ -n "${_ws}" ]; then
 			rm -rf "${_ws}" 2>/dev/null || true
@@ -1170,6 +1201,7 @@ _sync_integration_and_rebase_subissue()
 		git branch -D "${_tmp_branch}" >/dev/null 2>&1 || true
 		return 0
 	fi
+	worktree_registry_register "$(basename -- "${_wh}")" "${_wh}" "${_tmp_branch}" "pr-${pr_num}" "orchestrate-poll"
 
 	if (cd "${_wh}" && \
 		git -c user.email="orchestrator@coding-workflows" \
@@ -1190,6 +1222,7 @@ _sync_integration_and_rebase_subissue()
 		_rc=1
 	fi
 
+	worktree_registry_deregister "$(basename -- "${_wh}")"
 	git worktree remove --force "${_wh}" >/dev/null 2>&1 || true
 	git branch -D "${_tmp_branch}" >/dev/null 2>&1 || true
 	if [ "${_rc}" -eq 0 ] && [ "${_did_push}" -eq 1 ]; then
@@ -5494,12 +5527,13 @@ _refresh_integration_resolver_tooling() {
       return 0
     fi
 
-    if ! git worktree add --quiet --detach "${wt}" \
-         "refs/remotes/origin/${integration_branch}" 2>/dev/null; then
-      echo "::warning::${log_prefix} git worktree add failed (attempt ${attempt}/3); proceeding to dispatch with current tooling."
-      [ "${attempt}" -lt 3 ] && sleep 1 && continue
-      return 0
-    fi
+	if ! git worktree add --quiet --detach "${wt}" \
+	     "refs/remotes/origin/${integration_branch}" 2>/dev/null; then
+	  echo "::warning::${log_prefix} git worktree add failed (attempt ${attempt}/3); proceeding to dispatch with current tooling."
+	  [ "${attempt}" -lt 3 ] && sleep 1 && continue
+	  return 0
+	fi
+	worktree_registry_register "$(basename -- "${wt}")" "${wt}" "refs/remotes/origin/${integration_branch}" "tracking-${TRACKING_NUM:-0}" "orchestrate-poll"
 
     local subshell_rc=0
     (
@@ -5726,7 +5760,8 @@ _refresh_integration_resolver_tooling() {
       exit 0
     )
     subshell_rc=$?
-    git worktree remove --force "${wt}" 2>/dev/null || rm -rf "${wt}" 2>/dev/null || true
+	worktree_registry_deregister "$(basename -- "${wt}")"
+	git worktree remove --force "${wt}" 2>/dev/null || rm -rf "${wt}" 2>/dev/null || true
 
     case "${subshell_rc}" in
       0)
@@ -6529,17 +6564,18 @@ _attempt_branch_rebuild_after_escalation() {
     return 0
   fi
 
-  if ! git worktree add --detach "${worktree_dir}" "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
-    completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-    final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "failed" "false" "Recreated '${integration_branch}' but could not check out the rebuilt branch in a temporary worktree." "${completed_at}")"
-    _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
-    rm -rf "${worktree_dir}" >/dev/null 2>&1 || true
+	if ! git worktree add --detach "${worktree_dir}" "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+	  completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+	  final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "failed" "false" "Recreated '${integration_branch}' but could not check out the rebuilt branch in a temporary worktree." "${completed_at}")"
+	  _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
+	  rm -rf "${worktree_dir}" >/dev/null 2>&1 || true
     rm -f "${replay_log}" >/dev/null 2>&1 || true
     _mark_branch_rebuild_failed "${integration_branch}" "${default_branch}" "${final_pr}" "Recreated '${integration_branch}' but could not check out the rebuilt branch in a temporary worktree."
     BRANCH_REBUILD_HANDLED="true"
-    BRANCH_REBUILD_TERMINAL_FAILURE="true"
-    return 0
-  fi
+	  BRANCH_REBUILD_TERMINAL_FAILURE="true"
+	  return 0
+	fi
+	worktree_registry_register "$(basename -- "${worktree_dir}")" "${worktree_dir}" "refs/remotes/origin/${integration_branch}" "pr-${final_pr}" "orchestrate-poll"
 
   # Replay exit codes: 20=worktree inaccessible, 21=missing/invalid
   # merge SHA, 22=missing commit object, 23=cherry-pick failed,
@@ -6604,16 +6640,18 @@ _attempt_branch_rebuild_after_escalation() {
     completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "failed" "false" "${failure_detail}" "${completed_at}")"
     _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
-    git worktree remove --force "${worktree_dir}" >/dev/null 2>&1 || rm -rf "${worktree_dir}"
-    rm -f "${replay_log}" >/dev/null 2>&1 || true
-    _mark_branch_rebuild_failed "${integration_branch}" "${default_branch}" "${final_pr}" "${failure_detail}"
+	worktree_registry_deregister "$(basename -- "${worktree_dir}")"
+	git worktree remove --force "${worktree_dir}" >/dev/null 2>&1 || rm -rf "${worktree_dir}"
+	rm -f "${replay_log}" >/dev/null 2>&1 || true
+	_mark_branch_rebuild_failed "${integration_branch}" "${default_branch}" "${final_pr}" "${failure_detail}"
     BRANCH_REBUILD_HANDLED="true"
     BRANCH_REBUILD_TERMINAL_FAILURE="true"
     return 0
   fi
 
-  git worktree remove --force "${worktree_dir}" >/dev/null 2>&1 || rm -rf "${worktree_dir}"
-  rm -f "${replay_log}" >/dev/null 2>&1 || true
+	worktree_registry_deregister "$(basename -- "${worktree_dir}")"
+	git worktree remove --force "${worktree_dir}" >/dev/null 2>&1 || rm -rf "${worktree_dir}"
+	rm -f "${replay_log}" >/dev/null 2>&1 || true
 
   completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "success" "false" "" "${completed_at}")"
@@ -18206,4 +18244,5 @@ To pause this behavior for manual review, add the \`force-review\` label."
 	fi
 done
 
+write_state_snapshot_actions_runs_export || true
 echo "Noop-suspicious recovery complete. Dispatched: ${NOOP_RECOVERY_DISPATCHED}, force-merged: ${NOOP_FORCE_MERGED}, blocked: ${NOOP_RECOVERY_BLOCKED}."

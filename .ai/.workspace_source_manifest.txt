@@ -107,6 +107,7 @@ analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
 analysis/workflow-optimization-2026-07-11.md
+analysis/workflow-optimization-2026-07-12.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
@@ -155,6 +156,8 @@ netwask/tier1-agent-suite.json
 path/to/your/workflow_script.sh
 probably_unnecessary_but_read_if_stuck.md
 prompts/.overrides.yaml
+prompts/_identity_recall.txt
+prompts/_nag_reminders.txt
 prompts/_prelude_clarify_and_plan.txt
 prompts/_prelude_common.txt
 prompts/_prelude_common_large.txt
@@ -345,6 +348,7 @@ scripts/mark-stable.sh
 scripts/mcp_handshake_probe.py
 scripts/memory_helpers.sh
 scripts/memory_injection_patterns.py
+scripts/nag_reminder.sh
 scripts/openrouter_prompt_cache.py
 scripts/orchestrate_force_tick.sh
 scripts/orchestrate_lib.py
@@ -390,9 +394,11 @@ scripts/stage_workflow_support.sh
 scripts/summarize_reviewer_consensus.sh
 scripts/summarize_unselected_runs.py
 scripts/targeted_file_context.py
+scripts/task_state.py
 scripts/templates/serena_project.yml.j2
 scripts/templates/slot_manifest.schema.json
 scripts/tg_helpers.sh
+scripts/transcript_archive.sh
 scripts/truncate_to_utf8_byte_cap.py
 scripts/validate_changed_files_syntax.sh
 scripts/validate_driver.sh
@@ -547,6 +553,8 @@ tests/test_files_touched_scope_guard.py
 tests/test_fingerprint_quarantine.py
 tests/test_fingerprint_state_selfheal.py
 tests/test_generate_resource_id.py
+tests/test_header_render.sh
+tests/test_identity_recall_render.sh
 tests/test_implement_post_codex_recovery.py
 tests/test_implement_pr_body_tracking_refs.py
 tests/test_implement_semble_contract.py
@@ -562,6 +570,8 @@ tests/test_mcp_handshake_probe.py
 tests/test_memory_maintenance_contract_noop.py
 tests/test_memory_record_schema.py
 tests/test_merge_probe.py
+tests/test_nag_reminder.sh
+tests/test_nag_reminder_phases.sh
 tests/test_nightly_validation_selftest_workflow_contract.py
 tests/test_orchestrate_clarify_loop_guard.py
 tests/test_orchestrate_final_merge_required_checks_gate.py
@@ -643,9 +653,12 @@ tests/test_subissue_closing_pr.py
 tests/test_summarize_reviewer_consensus_sandbox_pin.py
 tests/test_summarize_unselected_runs.py
 tests/test_targeted_file_context.py
+tests/test_task_state.py
+tests/test_task_state_unblock.py
 tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py
 tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py
 tests/test_test_and_mark_stable_plan_polling_guard.py
+tests/test_transcript_archive.sh
 tests/test_truncate_to_utf8_byte_cap.py
 tests/test_update_repo_tree.py
 tests/test_update_workflows_guardrails.py

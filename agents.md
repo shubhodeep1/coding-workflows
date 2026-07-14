@@ -455,6 +455,13 @@ and shipped:
 - `IDENTITY_REINJECT_PARSE_FAIL`
 - `drift-audit:`
 - `CHECK_TRIAGE`
+- `WORKTREE_REGISTER`
+- `WORKTREE_DEREGISTER`
+- `WORKTREE_GC`
+- `WORKTREE_REGISTRY_REBUILD`
+- `WORKTREE_REGISTER_INVALID_NAME`
+- `WORKTREE_REGISTER_FAIL`
+- `WORKTREE_DEREGISTER_FAIL`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -551,6 +558,13 @@ LOG_PREFIX.name=TRANSCRIPT_ARCHIVE_FAIL
 LOG_PREFIX.name=IDENTITY_REINJECT_PARSE_FAIL
 LOG_PREFIX.name=drift-audit:
 LOG_PREFIX.name=CHECK_TRIAGE
+LOG_PREFIX.name=WORKTREE_REGISTER
+LOG_PREFIX.name=WORKTREE_DEREGISTER
+LOG_PREFIX.name=WORKTREE_GC
+LOG_PREFIX.name=WORKTREE_REGISTRY_REBUILD
+LOG_PREFIX.name=WORKTREE_REGISTER_INVALID_NAME
+LOG_PREFIX.name=WORKTREE_REGISTER_FAIL
+LOG_PREFIX.name=WORKTREE_DEREGISTER_FAIL
 
 ---
 
@@ -784,3 +798,13 @@ workflow-templates/review_rb_judge_dispatch.yml
 - Unblock path: `scripts/task_state.py::unblock_dependents()` rewrites only the mirrored files, removing a completed issue from `depends_on[]` / `reissue_depends_on[]` and logging `TASK_STATE_UNBLOCK <wave> <completed> <count_unblocked>`.
 - Authority: `.tasks/` is mirror-only in Phase C. The chunked `ORCHESTRATOR_STATE_V2` / `STATE_FILE` path remains the sole read source until a future cut-over plan lands.
 - Fail-open logging: mirror write and unblock write failures log `TASK_STATE_WRITE_FAIL <issue> <reason>` and do not stop the poll loop.
+
+## Worktree registry (`.worktrees/index.json`)
+
+- Feature flag: `ORCH_WORKTREE_REGISTRY_ENABLED` (default `false`). When disabled, `scripts/worktree_registry.sh` is bypassed and the existing bare `git worktree` lifecycle remains authoritative.
+- Schema: the registry root is `{ "schema_version": "worktree_registry.v1.json", "entries": [...] }`.
+- Entry shape: each entry records `name`, `path`, `branch`, `task_id`, `created_at`, `owner_phase`, and `owner_run_id`.
+- Write path: `scripts/orchestrate_poll_process.sh` registers worktrees only after `git worktree add` succeeds and deregisters them before the matching remove/fallback cleanup path runs.
+- GC path: the existing `internal-orchestrate-poll.yml` `*/5` cadence reaches `scripts/worktree_gc.sh` through the reusable `.github/workflows/orchestrate_poll.yml` job, so stale registry/worktree cleanup rides the poller's existing schedule instead of adding a new cron surface.
+- Active-run safety: GC first reuses `${RUNTIME_DIR}/state_snapshot_actions_runs.json`, then the cached `scripts/ai_memory.py actions-runs-cache get --repo <owner/repo>` payload, and treats `queued` plus `in_progress` owner runs as live.
+- Fail-open logging: invalid names emit `WORKTREE_REGISTER_INVALID_NAME`; registry rebuilds emit `WORKTREE_REGISTRY_REBUILD`; register/deregister I/O failures emit `WORKTREE_REGISTER_FAIL` / `WORKTREE_DEREGISTER_FAIL`; successful lifecycle events emit `WORKTREE_REGISTER`, `WORKTREE_DEREGISTER`, and `WORKTREE_GC`.

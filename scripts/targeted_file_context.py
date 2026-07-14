@@ -154,14 +154,6 @@ SEMBLE_READ_FALLBACK_MAX_BYTES = 4096
 SEMBLE_MAX_CHUNKS_CAP = 20
 
 
-def _normalized_semble_log_context() -> str | None:
-	# Shared with scripts/semble_helpers.sh: tests can opt into additive
-	# classification without changing the stable SEMBLE_* prefix contract.
-	raw = os.getenv("SEMBLE_LOG_CONTEXT", "")
-	context = re.sub(r"-+", "-", re.sub(r"[\r\n\t ]", "-", raw)).strip("-")
-	return context or None
-
-
 def _mirror_event(prefix: str, **fields: object) -> None:
 	if _emit_event_helper is None:
 		return
@@ -175,6 +167,14 @@ def _mirror_event(prefix: str, **fields: object) -> None:
 		_emit_event_helper(prefix, **normalized_fields)
 	except Exception:
 		return
+
+
+def _normalized_semble_log_context() -> str | None:
+	# Shared with scripts/semble_helpers.sh: tests can opt into additive
+	# classification without changing the stable SEMBLE_* prefix contract.
+	raw = os.getenv("SEMBLE_LOG_CONTEXT", "")
+	context = re.sub(r"-+", "-", re.sub(r"[\r\n\t ]", "-", raw)).strip("-")
+	return context or None
 
 
 def _log_semble_event(prefix: str, **fields: object) -> None:

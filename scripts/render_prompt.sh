@@ -260,16 +260,6 @@ target_path.write_text(updated, encoding="utf-8")
 PY
 }
 
-cleanup_temp_files()
-{
-	if [ -n "${IDENTITY_RECALL_INJECTED_FILE:-}" ] && [ -f "${IDENTITY_RECALL_INJECTED_FILE}" ]; then
-		rm -f "${IDENTITY_RECALL_INJECTED_FILE}"
-	fi
-	if [ -n "${ASSEMBLED_PROMPT_FILE:-}" ] && [ -f "${ASSEMBLED_PROMPT_FILE}" ]; then
-		rm -f "${ASSEMBLED_PROMPT_FILE}"
-	fi
-}
-
 emit_identity_reinject_parse_fail()
 {
 	local failure_reason="$1"
@@ -342,6 +332,35 @@ resolve_assembly_source_path()
 	printf '%s\n' "${prompt_path}"
 }
 
+resolve_prompt_root_dir()
+{
+	local prompt_path="$1"
+	local prompt_dir=""
+	local prompt_dir_name=""
+
+	prompt_dir="$(dirname -- "${prompt_path}")"
+	prompt_dir_name="$(basename -- "${prompt_dir}")"
+	if [ "${prompt_dir_name}" = "prompts" ]; then
+		printf '%s\n' "${prompt_dir}"
+		return 0
+	fi
+	if [ "${prompt_dir_name}" = "_templates" ] && [ "$(basename -- "$(dirname -- "${prompt_dir}")")" = "prompts" ]; then
+		printf '%s\n' "$(dirname -- "${prompt_dir}")"
+		return 0
+	fi
+	printf '%s\n' "${prompt_dir}"
+}
+
+cleanup_temp_files()
+{
+	if [ -n "${IDENTITY_RECALL_INJECTED_FILE:-}" ] && [ -f "${IDENTITY_RECALL_INJECTED_FILE}" ]; then
+		rm -f "${IDENTITY_RECALL_INJECTED_FILE}"
+	fi
+	if [ -n "${ASSEMBLED_PROMPT_FILE:-}" ] && [ -f "${ASSEMBLED_PROMPT_FILE}" ]; then
+		rm -f "${ASSEMBLED_PROMPT_FILE}"
+	fi
+}
+
 collect_prompt_placeholders()
 {
 	local placeholder_source_file="$1"
@@ -392,7 +411,8 @@ if [ "${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" = "true" ]; then
 			echo "assemble_prompt.sh not found for ${PROMPT_FILE}" >&2
 			exit 1
 		fi
-		ASSEMBLED_PROMPT_FILE="$(mktemp "${TMPDIR:-/tmp}/.${PROMPT_BASENAME}.assembled.XXXXXX")"
+		PROMPT_ROOT_DIR="$(resolve_prompt_root_dir "${ASSEMBLY_SOURCE_FILE}")"
+		ASSEMBLED_PROMPT_FILE="$(mktemp "${PROMPT_ROOT_DIR}/.${PROMPT_BASENAME}.assembled.XXXXXX")"
 		trap cleanup_temp_files EXIT
 		"${ASSEMBLE_PROMPT_SH}" "${PROMPT_FILE}" > "${ASSEMBLED_PROMPT_FILE}"
 		RENDER_INPUT_FILE="${ASSEMBLED_PROMPT_FILE}"
