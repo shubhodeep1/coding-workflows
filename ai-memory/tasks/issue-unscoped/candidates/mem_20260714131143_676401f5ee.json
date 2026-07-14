@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add `scripts/render_scenario_trace.py` that normalizes log excerpts into `user_message`, `assistant_text`, `tool_call`, and `tool_result` steps with timestamps, run id, and phase.\" + \"Centralize parser markers/constants in the new renderer\" + \"Document the trace format and the new stable prefix `WORKFLOW_SCENARIO_TRACE_WRITTEN` / fail-open prefix `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL` in `agents.md`\" + \"Add `tests/test_render_scenario_trace.py` for happy-path parsing, malformed-input fail-open behavior, and schema-version stamping.\" + \"Tests cover all four step types and the fail-open path.\" (Phase G acceptance criteria from linked issue #3666).  \n  expected_change_site: `scripts/render_scenario_trace.py` (parser constants + main flow), `tests/test_render_scenario_trace.py` (full coverage of four step types + tokens=None for user_message/assistant_text), `agents.md` (non-duplicative section), `.github/workflows/ci.yml` (final coverage gate).  \n  confidence=[3]  \n  flagged_by: [x-ai_grok-4_20]  \n  EVIDENCE: The no-marker fail-open path (now correctly raising `TraceParseError`) is exercised only via a single test case that asserts the log line; the happy-path test exercises three concrete step types but lacks a dedicated assertion for a `user_message` with explicit `tokens=None` (the fourth documented type in agents.md schema). Coverage gate passes at --fail-under=80 but prior-run instrumentation showed 78% on the renderer before the final test strengthening; schema stamping is asserted but not validated against a fixture or round-tripped. README.md/INVENTORY.md updates and the workflow wiring are present.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: \"Add `scripts/render_scenario_trace.py` that normalizes log excerpts into `user_message`, `assistant_text`, `tool_call`, and `tool_result` steps with timestamps, run id, and phase.\" + \"Centralize parser markers/constants in the new renderer\" + \"Document the trace format and the new stable prefix `WORKFLOW_SCENARIO_TRACE_WRITTEN` / fail-open prefix `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL` in `agents.md`\" + \"Add `tests/test_render_scenario_trace.py` for happy-path parsing, malformed-input fail-open behavior, and schema-version stamping.\" + \"Tests cover all four step types and the fail-open path.\" (Phase G acceptance criteria from linked issue #3666).  \n  Expected change site: `scripts/render_scenario_trace.py` (parser constants + main flow), `tests/test_render_scenario_trace.py` (full coverage of four step types + tokens=None for user_message/assistant_text), `agents.md` (non-duplicative section), `.github/workflows/ci.yml` (final coverage gate).  \n  Evidence of absence: The no-marker fail-open path (now correctly raising `TraceParseError`) is exercised only via a single test case that asserts the log line; the happy-path test exercises three concrete step types but lacks a dedicated assertion for a `user_message` with explicit `tokens=None` (the fourth documented type in agents.md schema). Coverage gate passes at --fail-under=80 but prior-run instrumentation showed 78% on the renderer before the final test strengthening; schema stamping is asserted but not validated against a fixture or round-tripped. README.md/INVENTORY.md updates and the workflow wiring are present.  \n  SEVERITY: MAJOR  \n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "a14ec9b749c9b3b1e5399acb0a197682b78ab6e96008d02874699d8c69fc8035",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3669,
+    "run_id": "29332061221",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29332061221",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260714131143_676401f5ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3669,
+    "run_id": "29332061221"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-07-14T13:11:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
