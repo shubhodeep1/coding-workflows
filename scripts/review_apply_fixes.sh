@@ -1136,7 +1136,7 @@ The CI / lint check-run snapshot is already inlined above as ${PR_CHECK_RUNS_CON
 That section is a deterministic snapshot of failed and incomplete GitHub check-runs on the PR head SHA. When the header reports failed_count > 0, every listed failure is a confirmed defect produced by a real CI / lint / test job — not a speculative reviewer suggestion. Treat these failures as the highest-priority WILL_FIX items, ahead of reviewer findings, and address every one of them in this run.
 
 For each failed entry:
-1. Read failed[i].name, failed[i].title, failed[i].summary, and failed[i].conclusion to identify the failing job and the kind of failure (lint, type-check, unit test, etc.). If failed[i].summary is empty or unhelpful (common when the CI step doesn't emit ::error:: annotations, e.g. bare `npm test`, `pytest`, `make test`), read failed[i].log_tail next: it is the last ~16 KB / 200 lines of the failing job's GitHub Actions log and typically contains the failing test name, file:line, expected/actual diff, and stack trace needed to map the failure.
+1. Read failed[i].name, failed[i].title, failed[i].summary, and failed[i].conclusion to identify the failing job and the kind of failure (lint, type-check, unit test, etc.). If failed[i].summary is empty or unhelpful (common when the CI step doesn't emit ::error:: annotations, e.g. bare \`npm test\`, \`pytest\`, \`make test\`), read failed[i].log_tail next: it is the last ~16 KB / 200 lines of the failing job's GitHub Actions log and typically contains the failing test name, file:line, expected/actual diff, and stack trace needed to map the failure.
 2. Map the failure back to specific files and lines in the diff or repository — use the failure summary or log_tail plus your existing exploration tools (repository reads, shell grep/rg).
 3. Apply the smallest correct fix that resolves the failure without breaking other modules. Lint/format fixes should match the project style without unrelated reformatting.
 4. If a failure cannot be mapped to a concrete fix from the snapshot alone (e.g. both summary and log_tail are empty, or they refer to an external artifact), state explicitly in the editor summary which check-run could not be fixed and why, so the next iteration can re-check it.
@@ -1311,7 +1311,7 @@ regex misses, leaving the file unchanged.
 If you compact context:
 - Preserve the latest file-read result for every file still likely to be edited in this run.
 - Preserve the exact structured-output contract, including required section headings and JSON/Q-ID schemas.
-- When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side `.transcripts/<run_id>-<phase>-<ts>.json` archive instead of re-emitting raw transcript or tool-call history.
+- When \`UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true\`, trust the host-side \`.transcripts/<run_id>-<phase>-<ts>.json\` archive instead of re-emitting raw transcript or tool-call history.
 </compaction-rules>
 
 FINAL RESPONSE FORMAT

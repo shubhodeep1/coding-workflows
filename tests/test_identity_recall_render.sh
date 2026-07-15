@@ -93,12 +93,59 @@ def _opening_role_goal_shape(prompt_path: Path) -> bool:
 	return ROLE_GOAL_RE.match(paragraph) is not None
 
 
+def _opening_role_goal_end_offset(rendered_text: str) -> int | None:
+	paragraph_lines: list[str] = []
+	paragraph_end: int | None = None
+	started = False
+	in_compaction_rules = False
+	offset = 0
+	for raw_line in rendered_text.splitlines(keepends=True):
+		line = raw_line.strip()
+		if not started:
+			if in_compaction_rules:
+				if line == "</compaction-rules>":
+					in_compaction_rules = False
+				offset += len(raw_line)
+				continue
+			if not line or line.startswith("#") or (line.startswith("{%") and line.endswith("%}")):
+				offset += len(raw_line)
+				continue
+			if line.startswith("<compaction-rules>"):
+				if not line.endswith("</compaction-rules>"):
+					in_compaction_rules = True
+				offset += len(raw_line)
+				continue
+			started = True
+		if not line:
+			paragraph = " ".join(paragraph_lines)
+			if paragraph_end is None or ROLE_GOAL_RE.match(paragraph) is None:
+				return None
+			return paragraph_end
+		paragraph_lines.append(line)
+		paragraph_end = offset + len(raw_line.rstrip("\r\n"))
+		offset += len(raw_line)
+	if not started or not paragraph_lines or paragraph_end is None:
+		return None
+	paragraph = " ".join(paragraph_lines)
+	if ROLE_GOAL_RE.match(paragraph) is None:
+		return None
+	return paragraph_end
+
+
 def _assert_identity_block(rendered_text: str, *, phase_name: str) -> re.Match[str]:
 	match = IDENTITY_BLOCK_RE.search(rendered_text)
 	assert match is not None, f"missing identity-recall block for {phase_name}"
 	assert match.group("phase") == phase_name, match.groupdict()
 	assert match.group("role"), match.groupdict()
 	assert match.group("mission"), match.groupdict()
+	return match
+
+
+def _assert_identity_block_after_opening_role_goal(rendered_text: str, *, phase_name: str) -> re.Match[str]:
+	match = _assert_identity_block(rendered_text, phase_name=phase_name)
+	paragraph_end = _opening_role_goal_end_offset(rendered_text)
+	assert paragraph_end is not None, f"missing opening role/goal paragraph for {phase_name}"
+	assert rendered_text[paragraph_end:match.start()] == "\n\n", rendered_text[max(0, paragraph_end - 80):match.start() + 80]
 	return match
 
 
@@ -132,7 +179,7 @@ def test_flag_on_renders_or_fails_open_per_prompt_shape() -> None:
 		assert identity_proc.returncode == 0, f"{prompt_path.name}: {identity_proc.stderr}"
 		if _opening_role_goal_shape(prompt_path):
 			assert "IDENTITY_REINJECT_PARSE_FAIL" not in identity_proc.stderr, identity_proc.stderr
-			_assert_identity_block(identity_proc.stdout, phase_name=prompt_path.stem)
+			_assert_identity_block_after_opening_role_goal(identity_proc.stdout, phase_name=prompt_path.stem)
 		else:
 			assert identity_proc.stdout == baseline.stdout, prompt_path.name
 			assert "<identity-recall>" not in identity_proc.stdout, prompt_path.name
@@ -243,7 +290,7 @@ def test_shared_prelude_path_injects_and_cleans_temp_files() -> None:
 		after = sorted(path.name for path in (root / "prompts").glob(".mode-plan.txt.*"))
 		assert proc.returncode == 0, proc.stderr
 		assert before == after, after
-		_assert_identity_block(proc.stdout, phase_name="mode-plan")
+		_assert_identity_block_after_opening_role_goal(proc.stdout, phase_name="mode-plan")
 
 
 def main() -> int:

@@ -262,17 +262,75 @@ inject_identity_recall_block()
 
 	"${PYTHON_BIN}" - <<'PY' "${prompt_input_file}" "${injected_file}" "${rendered_identity_block}"
 import pathlib
+import re
 import sys
 
 source_path = pathlib.Path(sys.argv[1])
 target_path = pathlib.Path(sys.argv[2])
 identity_block = sys.argv[3]
 text = source_path.read_text(encoding="utf-8")
-parts = text.split("\n\n", 1)
-if len(parts) == 2:
-	updated = parts[0] + "\n\n" + identity_block + "\n\n" + parts[1]
+
+ROLE_GOAL_RE = re.compile(r"^Role:\s*(?P<role>.+?)\s+Goal:\s*(?P<goal>.+?)\s*$")
+
+
+def inject_after_offset(rendered_text: str, paragraph_end: int) -> str:
+	before = rendered_text[:paragraph_end].rstrip("\n")
+	remainder = rendered_text[paragraph_end:].lstrip("\n")
+	if remainder:
+		return before + "\n\n" + identity_block + "\n\n" + remainder
+	return before + "\n\n" + identity_block + "\n"
+
+
+def opening_role_goal_end_offset(rendered_text: str) -> int | None:
+	paragraph_lines: list[str] = []
+	paragraph_end: int | None = None
+	started = False
+	in_compaction_rules = False
+	offset = 0
+
+	for raw_line in rendered_text.splitlines(keepends=True):
+		line = raw_line.strip()
+		if not started:
+			if in_compaction_rules:
+				if line == "</compaction-rules>":
+					in_compaction_rules = False
+				offset += len(raw_line)
+				continue
+			if not line or line.startswith("#") or (line.startswith("{%") and line.endswith("%}")):
+				offset += len(raw_line)
+				continue
+			if line.startswith("<compaction-rules>"):
+				if not line.endswith("</compaction-rules>"):
+					in_compaction_rules = True
+				offset += len(raw_line)
+				continue
+			started = True
+		if not line:
+			paragraph = " ".join(paragraph_lines)
+			if paragraph_end is None or ROLE_GOAL_RE.match(paragraph) is None:
+				return None
+			return paragraph_end
+		paragraph_lines.append(line)
+		paragraph_end = offset + len(raw_line.rstrip("\r\n"))
+		offset += len(raw_line)
+
+	if not started or not paragraph_lines or paragraph_end is None:
+		return None
+	paragraph = " ".join(paragraph_lines)
+	if ROLE_GOAL_RE.match(paragraph) is None:
+		return None
+	return paragraph_end
+
+
+paragraph_end = opening_role_goal_end_offset(text)
+if paragraph_end is not None:
+	updated = inject_after_offset(text, paragraph_end)
 else:
-	updated = text + "\n\n" + identity_block + "\n"
+	parts = text.split("\n\n", 1)
+	if len(parts) == 2:
+		updated = parts[0] + "\n\n" + identity_block + "\n\n" + parts[1]
+	else:
+		updated = text + "\n\n" + identity_block + "\n"
 target_path.write_text(updated, encoding="utf-8")
 PY
 }
