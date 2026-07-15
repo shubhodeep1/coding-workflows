@@ -225,10 +225,202 @@ def test_render_honors_run_id_filter_and_schema_version_stamp() -> None:
 		]
 
 
+def test_helper_parsers_cover_edge_branches() -> None:
+	assert renderer._normalize_excerpts("not-a-list") == []
+	assert renderer._normalize_excerpts(
+		[
+			"skip",
+			{},
+			{"step_name": "Agent", "excerpt": ""},
+			{"step_name": "Agent", "excerpt": "kept excerpt"},
+		]
+	) == [{"step_name": "Agent", "excerpt": "kept excerpt"}]
+	assert renderer._split_timestamp("plain line") == (None, "plain line")
+	assert renderer._detect_marker("[tool_result]  kept output") == ("tool_result", "kept output")
+
+	name, args = renderer._parse_tool_call_payload('{"name": "apply_patch", "input": "patch"}')
+	assert name == "apply_patch"
+	assert args == {"input": "patch"}
+
+	name, args = renderer._parse_tool_call_payload("run_shell")
+	assert name == "run_shell"
+	assert args == {}
+
+	name, args = renderer._parse_tool_call_payload("run_shell first line\nsecond line")
+	assert name == "run_shell"
+	assert args == "first line\nsecond line"
+
+	assert renderer._finalize_block(None) is None
+	assert (
+		renderer._finalize_block(
+			renderer._Block(kind="assistant_text", ts="2026-07-15T00:00:00Z", lines=[])
+		)
+		is None
+	)
+	assert (
+		renderer._finalize_block(
+			renderer._Block(kind="unknown", ts="2026-07-15T00:00:00Z", lines=["ignored"])
+		)
+		is None
+	)
+
+	try:
+		renderer._parse_steps(
+			[
+				{
+					"step_name": "Agent",
+					"excerpt": "2026-07-15T00:00:00Z >>> [model]",
+				}
+			]
+		)
+	except renderer.TraceParseError as exc:
+		assert str(exc) == "marked excerpts did not yield any scenario steps"
+	else:
+		raise AssertionError("expected marked excerpts without content to fail open")
+
+
+def test_build_tool_result_step_covers_fallback_shapes() -> None:
+	ts = "2026-07-15T00:00:00Z"
+
+	assert renderer._build_tool_result_step(renderer._Block(kind="tool_result", ts=ts, lines=[])) == {
+		"type": "tool_result",
+		"ts": ts,
+		"output": "",
+		"exit_status": None,
+	}
+	assert renderer._build_tool_result_step(
+		renderer._Block(
+			kind="tool_result",
+			ts=ts,
+			lines=['{"result": "ok", "exit_status": "7"}'],
+		)
+	) == {
+		"type": "tool_result",
+		"ts": ts,
+		"output": "ok",
+		"exit_status": 7,
+	}
+	assert renderer._build_tool_result_step(
+		renderer._Block(kind="tool_result", ts=ts, lines=['{"alpha": 1, "beta": 2}'])
+	) == {
+		"type": "tool_result",
+		"ts": ts,
+		"output": '{"alpha": 1, "beta": 2}',
+		"exit_status": None,
+	}
+	assert renderer._build_tool_result_step(
+		renderer._Block(kind="tool_result", ts=ts, lines=["exit_status=-3 partial output", "tail line"])
+	) == {
+		"type": "tool_result",
+		"ts": ts,
+		"output": "partial output\ntail line",
+		"exit_status": -3,
+	}
+	assert renderer._build_tool_result_step(
+		renderer._Block(kind="tool_result", ts=ts, lines=["plain text fallback"])
+	) == {
+		"type": "tool_result",
+		"ts": ts,
+		"output": "plain text fallback",
+		"exit_status": None,
+	}
+
+
+def test_render_fail_open_for_report_shape_and_write_failures() -> None:
+	os.environ["EVENTS_JSONL_ENABLED"] = "false"
+	with tempfile.TemporaryDirectory(prefix="scenario-trace-errors-") as td:
+		report_path = Path(td) / "workflow_log_report.json"
+		output_dir = Path(td) / "traces"
+
+		_write_json(report_path, [])
+		with _capture_std() as (out, err):
+			written_paths = renderer.render(None, report_path, output_dir)
+		assert written_paths == []
+		assert err.getvalue() == ""
+		assert (
+			"collector_report_load_failed:collector report root is not a JSON object" in out.getvalue()
+		)
+
+		_write_json(report_path, {"schema_version": renderer.COLLECTOR_SCHEMA_VERSION, "runs": {}})
+		with _capture_std() as (out, err):
+			written_paths = renderer.render(None, report_path, output_dir)
+		assert written_paths == []
+		assert err.getvalue() == ""
+		assert "reason=collector_report_missing_runs_array" in out.getvalue()
+
+		report = {
+			"schema_version": renderer.COLLECTOR_SCHEMA_VERSION,
+			"runs": [
+				"skip non-dict run",
+				{"run_id": 10, "workflow_family": "plan", "log_excerpts": "not-a-list"},
+				{
+					"workflow_family": "plan",
+					"log_excerpts": [
+						{
+							"step_name": "Agent",
+							"excerpt": "2026-07-15T00:01:00Z >>> [model]\n2026-07-15T00:01:01Z Missing run id.",
+						}
+					],
+				},
+				{
+					"run_id": 12,
+					"log_excerpts": [
+						{
+							"step_name": "Agent",
+							"excerpt": "2026-07-15T00:02:00Z >>> [model]\n2026-07-15T00:02:01Z Missing phase.",
+						}
+					],
+				},
+				{
+					"run_id": 13,
+					"workflow_family": "implement",
+					"log_excerpts": [
+						{
+							"step_name": "Agent",
+							"excerpt": "2026-07-15T00:03:00Z <<< [model]\n2026-07-15T00:03:01Z Write me.",
+						}
+					],
+				},
+			],
+		}
+		_write_json(report_path, report)
+
+		original_write_trace = renderer._write_trace
+
+		def _failing_write_trace(path: Path, payload: dict[str, object]) -> None:
+			raise OSError("disk full")
+
+		renderer._write_trace = _failing_write_trace
+		try:
+			with _capture_std() as (out, err):
+				written_paths = renderer.render(None, report_path, output_dir)
+		finally:
+			renderer._write_trace = original_write_trace
+
+		assert written_paths == []
+		assert err.getvalue() == ""
+		stdout = out.getvalue()
+		assert (
+			"WORKFLOW_SCENARIO_TRACE_PARSE_FAIL: run_id=unknown phase=plan reason=missing_run_id_or_workflow_family"
+			in stdout
+		)
+		assert (
+			"WORKFLOW_SCENARIO_TRACE_PARSE_FAIL: run_id=12 phase=unknown reason=missing_run_id_or_workflow_family"
+			in stdout
+		)
+		assert (
+			"WORKFLOW_SCENARIO_TRACE_PARSE_FAIL: run_id=13 phase=implement reason=trace_write_failed:disk full"
+			in stdout
+		)
+
+
 def main() -> int:
 	test_render_writes_trace_with_all_step_types()
 	test_main_fail_open_on_malformed_run_and_keeps_parseable_run()
 	test_render_honors_run_id_filter_and_schema_version_stamp()
+	test_helper_parsers_cover_edge_branches()
+	test_build_tool_result_step_covers_fallback_shapes()
+	test_render_fail_open_for_report_shape_and_write_failures()
 	return 0
 
 
