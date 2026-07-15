@@ -49,11 +49,25 @@ bash "${REPO_ROOT}/scripts/worktree_registry.sh" register \
 WORKTREE_REGISTRY_ROOT="${workspace}" \
 GITHUB_RUN_ID="300" \
 bash "${REPO_ROOT}/scripts/worktree_registry.sh" register \
-	"fresh-wt" \
-	"${fresh_path}" \
+		"fresh-wt" \
+		"${fresh_path}" \
 	"HEAD" \
-	"task-fresh" \
-	"orchestrate-poll" >/dev/null
+		"task-fresh" \
+		"orchestrate-poll" >/dev/null
+
+printf '{invalid json\n' > "${workspace}/.worktrees/index.json"
+
+rebuilt_json="$(WORKTREE_REGISTRY_ROOT="${workspace}" bash "${REPO_ROOT}/scripts/worktree_registry.sh" list)"
+PYTHONDONTWRITEBYTECODE=1 python3 - "${rebuilt_json}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+
+
+entries = json.loads(sys.argv[1])
+assert {entry["name"] for entry in entries} == {"stale-dead-wt", "stale-live-wt", "fresh-wt"}, entries
+PY
 
 PYTHONDONTWRITEBYTECODE=1 python3 - "${workspace}/.worktrees/index.json" <<'PY'
 from __future__ import annotations
@@ -66,8 +80,20 @@ from pathlib import Path
 index_path = Path(sys.argv[1])
 payload = json.loads(index_path.read_text(encoding="utf-8"))
 for entry in payload["entries"]:
-	if entry["name"] in {"stale-dead-wt", "stale-live-wt"}:
+	if entry["name"] == "stale-dead-wt":
 		entry["created_at"] = "2000-01-01T00:00:00Z"
+		entry["task_id"] = "task-stale-dead"
+		entry["owner_phase"] = "orchestrate-poll"
+		entry["owner_run_id"] = "100"
+	elif entry["name"] == "stale-live-wt":
+		entry["created_at"] = "2000-01-01T00:00:00Z"
+		entry["task_id"] = "task-stale-live"
+		entry["owner_phase"] = "orchestrate-poll"
+		entry["owner_run_id"] = "200"
+	elif entry["name"] == "fresh-wt":
+		entry["task_id"] = "task-fresh"
+		entry["owner_phase"] = "orchestrate-poll"
+		entry["owner_run_id"] = "300"
 index_path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
 PY
 
@@ -96,6 +122,57 @@ import sys
 
 entries = json.loads(sys.argv[1])
 assert {entry["name"] for entry in entries} == {"stale-live-wt", "fresh-wt"}, entries
+PY
+
+bogus_path="${tmpdir}/not-a-worktree"
+mkdir -p "${bogus_path}"
+printf 'sentinel\n' > "${bogus_path}/sentinel.txt"
+
+PYTHONDONTWRITEBYTECODE=1 python3 - "${workspace}/.worktrees/index.json" "${bogus_path}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+
+index_path = Path(sys.argv[1])
+bogus_path = sys.argv[2]
+payload = json.loads(index_path.read_text(encoding="utf-8"))
+payload["entries"].append(
+	{
+		"name": "bogus-wt",
+		"path": bogus_path,
+		"branch": "HEAD",
+		"task_id": "task-bogus",
+		"created_at": "2000-01-01T00:00:00Z",
+		"owner_phase": "orchestrate-poll",
+		"owner_run_id": "400",
+	}
+)
+index_path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+PY
+
+WORKTREE_REGISTRY_ROOT="${workspace}" \
+ORCH_WORKTREE_REGISTRY_ENABLED="true" \
+ORCH_WORKTREE_TTL_SECS="300" \
+RUNTIME_DIR="${runtime_dir}" \
+GITHUB_REPOSITORY="owner/repo" \
+bash "${REPO_ROOT}/scripts/worktree_gc.sh" >/dev/null
+
+[ -d "${bogus_path}" ]
+[ -f "${bogus_path}/sentinel.txt" ]
+
+remaining_json="$(WORKTREE_REGISTRY_ROOT="${workspace}" bash "${REPO_ROOT}/scripts/worktree_registry.sh" list)"
+PYTHONDONTWRITEBYTECODE=1 python3 - "${remaining_json}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+
+
+entries = json.loads(sys.argv[1])
+assert {entry["name"] for entry in entries} == {"stale-live-wt", "fresh-wt", "bogus-wt"}, entries
 PY
 
 echo "test_worktree_gc.sh: PASS"
