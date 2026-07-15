@@ -275,7 +275,7 @@ ROLE_GOAL_RE = re.compile(r"^Role:\s*(?P<role>.+?)\s+Goal:\s*(?P<goal>.+?)\s*$")
 
 def inject_after_offset(rendered_text: str, paragraph_end: int) -> str:
 	before = rendered_text[:paragraph_end].rstrip("\n")
-	remainder = rendered_text[paragraph_end:].lstrip("\n")
+	remainder = rendered_text[paragraph_end:].lstrip("\r\n")
 	if remainder:
 		return before + "\n\n" + identity_block + "\n\n" + remainder
 	return before + "\n\n" + identity_block + "\n"

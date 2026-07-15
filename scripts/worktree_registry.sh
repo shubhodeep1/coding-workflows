@@ -124,14 +124,16 @@ _worktree_registry_rebuild_json()
 {
 	local repo_root="${1:?repo_root required}"
 	local created_at="${2:?created_at required}"
+	local parser_file=""
+	local rc=0
 
 	if ! command -v python3 >/dev/null 2>&1; then
 		_worktree_registry_empty_json
 		return 0
 	fi
 
-	git -C "${repo_root}" worktree list --porcelain 2>/dev/null | \
-		PYTHONDONTWRITEBYTECODE=1 python3 - "${repo_root}" "${created_at}" <<'PY'
+	parser_file="$(mktemp "${TMPDIR:-/tmp}/worktree_registry_rebuild.XXXXXX.py" 2>/dev/null)" || return 1
+	if ! cat > "${parser_file}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -189,6 +191,18 @@ for raw_line in sys.stdin.read().splitlines():
 flush_current()
 print(json.dumps({"schema_version": "worktree_registry.v1.json", "entries": entries}, ensure_ascii=True))
 PY
+	then
+		rm -f "${parser_file}" 2>/dev/null || true
+		return 1
+	fi
+
+	if ! git -C "${repo_root}" worktree list --porcelain 2>/dev/null | \
+		PYTHONDONTWRITEBYTECODE=1 python3 "${parser_file}" "${repo_root}" "${created_at}"
+	then
+		rc=1
+	fi
+	rm -f "${parser_file}" 2>/dev/null || true
+	return "${rc}"
 }
 
 _worktree_registry_load_json_locked()

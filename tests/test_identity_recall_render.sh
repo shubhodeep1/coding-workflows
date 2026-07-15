@@ -197,6 +197,21 @@ def test_wrapped_goal_paragraph_is_captured_in_full() -> None:
 	assert "autonomous AI pipeline (clarify -> plan -> implement -> review)" in mission, mission
 
 
+def test_crlf_prompt_does_not_leave_carriage_return_before_remainder() -> None:
+	with tempfile.TemporaryDirectory(prefix="identity_recall_crlf_") as td:
+		prompt_path = Path(td) / "mode-crlf.txt"
+		prompt_path.write_bytes(
+			b"# tier: DEFAULT\r\nRole: crlf parser. Goal: preserve the remainder body.\r\n\r\nBody follows.\r\n"
+		)
+		proc = _run_render(
+			prompt_path,
+			env_overrides={"UNATTENDED_IDENTITY_REINJECT_ENABLED": "true"},
+		)
+		assert proc.returncode == 0, proc.stderr
+		_assert_identity_block_after_opening_role_goal(proc.stdout, phase_name="mode-crlf")
+		assert "\n\n\r" not in proc.stdout, proc.stdout
+
+
 def test_parse_failure_is_fail_open_for_synthetic_malformed_prompt() -> None:
 	with tempfile.TemporaryDirectory(prefix="identity_recall_malformed_") as td:
 		prompt_path = Path(td) / "mode-malformed.txt"
@@ -297,6 +312,7 @@ def main() -> int:
 	test_flag_off_is_byte_stable_for_mode_prompt_corpus()
 	test_flag_on_renders_or_fails_open_per_prompt_shape()
 	test_wrapped_goal_paragraph_is_captured_in_full()
+	test_crlf_prompt_does_not_leave_carriage_return_before_remainder()
 	test_parse_failure_is_fail_open_for_synthetic_malformed_prompt()
 	test_identity_only_path_cleans_tmpdir_temp_files()
 	test_inline_prompt_uses_canonical_mode_metadata()
