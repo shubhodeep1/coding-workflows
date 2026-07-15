@@ -503,8 +503,6 @@ worktree_registry_gc()
 				if [ -n "${path}" ] && [ -e "${path}" ]; then
 					if git -C "${repo_root}" worktree remove --force "${path}" >/dev/null 2>&1; then
 						removed_path='true'
-					elif rm -rf "${path}" >/dev/null 2>&1; then
-						removed_path='true'
 					else
 						removed_path='false'
 					fi
