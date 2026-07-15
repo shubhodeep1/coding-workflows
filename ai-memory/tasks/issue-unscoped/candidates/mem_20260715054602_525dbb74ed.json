@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_lib.py:2176-2184 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603]\n  PROBLEM: `_maybe_unblock_task_state_dependents` silently returns when `_task_state_resolved_status` is absent, so dependents may never be unblocked.\n  WHY: The function depends on a private injected key; if a caller omits it, task-state dependency resolution can stall indefinitely without any diagnostic.\n- scripts/review_apply_fixes.sh:1314 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: Unescaped angle-bracket tokens in the `<compaction-rules>` documentation text trigger shellcheck SC2287/SC2261.\n  WHY: The lint job exits non-zero on these shellcheck errors, which blocks CI and prevents the PR from merging.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Fix the shellcheck lint failure so the lint job passes and the PR can merge.\n  expected_change_site: scripts/review_apply_fixes.sh:1314\n  confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  EVIDENCE: The lint job fails with SC2287/SC2261 on line 1314; the PR diff does not touch scripts/review_apply_fixes.sh; the `<compaction-rules>` block remains unchanged and still contains `<run_id>`, `<phase>`, and `<ts>` tokens interpreted as redirections.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_lib.py:2179-2181 | severity=MAJOR | confidence=4\n  PROBLEM: `_maybe_unblock_task_state_dependents` reads `_task_state_resolved_status` from the issue dict as a private contract key, and when the key is absent the function silently returns without unblocking dependents.\n  WHY: A future caller that omits the key will stall task-state dependency resolution with no log or error signal, leaving legitimately completed issues blocked.\n- scripts/review_apply_fixes.sh:1314\n  PROBLEM: The lint job fails with shellcheck SC2287 and SC2261 on angle-bracket tokens (`<run_id>`, `<phase>`, `<ts>`) inside a `<compaction-rules>` documentation block.\n  WHY: `shellcheck --severity=error` exits non-zero on this pre-existing parse failure; the file was not modified by the PR, but the error still blocks CI and merge.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: The PR aims to adopt \"Learn-Claude-Code learnings \u2014 Phases A\u2013H into the unattended pipeline\" and resolve main \u2194 integration branch drift\n  Expected change site: scripts/review_apply_fixes.sh line 1314 (fix lint failure)\n  Evidence of absence: The lint job is failing due to shellcheck SC2287/SC2261 errors on line 1314. The PR cannot merge until this lint failure is resolved. While the file is not part of the LAST RUN DIFF changes, the lint failure blocks the entire PR merge.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_apply_fixes.sh:1314 | severity=BLOCKER | confidence=5\n  PROBLEM: SC2287/SC2261 shellcheck errors due to unescaped angle brackets in XML-like documentation text.\n  WHY: Shellcheck interprets `<run_id>`, `<phase>`, `<ts>` as redirections, causing the lint job to fail and blocking merge.\n- scripts/orchestrate_lib.py:2176-2184 | severity=none | confidence=5\n  PROBLEM: `_maybe_unblock_task_state_dependents` now depends on callers to inject a private \"_task_state_resolved_status\" key. If a future call site omits this key when calling the function, it silently returns without unblocking dependents.\n  WHY: Once a process stalls due to this silent-return, dependent issues in the orchestration pipeline will wait forever.\n- File: scripts/orchestrate_lib.py\n  Location: _maybe_unblock_task_state_dependents function, lines 2176-2184\n  Issue: Private-key dependency introduces future failure risk.\n  Suggested minimal fix: Fall back to issue.get(\"status\") when \"_task_state_resolved_status\" is absent.\n  Estimated lines changed: 3\n  HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: scripts/review_apply_fixes.sh\n  Line or code reference: 1314\n  Problem: Shellcheck SC2287/SC2261 errors due to unescaped angle brackets in documentation text containing XML-like tokens `<run_id>`, `<phase>`, `<ts>`\n  Why it fails at runtime: Causes the lint CI check to exit non-zero with \"Multiple redirections compete for stdin/stdout\" errors, blocking PR merge\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n\nRequirement: \"feat: Learn-Claude-Code learnings \u2014 adopt Phases A\u2013H into the unattended pipeline\" \u2014 the PR must pass CI lint checks to be mergeable\nExpected change site: scripts/review_apply_fixes.sh line 1314\nEvidence of absence: The PR diff does not include a fix for the shellcheck SC2287/SC2261 errors at line 1314 where angle brackets in documentation are interpreted as shell redirections; CI lint job fails on this line\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_apply_fixes.sh:1314 (`.transcripts/<run_id>-<phase>-<ts>.json` within the `<compaction-rules>` heredoc-like block starting at line 1310) | severity=BLOCKER | confidence=5\n  PROBLEM: Unescaped angle-bracket tokens in documentation text cause shellcheck SC2287/SC2261 errors.\n  WHY: Shellcheck interprets `<run_id>`, `<phase>`, and `<ts>` as redirection operators, and the lint job exits non-zero when `shellcheck --severity=error` hits these errors.\nRequirement: Fix the shellcheck lint failure so the lint job passes and the PR can merge.\nExpected change site: scripts/review_apply_fixes.sh lines 1310-1317 (the `<compaction-rules>` block)\nEvidence of absence: The LAST RUN DIFF touches only orchestrate_lib.py, worktree_registry.sh, test_orchestrate_lib.py, and test_worktree_gc.sh \u2014 none of which edit scripts/review_apply_fixes.sh. The compaction-rules block with unescaped `<run_id>`, `<phase>`, `<ts>` tokens remains unchanged at line 1314, so `shellcheck --severity=error scripts/review_apply_fixes.sh` still exits non-zero.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "8b5a21e74d6b90932959b46f830c4e7568dc298485552df9c96b581e7e6adbe8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3673,
+    "run_id": "29389620305",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29389620305",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260715054602_525dbb74ed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3673,
+    "run_id": "29389620305"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-15T05:46:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
