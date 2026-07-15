@@ -132,7 +132,7 @@ _worktree_registry_rebuild_json()
 		return 0
 	fi
 
-	parser_file="$(mktemp "${TMPDIR:-/tmp}/worktree_registry_rebuild.XXXXXX.py" 2>/dev/null)" || return 1
+	parser_file="$(mktemp "${TMPDIR:-/tmp}/worktree_registry_rebuild.XXXXXX" 2>/dev/null)" || return 1
 	if ! cat > "${parser_file}" <<'PY'
 from __future__ import annotations
 
