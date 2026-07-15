@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.sh:253-272 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `inject_identity_recall_block` splits on the first blank line, so prompts with a leading `# tier:` header can place the identity block before the role/goal paragraph instead of immediately after it.\n  WHY: That separation moves `<identity-recall>` away from the paragraph that explains the identity, which can weaken compaction-time recall reliability.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/render_prompt.sh | Line or code reference: inject_identity_recall_block \u2014 text.split(\"\\n\\n\", 1)\n  Problem: The function splits rendered prompt text at the first double-newline and injects the identity block between the two halves. For mode prompts that start with a `# tier: ...` metadata line followed by a blank line (e.g. `prompts/mode-plan.txt`), that first double-newline occurs *before* the `Role: \u2026 Goal: \u2026` paragraph, so the identity block is placed between the tier header and the actual opening paragraph instead of immediately after it. This means the model would see `<identity-recall>` before encountering the role/goal paragraph that describes what the identity refers to, defeating the compaction-recall intent.\n  Why it fails at runtime: After context compaction the model re-emits the `<identity-recall>` block but it has already been separated from the role/goal paragraph by the blank line that was the original split point; on long prompts the injected block can end up far above the operational instructions, weakening recall reliability.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "526f45d170bfe40d476ecb67b125e67c9f3c29093599ebca1eaa0283a89f211e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3673,
+    "run_id": "29386661729",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29386661729",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260715043128_dd8a4585e4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3673,
+    "run_id": "29386661729"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-07-15T04:31:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
