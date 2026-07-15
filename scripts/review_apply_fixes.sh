@@ -1792,6 +1792,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   # fresh inference; the trailer is metadata the model is asked to
   # ignore.
   attempt_prompt_file="${EDITOR_PROMPT_FILE}.attempt_${attempt}"
+  attempt_prompt_file_cleanup_path="${attempt_prompt_file}"
   attempt_prompt_file_ready=false
   if cp "${EDITOR_PROMPT_FILE}" "${attempt_prompt_file}" 2>/dev/null \
     || cat "${EDITOR_PROMPT_FILE}" > "${attempt_prompt_file}" 2>/dev/null; then
@@ -1804,7 +1805,8 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
         "$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
     } >> "${attempt_prompt_file}"
   else
-    echo "::warning::Could not create per-attempt editor prompt file for attempt ${attempt}; failing closed instead of reusing the base prompt." >&2
+    echo "::warning::Could not create per-attempt editor prompt file for attempt ${attempt}; continuing with the base prompt." >&2
+    attempt_prompt_file="${EDITOR_PROMPT_FILE}"
   fi
   # Prompt assembly happens before the current editor turn runs, so feed
   # the projected consecutive-silent count for the attempt we are about
@@ -1906,7 +1908,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
       echo "Editor stderr on attempt ${attempt}:"
       cat "${tmp_err}"
     fi
-    rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file}"
+    rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file_cleanup_path}"
     exit 78
   fi
 
@@ -2132,7 +2134,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
           echo "::endgroup::"
           mv "${tmp_output}" "${EDITOR_SUMMARY_FILE}"
           rm -f "${tmp_err}"
-          rm -f "${attempt_prompt_file}"
+          rm -f "${attempt_prompt_file_cleanup_path}"
           archive_transcript "${GITHUB_RUN_ID:-local-run}" "review-editor" "${EDITOR_SUMMARY_FILE}"
           echo "Editor succeeded on attempt ${attempt}."
           emit_editor_substate "Succeeded" "${attempt}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err"
@@ -2212,12 +2214,12 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   if grep -qiE "${_REFUSAL_REGEX}" "${tmp_output}" 2>/dev/null; then
     echo "Editor model returned a safety-policy refusal on attempt ${attempt}; breaking out of retry loop (further attempts likely to repeat the refusal)."
     touch "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag"
-    rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file}"
+    rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file_cleanup_path}"
     break
   fi
   rm -f "${tmp_output}"
   rm -f "${tmp_err}"
-  rm -f "${attempt_prompt_file}"
+  rm -f "${attempt_prompt_file_cleanup_path}"
   attempt=$((attempt + 1))
   sleep 2
 done

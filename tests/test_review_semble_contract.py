@@ -201,7 +201,8 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert 'nag_reminder_enabled() { return 1; }' in reviewers
 	assert 'editor_nag_attempt_limit="$(nag_silent_round_threshold)"' in apply_fixes
 	assert 'if [ "${editor_nag_attempt_limit}" -gt "${editor_max_attempts}" ]; then' in apply_fixes
-	assert 'if cp "${EDITOR_PROMPT_FILE}" "${attempt_prompt_file}" 2>/dev/null; then' in apply_fixes
+	assert 'if cp "${EDITOR_PROMPT_FILE}" "${attempt_prompt_file}" 2>/dev/null \\' in apply_fixes
+	assert '|| cat "${EDITOR_PROMPT_FILE}" > "${attempt_prompt_file}" 2>/dev/null; then' in apply_fixes
 	assert 'Could not create per-attempt editor prompt file for attempt ${attempt}; continuing with the base prompt.' in apply_fixes
 	assert 'editor_nag_counter_for_attempt=$((editor_silent_rounds + 1))' in apply_fixes
 	assert 'editor_nag_block="$(maybe_inject_nag "review-editor" "${editor_nag_counter_for_attempt}")"' in apply_fixes
