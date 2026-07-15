@@ -2173,14 +2173,10 @@ def _log_task_state_write_fail(issue_id: Any, reason: str) -> None:
 	print(f"TASK_STATE_WRITE_FAIL {issue_token} {reason_token}", file=sys.stderr)
 
 
-def _maybe_unblock_task_state_dependents(
-	wave_id: Any,
-	issue: dict[str, Any],
-	*,
-	resolved_status: str | None,
-) -> None:
+def _maybe_unblock_task_state_dependents(wave_id: Any, issue: dict[str, Any]) -> None:
 	if not _task_state_files_enabled():
 		return
+	resolved_status = issue.get("_task_state_resolved_status")
 	if str(resolved_status or "").strip() not in TRACKING_BODY_CHECKED_STATUSES:
 		return
 
@@ -3064,11 +3060,9 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 			not is_terminal_wave_issue_status(stored_status)
 			and is_terminal_wave_issue_status(status)
 		):
-			_maybe_unblock_task_state_dependents(
-				wave_id,
-				issue,
-				resolved_status=status,
-			)
+			task_state_issue = dict(issue)
+			task_state_issue["_task_state_resolved_status"] = status
+			_maybe_unblock_task_state_dependents(wave_id, task_state_issue)
 		if status == "review-blocked":
 			any_review_blocked = True
 		if status in ("closed", "implementation-failed"):

@@ -648,7 +648,6 @@ def test_check_wave_status_unblocks_task_state_dependents_on_first_terminal_tran
 			else:
 				os.environ["ORCH_TASK_FILES_ENABLED"] = previous_flag
 
-
 def test_check_wave_status_does_not_unblock_task_state_dependents_for_not_created_transition():
 	import io
 	from contextlib import redirect_stderr, redirect_stdout
