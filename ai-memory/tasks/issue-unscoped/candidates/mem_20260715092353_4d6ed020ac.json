@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/worktree_registry.sh:132-136 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The mktemp result is not checked before the parser file is used.\n  WHY: If mktemp fails, parser_file may be empty and subsequent writes can fail or target an unintended path.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Adopt Phases A\u2013H into the unattended pipeline\" (full set of transcript_archive, task_state, emit_event, nag_reminder, worktree_registry+gc, render_scenario_trace, lint_plan_decisions, identity_recall, and all corresponding tests + schema updates)\n  expected_change_site: docs/plans/learn-claude-code-learnings-plan.md / scripts/transcript_archive.sh, scripts/task_state.py, scripts/emit_event.sh, scripts/emit_event.py, scripts/nag_reminder.sh, scripts/render_scenario_trace.py, scripts/lint_plan_decisions.py, prompts/_identity_recall.txt, prompts/_nag_reminders.txt, ai-memory/schemas/*, tests/*, workflow updates\n  confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: The PR diff only touches worktree_registry.sh, render_prompt.sh, review_apply_fixes.sh, and test files; no transcript_archive.sh, task_state.py, emit_event.sh, emit_event.py, nag_reminder.sh, render_scenario_trace.py, lint_plan_decisions.py, prompts/_identity_recall.txt, prompts/_nag_reminders.txt, or schema updates are present.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/worktree_registry.sh:132-136 | severity=NIT | confidence=3\n  PROBLEM: The mktemp result is not checked before the parser file is used.\n  WHY: If mktemp fails, parser_file may be empty and subsequent writes can fail or target an unintended path.\n- Requirement: \"Adopt Phases A\u2013H into the unattended pipeline\" (full set of transcript_archive, task_state, emit_event, nag_reminder, worktree_registry+gc, render_scenario_trace, lint_plan_decisions, identity_recall, and all corresponding tests + schema updates from the linked project #3627 plan).\n  Expected change site: Multiple files listed in docs/plans/learn-claude-code-learnings-plan.md (new scripts: scripts/transcript_archive.sh, scripts/task_state.py, scripts/emit_event.sh, scripts/emit_event.py, scripts/nag_reminder.sh, scripts/render_scenario_trace.py, scripts/lint_plan_decisions.py, prompts/_identity_recall.txt, prompts/_nag_reminders.txt, ai-memory/schemas/*)\n  Evidence of absence: The PR diff contains only targeted fixes to existing files (worktree_registry.sh, render_prompt.sh, review_apply_fixes.sh, orchestrate_lib.py) and test updates. No new Phase A-H artifacts are present - missing transcript_archive.sh, task_state.py, emit_event.sh, emit_event.py, nag_reminder.sh, render_scenario_trace.py, lint_plan_decisions.py, prompts/_identity_recall.txt, prompts/_nag_reminders.txt, and schema updates.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: \"Adopt Phases A\u2013H into the unattended pipeline\" (full set of transcript_archive, task_state, emit_event, nag_reminder, worktree_registry+gc, render_scenario_trace, lint_plan_decisions, identity_recall, and all corresponding tests + schema updates from the linked project #3627 plan).\n  Expected change site: Multiple files listed in docs/plans/learn-claude-code-learnings-plan.md (new scripts, prompts/_identity_recall.txt, tests/*, ai-memory/schemas/*, workflow updates).\n  Evidence of absence: The PR diff (and last-run diff) only touches worktree_registry.sh + render_prompt.sh + review_apply_fixes.sh + 3 test files with targeted fixes for regressions introduced in prior autofix passes (mktemp portability, CRLF identity block, task-state guard, shellcheck in prompt text). No implementation of the remaining Phases A\u2013H artifacts (e.g. no transcript_archive.sh, no nag_reminder.sh, no new schemas, no render_scenario_trace.py) is present. This is an eager self-healing integration PR for project #3627, so the incomplete scope is intentional per the squash-merge note, but the linked plan's full deliverable set remains unmet.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "b50e020246f24e43563ac1a2b48be874f5a534565d3181161e2357e7c7097394",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3673,
+    "run_id": "29400389300",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29400389300",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260715092353_4d6ed020ac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3673,
+    "run_id": "29400389300"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-15T09:23:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
