@@ -19,6 +19,9 @@ if [ -f "scripts/gh_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/gh_helpers.sh
 fi
+if ! type emit_event >/dev/null 2>&1; then
+  emit_event() { return 0; }
+fi
 # shellcheck source=tg_helpers.sh
 if [ -f "scripts/tg_helpers.sh" ]; then
   # shellcheck disable=SC1091
@@ -28,6 +31,17 @@ fi
 if [ -f "scripts/memory_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/memory_helpers.sh
+fi
+if [ -f "scripts/transcript_archive.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/transcript_archive.sh 2>/dev/null || true
+fi
+if ! type archive_transcript >/dev/null 2>&1; then
+  archive_transcript() { return 0; }
+fi
+if [ -f "scripts/nag_reminder.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/nag_reminder.sh 2>/dev/null || true
 fi
 # shellcheck source=pr_checks_lib.sh
 # Shared PR check-runs merge gate (_pr_checks_completed /
@@ -144,6 +158,96 @@ fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
+if ! command -v nag_reminder_enabled >/dev/null 2>&1; then
+  nag_reminder_enabled() { return 1; }
+fi
+if ! command -v nag_silent_round_threshold >/dev/null 2>&1; then
+  nag_silent_round_threshold() { printf '3\n'; }
+fi
+if ! command -v maybe_inject_nag >/dev/null 2>&1; then
+  maybe_inject_nag() { return 0; }
+fi
+
+worktree_registry_enabled() {
+	_is_truthy "${ORCH_WORKTREE_REGISTRY_ENABLED:-false}"
+}
+
+worktree_registry_register() {
+	local name="${1:-}"
+	local path="${2:-}"
+	local branch="${3:-}"
+	local task_id="${4:-}"
+	local owner_phase="${5:-orchestrate-poll}"
+
+	worktree_registry_enabled || return 0
+	[ -n "${name}" ] || return 0
+	[ -f "scripts/worktree_registry.sh" ] || return 0
+	bash scripts/worktree_registry.sh register "${name}" "${path}" "${branch}" "${task_id}" "${owner_phase}" || true
+}
+
+worktree_registry_deregister() {
+	local name="${1:-}"
+
+	worktree_registry_enabled || return 0
+	[ -n "${name}" ] || return 0
+	[ -f "scripts/worktree_registry.sh" ] || return 0
+	bash scripts/worktree_registry.sh deregister "${name}" || true
+}
+
+extract_judge_json_with_status() {
+  local output_file="$1"
+  local parsed_json=""
+
+  [ -s "${output_file}" ] || return 0
+  parsed_json="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${output_file}" <<'PY' 2>/dev/null || true
+import json
+import re
+import sys
+from pathlib import Path
+
+
+raw = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+
+def emit_if_valid(candidate: str) -> bool:
+    if not candidate:
+        return False
+    try:
+        data = json.loads(candidate)
+    except json.JSONDecodeError:
+        return False
+    status = data.get("status") if isinstance(data, dict) else None
+    if not isinstance(status, str) or not status:
+        return False
+    json.dump(data, sys.stdout)
+    return True
+
+
+if emit_if_valid(raw.strip()):
+    raise SystemExit(0)
+
+cleaned = re.sub(r"```(?:json)?\s*", "", raw)
+cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE)
+
+brace_depth = 0
+start = None
+for idx, ch in enumerate(cleaned):
+    if ch == "{":
+        if brace_depth == 0:
+            start = idx
+        brace_depth += 1
+    elif ch == "}":
+        brace_depth -= 1
+        if brace_depth == 0 and start is not None:
+            if emit_if_valid(cleaned[start:idx + 1]):
+                raise SystemExit(0)
+            start = None
+
+raise SystemExit(1)
+PY
+ )"
+  printf '%s' "${parsed_json}"
+}
 
 append_judge_semble_query_text() {
   local label="$1"
@@ -908,11 +1012,13 @@ _record_merge_conflict_telemetry()
 				sleep 1
 				continue
 			fi
+			worktree_registry_register "$(basename -- "${wt}")" "${wt}" "${branch}" "project-${project}" "orchestrate-poll"
 		else
 			# Orphan init: produce a fresh branch locally.
 			if ! git worktree add --quiet --detach "${wt}" "$(git rev-parse HEAD 2>/dev/null || echo "")" 2>/dev/null; then
 				return 0
 			fi
+			worktree_registry_register "$(basename -- "${wt}")" "${wt}" "${branch}" "project-${project}" "orchestrate-poll"
 			( cd "${wt}" && git checkout --quiet --orphan "${branch}" && git rm -rf --quiet . 2>/dev/null || true ) || true
 		fi
 		mkdir -p "${wt}/${mem_root}/orchestrator"
@@ -929,6 +1035,7 @@ _record_merge_conflict_telemetry()
 			git commit --quiet -m "orchestrator: merge-conflict telemetry (${project}/${pr_a}↔${pr_b})" 2>/dev/null || exit 1
 			git push --quiet origin "${branch}:${branch}" 2>/dev/null || exit 2
 		) || push_rc=$?
+		worktree_registry_deregister "$(basename -- "${wt}")"
 		git worktree remove --force "${wt}" 2>/dev/null || true
 		if [ "${push_rc}" -eq 0 ]; then
 			echo "  [merge-probe] telemetry append: recorded conflict for ${project} PR #${pr_a}↔#${pr_b} (${#paths[@]} path(s)) to ${branch}/${mem_root}/orchestrator/merge_conflicts.jsonl"
@@ -1051,6 +1158,7 @@ _sync_integration_and_rebase_subissue()
 		local _ws=""
 		_ws="$(mktemp -d -t premerge-int-sync.XXXXXX 2>/dev/null)" || _ws=""
 		if [ -n "${_ws}" ] && git worktree add --quiet --detach "${_ws}" "${int_sha}" 2>/dev/null; then
+			worktree_registry_register "$(basename -- "${_ws}")" "${_ws}" "${int_sha}" "pr-${pr_num}" "orchestrate-poll"
 			if (cd "${_ws}" && \
 				git -c user.email="orchestrator@coding-workflows" \
 				    -c user.name="orchestrator" \
@@ -1069,6 +1177,7 @@ _sync_integration_and_rebase_subissue()
 				(cd "${_ws}" && git merge --abort >/dev/null 2>&1) || true
 				echo "  [premerge-rebase] ${integration_branch}: ${default_branch} cannot merge cleanly (textual conflicts); skipping step 1 for PR #${pr_num}, integration-sync resolver will handle."
 			fi
+			worktree_registry_deregister "$(basename -- "${_ws}")"
 			git worktree remove --force "${_ws}" >/dev/null 2>&1 || true
 		elif [ -n "${_ws}" ]; then
 			rm -rf "${_ws}" 2>/dev/null || true
@@ -1095,6 +1204,7 @@ _sync_integration_and_rebase_subissue()
 		git branch -D "${_tmp_branch}" >/dev/null 2>&1 || true
 		return 0
 	fi
+	worktree_registry_register "$(basename -- "${_wh}")" "${_wh}" "${_tmp_branch}" "pr-${pr_num}" "orchestrate-poll"
 
 	if (cd "${_wh}" && \
 		git -c user.email="orchestrator@coding-workflows" \
@@ -1115,6 +1225,7 @@ _sync_integration_and_rebase_subissue()
 		_rc=1
 	fi
 
+	worktree_registry_deregister "$(basename -- "${_wh}")"
 	git worktree remove --force "${_wh}" >/dev/null 2>&1 || true
 	git branch -D "${_tmp_branch}" >/dev/null 2>&1 || true
 	if [ "${_rc}" -eq 0 ] && [ "${_did_push}" -eq 1 ]; then
@@ -1784,7 +1895,34 @@ post_state_comment() {
     return 1
   fi
   rm -rf "${pack_dir}"
+  _mirror_task_state_files_from_state
   return 0
+}
+
+_mirror_task_state_files_from_state() {
+	local task_state_files_enabled
+	task_state_files_enabled="${ORCH_TASK_FILES_ENABLED:-false}"
+	if [ "${task_state_files_enabled,,}" != "true" ]; then
+		return 0
+	fi
+
+	local script_dir task_state_helper
+	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
+	task_state_helper="${script_dir}/task_state.py"
+	if [ ! -f "${task_state_helper}" ]; then
+		echo "TASK_STATE_WRITE_FAIL helper_missing task_state_py_not_staged" >&2
+		return 0
+	fi
+
+	if [ -z "${STATE_FILE:-}" ] || [ ! -s "${STATE_FILE}" ]; then
+		echo "TASK_STATE_WRITE_FAIL state_file state_file_missing_or_empty" >&2
+		return 0
+	fi
+
+	if ! python3 "${task_state_helper}" mirror-state --state-file "${STATE_FILE}"; then
+		echo "TASK_STATE_WRITE_FAIL state_file mirror_state_command_failed" >&2
+	fi
+	return 0
 }
 
 # Posts a single V2 state-chunk comment to the tracking issue.  Unlike
@@ -3423,7 +3561,18 @@ PY
   if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" "${edit_args[@]}" >/dev/null 2>"${_label_err_file}"; then
     updated_labels_json="$(echo "${plan_json}" | jq -c '.final // []' 2>/dev/null || echo "${labels_json}")"
     echo "LABEL_REPAIR issue=${issue_num} issue_state=${issue_state} pr_state=${pr_state:-none} pr_merged=${pr_merged}" >&2
+    emit_event "LABEL_REPAIR" \
+      "issue=${issue_num}" \
+      "issue_state=${issue_state}" \
+      "pr_state=${pr_state:-none}" \
+      "pr_merged=${pr_merged}"
     echo "LABEL_REPAIR_DIFF issue=${issue_num} before=$(echo "${labels_json}" | jq -c .) after=$(echo "${updated_labels_json}" | jq -c .) add=$(echo "${plan_json}" | jq -c '.add // []') remove=$(echo "${plan_json}" | jq -c '.remove // []')" >&2
+    emit_event "LABEL_REPAIR_DIFF" \
+      "issue=${issue_num}" \
+      "before=$(echo "${labels_json}" | jq -c .)" \
+      "after=$(echo "${updated_labels_json}" | jq -c .)" \
+      "add=$(echo "${plan_json}" | jq -c '.add // []')" \
+      "remove=$(echo "${plan_json}" | jq -c '.remove // []')"
     local _added_labels _removed_labels
     _added_labels="$(echo "${plan_json}" | jq -r '(.add // []) | join(",")')"
     _removed_labels="$(echo "${plan_json}" | jq -r '(.remove // []) | join(",")')"
@@ -5381,12 +5530,13 @@ _refresh_integration_resolver_tooling() {
       return 0
     fi
 
-    if ! git worktree add --quiet --detach "${wt}" \
-         "refs/remotes/origin/${integration_branch}" 2>/dev/null; then
-      echo "::warning::${log_prefix} git worktree add failed (attempt ${attempt}/3); proceeding to dispatch with current tooling."
-      [ "${attempt}" -lt 3 ] && sleep 1 && continue
-      return 0
-    fi
+	if ! git worktree add --quiet --detach "${wt}" \
+	     "refs/remotes/origin/${integration_branch}" 2>/dev/null; then
+	  echo "::warning::${log_prefix} git worktree add failed (attempt ${attempt}/3); proceeding to dispatch with current tooling."
+	  [ "${attempt}" -lt 3 ] && sleep 1 && continue
+	  return 0
+	fi
+	worktree_registry_register "$(basename -- "${wt}")" "${wt}" "refs/remotes/origin/${integration_branch}" "tracking-${TRACKING_NUM:-0}" "orchestrate-poll"
 
     local subshell_rc=0
     (
@@ -5613,7 +5763,8 @@ _refresh_integration_resolver_tooling() {
       exit 0
     )
     subshell_rc=$?
-    git worktree remove --force "${wt}" 2>/dev/null || rm -rf "${wt}" 2>/dev/null || true
+	worktree_registry_deregister "$(basename -- "${wt}")"
+	git worktree remove --force "${wt}" 2>/dev/null || rm -rf "${wt}" 2>/dev/null || true
 
     case "${subshell_rc}" in
       0)
@@ -6416,17 +6567,18 @@ _attempt_branch_rebuild_after_escalation() {
     return 0
   fi
 
-  if ! git worktree add --detach "${worktree_dir}" "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
-    completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-    final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "failed" "false" "Recreated '${integration_branch}' but could not check out the rebuilt branch in a temporary worktree." "${completed_at}")"
-    _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
-    rm -rf "${worktree_dir}" >/dev/null 2>&1 || true
+	if ! git worktree add --detach "${worktree_dir}" "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+	  completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+	  final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "failed" "false" "Recreated '${integration_branch}' but could not check out the rebuilt branch in a temporary worktree." "${completed_at}")"
+	  _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
+	  rm -rf "${worktree_dir}" >/dev/null 2>&1 || true
     rm -f "${replay_log}" >/dev/null 2>&1 || true
     _mark_branch_rebuild_failed "${integration_branch}" "${default_branch}" "${final_pr}" "Recreated '${integration_branch}' but could not check out the rebuilt branch in a temporary worktree."
     BRANCH_REBUILD_HANDLED="true"
-    BRANCH_REBUILD_TERMINAL_FAILURE="true"
-    return 0
-  fi
+	  BRANCH_REBUILD_TERMINAL_FAILURE="true"
+	  return 0
+	fi
+	worktree_registry_register "$(basename -- "${worktree_dir}")" "${worktree_dir}" "refs/remotes/origin/${integration_branch}" "pr-${final_pr}" "orchestrate-poll"
 
   # Replay exit codes: 20=worktree inaccessible, 21=missing/invalid
   # merge SHA, 22=missing commit object, 23=cherry-pick failed,
@@ -6491,16 +6643,18 @@ _attempt_branch_rebuild_after_escalation() {
     completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "failed" "false" "${failure_detail}" "${completed_at}")"
     _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
-    git worktree remove --force "${worktree_dir}" >/dev/null 2>&1 || rm -rf "${worktree_dir}"
-    rm -f "${replay_log}" >/dev/null 2>&1 || true
-    _mark_branch_rebuild_failed "${integration_branch}" "${default_branch}" "${final_pr}" "${failure_detail}"
+	worktree_registry_deregister "$(basename -- "${worktree_dir}")"
+	git worktree remove --force "${worktree_dir}" >/dev/null 2>&1 || rm -rf "${worktree_dir}"
+	rm -f "${replay_log}" >/dev/null 2>&1 || true
+	_mark_branch_rebuild_failed "${integration_branch}" "${default_branch}" "${final_pr}" "${failure_detail}"
     BRANCH_REBUILD_HANDLED="true"
     BRANCH_REBUILD_TERMINAL_FAILURE="true"
     return 0
   fi
 
-  git worktree remove --force "${worktree_dir}" >/dev/null 2>&1 || rm -rf "${worktree_dir}"
-  rm -f "${replay_log}" >/dev/null 2>&1 || true
+	worktree_registry_deregister "$(basename -- "${worktree_dir}")"
+	git worktree remove --force "${worktree_dir}" >/dev/null 2>&1 || rm -rf "${worktree_dir}"
+	rm -f "${replay_log}" >/dev/null 2>&1 || true
 
   completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "success" "false" "" "${completed_at}")"
@@ -16922,69 +17076,64 @@ ${PR_DIFF}
 
   # Run judge via Codex
   JUDGE_SUCCESS=false
+  JUDGE_JSON=""
+  judge_silent_rounds=0
   max_attempts=2
+  if nag_reminder_enabled; then
+    judge_nag_attempt_limit="$(nag_silent_round_threshold)"
+    if [ "${judge_nag_attempt_limit}" -gt "${max_attempts}" ]; then
+      max_attempts="${judge_nag_attempt_limit}"
+    fi
+  fi
   for attempt in $(seq 1 "${max_attempts}"); do
+    judge_attempt_prompt_file="${JUDGE_PROMPT_FILE}.attempt_${attempt}"
+    judge_effective_prompt_file="${JUDGE_PROMPT_FILE}"
+    if cp "${JUDGE_PROMPT_FILE}" "${judge_attempt_prompt_file}" 2>/dev/null; then
+      judge_effective_prompt_file="${judge_attempt_prompt_file}"
+    else
+      echo "::warning::Could not create per-attempt judge prompt file for attempt ${attempt}; continuing with the base prompt." >&2
+    fi
+    # Prompt assembly happens before the current judge turn runs, so feed the
+    # projected consecutive-silent count for the attempt we are about to
+    # launch.
+    judge_nag_counter_for_attempt=$((judge_silent_rounds + 1))
+    judge_nag_block="$(maybe_inject_nag "orchestrate-poll-judge" "${judge_nag_counter_for_attempt}")"
+    if [ -n "${judge_nag_block}" ]; then
+      if [ "${judge_effective_prompt_file}" = "${judge_attempt_prompt_file}" ]; then
+        printf '\n%s\n' "${judge_nag_block}" >> "${judge_effective_prompt_file}"
+        judge_silent_rounds=0
+      fi
+    fi
     echo "Judge attempt ${attempt}/${max_attempts}..."
-    sanitize_codex_prompt_file "${JUDGE_PROMPT_FILE}"
+    sanitize_codex_prompt_file "${judge_effective_prompt_file}"
     # The pipeline may return 141 (SIGPIPE) when the prompt is larger
     # than the OS pipe buffer and codex closes stdin before cat finishes.
     # This is harmless — check the output file regardless of exit code.
-    cat "${JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
-    if grep -q '[^[:space:]]' "${JUDGE_OUTPUT_FILE}"; then
+    cat "${judge_effective_prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+    rm -f "${judge_attempt_prompt_file}"
+    judge_json_candidate="$(extract_judge_json_with_status "${JUDGE_OUTPUT_FILE}")"
+    if [ -n "${judge_json_candidate}" ]; then
+      JUDGE_JSON="${judge_json_candidate}"
       JUDGE_SUCCESS=true
+      judge_silent_rounds=0
       break
     fi
+    judge_silent_rounds=$((judge_silent_rounds + 1))
     if [ "${attempt}" -lt "${max_attempts}" ]; then
       sleep $(( 10 * attempt + RANDOM % 10 ))
     fi
   done
 
-  if [ "${JUDGE_SUCCESS}" != "true" ]; then
-    echo "::error::Judge failed for tracking issue #${TRACKING_NUM}"
-    tg_notify "Orchestrator Judge failed for #${TRACKING_NUM}. Manual review needed." "CRITICAL"
-    continue
-  fi
+	  if [ "${JUDGE_SUCCESS}" != "true" ]; then
+	    echo "::error::Judge failed for tracking issue #${TRACKING_NUM}"
+	    tg_notify "Orchestrator Judge failed for #${TRACKING_NUM}. Manual review needed." "CRITICAL"
+	    continue
+	  fi
+	  archive_transcript "${GITHUB_RUN_ID:-local-run}" "judge" "${JUDGE_OUTPUT_FILE}"
 
+	  # ---------------------------------------------------------------
+	  # Parse judge output
   # ---------------------------------------------------------------
-  # Parse judge output
-  # ---------------------------------------------------------------
-  JUDGE_JSON="$(python3 -c "
-import json, re, sys
-
-raw = open('${JUDGE_OUTPUT_FILE}', 'r').read()
-
-try:
-    data = json.loads(raw.strip())
-    json.dump(data, sys.stdout)
-    sys.exit(0)
-except json.JSONDecodeError:
-    pass
-
-cleaned = re.sub(r'\`\`\`(?:json)?\s*', '', raw)
-cleaned = re.sub(r'\`\`\`\s*$', '', cleaned, flags=re.MULTILINE)
-
-brace_depth = 0
-start = None
-for i, ch in enumerate(cleaned):
-    if ch == '{':
-        if brace_depth == 0:
-            start = i
-        brace_depth += 1
-    elif ch == '}':
-        brace_depth -= 1
-        if brace_depth == 0 and start is not None:
-            candidate = cleaned[start:i+1]
-            try:
-                data = json.loads(candidate)
-                json.dump(data, sys.stdout)
-                sys.exit(0)
-            except json.JSONDecodeError:
-                start = None
-
-print('Could not parse judge JSON', file=sys.stderr)
-sys.exit(1)
-" 2>/dev/null || echo "")"
-
   if [ -z "${JUDGE_JSON}" ]; then
     echo "::error::Could not parse judge output for #${TRACKING_NUM}"
     tg_notify "Orchestrator Judge output unparseable for #${TRACKING_NUM}. Manual review needed." "CRITICAL"
@@ -18173,4 +18322,5 @@ To pause this behavior for manual review, add the \`force-review\` label."
 	fi
 done
 
+write_state_snapshot_actions_runs_export || true
 echo "Noop-suspicious recovery complete. Dispatched: ${NOOP_RECOVERY_DISPATCHED}, force-merged: ${NOOP_FORCE_MERGED}, blocked: ${NOOP_RECOVERY_BLOCKED}."

@@ -272,6 +272,24 @@ committing the corresponding file:
   `scripts/run_workspace_hook.sh`. Supported hook names are `after_create`,
   `before_run`, `after_run`, and `before_remove`; missing files are a no-op.
 
+## Workflow scenario traces
+
+- Flag: `WORKFLOW_LOG_SCENARIO_TRACE_ENABLED` (default `false`).
+- Renderer: `scripts/render_scenario_trace.py` runs downstream of
+  `workflow_log_collector.v2` inside `.github/workflows/workflow-log-analysis.yml`.
+- Output: local-only `.ai/workflow_traces/<run_id>.scenario.json` files. The
+  directory is gitignored and this phase does not upload or commit the traces.
+- Schema: top-level `schema_version`, `run_id`, `phase`, and ordered `steps[]`
+  with `schema_version: "workflow_scenario_trace.v1.json"`.
+- Step types: `user_message` / `assistant_text` (`ts`, `content`, `tokens`),
+  `tool_call` (`ts`, `name`, `args`), and `tool_result`
+  (`ts`, `output`, `exit_status`).
+- Parser markers are centralized in `scripts/render_scenario_trace.py` and
+  currently key off `>>> [model]`, `<<< [model]`, `[tool_call]`, and
+  `[tool_result]`.
+- Logging: successful writes emit `WORKFLOW_SCENARIO_TRACE_WRITTEN`; fail-open
+  per-run skips emit `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL`.
+
 ---
 
 ## Run-substate ledger + state-snapshot contract
@@ -392,6 +410,8 @@ and shipped:
 - `AUTOFIX_DISPATCH_ISSUED`
 - `AI_PHASE_FAILURE_V1`
 - `AI_PHASE_GATE_V1`
+- `WORKFLOW_SCENARIO_TRACE_WRITTEN`
+- `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL`
 - `JUDGE_INTERIM_PASS_OK`
 - `JUDGE_INTERIM_PASS_FAIL`
 - `JUDGE_INTERIM_PRIORS_MERGED`
@@ -447,8 +467,44 @@ and shipped:
 - `SERENA_QUERY`
 - `SERENA_FALLBACK`
 - `SERENA_PROBE`
+- `TASK_STATE_UNBLOCK`
+- `TASK_STATE_WRITE_FAIL`
+- `EVENTS_EMIT`
+- `EVENTS_EMIT_FAIL`
+- `NAG_REMINDER_LOAD_FAIL`
+- `TRANSCRIPT_ARCHIVE_FAIL`
+- `IDENTITY_REINJECT_PARSE_FAIL`
 - `drift-audit:`
 - `CHECK_TRIAGE`
+- `WORKTREE_REGISTER`
+- `WORKTREE_DEREGISTER`
+- `WORKTREE_GC`
+- `WORKTREE_REGISTRY_REBUILD`
+- `WORKTREE_REGISTER_INVALID_NAME`
+- `WORKTREE_REGISTER_FAIL`
+- `WORKTREE_DEREGISTER_FAIL`
+
+When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
+`scripts/emit_event.py` append a fail-open JSONL mirror to
+`.events/run-<run_id>.jsonl` after the original stable text line (or
+`AI_PHASE_FAILURE_V1` comment marker) emits. The legacy text stream remains
+authoritative for current grep-based tooling, and helper-internal
+`EVENTS_EMIT*` diagnostics are not mirrored recursively. Phase D currently
+emits only `EVENTS_EMIT_FAIL` on helper-write problems; `EVENTS_EMIT` is a
+reserved additive success-path prefix for future use.
+
+When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`,
+`scripts/transcript_archive.sh` writes a fail-open JSON envelope under
+`.transcripts/<run_id>-<phase>-<ts>.json` from already-captured success-path
+output files. Archive helper problems never fail the caller; the helper emits
+only `TRANSCRIPT_ARCHIVE_FAIL` on mkdir/read/write/JSON-encode failures.
+
+When wrapper-level nag reminders are enabled,
+`scripts/nag_reminder.sh` loads phase-specific reminder text from
+`prompts/_nag_reminders.txt`. Reminder-asset lookup problems fail open: the
+caller continues without injection and the helper emits only
+`NAG_REMINDER_LOAD_FAIL` when the prompt fragment is missing, unreadable, or
+missing the requested phase key.
 
 LOG_PREFIX.name=LABEL_REPAIR
 LOG_PREFIX.name=LABEL_REPAIR_DIFF
@@ -461,6 +517,8 @@ LOG_PREFIX.name=AUTOFIX_DISPATCH_SKIPPED
 LOG_PREFIX.name=AUTOFIX_DISPATCH_ISSUED
 LOG_PREFIX.name=AI_PHASE_FAILURE_V1
 LOG_PREFIX.name=AI_PHASE_GATE_V1
+LOG_PREFIX.name=WORKFLOW_SCENARIO_TRACE_WRITTEN
+LOG_PREFIX.name=WORKFLOW_SCENARIO_TRACE_PARSE_FAIL
 LOG_PREFIX.name=JUDGE_INTERIM_PASS_OK
 LOG_PREFIX.name=JUDGE_INTERIM_PASS_FAIL
 LOG_PREFIX.name=JUDGE_INTERIM_PRIORS_MERGED
@@ -515,8 +573,22 @@ LOG_PREFIX.name=SEMBLE_FALLBACK
 LOG_PREFIX.name=SERENA_QUERY
 LOG_PREFIX.name=SERENA_FALLBACK
 LOG_PREFIX.name=SERENA_PROBE
+LOG_PREFIX.name=TASK_STATE_UNBLOCK
+LOG_PREFIX.name=TASK_STATE_WRITE_FAIL
+LOG_PREFIX.name=EVENTS_EMIT
+LOG_PREFIX.name=EVENTS_EMIT_FAIL
+LOG_PREFIX.name=NAG_REMINDER_LOAD_FAIL
+LOG_PREFIX.name=TRANSCRIPT_ARCHIVE_FAIL
+LOG_PREFIX.name=IDENTITY_REINJECT_PARSE_FAIL
 LOG_PREFIX.name=drift-audit:
 LOG_PREFIX.name=CHECK_TRIAGE
+LOG_PREFIX.name=WORKTREE_REGISTER
+LOG_PREFIX.name=WORKTREE_DEREGISTER
+LOG_PREFIX.name=WORKTREE_GC
+LOG_PREFIX.name=WORKTREE_REGISTRY_REBUILD
+LOG_PREFIX.name=WORKTREE_REGISTER_INVALID_NAME
+LOG_PREFIX.name=WORKTREE_REGISTER_FAIL
+LOG_PREFIX.name=WORKTREE_DEREGISTER_FAIL
 
 ---
 
@@ -740,3 +812,23 @@ workflow-templates/ai-validate.yml
 workflow-templates/review_rb_judge_dispatch.yml
 ```
 <!-- TREE:END id=workflow_templates -->
+
+## Task-state files (`.tasks/<wave>/<issue>.json`)
+
+- Feature flag: `ORCH_TASK_FILES_ENABLED` (default `false`). When disabled, `scripts/task_state.py` is a no-op and the poller writes only the authoritative chunked GitHub-comment state.
+- Schema: each mirrored file is a single issue payload plus `schema_version: "task_state.v1.json"`.
+- Layout: wave directory from `waves[].wave`, filename from the stable local wave issue `id` (for example `.tasks/1/issue-1.json`). Existing fields such as `github_issue`, `depends_on`, and `reissue_depends_on` are preserved verbatim inside the mirrored JSON.
+- Write path: `scripts/orchestrate_poll_process.sh::post_state_comment()` mirrors every successful authoritative checkpoint into `.tasks/` via atomic tmp-write + rename.
+- Unblock path: `scripts/task_state.py::unblock_dependents()` rewrites only the mirrored files, removing a completed issue from `depends_on[]` / `reissue_depends_on[]` and logging `TASK_STATE_UNBLOCK <wave> <completed> <count_unblocked>`.
+- Authority: `.tasks/` is mirror-only in Phase C. The chunked `ORCHESTRATOR_STATE_V2` / `STATE_FILE` path remains the sole read source until a future cut-over plan lands.
+- Fail-open logging: mirror write and unblock write failures log `TASK_STATE_WRITE_FAIL <issue> <reason>` and do not stop the poll loop.
+
+## Worktree registry (`.worktrees/index.json`)
+
+- Feature flag: `ORCH_WORKTREE_REGISTRY_ENABLED` (default `false`). When disabled, `scripts/worktree_registry.sh` is bypassed and the existing bare `git worktree` lifecycle remains authoritative.
+- Schema: the registry root is `{ "schema_version": "worktree_registry.v1.json", "entries": [...] }`.
+- Entry shape: each entry records `name`, `path`, `branch`, `task_id`, `created_at`, `owner_phase`, and `owner_run_id`.
+- Write path: `scripts/orchestrate_poll_process.sh` registers worktrees only after `git worktree add` succeeds and deregisters them before the matching remove/fallback cleanup path runs.
+- GC path: the existing `internal-orchestrate-poll.yml` `*/5` cadence reaches `scripts/worktree_gc.sh` through the reusable `.github/workflows/orchestrate_poll.yml` job, so stale registry/worktree cleanup rides the poller's existing schedule instead of adding a new cron surface.
+- Active-run safety: GC first reuses `${RUNTIME_DIR}/state_snapshot_actions_runs.json`, then the cached `scripts/ai_memory.py actions-runs-cache get --repo <owner/repo>` payload, and treats `queued` plus `in_progress` owner runs as live.
+- Fail-open logging: invalid names emit `WORKTREE_REGISTER_INVALID_NAME`; registry rebuilds emit `WORKTREE_REGISTRY_REBUILD`; register/deregister I/O failures emit `WORKTREE_REGISTER_FAIL` / `WORKTREE_DEREGISTER_FAIL`; successful lifecycle events emit `WORKTREE_REGISTER`, `WORKTREE_DEREGISTER`, and `WORKTREE_GC`.

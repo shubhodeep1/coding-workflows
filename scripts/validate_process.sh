@@ -27,6 +27,26 @@ command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum is required but not in
 _validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "${_validate_script_dir}/write_guard.sh"
+if [ -f "${_validate_script_dir}/emit_event.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${_validate_script_dir}/emit_event.sh" 2>/dev/null || true
+fi
+if ! type emit_event >/dev/null 2>&1; then
+  emit_event()
+  {
+    return 0
+  }
+fi
+if [ -f "${_validate_script_dir}/transcript_archive.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${_validate_script_dir}/transcript_archive.sh" 2>/dev/null || true
+fi
+if ! type archive_transcript >/dev/null 2>&1; then
+  archive_transcript()
+  {
+    return 0
+  }
+fi
 
 TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
 TRACKING_ISSUE_NUM=0
@@ -649,10 +669,16 @@ emit_serena_fallback()
 {
   local phase="${1:-general}"
   local reason="${2:-setup-failure}"
+  local safe_phase=""
+  local safe_reason=""
+
+  safe_phase="$(sanitize_serena_log_value "${phase}")"
+  safe_reason="$(sanitize_serena_log_value "${reason}")"
 
   printf 'SERENA_FALLBACK target=validate phase=%s reason=%s\n' \
-    "$(sanitize_serena_log_value "${phase}")" \
-    "$(sanitize_serena_log_value "${reason}")" >&2
+    "${safe_phase}" \
+    "${safe_reason}" >&2
+  emit_event "SERENA_FALLBACK" "target=validate" "phase=${safe_phase}" "reason=${safe_reason}"
 }
 
 ensure_serena_bootstrap()
@@ -1646,20 +1672,39 @@ emit_phase_failure_marker()
   local failure_mode="$3"
   local attempt_count="$4"
   local failure_summary="$5"
-
-  if ! is_tracking_run; then
-    echo "::warning::AI_PHASE_FAILURE_V1 skipped: no tracking issue context (phase=${phase}, step=${failed_step_name})." >&2
-    return 0
-  fi
-
   local timestamp
-  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
   local run_id="${GITHUB_RUN_ID:-}"
   local run_attempt="${GITHUB_RUN_ATTEMPT:-}"
   local run_url=""
+  local workflow_name="${GITHUB_WORKFLOW:-AI Validate (Reusable)}"
+  local workflow_file="validate.yml"
+  local recommended_resume_action="retrigger_validate"
+
+  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if [ -n "${run_id}" ]; then
     run_url="$(_gh_url "actions/runs/${run_id}")"
+  fi
+
+  if ! is_tracking_run; then
+    echo "::warning::AI_PHASE_FAILURE_V1 skipped: no tracking issue context (phase=${phase}, step=${failed_step_name})." >&2
+    emit_event "AI_PHASE_FAILURE_V1" \
+      "schema_version=1" \
+      "phase=${phase}" \
+      "failure_mode=${failure_mode}" \
+      "failed_step_name=${failed_step_name}" \
+      "workflow_run_id=${run_id}" \
+      "workflow_run_attempt=${run_attempt}" \
+      "workflow_name=${workflow_name}" \
+      "workflow_file=${workflow_file}" \
+      "workflow_run_url=${run_url}" \
+      "repository=${GITHUB_REPOSITORY}" \
+      "tracking_issue=0" \
+      "attempt_count=${attempt_count}" \
+      "recommended_resume_action=${recommended_resume_action}" \
+      "timestamp=${timestamp}" \
+      "status=skipped" \
+      "reason=no_tracking_issue"
+    return 0
   fi
 
   local payload
@@ -1669,13 +1714,13 @@ emit_phase_failure_marker()
     --arg failed_step_name "${failed_step_name}" \
     --arg workflow_run_id "${run_id}" \
     --arg workflow_run_attempt "${run_attempt}" \
-    --arg workflow_name "${GITHUB_WORKFLOW:-AI Validate (Reusable)}" \
-    --arg workflow_file "validate.yml" \
+    --arg workflow_name "${workflow_name}" \
+    --arg workflow_file "${workflow_file}" \
     --arg workflow_run_url "${run_url}" \
     --arg repository "${GITHUB_REPOSITORY}" \
     --arg tracking_issue "${TRACKING_ISSUE_NUM}" \
     --arg attempt_count "${attempt_count}" \
-    --arg recommended_resume_action "retrigger_validate" \
+    --arg recommended_resume_action "${recommended_resume_action}" \
     --arg timestamp "${timestamp}" \
     '{
       schema_version: 1,
@@ -1707,6 +1752,21 @@ ${failure_summary}"
   fi
 
   post_tracking_comment "${comment_body}"
+  emit_event "AI_PHASE_FAILURE_V1" \
+    "schema_version=1" \
+    "phase=${phase}" \
+    "failure_mode=${failure_mode}" \
+    "failed_step_name=${failed_step_name}" \
+    "workflow_run_id=${run_id}" \
+    "workflow_run_attempt=${run_attempt}" \
+    "workflow_name=${workflow_name}" \
+    "workflow_file=${workflow_file}" \
+    "workflow_run_url=${run_url}" \
+    "repository=${GITHUB_REPOSITORY}" \
+    "tracking_issue=${TRACKING_ISSUE_NUM}" \
+    "attempt_count=${attempt_count}" \
+    "recommended_resume_action=${recommended_resume_action}" \
+    "timestamp=${timestamp}"
 }
 
 fail_validate_codex_phase()
@@ -3008,6 +3068,7 @@ PY
       DISCOVER_SUCCESS=true
       HINTS_SOURCE="discovered"
       emit_validate_substate "validate_discover" "discover" "Succeeded" "${attempt}" "${DISCOVER_LOG_FILE}"
+      archive_transcript "${GITHUB_RUN_ID:-local-run}" "validate-discover" "${DISCOVER_OUTPUT_FILE}"
       break
     else
       DISCOVER_FAILURE_MODE="validator_rejected"
@@ -3712,6 +3773,7 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   elif extract_last_json_with_key "${DIAGNOSE_OUTPUT_FILE}" "status" "${DIAGNOSE_RESULT_FILE}"; then
     DIAGNOSE_SUCCESS=true
     emit_validate_substate "validate_diagnose" "diagnose" "Succeeded" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+    archive_transcript "${GITHUB_RUN_ID:-local-run}" "validate-diagnose" "${DIAGNOSE_OUTPUT_FILE}"
     break
   else
     DIAGNOSE_FAILURE_MODE="validator_rejected"

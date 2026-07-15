@@ -38,6 +38,9 @@ autofix reviewer/aggregator/editor, conflict resolver, orchestrate),
 "Never ask interactive clarification questions" applies as written: produce
 the deliverable, encode assumptions as code comments, or emit `BLOCKED:`.
 
+Identity recall: when the host renders an `<identity-recall>` block, treat it
+as part of your role contract. Re-emit it verbatim if you have just compacted.
+
 ---
 
 ## §1. Persistence
@@ -624,3 +627,29 @@ project's planned phases never shipped (see
 CLAUDE.md and this §21 entry both exist to forbid this pattern; the
 script `scripts/lint_pr_body_auto_close.py` is the executable
 enforcement vehicle for both.
+
+---
+
+## §22. Context-Compaction Discipline
+
+These rules document what to preserve when the host compacts context for
+an unattended run. They do not replace the host's own compaction
+mechanics.
+
+- Preserve the latest `read` / file-read result for every file still
+  likely to be edited in the current rollout.
+- Preserve the structured-output contract verbatim across any compaction
+  summary, including required section headings, JSON keys, `Q<ID>`
+  question labels, and any exact `BLOCKED:` output requirement.
+- When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side
+  `.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json` archive to retain raw
+  transcript/output data instead of re-emitting raw transcript or
+  tool-call history into the compacted summary.
+
+---
+
+## §23. Reminder Re-engagement
+
+When the host injects a `<reminder>` block, treat it as an execution nudge,
+re-engage with the task immediately, and do not comment on the reminder
+itself in your output.

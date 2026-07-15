@@ -464,14 +464,18 @@ def test_review_apply_fixes_cleans_attempt_prompt_file_on_success() -> None:
 	loop, so the per-attempt prompt copy must be removed before that
 	early exit rather than relying on the common cleanup tail."""
 	text = _review_apply_fixes_text()
+	assert 'attempt_prompt_file_cleanup_path="${attempt_prompt_file}"' in text, (
+		"Cleanup must stay pinned to the generated per-attempt prompt path "
+		"even when execution falls back to `${EDITOR_PROMPT_FILE}`."
+	)
 	success_start = text.find('mv "${tmp_output}" "${EDITOR_SUMMARY_FILE}"')
 	assert success_start != -1, "Success-path summary move not found in review_apply_fixes.sh"
 	success_end = text.find('echo "Editor succeeded on attempt ${attempt}."', success_start)
 	assert success_end != -1, "Success-path exit log not found in review_apply_fixes.sh"
 	success_block = text[success_start:success_end]
-	assert 'rm -f "${attempt_prompt_file}"' in success_block, (
-		"Success path must remove `${attempt_prompt_file}` before exiting; "
-		"the loop's common cleanup tail is skipped on validated success."
+	assert 'rm -f "${attempt_prompt_file_cleanup_path}"' in success_block, (
+		"Success path must remove the generated per-attempt prompt copy before "
+		"exiting; the loop's common cleanup tail is skipped on validated success."
 	)
 
 

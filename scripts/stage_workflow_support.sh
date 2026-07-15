@@ -39,9 +39,10 @@ mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_
   echo "SUPPORT_CODEX_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/unattended_system_instructions.md"
   echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
   echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}"
+  echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}"
 } >> "$GITHUB_ENV"
 
-REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh workspace_init.sh workspace_safety_check.sh"
+REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh workspace_init.sh workspace_safety_check.sh"
 # Main-primary bootstrap scripts: prefer the fresh main snapshot so
 # wedged integration branches still pick up resolver safety fixes
 # shipped on main. Entries staged only via this list fail open when
@@ -112,6 +113,30 @@ for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do
   fi
   install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
 done
+
+	for f in emit_event.sh emit_event.py; do
+	  src=".codex-workflow-src/scripts/${f}"
+	  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+	    src=".codex-workflow-src-main/scripts/${f}"
+  fi
+  if [ ! -f "${src}" ]; then
+    echo "::warning::Optional events mirror helper ${f} is unavailable in checked-out support sources; stable text-prefix mirroring remains disabled."
+    continue
+	  fi
+	  install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+	done
+
+	for f in transcript_archive.sh; do
+	  src=".codex-workflow-src/scripts/${f}"
+	  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+	    src=".codex-workflow-src-main/scripts/${f}"
+	  fi
+	  if [ ! -f "${src}" ]; then
+	    echo "::warning::Optional transcript archive helper ${f} is unavailable in checked-out support sources; transcript archiving remains disabled."
+	    continue
+	  fi
+	  install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+	done
 
 mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"
 serena_template_src=".codex-workflow-src/scripts/templates/serena_project.yml.j2"
@@ -282,7 +307,7 @@ done
 # prompts/_prelude_role_persona.txt map. Stage the exact assets those support-
 # bundle renders need so the assembled path works from SUPPORT_ROOT_DIR without
 # a support checkout on disk.
-for prompt_assembly_asset in _prelude_common.txt _prelude_role_persona.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-interim.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-orchestrate-poll-judge.txt; do
+for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_role_persona.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-interim.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-orchestrate-poll-judge.txt; do
   if [ ! -f "${SUPPORT_PROMPTS_DIR}/${prompt_assembly_asset}" ]; then
     src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
     if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/${prompt_assembly_asset}" ]; then
@@ -329,6 +354,18 @@ if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then
   else
     echo "::warning::review-reviewer-checklist.txt not found in checked-out support sources for ${SCRIPT_REF}; reviewer prompts will keep the checklist disabled even when REVIEW_REVIEWER_CHECKLIST_ENABLED=true."
     rm -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"
+  fi
+fi
+if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then
+  src=".codex-workflow-src/prompts/_nag_reminders.txt"
+  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/_nag_reminders.txt" ]; then
+    src=".codex-workflow-src-main/prompts/_nag_reminders.txt"
+  fi
+  if [ -f "${src}" ]; then
+    install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"
+  else
+    echo "::warning::_nag_reminders.txt not found in checked-out support sources for ${SCRIPT_REF}; nag reminders will fail open even when UNATTENDED_NAG_REMINDER_ENABLED=true."
+    rm -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"
   fi
 fi
 if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ]; then
@@ -641,6 +678,9 @@ emit_optional_missing_notice()
 		scripts/setup_serena.sh|scripts/serena_stats_emit.py|scripts/mcp_handshake_probe.py)
 			echo "Optional Serena support asset ${repo_path} not on ${ORIGINAL_SCRIPT_REF} yet; validation will continue without that helper."
 			;;
+		scripts/emit_event.sh|scripts/emit_event.py)
+			echo "Optional events mirror helper ${repo_path} not on ${ORIGINAL_SCRIPT_REF} yet; stable text-prefix mirroring remains disabled."
+			;;
 		scripts/templates/serena_project.yml.j2)
 			echo "Optional Serena template scripts/templates/serena_project.yml.j2 not on ${ORIGINAL_SCRIPT_REF} yet; validation will continue without Serena project templating."
 			;;
@@ -833,6 +873,7 @@ stage_validate_support()
 	local repo_path require_remote_when_external model_catalog_path serena_template_path
 	if [ -n "${GITHUB_ENV:-}" ]; then
 		echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" >> "$GITHUB_ENV"
+		echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}" >> "$GITHUB_ENV"
 	fi
 
 	while IFS= read -r repo_path; do

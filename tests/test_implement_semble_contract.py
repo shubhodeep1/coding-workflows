@@ -63,6 +63,8 @@ def test_semble_repo_var_defaults_true() -> None:
 	workflow = _workflow_text()
 	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}" in workflow
 	assert "SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}" in workflow
+	assert "UNATTENDED_PHASE: implement" in workflow
+	assert "EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}" in workflow
 
 
 def test_runtime_workspace_exports_fail_open_semble_defaults() -> None:
@@ -78,6 +80,10 @@ def test_runtime_workspace_exports_fail_open_semble_defaults() -> None:
 def test_stage_workflow_support_files_bootstraps_serena_assets() -> None:
 	stage_block = _step_run_text("Stage workflow support files")
 	assert "for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do" in stage_block
+	assert "for f in emit_event.sh emit_event.py; do" in stage_block
+	assert "for f in transcript_archive.sh; do" in stage_block
+	assert "Optional events mirror helper ${f} is unavailable" in stage_block
+	assert "Optional transcript archive helper ${f} is unavailable" in stage_block
 	assert 'mkdir -p scripts/templates' in stage_block
 	assert 'scripts/templates/serena_project.yml.j2' in stage_block
 	assert 'echo "scripts/templates/serena_project.yml.j2" >> "${FETCHED_MANIFEST}"' in stage_block
@@ -86,6 +92,16 @@ def test_stage_workflow_support_files_bootstraps_serena_assets() -> None:
 	assert 'git ls-files --error-unmatch -- "scripts/templates/serena_project.yml.j2"' in stage_block
 	assert "preserving caller-owned Serena template" in stage_block
 	assert "Serena bootstrap remains disabled" in stage_block
+
+
+def test_transcript_archive_helper_is_opt_in_and_wired_for_implement() -> None:
+	workflow = _workflow_text()
+	stage_block = _step_run_text("Stage workflow support files")
+	codex_block = _step_run_text("Run Codex implementation")
+	assert "UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}" in workflow
+	assert "for f in transcript_archive.sh; do" in stage_block
+	assert 'source scripts/transcript_archive.sh 2>/dev/null || true' in codex_block
+	assert 'archive_transcript "${GITHUB_RUN_ID:-local-run}" "implement" "${CODEX_OUTPUT_FILE}"' in codex_block
 
 
 def test_stage_workflow_support_files_bootstraps_optional_semble_assets() -> None:
@@ -190,6 +206,7 @@ def test_setup_serena_step_runs_after_codex_config_and_emits_bootstrap_hash() ->
 	commit_step = _step_run_text("Commit changes")
 	assert setup_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && env.SERENA_ENABLED == 'true'"
 	assert setup_step.get("continue-on-error") is True
+	assert 'source scripts/emit_event.sh 2>/dev/null || true' in setup_block
 	assert 'SERENA_FALLBACK_TARGET="implement" bash scripts/setup_serena.sh' in setup_block
 	assert 'SERENA_FALLBACK target=implement reason=setup-failure' in setup_block
 	assert 'echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"' in setup_block

@@ -132,15 +132,18 @@ jobs:
       - name: Python syntax check
         run: |
           set -euo pipefail
+          python3 -m py_compile scripts/emit_event.py
           python3 -m py_compile scripts/ai_memory.py
           python3 -m py_compile scripts/ai_memory_lib.py
           python3 -m py_compile scripts/ai_context_utils.py
           python3 -m py_compile scripts/issue_attachment_bundle.py
           python3 -m py_compile scripts/generate_symbol_diff_summary.py
           python3 -m py_compile scripts/orchestrate_lib.py
+          python3 -m py_compile scripts/task_state.py
           python3 -m py_compile scripts/ai_labels.py
           python3 -m py_compile scripts/collect_workflow_logs.py
           python3 -m py_compile scripts/analyze_workflow_logs.py
+          python3 -m py_compile scripts/render_scenario_trace.py
           python3 -m py_compile scripts/workflow_retro.py
           python3 -m py_compile scripts/semantic_cache.py
           python3 -m py_compile scripts/check_workflow_script_refs.py
@@ -156,6 +159,33 @@ jobs:
         run: |
           set -euo pipefail
           ruff check --select E,F --ignore E501 scripts/*.py
+
+      - name: Event mirror shell tests
+        run: |
+          set -euo pipefail
+          bash tests/test_emit_event.sh
+          bash tests/test_emit_event_concurrent.sh
+          bash tests/test_log_prefix_regressions.sh
+
+      - name: Identity-recall render shell tests
+        run: |
+          set -euo pipefail
+          bash tests/test_identity_recall_render.sh
+
+      - name: Prompt and transcript archive shell tests
+        run: |
+          set -euo pipefail
+          bash tests/test_header_render.sh
+          bash tests/test_nag_reminder.sh
+          bash tests/test_nag_reminder_phases.sh
+          bash tests/test_transcript_archive.sh
+
+      - name: Worktree registry shell tests
+        run: |
+          set -euo pipefail
+          bash tests/test_worktree_registry.sh
+          bash tests/test_worktree_gc.sh
+          bash tests/test_worktree_name_validation.sh
 
       - name: Review Semble contract test
         run: |
@@ -183,6 +213,8 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state_unblock.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_force_tick.py
@@ -210,6 +242,32 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_archival_completeness.py
+
+      - name: Plan decisions lint unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_decisions.py
+
+      - name: Plan decisions advisory lint
+        continue-on-error: true
+        env:
+          DOCS_DECISION_LINT_ENABLED: ${{ vars.DOCS_DECISION_LINT_ENABLED || 'false' }}
+        run: |
+          set -euo pipefail
+          decision_lint_stderr="$(mktemp)"
+          trap 'rm -f "${decision_lint_stderr}"' EXIT
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_plan_decisions.py 2> "${decision_lint_stderr}"
+          if [ "${DOCS_DECISION_LINT_ENABLED}" = "true" ] && [ -s "${decision_lint_stderr}" ]; then
+            cat "${decision_lint_stderr}" >&2
+            {
+              echo "### Plan decision lint advisories"
+              echo
+              echo '```text'
+              cat "${decision_lint_stderr}"
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+          rm -f "${decision_lint_stderr}"
 
       - name: Integration PR readiness check unit tests
         # P3 from docs/postmortems/2026-05-18-project-2734-stall.md.
@@ -580,6 +638,13 @@ jobs:
           python3 -m coverage erase
           python3 -m coverage run tests/test_analyze_workflow_logs.py
           python3 -m coverage report --include='scripts/analyze_workflow_logs.py' --fail-under=67
+
+      - name: Workflow scenario trace renderer coverage gate
+        run: |
+          set -euo pipefail
+          python3 -m coverage erase
+          PYTHONDONTWRITEBYTECODE=1 python3 -m coverage run tests/test_render_scenario_trace.py
+          python3 -m coverage report --include='scripts/render_scenario_trace.py' --fail-under=80
 
       - name: Workflow log analysis contract tests
         run: |

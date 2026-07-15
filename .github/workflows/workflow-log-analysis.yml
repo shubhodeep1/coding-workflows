@@ -38,8 +38,11 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  UNATTENDED_PHASE: workflow_log_analysis
+  EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
   ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
+  WORKFLOW_LOG_SCENARIO_TRACE_ENABLED: ${{ vars.WORKFLOW_LOG_SCENARIO_TRACE_ENABLED || 'false' }}
   WORKFLOW_RETRO_ENABLED: ${{ vars.WORKFLOW_RETRO_ENABLED || 'true' }}
   WORKFLOW_RETRO_MODEL: ${{ vars.WORKFLOW_RETRO_MODEL || 'openai/gpt-5.4-mini' }}
   WORKFLOW_RETRO_REASONING: ${{ vars.WORKFLOW_RETRO_REASONING || 'medium' }}
@@ -879,6 +882,7 @@ jobs:
           # downstream tool output that may include invalid UTF-8.
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
@@ -903,6 +907,21 @@ jobs:
 
             if [ -z "${TRACKING_ISSUE_NUM}" ]; then
               echo "::warning::AI_PHASE_FAILURE_V1 skipped for log-analysis: no tracking issue context (step=${failed_step_name}, mode=${failure_mode})."
+              emit_event "AI_PHASE_FAILURE_V1" \
+                "schema_version=1" \
+                "phase=workflow_log_analysis" \
+                "failure_mode=${failure_mode}" \
+                "failed_step_name=${failed_step_name}" \
+                "workflow_run_id=${{ github.run_id }}" \
+                "workflow_run_attempt=${{ github.run_attempt }}" \
+                "workflow_name=${{ github.workflow }}" \
+                "workflow_file=workflow-log-analysis.yml" \
+                "repository=${GITHUB_REPOSITORY}" \
+                "tracking_issue=0" \
+                "attempt_count=${attempt_count}" \
+                "recommended_resume_action=retrigger_log_analysis" \
+                "status=skipped" \
+                "reason=no_tracking_issue"
               return 0
             fi
 
@@ -948,6 +967,21 @@ jobs:
               --repo "${GITHUB_REPOSITORY}" \
               --body "${comment_body}" >/dev/null 2>&1 || \
               echo "::warning::Failed to post AI_PHASE_FAILURE_V1 comment for tracking issue #${TRACKING_ISSUE_NUM}."
+            emit_event "AI_PHASE_FAILURE_V1" \
+              "schema_version=1" \
+              "phase=workflow_log_analysis" \
+              "failure_mode=${failure_mode}" \
+              "failed_step_name=${failed_step_name}" \
+              "workflow_run_id=${{ github.run_id }}" \
+              "workflow_run_attempt=${{ github.run_attempt }}" \
+              "workflow_name=${{ github.workflow }}" \
+              "workflow_file=workflow-log-analysis.yml" \
+              "workflow_run_url=${run_url}" \
+              "repository=${GITHUB_REPOSITORY}" \
+              "tracking_issue=${TRACKING_ISSUE_NUM}" \
+              "attempt_count=${attempt_count}" \
+              "recommended_resume_action=retrigger_log_analysis" \
+              "timestamp=${timestamp}"
 
             gh label create "ai:log-analysis-failed" \
               --repo "${GITHUB_REPOSITORY}" \
@@ -1093,6 +1127,21 @@ jobs:
 
           echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
           echo "analysis_status=completed" >> "$GITHUB_OUTPUT"
+
+      - name: Render workflow scenario traces
+        if: steps.analyze.outputs.analysis_status == 'completed' && env.WORKFLOW_LOG_SCENARIO_TRACE_ENABLED == 'true'
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          # The renderer logs WORKFLOW_SCENARIO_TRACE_WRITTEN on successful
+          # writes and WORKFLOW_SCENARIO_TRACE_PARSE_FAIL on fail-open per-run
+          # skips. Traces stay local-only under the gitignored .ai/ path.
+          TRACE_OUTPUT_DIR=".ai/workflow_traces"
+          mkdir -p "${TRACE_OUTPUT_DIR}"
+          python3 scripts/render_scenario_trace.py \
+            --input workflow_log_report.json \
+            --output-dir "${TRACE_OUTPUT_DIR}"
 
       - name: Commit and push report
         id: commit_report
@@ -1475,6 +1524,7 @@ jobs:
           # deep-audit prompt is UTF-8-clean before piping.
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
@@ -1488,6 +1538,21 @@ jobs:
             local failure_summary="$3"
             if [ -z "${TRACKING_ISSUE_NUM}" ]; then
               echo "::warning::Deep audit failure without tracking issue context; skipping ai:log-analysis-failed label and AI_PHASE_FAILURE_V1 marker."
+              emit_event "AI_PHASE_FAILURE_V1" \
+                "schema_version=1" \
+                "phase=workflow_log_analysis" \
+                "failure_mode=${failure_mode}" \
+                "failed_step_name=deep_audit_codex_pass" \
+                "workflow_run_id=${{ github.run_id }}" \
+                "workflow_run_attempt=${{ github.run_attempt }}" \
+                "workflow_name=${{ github.workflow }}" \
+                "workflow_file=workflow-log-analysis.yml" \
+                "repository=${GITHUB_REPOSITORY}" \
+                "tracking_issue=0" \
+                "attempt_count=${attempt_count}" \
+                "recommended_resume_action=retrigger_log_analysis" \
+                "status=skipped" \
+                "reason=no_tracking_issue"
               return 0
             fi
             local timestamp
@@ -1526,6 +1591,21 @@ jobs:
               }')"
             comment_body="<!-- AI_PHASE_FAILURE_V1"$'\n'"${payload}"$'\n'"AI_PHASE_FAILURE_V1 -->"$'\n'"## ❌ Workflow log analysis deep audit failure"$'\n\n'"${failure_summary}"$'\n\n'"Run: ${run_url}"
             gh issue comment "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --body "${comment_body}" >/dev/null 2>&1 || true
+            emit_event "AI_PHASE_FAILURE_V1" \
+              "schema_version=1" \
+              "phase=workflow_log_analysis" \
+              "failure_mode=${failure_mode}" \
+              "failed_step_name=deep_audit_codex_pass" \
+              "workflow_run_id=${{ github.run_id }}" \
+              "workflow_run_attempt=${{ github.run_attempt }}" \
+              "workflow_name=${{ github.workflow }}" \
+              "workflow_file=workflow-log-analysis.yml" \
+              "workflow_run_url=${run_url}" \
+              "repository=${GITHUB_REPOSITORY}" \
+              "tracking_issue=${TRACKING_ISSUE_NUM}" \
+              "attempt_count=${attempt_count}" \
+              "recommended_resume_action=retrigger_log_analysis" \
+              "timestamp=${timestamp}"
             gh label create "ai:log-analysis-failed" --repo "${GITHUB_REPOSITORY}" --color "e11d48" --description "Workflow log analysis failed" >/dev/null 2>&1 || true
             gh issue edit "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || true
           }
@@ -1944,6 +2024,7 @@ jobs:
           # API-redundancy prompt is UTF-8-clean before piping.
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
@@ -1957,6 +2038,21 @@ jobs:
             local failure_summary="$3"
             if [ -z "${TRACKING_ISSUE_NUM}" ]; then
               echo "::warning::API redundancy failure without tracking issue context; skipping ai:log-analysis-failed label and AI_PHASE_FAILURE_V1 marker."
+              emit_event "AI_PHASE_FAILURE_V1" \
+                "schema_version=1" \
+                "phase=workflow_log_analysis" \
+                "failure_mode=${failure_mode}" \
+                "failed_step_name=api_redundancy_codex_pass" \
+                "workflow_run_id=${{ github.run_id }}" \
+                "workflow_run_attempt=${{ github.run_attempt }}" \
+                "workflow_name=${{ github.workflow }}" \
+                "workflow_file=workflow-log-analysis.yml" \
+                "repository=${GITHUB_REPOSITORY}" \
+                "tracking_issue=0" \
+                "attempt_count=${attempt_count}" \
+                "recommended_resume_action=retrigger_log_analysis" \
+                "status=skipped" \
+                "reason=no_tracking_issue"
               return 0
             fi
             local timestamp
@@ -1995,6 +2091,21 @@ jobs:
               }')"
             comment_body="<!-- AI_PHASE_FAILURE_V1"$'\n'"${payload}"$'\n'"AI_PHASE_FAILURE_V1 -->"$'\n'"## ❌ Workflow log analysis API redundancy failure"$'\n\n'"${failure_summary}"$'\n\n'"Run: ${run_url}"
             gh issue comment "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --body "${comment_body}" >/dev/null 2>&1 || true
+            emit_event "AI_PHASE_FAILURE_V1" \
+              "schema_version=1" \
+              "phase=workflow_log_analysis" \
+              "failure_mode=${failure_mode}" \
+              "failed_step_name=api_redundancy_codex_pass" \
+              "workflow_run_id=${{ github.run_id }}" \
+              "workflow_run_attempt=${{ github.run_attempt }}" \
+              "workflow_name=${{ github.workflow }}" \
+              "workflow_file=workflow-log-analysis.yml" \
+              "workflow_run_url=${run_url}" \
+              "repository=${GITHUB_REPOSITORY}" \
+              "tracking_issue=${TRACKING_ISSUE_NUM}" \
+              "attempt_count=${attempt_count}" \
+              "recommended_resume_action=retrigger_log_analysis" \
+              "timestamp=${timestamp}"
             gh label create "ai:log-analysis-failed" --repo "${GITHUB_REPOSITORY}" --color "e11d48" --description "Workflow log analysis failed" >/dev/null 2>&1 || true
             gh issue edit "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || true
           }

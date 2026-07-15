@@ -84,6 +84,14 @@ import sys
 import time
 from pathlib import Path
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+	sys.path.insert(0, str(_SCRIPT_DIR))
+try:
+	from emit_event import emit_event as _emit_event_helper
+except Exception:
+	_emit_event_helper = None
+
 PATH_IN_BACKTICKS_RE = re.compile(r"`([^`]+)`")
 BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)\s*$")
 # Section-label heuristic: short label-shaped phrase, optional leading
@@ -146,6 +154,21 @@ SEMBLE_READ_FALLBACK_MAX_BYTES = 4096
 SEMBLE_MAX_CHUNKS_CAP = 20
 
 
+def _mirror_event(prefix: str, **fields: object) -> None:
+	if _emit_event_helper is None:
+		return
+	normalized_fields: dict[str, object] = {}
+	for key, value in fields.items():
+		if isinstance(value, str):
+			normalized_fields[key] = " ".join(value.split())
+		else:
+			normalized_fields[key] = value
+	try:
+		_emit_event_helper(prefix, **normalized_fields)
+	except Exception:
+		return
+
+
 def _normalized_semble_log_context() -> str | None:
 	# Shared with scripts/semble_helpers.sh: tests can opt into additive
 	# classification without changing the stable SEMBLE_* prefix contract.
@@ -169,6 +192,7 @@ def _log_semble_event(prefix: str, **fields: object) -> None:
 		rendered = " ".join(str(value).split())
 		parts.append(f"{key}={rendered}")
 	print(" ".join(parts), file=sys.stderr)
+	_mirror_event(prefix, **rendered_fields)
 
 
 def _is_probable_root_level_path_core(value: str) -> bool:

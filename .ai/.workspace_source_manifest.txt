@@ -106,6 +106,8 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
+analysis/workflow-optimization-2026-07-11.md
+analysis/workflow-optimization-2026-07-12.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
@@ -154,6 +156,8 @@ netwask/tier1-agent-suite.json
 path/to/your/workflow_script.sh
 probably_unnecessary_but_read_if_stuck.md
 prompts/.overrides.yaml
+prompts/_identity_recall.txt
+prompts/_nag_reminders.txt
 prompts/_prelude_clarify_and_plan.txt
 prompts/_prelude_common.txt
 prompts/_prelude_common_large.txt
@@ -309,6 +313,8 @@ scripts/dev/test_watchdog_helpers.sh
 scripts/dev/test_write_guard.sh
 scripts/dispatch_and_watch_workflow_run.sh
 scripts/drift_audit.sh
+scripts/emit_event.py
+scripts/emit_event.sh
 scripts/files_touched_scope_guard.py
 scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch
 scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-always-full.patch
@@ -335,12 +341,14 @@ scripts/issue_attachment_bundle.py
 scripts/label_helpers.sh
 scripts/ledger_emit_substate.sh
 scripts/lint_plan_archival_completeness.py
+scripts/lint_plan_decisions.py
 scripts/lint_pr_body_auto_close.py
 scripts/load_workflow_overlay.py
 scripts/mark-stable.sh
 scripts/mcp_handshake_probe.py
 scripts/memory_helpers.sh
 scripts/memory_injection_patterns.py
+scripts/nag_reminder.sh
 scripts/openrouter_prompt_cache.py
 scripts/orchestrate_force_tick.sh
 scripts/orchestrate_lib.py
@@ -351,6 +359,7 @@ scripts/post_review_comment.sh
 scripts/pr_checks_lib.sh
 scripts/render_prompt.py
 scripts/render_prompt.sh
+scripts/render_scenario_trace.py
 scripts/render_validation_templates.py
 scripts/repo_root.py
 scripts/resolve_integration_ref.sh
@@ -386,9 +395,11 @@ scripts/stage_workflow_support.sh
 scripts/summarize_reviewer_consensus.sh
 scripts/summarize_unselected_runs.py
 scripts/targeted_file_context.py
+scripts/task_state.py
 scripts/templates/serena_project.yml.j2
 scripts/templates/slot_manifest.schema.json
 scripts/tg_helpers.sh
+scripts/transcript_archive.sh
 scripts/truncate_to_utf8_byte_cap.py
 scripts/validate_changed_files_syntax.sh
 scripts/validate_driver.sh
@@ -406,6 +417,8 @@ scripts/workflow_retro.py
 scripts/workflow_retro_fanout.sh
 scripts/workspace_init.sh
 scripts/workspace_safety_check.sh
+scripts/worktree_gc.sh
+scripts/worktree_registry.sh
 scripts/write_codex_config.sh
 scripts/write_guard.sh
 test_file.txt
@@ -534,6 +547,8 @@ tests/test_detect_editor_changes_lost.py
 tests/test_drift_audit_job.py
 tests/test_e2e_editor_smoke_canary.py
 tests/test_editor_capacity_fallback_contract.py
+tests/test_emit_event.sh
+tests/test_emit_event_concurrent.sh
 tests/test_family_node_runtime.py
 tests/test_family_python_mongo_flask.py
 tests/test_family_python_repo_checks.py
@@ -541,6 +556,8 @@ tests/test_files_touched_scope_guard.py
 tests/test_fingerprint_quarantine.py
 tests/test_fingerprint_state_selfheal.py
 tests/test_generate_resource_id.py
+tests/test_header_render.sh
+tests/test_identity_recall_render.sh
 tests/test_implement_post_codex_recovery.py
 tests/test_implement_pr_body_tracking_refs.py
 tests/test_implement_semble_contract.py
@@ -548,12 +565,16 @@ tests/test_issue_pr_status_payload_fallback_contract.py
 tests/test_judge_semble_prefetch_contract.py
 tests/test_label_helpers_phase_transition_contract.py
 tests/test_lint_plan_archival_completeness.py
+tests/test_lint_plan_decisions.py
 tests/test_lint_pr_body_auto_close.py
+tests/test_log_prefix_regressions.sh
 tests/test_mark_stable_release_tag_refspec_contract.py
 tests/test_mcp_handshake_probe.py
 tests/test_memory_maintenance_contract_noop.py
 tests/test_memory_record_schema.py
 tests/test_merge_probe.py
+tests/test_nag_reminder.sh
+tests/test_nag_reminder_phases.sh
 tests/test_nightly_validation_selftest_workflow_contract.py
 tests/test_orchestrate_clarify_loop_guard.py
 tests/test_orchestrate_final_merge_required_checks_gate.py
@@ -581,6 +602,7 @@ tests/test_render_prompt_core_modes.py
 tests/test_render_prompt_foundation.py
 tests/test_render_prompt_review_judge_modes.py
 tests/test_render_prompt_validate_analytics_modes.py
+tests/test_render_scenario_trace.py
 tests/test_render_validation_templates.py
 tests/test_render_validation_templates_node_hardhat_regressions.py
 tests/test_render_validation_templates_node_runtime_regressions.py
@@ -635,9 +657,12 @@ tests/test_subissue_closing_pr.py
 tests/test_summarize_reviewer_consensus_sandbox_pin.py
 tests/test_summarize_unselected_runs.py
 tests/test_targeted_file_context.py
+tests/test_task_state.py
+tests/test_task_state_unblock.py
 tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py
 tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py
 tests/test_test_and_mark_stable_plan_polling_guard.py
+tests/test_transcript_archive.sh
 tests/test_truncate_to_utf8_byte_cap.py
 tests/test_update_repo_tree.py
 tests/test_update_workflows_guardrails.py
@@ -678,6 +703,9 @@ tests/test_workflow_overlay_core.py
 tests/test_workflow_overlay_orchestrator.py
 tests/test_workflow_retro.py
 tests/test_workflow_retro_fanout.py
+tests/test_worktree_gc.sh
+tests/test_worktree_name_validation.sh
+tests/test_worktree_registry.sh
 tests/test_workspace_cache_maintenance.py
 tests/test_workspace_hooks.py
 tests/test_workspace_init.py

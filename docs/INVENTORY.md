@@ -126,6 +126,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/dev/test_watchdog_helpers.sh` — Shell regression tests for watchdog_helpers.sh.
 - `scripts/dev/test_write_guard.sh` — Shell regression tests for write_guard.sh.
 - `scripts/drift_audit.sh` — drift_audit.sh — Scan recent review/autofix logs for persistent fingerprint drift.
+- `scripts/emit_event.py` — Fail-open append-only JSONL mirror for stable workflow event prefixes.
+- `scripts/emit_event.sh` — emit_event.sh — fail-open append-only JSONL mirror helper.
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
 - `scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch` — Fixture asset for phase-a-anti-rules-noisy-pr.patch.
 - `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-always-full.patch` — Fixture asset for phase-b-risk-tier-always-full.patch.
@@ -152,12 +154,14 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/label_helpers.sh` — label_helpers.sh — idempotent AI label creation helpers.
 - `scripts/ledger_emit_substate.sh` — Shell helper for ledger emit substate.
 - `scripts/lint_plan_archival_completeness.py` — Lint a PR that adds files under docs/completed/ for plan-archival completeness.
+- `scripts/lint_plan_decisions.py` — Advisory lint for the `## Decisions` convention in `docs/plans/*.md`.
 - `scripts/lint_pr_body_auto_close.py` — Lint PR title/body text (and optionally commit messages) for GitHub auto- close keywords that target ai:orchestrator-tracking issues.
 - `scripts/load_workflow_overlay.py` — Load .github/ai/WORKFLOW.md prompt overrides into $GITHUB_ENV.
 - `scripts/mark-stable.sh` — Mark the current stable branch as a released version.
 - `scripts/mcp_handshake_probe.py` — Probe an MCP stdio server with a single JSON-RPC initialize request.
 - `scripts/memory_helpers.sh` — Shell helper for memory helpers.
 - `scripts/memory_injection_patterns.py` — Advisory prompt-injection regex roster for AI-memory candidate writes.
+- `scripts/nag_reminder.sh` — Fail-open reminder injection helper for long-running unattended wrapper loops.
 - `scripts/openrouter_prompt_cache.py` — OpenRouter prompt-cache helpers shared by workflow scripts.
 - `scripts/orchestrate_force_tick.sh` — Shell helper for orchestrate force tick.
 - `scripts/orchestrate_lib.py` — Orchestrator library: DAG management, wave computation, issue tracking, and judge helpers.
@@ -168,6 +172,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
 - `scripts/render_prompt.py` — Render prompt templates with optional mode contracts.
 - `scripts/render_prompt.sh` — Shell helper for render prompt.
+- `scripts/render_scenario_trace.py` — Render replayable workflow scenario traces from workflow-log collector excerpts.
 - `scripts/render_validation_templates.py` — Render validation harness templates from a slot manifest.
 - `scripts/repo_root.py` — Resolve the repository root from scripts and tests.
 - `scripts/resolve_integration_ref.sh` — Shell helper for resolve integration ref.
@@ -203,9 +208,11 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/summarize_reviewer_consensus.sh` — ledger via codex-cli (model: openai/gpt-5.4-mini, reasoning: medium).
 - `scripts/summarize_unselected_runs.py` — Summarize unselected workflow runs via gpt-5.4-mini to widen analysis coverage.
 - `scripts/targeted_file_context.py` — Inline likely-to-be-edited files into the Codex prompt as a reference block so the editor doesn't waste budget reading them.
+- `scripts/task_state.py` — Mirror orchestrator wave-issue state into per-task JSON files and unblock mirrored dependents.
 - `scripts/templates/serena_project.yml.j2` — Template asset for serena_project.yml.j2.
 - `scripts/templates/slot_manifest.schema.json` — Template asset for slot_manifest.schema.json.
 - `scripts/tg_helpers.sh` — tg_helpers.sh — Telegram message tracking & cleanup helpers.
+- `scripts/transcript_archive.sh` — transcript_archive.sh — fail-open JSON archive helper for captured phase output.
 - `scripts/truncate_to_utf8_byte_cap.py` — Truncate stdin to a UTF-8 byte cap on a codepoint boundary.
 - `scripts/validate_changed_files_syntax.sh` — Shell helper for validate changed files syntax.
 - `scripts/validate_driver.sh` — Shell helper for validate driver.
@@ -223,6 +230,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/workflow_retro_fanout.sh` — Post weekly workflow retros to consumer repositories from the centralized fan-out job.
 - `scripts/workspace_init.sh` — Shell helper for workspace init.
 - `scripts/workspace_safety_check.sh` — Shell helper for workspace safety check.
+- `scripts/worktree_gc.sh` — Fail-open stale worktree registry cleanup helper.
+- `scripts/worktree_registry.sh` — Atomic worktree registry helper with register, deregister, list, and GC subcommands.
 - `scripts/write_codex_config.sh` — write_codex_config.sh — central writer for ~/.codex/config.toml.
 - `scripts/write_guard.sh` — Shell helper for write-guard policy enforcement.
 

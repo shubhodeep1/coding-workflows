@@ -360,6 +360,7 @@ jobs:
             --github-env "${GITHUB_ENV}"
 
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
+          echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
 
           for f in unattended_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
@@ -395,6 +396,17 @@ jobs:
               exit 1
             fi
             install -m 0644 "${src}" prompts/header.txt
+          fi
+          if [ ! -f prompts/_identity_recall.txt ]; then
+            src=".codex-workflow-src/prompts/_identity_recall.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/_identity_recall.txt" ]; then
+              src=".codex-workflow-src-main/prompts/_identity_recall.txt"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Failed to stage required file prompts/_identity_recall.txt"
+              exit 1
+            fi
+            install -m 0644 "${src}" prompts/_identity_recall.txt
           fi
 
           rm -rf .codex-workflow-src-main
@@ -1055,6 +1067,7 @@ jobs:
           2. Functions or modules to implement
           3. Data structures affected
           4. API or interface changes
+          4a. `## Decisions` — include a markdown section named exactly `## Decisions` with at least one decision record using the exact heading shape `### D<n> — <title>`. Each decision record must include non-empty bullets for `Chosen`, `Alternatives considered`, and `Why`. Add this section additively; do not rename or remove any existing required sections.
           5. Potential risks or edge cases
           6. Testing considerations
           7. A pre-execution self-check result

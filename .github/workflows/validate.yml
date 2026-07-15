@@ -52,6 +52,9 @@ name: AI Validate (Reusable)
         value: ${{ jobs.validate.outputs.metadata_file }}
 
 env:
+  UNATTENDED_PHASE: validate
+  EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
+  UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
   # Validate-generate / validate-diagnose / validate-discover are gpt-5.4
   # (research/synthesis); validate-fix-harness / validate-self-heal are
   # codex (file edits) — those phases override MODEL_EDITOR locally if
@@ -373,7 +376,10 @@ jobs:
               "scripts/self_heal_validation.sh",
               "scripts/setup_serena.sh",
               "scripts/serena_stats_emit.py",
-              "scripts/mcp_handshake_probe.py"
+              "scripts/mcp_handshake_probe.py",
+              "scripts/transcript_archive.sh",
+              "scripts/emit_event.sh",
+              "scripts/emit_event.py"
             ],
             "serena_template_path": "scripts/templates/serena_project.yml.j2",
             "required_prompts": [
@@ -387,6 +393,7 @@ jobs:
               "prompts/_prelude_role_persona.txt",
               "prompts/_prelude_serena.txt",
               "prompts/_prelude_output_contract.txt",
+              "prompts/_identity_recall.txt",
               "prompts/_templates/mode-validate-generate.txt",
               "prompts/_templates/mode-validate-diagnose.txt",
               "prompts/_templates/mode-validate-discover.txt",
@@ -413,6 +420,7 @@ jobs:
           EOF
 
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
+          echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           bash "${helper_path}" validate --manifest "${manifest_path}"
       - name: Initialize workspace metadata
         id: workspace_meta

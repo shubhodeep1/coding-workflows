@@ -131,6 +131,8 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	stage_helper = _stage_helper_text()
 	init_block = _step_block(workflow, "Initialize runtime workspace")
 	preflight_block = _step_block(workflow, '"Preflight: Verify required files before reviewer invocation"')
+	reviewers = _read(REVIEWERS)
+	apply_fixes = _read(APPLY_FIXES)
 	main_primary_line = next(
 		(line for line in stage_helper.splitlines() if "MAIN_PRIMARY_BOOTSTRAP_SCRIPTS=" in line),
 		"",
@@ -145,11 +147,18 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 
 	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}" in workflow
 	assert "SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}" in workflow
+	assert "UNATTENDED_NAG_REMINDER_ENABLED: ${{ vars.UNATTENDED_NAG_REMINDER_ENABLED || 'false' }}" in workflow
+	assert "UNATTENDED_NAG_SILENT_ROUNDS: ${{ vars.UNATTENDED_NAG_SILENT_ROUNDS || '3' }}" in workflow
+	assert "UNATTENDED_PHASE: review_autofix" in workflow
+	assert "EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}" in workflow
+	assert "UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}" in workflow
 	assert 'helper=".codex-workflow-src/scripts/stage_workflow_support.sh"' in stage_step_block
 	assert 'helper=".codex-workflow-src-main/scripts/stage_workflow_support.sh"' in stage_step_block
 	assert 'WORKFLOW_SOURCE_REPO="shubhodeep1/coding-workflows" \\' in stage_step_block
 	assert 'bash "${helper}"' in stage_step_block
+	assert 'Backfilled transcript_archive.sh into the runtime support bundle from ${backfill_src}' in stage_step_block
 	assert "render_prompt.py" in main_primary_line
+	assert "nag_reminder.sh" in required_bootstrap_line
 	# build_semble_wrapper.sh stays in the optional-bootstrap loop once the BM25
 	# wrapper was extracted to a shared script (semble 0.1.3 ships no
 	# index/query CLI). render_prompt.py is main-primary so validator fixes from
@@ -161,19 +170,54 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert (
 		"REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-\n"
 		"    codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh\n"
-		"    review_run_reviewers.sh render_prompt.sh assemble_prompt.sh"
+		"    review_run_reviewers.sh render_prompt.sh assemble_prompt.sh\n"
+		"    nag_reminder.sh"
 	) in workflow
 	assert "REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-\n    render_prompt.py" in workflow
 	assert "for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS} ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do" in stage_step_block
+	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then' in stage_step_block
+	assert 'Backfilled _nag_reminders.txt into the runtime support bundle from ${src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it).' in stage_step_block
 	assert 'for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS}; do' in preflight_block
 	assert 'check_required_file "${SUPPORT_SCRIPTS_DIR}/${f}"' in preflight_block
 	assert 'for f in ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do' in preflight_block
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/${f}"' in preflight_block
+	assert 'check_soft_file "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"' in preflight_block
 	assert "for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do" in stage_helper
+	assert "for f in emit_event.sh emit_event.py; do" in stage_helper
+	assert "for f in transcript_archive.sh; do" in stage_helper
+	assert 'Optional events mirror helper ${f} is unavailable in checked-out support sources; stable text-prefix mirroring remains disabled.' in stage_helper
+	assert 'Optional transcript archive helper ${f} is unavailable in checked-out support sources; transcript archiving remains disabled.' in stage_helper
 	assert 'Optional Serena support asset ${f} is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_helper
 	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"' in stage_helper
 	assert 'install -m 0644 "${serena_template_src}" "${SUPPORT_SCRIPTS_DIR}/templates/serena_project.yml.j2"' in stage_helper
 	assert 'Optional Serena template scripts/templates/serena_project.yml.j2 is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_helper
+	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then' in stage_helper
+	assert 'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"' in stage_helper
+	assert 'nag reminders will fail open even when UNATTENDED_NAG_REMINDER_ENABLED=true.' in stage_helper
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/nag_reminder.sh" 2>/dev/null || true' in reviewers
+	assert 'nag_reminder_enabled() { return 1; }' in apply_fixes
+	assert 'nag_silent_round_threshold() { printf \'3\\n\'; }' in apply_fixes
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/nag_reminder.sh" 2>/dev/null || true' in apply_fixes
+	assert 'nag_reminder_enabled() { return 1; }' in reviewers
+	assert 'editor_nag_attempt_limit="$(nag_silent_round_threshold)"' in apply_fixes
+	assert 'if [ "${editor_nag_attempt_limit}" -gt "${editor_max_attempts}" ]; then' in apply_fixes
+	assert 'if cp "${EDITOR_PROMPT_FILE}" "${attempt_prompt_file}" 2>/dev/null \\' in apply_fixes
+	assert '|| cat "${EDITOR_PROMPT_FILE}" > "${attempt_prompt_file}" 2>/dev/null; then' in apply_fixes
+	assert 'Could not create per-attempt editor prompt file for attempt ${attempt}; continuing with the base prompt.' in apply_fixes
+	assert 'editor_nag_counter_for_attempt=$((editor_silent_rounds + 1))' in apply_fixes
+	assert 'editor_nag_block="$(maybe_inject_nag "review-editor" "${editor_nag_counter_for_attempt}")"' in apply_fixes
+	assert 'reviewer_max_attempts=3' in reviewers
+	assert 'reviewer_nag_attempt_limit="$(nag_silent_round_threshold)"' in reviewers
+	assert 'while [ "${attempt}" -le "${reviewer_max_attempts}" ]; do' in reviewers
+	assert 'Reviewer ${model} failed after ${reviewer_max_attempts} attempts.' in reviewers
+	assert 'echo "REVIEWER_FAILBACK_UNMAPPED: ${model}" | tee -a "${log_file}"' in reviewers
+	assert 'reviewer_record_health_outcome "${model}" "retryable_failure" "" "${final_retryable_class}" "${log_file}"' in reviewers
+	assert 'Reviewer slot %s skipped after retryable failure (%s); no same-family failback mapping is available.\\n' in reviewers
+	assert 'echo "skipped_unmapped" > "${status_file}"' in reviewers
+	assert 'if [ "${reviewer_max_attempts}" -gt 3 ]; then' in reviewers
+	assert 'reviewer_nag_counter_for_attempt=$((reviewer_silent_rounds + 1))' in reviewers
+	assert 'reviewer_nag_block="$(maybe_inject_nag "review-reviewer" "${reviewer_nag_counter_for_attempt}")"' in reviewers
+	assert 'if [ "${REVIEWER_ATTEMPT_SILENT}" = "true" ] && nag_reminder_enabled; then' in reviewers
 	assert 'echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"' in init_block
 	assert 'echo "EDITOR_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/editor_semble_query.txt"' in init_block
 	assert 'echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/conflict_resolver_semble_query.txt"' in init_block
@@ -216,6 +260,7 @@ def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() 
 	assert 'echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"' in index_block
 	assert "if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.SERENA_ENABLED == 'true'" in setup_serena_block
 	assert 'SERENA_FALLBACK_TARGET="review-autofix-editor" bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh"' in setup_serena_block
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/emit_event.sh" 2>/dev/null || true' in setup_serena_block
 	assert 'SERENA_FALLBACK target=review-autofix-editor reason=setup-failure' in setup_serena_block
 	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH=${serena_project_hash}" >> "$GITHUB_ENV"' in setup_serena_block
 	assert "if: always() && env.SERENA_ENABLED == 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'" in clear_serena_block
@@ -368,9 +413,12 @@ def test_editor_targeted_file_context_and_prompt_render_path_passes_flags() -> N
 	assert '--semble-query-from "${EDITOR_SEMBLE_QUERY_FILE}"' in apply_fixes
 	assert '--semble-max-chunks "${SEMBLE_TARGETED_CONTEXT_MAX_CHUNKS:-6}"' in apply_fixes
 	assert "{{SERENA_TOOL_HINTS}}" in apply_fixes
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" 2>/dev/null || true' in apply_fixes
+	assert '<compaction-rules>' in apply_fixes
 	assert 'EDITOR_SERENA_TOOL_HINTS=""' in apply_fixes
 	assert 'Serena hints:' in apply_fixes
 	assert 'SERENA_TOOL_HINTS="${EDITOR_SERENA_TOOL_HINTS}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${EDITOR_PROMPT_BODY_FILE}"' in apply_fixes
+	assert 'archive_transcript "${GITHUB_RUN_ID:-local-run}" "review-editor" "${EDITOR_SUMMARY_FILE}"' in apply_fixes
 	assert "serena_runtime_noise_should_be_ignored()" in apply_fixes
 	assert "SERENA_PROJECT_PREEXISTED" in apply_fixes
 	assert "SERENA_PROJECT_BOOTSTRAP_HASH" in apply_fixes

@@ -9,6 +9,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ORCHESTRATE_POLL_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
 ORCHESTRATE_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
+ORCHESTRATE_POLL_PROCESS = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 
 
 def _workflow(path: Path = ORCHESTRATE_POLL_WF) -> str:
@@ -47,11 +48,57 @@ def test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lif
 	assert "revalidate_events.v1.json" in wf
 
 
+def test_nag_reminder_assets_and_judge_wiring_are_present() -> None:
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+
+	assert "nag_reminder.sh" in wf
+	assert 'nag_prompt_src=".codex-workflow-src/prompts/_nag_reminders.txt"' in wf
+	assert 'install -m 0644 "${nag_prompt_src}" "prompts/_nag_reminders.txt"' in wf
+	assert 'Optional nag reminder prompt asset _nag_reminders.txt is unavailable on ${SCRIPT_REF}; nag reminders will fail open for this run.' in wf
+	assert "UNATTENDED_NAG_REMINDER_ENABLED: ${{ vars.UNATTENDED_NAG_REMINDER_ENABLED || 'false' }}" in wf
+	assert "UNATTENDED_NAG_SILENT_ROUNDS: ${{ vars.UNATTENDED_NAG_SILENT_ROUNDS || '3' }}" in wf
+	assert 'source scripts/nag_reminder.sh 2>/dev/null || true' in poller
+	assert 'nag_reminder_enabled() { return 1; }' in poller
+	assert 'nag_silent_round_threshold() { printf \'3\\n\'; }' in poller
+	assert 'if nag_reminder_enabled; then' in poller
+	assert 'judge_nag_attempt_limit="$(nag_silent_round_threshold)"' in poller
+	assert 'judge_nag_counter_for_attempt=$((judge_silent_rounds + 1))' in poller
+	assert 'judge_nag_block="$(maybe_inject_nag "orchestrate-poll-judge" "${judge_nag_counter_for_attempt}")"' in poller
+	assert 'if cp "${JUDGE_PROMPT_FILE}" "${judge_attempt_prompt_file}" 2>/dev/null; then' in poller
+	assert 'Could not create per-attempt judge prompt file for attempt ${attempt}; continuing with the base prompt.' in poller
+	assert 'judge_json_candidate="$(extract_judge_json_with_status "${JUDGE_OUTPUT_FILE}")"' in poller
+	assert 'cleaned = re.sub(r"```(?:json)?\\s*", "", raw)' in poller
+	assert 'cleaned = re.sub(r"```\\s*$", "", cleaned, flags=re.MULTILINE)' in poller
+	assert 'cleaned = re.sub(r"```(?:json)?\\\\s*", "", raw)' not in poller
+	assert 'cleaned = re.sub(r"```\\\\s*$", "", cleaned, flags=re.MULTILINE)' not in poller
+
+
+def test_task_state_helper_and_flag_are_wired_into_poller_workflow() -> None:
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	assert "task_state.py" in wf
+	assert "ORCH_TASK_FILES_ENABLED: ${{ vars.ORCH_TASK_FILES_ENABLED || 'false' }}" in wf
+
+
+def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> None:
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	assert "worktree_registry.sh" in wf
+	assert "worktree_gc.sh" in wf
+	assert "ORCH_WORKTREE_REGISTRY_ENABLED: ${{ vars.ORCH_WORKTREE_REGISTRY_ENABLED || 'false' }}" in wf
+	assert "ORCH_WORKTREE_TTL_SECS: ${{ vars.ORCH_WORKTREE_TTL_SECS || '3600' }}" in wf
+	assert "- name: Run worktree registry GC" in wf
+	assert "if: steps.find_tracking.outputs.has_work == 'true'\n        run: bash scripts/worktree_gc.sh" not in wf
+	assert "run: bash scripts/worktree_gc.sh" in wf
+
+
 def main() -> int:
 	test_stall_control_env_defaults_are_declared()
 	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
 	test_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
+	test_nag_reminder_assets_and_judge_wiring_are_present()
+	test_task_state_helper_and_flag_are_wired_into_poller_workflow()
+	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
 	return 0
 
 

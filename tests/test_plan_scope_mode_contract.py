@@ -35,9 +35,16 @@ def _render_mode_plan(*extra_args: str) -> str:
 	return proc.stdout
 
 
+def _assert_decisions_contract(text: str) -> None:
+	assert "## Decisions" in text
+	assert "### D<n> — <title>" in text
+	assert "Each decision record must include non-empty bullets for `Chosen`, `Alternatives considered`, and `Why`." in text
+
+
 def test_mode_plan_scope_mode_contract_defaults_on() -> None:
 	rendered = _render_mode_plan()
 
+	_assert_decisions_contract(rendered)
 	assert "PLAN_SCOPE_MODE_REQUIRED=true" in rendered
 	assert "`Scope-mode: <Expansion | Selective Expansion | Hold Scope | Reduction>`" in rendered
 	assert "`Scope-mode justification:`" in rendered
@@ -52,6 +59,7 @@ def test_mode_plan_scope_mode_contract_defaults_on() -> None:
 def test_mode_plan_scope_mode_contract_relaxes_when_flag_disabled() -> None:
 	rendered = _render_mode_plan("--var", "PLAN_SCOPE_MODE_REQUIRED=false")
 
+	_assert_decisions_contract(rendered)
 	assert "PLAN_SCOPE_MODE_REQUIRED=false" in rendered
 	assert "optional but preferred" in rendered
 	assert "whenever `Scope-mode:` is present" in rendered
@@ -60,6 +68,7 @@ def test_mode_plan_scope_mode_contract_relaxes_when_flag_disabled() -> None:
 def test_plan_workflow_exports_flag_and_keeps_live_prompt_parity() -> None:
 	workflow = PLAN_WORKFLOW.read_text(encoding="utf-8")
 
+	_assert_decisions_contract(workflow)
 	assert "PLAN_SCOPE_MODE_REQUIRED: ${{ vars.PLAN_SCOPE_MODE_REQUIRED || 'true' }}" in workflow
 	assert "PLAN_SCOPE_MODE_REQUIRED={{PLAN_SCOPE_MODE_REQUIRED}}" in workflow
 	assert "`Scope-mode: <Expansion | Selective Expansion | Hold Scope | Reduction>`" in workflow

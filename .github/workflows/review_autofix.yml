@@ -93,6 +93,9 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  UNATTENDED_PHASE: review_autofix
+  EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
+  UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
   REVIEWER_MODELS: |
     minimax/minimax-m2.5
     moonshotai/kimi-k2.5
@@ -209,12 +212,15 @@ env:
   FINGERPRINT_QUARANTINE_RUNS_M: ${{ vars.FINGERPRINT_QUARANTINE_RUNS_M || '3' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
+  UNATTENDED_NAG_REMINDER_ENABLED: ${{ vars.UNATTENDED_NAG_REMINDER_ENABLED || 'false' }}
+  UNATTENDED_NAG_SILENT_ROUNDS: ${{ vars.UNATTENDED_NAG_SILENT_ROUNDS || '3' }}
   # Shared source of truth for the scripts the later preflight checks under
   # SUPPORT_SCRIPTS_DIR. Keep the hard-required and soft-checked sets separate
   # so the staging backfill and preflight stay in sync without conflating them.
   REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-
     codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh
     review_run_reviewers.sh render_prompt.sh assemble_prompt.sh
+    nag_reminder.sh
   REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-
     render_prompt.py
 
@@ -1358,6 +1364,7 @@ jobs:
             exit 1
           fi
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
+          echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           CURRENT_REPOSITORY="${{ github.repository }}" \
           WORKFLOW_SOURCE_REPO="shubhodeep1/coding-workflows" \
           bash "${helper}"
@@ -1365,6 +1372,19 @@ jobs:
           SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
           SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
+
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" ]; then
+            backfill_src=".codex-workflow-src/scripts/transcript_archive.sh"
+            if [ ! -f "${backfill_src}" ] && [ -f ".codex-workflow-src-main/scripts/transcript_archive.sh" ]; then
+              backfill_src=".codex-workflow-src-main/scripts/transcript_archive.sh"
+            fi
+            if [ -f "${backfill_src}" ]; then
+              install -m 0755 "${backfill_src}" "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh"
+              echo "::notice::Backfilled transcript_archive.sh into the runtime support bundle from ${backfill_src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+            else
+              echo "::warning::Optional transcript archive helper transcript_archive.sh was not staged and could not be backfilled from .codex-workflow-src/scripts or .codex-workflow-src-main/scripts; transcript archiving remains disabled for this run."
+            fi
+          fi
 
           # Backfill the preflight-checked SUPPORT_SCRIPTS_DIR subset that the
           # branch-pinned staging helper did not stage. review_autofix.yml runs
@@ -1390,6 +1410,20 @@ jobs:
               echo "::warning::Preflight support script ${f} was not staged and could not be backfilled from .codex-workflow-src/scripts or .codex-workflow-src-main/scripts; the later preflight step will report whether this is a hard or soft miss."
             fi
           done
+
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then
+            src=".codex-workflow-src/prompts/_nag_reminders.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/_nag_reminders.txt" ]; then
+              src=".codex-workflow-src-main/prompts/_nag_reminders.txt"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"
+              echo "::notice::Backfilled _nag_reminders.txt into the runtime support bundle from ${src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+            else
+              echo "::warning::_nag_reminders.txt was not staged and could not be backfilled from .codex-workflow-src/prompts or .codex-workflow-src-main/prompts; nag reminders will fail open for this run."
+              rm -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"
+            fi
+          fi
 
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
             src=".codex-workflow-src/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
@@ -2717,6 +2751,7 @@ jobs:
           check_soft_file "${SUPPORT_PROMPTS_DIR}/mode-judge-interim.txt"
           check_soft_file "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt"
           check_soft_file "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
+          check_soft_file "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"
           case "$(printf '%s' "${REVIEW_REVIEWER_CHECKLIST_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
             1|true|yes|on) check_soft_file "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ;;
           esac
@@ -3288,15 +3323,19 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/emit_event.sh" 2>/dev/null || true
+          type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
           if [ ! -f "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh" ]; then
             echo "::warning::Optional Serena bootstrap helper is unavailable at ${SUPPORT_SCRIPTS_DIR}/setup_serena.sh; leaving Serena disabled for this run."
             echo "SERENA_FALLBACK target=review-autofix-editor reason=setup-failure" >&2
+            emit_event "SERENA_FALLBACK" "target=review-autofix-editor" "reason=setup-failure"
             echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"
             exit 0
           fi
           if ! SERENA_FALLBACK_TARGET="review-autofix-editor" bash "${SUPPORT_SCRIPTS_DIR}/setup_serena.sh"; then
             echo "::warning::Serena bootstrap helper failed; leaving Serena disabled for this run."
             echo "SERENA_FALLBACK target=review-autofix-editor reason=setup-failure" >&2
+            emit_event "SERENA_FALLBACK" "target=review-autofix-editor" "reason=setup-failure"
             echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"
           fi
           if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -f .serena/project.yml ]; then
@@ -5098,6 +5137,7 @@ jobs:
               || { [ "${AUTOFIX_SKIP_SELF_TRIGGERED:-false}" = "true" ] \
                 && [ "${continuation_enabled}" = "false" ]; }; }; then
             echo "AUTOFIX_DISPATCH_SKIPPED reason=self_triggered_autofix pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation_enabled=${continuation_enabled} ledger_only=${is_ledger_only_commit}"
+            emit_event "AUTOFIX_DISPATCH_SKIPPED" "reason=self_triggered_autofix" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=post_commit_retrigger" "continuation_enabled=${continuation_enabled}" "ledger_only=${is_ledger_only_commit}"
             exit 0
           fi
 
@@ -5160,14 +5200,17 @@ jobs:
           elif type autofix_retrigger_has_inflight_peer >/dev/null 2>&1 \
             && autofix_retrigger_has_inflight_peer "${PR_NUMBER}" "${TARGET_BRANCH}" "${CURRENT_RUN_ID}"; then
             echo "AUTOFIX_DISPATCH_SKIPPED reason=sync_event_inflight pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger"
+            emit_event "AUTOFIX_DISPATCH_SKIPPED" "reason=sync_event_inflight" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=post_commit_retrigger"
             exit 0
           fi
 
           if [ "${is_continuation_dispatch}" = "true" ]; then
             echo "AUTOFIX_CONTINUATION_DISPATCH_ISSUED pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} settle_secs=${settle_secs} source=post_commit_retrigger"
             echo "AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation=true"
+            emit_event "AUTOFIX_DISPATCH_ISSUED" "reason=no_peer_detected" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=post_commit_retrigger" "continuation=true"
           else
             echo "AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger"
+            emit_event "AUTOFIX_DISPATCH_ISSUED" "reason=no_peer_detected" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=post_commit_retrigger"
           fi
 
           dispatched=false
@@ -5290,11 +5333,13 @@ jobs:
           if type autofix_retrigger_has_inflight_peer >/dev/null 2>&1 \
             && autofix_retrigger_has_inflight_peer "${PR_NUMBER}" "${TARGET_BRANCH}" "${CURRENT_RUN_ID}"; then
             echo "AUTOFIX_DISPATCH_SKIPPED reason=peer_inflight pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=editor_changes_lost_retrigger"
+            emit_event "AUTOFIX_DISPATCH_SKIPPED" "reason=peer_inflight" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=editor_changes_lost_retrigger"
             echo "CHANGES_LOST_REDISPATCHED=skipped_peer_inflight" >> "$GITHUB_ENV"
             exit 0
           fi
 
           echo "AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=editor_changes_lost_retrigger"
+          emit_event "AUTOFIX_DISPATCH_ISSUED" "reason=no_peer_detected" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=editor_changes_lost_retrigger"
 
           dispatched=false
 
