@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -51,6 +52,17 @@ PHASE_C_REQUIRED_VARS = {
 		"MERGED_SUB_ISSUES_LIST": "- #3505 phase-c-persona-prefixes\n- #3496 tracking",
 	},
 }
+ROLE_GOAL_LINE_RE = re.compile(r"^Role:\s*(?P<role>.+?)\s+Goal:\s*(?P<goal>.+?)$", re.MULTILINE)
+IDENTITY_RECALL_BLOCK_RE = re.compile(
+	r"<identity-recall>\n"
+	r"Phase: (?P<phase>.+?)\.\n"
+	r"Role: (?P<role>.+?)\.\n"
+	r"Mission: (?P<mission>.+?)\.\n"
+	r"Re-emit this block at the top of your next message if you\n"
+	r"have just performed a context compaction\.\n"
+	r"</identity-recall>",
+	re.DOTALL,
+)
 
 
 def _normalize_text(content: str) -> str:
@@ -69,6 +81,17 @@ def _base_env() -> dict[str, str]:
 
 def _load_reference_text(file_name: str) -> str:
 	return _normalize_text((REPO_ROOT / "prompts" / "references" / file_name).read_text(encoding="utf-8"))
+
+
+def _assert_identity_recall_after_role_goal(rendered_text: str, *, phase_name: str) -> re.Match[str]:
+	role_goal_match = ROLE_GOAL_LINE_RE.search(rendered_text)
+	assert role_goal_match is not None
+	identity_match = IDENTITY_RECALL_BLOCK_RE.search(rendered_text)
+	assert identity_match is not None
+	assert identity_match.group("phase") == phase_name
+	assert rendered_text[role_goal_match.end(): identity_match.start()] == "\n\n"
+	assert rendered_text[identity_match.end():].startswith("\n\n")
+	return identity_match
 
 
 def _run_render_prompt_py(
@@ -785,6 +808,68 @@ def test_render_prompt_py_treats_blank_persona_env_value_as_disabled() -> None:
 	assert blank_proc.stdout == legacy_proc.stdout
 
 
+def test_render_prompt_py_identity_recall_flag_disabled_is_byte_stable() -> None:
+	prompt_file = REPO_ROOT / "prompts" / "mode-plan.txt"
+	baseline_proc = _run_render_prompt_py(prompt_file)
+	disabled_env = _base_env()
+	disabled_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "false"
+	disabled_proc = _run_render_prompt_py(prompt_file, env=disabled_env)
+
+	assert baseline_proc.returncode == 0, baseline_proc.stderr
+	assert baseline_proc.stderr == ""
+	assert disabled_proc.returncode == 0, disabled_proc.stderr
+	assert disabled_proc.stderr == ""
+	assert disabled_proc.stdout == baseline_proc.stdout
+
+
+def test_render_prompt_py_matches_shell_identity_recall_output_with_default_persona() -> None:
+	prompt_file = REPO_ROOT / "prompts" / "mode-plan.txt"
+	identity_env = os.environ.copy()
+	identity_env["PYTHONDONTWRITEBYTECODE"] = "1"
+	identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "true"
+	identity_env.pop("PROMPT_PERSONA_PREFIX_ENABLED", None)
+
+	python_proc = _run_render_prompt_py(prompt_file, env=identity_env)
+	shell_proc = subprocess.run(
+		["bash", str(RENDER_PROMPT_SH), str(prompt_file)],
+		cwd=str(REPO_ROOT),
+		env=identity_env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+
+	assert python_proc.returncode == 0, python_proc.stderr
+	assert python_proc.stderr == ""
+	assert shell_proc.returncode == 0, shell_proc.stderr
+	assert shell_proc.stderr == ""
+	assert python_proc.stdout == shell_proc.stdout
+	assert python_proc.stdout.startswith(PHASE_C_PERSONA_SENTINELS["mode-plan"])
+	identity_match = _assert_identity_recall_after_role_goal(python_proc.stdout, phase_name="mode-plan")
+	assert identity_match.group("role") == "planning-phase auditor"
+	assert identity_match.group("mission") == "emit a structured implementation plan or `BLOCKED:` line"
+
+
+def test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_identity_fail_open_") as td:
+		prompt_file = Path(td) / "mode-malformed.txt"
+		prompt_file.write_text(
+			"# tier: DEFAULT\nRole: malformed prompt without a goal line.\n\nBody.\n",
+			encoding="utf-8",
+		)
+
+		baseline_proc = _run_render_prompt_py(prompt_file, cwd=Path(td))
+		identity_env = _base_env()
+		identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "true"
+		identity_proc = _run_render_prompt_py(prompt_file, env=identity_env, cwd=Path(td))
+
+	assert baseline_proc.returncode == 0, baseline_proc.stderr
+	assert baseline_proc.stderr == ""
+	assert identity_proc.returncode == 0, identity_proc.stderr
+	assert identity_proc.stdout == baseline_proc.stdout
+	assert identity_proc.stderr.strip() == "IDENTITY_REINJECT_PARSE_FAIL: mode-malformed reason=metadata_extract_failed"
+
+
 def main() -> int:
 	test_output_contract_reference_includes_status_update_cadence()
 	test_render_prompt_sh_renders_implement_contract_defaults_and_env_values()
@@ -811,6 +896,9 @@ def main() -> int:
 	test_render_prompt_py_prepends_phase_c_persona_prefix_without_altering_legacy_body()
 	test_render_prompt_py_enables_phase_c_persona_prefix_by_default()
 	test_render_prompt_py_treats_blank_persona_env_value_as_disabled()
+	test_render_prompt_py_identity_recall_flag_disabled_is_byte_stable()
+	test_render_prompt_py_matches_shell_identity_recall_output_with_default_persona()
+	test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt()
 	print("OK: render prompt foundation assertions hold")
 	return 0
 
