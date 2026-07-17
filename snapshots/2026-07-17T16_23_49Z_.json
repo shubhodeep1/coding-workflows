@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-07-15T06:25:38Z",
+  "tick_at": "2026-07-17T16:23:49Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -35,10 +35,11 @@
       "wave_complete": false
     },
     {
-      "current_wave": 0,
+      "current_wave": 4,
+      "integration_ahead_by": "38",
       "issue_counts": {
         "closed": 0,
-        "done": 0,
+        "done": 1,
         "implementation_failed": 0,
         "in_progress": 0,
         "merged": 0,
@@ -51,7 +52,7 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] Learn-Claude-Code learnings \u2014 adopt Phases A\u2013H into the unattended pipeline",
-      "total_waves": 0,
+      "total_waves": 8,
       "wave_complete": false
     }
   ]
