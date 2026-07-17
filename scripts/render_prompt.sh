@@ -92,6 +92,22 @@ MODEL_FAMILY_OVERLAY_BLOCK="${MODEL_FAMILY_OVERLAY:-}"
 PROMPT_BASENAME="$(basename -- "${PROMPT_FILE}")"
 MODE_NAME="${PROMPT_BASENAME%.*}"
 
+identity_reinject_enabled()
+{
+	local normalized_value=""
+
+	normalized_value="$(printf '%s' "${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')"
+	normalized_value="${normalized_value#"${normalized_value%%[![:space:]]*}"}"
+	normalized_value="${normalized_value%"${normalized_value##*[![:space:]]}"}"
+	if [ -z "${normalized_value}" ]; then
+		return 1
+	fi
+	case "${normalized_value}" in
+		0|false|no|off) return 1 ;;
+	esac
+	return 0
+}
+
 resolve_identity_recall_template()
 {
 	local candidate=""
@@ -271,7 +287,10 @@ import sys
 source_path = pathlib.Path(sys.argv[1])
 target_path = pathlib.Path(sys.argv[2])
 identity_block = sys.argv[3]
-text = source_path.read_text(encoding="utf-8")
+try:
+	text = source_path.read_text(encoding="utf-8")
+except (OSError, UnicodeDecodeError):
+	sys.exit(1)
 
 ROLE_GOAL_RE = re.compile(r"^Role:\s*(?P<role>.+?)\s+Goal:\s*(?P<goal>.+?)\s*$")
 
@@ -334,7 +353,10 @@ else:
 		updated = parts[0] + "\n\n" + identity_block + "\n\n" + parts[1]
 	else:
 		updated = text + "\n\n" + identity_block + "\n"
-target_path.write_text(updated, encoding="utf-8")
+try:
+	target_path.write_text(updated, encoding="utf-8")
+except OSError:
+	sys.exit(1)
 PY
 }
 
@@ -498,7 +520,7 @@ if [ "${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" = "true" ]; then
 	fi
 fi
 
-if [ "${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}" = "true" ] && [[ "${MODE_NAME}" = mode-* ]]; then
+if identity_reinject_enabled && [[ "${MODE_NAME}" = mode-* ]]; then
 	IDENTITY_RECALL_CANONICAL_PROMPT=""
 	IDENTITY_RECALL_PHASE_NAME=""
 	IDENTITY_RECALL_METADATA=""
