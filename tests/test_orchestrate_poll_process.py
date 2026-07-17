@@ -566,6 +566,8 @@ def _run_poller(
 	codex_json: dict | None = None,
 	fail_validation_dispatch: bool = False,
 	fail_release_dispatch: bool = False,
+	fail_search_issues: bool = False,
+	search_issue_items: list[dict] | None = None,
 	prs: list[dict] | None = None,
 	pr_api_sequence: dict[int, list[dict]] | None = None,
 	existing_branches: list[str] | None = None,
@@ -772,6 +774,8 @@ def _run_poller(
 			"issue_state_calls": {},
 			"fail_validation_dispatch": fail_validation_dispatch,
 			"fail_release_dispatch": fail_release_dispatch,
+			"fail_search_issues": bool(fail_search_issues),
+			"search_issue_items": list(search_issue_items or []),
 			"default_branch": "main",
 			"prs": prs,
 			"pr_api_sequence": {str(k): list(v) for k, v in pr_api_sequence.items()},
@@ -1483,6 +1487,52 @@ if args[0] == 'api':
 				issue_payload['timelineItems'] = {'nodes': timeline_nodes}
 			repo[f'i{alias_num}'] = issue_payload
 		print(json.dumps({'data': {'repository': repo}}))
+		sys.exit(0)
+
+	if path == 'search/issues':
+		# Minimal child-issue search: return issues whose stored body contains
+		# the queried `Tracking issue: #N` reference (mirrors the real
+		# search/issues used by state reconstruction and the deferred-creation
+		# duplicate backstop).  Honors an injected failure so fail-closed tests
+		# can exercise the "lookup unavailable this cycle" path.  The real
+		# endpoint returns both issues and pull requests unless the query adds
+		# `is:issue`; explicit `search_issue_items` fixtures can model that.
+		if store.get('fail_search_issues'):
+			print('search/issues failed', file=sys.stderr)
+			sys.exit(1)
+		q = ''
+		for f in fields:
+			if f.startswith('q='):
+				q = f.split('=', 1)[1]
+		explicit_items = store.get('search_issue_items')
+		if explicit_items:
+			items = list(explicit_items)
+		else:
+			items = []
+			mt = re.search(r'Tracking issue: #(\d+)', q)
+			if mt is not None:
+				needle = 'Tracking issue: #' + mt.group(1)
+				for inum, idata in store.get('issues', {}).items():
+					body = str(idata.get('body', '') or '')
+					if needle in body:
+						items.append({
+							'number': int(inum),
+							'title': idata.get('title', ''),
+							'body': body,
+							'state': 'closed' if idata.get('closed') else 'open',
+						})
+		if 'is:issue' in q:
+			items = [item for item in items if 'pull_request' not in item]
+		result = {'total_count': len(items), 'incomplete_results': False, 'items': items}
+		if jq:
+			import subprocess as _sp
+			p = _sp.run(['jq', '-rc', jq], input=json.dumps(result), capture_output=True, text=True)
+			if p.returncode != 0:
+				print(p.stderr, file=sys.stderr, end='')
+				sys.exit(p.returncode)
+			print(p.stdout, end='')
+		else:
+			print(json.dumps(result))
 		sys.exit(0)
 
 	m = re.search(r'/issues/(\d+)/comments(?:\?.*)?$', path)
@@ -10232,6 +10282,262 @@ def test_all_invalid_state_comments_trigger_reconstruction_path_without_heal():
 	assert "restored from older valid state and posted healed canonical state" not in result["stdout"]
 	assert "State reconstructed and posted for tracking issue #192." in result["stdout"]
 	assert result["latest_state"]["schema_version"] == "orchestrate_state.v1"
+
+
+def test_failed_comments_fetch_skips_state_reconstruction():
+	"""A failed comments fetch must not be misread as 'state missing'.
+
+	Regression for the project #3627 incident (poll run 29539323907): the
+	tracking issue had 665 comments, the paginated
+	``gh api --paginate .../issues/3627/comments`` fetch exhausted its retries
+	("gh command failed after 5 attempts"), and the poller treated the
+	resulting empty COMMENTS as "No state found ... Attempting state
+	reconstruction".  Reconstruction reset current_wave to 1 and — with the
+	child-issue search also returning an empty map — re-created the
+	already-completed wave-1 issue as duplicates (#3674, then #3676 on the
+	next cycle).
+
+	When COMMENTS_FETCH_OK != "true" the poller must instead skip
+	reconstruction this cycle and retry on the next poll, matching how the
+	rest of the file treats an unreadable comments fetch as "fail open".
+	"""
+	rewindable_body = (
+		"## Project: Demo project\n\n"
+		"**Integration branch:** `orchestrator/project-192`\n\n"
+		"### Wave 1\n\n"
+		"- [x] **phase-a-done**: Phase A — already completed (priority 1)\n\n"
+		"### Wave 2\n\n"
+		"- [ ] **phase-b-next**: Phase B — not started (priority 2)\n"
+	)
+	result = _run_poller(
+		state={"schema_version": "orchestrate_state.v1"},
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_body=rewindable_body,
+		# Force the tracking-issue comments GET to fail on the first call,
+		# reproducing the exhausted-retries fetch from run 29539323907.
+		fail_issue_comment_get_after={192: 0},
+	)
+	assert (
+		"Comments fetch failed for tracking issue #192; cannot confirm "
+		"orchestrator state is missing" in result["stdout"]
+	), result["stdout"]
+	# The destructive reconstruction path must NOT run when the fetch failed.
+	assert "Attempting state reconstruction" not in result["stdout"], result["stdout"]
+	assert (
+		"State reconstructed and posted for tracking issue #192."
+		not in result["stdout"]
+	), result["stdout"]
+	# And no duplicate wave-1 issue may be spawned for already-done work.
+	assert "Deferred issue creation for wave" not in result["stdout"], result["stdout"]
+
+
+def test_reconstruction_refused_when_body_has_completed_unmapped_issue():
+	"""Defense-in-depth for #3627: refuse a from-scratch rebuild that would
+	duplicate finished work.
+
+	Even when the comments fetch succeeds but carries no valid state comment,
+	the poller must not rebuild a project whose tracking body shows completed
+	([x] or [X]) sub-issues the child-issue search cannot map — a from-scratch rebuild
+	resets current_wave to 1 and re-creates those finished issues as
+	duplicates.  rebuild_tracking_state raises ReconstructionUnsafeError, the
+	helper exits non-zero, and the poller skips this cycle instead of creating
+	duplicates.
+	"""
+	rewindable_body = (
+		"## Project: Demo project\n\n"
+		"**Integration branch:** `orchestrator/project-192`\n\n"
+		"### Wave 1\n\n"
+		"- [X] **phase-h-done**: Phase H — already merged (priority 1)\n\n"
+		"### Wave 2\n\n"
+		"- [ ] **phase-d-next**: Phase D — not started (priority 2)\n"
+	)
+	invalid_state = {"schema_version": "orchestrate_state.v1"}
+	malformed_latest = '<!-- ORCHESTRATOR_STATE_V1\n{"schema_version":"orchestrate_state.v1",\nORCHESTRATOR_STATE_V1 -->'
+	result = _run_poller(
+		state=invalid_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[malformed_latest],
+		tracking_body=rewindable_body,
+		issue_labels={10: ["ai:implementing"]},
+	)
+	# The rebuild is refused (and the reason is surfaced), not performed.
+	assert (
+		"State reconstruction failed for tracking issue #192, skipping."
+		in result["stdout"]
+	), result["stdout"]
+	assert "refusing to reconstruct state" in result["stdout"], result["stdout"]
+	assert (
+		"State reconstructed and posted for tracking issue #192."
+		not in result["stdout"]
+	), result["stdout"]
+	# No duplicate GitHub issue may be created for the already-completed work.
+	assert result.get("created_issues", []) == [], result.get("created_issues")
+
+
+def test_deferred_creation_adopts_existing_github_issue_instead_of_duplicating():
+	"""Backstop for the project #3542 duplicate-Phase-1 failure mode.
+
+	When the loaded state presents a current-wave issue as uncreated
+	(github_issue == null) AND absent from issue_number_map — e.g. the poller
+	acted on a stale/rewound snapshot whose write recording the original issue
+	never durably landed — the deferred-creation path must NOT mint a duplicate
+	if an issue already exists on GitHub carrying that Local ID.  It adopts the
+	existing issue (here a closed/merged one, mirroring the original #3543)
+	instead of creating a second one.
+	"""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"] = [
+		{"id": "phase-1-backend", "github_issue": None, "status": "not_created"},
+	]
+	state["issue_number_map"] = {}
+	state["pending_issue_defs"] = {
+		"phase-1-backend": {
+			"title": "Phase 1: backend",
+			"body": "Implement phase 1 backend.",
+			"priority": 1,
+		},
+	}
+	existing_body = (
+		"Implement phase 1 backend.\n\n---\n"
+		"**Orchestrator metadata** (do not edit)\n"
+		"- Tracking issue: #192\n"
+		"- Local ID: `phase-1-backend`\n"
+		"- Priority: 1\n"
+		"- Managed by: AI Orchestrator"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={3543: ["ai:merged"]},
+		issue_closed={3543: True},
+		issue_bodies={3543: existing_body},
+	)
+	# No duplicate issue may be minted for the already-created work.
+	assert result.get("created_issues", []) == [], result.get("created_issues")
+	# The existing issue is adopted into the wave entry + issue_number_map and
+	# dropped from pending_issue_defs.
+	ls = result["latest_state"]
+	w1 = ls["waves"][0]["issues"][0]
+	assert w1["github_issue"] == 3543, w1
+	assert ls["issue_number_map"].get("phase-1-backend") == 3543
+	assert "phase-1-backend" not in ls["pending_issue_defs"]
+	# The adoption is logged and NOT announced as a fresh creation.
+	assert "already exists on GitHub as #3543" in result["stdout"], result["stdout"]
+	tracking_bodies = "".join(
+		str(c.get("body", "")) for c in result["issues"]["192"]["comments"]
+	)
+	assert "Deferred Issue Creation" not in tracking_bodies
+
+
+def test_deferred_creation_scopes_lookup_to_issues_and_adopts_existing_issue():
+	"""Mixed issue/PR search results must not degrade the duplicate backstop.
+
+	The real `search/issues` endpoint returns pull requests too unless the query
+	adds `is:issue`. A PR-like result with `body: null` used to make the jq
+	reduce fail, which the shell fallback then misread as a successful empty
+	lookup and allowed duplicate creation. Scope the query to issues and keep
+	the real child issue adoptable.
+	"""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"] = [
+		{"id": "phase-1-backend", "github_issue": None, "status": "not_created"},
+	]
+	state["issue_number_map"] = {}
+	state["pending_issue_defs"] = {
+		"phase-1-backend": {
+			"title": "Phase 1: backend",
+			"body": "Implement phase 1 backend.",
+			"priority": 1,
+		},
+	}
+	existing_body = (
+		"Implement phase 1 backend.\n\n---\n"
+		"**Orchestrator metadata** (do not edit)\n"
+		"- Tracking issue: #192\n"
+		"- Local ID: `phase-1-backend`\n"
+		"- Priority: 1\n"
+		"- Managed by: AI Orchestrator"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		search_issue_items=[
+			{"number": 9001, "title": "Integration PR", "body": None, "pull_request": {}, "state": "open"},
+			{"number": 3543, "title": "Phase 1: backend", "body": existing_body, "state": "closed"},
+		],
+	)
+	assert result.get("created_issues", []) == [], result.get("created_issues")
+	assert "phase-1-backend" not in result["latest_state"]["pending_issue_defs"]
+	w1 = result["latest_state"]["waves"][0]["issues"][0]
+	assert w1["github_issue"] == 3543, w1
+
+
+def test_deferred_creation_skips_when_existence_lookup_fails():
+	"""Fail-closed: when the child-issue existence lookup itself fails this
+	cycle, deferred creation must skip (and retry on the next poll) rather than
+	risk a duplicate — an unavailable lookup is not evidence the issue is
+	absent.
+	"""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"] = [
+		{"id": "phase-1-backend", "github_issue": None, "status": "not_created"},
+	]
+	state["issue_number_map"] = {}
+	state["pending_issue_defs"] = {
+		"phase-1-backend": {
+			"title": "Phase 1: backend",
+			"body": "Implement phase 1 backend.",
+			"priority": 1,
+		},
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		fail_search_issues=True,
+		# Keep gh_retry from sleeping through its backoff ladder during the test.
+		env_overrides={"GH_RETRY_MAX_ATTEMPTS": "1"},
+	)
+	# No issue created, and the wave entry stays uncreated for a later retry.
+	assert result.get("created_issues", []) == [], result.get("created_issues")
+	assert "skipping creation to avoid a duplicate" in result["stdout"], result["stdout"]
+	w1 = result["latest_state"]["waves"][0]["issues"][0]
+	assert w1.get("github_issue") is None, w1
+
+
+def test_deferred_creation_relinks_issue_number_map_entry_without_creation_comment():
+	"""A zero-creation relink cycle must not claim that issues were created.
+
+	When an uncreated wave entry already has a Local ID -> GitHub issue mapping
+	in-state, the deferred-creation loop heals the wave entry from
+	issue_number_map instead of minting a new issue.  That relink path is not a
+	creation and must not feed the "Created them now" tracking comment or
+	Telegram notification.
+	"""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"] = [
+		{"id": "issue-1", "github_issue": None, "status": "not_created"},
+	]
+	state["pending_issue_defs"] = {}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:clarification"]},
+	)
+	assert result.get("created_issues", []) == [], result.get("created_issues")
+	assert "already mapped to #10" in result["stdout"], result["stdout"]
+	ls = result["latest_state"]
+	w1 = ls["waves"][0]["issues"][0]
+	assert w1["github_issue"] == 10, w1
+	tracking_bodies = "".join(
+		str(c.get("body", "")) for c in result["issues"]["192"]["comments"]
+	)
+	assert "Deferred Issue Creation" not in tracking_bodies
 
 
 def test_truncated_comments_json_is_handled_gracefully():

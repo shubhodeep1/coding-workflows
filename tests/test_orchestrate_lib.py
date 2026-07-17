@@ -1690,6 +1690,63 @@ Summary
 	assert state["final_merge_status"] == "pending"
 
 
+def test_parse_tracking_body_captures_completion_marks():
+	body = (
+		"## Project: P\n\n"
+		"### Wave 1\n\n"
+		"- [x] **done-issue**: Finished task (priority 1)\n\n"
+		"- [X] **done-issue-2**: Finished task (priority 2)\n\n"
+		"### Wave 2\n\n"
+		"- [ ] **todo-issue**: Pending task (priority 3)\n"
+	)
+	parsed = orchestrate_lib.parse_tracking_body(body)
+	assert parsed["waves"][0][0]["completed"] is True
+	assert parsed["waves"][0][1]["completed"] is True
+	assert parsed["waves"][1][0]["completed"] is False
+
+
+def test_rebuild_tracking_state_refuses_when_completed_issue_unmapped():
+	"""Mirrors project #3627: wave 1 is already complete ([x]) but the child-
+	issue search returned an empty map, so a from-scratch rebuild would reset
+	current_wave to 1 and re-create the finished issue as a duplicate.  The
+	rebuild must refuse rather than rewind."""
+	body = (
+		"## Project: P\n\n"
+		"**Integration branch:** `orchestrator/project-9`\n\n"
+		"### Wave 1\n\n- [x] **phase-h**: Phase H (priority 1)\n\n"
+		"### Wave 2\n\n- [ ] **phase-d**: Phase D (priority 2)\n"
+	)
+	try:
+		orchestrate_lib.rebuild_tracking_state(body, {}, tracking_issue=9)
+	except orchestrate_lib.ReconstructionUnsafeError as exc:
+		assert "phase-h" in str(exc)
+		# It must be an OrchestrateError so the CLI maps it to a non-zero exit
+		# and the poller falls into its "reconstruction failed, skipping" arm.
+		assert isinstance(exc, orchestrate_lib.OrchestrateError)
+	else:
+		raise AssertionError("expected ReconstructionUnsafeError")
+
+
+def test_rebuild_tracking_state_allows_when_completed_issue_mapped():
+	"""When the completed issue IS discoverable, reconstruction proceeds and
+	never queues it for re-creation."""
+	body = (
+		"## Project: P\n\n"
+		"**Integration branch:** `orchestrator/project-9`\n\n"
+		"### Wave 1\n\n- [x] **phase-h**: Phase H (priority 1)\n\n"
+		"### Wave 2\n\n- [ ] **phase-d**: Phase D (priority 2)\n"
+	)
+	state = orchestrate_lib.rebuild_tracking_state(body, {"phase-h": 100}, tracking_issue=9)
+	# The mapped, completed issue carries its real number and is not pending.
+	assert state["issue_number_map"]["phase-h"] == 100
+	assert "phase-h" not in state["pending_issue_defs"]
+	w1_issue = state["waves"][0]["issues"][0]
+	assert w1_issue["id"] == "phase-h"
+	assert w1_issue["github_issue"] == 100
+	# The still-pending, unmapped issue is legitimately queued for creation.
+	assert "phase-d" in state["pending_issue_defs"]
+
+
 def test_render_tracking_issue_body_from_state_preserves_structure_and_ticks_terminal_rows():
 	template = """## Project: Test Project
 
