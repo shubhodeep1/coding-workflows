@@ -12,6 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_PROMPT = REPO_ROOT / "prompts" / "mode-plan.txt"
 PLAN_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "plan.yml"
+CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 REUSE_AUDIT_CONTRACT_TEST = REPO_ROOT / "tests" / "test_plan_reuse_audit_contract.py"
 RENDER_PROMPT = REPO_ROOT / "scripts" / "render_prompt.py"
 
@@ -81,6 +82,22 @@ def test_plan_workflow_exports_flag_and_keeps_live_prompt_parity() -> None:
 	assert "existing scope-too-large gate" in workflow
 
 
+def test_ci_workflow_keeps_plan_decisions_lint_contract() -> None:
+	workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+	step_name = "- name: Plan decisions advisory lint"
+	step_index = workflow.index(step_name)
+
+	assert "- name: Plan decisions lint unit tests" in workflow
+	assert "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_decisions.py" in workflow
+	assert workflow.index("continue-on-error: true", step_index) > step_index
+	assert "DOCS_DECISION_LINT_ENABLED: ${{ vars.DOCS_DECISION_LINT_ENABLED || 'false' }}" in workflow
+	assert "decision_lint_stderr=\"$(mktemp)\"" in workflow
+	assert "PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_plan_decisions.py 2> \"${decision_lint_stderr}\"" in workflow
+	assert "if [ \"${DOCS_DECISION_LINT_ENABLED}\" = \"true\" ] && [ -s \"${decision_lint_stderr}\" ]; then" in workflow
+	assert 'echo "### Plan decision lint advisories"' in workflow
+	assert 'cat "${decision_lint_stderr}" >&2' in workflow
+
+
 def test_reuse_audit_contract_script_runs_cleanly() -> None:
 	proc = subprocess.run(
 		[sys.executable, str(REUSE_AUDIT_CONTRACT_TEST)],
@@ -97,6 +114,7 @@ def main() -> int:
 	test_mode_plan_scope_mode_contract_defaults_on()
 	test_mode_plan_scope_mode_contract_relaxes_when_flag_disabled()
 	test_plan_workflow_exports_flag_and_keeps_live_prompt_parity()
+	test_ci_workflow_keeps_plan_decisions_lint_contract()
 	test_reuse_audit_contract_script_runs_cleanly()
 	print("OK: plan scope-mode contract holds")
 	return 0
