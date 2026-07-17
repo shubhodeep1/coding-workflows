@@ -566,6 +566,7 @@ def _run_poller(
 	codex_json: dict | None = None,
 	fail_validation_dispatch: bool = False,
 	fail_release_dispatch: bool = False,
+	fail_search_issues: bool = False,
 	prs: list[dict] | None = None,
 	pr_api_sequence: dict[int, list[dict]] | None = None,
 	existing_branches: list[str] | None = None,
@@ -772,6 +773,7 @@ def _run_poller(
 			"issue_state_calls": {},
 			"fail_validation_dispatch": fail_validation_dispatch,
 			"fail_release_dispatch": fail_release_dispatch,
+			"fail_search_issues": bool(fail_search_issues),
 			"default_branch": "main",
 			"prs": prs,
 			"pr_api_sequence": {str(k): list(v) for k, v in pr_api_sequence.items()},
@@ -1483,6 +1485,44 @@ if args[0] == 'api':
 				issue_payload['timelineItems'] = {'nodes': timeline_nodes}
 			repo[f'i{alias_num}'] = issue_payload
 		print(json.dumps({'data': {'repository': repo}}))
+		sys.exit(0)
+
+	if path == 'search/issues':
+		# Minimal child-issue search: return issues whose stored body contains
+		# the queried `Tracking issue: #N` reference (mirrors the real
+		# search/issues used by state reconstruction and the deferred-creation
+		# duplicate backstop).  Honors an injected failure so fail-closed tests
+		# can exercise the "lookup unavailable this cycle" path.
+		if store.get('fail_search_issues'):
+			print('search/issues failed', file=sys.stderr)
+			sys.exit(1)
+		q = ''
+		for f in fields:
+			if f.startswith('q='):
+				q = f.split('=', 1)[1]
+		items = []
+		mt = re.search(r'Tracking issue: #(\d+)', q)
+		if mt is not None:
+			needle = 'Tracking issue: #' + mt.group(1)
+			for inum, idata in store.get('issues', {}).items():
+				body = str(idata.get('body', '') or '')
+				if needle in body:
+					items.append({
+						'number': int(inum),
+						'title': idata.get('title', ''),
+						'body': body,
+						'state': 'closed' if idata.get('closed') else 'open',
+					})
+		result = {'total_count': len(items), 'incomplete_results': False, 'items': items}
+		if jq:
+			import subprocess as _sp
+			p = _sp.run(['jq', '-rc', jq], input=json.dumps(result), capture_output=True, text=True)
+			if p.returncode != 0:
+				print(p.stderr, file=sys.stderr, end='')
+				sys.exit(p.returncode)
+			print(p.stdout, end='')
+		else:
+			print(json.dumps(result))
 		sys.exit(0)
 
 	m = re.search(r'/issues/(\d+)/comments(?:\?.*)?$', path)
@@ -10324,6 +10364,95 @@ def test_reconstruction_refused_when_body_has_completed_unmapped_issue():
 	), result["stdout"]
 	# No duplicate GitHub issue may be created for the already-completed work.
 	assert result.get("created_issues", []) == [], result.get("created_issues")
+
+
+def test_deferred_creation_adopts_existing_github_issue_instead_of_duplicating():
+	"""Backstop for the project #3542 duplicate-Phase-1 failure mode.
+
+	When the loaded state presents a current-wave issue as uncreated
+	(github_issue == null) AND absent from issue_number_map — e.g. the poller
+	acted on a stale/rewound snapshot whose write recording the original issue
+	never durably landed — the deferred-creation path must NOT mint a duplicate
+	if an issue already exists on GitHub carrying that Local ID.  It adopts the
+	existing issue (here a closed/merged one, mirroring the original #3543)
+	instead of creating a second one.
+	"""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"] = [
+		{"id": "phase-1-backend", "github_issue": None, "status": "not_created"},
+	]
+	state["issue_number_map"] = {}
+	state["pending_issue_defs"] = {
+		"phase-1-backend": {
+			"title": "Phase 1: backend",
+			"body": "Implement phase 1 backend.",
+			"priority": 1,
+		},
+	}
+	existing_body = (
+		"Implement phase 1 backend.\n\n---\n"
+		"**Orchestrator metadata** (do not edit)\n"
+		"- Tracking issue: #192\n"
+		"- Local ID: `phase-1-backend`\n"
+		"- Priority: 1\n"
+		"- Managed by: AI Orchestrator"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={3543: ["ai:merged"]},
+		issue_closed={3543: True},
+		issue_bodies={3543: existing_body},
+	)
+	# No duplicate issue may be minted for the already-created work.
+	assert result.get("created_issues", []) == [], result.get("created_issues")
+	# The existing issue is adopted into the wave entry + issue_number_map and
+	# dropped from pending_issue_defs.
+	ls = result["latest_state"]
+	w1 = ls["waves"][0]["issues"][0]
+	assert w1["github_issue"] == 3543, w1
+	assert ls["issue_number_map"].get("phase-1-backend") == 3543
+	assert "phase-1-backend" not in ls["pending_issue_defs"]
+	# The adoption is logged and NOT announced as a fresh creation.
+	assert "already exists on GitHub as #3543" in result["stdout"], result["stdout"]
+	tracking_bodies = "".join(
+		str(c.get("body", "")) for c in result["issues"]["192"]["comments"]
+	)
+	assert "Deferred Issue Creation" not in tracking_bodies
+
+
+def test_deferred_creation_skips_when_existence_lookup_fails():
+	"""Fail-closed: when the child-issue existence lookup itself fails this
+	cycle, deferred creation must skip (and retry on the next poll) rather than
+	risk a duplicate — an unavailable lookup is not evidence the issue is
+	absent.
+	"""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"] = [
+		{"id": "phase-1-backend", "github_issue": None, "status": "not_created"},
+	]
+	state["issue_number_map"] = {}
+	state["pending_issue_defs"] = {
+		"phase-1-backend": {
+			"title": "Phase 1: backend",
+			"body": "Implement phase 1 backend.",
+			"priority": 1,
+		},
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		fail_search_issues=True,
+		# Keep gh_retry from sleeping through its backoff ladder during the test.
+		env_overrides={"GH_RETRY_MAX_ATTEMPTS": "1"},
+	)
+	# No issue created, and the wave entry stays uncreated for a later retry.
+	assert result.get("created_issues", []) == [], result.get("created_issues")
+	assert "skipping creation to avoid a duplicate" in result["stdout"], result["stdout"]
+	w1 = result["latest_state"]["waves"][0]["issues"][0]
+	assert w1.get("github_issue") is None, w1
 
 
 def test_truncated_comments_json_is_handled_gracefully():
