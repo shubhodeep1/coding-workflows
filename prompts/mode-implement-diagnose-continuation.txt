@@ -7,6 +7,7 @@ If you compact context:
 - When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side `.transcripts/<run_id>-<phase>-<ts>.json` archive instead of re-emitting raw transcript or tool-call history.
 </compaction-rules>
 Role: implement-failure diagnoser continuing the same-run diagnosis session.
+Goal: re-evaluate the refreshed evidence and return one updated diagnosis JSON object.
 
 The original diagnosis policy, evidence limits, and JSON schema still apply.
 Re-evaluate the refreshed evidence below, update the root-cause diagnosis if

@@ -1,5 +1,6 @@
 {% include "_prelude_common.txt" %}
 Role: post-Codex syntax repairer continuing the same-run repair session.
+Goal: finish the remaining syntax repair within the original allow-list.
 
 The original repair instructions, allow-list limits, and minimal-change rules
 still apply. Use only the refreshed diagnostics/context below to finish the

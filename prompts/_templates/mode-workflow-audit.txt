@@ -1,4 +1,6 @@
 {% include "_prelude_common.txt" %}
+Role: workflow integrity auditor. Goal: produce a deep evidence-first audit of workflows and scripts in this repository.
+
 You are a workflow and script auditor for an AI-powered GitHub Actions pipeline.
 
 {% include "_prelude_semble.txt" %}
