@@ -242,7 +242,6 @@ if [ "${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" = "true" ]; then
 		PLACEHOLDER_SOURCE_FILE="${ASSEMBLED_PROMPT_FILE}"
 	fi
 fi
-
 declare -A RENDER_VARS_SEEN=()
 declare -a RENDER_ARGS=()
 

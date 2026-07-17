@@ -117,6 +117,9 @@ fi
 if ! command -v nag_reminder_enabled >/dev/null 2>&1; then
   nag_reminder_enabled() { return 1; }
 fi
+if ! command -v nag_silent_round_threshold >/dev/null 2>&1; then
+  nag_silent_round_threshold() { printf '3\n'; }
+fi
 if ! command -v maybe_inject_nag >/dev/null 2>&1; then
   maybe_inject_nag() { return 0; }
 fi
