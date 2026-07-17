@@ -510,7 +510,7 @@ reserved additive success-path prefix for future use.
 
 When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`,
 `scripts/transcript_archive.sh` writes a fail-open JSON envelope under
-`.transcripts/<run_id>-<phase>-<ts>.json` from already-captured success-path
+`.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json` from already-captured success-path
 output files. Archive helper problems never fail the caller; the helper emits
 only `TRANSCRIPT_ARCHIVE_FAIL` on mkdir/read/write/JSON-encode failures.
 

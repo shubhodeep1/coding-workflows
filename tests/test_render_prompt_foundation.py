@@ -188,7 +188,7 @@ def test_render_prompt_sh_renders_header_with_empty_repo_learnings() -> None:
 		"If you compact context:\n"
 		"- Preserve the latest file-read result for every file still likely to be edited in this run.\n"
 		"- Preserve the exact structured-output contract, including required section headings and JSON/Q-ID schemas.\n"
-		"- When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side `.transcripts/<run_id>-<phase>-<ts>.json` archive instead of re-emitting raw transcript or tool-call history.\n"
+		"- When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side `.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json` archive instead of re-emitting raw transcript or tool-call history.\n"
 		"</compaction-rules>\n"
 	)
 	proc = subprocess.run(
@@ -214,7 +214,7 @@ def test_render_prompt_sh_renders_header_with_populated_repo_learnings() -> None
 		"If you compact context:\n"
 		"- Preserve the latest file-read result for every file still likely to be edited in this run.\n"
 		"- Preserve the exact structured-output contract, including required section headings and JSON/Q-ID schemas.\n"
-		"- When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side `.transcripts/<run_id>-<phase>-<ts>.json` archive instead of re-emitting raw transcript or tool-call history.\n"
+		"- When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side `.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json` archive instead of re-emitting raw transcript or tool-call history.\n"
 		"</compaction-rules>\n"
 	)
 	proc = subprocess.run(
