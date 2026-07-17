@@ -568,7 +568,7 @@ def _find_identity_role_goal_line_end_offset(rendered_prompt_text: str) -> int |
 	return None
 
 
-def inject_identity_recall_block(rendered_prompt_text: str, identity_block: str) -> str | None:
+def inject_identity_recall_block(rendered_prompt_text: str, identity_block: str) -> str:
 	paragraph_end = _find_identity_role_goal_line_end_offset(rendered_prompt_text)
 	identity_block_text = identity_block.rstrip("\n")
 	if paragraph_end is not None:
@@ -634,12 +634,7 @@ def apply_identity_recall_block(rendered_prompt_text: str, *, prompt_path: Path,
 	except RenderPromptError as exc:
 		emit_identity_reinject_parse_fail(mode_name, "render_failed", detail=str(exc))
 		return rendered_prompt_text
-
-	updated_prompt_text = inject_identity_recall_block(rendered_prompt_text, identity_block)
-	if updated_prompt_text is None:
-		emit_identity_reinject_parse_fail(mode_name, "injection_failed")
-		return rendered_prompt_text
-	return updated_prompt_text
+	return inject_identity_recall_block(rendered_prompt_text, identity_block)
 
 
 def load_phase_c_persona_prefixes(prompt_path: Path | None) -> dict[str, str]:
