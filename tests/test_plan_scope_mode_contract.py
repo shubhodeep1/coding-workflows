@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_PROMPT = REPO_ROOT / "prompts" / "mode-plan.txt"
@@ -42,23 +44,27 @@ def _assert_decisions_contract(text: str) -> None:
 	assert "Each decision record must include non-empty bullets for `Chosen`, `Alternatives considered`, and `Why`." in text
 
 
-def _workflow_step_block(workflow: str, step_name: str) -> str:
-	lines = workflow.splitlines()
-	step_marker = f"- name: {step_name}"
-	start_line = -1
-	for index, line in enumerate(lines):
-		if line.strip() == step_marker:
-			start_line = index
-			break
-	assert start_line >= 0, f"missing workflow step: {step_name}"
+def _workflow_step_block(workflow: str, step_name: str) -> dict[str, object]:
+	parsed_workflow = yaml.safe_load(workflow)
+	assert isinstance(parsed_workflow, dict), "workflow YAML must parse to a mapping"
 
-	end_line = len(lines)
-	step_prefix = lines[start_line][: len(lines[start_line]) - len(lines[start_line].lstrip())] + "- name: "
-	for index in range(start_line + 1, len(lines)):
-		if lines[index].startswith(step_prefix):
-			end_line = index
-			break
-	return "\n".join(lines[start_line:end_line])
+	jobs = parsed_workflow.get("jobs")
+	assert isinstance(jobs, dict), "workflow YAML missing jobs mapping"
+
+	matching_steps: list[dict[str, object]] = []
+	for job in jobs.values():
+		if not isinstance(job, dict):
+			continue
+		steps = job.get("steps")
+		if not isinstance(steps, list):
+			continue
+		for step in steps:
+			if isinstance(step, dict) and step.get("name") == step_name:
+				matching_steps.append(step)
+
+	assert matching_steps, f"missing workflow step: {step_name}"
+	assert len(matching_steps) == 1, f"duplicate workflow step: {step_name}"
+	return matching_steps[0]
 
 
 def test_mode_plan_scope_mode_contract_defaults_on() -> None:
@@ -106,14 +112,22 @@ def test_ci_workflow_keeps_plan_decisions_lint_contract() -> None:
 	unit_test_step = _workflow_step_block(workflow, "Plan decisions lint unit tests")
 	advisory_step = _workflow_step_block(workflow, "Plan decisions advisory lint")
 
-	assert "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_decisions.py" in unit_test_step
-	assert "continue-on-error: true" in advisory_step
-	assert "DOCS_DECISION_LINT_ENABLED: ${{ vars.DOCS_DECISION_LINT_ENABLED || 'false' }}" in advisory_step
-	assert "decision_lint_stderr=\"$(mktemp)\"" in advisory_step
-	assert "PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_plan_decisions.py 2> \"${decision_lint_stderr}\"" in advisory_step
-	assert "if [ \"${DOCS_DECISION_LINT_ENABLED}\" = \"true\" ] && [ -s \"${decision_lint_stderr}\" ]; then" in advisory_step
-	assert 'echo "### Plan decision lint advisories"' in advisory_step
-	assert 'cat "${decision_lint_stderr}" >&2' in advisory_step
+	unit_test_run = unit_test_step.get("run")
+	assert isinstance(unit_test_run, str)
+	assert "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_decisions.py" in unit_test_run
+
+	assert advisory_step.get("continue-on-error") is True
+	advisory_env = advisory_step.get("env")
+	assert isinstance(advisory_env, dict)
+	assert advisory_env.get("DOCS_DECISION_LINT_ENABLED") == "${{ vars.DOCS_DECISION_LINT_ENABLED || 'false' }}"
+
+	advisory_run = advisory_step.get("run")
+	assert isinstance(advisory_run, str)
+	assert "decision_lint_stderr=\"$(mktemp)\"" in advisory_run
+	assert "PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_plan_decisions.py 2> \"${decision_lint_stderr}\"" in advisory_run
+	assert "if [ \"${DOCS_DECISION_LINT_ENABLED}\" = \"true\" ] && [ -s \"${decision_lint_stderr}\" ]; then" in advisory_run
+	assert 'echo "### Plan decision lint advisories"' in advisory_run
+	assert 'cat "${decision_lint_stderr}" >&2' in advisory_run
 
 
 def test_reuse_audit_contract_script_runs_cleanly() -> None:
