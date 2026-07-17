@@ -566,8 +566,11 @@ def inject_identity_recall_block(rendered_prompt_text: str, identity_block: str)
 	return rendered_prompt_text + "\n\n" + identity_block_text + "\n"
 
 
-def emit_identity_reinject_parse_fail(mode_name: str, failure_reason: str) -> None:
-	print(f"IDENTITY_REINJECT_PARSE_FAIL: {mode_name} reason={failure_reason}", file=sys.stderr)
+def emit_identity_reinject_parse_fail(mode_name: str, failure_reason: str, *, detail: str | None = None) -> None:
+	message = f"IDENTITY_REINJECT_PARSE_FAIL: {mode_name} reason={failure_reason}"
+	if detail:
+		message += f" detail={json.dumps(detail, ensure_ascii=True)}"
+	print(message, file=sys.stderr)
 
 
 def apply_identity_recall_block(rendered_prompt_text: str, *, prompt_path: Path, mode_name: str) -> str:
@@ -585,9 +588,16 @@ def apply_identity_recall_block(rendered_prompt_text: str, *, prompt_path: Path,
 		return rendered_prompt_text
 
 	try:
-		identity_metadata = extract_identity_recall_metadata(load_prompt(canonical_prompt_path))
-	except RenderPromptError:
-		identity_metadata = None
+		canonical_prompt_text = load_prompt(canonical_prompt_path)
+	except RenderPromptError as exc:
+		emit_identity_reinject_parse_fail(
+			mode_name,
+			"canonical_prompt_load_failed",
+			detail=str(exc),
+		)
+		return rendered_prompt_text
+
+	identity_metadata = extract_identity_recall_metadata(canonical_prompt_text)
 	if identity_metadata is None:
 		emit_identity_reinject_parse_fail(mode_name, "metadata_extract_failed")
 		return rendered_prompt_text
@@ -604,8 +614,8 @@ def apply_identity_recall_block(rendered_prompt_text: str, *, prompt_path: Path,
 			phase_role=phase_role,
 			phase_mission=phase_mission,
 		)
-	except RenderPromptError:
-		emit_identity_reinject_parse_fail(mode_name, "render_failed")
+	except RenderPromptError as exc:
+		emit_identity_reinject_parse_fail(mode_name, "render_failed", detail=str(exc))
 		return rendered_prompt_text
 
 	updated_prompt_text = inject_identity_recall_block(rendered_prompt_text, identity_block)

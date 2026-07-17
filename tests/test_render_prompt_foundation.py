@@ -850,6 +850,80 @@ def test_render_prompt_py_matches_shell_identity_recall_output_with_default_pers
 	assert identity_match.group("mission") == "emit a structured implementation plan or `BLOCKED:` line"
 
 
+def test_render_prompt_py_identity_recall_reports_canonical_prompt_load_failure_details() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_identity_load_fail_") as td:
+		root = Path(td)
+		(root / "prompts").mkdir(parents=True, exist_ok=True)
+		prompt_file = root / "runtime" / "mode-synthetic-load-inline.txt"
+		canonical_prompt = root / "prompts" / "mode-synthetic-load.txt"
+		prompt_file.parent.mkdir(parents=True, exist_ok=True)
+		prompt_file.write_text("Runtime wrapper prelude.\n\nBody follows.\n", encoding="utf-8")
+		canonical_prompt.write_text(
+			"# tier: DEFAULT\nRole: synthetic planner. Goal: surface load failures.\n",
+			encoding="utf-8",
+		)
+
+		baseline_proc = _run_render_prompt_py(prompt_file, cwd=root)
+		identity_env = _base_env()
+		identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "true"
+		os.chmod(canonical_prompt, 0)
+		try:
+			identity_proc = _run_render_prompt_py(prompt_file, env=identity_env, cwd=root)
+		finally:
+			os.chmod(canonical_prompt, 0o644)
+
+	assert baseline_proc.returncode == 0, baseline_proc.stderr
+	assert baseline_proc.stderr == ""
+	assert identity_proc.returncode == 0, identity_proc.stderr
+	assert identity_proc.stdout == baseline_proc.stdout
+	assert identity_proc.stderr.startswith(
+		"IDENTITY_REINJECT_PARSE_FAIL: mode-synthetic-load-inline reason=canonical_prompt_load_failed detail=",
+	)
+	assert "Unable to read prompt file" in identity_proc.stderr
+	assert str(canonical_prompt) in identity_proc.stderr
+
+
+def test_render_prompt_py_identity_recall_reports_render_failure_details() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_identity_render_fail_") as td:
+		root = Path(td)
+		render_script = root / "scripts" / "render_prompt.py"
+		prompt_file = root / "mode-sample.txt"
+		render_script.parent.mkdir(parents=True, exist_ok=True)
+		shutil.copy2(RENDER_PROMPT_PY, render_script)
+		prompt_file.write_text(
+			"# tier: DEFAULT\nRole: synthetic planner. Goal: surface render failures.\n\nBody.\n",
+			encoding="utf-8",
+		)
+
+		baseline_proc = subprocess.run(
+			[sys.executable, str(render_script), str(prompt_file)],
+			cwd=str(root),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		identity_env = _base_env()
+		identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "true"
+		identity_proc = subprocess.run(
+			[sys.executable, str(render_script), str(prompt_file)],
+			cwd=str(root),
+			env=identity_env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert baseline_proc.returncode == 0, baseline_proc.stderr
+	assert baseline_proc.stderr == ""
+	assert identity_proc.returncode == 0, identity_proc.stderr
+	assert identity_proc.stdout == baseline_proc.stdout
+	assert identity_proc.stderr.startswith(
+		"IDENTITY_REINJECT_PARSE_FAIL: mode-sample reason=render_failed detail=",
+	)
+	assert "Identity recall template not found" in identity_proc.stderr
+
+
 def test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_identity_fail_open_") as td:
 		prompt_file = Path(td) / "mode-malformed.txt"
@@ -898,6 +972,8 @@ def main() -> int:
 	test_render_prompt_py_treats_blank_persona_env_value_as_disabled()
 	test_render_prompt_py_identity_recall_flag_disabled_is_byte_stable()
 	test_render_prompt_py_matches_shell_identity_recall_output_with_default_persona()
+	test_render_prompt_py_identity_recall_reports_canonical_prompt_load_failure_details()
+	test_render_prompt_py_identity_recall_reports_render_failure_details()
 	test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt()
 	print("OK: render prompt foundation assertions hold")
 	return 0
