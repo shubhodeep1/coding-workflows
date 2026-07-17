@@ -10282,6 +10282,50 @@ def test_failed_comments_fetch_skips_state_reconstruction():
 	assert "Deferred issue creation for wave" not in result["stdout"], result["stdout"]
 
 
+def test_reconstruction_refused_when_body_has_completed_unmapped_issue():
+	"""Defense-in-depth for #3627: refuse a from-scratch rebuild that would
+	duplicate finished work.
+
+	Even when the comments fetch succeeds but carries no valid state comment,
+	the poller must not rebuild a project whose tracking body shows completed
+	([x]) sub-issues the child-issue search cannot map — a from-scratch rebuild
+	resets current_wave to 1 and re-creates those finished issues as
+	duplicates.  rebuild_tracking_state raises ReconstructionUnsafeError, the
+	helper exits non-zero, and the poller skips this cycle instead of creating
+	duplicates.
+	"""
+	rewindable_body = (
+		"## Project: Demo project\n\n"
+		"**Integration branch:** `orchestrator/project-192`\n\n"
+		"### Wave 1\n\n"
+		"- [x] **phase-h-done**: Phase H — already merged (priority 1)\n\n"
+		"### Wave 2\n\n"
+		"- [ ] **phase-d-next**: Phase D — not started (priority 2)\n"
+	)
+	invalid_state = {"schema_version": "orchestrate_state.v1"}
+	malformed_latest = '<!-- ORCHESTRATOR_STATE_V1\n{"schema_version":"orchestrate_state.v1",\nORCHESTRATOR_STATE_V1 -->'
+	result = _run_poller(
+		state=invalid_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[malformed_latest],
+		tracking_body=rewindable_body,
+		issue_labels={10: ["ai:implementing"]},
+	)
+	# The rebuild is refused (and the reason is surfaced), not performed.
+	assert (
+		"State reconstruction failed for tracking issue #192, skipping."
+		in result["stdout"]
+	), result["stdout"]
+	assert "refusing to reconstruct state" in result["stdout"], result["stdout"]
+	assert (
+		"State reconstructed and posted for tracking issue #192."
+		not in result["stdout"]
+	), result["stdout"]
+	# No duplicate GitHub issue may be created for the already-completed work.
+	assert result.get("created_issues", []) == [], result.get("created_issues")
+
+
 def test_truncated_comments_json_is_handled_gracefully():
 	"""Poller exits cleanly when the comments API returns invalid/truncated JSON."""
 	with tempfile.TemporaryDirectory(prefix="poller-test-truncated-") as td:

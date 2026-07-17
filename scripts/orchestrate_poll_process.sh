@@ -13120,11 +13120,16 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     REBUILD_BODY_FILE="${RUNTIME_DIR}/rebuild_body_${TRACKING_NUM}.txt"
     printf '%s\n' "${TRACKING_BODY}" > "${REBUILD_BODY_FILE}"
 
+    # Capture the helper's stderr so a deliberate refusal (e.g.
+    # ReconstructionUnsafeError when the body marks completed work the issue
+    # map cannot account for) is surfaced in the log instead of discarded.
+    REBUILD_ERR_FILE="${RUNTIME_DIR}/rebuild_err_${TRACKING_NUM}.txt"
     if python3 scripts/orchestrate_lib.py rebuild-state \
       --body-file "${REBUILD_BODY_FILE}" \
       --issue-map-json "${ISSUE_MAP_JSON}" \
-      --tracking-issue "${TRACKING_NUM}" > "${STATE_FILE}" 2>/dev/null; then
+      --tracking-issue "${TRACKING_NUM}" > "${STATE_FILE}" 2>"${REBUILD_ERR_FILE}"; then
 
+      rm -f "${REBUILD_ERR_FILE}"
       if [ -s "${STATE_FILE}" ] && jq -e '.schema_version' "${STATE_FILE}" >/dev/null 2>&1; then
         STATE_JSON="$(cat "${STATE_FILE}")"
         # Post the reconstructed state so future poll cycles find it
@@ -13136,7 +13141,13 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
         continue
       fi
     else
-      echo "::warning::State reconstruction failed for tracking issue #${TRACKING_NUM}, skipping."
+      REBUILD_ERR_MSG="$(head -c 500 "${REBUILD_ERR_FILE}" 2>/dev/null | tr '\n' ' ')"
+      rm -f "${REBUILD_ERR_FILE}"
+      # A non-zero rebuild (e.g. a deliberate ReconstructionUnsafeError refusal)
+      # leaves an empty STATE_FILE from the stdout redirect; drop it so no
+      # downstream reader trips over a 0-byte "state" file.
+      rm -f "${STATE_FILE}"
+      echo "::warning::State reconstruction failed for tracking issue #${TRACKING_NUM}, skipping. ${REBUILD_ERR_MSG}"
       continue
     fi
   fi
