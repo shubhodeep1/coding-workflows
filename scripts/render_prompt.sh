@@ -293,11 +293,21 @@ except (OSError, UnicodeDecodeError):
 	sys.exit(1)
 
 ROLE_GOAL_RE = re.compile(r"^Role:\s*(?P<role>.+?)\s+Goal:\s*(?P<goal>.+?)\s*$")
+PLACEHOLDER_ONLY_LINE_RE = re.compile(r"^(?:\{\{.+\}\}|\{%.*%\})$")
 
 
-def inject_after_offset(rendered_text: str, paragraph_end: int) -> str:
+def should_defer_to_backend(remainder: str) -> bool:
+	if not remainder:
+		return False
+	first_line = remainder.splitlines()[0].strip()
+	return PLACEHOLDER_ONLY_LINE_RE.fullmatch(first_line) is not None
+
+
+def inject_after_offset(rendered_text: str, paragraph_end: int) -> str | None:
 	before = rendered_text[:paragraph_end].rstrip("\n")
 	remainder = rendered_text[paragraph_end:].lstrip("\r\n")
+	if should_defer_to_backend(remainder):
+		return None
 	if remainder:
 		return before + "\n\n" + identity_block + "\n\n" + remainder
 	return before + "\n\n" + identity_block + "\n"
@@ -347,9 +357,13 @@ def opening_role_goal_end_offset(rendered_text: str) -> int | None:
 paragraph_end = opening_role_goal_end_offset(text)
 if paragraph_end is not None:
 	updated = inject_after_offset(text, paragraph_end)
+	if updated is None:
+		sys.exit(1)
 else:
 	parts = text.split("\n\n", 1)
 	if len(parts) == 2:
+		if should_defer_to_backend(parts[1]):
+			sys.exit(1)
 		updated = parts[0] + "\n\n" + identity_block + "\n\n" + parts[1]
 	else:
 		updated = text + "\n\n" + identity_block + "\n"
@@ -520,6 +534,8 @@ if [ "${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" = "true" ]; then
 	fi
 fi
 
+IDENTITY_RECALL_SHELL_INJECTION_APPLIED=false
+
 if identity_reinject_enabled && [[ "${MODE_NAME}" = mode-* ]]; then
 	IDENTITY_RECALL_CANONICAL_PROMPT=""
 	IDENTITY_RECALL_PHASE_NAME=""
@@ -529,11 +545,11 @@ if identity_reinject_enabled && [[ "${MODE_NAME}" = mode-* ]]; then
 	IDENTITY_RECALL_BLOCK=""
 
 	if ! IDENTITY_RECALL_CANONICAL_PROMPT="$(resolve_identity_source_prompt "${PROMPT_FILE}")"; then
-		emit_identity_reinject_parse_fail "canonical_prompt_missing"
+		:
 	elif ! IDENTITY_RECALL_PHASE_NAME="$(resolve_identity_phase_name "${IDENTITY_RECALL_CANONICAL_PROMPT}")"; then
-		emit_identity_reinject_parse_fail "phase_name_missing"
+		:
 	elif ! IDENTITY_RECALL_METADATA="$(extract_identity_recall_metadata "${IDENTITY_RECALL_CANONICAL_PROMPT}")"; then
-		emit_identity_reinject_parse_fail "metadata_extract_failed"
+		:
 	else
 		declare -a IDENTITY_RECALL_METADATA_LINES=()
 		mapfile -t IDENTITY_RECALL_METADATA_LINES < <(printf '%s\n' "${IDENTITY_RECALL_METADATA}")
@@ -542,12 +558,13 @@ if identity_reinject_enabled && [[ "${MODE_NAME}" = mode-* ]]; then
 			IDENTITY_RECALL_MISSION="${IDENTITY_RECALL_METADATA_LINES[1]}"
 		fi
 		if [ -z "${IDENTITY_RECALL_PHASE_NAME}" ] || [ -z "${IDENTITY_RECALL_ROLE}" ] || [ -z "${IDENTITY_RECALL_MISSION}" ]; then
-			emit_identity_reinject_parse_fail "identity_metadata_incomplete"
+			:
 		elif ! IDENTITY_RECALL_BLOCK="$(render_identity_recall_block "${IDENTITY_RECALL_PHASE_NAME}" "${IDENTITY_RECALL_ROLE}" "${IDENTITY_RECALL_MISSION}")"; then
-			emit_identity_reinject_parse_fail "render_failed"
+			:
 		elif ! inject_identity_recall_block "${RENDER_INPUT_FILE}" "${IDENTITY_RECALL_BLOCK}"; then
-			emit_identity_reinject_parse_fail "injection_failed"
+			:
 		else
+			IDENTITY_RECALL_SHELL_INJECTION_APPLIED=true
 			RENDER_INPUT_FILE="${IDENTITY_RECALL_INJECTED_FILE}"
 			PLACEHOLDER_SOURCE_FILE="${RENDER_INPUT_FILE}"
 		fi
@@ -618,9 +635,14 @@ while IFS= read -r placeholder_name; do
 	fi
 done < <(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")
 
-if [ -n "${ASSEMBLED_PROMPT_FILE}" ] || [ -n "${IDENTITY_RECALL_INJECTED_FILE:-}" ]; then
+if [ "${IDENTITY_RECALL_SHELL_INJECTION_APPLIED:-false}" = "true" ]; then
 	UNATTENDED_IDENTITY_REINJECT_ENABLED=false "${RENDER_ARGS[@]}"
 	exit 0
 fi
 
-UNATTENDED_IDENTITY_REINJECT_ENABLED=false exec "${RENDER_ARGS[@]}"
+if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
+	"${RENDER_ARGS[@]}"
+	exit 0
+fi
+
+exec "${RENDER_ARGS[@]}"
