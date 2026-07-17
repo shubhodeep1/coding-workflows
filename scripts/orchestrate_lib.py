@@ -2642,7 +2642,7 @@ def parse_tracking_body(body: str) -> dict[str, Any]:
 	"""Parse a tracking issue markdown body to extract wave structure.
 
 	Returns a dict with keys:
-		project_title, waves (list of lists of {id, title, priority}),
+		project_title, waves (list of lists of {id, title, priority, completed}),
 		dependency_edges (list of {from, to}), integration_branch.
 	"""
 	result: dict[str, Any] = {
@@ -2663,7 +2663,7 @@ def parse_tracking_body(body: str) -> dict[str, Any]:
 	for section in wave_sections[1:]:  # skip preamble before Wave 1
 		issues: list[dict[str, Any]] = []
 		for match in re.finditer(
-			r"-\s*\[(?P<mark>[ x])\]\s*\*\*(?P<id>[^*]+)\*\*:\s*(?P<title>.+?)\s*\(priority\s+(?P<priority>\d+)\)",
+			r"-\s*\[(?P<mark>[ xX])\]\s*\*\*(?P<id>[^*]+)\*\*:\s*(?P<title>.+?)\s*\(priority\s+(?P<priority>\d+)\)",
 			section,
 		):
 			issues.append({
@@ -2671,7 +2671,7 @@ def parse_tracking_body(body: str) -> dict[str, Any]:
 				"title": match.group("title").strip(),
 				"priority": int(match.group("priority")),
 				# Whether the tracking body marks this sub-issue complete
-				# ([x]).  rebuild_tracking_state consults this to refuse a
+				# ([x] or [X]).  rebuild_tracking_state consults this to refuse a
 				# destructive from-scratch rebuild of a project that already
 				# has finished work it cannot map (see ReconstructionUnsafeError).
 				"completed": match.group("mark").strip().lower() == "x",

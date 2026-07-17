@@ -14155,7 +14155,6 @@ The poller will resume processing on the next cycle."
         jq "(.waves[${WAVE_IDX}].issues[] | select(.id == \"${local_id}\")) |= (.github_issue = ${EXISTING_NUM} | .status = \"pending\")" \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         ISSUE_NUMS="${ISSUE_NUMS} ${EXISTING_NUM}"
-        DEFERRED_CREATED_NUMS="${DEFERRED_CREATED_NUMS} ${EXISTING_NUM}"
         DEFERRED_STATE_CHANGED=true
         continue
       fi

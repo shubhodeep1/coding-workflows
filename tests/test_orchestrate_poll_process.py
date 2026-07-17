@@ -10328,7 +10328,7 @@ def test_reconstruction_refused_when_body_has_completed_unmapped_issue():
 
 	Even when the comments fetch succeeds but carries no valid state comment,
 	the poller must not rebuild a project whose tracking body shows completed
-	([x]) sub-issues the child-issue search cannot map — a from-scratch rebuild
+	([x] or [X]) sub-issues the child-issue search cannot map — a from-scratch rebuild
 	resets current_wave to 1 and re-creates those finished issues as
 	duplicates.  rebuild_tracking_state raises ReconstructionUnsafeError, the
 	helper exits non-zero, and the poller skips this cycle instead of creating
@@ -10338,7 +10338,7 @@ def test_reconstruction_refused_when_body_has_completed_unmapped_issue():
 		"## Project: Demo project\n\n"
 		"**Integration branch:** `orchestrator/project-192`\n\n"
 		"### Wave 1\n\n"
-		"- [x] **phase-h-done**: Phase H — already merged (priority 1)\n\n"
+		"- [X] **phase-h-done**: Phase H — already merged (priority 1)\n\n"
 		"### Wave 2\n\n"
 		"- [ ] **phase-d-next**: Phase D — not started (priority 2)\n"
 	)
@@ -10453,6 +10453,37 @@ def test_deferred_creation_skips_when_existence_lookup_fails():
 	assert "skipping creation to avoid a duplicate" in result["stdout"], result["stdout"]
 	w1 = result["latest_state"]["waves"][0]["issues"][0]
 	assert w1.get("github_issue") is None, w1
+
+
+def test_deferred_creation_relinks_issue_number_map_entry_without_creation_comment():
+	"""A zero-creation relink cycle must not claim that issues were created.
+
+	When an uncreated wave entry already has a Local ID -> GitHub issue mapping
+	in-state, the deferred-creation loop heals the wave entry from
+	issue_number_map instead of minting a new issue.  That relink path is not a
+	creation and must not feed the "Created them now" tracking comment or
+	Telegram notification.
+	"""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"] = [
+		{"id": "issue-1", "github_issue": None, "status": "not_created"},
+	]
+	state["pending_issue_defs"] = {}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:clarification"]},
+	)
+	assert result.get("created_issues", []) == [], result.get("created_issues")
+	assert "already mapped to #10" in result["stdout"], result["stdout"]
+	ls = result["latest_state"]
+	w1 = ls["waves"][0]["issues"][0]
+	assert w1["github_issue"] == 10, w1
+	tracking_bodies = "".join(
+		str(c.get("body", "")) for c in result["issues"]["192"]["comments"]
+	)
+	assert "Deferred Issue Creation" not in tracking_bodies
 
 
 def test_truncated_comments_json_is_handled_gracefully():

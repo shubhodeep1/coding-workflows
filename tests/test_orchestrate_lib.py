@@ -1695,11 +1695,13 @@ def test_parse_tracking_body_captures_completion_marks():
 		"## Project: P\n\n"
 		"### Wave 1\n\n"
 		"- [x] **done-issue**: Finished task (priority 1)\n\n"
+		"- [X] **done-issue-2**: Finished task (priority 2)\n\n"
 		"### Wave 2\n\n"
-		"- [ ] **todo-issue**: Pending task (priority 2)\n"
+		"- [ ] **todo-issue**: Pending task (priority 3)\n"
 	)
 	parsed = orchestrate_lib.parse_tracking_body(body)
 	assert parsed["waves"][0][0]["completed"] is True
+	assert parsed["waves"][0][1]["completed"] is True
 	assert parsed["waves"][1][0]["completed"] is False
 
 
