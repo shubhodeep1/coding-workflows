@@ -42,6 +42,25 @@ def _assert_decisions_contract(text: str) -> None:
 	assert "Each decision record must include non-empty bullets for `Chosen`, `Alternatives considered`, and `Why`." in text
 
 
+def _workflow_step_block(workflow: str, step_name: str) -> str:
+	lines = workflow.splitlines()
+	step_marker = f"- name: {step_name}"
+	start_line = -1
+	for index, line in enumerate(lines):
+		if line.strip() == step_marker:
+			start_line = index
+			break
+	assert start_line >= 0, f"missing workflow step: {step_name}"
+
+	end_line = len(lines)
+	step_prefix = lines[start_line][: len(lines[start_line]) - len(lines[start_line].lstrip())] + "- name: "
+	for index in range(start_line + 1, len(lines)):
+		if lines[index].startswith(step_prefix):
+			end_line = index
+			break
+	return "\n".join(lines[start_line:end_line])
+
+
 def test_mode_plan_scope_mode_contract_defaults_on() -> None:
 	rendered = _render_mode_plan()
 
@@ -84,18 +103,17 @@ def test_plan_workflow_exports_flag_and_keeps_live_prompt_parity() -> None:
 
 def test_ci_workflow_keeps_plan_decisions_lint_contract() -> None:
 	workflow = CI_WORKFLOW.read_text(encoding="utf-8")
-	step_name = "- name: Plan decisions advisory lint"
-	step_index = workflow.index(step_name)
+	unit_test_step = _workflow_step_block(workflow, "Plan decisions lint unit tests")
+	advisory_step = _workflow_step_block(workflow, "Plan decisions advisory lint")
 
-	assert "- name: Plan decisions lint unit tests" in workflow
-	assert "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_decisions.py" in workflow
-	assert workflow.index("continue-on-error: true", step_index) > step_index
-	assert "DOCS_DECISION_LINT_ENABLED: ${{ vars.DOCS_DECISION_LINT_ENABLED || 'false' }}" in workflow
-	assert "decision_lint_stderr=\"$(mktemp)\"" in workflow
-	assert "PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_plan_decisions.py 2> \"${decision_lint_stderr}\"" in workflow
-	assert "if [ \"${DOCS_DECISION_LINT_ENABLED}\" = \"true\" ] && [ -s \"${decision_lint_stderr}\" ]; then" in workflow
-	assert 'echo "### Plan decision lint advisories"' in workflow
-	assert 'cat "${decision_lint_stderr}" >&2' in workflow
+	assert "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_decisions.py" in unit_test_step
+	assert "continue-on-error: true" in advisory_step
+	assert "DOCS_DECISION_LINT_ENABLED: ${{ vars.DOCS_DECISION_LINT_ENABLED || 'false' }}" in advisory_step
+	assert "decision_lint_stderr=\"$(mktemp)\"" in advisory_step
+	assert "PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_plan_decisions.py 2> \"${decision_lint_stderr}\"" in advisory_step
+	assert "if [ \"${DOCS_DECISION_LINT_ENABLED}\" = \"true\" ] && [ -s \"${decision_lint_stderr}\" ]; then" in advisory_step
+	assert 'echo "### Plan decision lint advisories"' in advisory_step
+	assert 'cat "${decision_lint_stderr}" >&2' in advisory_step
 
 
 def test_reuse_audit_contract_script_runs_cleanly() -> None:
