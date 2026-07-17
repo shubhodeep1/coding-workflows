@@ -186,7 +186,10 @@ import re
 import sys
 
 prompt_path = pathlib.Path(sys.argv[1])
-text = prompt_path.read_text(encoding="utf-8")
+try:
+	text = prompt_path.read_text(encoding="utf-8")
+except (OSError, UnicodeDecodeError):
+	sys.exit(1)
 lines = text.splitlines()
 paragraph_lines = []
 started = False
@@ -510,8 +513,12 @@ if [ "${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}" = "true" ] && [[ "${MODE_N
 	elif ! IDENTITY_RECALL_METADATA="$(extract_identity_recall_metadata "${IDENTITY_RECALL_CANONICAL_PROMPT}")"; then
 		emit_identity_reinject_parse_fail "metadata_extract_failed"
 	else
-		IDENTITY_RECALL_ROLE="$(printf '%s\n' "${IDENTITY_RECALL_METADATA}" | sed -n '1p')"
-		IDENTITY_RECALL_MISSION="$(printf '%s\n' "${IDENTITY_RECALL_METADATA}" | sed -n '2p')"
+		declare -a IDENTITY_RECALL_METADATA_LINES=()
+		mapfile -t IDENTITY_RECALL_METADATA_LINES < <(printf '%s\n' "${IDENTITY_RECALL_METADATA}")
+		if [ "${#IDENTITY_RECALL_METADATA_LINES[@]}" -eq 2 ]; then
+			IDENTITY_RECALL_ROLE="${IDENTITY_RECALL_METADATA_LINES[0]}"
+			IDENTITY_RECALL_MISSION="${IDENTITY_RECALL_METADATA_LINES[1]}"
+		fi
 		if [ -z "${IDENTITY_RECALL_PHASE_NAME}" ] || [ -z "${IDENTITY_RECALL_ROLE}" ] || [ -z "${IDENTITY_RECALL_MISSION}" ]; then
 			emit_identity_reinject_parse_fail "identity_metadata_incomplete"
 		elif ! IDENTITY_RECALL_BLOCK="$(render_identity_recall_block "${IDENTITY_RECALL_PHASE_NAME}" "${IDENTITY_RECALL_ROLE}" "${IDENTITY_RECALL_MISSION}")"; then
@@ -590,8 +597,8 @@ while IFS= read -r placeholder_name; do
 done < <(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")
 
 if [ -n "${ASSEMBLED_PROMPT_FILE}" ] || [ -n "${IDENTITY_RECALL_INJECTED_FILE:-}" ]; then
-	"${RENDER_ARGS[@]}"
+	UNATTENDED_IDENTITY_REINJECT_ENABLED=false "${RENDER_ARGS[@]}"
 	exit 0
 fi
 
-exec "${RENDER_ARGS[@]}"
+UNATTENDED_IDENTITY_REINJECT_ENABLED=false exec "${RENDER_ARGS[@]}"
