@@ -92,6 +92,255 @@ MODEL_FAMILY_OVERLAY_BLOCK="${MODEL_FAMILY_OVERLAY:-}"
 PROMPT_BASENAME="$(basename -- "${PROMPT_FILE}")"
 MODE_NAME="${PROMPT_BASENAME%.*}"
 
+resolve_identity_recall_template()
+{
+	local candidate=""
+	local -a candidates=()
+
+	candidates+=(
+		"${SCRIPT_DIR}/../prompts/_identity_recall.txt"
+		"$(pwd)/prompts/_identity_recall.txt"
+		"$(pwd)/.codex-workflow-src/prompts/_identity_recall.txt"
+		"$(pwd)/.codex-workflow-src-main/prompts/_identity_recall.txt"
+	)
+
+	for candidate in "${candidates[@]}"; do
+		if [ -f "${candidate}" ]; then
+			printf '%s\n' "${candidate}"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+resolve_identity_source_prompt()
+{
+	local prompt_path="$1"
+	local prompt_basename=""
+	local prompt_dir=""
+	local prompt_dir_name=""
+	local candidate=""
+	local template_candidate=""
+	local -a candidates=()
+
+	prompt_basename="$(basename -- "${prompt_path}")"
+	prompt_dir="$(dirname -- "${prompt_path}")"
+	prompt_dir_name="$(basename -- "${prompt_dir}")"
+
+	if [[ "${prompt_basename}" = mode-*-inline.txt ]]; then
+		prompt_basename="${prompt_basename%-inline.txt}.txt"
+	fi
+	if [ "${prompt_dir_name}" = "_templates" ]; then
+		candidate="$(dirname -- "${prompt_dir}")/${prompt_basename}"
+		if [ -f "${candidate}" ]; then
+			printf '%s\n' "${candidate}"
+			return 0
+		fi
+	fi
+	if [ "${prompt_dir_name}" = "prompts" ] && [ "${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" = "true" ]; then
+		template_candidate="${prompt_dir}/_templates/${prompt_basename}"
+		if [ -f "${template_candidate}" ]; then
+			printf '%s\n' "${template_candidate}"
+			return 0
+		fi
+	fi
+
+	if [ -f "${prompt_path}" ] && [[ "${prompt_basename}" = mode-*.txt ]]; then
+		if [ "${prompt_basename}" = "$(basename -- "${prompt_path}")" ]; then
+			printf '%s\n' "${prompt_path}"
+			return 0
+		fi
+	fi
+
+	candidates+=(
+		"${SCRIPT_DIR}/../prompts/${prompt_basename}"
+		"${prompt_dir}/${prompt_basename}"
+		"$(pwd)/prompts/${prompt_basename}"
+		"$(pwd)/.codex-workflow-src/prompts/${prompt_basename}"
+		"$(pwd)/.codex-workflow-src-main/prompts/${prompt_basename}"
+	)
+
+	for candidate in "${candidates[@]}"; do
+		if [ -f "${candidate}" ]; then
+			printf '%s\n' "${candidate}"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+resolve_identity_phase_name()
+{
+	local canonical_prompt_file="$1"
+	basename -- "${canonical_prompt_file}" .txt
+}
+
+extract_identity_recall_metadata()
+{
+	local canonical_prompt_file="$1"
+	"${PYTHON_BIN}" - <<'PY' "${canonical_prompt_file}"
+import pathlib
+import re
+import sys
+
+prompt_path = pathlib.Path(sys.argv[1])
+text = prompt_path.read_text(encoding="utf-8")
+lines = text.splitlines()
+paragraph_lines = []
+started = False
+in_compaction_rules = False
+
+for raw_line in lines:
+	line = raw_line.strip()
+	if not started:
+		if in_compaction_rules:
+			if line == "</compaction-rules>":
+				in_compaction_rules = False
+			continue
+		if not line or line.startswith("#") or (line.startswith("{%") and line.endswith("%}")):
+			continue
+		if line.startswith("<compaction-rules>"):
+			if not line.endswith("</compaction-rules>"):
+				in_compaction_rules = True
+			continue
+		started = True
+	if not line:
+		break
+	paragraph_lines.append(line)
+
+paragraph = " ".join(paragraph_lines)
+match = re.match(r"^Role:\s*(?P<role>.+?)\s+Goal:\s*(?P<goal>.+?)\s*$", paragraph)
+if not match:
+	sys.exit(1)
+
+def normalize(value: str) -> str:
+	return value.strip().rstrip(". ")
+
+role = normalize(match.group("role"))
+goal = normalize(match.group("goal"))
+if not role or not goal:
+	sys.exit(1)
+
+print(role)
+print(goal)
+PY
+}
+
+render_identity_recall_block()
+{
+	local phase_name="$1"
+	local phase_role="$2"
+	local phase_mission="$3"
+	local identity_template_file=""
+	local -a identity_render_args=()
+
+	if ! identity_template_file="$(resolve_identity_recall_template)"; then
+		return 1
+	fi
+
+	identity_render_args=(
+		"${PYTHON_BIN}" "${RENDER_PROMPT_PY}" "${identity_template_file}"
+		--var "PHASE_NAME=${phase_name}"
+		--var "PHASE_ROLE=${phase_role}"
+		--var "PHASE_MISSION=${phase_mission}"
+	)
+
+	"${identity_render_args[@]}"
+}
+
+inject_identity_recall_block()
+{
+	local prompt_input_file="$1"
+	local rendered_identity_block="$2"
+	local injected_file=""
+
+	injected_file="$(mktemp "${TMPDIR:-/tmp}/.${PROMPT_BASENAME}.identity.XXXXXX")"
+	IDENTITY_RECALL_INJECTED_FILE="${injected_file}"
+	trap cleanup_temp_files EXIT
+
+	"${PYTHON_BIN}" - <<'PY' "${prompt_input_file}" "${injected_file}" "${rendered_identity_block}"
+import pathlib
+import re
+import sys
+
+source_path = pathlib.Path(sys.argv[1])
+target_path = pathlib.Path(sys.argv[2])
+identity_block = sys.argv[3]
+text = source_path.read_text(encoding="utf-8")
+
+ROLE_GOAL_RE = re.compile(r"^Role:\s*(?P<role>.+?)\s+Goal:\s*(?P<goal>.+?)\s*$")
+
+
+def inject_after_offset(rendered_text: str, paragraph_end: int) -> str:
+	before = rendered_text[:paragraph_end].rstrip("\n")
+	remainder = rendered_text[paragraph_end:].lstrip("\r\n")
+	if remainder:
+		return before + "\n\n" + identity_block + "\n\n" + remainder
+	return before + "\n\n" + identity_block + "\n"
+
+
+def opening_role_goal_end_offset(rendered_text: str) -> int | None:
+	paragraph_lines: list[str] = []
+	paragraph_end: int | None = None
+	started = False
+	in_compaction_rules = False
+	offset = 0
+
+	for raw_line in rendered_text.splitlines(keepends=True):
+		line = raw_line.strip()
+		if not started:
+			if in_compaction_rules:
+				if line == "</compaction-rules>":
+					in_compaction_rules = False
+				offset += len(raw_line)
+				continue
+			if not line or line.startswith("#") or (line.startswith("{%") and line.endswith("%}")):
+				offset += len(raw_line)
+				continue
+			if line.startswith("<compaction-rules>"):
+				if not line.endswith("</compaction-rules>"):
+					in_compaction_rules = True
+				offset += len(raw_line)
+				continue
+			started = True
+		if not line:
+			paragraph = " ".join(paragraph_lines)
+			if paragraph_end is None or ROLE_GOAL_RE.match(paragraph) is None:
+				return None
+			return paragraph_end
+		paragraph_lines.append(line)
+		paragraph_end = offset + len(raw_line.rstrip("\r\n"))
+		offset += len(raw_line)
+
+	if not started or not paragraph_lines or paragraph_end is None:
+		return None
+	paragraph = " ".join(paragraph_lines)
+	if ROLE_GOAL_RE.match(paragraph) is None:
+		return None
+	return paragraph_end
+
+
+paragraph_end = opening_role_goal_end_offset(text)
+if paragraph_end is not None:
+	updated = inject_after_offset(text, paragraph_end)
+else:
+	parts = text.split("\n\n", 1)
+	if len(parts) == 2:
+		updated = parts[0] + "\n\n" + identity_block + "\n\n" + parts[1]
+	else:
+		updated = text + "\n\n" + identity_block + "\n"
+target_path.write_text(updated, encoding="utf-8")
+PY
+}
+
+emit_identity_reinject_parse_fail()
+{
+	local failure_reason="$1"
+	echo "IDENTITY_REINJECT_PARSE_FAIL: ${MODE_NAME} reason=${failure_reason}" >&2
+}
+
 resolve_render_prompt_py()
 {
 	local candidate=""
@@ -179,6 +428,9 @@ resolve_prompt_root_dir()
 
 cleanup_temp_files()
 {
+	if [ -n "${IDENTITY_RECALL_INJECTED_FILE:-}" ] && [ -f "${IDENTITY_RECALL_INJECTED_FILE}" ]; then
+		rm -f "${IDENTITY_RECALL_INJECTED_FILE}"
+	fi
 	if [ -n "${ASSEMBLED_PROMPT_FILE:-}" ] && [ -f "${ASSEMBLED_PROMPT_FILE}" ]; then
 		rm -f "${ASSEMBLED_PROMPT_FILE}"
 	fi
@@ -240,6 +492,36 @@ if [ "${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" = "true" ]; then
 		"${ASSEMBLE_PROMPT_SH}" "${PROMPT_FILE}" > "${ASSEMBLED_PROMPT_FILE}"
 		RENDER_INPUT_FILE="${ASSEMBLED_PROMPT_FILE}"
 		PLACEHOLDER_SOURCE_FILE="${ASSEMBLED_PROMPT_FILE}"
+	fi
+fi
+
+if [ "${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}" = "true" ] && [[ "${MODE_NAME}" = mode-* ]]; then
+	IDENTITY_RECALL_CANONICAL_PROMPT=""
+	IDENTITY_RECALL_PHASE_NAME=""
+	IDENTITY_RECALL_METADATA=""
+	IDENTITY_RECALL_ROLE=""
+	IDENTITY_RECALL_MISSION=""
+	IDENTITY_RECALL_BLOCK=""
+
+	if ! IDENTITY_RECALL_CANONICAL_PROMPT="$(resolve_identity_source_prompt "${PROMPT_FILE}")"; then
+		emit_identity_reinject_parse_fail "canonical_prompt_missing"
+	elif ! IDENTITY_RECALL_PHASE_NAME="$(resolve_identity_phase_name "${IDENTITY_RECALL_CANONICAL_PROMPT}")"; then
+		emit_identity_reinject_parse_fail "phase_name_missing"
+	elif ! IDENTITY_RECALL_METADATA="$(extract_identity_recall_metadata "${IDENTITY_RECALL_CANONICAL_PROMPT}")"; then
+		emit_identity_reinject_parse_fail "metadata_extract_failed"
+	else
+		IDENTITY_RECALL_ROLE="$(printf '%s\n' "${IDENTITY_RECALL_METADATA}" | sed -n '1p')"
+		IDENTITY_RECALL_MISSION="$(printf '%s\n' "${IDENTITY_RECALL_METADATA}" | sed -n '2p')"
+		if [ -z "${IDENTITY_RECALL_PHASE_NAME}" ] || [ -z "${IDENTITY_RECALL_ROLE}" ] || [ -z "${IDENTITY_RECALL_MISSION}" ]; then
+			emit_identity_reinject_parse_fail "identity_metadata_incomplete"
+		elif ! IDENTITY_RECALL_BLOCK="$(render_identity_recall_block "${IDENTITY_RECALL_PHASE_NAME}" "${IDENTITY_RECALL_ROLE}" "${IDENTITY_RECALL_MISSION}")"; then
+			emit_identity_reinject_parse_fail "render_failed"
+		elif ! inject_identity_recall_block "${RENDER_INPUT_FILE}" "${IDENTITY_RECALL_BLOCK}"; then
+			emit_identity_reinject_parse_fail "injection_failed"
+		else
+			RENDER_INPUT_FILE="${IDENTITY_RECALL_INJECTED_FILE}"
+			PLACEHOLDER_SOURCE_FILE="${RENDER_INPUT_FILE}"
+		fi
 	fi
 fi
 
@@ -307,7 +589,7 @@ while IFS= read -r placeholder_name; do
 	fi
 done < <(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")
 
-if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
+if [ -n "${ASSEMBLED_PROMPT_FILE}" ] || [ -n "${IDENTITY_RECALL_INJECTED_FILE:-}" ]; then
 	"${RENDER_ARGS[@]}"
 	exit 0
 fi
