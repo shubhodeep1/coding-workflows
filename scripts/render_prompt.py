@@ -542,12 +542,29 @@ def render_identity_recall_block(
 
 
 def _find_identity_role_goal_line_end_offset(rendered_prompt_text: str) -> int | None:
+	raw_lines = rendered_prompt_text.splitlines(keepends=True)
+	line_start_offsets: list[int] = []
 	offset = 0
-	for raw_line in rendered_prompt_text.splitlines(keepends=True):
-		line = raw_line.strip()
-		if ROLE_GOAL_METADATA_PATTERN.fullmatch(line) is not None:
-			return offset + len(raw_line.rstrip("\r\n"))
+	for raw_line in raw_lines:
+		line_start_offsets.append(offset)
 		offset += len(raw_line)
+
+	for index, raw_line in enumerate(raw_lines):
+		line = raw_line.strip()
+		if not line.startswith("Role:"):
+			continue
+		paragraph_lines = [line]
+		paragraph_end_offset = line_start_offsets[index] + len(raw_line.rstrip("\r\n"))
+		for next_index in range(index + 1, len(raw_lines)):
+			next_raw_line = raw_lines[next_index]
+			next_line = next_raw_line.strip()
+			if not next_line:
+				break
+			paragraph_lines.append(next_line)
+			paragraph_end_offset = line_start_offsets[next_index] + len(next_raw_line.rstrip("\r\n"))
+		paragraph = " ".join(paragraph_lines)
+		if ROLE_GOAL_METADATA_PATTERN.fullmatch(paragraph) is not None:
+			return paragraph_end_offset
 	return None
 
 

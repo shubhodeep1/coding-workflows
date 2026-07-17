@@ -84,6 +84,31 @@ def _load_reference_text(file_name: str) -> str:
 	return _normalize_text((REPO_ROOT / "prompts" / "references" / file_name).read_text(encoding="utf-8"))
 
 
+def _load_opening_role_goal_paragraph(prompt_file: Path) -> str:
+	paragraph_lines: list[str] = []
+	started = False
+	in_compaction_rules = False
+	for raw_line in prompt_file.read_text(encoding="utf-8").splitlines():
+		line = raw_line.strip()
+		if not started:
+			if in_compaction_rules:
+				if line == "</compaction-rules>":
+					in_compaction_rules = False
+				continue
+			if not line or line.startswith("#") or (line.startswith("{%") and line.endswith("%}")):
+				continue
+			if line.startswith("<compaction-rules>"):
+				if not line.endswith("</compaction-rules>"):
+					in_compaction_rules = True
+				continue
+			started = True
+		if not line:
+			break
+		paragraph_lines.append(raw_line)
+	assert paragraph_lines, prompt_file
+	return "\n".join(paragraph_lines)
+
+
 def _assert_identity_recall_after_role_goal(rendered_text: str, *, phase_name: str) -> re.Match[str]:
 	role_goal_match = ROLE_GOAL_LINE_RE.search(rendered_text)
 	assert role_goal_match is not None
@@ -851,6 +876,34 @@ def test_render_prompt_py_matches_shell_identity_recall_output_with_default_pers
 	assert identity_match.group("mission") == "emit a structured implementation plan or `BLOCKED:` line"
 
 
+def test_render_prompt_py_matches_shell_identity_recall_output_for_wrapped_role_goal_prompt() -> None:
+	prompt_file = REPO_ROOT / "prompts" / "mode-check-failure-triage.txt"
+	identity_env = _base_env()
+	identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "true"
+	expected_role_goal_paragraph = _load_opening_role_goal_paragraph(prompt_file)
+
+	python_proc = _run_render_prompt_py(prompt_file, env=identity_env)
+	shell_proc = subprocess.run(
+		["bash", str(RENDER_PROMPT_SH), str(prompt_file)],
+		cwd=str(REPO_ROOT),
+		env=identity_env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+
+	assert python_proc.returncode == 0, python_proc.stderr
+	assert python_proc.stderr == ""
+	assert shell_proc.returncode == 0, shell_proc.stderr
+	assert shell_proc.stderr == ""
+	assert python_proc.stdout == shell_proc.stdout
+	assert f"{expected_role_goal_paragraph}\n\n<identity-recall>" in python_proc.stdout
+	identity_match = IDENTITY_RECALL_BLOCK_RE.search(python_proc.stdout)
+	assert identity_match is not None
+	assert identity_match.group("phase") == "mode-check-failure-triage"
+	assert "autonomous AI pipeline (clarify -> plan -> implement -> review)" in identity_match.group("mission")
+
+
 def test_render_prompt_py_identity_recall_reports_canonical_prompt_load_failure_details() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_identity_load_fail_") as td:
 		root = Path(td)
@@ -973,6 +1026,7 @@ def main() -> int:
 	test_render_prompt_py_treats_blank_persona_env_value_as_disabled()
 	test_render_prompt_py_identity_recall_flag_disabled_is_byte_stable()
 	test_render_prompt_py_matches_shell_identity_recall_output_with_default_persona()
+	test_render_prompt_py_matches_shell_identity_recall_output_for_wrapped_role_goal_prompt()
 	test_render_prompt_py_identity_recall_reports_canonical_prompt_load_failure_details()
 	test_render_prompt_py_identity_recall_reports_render_failure_details()
 	test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt()
