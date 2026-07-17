@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -2185,6 +2186,17 @@ def _log_task_state_write_fail(issue_id: Any, reason: str) -> None:
 	print(f"TASK_STATE_WRITE_FAIL {issue_token} {reason_token}", file=sys.stderr)
 
 
+def _unblock_dependents_accepts_completed_issue_payload(unblock_dependents: Any) -> bool:
+	try:
+		parameters = inspect.signature(unblock_dependents).parameters
+	except (TypeError, ValueError):
+		return False
+	# Only pass the Phase C payload when the callable explicitly advertises it.
+	# Opaque or wrapper callables stay on the legacy path rather than relying on
+	# exception-text matching or assuming that **kwargs are forwarded safely.
+	return "completed_issue_payload" in parameters
+
+
 def _maybe_unblock_task_state_dependents(wave_id: Any, issue: dict[str, Any]) -> None:
 	if not _task_state_files_enabled():
 		return
@@ -2204,18 +2216,13 @@ def _maybe_unblock_task_state_dependents(wave_id: Any, issue: dict[str, Any]) ->
 
 	try:
 		unblock_dependents = task_state_module.unblock_dependents
-		try:
+		if _unblock_dependents_accepts_completed_issue_payload(unblock_dependents):
 			unblock_dependents(
 				wave_id,
 				completed_issue_id,
 				completed_issue_payload=issue,
 			)
-		except TypeError as exc:
-			if (
-				"completed_issue_payload" not in str(exc)
-				or "unexpected keyword argument" not in str(exc)
-			):
-				raise
+		else:
 			unblock_dependents(wave_id, completed_issue_id)
 	except Exception as exc:
 		_log_task_state_write_fail(completed_issue_id, f"unblock_failed:{exc}")
