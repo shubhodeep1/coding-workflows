@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:13062-13084 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The new `continue` on `COMMENTS_FETCH_OK != \"true\"` skips the rest of the per-tracking-issue processing for that project this cycle.\n  WHY: x-ai rated this BLOCKER and qwen rated the same behavior NIT, while the other reviewers said the fail-open skip is intended, so the highest reported severity is critical.\n- scripts/orchestrate_poll_process.sh:13062-13084 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The guard compares `COMMENTS_FETCH_OK` only to the exact string `\"true\"` and does not normalize unset, empty, or unexpected values.\n  WHY: mistralai flagged the exact-match check as unsafe and x-ai echoed the unset/empty concern and rated it MAJOR, while other reviewers noted the variable is initialized to `\"false\"` before use.\n- scripts/orchestrate_poll_process.sh:13078-13081 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The fetch-failure path only emits a generic warning and continues without preserving the underlying `gh_retry_to_file` diagnostics.\n  WHY: Both reviewers said the HTTP/retry/root-cause signal is lost; qwen explicitly disputed that, saying the existing helper logs are enough.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Adds test_failed_comments_fetch_skips_state_reconstruction, which forces the comments GET to fail and asserts reconstruction is skipped. Verified the test fails without the guard and passes with it.\"\n  expected_change_site: tests/test_orchestrate_poll_process.py (_run_poller helper and test body)\n  confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The test exercises `fail_issue_comment_get_after={192: 0}` and checks stdout strings, but the test helper's mock implementation for the comments endpoint (and how it sets `COMMENTS_FETCH_OK`) is not shown or updated in the diff; the negative-control \"fails without the guard\" assertion is only described in the commit message/PR body, not exercised by a failing fixture.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:13062-13084 | confidence=5\n  PROBLEM: The new `COMMENTS_FETCH_OK` guard is added inside the state-reconstruction branch that checks `[ -z \"${STATE_JSON}\" ] || [ \"${STATE_JSON}\" = \"null\" ]`.\n  WHY: The reconstruction path can still be entered when `STATE_JSON` is empty, so the guard does not prevent the destructive behavior the PR aims to stop.\n- scripts/orchestrate_poll_process.sh:13062-13084 | confidence=4\n  PROBLEM: The guard only validates `${COMMENTS_FETCH_OK} != \"true\"` as an exact string match without guarding against unset, empty, or whitespace-only values in the variable.\n  WHY: If `COMMENTS_FETCH_OK` is unset, empty, contains whitespace, or is set to an unexpected variant, the guard may fail to block reconstruction even when the fetch failed.\n- scripts/orchestrate_poll_process.sh:13078-13081 | confidence=5\n  PROBLEM: The guard simply emits a warning and executes `continue`, discarding the diagnostic output captured by `gh_retry_to_file` and the HTTP diagnostics.\n  WHY: Operators and downstream analysis lose the root-cause signal, making it difficult to distinguish transient API flakes from persistent state problems.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/orchestrate_poll_process.sh:13063-13083 | severity=low | confidence=5\n  PROBLEM: The `continue` statement exits the entire per-tracking-issue loop iteration when `COMMENTS_FETCH_OK != \"true\"`, skipping the rest of that tracking issue\u2019s processing for this poll cycle.\n  WHY: This defers the affected project until the next poll tick, which qwen treated as an acceptable NIT-level tradeoff rather than a blocker.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:13078 | severity=critical | confidence=5\n  PROBLEM: The `continue` inside the per-tracking-issue `for ((tidx=0; tidx<COUNT; tidx++))` loop skips the remaining poll-cycle logic for that tracking issue on any comments-fetch failure.\n  WHY: A transient GitHub API flake now defers the entire project until the next poll tick instead of continuing normal processing, and x-ai rated that BLOCKER.\n- scripts/orchestrate_poll_process.sh:13062\u201313084 | severity=high | confidence=4\n  PROBLEM: The new guard is placed after the `[ -z \"${STATE_JSON}\" ] || [ \"${STATE_JSON}\" = \"null\" ]` check and does not normalize unset/empty values or persist a diagnostic marker.\n  WHY: Malformed or transient fetch states can bypass the intended skip-only semantics and lose root-cause signal.\n- scripts/orchestrate_poll_process.sh:13078\u201313081 | severity=high | confidence=4\n  PROBLEM: On comments-fetch failure the only output is a generic warning; the underlying `gh_retry_to_file` stderr, HTTP status, retry count, and raw response are discarded.\n  WHY: Operators and workflow-log-analysis lose the signal needed to distinguish transient flakes from persistent state problems.\n- Requirement: \"Adds test_failed_comments_fetch_skips_state_reconstruction, which forces the comments GET to fail and asserts reconstruction is skipped. Verified the test fails without the guard and passes with it.\" (plus update to the edited `test_all_invalid_state_comments_trigger_reconstruction_path_without_heal`).\n  Expected change site: tests/test_orchestrate_poll_process.py (the `_run_poller` helper and test body).\n  Evidence of absence: The test exercises `fail_issue_comment_get_after={192: 0}` and checks stdout strings, but the test helper's mock implementation for the comments endpoint (and how it sets `COMMENTS_FETCH_OK`) is not shown or updated in the diff; the negative-control \"fails without the guard\" assertion is only described in the commit message/PR body, not exercised by a failing fixture.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "1609a01bf833a8a21ff69b8a07d722fcd23ce49bc8db8bec30c0fdc5c1bfafb2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3683,
+    "run_id": "29572118898",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29572118898",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260717105644_076073cf39",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3683,
+    "run_id": "29572118898"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-17T10:56:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
