@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -2203,7 +2204,15 @@ def _maybe_unblock_task_state_dependents(wave_id: Any, issue: dict[str, Any]) ->
 		return
 
 	try:
-		task_state_module.unblock_dependents(wave_id, completed_issue_id)
+		unblock_dependents = task_state_module.unblock_dependents
+		if "completed_issue_payload" in inspect.signature(unblock_dependents).parameters:
+			unblock_dependents(
+				wave_id,
+				completed_issue_id,
+				completed_issue_payload=issue,
+			)
+		else:
+			unblock_dependents(wave_id, completed_issue_id)
 	except Exception as exc:
 		_log_task_state_write_fail(completed_issue_id, f"unblock_failed:{exc}")
 
