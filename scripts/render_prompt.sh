@@ -494,37 +494,6 @@ if [ "${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" = "true" ]; then
 		PLACEHOLDER_SOURCE_FILE="${ASSEMBLED_PROMPT_FILE}"
 	fi
 fi
-
-if [ "${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}" = "true" ] && [[ "${MODE_NAME}" = mode-* ]]; then
-	IDENTITY_RECALL_CANONICAL_PROMPT=""
-	IDENTITY_RECALL_PHASE_NAME=""
-	IDENTITY_RECALL_METADATA=""
-	IDENTITY_RECALL_ROLE=""
-	IDENTITY_RECALL_MISSION=""
-	IDENTITY_RECALL_BLOCK=""
-
-	if ! IDENTITY_RECALL_CANONICAL_PROMPT="$(resolve_identity_source_prompt "${PROMPT_FILE}")"; then
-		emit_identity_reinject_parse_fail "canonical_prompt_missing"
-	elif ! IDENTITY_RECALL_PHASE_NAME="$(resolve_identity_phase_name "${IDENTITY_RECALL_CANONICAL_PROMPT}")"; then
-		emit_identity_reinject_parse_fail "phase_name_missing"
-	elif ! IDENTITY_RECALL_METADATA="$(extract_identity_recall_metadata "${IDENTITY_RECALL_CANONICAL_PROMPT}")"; then
-		emit_identity_reinject_parse_fail "metadata_extract_failed"
-	else
-		IDENTITY_RECALL_ROLE="$(printf '%s\n' "${IDENTITY_RECALL_METADATA}" | sed -n '1p')"
-		IDENTITY_RECALL_MISSION="$(printf '%s\n' "${IDENTITY_RECALL_METADATA}" | sed -n '2p')"
-		if [ -z "${IDENTITY_RECALL_PHASE_NAME}" ] || [ -z "${IDENTITY_RECALL_ROLE}" ] || [ -z "${IDENTITY_RECALL_MISSION}" ]; then
-			emit_identity_reinject_parse_fail "identity_metadata_incomplete"
-		elif ! IDENTITY_RECALL_BLOCK="$(render_identity_recall_block "${IDENTITY_RECALL_PHASE_NAME}" "${IDENTITY_RECALL_ROLE}" "${IDENTITY_RECALL_MISSION}")"; then
-			emit_identity_reinject_parse_fail "render_failed"
-		elif ! inject_identity_recall_block "${RENDER_INPUT_FILE}" "${IDENTITY_RECALL_BLOCK}"; then
-			emit_identity_reinject_parse_fail "injection_failed"
-		else
-			RENDER_INPUT_FILE="${IDENTITY_RECALL_INJECTED_FILE}"
-			PLACEHOLDER_SOURCE_FILE="${RENDER_INPUT_FILE}"
-		fi
-	fi
-fi
-
 declare -A RENDER_VARS_SEEN=()
 declare -a RENDER_ARGS=()
 
