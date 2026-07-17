@@ -567,6 +567,7 @@ def _run_poller(
 	fail_validation_dispatch: bool = False,
 	fail_release_dispatch: bool = False,
 	fail_search_issues: bool = False,
+	search_issue_items: list[dict] | None = None,
 	prs: list[dict] | None = None,
 	pr_api_sequence: dict[int, list[dict]] | None = None,
 	existing_branches: list[str] | None = None,
@@ -774,6 +775,7 @@ def _run_poller(
 			"fail_validation_dispatch": fail_validation_dispatch,
 			"fail_release_dispatch": fail_release_dispatch,
 			"fail_search_issues": bool(fail_search_issues),
+			"search_issue_items": list(search_issue_items or []),
 			"default_branch": "main",
 			"prs": prs,
 			"pr_api_sequence": {str(k): list(v) for k, v in pr_api_sequence.items()},
@@ -1492,7 +1494,9 @@ if args[0] == 'api':
 		# the queried `Tracking issue: #N` reference (mirrors the real
 		# search/issues used by state reconstruction and the deferred-creation
 		# duplicate backstop).  Honors an injected failure so fail-closed tests
-		# can exercise the "lookup unavailable this cycle" path.
+		# can exercise the "lookup unavailable this cycle" path.  The real
+		# endpoint returns both issues and pull requests unless the query adds
+		# `is:issue`; explicit `search_issue_items` fixtures can model that.
 		if store.get('fail_search_issues'):
 			print('search/issues failed', file=sys.stderr)
 			sys.exit(1)
@@ -1500,19 +1504,25 @@ if args[0] == 'api':
 		for f in fields:
 			if f.startswith('q='):
 				q = f.split('=', 1)[1]
-		items = []
-		mt = re.search(r'Tracking issue: #(\d+)', q)
-		if mt is not None:
-			needle = 'Tracking issue: #' + mt.group(1)
-			for inum, idata in store.get('issues', {}).items():
-				body = str(idata.get('body', '') or '')
-				if needle in body:
-					items.append({
-						'number': int(inum),
-						'title': idata.get('title', ''),
-						'body': body,
-						'state': 'closed' if idata.get('closed') else 'open',
-					})
+		explicit_items = store.get('search_issue_items')
+		if explicit_items:
+			items = list(explicit_items)
+		else:
+			items = []
+			mt = re.search(r'Tracking issue: #(\d+)', q)
+			if mt is not None:
+				needle = 'Tracking issue: #' + mt.group(1)
+				for inum, idata in store.get('issues', {}).items():
+					body = str(idata.get('body', '') or '')
+					if needle in body:
+						items.append({
+							'number': int(inum),
+							'title': idata.get('title', ''),
+							'body': body,
+							'state': 'closed' if idata.get('closed') else 'open',
+						})
+		if 'is:issue' in q:
+			items = [item for item in items if 'pull_request' not in item]
 		result = {'total_count': len(items), 'incomplete_results': False, 'items': items}
 		if jq:
 			import subprocess as _sp
@@ -10420,6 +10430,50 @@ def test_deferred_creation_adopts_existing_github_issue_instead_of_duplicating()
 		str(c.get("body", "")) for c in result["issues"]["192"]["comments"]
 	)
 	assert "Deferred Issue Creation" not in tracking_bodies
+
+
+def test_deferred_creation_scopes_lookup_to_issues_and_adopts_existing_issue():
+	"""Mixed issue/PR search results must not degrade the duplicate backstop.
+
+	The real `search/issues` endpoint returns pull requests too unless the query
+	adds `is:issue`. A PR-like result with `body: null` used to make the jq
+	reduce fail, which the shell fallback then misread as a successful empty
+	lookup and allowed duplicate creation. Scope the query to issues and keep
+	the real child issue adoptable.
+	"""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"] = [
+		{"id": "phase-1-backend", "github_issue": None, "status": "not_created"},
+	]
+	state["issue_number_map"] = {}
+	state["pending_issue_defs"] = {
+		"phase-1-backend": {
+			"title": "Phase 1: backend",
+			"body": "Implement phase 1 backend.",
+			"priority": 1,
+		},
+	}
+	existing_body = (
+		"Implement phase 1 backend.\n\n---\n"
+		"**Orchestrator metadata** (do not edit)\n"
+		"- Tracking issue: #192\n"
+		"- Local ID: `phase-1-backend`\n"
+		"- Priority: 1\n"
+		"- Managed by: AI Orchestrator"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		search_issue_items=[
+			{"number": 9001, "title": "Integration PR", "body": None, "pull_request": {}, "state": "open"},
+			{"number": 3543, "title": "Phase 1: backend", "body": existing_body, "state": "closed"},
+		],
+	)
+	assert result.get("created_issues", []) == [], result.get("created_issues")
+	assert "phase-1-backend" not in result["latest_state"]["pending_issue_defs"]
+	w1 = result["latest_state"]["waves"][0]["issues"][0]
+	assert w1["github_issue"] == 3543, w1
 
 
 def test_deferred_creation_skips_when_existence_lookup_fails():

@@ -14169,11 +14169,11 @@ The poller will resume processing on the next cycle."
       if [ "${DEFERRED_EXISTING_LOOKUP_DONE}" != "true" ]; then
         DEFERRED_EXISTING_LOOKUP_DONE=true
         if _deferred_child_items="$(gh_retry gh api "search/issues" \
-          -f q="repo:${GITHUB_REPOSITORY} \"Tracking issue: #${TRACKING_NUM}\" in:body" \
+          -f q="repo:${GITHUB_REPOSITORY} is:issue \"Tracking issue: #${TRACKING_NUM}\" in:body" \
           --jq '.items // []' 2>/dev/null)"; then
-          DEFERRED_EXISTING_MAP_JSON="$(printf '%s' "${_deferred_child_items}" | jq '
+          if DEFERRED_EXISTING_MAP_JSON="$(printf '%s' "${_deferred_child_items}" | jq '
             reduce .[] as $issue ({};
-              ($issue.body | capture("Local ID: `(?<id>[^`]+)`") // null) as $cap |
+              (try ($issue.body | capture("Local ID: `(?<id>[^`]+)`")) catch null) as $cap |
               if $cap == null then .
               else
                 ($cap.id) as $lid |
@@ -14181,8 +14181,7 @@ The poller will resume processing on the next cycle."
                 else . + {($lid): $issue.number} end
               end
             )
-          ' 2>/dev/null || echo '{}')"
-          if printf '%s' "${DEFERRED_EXISTING_MAP_JSON}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+          ' 2>/dev/null)" && printf '%s' "${DEFERRED_EXISTING_MAP_JSON}" | jq -e 'type == "object"' >/dev/null 2>&1; then
             DEFERRED_EXISTING_LOOKUP_OK=true
           else
             DEFERRED_EXISTING_MAP_JSON='{}'
