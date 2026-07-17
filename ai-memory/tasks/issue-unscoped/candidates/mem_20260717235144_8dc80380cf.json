@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_lib.py:2210-2225 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The backward-compatibility fallback for `unblock_dependents` relies on substring matching in a TypeError message.\n  WHY: Exception wording is not API-stable across Python versions/implementations, so the shim can re-raise instead of degrading to the legacy call; reviewers ranged from nit to major, so using the highest severity.\n- scripts/task_state.py:~140-150 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_candidate_blocker_tokens` can silently drop github_issue tokens when a supplied completed_issue_payload is malformed or non-dict.\n  WHY: A malformed payload can hide dependency-unblocking failures by failing to surface the token-loss condition, making the fallback harder to diagnose.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"mirror every successful authoritative checkpoint\" in the main poll path\n  expected_change_site: scripts/orchestrate_poll_process.sh\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: No diff hunk touches scripts/orchestrate_poll_process.sh; post_state_comment() mirrors the chunked state but the task-state mirror wire-in appears incomplete in the main poll hot path according to documentation and tests.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: scripts/orchestrate_lib.py\n  Lines: 2210-2225\n  Problem: The backward-compatibility fallback for `unblock_dependents` depends on substring matching in a TypeError message.\n  Why it fails at runtime: Exception message text is not part of the API contract across Python implementations/versions, making this brittle. The TypeError fallback can fail if the wording changes upstream, causing graceful degradation to the legacy two-argument call to not occur.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n\n- File: scripts/task_state.py\n  Lines: ~140-150\n  Problem: `_candidate_blocker_tokens` can silently drop github_issue tokens when a supplied completed_issue_payload is malformed or non-dict.\n  Why it fails at runtime: In corrupted mirror state or partial recovery scenarios, the fallback path may miss unblocking dependent tasks because it does not surface the silent failure, making it harder to diagnose the root cause of dependency cascade failures.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n\nRequirement: \"mirror every successful authoritative checkpoint\" in the main poll path\nExpected change site: scripts/orchestrate_poll_process.sh\nEvidence of absence: No diff hunk touches scripts/orchestrate_poll_process.sh; post_state_comment() mirrors the chunked state but the task-state mirror wire-in appears incomplete in the main poll hot path according to documentation and tests.\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: scripts/orchestrate_lib.py\n  Line or code reference: lines 2213-2219\n  Problem: The backward-compatibility fallback relies on substring matching of TypeError message content (\"completed_issue_payload\" and \"unexpected keyword argument\") to detect unsupported keyword arguments.\n  Why it fails at runtime: While this works in current CPython versions (the error message format has been stable), it is theoretically brittle across Python implementations or future Python versions. If the error message format changes, the fallback will fail and the TypeError will be re-raised, causing `_maybe_unblock_task_state_dependents` to log `TASK_STATE_WRITE_FAIL` and skip the unblock operation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: scripts/orchestrate_lib.py\n  Line or code reference: 2218-2225\n  Problem: The backward-compatibility fallback depends on exact substring matching of two strings (\"completed_issue_payload\" AND \"unexpected keyword argument\") in the TypeError message.\n  Why it fails at runtime: If an older `task_state.unblock_dependents` is accessed through a wrapper, partial, or alternative Python implementation (PyPy, embedded interpreters), the TypeError message may differ. For example, a `functools.partial` or a mocked function in tests could produce \"got an unexpected keyword argument 'completed_issue_payload'\" (note \"got\" prefix) or an entirely different message shape. The `and` (expressed as `not in ... or not in ...`) conjunction means if either substring is absent, the exception is re-raised instead of falling back to the legacy two-argument call, causing the `_log_task_state_write_fail` catch-all to record an unblock failure when a silent fallback was intended.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n\n- File: scripts/orchestrate_lib.py\n  Line or code reference: 2218-2225\n  Problem: The TypeError message-matching fallback is a brittle backward-compatibility contract. Unlike `inspect.signature` (which inspects the callable's declared parameters directly), string matching the exception text depends on CPython's current error message wording.\n  Why it fails at runtime: A future Python version that reformats TypeError messages for kwargs would break the fallback for any consumer repo still running an older `task_state.py`. The fallback is fail-closed (re-raises) rather than fail-open (logs and degrades), so a mismatched message causes a logged `unblock_failed` instead of silently using the legacy path. The existing repo tests (`test_check_wave_status_task_state_failures_are_fail_open`) monkeypatch `unblock_dependents` to raise a plain `RuntimeError(\"boom\")` \u2014 they do not exercise the TypeError fallback path, so a regression could land undetected.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/orchestrate_lib.py:2219\n  Line or code reference: `if (\"completed_issue_payload\" not in str(exc) or \"unexpected keyword argument\" not in str(exc)):`\n  Problem: The fallback relies on substring matching inside a `TypeError` message.\n  Why it fails at runtime: The exact wording can vary across Python implementations, versions, or when the callable is wrapped (e.g. by a decorator or mock), causing the except-block to re-raise instead of gracefully degrading to the legacy two-argument call. This would turn a safe compatibility path into a hard failure.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "13cc54872c59b840b3268007f364a0513315fbdc2cf3cf3e16c1c114400849f2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3689,
+    "run_id": "29618624339",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29618624339",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260717235144_8dc80380cf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3689,
+    "run_id": "29618624339"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-17T23:51:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
