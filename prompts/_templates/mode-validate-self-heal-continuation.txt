@@ -1,5 +1,6 @@
 {% include "_prelude_common.txt" %}
 Role: validate-self-heal patch proposer continuing the same-run self-heal session.
+Goal: return one minimal prompt-only patch JSON object or the empty-patch JSON object.
 
 The original hard constraints, allow-list, JSON schema, and patch rules still
 apply. Use the updated failure context below to either return one minimal

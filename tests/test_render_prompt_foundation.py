@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -51,6 +52,17 @@ PHASE_C_REQUIRED_VARS = {
 		"MERGED_SUB_ISSUES_LIST": "- #3505 phase-c-persona-prefixes\n- #3496 tracking",
 	},
 }
+ROLE_GOAL_LINE_RE = re.compile(r"^Role:\s*(?P<role>.+?)\s+Goal:\s*(?P<goal>.+?)$", re.MULTILINE)
+IDENTITY_RECALL_BLOCK_RE = re.compile(
+	r"<identity-recall>\n"
+	r"Phase: (?P<phase>.+?)\.\n"
+	r"Role: (?P<role>.+?)\.\n"
+	r"Mission: (?P<mission>.+?)\.\n"
+	r"Re-emit this block at the top of your next message if you\n"
+	r"have just performed a context compaction\.\n"
+	r"</identity-recall>",
+	re.DOTALL,
+)
 
 
 def _normalize_text(content: str) -> str:
@@ -62,6 +74,7 @@ def _normalize_text(content: str) -> str:
 
 def _base_env() -> dict[str, str]:
 	env = os.environ.copy()
+	env.pop("UNATTENDED_IDENTITY_REINJECT_ENABLED", None)
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env["PROMPT_PERSONA_PREFIX_ENABLED"] = "false"
 	return env
@@ -69,6 +82,42 @@ def _base_env() -> dict[str, str]:
 
 def _load_reference_text(file_name: str) -> str:
 	return _normalize_text((REPO_ROOT / "prompts" / "references" / file_name).read_text(encoding="utf-8"))
+
+
+def _load_opening_role_goal_paragraph(prompt_file: Path) -> str:
+	paragraph_lines: list[str] = []
+	started = False
+	in_compaction_rules = False
+	for raw_line in prompt_file.read_text(encoding="utf-8").splitlines():
+		line = raw_line.strip()
+		if not started:
+			if in_compaction_rules:
+				if line == "</compaction-rules>":
+					in_compaction_rules = False
+				continue
+			if not line or line.startswith("#") or (line.startswith("{%") and line.endswith("%}")):
+				continue
+			if line.startswith("<compaction-rules>"):
+				if not line.endswith("</compaction-rules>"):
+					in_compaction_rules = True
+				continue
+			started = True
+		if not line:
+			break
+		paragraph_lines.append(raw_line)
+	assert paragraph_lines, prompt_file
+	return "\n".join(paragraph_lines)
+
+
+def _assert_identity_recall_after_role_goal(rendered_text: str, *, phase_name: str) -> re.Match[str]:
+	role_goal_match = ROLE_GOAL_LINE_RE.search(rendered_text)
+	assert role_goal_match is not None
+	identity_match = IDENTITY_RECALL_BLOCK_RE.search(rendered_text)
+	assert identity_match is not None
+	assert identity_match.group("phase") == phase_name
+	assert rendered_text[role_goal_match.end(): identity_match.start()] == "\n\n"
+	assert rendered_text[identity_match.end():].startswith("\n\n")
+	return identity_match
 
 
 def _run_render_prompt_py(
@@ -679,7 +728,7 @@ def test_render_prompt_py_uses_checked_in_persona_source() -> None:
 			encoding="utf-8",
 		)
 
-		persona_env = os.environ.copy()
+		persona_env = _base_env()
 		persona_env["PYTHONDONTWRITEBYTECODE"] = "1"
 		persona_env.pop("PROMPT_PERSONA_PREFIX_ENABLED", None)
 		proc = _run_render_prompt_py(prompt_file, env=persona_env, cwd=repo_root)
@@ -708,7 +757,7 @@ def test_apply_phase_c_persona_prefix_accepts_legacy_mode_name_only_call() -> No
 			f"os.chdir({str(repo_root)!r})\n"
 			"print(module.apply_phase_c_persona_prefix('Body\\n', mode_name='mode-sample'), end='')\n"
 		)
-		persona_env = os.environ.copy()
+		persona_env = _base_env()
 		persona_env["PYTHONDONTWRITEBYTECODE"] = "1"
 		persona_env.pop("PROMPT_PERSONA_PREFIX_ENABLED", None)
 		proc = subprocess.run(
@@ -760,7 +809,7 @@ def test_render_prompt_py_enables_phase_c_persona_prefix_by_default() -> None:
 	assert disabled_proc.returncode == 0, disabled_proc.stderr
 	assert disabled_proc.stderr == ""
 
-	default_env = os.environ.copy()
+	default_env = _base_env()
 	default_env["PYTHONDONTWRITEBYTECODE"] = "1"
 	default_env.pop("PROMPT_PERSONA_PREFIX_ENABLED", None)
 	default_proc = _run_render_prompt_py(prompt_file, env=default_env)
@@ -783,6 +832,196 @@ def test_render_prompt_py_treats_blank_persona_env_value_as_disabled() -> None:
 	assert blank_proc.returncode == 0, blank_proc.stderr
 	assert blank_proc.stderr == ""
 	assert blank_proc.stdout == legacy_proc.stdout
+
+
+def test_render_prompt_py_identity_recall_flag_disabled_is_byte_stable() -> None:
+	prompt_file = REPO_ROOT / "prompts" / "mode-plan.txt"
+	baseline_proc = _run_render_prompt_py(prompt_file)
+	disabled_env = _base_env()
+	disabled_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "false"
+	disabled_proc = _run_render_prompt_py(prompt_file, env=disabled_env)
+
+	assert baseline_proc.returncode == 0, baseline_proc.stderr
+	assert baseline_proc.stderr == ""
+	assert disabled_proc.returncode == 0, disabled_proc.stderr
+	assert disabled_proc.stderr == ""
+	assert disabled_proc.stdout == baseline_proc.stdout
+
+
+def test_render_prompt_py_matches_shell_identity_recall_output_with_default_persona() -> None:
+	prompt_file = REPO_ROOT / "prompts" / "mode-plan.txt"
+	identity_env = _base_env()
+	identity_env["PYTHONDONTWRITEBYTECODE"] = "1"
+	# Mixed-case, padded truthy input pins normalized env-flag parsing.
+	identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = " True "
+	identity_env.pop("PROMPT_PERSONA_PREFIX_ENABLED", None)
+
+	python_proc = _run_render_prompt_py(prompt_file, env=identity_env)
+	shell_proc = subprocess.run(
+		["bash", str(RENDER_PROMPT_SH), str(prompt_file)],
+		cwd=str(REPO_ROOT),
+		env=identity_env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+
+	assert python_proc.returncode == 0, python_proc.stderr
+	assert python_proc.stderr == ""
+	assert shell_proc.returncode == 0, shell_proc.stderr
+	assert shell_proc.stderr == ""
+	assert python_proc.stdout == shell_proc.stdout
+	assert python_proc.stdout.startswith(PHASE_C_PERSONA_SENTINELS["mode-plan"])
+	identity_match = _assert_identity_recall_after_role_goal(python_proc.stdout, phase_name="mode-plan")
+	assert identity_match.group("role") == "planning-phase auditor"
+	assert identity_match.group("mission") == "emit a structured implementation plan or `BLOCKED:` line"
+
+
+def test_render_prompt_py_matches_shell_identity_recall_output_for_wrapped_role_goal_prompt() -> None:
+	prompt_file = REPO_ROOT / "prompts" / "mode-check-failure-triage.txt"
+	identity_env = _base_env()
+	identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "true"
+	expected_role_goal_paragraph = _load_opening_role_goal_paragraph(prompt_file)
+
+	python_proc = _run_render_prompt_py(prompt_file, env=identity_env)
+	shell_proc = subprocess.run(
+		["bash", str(RENDER_PROMPT_SH), str(prompt_file)],
+		cwd=str(REPO_ROOT),
+		env=identity_env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+
+	assert python_proc.returncode == 0, python_proc.stderr
+	assert python_proc.stderr == ""
+	assert shell_proc.returncode == 0, shell_proc.stderr
+	assert shell_proc.stderr == ""
+	assert python_proc.stdout == shell_proc.stdout
+	assert f"{expected_role_goal_paragraph}\n\n<identity-recall>" in python_proc.stdout
+	identity_match = IDENTITY_RECALL_BLOCK_RE.search(python_proc.stdout)
+	assert identity_match is not None
+	assert identity_match.group("phase") == "mode-check-failure-triage"
+	assert "autonomous AI pipeline (clarify -> plan -> implement -> review)" in identity_match.group("mission")
+
+
+def test_render_prompt_py_inline_prompt_prefers_cwd_canonical_prompt_root() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_identity_inline_root_") as td:
+		root = Path(td)
+		(root / "prompts").mkdir(parents=True, exist_ok=True)
+		prompt_file = root / "runtime" / "mode-plan-inline.txt"
+		prompt_file.parent.mkdir(parents=True, exist_ok=True)
+		(root / "prompts" / "mode-plan.txt").write_text(
+			"# tier: DEFAULT\nRole: cwd-local planner. Goal: prefer the cwd prompt root for identity recall.\n",
+			encoding="utf-8",
+		)
+		prompt_file.write_text("Runtime wrapper prelude.\n\nBody follows.\n", encoding="utf-8")
+		identity_env = _base_env()
+		identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "true"
+		proc = _run_render_prompt_py(prompt_file, env=identity_env, cwd=root)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stderr == ""
+	identity_match = IDENTITY_RECALL_BLOCK_RE.search(proc.stdout)
+	assert identity_match is not None
+	assert identity_match.group("phase") == "mode-plan"
+	assert identity_match.group("role") == "cwd-local planner"
+	assert identity_match.group("mission") == "prefer the cwd prompt root for identity recall"
+	assert "Role: planning-phase auditor." not in proc.stdout
+
+
+def test_render_prompt_py_identity_recall_reports_canonical_prompt_load_failure_details() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_identity_load_fail_") as td:
+		root = Path(td)
+		(root / "prompts").mkdir(parents=True, exist_ok=True)
+		prompt_file = root / "runtime" / "mode-synthetic-load-inline.txt"
+		canonical_prompt = root / "prompts" / "mode-synthetic-load.txt"
+		prompt_file.parent.mkdir(parents=True, exist_ok=True)
+		prompt_file.write_text("Runtime wrapper prelude.\n\nBody follows.\n", encoding="utf-8")
+		canonical_prompt.write_text(
+			"# tier: DEFAULT\nRole: synthetic planner. Goal: surface load failures.\n",
+			encoding="utf-8",
+		)
+
+		baseline_proc = _run_render_prompt_py(prompt_file, cwd=root)
+		identity_env = _base_env()
+		identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "true"
+		os.chmod(canonical_prompt, 0)
+		try:
+			identity_proc = _run_render_prompt_py(prompt_file, env=identity_env, cwd=root)
+		finally:
+			os.chmod(canonical_prompt, 0o644)
+
+	assert baseline_proc.returncode == 0, baseline_proc.stderr
+	assert baseline_proc.stderr == ""
+	assert identity_proc.returncode == 0, identity_proc.stderr
+	assert identity_proc.stdout == baseline_proc.stdout
+	assert identity_proc.stderr.startswith(
+		"IDENTITY_REINJECT_PARSE_FAIL: mode-synthetic-load-inline reason=canonical_prompt_load_failed detail=",
+	)
+	assert "Unable to read prompt file" in identity_proc.stderr
+	assert str(canonical_prompt) in identity_proc.stderr
+
+
+def test_render_prompt_py_identity_recall_reports_render_failure_details() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_identity_render_fail_") as td:
+		root = Path(td)
+		render_script = root / "scripts" / "render_prompt.py"
+		prompt_file = root / "mode-sample.txt"
+		render_script.parent.mkdir(parents=True, exist_ok=True)
+		shutil.copy2(RENDER_PROMPT_PY, render_script)
+		prompt_file.write_text(
+			"# tier: DEFAULT\nRole: synthetic planner. Goal: surface render failures.\n\nBody.\n",
+			encoding="utf-8",
+		)
+
+		baseline_proc = subprocess.run(
+			[sys.executable, str(render_script), str(prompt_file)],
+			cwd=str(root),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		identity_env = _base_env()
+		identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "true"
+		identity_proc = subprocess.run(
+			[sys.executable, str(render_script), str(prompt_file)],
+			cwd=str(root),
+			env=identity_env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert baseline_proc.returncode == 0, baseline_proc.stderr
+	assert baseline_proc.stderr == ""
+	assert identity_proc.returncode == 0, identity_proc.stderr
+	assert identity_proc.stdout == baseline_proc.stdout
+	assert identity_proc.stderr.startswith(
+		"IDENTITY_REINJECT_PARSE_FAIL: mode-sample reason=render_failed detail=",
+	)
+	assert "Identity recall template not found" in identity_proc.stderr
+
+
+def test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_identity_fail_open_") as td:
+		prompt_file = Path(td) / "mode-malformed.txt"
+		prompt_file.write_text(
+			"# tier: DEFAULT\nRole: malformed prompt without a goal line.\n\nBody.\n",
+			encoding="utf-8",
+		)
+
+		baseline_proc = _run_render_prompt_py(prompt_file, cwd=Path(td))
+		identity_env = _base_env()
+		identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "true"
+		identity_proc = _run_render_prompt_py(prompt_file, env=identity_env, cwd=Path(td))
+
+	assert baseline_proc.returncode == 0, baseline_proc.stderr
+	assert baseline_proc.stderr == ""
+	assert identity_proc.returncode == 0, identity_proc.stderr
+	assert identity_proc.stdout == baseline_proc.stdout
+	assert identity_proc.stderr.strip() == "IDENTITY_REINJECT_PARSE_FAIL: mode-malformed reason=metadata_extract_failed"
 
 
 def main() -> int:
@@ -811,6 +1050,13 @@ def main() -> int:
 	test_render_prompt_py_prepends_phase_c_persona_prefix_without_altering_legacy_body()
 	test_render_prompt_py_enables_phase_c_persona_prefix_by_default()
 	test_render_prompt_py_treats_blank_persona_env_value_as_disabled()
+	test_render_prompt_py_identity_recall_flag_disabled_is_byte_stable()
+	test_render_prompt_py_matches_shell_identity_recall_output_with_default_persona()
+	test_render_prompt_py_matches_shell_identity_recall_output_for_wrapped_role_goal_prompt()
+	test_render_prompt_py_inline_prompt_prefers_cwd_canonical_prompt_root()
+	test_render_prompt_py_identity_recall_reports_canonical_prompt_load_failure_details()
+	test_render_prompt_py_identity_recall_reports_render_failure_details()
+	test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt()
 	print("OK: render prompt foundation assertions hold")
 	return 0
 

@@ -6,6 +6,8 @@ If you compact context:
 - Preserve the exact structured-output contract, including required section headings and JSON/Q-ID schemas.
 - When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side `.transcripts/<run_id>-<phase>-<ts>.json` archive instead of re-emitting raw transcript or tool-call history.
 </compaction-rules>
+Role: validate-generate compatibility steward. Goal: preserve the manifest-centric validation harness rules for this phase.
+
 You are executing the VALIDATE-GENERATE phase of the AI development pipeline.
 You are Codex v0.114.0 running in unattended CI mode.
 

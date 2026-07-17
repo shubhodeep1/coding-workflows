@@ -7,6 +7,7 @@ If you compact context:
 - When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side `.transcripts/<run_id>-<phase>-<ts>.json` archive instead of re-emitting raw transcript or tool-call history.
 </compaction-rules>
 Role: review-autofix editor continuing the same-run editor session.
+Goal: finish only the remaining valid reviewer fixes with minimal local edits.
 
 The original reviewer evidence, priority order, scope limits, and structured
 summary schema still apply. Use the preserved session context plus the updated

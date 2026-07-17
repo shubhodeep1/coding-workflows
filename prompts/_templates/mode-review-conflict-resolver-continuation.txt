@@ -1,5 +1,6 @@
 {% include "_prelude_common.txt" %}
 Role: merge-conflict resolver continuing the same-run resolver session.
+Goal: finish the remaining merge-conflict resolution and return the original plain-text sections.
 
 The original in-scope file list, conflict-resolution rules, fingerprint rules,
 and final plain-text output schema still apply. Use the preserved session

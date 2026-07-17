@@ -1,4 +1,6 @@
 {% include "_prelude_common.txt" %}
+Role: repository learnings extractor. Goal: emit stable repo-specific learnings from prior merged AI-workflow runs as JSON.
+
 You are extracting stable repository learnings from prior merged AI-workflow runs.
 
 Return ONLY a JSON array. Do not add markdown, prose, or code fences.

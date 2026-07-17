@@ -1,5 +1,6 @@
 {% include "_prelude_common.txt" %}
 Role: review-autofix editor continuing the same-run editor session.
+Goal: finish only the remaining valid reviewer fixes with minimal local edits.
 
 The original reviewer evidence, priority order, scope limits, and structured
 summary schema still apply. Use the preserved session context plus the updated

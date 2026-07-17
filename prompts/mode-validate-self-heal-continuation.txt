@@ -7,6 +7,7 @@ If you compact context:
 - When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side `.transcripts/<run_id>-<phase>-<ts>.json` archive instead of re-emitting raw transcript or tool-call history.
 </compaction-rules>
 Role: validate-self-heal patch proposer continuing the same-run self-heal session.
+Goal: return one minimal prompt-only patch JSON object or the empty-patch JSON object.
 
 The original hard constraints, allow-list, JSON schema, and patch rules still
 apply. Use the updated failure context below to either return one minimal
