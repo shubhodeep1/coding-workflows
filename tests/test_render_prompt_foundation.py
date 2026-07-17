@@ -74,6 +74,7 @@ def _normalize_text(content: str) -> str:
 
 def _base_env() -> dict[str, str]:
 	env = os.environ.copy()
+	env.pop("UNATTENDED_IDENTITY_REINJECT_ENABLED", None)
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env["PROMPT_PERSONA_PREFIX_ENABLED"] = "false"
 	return env
@@ -702,7 +703,7 @@ def test_render_prompt_py_uses_checked_in_persona_source() -> None:
 			encoding="utf-8",
 		)
 
-		persona_env = os.environ.copy()
+		persona_env = _base_env()
 		persona_env["PYTHONDONTWRITEBYTECODE"] = "1"
 		persona_env.pop("PROMPT_PERSONA_PREFIX_ENABLED", None)
 		proc = _run_render_prompt_py(prompt_file, env=persona_env, cwd=repo_root)
@@ -731,7 +732,7 @@ def test_apply_phase_c_persona_prefix_accepts_legacy_mode_name_only_call() -> No
 			f"os.chdir({str(repo_root)!r})\n"
 			"print(module.apply_phase_c_persona_prefix('Body\\n', mode_name='mode-sample'), end='')\n"
 		)
-		persona_env = os.environ.copy()
+		persona_env = _base_env()
 		persona_env["PYTHONDONTWRITEBYTECODE"] = "1"
 		persona_env.pop("PROMPT_PERSONA_PREFIX_ENABLED", None)
 		proc = subprocess.run(
@@ -783,7 +784,7 @@ def test_render_prompt_py_enables_phase_c_persona_prefix_by_default() -> None:
 	assert disabled_proc.returncode == 0, disabled_proc.stderr
 	assert disabled_proc.stderr == ""
 
-	default_env = os.environ.copy()
+	default_env = _base_env()
 	default_env["PYTHONDONTWRITEBYTECODE"] = "1"
 	default_env.pop("PROMPT_PERSONA_PREFIX_ENABLED", None)
 	default_proc = _run_render_prompt_py(prompt_file, env=default_env)
@@ -824,7 +825,7 @@ def test_render_prompt_py_identity_recall_flag_disabled_is_byte_stable() -> None
 
 def test_render_prompt_py_matches_shell_identity_recall_output_with_default_persona() -> None:
 	prompt_file = REPO_ROOT / "prompts" / "mode-plan.txt"
-	identity_env = os.environ.copy()
+	identity_env = _base_env()
 	identity_env["PYTHONDONTWRITEBYTECODE"] = "1"
 	identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "true"
 	identity_env.pop("PROMPT_PERSONA_PREFIX_ENABLED", None)

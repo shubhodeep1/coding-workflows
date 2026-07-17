@@ -40,6 +40,7 @@ IDENTITY_BLOCK_RE = re.compile(
 
 def _base_env() -> dict[str, str]:
 	env = os.environ.copy()
+	env.pop("UNATTENDED_IDENTITY_REINJECT_ENABLED", None)
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env["PROMPT_PERSONA_PREFIX_ENABLED"] = "false"
 	env["PREVIOUS_ATTEMPT_NUMBER"] = "1"
