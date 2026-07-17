@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The linked issue (\"Phase B \u2014 inject identity recall blocks after prompt rendering\") and the judge decision require corpus-wide identity-recall behavior: every checked-in `prompts/mode-*.txt` file must open with a parseable opening `Role: ... Goal: ...` paragraph so `UNATTENDED_IDENTITY_REINJECT_ENABLED=true` injects the `<identity-recall>` block for the full mode corpus.\n  expected_change_site: Every `prompts/mode-*.txt` and its matching `prompts/_templates/*.txt` canonical source.\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Checked-in files `prompts/mode-clarify.txt`, `prompts/mode-plan.txt`, `prompts/mode-implement.txt`, `prompts/mode-judge.txt`, `prompts/mode-orchestrate.txt`, `prompts/mode-orchestrate-poll-judge.txt`, `prompts/mode-implement-diagnose.txt`, `prompts/mode-implement-repair.txt`, `prompts/mode-validate-discover.txt`, `prompts/mode-validate-diagnose.txt`, `prompts/mode-validate-fix-harness.txt`, `prompts/mode-validate-self-heal.txt`, `prompts/conflict-resolver.txt`, `prompts/integration-sync-conflict-resolver.txt` and others still lack a `Role: \u2026 Goal: \u2026` opening paragraph; recent reviewer consensus and judge comments (entries [15], [17]) call these exactly the remaining gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: The linked issue (\"Phase B \u2014 inject identity recall blocks after prompt rendering\") and the judge decision require corpus-wide identity-recall behavior: every checked-in `prompts/mode-*.txt` file must open with a parseable opening `Role: ... Goal: ...` paragraph so `UNATTENDED_IDENTITY_REINJECT_ENABLED=true` injects the `<identity-recall>` block for the full mode corpus.\n  Expected change site: Every `prompts/mode-*.txt` and its matching `prompts/_templates/*.txt` canonical source.\n  Evidence of absence:\n  - Checked-in files `prompts/mode-clarify.txt`, `prompts/mode-plan.txt`, `prompts/mode-implement.txt`, `prompts/mode-judge.txt`, `prompts/mode-orchestrate.txt`, `prompts/mode-orchestrate-poll-judge.txt`, `prompts/mode-implement-diagnose.txt`, `prompts/mode-implement-repair.txt`, `prompts/mode-validate-discover.txt`, `prompts/mode-validate-diagnose.txt`, `prompts/mode-validate-fix-harness.txt`, `prompts/mode-validate-self-heal.txt`, `prompts/conflict-resolver.txt`, `prompts/integration-sync-conflict-resolver.txt` and others still lack a `Role: \u2026 Goal: \u2026` opening paragraph.\n  - Recent reviewer consensus and judge comments (entries [15], [17]) call these exactly the remaining gap; the last-run diff declaration (entry [17]) claimed completion over only the prompts explicitly listed in the PR diff, not the full checked-in corpus.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "ee0131c0541c7b4354a95c76a1d6c24741594f3d11191cd1d3d372d88a2379d9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3682,
+    "run_id": "29568666734",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29568666734",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260717101705_a5f34f9afe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3682,
+    "run_id": "29568666734"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-07-17T10:17:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
