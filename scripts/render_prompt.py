@@ -440,13 +440,23 @@ def resolve_identity_source_prompt(prompt_path: Path, mode_name: str) -> Path | 
 	if prompt_path.is_file() and prompt_file_name == prompt_path.name:
 		return prompt_path.resolve()
 
-	candidate_paths = [
-		(script_root / "prompts" / prompt_file_name).resolve(),
-		(prompt_dir / prompt_file_name).resolve(),
-		(Path.cwd() / "prompts" / prompt_file_name).resolve(),
-		(Path.cwd() / ".codex-workflow-src" / "prompts" / prompt_file_name).resolve(),
-		(Path.cwd() / ".codex-workflow-src-main" / "prompts" / prompt_file_name).resolve(),
-	]
+	candidate_paths = [(prompt_dir / prompt_file_name).resolve()]
+	for ancestor in (prompt_dir, *prompt_dir.parents):
+		# Inline/runtime prompt renders often live under sibling runtime/ or tmp/
+		# directories rather than under prompts/ itself. Walk upward from the prompt
+		# file to find the nearest local prompts/ tree before falling back to cwd or
+		# this script's bundled prompt catalog.
+		if _prompt_prelude_refactor_enabled():
+			candidate_paths.append((ancestor / "prompts" / "_templates" / prompt_file_name).resolve())
+		candidate_paths.append((ancestor / "prompts" / prompt_file_name).resolve())
+	candidate_paths.extend(
+		[
+			(Path.cwd() / "prompts" / prompt_file_name).resolve(),
+			(Path.cwd() / ".codex-workflow-src" / "prompts" / prompt_file_name).resolve(),
+			(Path.cwd() / ".codex-workflow-src-main" / "prompts" / prompt_file_name).resolve(),
+			(script_root / "prompts" / prompt_file_name).resolve(),
+		]
+	)
 	for candidate in _unique_paths(candidate_paths):
 		if candidate.is_file():
 			return candidate

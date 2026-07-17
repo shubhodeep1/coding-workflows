@@ -905,6 +905,31 @@ def test_render_prompt_py_matches_shell_identity_recall_output_for_wrapped_role_
 	assert "autonomous AI pipeline (clarify -> plan -> implement -> review)" in identity_match.group("mission")
 
 
+def test_render_prompt_py_inline_prompt_prefers_cwd_canonical_prompt_root() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_identity_inline_root_") as td:
+		root = Path(td)
+		(root / "prompts").mkdir(parents=True, exist_ok=True)
+		prompt_file = root / "runtime" / "mode-plan-inline.txt"
+		prompt_file.parent.mkdir(parents=True, exist_ok=True)
+		(root / "prompts" / "mode-plan.txt").write_text(
+			"# tier: DEFAULT\nRole: cwd-local planner. Goal: prefer the cwd prompt root for identity recall.\n",
+			encoding="utf-8",
+		)
+		prompt_file.write_text("Runtime wrapper prelude.\n\nBody follows.\n", encoding="utf-8")
+		identity_env = _base_env()
+		identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "true"
+		proc = _run_render_prompt_py(prompt_file, env=identity_env, cwd=root)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stderr == ""
+	identity_match = IDENTITY_RECALL_BLOCK_RE.search(proc.stdout)
+	assert identity_match is not None
+	assert identity_match.group("phase") == "mode-plan"
+	assert identity_match.group("role") == "cwd-local planner"
+	assert identity_match.group("mission") == "prefer the cwd prompt root for identity recall"
+	assert "Role: planning-phase auditor." not in proc.stdout
+
+
 def test_render_prompt_py_identity_recall_reports_canonical_prompt_load_failure_details() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_identity_load_fail_") as td:
 		root = Path(td)
@@ -1028,6 +1053,7 @@ def main() -> int:
 	test_render_prompt_py_identity_recall_flag_disabled_is_byte_stable()
 	test_render_prompt_py_matches_shell_identity_recall_output_with_default_persona()
 	test_render_prompt_py_matches_shell_identity_recall_output_for_wrapped_role_goal_prompt()
+	test_render_prompt_py_inline_prompt_prefers_cwd_canonical_prompt_root()
 	test_render_prompt_py_identity_recall_reports_canonical_prompt_load_failure_details()
 	test_render_prompt_py_identity_recall_reports_render_failure_details()
 	test_render_prompt_py_identity_recall_fail_open_on_malformed_prompt()
