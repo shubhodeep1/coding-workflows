@@ -852,7 +852,8 @@ def test_render_prompt_py_matches_shell_identity_recall_output_with_default_pers
 	prompt_file = REPO_ROOT / "prompts" / "mode-plan.txt"
 	identity_env = _base_env()
 	identity_env["PYTHONDONTWRITEBYTECODE"] = "1"
-	identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "true"
+	# Mixed-case, padded truthy input pins normalized env-flag parsing.
+	identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = " True "
 	identity_env.pop("PROMPT_PERSONA_PREFIX_ENABLED", None)
 
 	python_proc = _run_render_prompt_py(prompt_file, env=identity_env)

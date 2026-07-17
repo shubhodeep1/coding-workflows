@@ -400,7 +400,8 @@ def discover_persona_source_path(prompt_path: Path | None) -> Path | None:
 
 
 def _identity_reinject_enabled() -> bool:
-	return os.environ.get("UNATTENDED_IDENTITY_REINJECT_ENABLED", "false") == "true"
+	raw_value = os.environ.get("UNATTENDED_IDENTITY_REINJECT_ENABLED", "false").strip().lower()
+	return bool(raw_value) and raw_value not in FALSEY_ENV_VALUES
 
 
 def _prompt_prelude_refactor_enabled() -> bool:
