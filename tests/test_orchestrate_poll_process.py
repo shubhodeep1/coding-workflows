@@ -10234,6 +10234,54 @@ def test_all_invalid_state_comments_trigger_reconstruction_path_without_heal():
 	assert result["latest_state"]["schema_version"] == "orchestrate_state.v1"
 
 
+def test_failed_comments_fetch_skips_state_reconstruction():
+	"""A failed comments fetch must not be misread as 'state missing'.
+
+	Regression for the project #3627 incident (poll run 29539323907): the
+	tracking issue had 665 comments, the paginated
+	``gh api --paginate .../issues/3627/comments`` fetch exhausted its retries
+	("gh command failed after 5 attempts"), and the poller treated the
+	resulting empty COMMENTS as "No state found ... Attempting state
+	reconstruction".  Reconstruction reset current_wave to 1 and — with the
+	child-issue search also returning an empty map — re-created the
+	already-completed wave-1 issue as duplicates (#3674, then #3676 on the
+	next cycle).
+
+	When COMMENTS_FETCH_OK != "true" the poller must instead skip
+	reconstruction this cycle and retry on the next poll, matching how the
+	rest of the file treats an unreadable comments fetch as "fail open".
+	"""
+	rewindable_body = (
+		"## Project: Demo project\n\n"
+		"**Integration branch:** `orchestrator/project-192`\n\n"
+		"### Wave 1\n\n"
+		"- [x] **phase-a-done**: Phase A — already completed (priority 1)\n\n"
+		"### Wave 2\n\n"
+		"- [ ] **phase-b-next**: Phase B — not started (priority 2)\n"
+	)
+	result = _run_poller(
+		state={"schema_version": "orchestrate_state.v1"},
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_body=rewindable_body,
+		# Force the tracking-issue comments GET to fail on the first call,
+		# reproducing the exhausted-retries fetch from run 29539323907.
+		fail_issue_comment_get_after={192: 0},
+	)
+	assert (
+		"Comments fetch failed for tracking issue #192; cannot confirm "
+		"orchestrator state is missing" in result["stdout"]
+	), result["stdout"]
+	# The destructive reconstruction path must NOT run when the fetch failed.
+	assert "Attempting state reconstruction" not in result["stdout"], result["stdout"]
+	assert (
+		"State reconstructed and posted for tracking issue #192."
+		not in result["stdout"]
+	), result["stdout"]
+	# And no duplicate wave-1 issue may be spawned for already-done work.
+	assert "Deferred issue creation for wave" not in result["stdout"], result["stdout"]
+
+
 def test_truncated_comments_json_is_handled_gracefully():
 	"""Poller exits cleanly when the comments API returns invalid/truncated JSON."""
 	with tempfile.TemporaryDirectory(prefix="poller-test-truncated-") as td:

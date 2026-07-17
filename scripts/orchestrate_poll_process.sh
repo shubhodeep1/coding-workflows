@@ -13060,6 +13060,27 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
 
   if [ -z "${STATE_JSON}" ] || [ "${STATE_JSON}" = "null" ]; then
+    # A failed (or unvalidated) comments fetch is NOT evidence that the
+    # orchestrator state is missing.  The state comment may exist but be
+    # temporarily unreadable — e.g. a paginated fetch of a tracking issue
+    # with hundreds of comments that exhausted its retries, or a truncated
+    # response that failed JSON validation above (COMMENTS_FETCH_OK="false"
+    # with COMMENTS="[]").  The rest of the poller already treats
+    # COMMENTS_FETCH_OK != true as "comments unavailable this cycle, fail
+    # open and retry" (see update_completion_status_comment and
+    # completion_status_comment_failed_state_observation).
+    #
+    # State reconstruction, by contrast, is destructive: rebuild_tracking_state
+    # resets current_wave to 1 and re-creates GitHub issues for any local id
+    # the best-effort, eventually-consistent child-issue search fails to map,
+    # spawning duplicate issues for already-completed waves.  Only reconstruct
+    # when we actually read the comments and confirmed no valid state comment
+    # exists; when the fetch itself failed, skip this tracking issue and let a
+    # later poll cycle read the real state.
+    if [ "${COMMENTS_FETCH_OK}" != "true" ]; then
+      echo "::warning::Comments fetch failed for tracking issue #${TRACKING_NUM}; cannot confirm orchestrator state is missing. Skipping state reconstruction this cycle (will retry next poll)."
+      continue
+    fi
     if [ "${STATE_COMMENT_COUNT}" -gt 0 ]; then
       echo "::warning::No valid ORCHESTRATOR_STATE_V1 comment found for tracking issue #${TRACKING_NUM}. Attempting state reconstruction..."
     else
