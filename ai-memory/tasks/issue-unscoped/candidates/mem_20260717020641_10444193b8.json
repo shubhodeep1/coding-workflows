@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_plan_scope_mode_contract.py:44-66 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: `_workflow_step_block()` is brittle string scanning: it stops only at the next `- name:` line, so unnamed steps or other YAML/layout variants can be folded into the returned block and make the contract assertions pass on the wrong content.\n  WHY: Four reviewers called out the unnamed-step false-positive case and x-ai_grok-4_20 additionally noted missing/duplicate-step and indentation/layout variants; reviewers disagreed only on severity (NIT vs MAJOR), so the higher severity is kept.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Phase H \u2014 add the plan Decisions convention and advisory linter (including prompt contract, linter script, CI steps, contract test, manifest ordering, and docs).\n  expected_change_site: prompts/mode-plan.txt, scripts/lint_plan_decisions.py, tests/test_lint_plan_decisions.py, .github/workflows/ci.yml, .ai/.workspace_source_manifest.txt, README.md\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: All surfaces already exist and are correct on HEAD; the PR only tightened the contract test helper and restored manifest test ordering.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_plan_scope_mode_contract.py:60 | severity=low | confidence=4\n  PROBLEM: The step-boundary detection stops only at the next line starting with the same indentation plus `- name: `, so unnamed steps can be absorbed into the returned block.\n  WHY: If an unnamed step is inserted between the two plan-decisions lint steps, the substring assertions can still pass even when the target named step is missing or damaged.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_plan_scope_mode_contract.py:44-66 | severity=low | confidence=4\n  PROBLEM: The step-block extraction helper stops only at the next line starting with the same indentation plus `- name: `, so an unnamed step can be included in the extracted block.\n  WHY: A future unnamed workflow step inserted between the named plan-decisions steps could cause substring assertions to pass against combined content instead of the real target step.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_plan_scope_mode_contract.py:44-66 | severity=high | confidence=4\n  PROBLEM: The returned block may include unintended steps when an unnamed workflow step appears between named steps.\n  WHY: If the CI workflow later inserts a step without `- name: `, the helper can capture that step and let the contract test pass even when the targeted step is missing required content.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_plan_scope_mode_contract.py:45-66 | severity=high | confidence=4\n  PROBLEM: The step boundary detection only stops at lines starting with the same indentation plus `- name: `, so an unnamed step can be included in the returned block.\n  WHY: This can make the contract test assertions pass on content from unrelated steps if a nameless step is inserted between the named plan-decisions steps.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_plan_scope_mode_contract.py:44-66 | severity=high | confidence=4\n  PROBLEM: The helper only stops at the next line that starts with the exact same indent prefix + `- name: `, so unnamed steps or other YAML/layout variants can be folded into the returned block.\n  WHY: If any unnamed step appears between the named plan-decisions steps, the returned block can include extra content and the substring assertions can pass even when the true target step is missing, altered, or deleted.\n- tests/test_plan_scope_mode_contract.py:44-66 | severity=high | confidence=4\n  PROBLEM: The helper has no robust handling for missing step, multiple identical step names, or workflow YAML that uses different indentation styles or folded/scalar blocks.\n  WHY: The test can raise on real workflows or silently accept the wrong block, masking a CI regression.\n- Requirement: Phase H \u2014 add the plan Decisions convention and advisory linter (including prompt contract, linter script, CI steps, contract test, manifest ordering, and docs).\n  Expected change site: prompts/mode-plan.txt, scripts/lint_plan_decisions.py, tests/test_lint_plan_decisions.py, .github/workflows/ci.yml, .ai/.workspace_source_manifest.txt, README.md (and related contract surfaces).\n  Evidence of absence: All surfaces already exist and are correct on HEAD (verified via CI workflow extraction, test run, and prior reviewer consensus).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "ec88a4fa121a760a6d832f375bdcb7e0a06d947ecdb9bc81af0d6629acbadca3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3678,
+    "run_id": "29546986738",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29546986738",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260717020641_10444193b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3678,
+    "run_id": "29546986738"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-17T02:06:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
