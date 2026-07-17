@@ -5,13 +5,26 @@
   "entry_id": "processed_command_3688_5007021670_approved",
   "issue_number": 3688,
   "metadata": {
+    "branch": "ai/issue-3688",
+    "changed_files": [
+      "scripts/orchestrate_lib.py",
+      "scripts/render_prompt.py",
+      "scripts/render_prompt.sh",
+      "scripts/task_state.py",
+      "tests/test_task_state_unblock.py"
+    ],
+    "issue_number": 3688,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3688",
+    "pr_number": 3689,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3689",
+    "run_attempt": "1",
+    "run_id": "29609674736",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/29609674736"
   },
   "run_attempt": 1,
   "run_id": "29609674736",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-07-17T20:02:48Z",
+  "status": "completed",
+  "timestamp": "2026-07-17T20:11:38Z",
   "workflow": "implement"
 }
