@@ -30,6 +30,18 @@ class IntegrationBranchMissingError(OrchestrateError):
 	"""Raised when integration metadata points to a missing branch ref."""
 
 
+class ReconstructionUnsafeError(OrchestrateError):
+	"""Raised when rebuilding orchestrator state from the tracking body would
+	rewind or duplicate already-completed work.
+
+	Reconstruction resets ``current_wave`` to 1 and re-creates GitHub issues
+	for any local id missing from the discovered issue map.  When the tracking
+	body marks a sub-issue complete (``[x]``) but that issue cannot be mapped
+	to its existing GitHub issue, a from-scratch rebuild would spawn a
+	duplicate of finished work (the project #3627 failure mode), so the rebuild
+	must be refused and retried on a later poll cycle instead."""
+
+
 INTEGRATION_BRANCH_LINE_RE = re.compile(
 	r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$",
 	re.MULTILINE,
@@ -2630,7 +2642,7 @@ def parse_tracking_body(body: str) -> dict[str, Any]:
 	"""Parse a tracking issue markdown body to extract wave structure.
 
 	Returns a dict with keys:
-		project_title, waves (list of lists of {id, title, priority}),
+		project_title, waves (list of lists of {id, title, priority, completed}),
 		dependency_edges (list of {from, to}), integration_branch.
 	"""
 	result: dict[str, Any] = {
@@ -2651,13 +2663,18 @@ def parse_tracking_body(body: str) -> dict[str, Any]:
 	for section in wave_sections[1:]:  # skip preamble before Wave 1
 		issues: list[dict[str, Any]] = []
 		for match in re.finditer(
-			r"-\s*\[[ x]\]\s*\*\*([^*]+)\*\*:\s*(.+?)\s*\(priority\s+(\d+)\)",
+			r"-\s*\[(?P<mark>[ xX])\]\s*\*\*(?P<id>[^*]+)\*\*:\s*(?P<title>.+?)\s*\(priority\s+(?P<priority>\d+)\)",
 			section,
 		):
 			issues.append({
-				"id": match.group(1).strip(),
-				"title": match.group(2).strip(),
-				"priority": int(match.group(3)),
+				"id": match.group("id").strip(),
+				"title": match.group("title").strip(),
+				"priority": int(match.group("priority")),
+				# Whether the tracking body marks this sub-issue complete
+				# ([x] or [X]).  rebuild_tracking_state consults this to refuse a
+				# destructive from-scratch rebuild of a project that already
+				# has finished work it cannot map (see ReconstructionUnsafeError).
+				"completed": match.group("mark").strip().lower() == "x",
 			})
 		if issues:
 			result["waves"].append(issues)
@@ -2698,6 +2715,35 @@ def rebuild_tracking_state(
 	"""
 	parsed = parse_tracking_body(body)
 	now_ts = int(time.time())
+
+	# Defense-in-depth against the project #3627 failure mode.  If the tracking
+	# body marks a sub-issue complete ([x]) but the discovered issue map does
+	# not contain it, a from-scratch rebuild would reset current_wave to 1 and
+	# re-create that finished issue as a duplicate — spawning a fresh
+	# clarify/plan/implement/review run for already-merged work.  We cannot
+	# faithfully represent a completed issue we are unable to map, so refuse the
+	# rebuild rather than rewind.  The caller skips this tracking issue and
+	# retries on the next poll cycle, by which point the state comment (or the
+	# child-issue search that feeds issue_number_map) is usually readable again.
+	#
+	# The genuine recovery case reconstruction exists for — a project whose
+	# issues were created but crashed before the first state comment was posted
+	# — has no completed sub-issues yet (every checkbox is still [ ]), so it is
+	# unaffected by this guard.
+	unmapped_completed = sorted(
+		issue["id"]
+		for wave_issues in parsed["waves"]
+		for issue in wave_issues
+		if issue.get("completed") and issue["id"] not in issue_number_map
+	)
+	if unmapped_completed:
+		raise ReconstructionUnsafeError(
+			f"refusing to reconstruct state for tracking issue #{tracking_issue}: "
+			f"the tracking body marks {len(unmapped_completed)} completed "
+			f"sub-issue(s) absent from the discovered issue map "
+			f"({', '.join(unmapped_completed)}); a from-scratch rebuild would "
+			"rewind current_wave and duplicate finished work"
+		)
 
 	all_ids: set[str] = set()
 	wave_list: list[dict[str, Any]] = []

@@ -13060,6 +13060,27 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
 
   if [ -z "${STATE_JSON}" ] || [ "${STATE_JSON}" = "null" ]; then
+    # A failed (or unvalidated) comments fetch is NOT evidence that the
+    # orchestrator state is missing.  The state comment may exist but be
+    # temporarily unreadable — e.g. a paginated fetch of a tracking issue
+    # with hundreds of comments that exhausted its retries, or a truncated
+    # response that failed JSON validation above (COMMENTS_FETCH_OK="false"
+    # with COMMENTS="[]").  The rest of the poller already treats
+    # COMMENTS_FETCH_OK != true as "comments unavailable this cycle, fail
+    # open and retry" (see update_completion_status_comment and
+    # completion_status_comment_failed_state_observation).
+    #
+    # State reconstruction, by contrast, is destructive: rebuild_tracking_state
+    # resets current_wave to 1 and re-creates GitHub issues for any local id
+    # the best-effort, eventually-consistent child-issue search fails to map,
+    # spawning duplicate issues for already-completed waves.  Only reconstruct
+    # when we actually read the comments and confirmed no valid state comment
+    # exists; when the fetch itself failed, skip this tracking issue and let a
+    # later poll cycle read the real state.
+    if [ "${COMMENTS_FETCH_OK}" != "true" ]; then
+      echo "::warning::Comments fetch failed for tracking issue #${TRACKING_NUM}; cannot confirm orchestrator state is missing. Skipping state reconstruction this cycle (will retry next poll)."
+      continue
+    fi
     if [ "${STATE_COMMENT_COUNT}" -gt 0 ]; then
       echo "::warning::No valid ORCHESTRATOR_STATE_V1 comment found for tracking issue #${TRACKING_NUM}. Attempting state reconstruction..."
     else
@@ -13099,11 +13120,16 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     REBUILD_BODY_FILE="${RUNTIME_DIR}/rebuild_body_${TRACKING_NUM}.txt"
     printf '%s\n' "${TRACKING_BODY}" > "${REBUILD_BODY_FILE}"
 
+    # Capture the helper's stderr so a deliberate refusal (e.g.
+    # ReconstructionUnsafeError when the body marks completed work the issue
+    # map cannot account for) is surfaced in the log instead of discarded.
+    REBUILD_ERR_FILE="${RUNTIME_DIR}/rebuild_err_${TRACKING_NUM}.txt"
     if python3 scripts/orchestrate_lib.py rebuild-state \
       --body-file "${REBUILD_BODY_FILE}" \
       --issue-map-json "${ISSUE_MAP_JSON}" \
-      --tracking-issue "${TRACKING_NUM}" > "${STATE_FILE}" 2>/dev/null; then
+      --tracking-issue "${TRACKING_NUM}" > "${STATE_FILE}" 2>"${REBUILD_ERR_FILE}"; then
 
+      rm -f "${REBUILD_ERR_FILE}"
       if [ -s "${STATE_FILE}" ] && jq -e '.schema_version' "${STATE_FILE}" >/dev/null 2>&1; then
         STATE_JSON="$(cat "${STATE_FILE}")"
         # Post the reconstructed state so future poll cycles find it
@@ -13115,7 +13141,13 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
         continue
       fi
     else
-      echo "::warning::State reconstruction failed for tracking issue #${TRACKING_NUM}, skipping."
+      REBUILD_ERR_MSG="$(head -c 500 "${REBUILD_ERR_FILE}" 2>/dev/null | tr '\n' ' ')"
+      rm -f "${REBUILD_ERR_FILE}"
+      # A non-zero rebuild (e.g. a deliberate ReconstructionUnsafeError refusal)
+      # leaves an empty STATE_FILE from the stdout redirect; drop it so no
+      # downstream reader trips over a 0-byte "state" file.
+      rm -f "${STATE_FILE}"
+      echo "::warning::State reconstruction failed for tracking issue #${TRACKING_NUM}, skipping. ${REBUILD_ERR_MSG}"
       continue
     fi
   fi
@@ -14080,6 +14112,26 @@ The poller will resume processing on the next cycle."
     echo "Detected uncreated issues in wave ${CURRENT_WAVE}. Creating GitHub issues..."
     DEFERRED_STATE_CHANGED=false
     DEFERRED_CREATED_NUMS=""
+    # Backstop against re-minting an issue that already exists on GitHub when
+    # the loaded state has lost the local_id -> github_issue mapping.  A stale
+    # or rewound state snapshot (e.g. one whose write recording the original
+    # issue never durably landed, so the poller acted on an older snapshot)
+    # can present a wave entry with github_issue == null AND no
+    # issue_number_map entry even though the issue was already created — the
+    # project #3542 duplicate-Phase-1 failure mode.  The in-state map check
+    # below only catches duplicates the current snapshot already knows about,
+    # so before creating we consult a live child-issue search (built lazily on
+    # first need and reused for the rest of the loop).
+    #
+    # §15 API hygiene: this reuses the reconstruction path's child-issue
+    # search shape (the ISSUE_MAP_JSON build earlier in this file).  Deferred
+    # creation runs outside the reconstruction branch, so that map is not in
+    # scope here and cannot be shared; the search is issued at most once per
+    # wave-creation cycle and only when an uncreated id is missing from the
+    # in-state map.
+    DEFERRED_EXISTING_MAP_JSON='{}'
+    DEFERRED_EXISTING_LOOKUP_DONE=false
+    DEFERRED_EXISTING_LOOKUP_OK=false
     DEFERRED_BLOCKER_DETAILS_JSON='{}'
     if [ "${RUNTIME_BLOCKER_CHECK_ENABLED}" = "true" ] \
       && jq -e '.dependency_edges | type == "array" and length > 0' "${STATE_FILE}" >/dev/null 2>&1; then
@@ -14103,8 +14155,57 @@ The poller will resume processing on the next cycle."
         jq "(.waves[${WAVE_IDX}].issues[] | select(.id == \"${local_id}\")) |= (.github_issue = ${EXISTING_NUM} | .status = \"pending\")" \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         ISSUE_NUMS="${ISSUE_NUMS} ${EXISTING_NUM}"
-        DEFERRED_CREATED_NUMS="${DEFERRED_CREATED_NUMS} ${EXISTING_NUM}"
         DEFERRED_STATE_CHANGED=true
+        continue
+      fi
+
+      # Backstop: before minting a brand-new issue, confirm no issue already
+      # exists on GitHub for this Local ID (open OR closed).  The issue_number_map
+      # check above only catches duplicates the current snapshot already knows
+      # about; a stale/rewound snapshot can have both github_issue == null AND no
+      # map entry while the real issue (e.g. an already-merged, closed one)
+      # exists on GitHub.  Look it up once, lazily, and adopt the existing issue
+      # instead of creating a duplicate.
+      if [ "${DEFERRED_EXISTING_LOOKUP_DONE}" != "true" ]; then
+        DEFERRED_EXISTING_LOOKUP_DONE=true
+        if _deferred_child_items="$(gh_retry gh api "search/issues" \
+          -f q="repo:${GITHUB_REPOSITORY} is:issue \"Tracking issue: #${TRACKING_NUM}\" in:body" \
+          --jq '.items // []' 2>/dev/null)"; then
+          if DEFERRED_EXISTING_MAP_JSON="$(printf '%s' "${_deferred_child_items}" | jq '
+            reduce .[] as $issue ({};
+              (try ($issue.body | capture("Local ID: `(?<id>[^`]+)`")) catch null) as $cap |
+              if $cap == null then .
+              else
+                ($cap.id) as $lid |
+                if (has($lid) and .[$lid] <= $issue.number) then .
+                else . + {($lid): $issue.number} end
+              end
+            )
+          ' 2>/dev/null)" && printf '%s' "${DEFERRED_EXISTING_MAP_JSON}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+            DEFERRED_EXISTING_LOOKUP_OK=true
+          else
+            DEFERRED_EXISTING_MAP_JSON='{}'
+          fi
+        fi
+      fi
+
+      GH_EXISTING_NUM="$(printf '%s' "${DEFERRED_EXISTING_MAP_JSON}" | jq -r --arg id "${local_id}" '.[$id] // empty' 2>/dev/null || true)"
+      if [ -n "${GH_EXISTING_NUM}" ] && [[ "${GH_EXISTING_NUM}" =~ ^[0-9]+$ ]]; then
+        echo "  ${local_id}: already exists on GitHub as #${GH_EXISTING_NUM} (absent from issue_number_map); adopting it instead of creating a duplicate."
+        jq "(.waves[${WAVE_IDX}].issues[] | select(.id == \"${local_id}\")) |= (.github_issue = ${GH_EXISTING_NUM} | .status = \"pending\") | .issue_number_map[\"${local_id}\"] = ${GH_EXISTING_NUM} | del(.pending_issue_defs[\"${local_id}\"])" \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        ISSUE_NUMS="${ISSUE_NUMS} ${GH_EXISTING_NUM}"
+        DEFERRED_STATE_CHANGED=true
+        continue
+      fi
+
+      # Fail closed: if the existence lookup itself failed this cycle we cannot
+      # rule out an already-created issue, so skip creation and retry on the
+      # next poll rather than risk a duplicate (matching how the reconstruction
+      # path treats an unreadable API as "try again later" instead of acting on
+      # incomplete information).
+      if [ "${DEFERRED_EXISTING_LOOKUP_OK}" != "true" ]; then
+        echo "::warning::Could not verify whether ${local_id} already exists on GitHub (child-issue lookup failed this cycle); skipping creation to avoid a duplicate. Will retry next poll."
         continue
       fi
 
@@ -14176,7 +14277,13 @@ The poller will resume processing on the next cycle."
 
     if [ "${DEFERRED_STATE_CHANGED}" = "true" ]; then
       post_state_comment || true
-      post_tracking_comment "## 🔧 Deferred Issue Creation (Wave ${CURRENT_WAVE})
+      # Only announce genuinely-created issues.  A pure-adoption cycle — where
+      # the backstop above healed the state map against an issue that already
+      # existed on GitHub — persists the corrected state but must not claim it
+      # "Created" anything.
+      _deferred_created_trimmed="$(printf '%s' "${DEFERRED_CREATED_NUMS}" | tr -s '[:space:]' ' ' | sed 's/^ *//; s/ *$//')"
+      if [ -n "${_deferred_created_trimmed}" ]; then
+        post_tracking_comment "## 🔧 Deferred Issue Creation (Wave ${CURRENT_WAVE})
 
 Issues in this wave had not been created yet (likely from an interrupted initial setup). Created them now:
 
@@ -14185,7 +14292,8 @@ $(for inum in ${DEFERRED_CREATED_NUMS}; do
 done)
 
 These issues will enter the AI pipeline (clarify → plan → implement → review)."
-      tg_notify "Deferred issue creation for wave ${CURRENT_WAVE} of project #${TRACKING_NUM}. Created missing GitHub issues." "WARNING"
+        tg_notify "Deferred issue creation for wave ${CURRENT_WAVE} of project #${TRACKING_NUM}. Created missing GitHub issues." "WARNING"
+      fi
     fi
   fi
 
