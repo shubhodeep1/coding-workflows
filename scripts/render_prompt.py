@@ -39,7 +39,8 @@ LEGACY_STANDALONE_ONLY_VARS = frozenset({"WORKFLOW_EDIT_RESTRICTION", "SEMBLE_PR
 FALSEY_ENV_VALUES = frozenset({"0", "false", "no", "off"})
 TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on", "y"})
 IDENTITY_RECALL_TEMPLATE_FILE_NAME = "_identity_recall.txt"
-ROLE_GOAL_METADATA_PATTERN = re.compile(r"^Role:\s*(?P<role>.+?)\s+Goal:\s*(?P<goal>.+?)\s*$")
+ROLE_GOAL_LINE_RE = re.compile(r"^Role:\s*(?P<role>.+?)\s+Goal:\s*(?P<goal>.+?)\s*$")
+ROLE_GOAL_METADATA_PATTERN = ROLE_GOAL_LINE_RE
 
 
 class RenderPromptError(Exception):
@@ -72,6 +73,15 @@ class ContractViolationError(RenderPromptError):
 
 class WorkflowOverlayError(RenderPromptError):
 	"""Raised when workflow-overlay prompt overrides are invalid."""
+
+
+class IdentityRecallParseError(Exception):
+	"""Raised for fail-open identity-recall parsing/rendering problems."""
+
+	def __init__(self, reason: str, detail: str | None = None):
+		super().__init__(reason)
+		self.reason = reason
+		self.detail = detail
 
 
 @dataclass(frozen=True)
@@ -161,6 +171,10 @@ def _normalize_prompt_text(content: str) -> str:
 	return normalized
 
 
+def _normalize_identity_recall_field(value: str) -> str:
+	return value.strip().rstrip(". ")
+
+
 def load_prompt(prompt_path: Path) -> str:
 	if not prompt_path.is_file():
 		raise PromptLoadError(f"Prompt file not found: {prompt_path}")
@@ -183,6 +197,36 @@ def _prompt_base_dir(prompt_path: Path) -> Path | None:
 	if prompt_root is None:
 		return None
 	return prompt_root.parent
+
+
+def _nearest_repo_root_with_prompts(prompt_path: Path | None) -> Path | None:
+	if prompt_path is None:
+		return None
+	resolved_prompt_path = prompt_path.resolve()
+	for candidate in (resolved_prompt_path.parent, *resolved_prompt_path.parents):
+		if (candidate / "prompts").is_dir():
+			return candidate
+	return None
+
+
+def _discover_prompt_repo_roots(prompt_path: Path | None) -> tuple[Path, ...]:
+	script_root = Path(__file__).resolve().parents[1]
+	nearest_repo_root = _nearest_repo_root_with_prompts(prompt_path)
+	prompt_root = _prompt_base_dir(prompt_path) if prompt_path is not None else None
+	return _unique_paths(
+		[path.resolve() for path in (
+			candidate
+			for candidate in (
+				nearest_repo_root,
+				prompt_root,
+				Path.cwd(),
+				script_root,
+				Path.cwd() / ".codex-workflow-src",
+				Path.cwd() / ".codex-workflow-src-main",
+			)
+			if candidate is not None
+		)]
+	)
 
 
 def _unique_paths(paths: list[Path]) -> tuple[Path, ...]:
@@ -375,33 +419,22 @@ def _expected_reference_path(prompt_path: Path, file_name: str) -> Path:
 
 
 def discover_persona_source_path(prompt_path: Path | None) -> Path | None:
-	candidates: list[Path] = []
-	seen: set[Path] = set()
-	script_root = Path(__file__).resolve().parents[1]
-	prompt_root = _prompt_base_dir(prompt_path) if prompt_path is not None else None
-
-	for base_dir in (
-		prompt_root,
-		Path.cwd(),
-		script_root,
-		Path.cwd() / ".codex-workflow-src",
-		Path.cwd() / ".codex-workflow-src-main",
-	):
-		if base_dir is None:
-			continue
+	for base_dir in _discover_prompt_repo_roots(prompt_path):
 		candidate = (base_dir / "prompts" / PERSONA_SOURCE_FILE_NAME).resolve()
-		if candidate in seen:
-			continue
-		seen.add(candidate)
-		candidates.append(candidate)
-
-	for candidate in candidates:
 		if candidate.is_file():
 			return candidate
 	return None
 
 
-def _identity_reinject_enabled() -> bool:
+def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
+	raw_value = os.environ.get(name)
+	if raw_value is None:
+		return default
+	normalized = raw_value.strip().lower()
+	return bool(normalized) and normalized not in FALSEY_ENV_VALUES
+
+
+def _identity_recall_enabled() -> bool:
 	raw_value = os.environ.get("UNATTENDED_IDENTITY_REINJECT_ENABLED", "")
 	return raw_value.strip().lower() in TRUTHY_ENV_VALUES
 
@@ -410,84 +443,58 @@ def _prompt_prelude_refactor_enabled() -> bool:
 	return os.environ.get("PROMPT_PRELUDE_REFACTOR_ENABLED", "false") == "true"
 
 
-def _identity_prompt_file_name(prompt_path: Path, mode_name: str) -> str:
-	prompt_name = prompt_path.name.strip()
-	if prompt_name.startswith("mode-") and prompt_name.endswith("-inline.txt"):
-		return prompt_name.removesuffix("-inline.txt") + ".txt"
-	if prompt_name.startswith("mode-") and prompt_name.endswith(".txt"):
-		return prompt_name
-	if mode_name.startswith("mode-"):
-		mode_file_name = f"{mode_name}.txt"
-		if mode_file_name.endswith("-inline.txt"):
-			return mode_file_name.removesuffix("-inline.txt") + ".txt"
-		return mode_file_name
-	return prompt_name
+def _identity_canonical_prompt_basename(prompt_path: Path, mode_name: str) -> str:
+	prompt_basename = prompt_path.name
+	if prompt_basename.startswith("mode-") and prompt_basename.endswith("-inline.txt"):
+		return prompt_basename[: -len("-inline.txt")] + ".txt"
+	if prompt_basename.startswith("mode-") and prompt_basename.endswith(".txt"):
+		return prompt_basename
+	if mode_name.startswith("mode-") and mode_name.endswith("-inline"):
+		return mode_name[: -len("-inline")] + ".txt"
+	return f"{mode_name}.txt"
+
+
+def discover_identity_source_prompt(prompt_path: Path, mode_name: str) -> Path | None:
+	resolved_prompt_path = prompt_path.resolve()
+	canonical_basename = _identity_canonical_prompt_basename(resolved_prompt_path, mode_name)
+	candidates: list[Path] = []
+
+	if resolved_prompt_path.parent.name == "_templates":
+		candidates.append((resolved_prompt_path.parent.parent / canonical_basename).resolve())
+
+	if resolved_prompt_path.parent.name == "prompts" and _prompt_prelude_refactor_enabled():
+		for base_dir in _discover_prompt_repo_roots(resolved_prompt_path):
+			candidates.append((base_dir / "prompts" / "_templates" / canonical_basename).resolve())
+
+	if resolved_prompt_path.is_file() and resolved_prompt_path.name == canonical_basename and canonical_basename.startswith("mode-"):
+		candidates.append(resolved_prompt_path)
+
+	candidates.append((resolved_prompt_path.parent / canonical_basename).resolve())
+	for base_dir in _discover_prompt_repo_roots(resolved_prompt_path):
+		candidates.append((base_dir / "prompts" / canonical_basename).resolve())
+
+	for candidate in _unique_paths(candidates):
+		if candidate.is_file():
+			return candidate
+	return None
 
 
 def resolve_identity_source_prompt(prompt_path: Path, mode_name: str) -> Path:
-	prompt_file_name = _identity_prompt_file_name(prompt_path, mode_name)
-	prompt_dir = prompt_path.parent
-	script_root = Path(__file__).resolve().parents[1]
-
-	if prompt_dir.name == "_templates":
-		candidate = (prompt_dir.parent / prompt_file_name).resolve()
-		if candidate.is_file():
-			return candidate
-
-	if prompt_dir.name == "prompts" and _prompt_prelude_refactor_enabled():
-		template_candidate = (prompt_dir / "_templates" / prompt_file_name).resolve()
-		if template_candidate.is_file():
-			return template_candidate
-
-	if prompt_path.is_file() and prompt_file_name == prompt_path.name:
-		return prompt_path.resolve()
-
-	candidate_paths = [(prompt_dir / prompt_file_name).resolve()]
-	for ancestor in (prompt_dir, *prompt_dir.parents):
-		# Inline/runtime prompt renders often live under sibling runtime/ or tmp/
-		# directories rather than under prompts/ itself. Walk upward from the prompt
-		# file to find the nearest local prompts/ tree before falling back to cwd or
-		# this script's bundled prompt catalog.
-		if _prompt_prelude_refactor_enabled():
-			candidate_paths.append((ancestor / "prompts" / "_templates" / prompt_file_name).resolve())
-		candidate_paths.append((ancestor / "prompts" / prompt_file_name).resolve())
-	candidate_paths.extend(
-		[
-			(Path.cwd() / "prompts" / prompt_file_name).resolve(),
-			(Path.cwd() / ".codex-workflow-src" / "prompts" / prompt_file_name).resolve(),
-			(Path.cwd() / ".codex-workflow-src-main" / "prompts" / prompt_file_name).resolve(),
-			(script_root / "prompts" / prompt_file_name).resolve(),
-		]
-	)
-	for candidate in _unique_paths(candidate_paths):
-		if candidate.is_file():
-			return candidate
-	expected_path = (_prompt_base_dir(prompt_path) or Path.cwd()) / "prompts" / prompt_file_name
+	canonical_prompt_path = discover_identity_source_prompt(prompt_path, mode_name)
+	if canonical_prompt_path is not None:
+		return canonical_prompt_path
+	expected_path = (_prompt_base_dir(prompt_path) or Path.cwd()) / "prompts" / _identity_canonical_prompt_basename(prompt_path.resolve(), mode_name)
 	raise PromptLoadError(f"Canonical prompt for identity recall not found: {expected_path.resolve()}")
 
 
-def discover_identity_recall_template_path(prompt_path: Path | None) -> Path | None:
-	candidates: list[Path] = []
-	seen: set[Path] = set()
-	script_root = Path(__file__).resolve().parents[1]
-	prompt_root = _prompt_base_dir(prompt_path) if prompt_path is not None else None
+def _expected_identity_template_path(prompt_path: Path) -> Path:
+	prompt_root = _prompt_base_dir(prompt_path) or Path.cwd()
+	return prompt_root / "prompts" / IDENTITY_RECALL_TEMPLATE_FILE_NAME
 
-	for base_dir in (
-		prompt_root,
-		Path.cwd(),
-		script_root,
-		Path.cwd() / ".codex-workflow-src",
-		Path.cwd() / ".codex-workflow-src-main",
-	):
-		if base_dir is None:
-			continue
+
+def discover_identity_recall_template_path(prompt_path: Path) -> Path | None:
+	for base_dir in _discover_prompt_repo_roots(prompt_path):
 		candidate = (base_dir / "prompts" / IDENTITY_RECALL_TEMPLATE_FILE_NAME).resolve()
-		if candidate in seen:
-			continue
-		seen.add(candidate)
-		candidates.append(candidate)
-
-	for candidate in candidates:
 		if candidate.is_file():
 			return candidate
 	return None
@@ -500,11 +507,10 @@ def resolve_identity_phase_name(canonical_prompt_path: Path) -> str | None:
 	return phase_name
 
 
-def extract_identity_recall_metadata(prompt_text: str) -> tuple[str, str] | None:
+def _extract_identity_recall_metadata_or_raise(prompt_text: str) -> tuple[str, str]:
 	paragraph_lines: list[str] = []
 	started = False
 	in_compaction_rules = False
-
 	for raw_line in prompt_text.splitlines():
 		line = raw_line.strip()
 		if not started:
@@ -523,13 +529,26 @@ def extract_identity_recall_metadata(prompt_text: str) -> tuple[str, str] | None
 			break
 		paragraph_lines.append(line)
 
+	if not paragraph_lines:
+		raise IdentityRecallParseError("metadata_extract_failed")
+
 	paragraph = " ".join(paragraph_lines)
-	match = ROLE_GOAL_METADATA_PATTERN.match(paragraph)
+	match = ROLE_GOAL_LINE_RE.match(paragraph)
 	if match is None:
-		return None
-	phase_role = match.group("role").strip().rstrip(". ")
-	phase_mission = match.group("goal").strip().rstrip(". ")
+		raise IdentityRecallParseError("metadata_extract_failed")
+
+	phase_role = _normalize_identity_recall_field(match.group("role"))
+	phase_mission = _normalize_identity_recall_field(match.group("goal"))
+	if not phase_role or not phase_mission:
+		raise IdentityRecallParseError("identity_metadata_incomplete")
 	return phase_role, phase_mission
+
+
+def extract_identity_recall_metadata(prompt_text: str) -> tuple[str, str] | None:
+	try:
+		return _extract_identity_recall_metadata_or_raise(prompt_text)
+	except IdentityRecallParseError:
+		return None
 
 
 def render_identity_recall_block(
@@ -539,64 +558,82 @@ def render_identity_recall_block(
 	phase_role: str,
 	phase_mission: str,
 ) -> str:
-	template_path = discover_identity_recall_template_path(prompt_path)
-	if template_path is None:
-		raise PromptLoadError("Identity recall template not found")
-	template_text = load_prompt(template_path)
+	identity_template_path = discover_identity_recall_template_path(prompt_path)
+	if identity_template_path is None:
+		raise IdentityRecallParseError(
+			"render_failed",
+			f"Identity recall template not found: {_expected_identity_template_path(prompt_path)}",
+		)
+	try:
+		identity_template_text = load_prompt(identity_template_path)
+	except PromptLoadError as exc:
+		raise IdentityRecallParseError("render_failed", str(exc)) from exc
 	return render_prompt_text(
-		template_text,
+		identity_template_text,
 		{
 			"PHASE_NAME": phase_name,
 			"PHASE_ROLE": phase_role,
 			"PHASE_MISSION": phase_mission,
 		},
-	)
+	).rstrip("\n")
 
 
-def _find_identity_role_goal_line_end_offset(rendered_prompt_text: str) -> int | None:
-	raw_lines = rendered_prompt_text.splitlines(keepends=True)
-	line_start_offsets: list[int] = []
+def _opening_role_goal_end_offset(rendered_text: str) -> int | None:
+	paragraph_lines: list[str] = []
+	paragraph_end: int | None = None
+	started = False
+	in_compaction_rules = False
 	offset = 0
-	for raw_line in raw_lines:
-		line_start_offsets.append(offset)
-		offset += len(raw_line)
-
-	for index, raw_line in enumerate(raw_lines):
+	for raw_line in rendered_text.splitlines(keepends=True):
 		line = raw_line.strip()
-		if not line.startswith("Role:"):
-			continue
-		paragraph_lines = [line]
-		paragraph_end_offset = line_start_offsets[index] + len(raw_line.rstrip("\r\n"))
-		for next_index in range(index + 1, len(raw_lines)):
-			next_raw_line = raw_lines[next_index]
-			next_line = next_raw_line.strip()
-			if not next_line:
-				break
-			paragraph_lines.append(next_line)
-			paragraph_end_offset = line_start_offsets[next_index] + len(next_raw_line.rstrip("\r\n"))
-		paragraph = " ".join(paragraph_lines)
-		if ROLE_GOAL_METADATA_PATTERN.fullmatch(paragraph) is not None:
-			return paragraph_end_offset
-	return None
+		if not started:
+			if in_compaction_rules:
+				if line == "</compaction-rules>":
+					in_compaction_rules = False
+				offset += len(raw_line)
+				continue
+			if not line or line.startswith("#") or (line.startswith("{%") and line.endswith("%}")):
+				offset += len(raw_line)
+				continue
+			if line.startswith("<compaction-rules>"):
+				if not line.endswith("</compaction-rules>"):
+					in_compaction_rules = True
+				offset += len(raw_line)
+				continue
+			started = True
+		if not line:
+			paragraph = " ".join(paragraph_lines)
+			if paragraph_end is None or ROLE_GOAL_LINE_RE.match(paragraph) is None:
+				return None
+			return paragraph_end
+		paragraph_lines.append(line)
+		paragraph_end = offset + len(raw_line.rstrip("\r\n"))
+		offset += len(raw_line)
+	if not started or not paragraph_lines or paragraph_end is None:
+		return None
+	paragraph = " ".join(paragraph_lines)
+	if ROLE_GOAL_LINE_RE.match(paragraph) is None:
+		return None
+	return paragraph_end
 
 
-def inject_identity_recall_block(rendered_prompt_text: str, identity_block: str) -> str:
-	paragraph_end = _find_identity_role_goal_line_end_offset(rendered_prompt_text)
-	identity_block_text = identity_block.rstrip("\n")
+def inject_identity_recall_block(prompt_text: str, identity_block: str) -> str:
+	paragraph_end = _opening_role_goal_end_offset(prompt_text)
 	if paragraph_end is not None:
-		before = rendered_prompt_text[:paragraph_end]
-		remainder = rendered_prompt_text[paragraph_end:].lstrip("\r\n")
+		before = prompt_text[:paragraph_end].rstrip("\n")
+		remainder = prompt_text[paragraph_end:].lstrip("\r\n")
 		if remainder:
-			return before + "\n\n" + identity_block_text + "\n\n" + remainder
-		return before + "\n\n" + identity_block_text + "\n"
-	parts = rendered_prompt_text.split("\n\n", 1)
+			return before + "\n\n" + identity_block + "\n\n" + remainder
+		return before + "\n\n" + identity_block + "\n"
+
+	parts = prompt_text.split("\n\n", 1)
 	if len(parts) == 2:
-		return parts[0] + "\n\n" + identity_block_text + "\n\n" + parts[1]
-	return rendered_prompt_text + "\n\n" + identity_block_text + "\n"
+		return parts[0] + "\n\n" + identity_block + "\n\n" + parts[1]
+	return prompt_text + "\n\n" + identity_block + "\n"
 
 
-def emit_identity_reinject_parse_fail(mode_name: str, failure_reason: str, *, detail: str | None = None) -> None:
-	message = f"IDENTITY_REINJECT_PARSE_FAIL: {mode_name} reason={failure_reason}"
+def emit_identity_reinject_parse_fail(mode_name: str, reason: str, detail: str | None = None) -> None:
+	message = f"IDENTITY_REINJECT_PARSE_FAIL: {mode_name} reason={reason}"
 	if detail:
 		sanitized_detail = " ".join(detail.split())
 		if sanitized_detail:
@@ -604,59 +641,36 @@ def emit_identity_reinject_parse_fail(mode_name: str, failure_reason: str, *, de
 	print(message, file=sys.stderr)
 
 
-def apply_identity_recall_block(rendered_prompt_text: str, *, prompt_path: Path, mode_name: str) -> str:
-	if not _identity_reinject_enabled() or not mode_name.startswith("mode-"):
-		return rendered_prompt_text
-
+def apply_identity_recall(prompt_text: str, *, prompt_path: Path, mode_name: str) -> str:
+	if not _identity_recall_enabled() or not mode_name.startswith("mode-"):
+		return prompt_text
 	try:
-		canonical_prompt_path = resolve_identity_source_prompt(prompt_path, mode_name)
-	except PromptLoadError as exc:
-		failure_reason = "canonical_prompt_load_failed"
-		if str(exc).startswith("Canonical prompt for identity recall not found:"):
-			failure_reason = "canonical_prompt_missing"
-		emit_identity_reinject_parse_fail(
-			mode_name,
-			failure_reason,
-			detail=str(exc),
-		)
-		return rendered_prompt_text
-
-	try:
-		canonical_prompt_text = load_prompt(canonical_prompt_path)
-	except RenderPromptError as exc:
-		emit_identity_reinject_parse_fail(
-			mode_name,
-			"canonical_prompt_load_failed",
-			detail=str(exc),
-		)
-		return rendered_prompt_text
-
-	phase_name = resolve_identity_phase_name(canonical_prompt_path)
-	if phase_name is None:
-		emit_identity_reinject_parse_fail(mode_name, "phase_name_missing")
-		return rendered_prompt_text
-
-	identity_metadata = extract_identity_recall_metadata(canonical_prompt_text)
-	if identity_metadata is None:
-		emit_identity_reinject_parse_fail(mode_name, "metadata_extract_failed")
-		return rendered_prompt_text
-
-	phase_role, phase_mission = identity_metadata
-	if not phase_role or not phase_mission:
-		emit_identity_reinject_parse_fail(mode_name, "identity_metadata_incomplete")
-		return rendered_prompt_text
-
-	try:
+		try:
+			canonical_prompt_path = resolve_identity_source_prompt(prompt_path, mode_name)
+		except PromptLoadError as exc:
+			raise IdentityRecallParseError("canonical_prompt_missing", str(exc)) from exc
+		phase_name = resolve_identity_phase_name(canonical_prompt_path)
+		if not phase_name:
+			raise IdentityRecallParseError("phase_name_missing")
+		try:
+			canonical_prompt_text = load_prompt(canonical_prompt_path)
+		except PromptLoadError as exc:
+			raise IdentityRecallParseError("canonical_prompt_load_failed", str(exc)) from exc
+		phase_role, phase_mission = _extract_identity_recall_metadata_or_raise(canonical_prompt_text)
 		identity_block = render_identity_recall_block(
 			prompt_path=canonical_prompt_path,
 			phase_name=phase_name,
 			phase_role=phase_role,
 			phase_mission=phase_mission,
 		)
-	except RenderPromptError as exc:
-		emit_identity_reinject_parse_fail(mode_name, "render_failed", detail=str(exc))
-		return rendered_prompt_text
-	return inject_identity_recall_block(rendered_prompt_text, identity_block)
+		return inject_identity_recall_block(prompt_text, identity_block)
+	except IdentityRecallParseError as exc:
+		emit_identity_reinject_parse_fail(mode_name, exc.reason, exc.detail)
+		return prompt_text
+
+
+def apply_identity_recall_block(rendered_prompt_text: str, *, prompt_path: Path, mode_name: str) -> str:
+	return apply_identity_recall(rendered_prompt_text, prompt_path=prompt_path, mode_name=mode_name)
 
 
 def load_phase_c_persona_prefixes(prompt_path: Path | None) -> dict[str, str]:
@@ -1109,8 +1123,7 @@ def _workflow_edit_restriction_value() -> str:
 
 
 def _persona_prefix_enabled() -> bool:
-	raw_value = os.environ.get("PROMPT_PERSONA_PREFIX_ENABLED", "true").strip().lower()
-	return bool(raw_value) and raw_value not in FALSEY_ENV_VALUES
+	return _env_flag_enabled("PROMPT_PERSONA_PREFIX_ENABLED", default=True)
 
 
 def apply_phase_c_persona_prefix(prompt_text: str, *, prompt_path: Path | None = None, mode_name: str) -> str:
@@ -1340,11 +1353,7 @@ def main(argv: list[str] | None = None) -> int:
 			mode_name=mode_name,
 			values=effective_values,
 		)
-		prompt_text = apply_identity_recall_block(
-			prompt_text,
-			prompt_path=prompt_path,
-			mode_name=mode_name,
-		)
+		prompt_text = apply_identity_recall(prompt_text, prompt_path=prompt_path, mode_name=mode_name)
 		prompt_text = apply_phase_c_persona_prefix(prompt_text, prompt_path=prompt_path, mode_name=mode_name)
 		sys.stdout.write(render_prompt_text(prompt_text, effective_values))
 	except RenderPromptError as exc:
