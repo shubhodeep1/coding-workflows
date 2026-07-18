@@ -602,7 +602,7 @@ def emit_identity_reinject_parse_fail(mode_name: str, failure_reason: str, *, de
 	if detail:
 		sanitized_detail = " ".join(detail.split())
 		if sanitized_detail:
-			message += f" detail={sanitized_detail}"
+			message += f" detail={json.dumps(sanitized_detail, ensure_ascii=True)}"
 	print(message, file=sys.stderr)
 
 
