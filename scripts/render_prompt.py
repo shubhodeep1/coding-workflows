@@ -1330,13 +1330,12 @@ def main(argv: list[str] | None = None) -> int:
 			values=effective_values,
 		)
 		prompt_text = apply_phase_c_persona_prefix(prompt_text, prompt_path=prompt_path, mode_name=mode_name)
-		rendered_prompt_text = render_prompt_text(prompt_text, effective_values)
-		rendered_prompt_text = apply_identity_recall_block(
-			rendered_prompt_text,
+		prompt_text = apply_identity_recall_block(
+			prompt_text,
 			prompt_path=prompt_path,
 			mode_name=mode_name,
 		)
-		sys.stdout.write(rendered_prompt_text)
+		sys.stdout.write(render_prompt_text(prompt_text, effective_values))
 	except RenderPromptError as exc:
 		print(f"ERROR: {exc}", file=sys.stderr)
 		return 1
