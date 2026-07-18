@@ -40,6 +40,7 @@ IDENTITY_BLOCK_RE = re.compile(
 
 def _base_env() -> dict[str, str]:
 	env = os.environ.copy()
+	env.pop("UNATTENDED_IDENTITY_REINJECT_ENABLED", None)
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env["PROMPT_PERSONA_PREFIX_ENABLED"] = "false"
 	env["PREVIOUS_ATTEMPT_NUMBER"] = "1"
@@ -66,31 +67,6 @@ def _run_render(
 		capture_output=True,
 		timeout=60,
 	)
-
-
-def _opening_role_goal_shape(prompt_path: Path) -> bool:
-	paragraph_lines: list[str] = []
-	started = False
-	in_compaction_rules = False
-	for raw_line in prompt_path.read_text(encoding="utf-8").splitlines():
-		line = raw_line.strip()
-		if not started:
-			if in_compaction_rules:
-				if line == "</compaction-rules>":
-					in_compaction_rules = False
-				continue
-			if not line or line.startswith("#") or (line.startswith("{%") and line.endswith("%}")):
-				continue
-			if line.startswith("<compaction-rules>"):
-				if not line.endswith("</compaction-rules>"):
-					in_compaction_rules = True
-				continue
-			started = True
-		if not line:
-			break
-		paragraph_lines.append(line)
-	paragraph = " ".join(paragraph_lines)
-	return ROLE_GOAL_RE.match(paragraph) is not None
 
 
 def _opening_role_goal_end_offset(rendered_text: str) -> int | None:
@@ -168,22 +144,16 @@ def test_flag_off_is_byte_stable_for_mode_prompt_corpus() -> None:
 		assert unset_proc.stderr == false_proc.stderr, prompt_path.name
 
 
-def test_flag_on_renders_or_fails_open_per_prompt_shape() -> None:
+def test_flag_on_renders_identity_block_for_mode_prompt_corpus() -> None:
 	for prompt_path in MODE_PROMPTS:
-		baseline = _run_render(prompt_path)
 		identity_proc = _run_render(
 			prompt_path,
 			env_overrides={"UNATTENDED_IDENTITY_REINJECT_ENABLED": "true"},
 		)
-		assert baseline.returncode == 0, f"{prompt_path.name}: {baseline.stderr}"
 		assert identity_proc.returncode == 0, f"{prompt_path.name}: {identity_proc.stderr}"
-		if _opening_role_goal_shape(prompt_path):
-			assert "IDENTITY_REINJECT_PARSE_FAIL" not in identity_proc.stderr, identity_proc.stderr
-			_assert_identity_block_after_opening_role_goal(identity_proc.stdout, phase_name=prompt_path.stem)
-		else:
-			assert identity_proc.stdout == baseline.stdout, prompt_path.name
-			assert "<identity-recall>" not in identity_proc.stdout, prompt_path.name
-			assert identity_proc.stderr.strip() == f"IDENTITY_REINJECT_PARSE_FAIL: {prompt_path.stem} reason=metadata_extract_failed", identity_proc.stderr
+		assert identity_proc.stderr == "", f"{prompt_path.name}: {identity_proc.stderr}"
+		assert len(list(IDENTITY_BLOCK_RE.finditer(identity_proc.stdout))) == 1, prompt_path.name
+		_assert_identity_block_after_opening_role_goal(identity_proc.stdout, phase_name=prompt_path.stem)
 
 
 def test_wrapped_goal_paragraph_is_captured_in_full() -> None:
@@ -310,7 +280,7 @@ def test_shared_prelude_path_injects_and_cleans_temp_files() -> None:
 
 def main() -> int:
 	test_flag_off_is_byte_stable_for_mode_prompt_corpus()
-	test_flag_on_renders_or_fails_open_per_prompt_shape()
+	test_flag_on_renders_identity_block_for_mode_prompt_corpus()
 	test_wrapped_goal_paragraph_is_captured_in_full()
 	test_crlf_prompt_does_not_leave_carriage_return_before_remainder()
 	test_parse_failure_is_fail_open_for_synthetic_malformed_prompt()

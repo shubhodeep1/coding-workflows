@@ -101,7 +101,7 @@ Each goal is falsifiable from the resulting PR + repo state:
 - **G-A.** A documented, prompt-injected compaction-discipline contract
   in `unattended_system_instructions.md` and an opt-in transcript
   archive helper that, when `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`,
-  writes `.transcripts/<run_id>-<phase>-<ts>.json` before any
+  writes `.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json` before any
   context-budget compaction trigger documented in
   `scripts/codex_model_catalog.json:auto_compact_token_limit`.
   Recent file-read tool results are explicitly protected from
@@ -333,7 +333,7 @@ What it **can** do upstream of codex-cli is:
    (`scripts/transcript_archive.sh`) that, when
    `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, writes the codex-cli
    `--show-raw-conversation` output (or equivalent dump) to
-   `.transcripts/<run_id>-<phase>-<ts>.json` before the phase
+   `.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json` before the phase
    exits. Provides a manual recovery escape hatch when an
    auto-compaction discards context that turns out to have mattered.
 
@@ -355,7 +355,7 @@ What it **can** do upstream of codex-cli is:
    each `mode-*.txt`.
 3. Add `scripts/transcript_archive.sh` with one entrypoint
    `archive_transcript <run_id> <phase> <source_path>` that writes
-   to `.transcripts/<run_id>-<phase>-<ts>.json` when
+   to `.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json` when
    `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`. No-op otherwise.
    `set -euo pipefail`. Tab-indented per §11.
 4. Wire the helper into the four codex-cli-driven phases that have

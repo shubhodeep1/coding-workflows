@@ -22,6 +22,40 @@ extract_prefixed_line()
 	printf '%s\n' "${text}" | grep -m 1 "^${prefix} "
 }
 
+assert_review_autofix_dispatch_mirrors()
+{
+	PYTHONDONTWRITEBYTECODE=1 python3 - "${REPO_ROOT}/.github/workflows/review_autofix.yml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+lines = path.read_text(encoding="utf-8").splitlines()
+prefixes = ("AUTOFIX_DISPATCH_SKIPPED", "AUTOFIX_DISPATCH_ISSUED")
+seen = {prefix: 0 for prefix in prefixes}
+
+for index, line in enumerate(lines):
+	for prefix in prefixes:
+		marker = f'echo "{prefix} '
+		if marker not in line:
+			continue
+		seen[prefix] += 1
+		next_index = index + 1
+		while next_index < len(lines) and not lines[next_index].strip():
+			next_index += 1
+		if next_index >= len(lines):
+			raise SystemExit(f"{path}: {prefix} echo at line {index + 1} is missing an emit_event mirror")
+		expected = f'emit_event "{prefix}"'
+		if expected not in lines[next_index]:
+			raise SystemExit(
+				f"{path}: {prefix} echo at line {index + 1} is not immediately followed by {expected}"
+			)
+
+for prefix, count in seen.items():
+	if count == 0:
+		raise SystemExit(f"{path}: no {prefix} echo callsites found")
+PY
+}
+
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "${tmpdir}"' EXIT
 
@@ -112,6 +146,11 @@ _emit_probe_line("serena", "ok", server_info={"name": "mock-serena", "version": 
 PY
 } 2>&1 >/dev/null)"
 assert_equals "SERENA_PROBE target=serena result=ok server_name=mock-serena server_version=1.2.0" "${probe_output}"
+
+# The AUTOFIX_DISPATCH_* mirrors live in review_autofix.yml rather than a
+# sourceable helper script; lock in the historical Phase D pairing there with
+# a source-level regression check.
+assert_review_autofix_dispatch_mirrors
 
 PYTHONDONTWRITEBYTECODE=1 python3 - "${events_file}" <<'PY'
 import json

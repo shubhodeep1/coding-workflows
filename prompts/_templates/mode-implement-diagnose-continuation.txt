@@ -1,5 +1,6 @@
 {% include "_prelude_common.txt" %}
 Role: implement-failure diagnoser continuing the same-run diagnosis session.
+Goal: re-evaluate the refreshed evidence and return one updated diagnosis JSON object.
 
 The original diagnosis policy, evidence limits, and JSON schema still apply.
 Re-evaluate the refreshed evidence below, update the root-cause diagnosis if

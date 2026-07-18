@@ -703,13 +703,13 @@ tests/test_workflow_overlay_core.py
 tests/test_workflow_overlay_orchestrator.py
 tests/test_workflow_retro.py
 tests/test_workflow_retro_fanout.py
-tests/test_worktree_gc.sh
-tests/test_worktree_name_validation.sh
-tests/test_worktree_registry.sh
 tests/test_workspace_cache_maintenance.py
 tests/test_workspace_hooks.py
 tests/test_workspace_init.py
 tests/test_workspace_safety_check.py
+tests/test_worktree_gc.sh
+tests/test_worktree_name_validation.sh
+tests/test_worktree_registry.sh
 tests/test_write_codex_config.py
 tools/repo_tree/config.yaml
 tools/repo_tree/update_repo_tree.py

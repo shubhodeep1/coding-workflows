@@ -199,6 +199,7 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert 'nag_silent_round_threshold() { printf \'3\\n\'; }' in apply_fixes
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/nag_reminder.sh" 2>/dev/null || true' in apply_fixes
 	assert 'nag_reminder_enabled() { return 1; }' in reviewers
+	assert 'nag_silent_round_threshold() { printf \'3\\n\'; }' in reviewers
 	assert 'editor_nag_attempt_limit="$(nag_silent_round_threshold)"' in apply_fixes
 	assert 'if [ "${editor_nag_attempt_limit}" -gt "${editor_max_attempts}" ]; then' in apply_fixes
 	assert 'if cp "${EDITOR_PROMPT_FILE}" "${attempt_prompt_file}" 2>/dev/null \\' in apply_fixes

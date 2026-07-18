@@ -81,6 +81,21 @@ uses it only when `PROMPT_PRELUDE_REFACTOR_ENABLED=true`. Default persona
 prefixes come from the checked-in JSON map at `prompts/_prelude_role_persona.txt`
 unless `PROMPT_PERSONA_PREFIX_ENABLED` is disabled.
 
+## Plan Decisions advisory lint
+
+- `scripts/lint_plan_decisions.py` is the fail-open linter for the plan
+  `## Decisions` convention under `docs/plans/*.md`. It always exits `0`,
+  emits advisories to stderr, and treats missing or malformed decision records
+  as warnings rather than merge blockers.
+- `.github/workflows/ci.yml` runs the linter in the
+  `Plan decisions advisory lint` step with `continue-on-error: true`.
+- `DOCS_DECISION_LINT_ENABLED` (default `false`) only controls whether CI
+  replays captured advisories into the job log and `GITHUB_STEP_SUMMARY`; it
+  does not disable the underlying linter run.
+- The documented plan schema is `## Decisions` containing one or more
+  `### D<n> — <title>` records with `Chosen`, `Alternatives considered`, and
+  `Why` bullets.
+
 ## Stable-ID convention
 
 - New AI-pipeline identifiers must be created through the canonical helper
@@ -495,7 +510,7 @@ reserved additive success-path prefix for future use.
 
 When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`,
 `scripts/transcript_archive.sh` writes a fail-open JSON envelope under
-`.transcripts/<run_id>-<phase>-<ts>.json` from already-captured success-path
+`.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json` from already-captured success-path
 output files. Archive helper problems never fail the caller; the helper emits
 only `TRANSCRIPT_ARCHIVE_FAIL` on mkdir/read/write/JSON-encode failures.
 

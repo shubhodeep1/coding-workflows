@@ -8,10 +8,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_PROMPT = REPO_ROOT / "prompts" / "mode-plan.txt"
 PLAN_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "plan.yml"
+CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 REUSE_AUDIT_CONTRACT_TEST = REPO_ROOT / "tests" / "test_plan_reuse_audit_contract.py"
 RENDER_PROMPT = REPO_ROOT / "scripts" / "render_prompt.py"
 
@@ -39,6 +42,29 @@ def _assert_decisions_contract(text: str) -> None:
 	assert "## Decisions" in text
 	assert "### D<n> — <title>" in text
 	assert "Each decision record must include non-empty bullets for `Chosen`, `Alternatives considered`, and `Why`." in text
+
+
+def _workflow_step_block(workflow: str, step_name: str) -> dict[str, object]:
+	parsed_workflow = yaml.safe_load(workflow)
+	assert isinstance(parsed_workflow, dict), "workflow YAML must parse to a mapping"
+
+	jobs = parsed_workflow.get("jobs")
+	assert isinstance(jobs, dict), "workflow YAML missing jobs mapping"
+
+	matching_steps: list[dict[str, object]] = []
+	for job in jobs.values():
+		if not isinstance(job, dict):
+			continue
+		steps = job.get("steps")
+		if not isinstance(steps, list):
+			continue
+		for step in steps:
+			if isinstance(step, dict) and step.get("name") == step_name:
+				matching_steps.append(step)
+
+	assert matching_steps, f"missing workflow step: {step_name}"
+	assert len(matching_steps) == 1, f"duplicate workflow step: {step_name}"
+	return matching_steps[0]
 
 
 def test_mode_plan_scope_mode_contract_defaults_on() -> None:
@@ -81,6 +107,29 @@ def test_plan_workflow_exports_flag_and_keeps_live_prompt_parity() -> None:
 	assert "existing scope-too-large gate" in workflow
 
 
+def test_ci_workflow_keeps_plan_decisions_lint_contract() -> None:
+	workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+	unit_test_step = _workflow_step_block(workflow, "Plan decisions lint unit tests")
+	advisory_step = _workflow_step_block(workflow, "Plan decisions advisory lint")
+
+	unit_test_run = unit_test_step.get("run")
+	assert isinstance(unit_test_run, str)
+	assert "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_decisions.py" in unit_test_run
+
+	assert advisory_step.get("continue-on-error") is True
+	advisory_env = advisory_step.get("env")
+	assert isinstance(advisory_env, dict)
+	assert advisory_env.get("DOCS_DECISION_LINT_ENABLED") == "${{ vars.DOCS_DECISION_LINT_ENABLED || 'false' }}"
+
+	advisory_run = advisory_step.get("run")
+	assert isinstance(advisory_run, str)
+	assert "decision_lint_stderr=\"$(mktemp)\"" in advisory_run
+	assert "PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_plan_decisions.py 2> \"${decision_lint_stderr}\"" in advisory_run
+	assert "if [ \"${DOCS_DECISION_LINT_ENABLED}\" = \"true\" ] && [ -s \"${decision_lint_stderr}\" ]; then" in advisory_run
+	assert 'echo "### Plan decision lint advisories"' in advisory_run
+	assert 'cat "${decision_lint_stderr}" >&2' in advisory_run
+
+
 def test_reuse_audit_contract_script_runs_cleanly() -> None:
 	proc = subprocess.run(
 		[sys.executable, str(REUSE_AUDIT_CONTRACT_TEST)],
@@ -97,6 +146,7 @@ def main() -> int:
 	test_mode_plan_scope_mode_contract_defaults_on()
 	test_mode_plan_scope_mode_contract_relaxes_when_flag_disabled()
 	test_plan_workflow_exports_flag_and_keeps_live_prompt_parity()
+	test_ci_workflow_keeps_plan_decisions_lint_contract()
 	test_reuse_audit_contract_script_runs_cleanly()
 	print("OK: plan scope-mode contract holds")
 	return 0

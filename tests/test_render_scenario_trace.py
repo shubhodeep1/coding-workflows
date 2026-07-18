@@ -225,6 +225,116 @@ def test_render_honors_run_id_filter_and_schema_version_stamp() -> None:
 		]
 
 
+def test_render_keeps_marker_block_open_across_excerpt_boundaries() -> None:
+	os.environ["EVENTS_JSONL_ENABLED"] = "false"
+	report = {
+		"schema_version": renderer.COLLECTOR_SCHEMA_VERSION,
+		"runs": [
+			{
+				"run_id": 401,
+				"workflow_family": "implement",
+				"log_excerpts": [
+					{
+						"step_name": "Agent",
+						"excerpt": "2026-07-14T06:30:00Z >>> [model]",
+					},
+					{
+						"step_name": "Agent",
+						"excerpt": "\n".join(
+							[
+								"2026-07-14T06:30:01Z First line stays with the open block.",
+								"2026-07-14T06:30:02Z Second line also stays with it.",
+								"2026-07-14T06:30:03Z <<< [model]",
+								"2026-07-14T06:30:04Z Response follows in the next block.",
+							]
+						),
+					},
+				],
+			}
+		],
+	}
+
+	with tempfile.TemporaryDirectory(prefix="scenario-trace-boundaries-") as td:
+		report_path = Path(td) / "workflow_log_report.json"
+		output_dir = Path(td) / "traces"
+		_write_json(report_path, report)
+
+		with _capture_std():
+			written_paths = renderer.render(None, report_path, output_dir)
+
+		assert [path.name for path in written_paths] == ["401.scenario.json"]
+		trace = _read_json(output_dir / "401.scenario.json")
+		assert trace["steps"] == [
+			{
+				"type": "user_message",
+				"ts": "2026-07-14T06:30:00Z",
+				"content": "First line stays with the open block.\nSecond line also stays with it.",
+				"tokens": None,
+			},
+			{
+				"type": "assistant_text",
+				"ts": "2026-07-14T06:30:03Z",
+				"content": "Response follows in the next block.",
+				"tokens": None,
+			},
+		]
+
+
+def test_render_keeps_tool_call_block_open_across_excerpt_boundaries() -> None:
+	os.environ["EVENTS_JSONL_ENABLED"] = "false"
+	report = {
+		"schema_version": renderer.COLLECTOR_SCHEMA_VERSION,
+		"runs": [
+			{
+				"run_id": 402,
+				"workflow_family": "implement",
+				"log_excerpts": [
+					{
+						"step_name": "Agent",
+						"excerpt": '2026-07-14T06:31:00Z [tool_call] {"name": "apply_patch",',
+					},
+					{
+						"step_name": "Agent",
+						"excerpt": "\n".join(
+							[
+								'2026-07-14T06:31:01Z "args": {"input": "*** Begin Patch"}',
+								"2026-07-14T06:31:02Z }",
+								"2026-07-14T06:31:03Z [tool_result] exit_status=0",
+								"2026-07-14T06:31:04Z Done!",
+							]
+						),
+					},
+				],
+			}
+		],
+	}
+
+	with tempfile.TemporaryDirectory(prefix="scenario-trace-tool-boundaries-") as td:
+		report_path = Path(td) / "workflow_log_report.json"
+		output_dir = Path(td) / "traces"
+		_write_json(report_path, report)
+
+		with _capture_std():
+			written_paths = renderer.render(None, report_path, output_dir)
+
+		assert [path.name for path in written_paths] == ["402.scenario.json"]
+		trace = _read_json(output_dir / "402.scenario.json")
+		assert trace["steps"] == [
+			{
+				"type": "tool_call",
+				"ts": "2026-07-14T06:31:00Z",
+				"name": "apply_patch",
+				"args": {"input": "*** Begin Patch"},
+			},
+			{
+				"type": "tool_result",
+				"ts": "2026-07-14T06:31:03Z",
+				"output": "Done!",
+				"exit_status": 0,
+			},
+		]
+
+
 def test_helper_parsers_cover_edge_branches() -> None:
 	assert renderer._normalize_excerpts("not-a-list") == []
 	assert renderer._normalize_excerpts(
@@ -418,6 +528,8 @@ def main() -> int:
 	test_render_writes_trace_with_all_step_types()
 	test_main_fail_open_on_malformed_run_and_keeps_parseable_run()
 	test_render_honors_run_id_filter_and_schema_version_stamp()
+	test_render_keeps_marker_block_open_across_excerpt_boundaries()
+	test_render_keeps_tool_call_block_open_across_excerpt_boundaries()
 	test_helper_parsers_cover_edge_branches()
 	test_build_tool_result_step_covers_fallback_shapes()
 	test_render_fail_open_for_report_shape_and_write_failures()

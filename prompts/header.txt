@@ -5,5 +5,5 @@ Role: AI pipeline phase agent. Goal: produce the artefact described below.
 If you compact context:
 - Preserve the latest file-read result for every file still likely to be edited in this run.
 - Preserve the exact structured-output contract, including required section headings and JSON/Q-ID schemas.
-- When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side `.transcripts/<run_id>-<phase>-<ts>.json` archive instead of re-emitting raw transcript or tool-call history.
+- When `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED=true`, trust the host-side `.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json` archive instead of re-emitting raw transcript or tool-call history.
 </compaction-rules>

@@ -132,9 +132,16 @@ def read_task(wave_id: Any, issue_id: Any) -> dict[str, Any] | None:
 	return _load_task_payload(path, issue_id)
 
 
-def _candidate_blocker_tokens(wave_id: Any, completed_issue_id: Any) -> set[str]:
+
+def _candidate_blocker_tokens(
+	wave_id: Any,
+	completed_issue_id: Any,
+	completed_issue_payload: dict[str, Any] | None = None,
+) -> set[str]:
 	candidate_values = {str(completed_issue_id)}
-	completed_payload = read_task(wave_id, completed_issue_id)
+	completed_payload = completed_issue_payload
+	if not isinstance(completed_payload, dict):
+		completed_payload = read_task(wave_id, completed_issue_id)
 	if isinstance(completed_payload, dict):
 		github_issue = completed_payload.get("github_issue")
 		if github_issue not in (None, ""):
@@ -178,7 +185,11 @@ def _issue_is_unblock_terminal(issue: Any) -> bool:
 	return str(issue.get("status") or "").strip() in TASK_STATE_UNBLOCK_TERMINAL_STATUSES
 
 
-def unblock_dependents(wave_id: Any, completed_issue_id: Any) -> int:
+def unblock_dependents(
+	wave_id: Any,
+	completed_issue_id: Any,
+	completed_issue_payload: dict[str, Any] | None = None,
+) -> int:
 	if not _task_files_enabled():
 		return 0
 
@@ -190,7 +201,11 @@ def unblock_dependents(wave_id: Any, completed_issue_id: Any) -> int:
 	if symlink_target is not None:
 		_log_task_state_write_fail(completed_issue_id, f"refusing_to_traverse_symlink:{symlink_target}")
 		return 0
-	blocker_tokens = _candidate_blocker_tokens(wave_id, completed_issue_id)
+	blocker_tokens = _candidate_blocker_tokens(
+		wave_id,
+		completed_issue_id,
+		completed_issue_payload=completed_issue_payload,
+	)
 	count_unblocked = 0
 
 	if wave_dir.is_dir() and blocker_tokens:
