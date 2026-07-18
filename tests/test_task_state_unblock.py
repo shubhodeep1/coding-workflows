@@ -89,6 +89,43 @@ def test_unblock_dependents_updates_only_changed_files() -> None:
 			_restore_task_state_root(previous_root, previous_flag)
 
 
+def test_unblock_dependents_uses_supplied_completed_issue_payload_for_github_issue_tokens() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		previous_root, previous_flag = _set_task_state_root(root, enabled="true")
+		try:
+			assert task_state.write_task(1, "T1", {
+				"id": "T1",
+				"github_issue": 201,
+				"status": "pending",
+				"reissue_depends_on": [202, 999],
+			})
+
+			stderr = io.StringIO()
+			with redirect_stderr(stderr):
+				assert task_state.unblock_dependents(
+					1,
+					"T2",
+					completed_issue_payload={
+						"id": "T2",
+						"github_issue": 202,
+						"status": "merged",
+					},
+				) == 1
+
+			assert task_state.read_task(1, "T1") == {
+				"github_issue": 201,
+				"id": "T1",
+				"reissue_depends_on": [999],
+				"schema_version": "task_state.v1.json",
+				"status": "pending",
+			}
+			assert task_state.read_task(1, "T2") is None
+			assert "TASK_STATE_UNBLOCK 1 T2 1" in stderr.getvalue()
+		finally:
+			_restore_task_state_root(previous_root, previous_flag)
+
+
 def test_unblock_dependents_rejects_symlinked_tasks_root() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		root = Path(td)
