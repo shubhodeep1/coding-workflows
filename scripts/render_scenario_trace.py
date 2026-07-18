@@ -271,6 +271,8 @@ def _finalize_block(block: _Block | None) -> dict[str, Any] | None:
 def _parse_steps(log_excerpts: list[dict[str, str]]) -> list[dict[str, Any]]:
 	steps: list[dict[str, Any]] = []
 	saw_marker = False
+	# Keep the active block open across the full collector excerpt list: one
+	# marked scenario step may be split across excerpt boundaries.
 	current: _Block | None = None
 
 	for excerpt in log_excerpts:
