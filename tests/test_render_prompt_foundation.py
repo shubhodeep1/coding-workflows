@@ -933,24 +933,48 @@ def test_render_prompt_py_inline_prompt_prefers_cwd_canonical_prompt_root() -> N
 def test_render_prompt_py_identity_recall_reports_canonical_prompt_load_failure_details() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_identity_load_fail_") as td:
 		root = Path(td)
+		render_script = root / "scripts" / "render_prompt.py"
 		(root / "prompts").mkdir(parents=True, exist_ok=True)
 		prompt_file = root / "runtime" / "mode-synthetic-load-inline.txt"
 		canonical_prompt = root / "prompts" / "mode-synthetic-load.txt"
+		render_script.parent.mkdir(parents=True, exist_ok=True)
 		prompt_file.parent.mkdir(parents=True, exist_ok=True)
 		prompt_file.write_text("Runtime wrapper prelude.\n\nBody follows.\n", encoding="utf-8")
 		canonical_prompt.write_text(
 			"# tier: DEFAULT\nRole: synthetic planner. Goal: surface load failures.\n",
 			encoding="utf-8",
 		)
+		render_script.write_text(
+			RENDER_PROMPT_PY.read_text(encoding="utf-8").replace(
+				"\tif not prompt_path.is_file():\n",
+				(
+					f"\tif prompt_path == Path({str(canonical_prompt)!r}):\n"
+					f"\t\traise PromptLoadError(\"Unable to read prompt file '{canonical_prompt}': synthetic load failure\")\n"
+					"\tif not prompt_path.is_file():\n"
+				),
+				1,
+			),
+			encoding="utf-8",
+		)
 
-		baseline_proc = _run_render_prompt_py(prompt_file, cwd=root)
+		baseline_proc = subprocess.run(
+			[sys.executable, str(render_script), str(prompt_file)],
+			cwd=str(root),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
 		identity_env = _base_env()
 		identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "true"
-		os.chmod(canonical_prompt, 0)
-		try:
-			identity_proc = _run_render_prompt_py(prompt_file, env=identity_env, cwd=root)
-		finally:
-			os.chmod(canonical_prompt, 0o644)
+		identity_proc = subprocess.run(
+			[sys.executable, str(render_script), str(prompt_file)],
+			cwd=str(root),
+			env=identity_env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
 
 	assert baseline_proc.returncode == 0, baseline_proc.stderr
 	assert baseline_proc.stderr == ""

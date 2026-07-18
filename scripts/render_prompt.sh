@@ -179,6 +179,9 @@ resolve_prompt_root_dir()
 
 cleanup_temp_files()
 {
+	if [ -n "${IDENTITY_RECALL_INJECTED_FILE:-}" ] && [ -f "${IDENTITY_RECALL_INJECTED_FILE}" ]; then
+		rm -f "${IDENTITY_RECALL_INJECTED_FILE}"
+	fi
 	if [ -n "${ASSEMBLED_PROMPT_FILE:-}" ] && [ -f "${ASSEMBLED_PROMPT_FILE}" ]; then
 		rm -f "${ASSEMBLED_PROMPT_FILE}"
 	fi
@@ -307,7 +310,7 @@ while IFS= read -r placeholder_name; do
 	fi
 done < <(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")
 
-if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
+if [ -n "${ASSEMBLED_PROMPT_FILE}" ] || [ -n "${IDENTITY_RECALL_INJECTED_FILE:-}" ]; then
 	"${RENDER_ARGS[@]}"
 	exit 0
 fi
