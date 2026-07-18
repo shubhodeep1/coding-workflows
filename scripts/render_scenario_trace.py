@@ -271,9 +271,9 @@ def _finalize_block(block: _Block | None) -> dict[str, Any] | None:
 def _parse_steps(log_excerpts: list[dict[str, str]]) -> list[dict[str, Any]]:
 	steps: list[dict[str, Any]] = []
 	saw_marker = False
+	current: _Block | None = None
 
 	for excerpt in log_excerpts:
-		current: _Block | None = None
 		for raw_line in excerpt["excerpt"].splitlines():
 			ts, text = _split_timestamp(raw_line)
 			kind, remainder = _detect_marker(text)
@@ -293,9 +293,9 @@ def _parse_steps(log_excerpts: list[dict[str, str]]) -> list[dict[str, Any]]:
 				current.ts = ts
 			current.lines.append(text)
 
-		finalized = _finalize_block(current)
-		if finalized is not None:
-			steps.append(finalized)
+	finalized = _finalize_block(current)
+	if finalized is not None:
+		steps.append(finalized)
 
 	if not saw_marker:
 		raise TraceParseError("log excerpts did not contain any supported scenario markers")
