@@ -529,8 +529,6 @@ def extract_identity_recall_metadata(prompt_text: str) -> tuple[str, str] | None
 		return None
 	phase_role = match.group("role").strip().rstrip(". ")
 	phase_mission = match.group("goal").strip().rstrip(". ")
-	if not phase_role or not phase_mission:
-		return None
 	return phase_role, phase_mission
 
 
@@ -612,6 +610,18 @@ def apply_identity_recall_block(rendered_prompt_text: str, *, prompt_path: Path,
 
 	try:
 		canonical_prompt_path = resolve_identity_source_prompt(prompt_path, mode_name)
+	except PromptLoadError as exc:
+		failure_reason = "canonical_prompt_load_failed"
+		if str(exc).startswith("Canonical prompt for identity recall not found:"):
+			failure_reason = "canonical_prompt_missing"
+		emit_identity_reinject_parse_fail(
+			mode_name,
+			failure_reason,
+			detail=str(exc),
+		)
+		return rendered_prompt_text
+
+	try:
 		canonical_prompt_text = load_prompt(canonical_prompt_path)
 	except RenderPromptError as exc:
 		emit_identity_reinject_parse_fail(
@@ -623,7 +633,7 @@ def apply_identity_recall_block(rendered_prompt_text: str, *, prompt_path: Path,
 
 	phase_name = resolve_identity_phase_name(canonical_prompt_path)
 	if phase_name is None:
-		emit_identity_reinject_parse_fail(mode_name, "metadata_extract_failed")
+		emit_identity_reinject_parse_fail(mode_name, "phase_name_missing")
 		return rendered_prompt_text
 
 	identity_metadata = extract_identity_recall_metadata(canonical_prompt_text)
@@ -633,7 +643,7 @@ def apply_identity_recall_block(rendered_prompt_text: str, *, prompt_path: Path,
 
 	phase_role, phase_mission = identity_metadata
 	if not phase_role or not phase_mission:
-		emit_identity_reinject_parse_fail(mode_name, "metadata_extract_failed")
+		emit_identity_reinject_parse_fail(mode_name, "identity_metadata_incomplete")
 		return rendered_prompt_text
 
 	try:
