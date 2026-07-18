@@ -87,8 +87,8 @@ unless `PROMPT_PERSONA_PREFIX_ENABLED` is disabled.
   `## Decisions` convention under `docs/plans/*.md`. It always exits `0`,
   emits advisories to stderr, and treats missing or malformed decision records
   as warnings rather than merge blockers.
-- `.github/workflows/ci.yml` runs the linter in the `Plan decisions advisory
-  lint` step with `continue-on-error: true`.
+- `.github/workflows/ci.yml` runs the linter in the
+  `Plan decisions advisory lint` step with `continue-on-error: true`.
 - `DOCS_DECISION_LINT_ENABLED` (default `false`) only controls whether CI
   replays captured advisories into the job log and `GITHUB_STEP_SUMMARY`; it
   does not disable the underlying linter run.
