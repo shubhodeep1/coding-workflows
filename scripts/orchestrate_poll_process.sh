@@ -5761,8 +5761,9 @@ _refresh_integration_resolver_tooling() {
       fi
       echo "  ${log_prefix} pushed [ai-maint] refresh: ${refreshed_count} file(s) updated from ${default_branch}."
       exit 0
-    )
-    subshell_rc=$?
+	# Keep cleanup reachable under the script's global `set -e`.
+	# This subshell returns intentional rc values used by the retry logic.
+	) || subshell_rc=$?
 	worktree_registry_deregister "$(basename -- "${wt}")"
 	git worktree remove --force "${wt}" 2>/dev/null || rm -rf "${wt}" 2>/dev/null || true
 
@@ -6618,8 +6619,9 @@ _attempt_branch_rebuild_after_escalation() {
 
     git push origin "HEAD:refs/heads/${integration_branch}" >>"${replay_log}" 2>&1 || exit 24
     exit 0
-  )
-  replay_rc=$?
+	# Capture replay-specific exit codes without letting `set -e` bypass
+	# the deregister/remove cleanup and structured failure handling.
+	) || replay_rc=$?
 
   if [ "${replay_rc}" -ne 0 ]; then
     local replay_failure_context=""
