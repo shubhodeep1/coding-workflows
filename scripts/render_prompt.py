@@ -37,6 +37,8 @@ CONTRACT_TOP_LEVEL_KEYS = {"required_vars", "optional_vars", "forbidden_vars"}
 PERSONA_SOURCE_FILE_NAME = "_prelude_role_persona.txt"
 LEGACY_STANDALONE_ONLY_VARS = frozenset({"WORKFLOW_EDIT_RESTRICTION", "SEMBLE_PREFETCH", "SERENA_TOOL_HINTS"})
 FALSEY_ENV_VALUES = frozenset({"0", "false", "no", "off"})
+TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on", "y"})
+IDENTITY_RECALL_TEMPLATE_FILE_NAME = "_identity_recall.txt"
 ROLE_GOAL_METADATA_PATTERN = re.compile(r"^Role:\s*(?P<role>.+?)\s+Goal:\s*(?P<goal>.+?)\s*$")
 
 
@@ -400,8 +402,8 @@ def discover_persona_source_path(prompt_path: Path | None) -> Path | None:
 
 
 def _identity_reinject_enabled() -> bool:
-	raw_value = os.environ.get("UNATTENDED_IDENTITY_REINJECT_ENABLED", "false").strip().lower()
-	return bool(raw_value) and raw_value not in FALSEY_ENV_VALUES
+	raw_value = os.environ.get("UNATTENDED_IDENTITY_REINJECT_ENABLED", "")
+	return raw_value.strip().lower() in TRUTHY_ENV_VALUES
 
 
 def _prompt_prelude_refactor_enabled() -> bool:
@@ -422,7 +424,7 @@ def _identity_prompt_file_name(prompt_path: Path, mode_name: str) -> str:
 	return prompt_name
 
 
-def resolve_identity_source_prompt(prompt_path: Path, mode_name: str) -> Path | None:
+def resolve_identity_source_prompt(prompt_path: Path, mode_name: str) -> Path:
 	prompt_file_name = _identity_prompt_file_name(prompt_path, mode_name)
 	prompt_dir = prompt_path.parent
 	script_root = Path(__file__).resolve().parents[1]
@@ -460,7 +462,8 @@ def resolve_identity_source_prompt(prompt_path: Path, mode_name: str) -> Path | 
 	for candidate in _unique_paths(candidate_paths):
 		if candidate.is_file():
 			return candidate
-	return None
+	expected_path = (_prompt_base_dir(prompt_path) or Path.cwd()) / "prompts" / prompt_file_name
+	raise PromptLoadError(f"Canonical prompt for identity recall not found: {expected_path.resolve()}")
 
 
 def discover_identity_recall_template_path(prompt_path: Path | None) -> Path | None:
@@ -478,7 +481,7 @@ def discover_identity_recall_template_path(prompt_path: Path | None) -> Path | N
 	):
 		if base_dir is None:
 			continue
-		candidate = (base_dir / "prompts" / "_identity_recall.txt").resolve()
+		candidate = (base_dir / "prompts" / IDENTITY_RECALL_TEMPLATE_FILE_NAME).resolve()
 		if candidate in seen:
 			continue
 		seen.add(candidate)
@@ -597,7 +600,9 @@ def inject_identity_recall_block(rendered_prompt_text: str, identity_block: str)
 def emit_identity_reinject_parse_fail(mode_name: str, failure_reason: str, *, detail: str | None = None) -> None:
 	message = f"IDENTITY_REINJECT_PARSE_FAIL: {mode_name} reason={failure_reason}"
 	if detail:
-		message += f" detail={json.dumps(detail, ensure_ascii=True)}"
+		sanitized_detail = " ".join(detail.split())
+		if sanitized_detail:
+			message += f" detail={sanitized_detail}"
 	print(message, file=sys.stderr)
 
 
@@ -605,17 +610,8 @@ def apply_identity_recall_block(rendered_prompt_text: str, *, prompt_path: Path,
 	if not _identity_reinject_enabled() or not mode_name.startswith("mode-"):
 		return rendered_prompt_text
 
-	canonical_prompt_path = resolve_identity_source_prompt(prompt_path, mode_name)
-	if canonical_prompt_path is None:
-		emit_identity_reinject_parse_fail(mode_name, "canonical_prompt_missing")
-		return rendered_prompt_text
-
-	phase_name = resolve_identity_phase_name(canonical_prompt_path)
-	if phase_name is None:
-		emit_identity_reinject_parse_fail(mode_name, "phase_name_missing")
-		return rendered_prompt_text
-
 	try:
+		canonical_prompt_path = resolve_identity_source_prompt(prompt_path, mode_name)
 		canonical_prompt_text = load_prompt(canonical_prompt_path)
 	except RenderPromptError as exc:
 		emit_identity_reinject_parse_fail(
@@ -625,6 +621,11 @@ def apply_identity_recall_block(rendered_prompt_text: str, *, prompt_path: Path,
 		)
 		return rendered_prompt_text
 
+	phase_name = resolve_identity_phase_name(canonical_prompt_path)
+	if phase_name is None:
+		emit_identity_reinject_parse_fail(mode_name, "metadata_extract_failed")
+		return rendered_prompt_text
+
 	identity_metadata = extract_identity_recall_metadata(canonical_prompt_text)
 	if identity_metadata is None:
 		emit_identity_reinject_parse_fail(mode_name, "metadata_extract_failed")
@@ -632,7 +633,7 @@ def apply_identity_recall_block(rendered_prompt_text: str, *, prompt_path: Path,
 
 	phase_role, phase_mission = identity_metadata
 	if not phase_role or not phase_mission:
-		emit_identity_reinject_parse_fail(mode_name, "identity_metadata_incomplete")
+		emit_identity_reinject_parse_fail(mode_name, "metadata_extract_failed")
 		return rendered_prompt_text
 
 	try:
@@ -1329,12 +1330,12 @@ def main(argv: list[str] | None = None) -> int:
 			mode_name=mode_name,
 			values=effective_values,
 		)
-		prompt_text = apply_phase_c_persona_prefix(prompt_text, prompt_path=prompt_path, mode_name=mode_name)
 		prompt_text = apply_identity_recall_block(
 			prompt_text,
 			prompt_path=prompt_path,
 			mode_name=mode_name,
 		)
+		prompt_text = apply_phase_c_persona_prefix(prompt_text, prompt_path=prompt_path, mode_name=mode_name)
 		sys.stdout.write(render_prompt_text(prompt_text, effective_values))
 	except RenderPromptError as exc:
 		print(f"ERROR: {exc}", file=sys.stderr)
