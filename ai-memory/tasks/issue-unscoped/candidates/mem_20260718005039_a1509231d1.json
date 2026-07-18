@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_lib.py:2190-2229 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: `inspect.signature`-based feature detection can misclassify valid wrappers, bound methods, partials, or other callables that safely accept `**kwargs`, causing the code to fall back to the legacy two-argument unblock path.\n  WHY: That fallback can force extra `read_task()` I/O and may omit payload-derived blocker tokens, which changes unblock behavior for Phase C mirror compatibility.\n- scripts/orchestrate_lib.py:2189-2196 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The signature-probe helper only handles `TypeError` and `ValueError`, so other `inspect.signature` failures can escape the compatibility fallback and abort the unblock path.\n  WHY: An uncaught signature-inspection exception turns a soft compatibility check into a hard `TASK_STATE_WRITE_FAIL` in the hot wave-status path.\n- scripts/orchestrate_lib.py:2189-2196 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: Calling `inspect.signature` on every terminal-wave transition adds avoidable overhead to a hot path.\n  WHY: Even if each call is small, the repeated introspection is extra CPU work compared with the previous fallback approach.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: scripts/orchestrate_lib.py\n  Code: _maybe_unblock_task_state_dependents function, lines 2222-2227\n  Function call to unblock_dependents with variable parameter passing\n  Problem: Parameter inspection-based detection of function signature support for `completed_issue_payload` is brittle and fragile across Python versions and implementations. This can cause incorrect routing between the new and legacy unblock paths, leading to failures when wrapper functions exist.\n  Why it fails at runtime: The function uses inspect.signature to detect whether unblock_dependents accepts the completed_issue_payload parameter, which may fail on some callable types (decorated functions, wrappers, bound methods) or versions, causing incorrect fallback routing that may trigger the exception handler with unexpected TypeError messages that cannot be properly handled.\n  ISSUE_CONFIDENCE: 4\n\n- File: scripts/orchestrate_lib.py\n  Code: _maybe_unblock_task_state_dependents function, lines 2189-2196\n  _unblock_dependents_accepts_completed_issue_payload helper function\n  Problem: Multiple potential error paths exist in the signature inspection logic including TypeError and ValueError when attempting to get the parameters of certain callable types or malformed callables.\n  Why it fails at runtime: While these exceptions are caught and result in returning False, this could mask legitimate issues during dependency unblocking in production scenarios, potentially causing the Phase C mirror to fall back to legacy behavior when it shouldn't.\n  ISSUE_CONFIDENCE: 3\n\n- File: scripts/orcheststrate_lib.py\n  Code: _unblock_dependents_accepts_completed_issue_payload function, lines 2189-2196\n  Inspect call performing function signature inspection\n  Problem: Performing inspect.signature on every call to `_maybe_unblock_task_state_dependents` adds overhead to the hot execution path.\n  Why it fails at runtime: This creates unnecessary CPU overhead during terminal wave-issue transitions compared with the previous TypeError-only fallback approach. Given this runs on every completed issue transition, cumulative performance impact could be meaningful in large orchestration deployments.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_moonshot-kimi-k2-5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_moonshot-kimi-k2-5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/orchestrate_lib.py\n  Line or code reference: lines 2190-2196 (_unblock_dependents_accepts_completed_issue_payload) and its use at 2221-2229 in _maybe_unblock_task_state_dependents\n  Problem: The inspect.signature probe can return False for valid wrappers (decorators, bound methods, partials, or objects that raise on __signature__ inspection) even when they accept **kwargs and would safely receive completed_issue_payload.\n  Why it fails at runtime: The legacy two-arg path is taken; _candidate_blocker_tokens falls back to read_task() (extra I/O) and github_issue token may be omitted for issues that rely on the supplied payload dict, causing incomplete dependency unblocking in Phase C mirror. The new test in test_orchestrate_lib.py reproduces exactly this failure path for legacy wrappers.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n\n- File: scripts/orchestrate_lib.py\n  Line or code reference: _unblock_dependents_accepts_completed_issue_payload (the try/except only catches TypeError/ValueError)\n  Problem: Other exceptions raised by inspect.signature (e.g. from a broken __signature__ attribute or import-time errors) are not caught and will propagate out of the hot unblock path, turning a soft compatibility fallback into a hard TASK_STATE_WRITE_FAIL on every terminal issue.\n  Why it fails at runtime: Any non-TypeError/ValueError during signature inspection aborts the whole wave-status check for that issue.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n\n- File: scripts/orchestrate_lib.py\n  Line or code reference: _unblock_dependents_accepts_completed_issue_payload called on every terminal-wave-issue transition (inside cmd_check_wave_status)\n  Problem: Unconditional inspect.signature call on the hot poll path.\n  Why it fails at runtime: Adds measurable per-issue overhead in large waves; the prior TypeError-based fallback was cheaper.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "011e8bde1777b198a79ed3326fdf045ed992404fa0f77c7af59debb4535b1ab5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3689,
+    "run_id": "29622051758",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29622051758",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260718005039_a1509231d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3689,
+    "run_id": "29622051758"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-18T00:50:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
