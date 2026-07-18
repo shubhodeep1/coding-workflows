@@ -11155,6 +11155,9 @@ def test_worktree_registry_is_wired_around_poller_worktree_lifecycles():
 	assert 'worktree_registry_register "$(basename -- "${wt}")" "${wt}" "refs/remotes/origin/${integration_branch}" "tracking-${TRACKING_NUM:-0}" "orchestrate-poll"' in script
 	assert 'worktree_registry_register "$(basename -- "${worktree_dir}")" "${worktree_dir}" "refs/remotes/origin/${integration_branch}" "pr-${final_pr}" "orchestrate-poll"' in script
 	assert script.count("write_state_snapshot_actions_runs_export || true") >= 2
+	assert "subshell returns intentional rc values used by the retry logic" in script
+	assert ") || subshell_rc=$?" in script
+	assert ") || replay_rc=$?" in script
 
 
 def test_integration_conflict_mergeable_payload_reuse_preserves_false_values():
