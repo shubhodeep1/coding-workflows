@@ -40,7 +40,6 @@ FALSEY_ENV_VALUES = frozenset({"0", "false", "no", "off"})
 TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on", "y"})
 IDENTITY_RECALL_TEMPLATE_FILE_NAME = "_identity_recall.txt"
 ROLE_GOAL_LINE_RE = re.compile(r"^Role:\s*(?P<role>.+?)\s+Goal:\s*(?P<goal>.+?)\s*$")
-ROLE_GOAL_METADATA_PATTERN = ROLE_GOAL_LINE_RE
 
 
 class RenderPromptError(Exception):
