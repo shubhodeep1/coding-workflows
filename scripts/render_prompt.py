@@ -439,6 +439,10 @@ def _identity_recall_enabled() -> bool:
 	return raw_value.strip().lower() in TRUTHY_ENV_VALUES
 
 
+def _prompt_prelude_refactor_enabled() -> bool:
+	return os.environ.get("PROMPT_PRELUDE_REFACTOR_ENABLED", "false") == "true"
+
+
 def _identity_canonical_prompt_basename(prompt_path: Path, mode_name: str) -> str:
 	prompt_basename = prompt_path.name
 	if prompt_basename.startswith("mode-") and prompt_basename.endswith("-inline.txt"):
@@ -458,7 +462,7 @@ def discover_identity_source_prompt(prompt_path: Path, mode_name: str) -> Path |
 	if resolved_prompt_path.parent.name == "_templates":
 		candidates.append((resolved_prompt_path.parent.parent / canonical_basename).resolve())
 
-	if resolved_prompt_path.parent.name == "prompts" and _env_flag_enabled("PROMPT_PRELUDE_REFACTOR_ENABLED", default=False):
+	if resolved_prompt_path.parent.name == "prompts" and _prompt_prelude_refactor_enabled():
 		for base_dir in _discover_prompt_repo_roots(resolved_prompt_path):
 			candidates.append((base_dir / "prompts" / "_templates" / canonical_basename).resolve())
 
@@ -641,9 +645,10 @@ def apply_identity_recall(prompt_text: str, *, prompt_path: Path, mode_name: str
 	if not _identity_recall_enabled() or not mode_name.startswith("mode-"):
 		return prompt_text
 	try:
-		canonical_prompt_path = discover_identity_source_prompt(prompt_path, mode_name)
-		if canonical_prompt_path is None:
-			raise IdentityRecallParseError("canonical_prompt_missing")
+		try:
+			canonical_prompt_path = resolve_identity_source_prompt(prompt_path, mode_name)
+		except PromptLoadError as exc:
+			raise IdentityRecallParseError("canonical_prompt_missing", str(exc)) from exc
 		phase_name = resolve_identity_phase_name(canonical_prompt_path)
 		if not phase_name:
 			raise IdentityRecallParseError("phase_name_missing")
