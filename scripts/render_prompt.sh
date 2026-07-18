@@ -92,14 +92,32 @@ MODEL_FAMILY_OVERLAY_BLOCK="${MODEL_FAMILY_OVERLAY:-}"
 PROMPT_BASENAME="$(basename -- "${PROMPT_FILE}")"
 MODE_NAME="${PROMPT_BASENAME%.*}"
 
+render_prompt_env_is_truthy()
+{
+	local value="${1:-}"
+	value="${value#"${value%%[![:space:]]*}"}"
+	value="${value%"${value##*[![:space:]]}"}"
+	case "${value}" in
+		1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy]) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
 resolve_identity_recall_template()
 {
+	local prompt_path="${1:-}"
+	local prompt_root_dir=""
 	local candidate=""
 	local -a candidates=()
 
+	if [ -n "${prompt_path}" ]; then
+		prompt_root_dir="$(resolve_prompt_root_dir "${prompt_path}")"
+		candidates+=("${prompt_root_dir}/_identity_recall.txt")
+	fi
+
 	candidates+=(
-		"${SCRIPT_DIR}/../prompts/_identity_recall.txt"
 		"$(pwd)/prompts/_identity_recall.txt"
+		"${SCRIPT_DIR}/../prompts/_identity_recall.txt"
 		"$(pwd)/.codex-workflow-src/prompts/_identity_recall.txt"
 		"$(pwd)/.codex-workflow-src-main/prompts/_identity_recall.txt"
 	)
@@ -122,6 +140,8 @@ resolve_identity_source_prompt()
 	local prompt_dir_name=""
 	local candidate=""
 	local template_candidate=""
+	local ancestor=""
+	local parent=""
 	local -a candidates=()
 
 	prompt_basename="$(basename -- "${prompt_path}")"
@@ -153,12 +173,24 @@ resolve_identity_source_prompt()
 		fi
 	fi
 
+	candidates+=("${prompt_dir}/${prompt_basename}")
+	ancestor="${prompt_dir}"
+	while :; do
+		if [ "${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" = "true" ]; then
+			candidates+=("${ancestor}/prompts/_templates/${prompt_basename}")
+		fi
+		candidates+=("${ancestor}/prompts/${prompt_basename}")
+		parent="$(dirname -- "${ancestor}")"
+		if [ "${parent}" = "${ancestor}" ]; then
+			break
+		fi
+		ancestor="${parent}"
+	done
 	candidates+=(
-		"${SCRIPT_DIR}/../prompts/${prompt_basename}"
-		"${prompt_dir}/${prompt_basename}"
 		"$(pwd)/prompts/${prompt_basename}"
 		"$(pwd)/.codex-workflow-src/prompts/${prompt_basename}"
 		"$(pwd)/.codex-workflow-src-main/prompts/${prompt_basename}"
+		"${SCRIPT_DIR}/../prompts/${prompt_basename}"
 	)
 
 	for candidate in "${candidates[@]}"; do
@@ -233,10 +265,11 @@ render_identity_recall_block()
 	local phase_name="$1"
 	local phase_role="$2"
 	local phase_mission="$3"
+	local prompt_path="${4:-}"
 	local identity_template_file=""
 	local -a identity_render_args=()
 
-	if ! identity_template_file="$(resolve_identity_recall_template)"; then
+	if ! identity_template_file="$(resolve_identity_recall_template "${prompt_path}")"; then
 		return 1
 	fi
 
@@ -495,7 +528,7 @@ if [ "${PROMPT_PRELUDE_REFACTOR_ENABLED:-false}" = "true" ]; then
 	fi
 fi
 
-if [ "${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}" = "true" ] && [[ "${MODE_NAME}" = mode-* ]]; then
+if render_prompt_env_is_truthy "${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}" && [[ "${MODE_NAME}" = mode-* ]]; then
 	IDENTITY_RECALL_CANONICAL_PROMPT=""
 	IDENTITY_RECALL_PHASE_NAME=""
 	IDENTITY_RECALL_METADATA=""
@@ -514,7 +547,7 @@ if [ "${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}" = "true" ] && [[ "${MODE_N
 		IDENTITY_RECALL_MISSION="$(printf '%s\n' "${IDENTITY_RECALL_METADATA}" | sed -n '2p')"
 		if [ -z "${IDENTITY_RECALL_PHASE_NAME}" ] || [ -z "${IDENTITY_RECALL_ROLE}" ] || [ -z "${IDENTITY_RECALL_MISSION}" ]; then
 			emit_identity_reinject_parse_fail "identity_metadata_incomplete"
-		elif ! IDENTITY_RECALL_BLOCK="$(render_identity_recall_block "${IDENTITY_RECALL_PHASE_NAME}" "${IDENTITY_RECALL_ROLE}" "${IDENTITY_RECALL_MISSION}")"; then
+		elif ! IDENTITY_RECALL_BLOCK="$(render_identity_recall_block "${IDENTITY_RECALL_PHASE_NAME}" "${IDENTITY_RECALL_ROLE}" "${IDENTITY_RECALL_MISSION}" "${IDENTITY_RECALL_CANONICAL_PROMPT}")"; then
 			emit_identity_reinject_parse_fail "render_failed"
 		elif ! inject_identity_recall_block "${RENDER_INPUT_FILE}" "${IDENTITY_RECALL_BLOCK}"; then
 			emit_identity_reinject_parse_fail "injection_failed"
@@ -590,8 +623,8 @@ while IFS= read -r placeholder_name; do
 done < <(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")
 
 if [ -n "${ASSEMBLED_PROMPT_FILE}" ] || [ -n "${IDENTITY_RECALL_INJECTED_FILE:-}" ]; then
-	"${RENDER_ARGS[@]}"
+	UNATTENDED_IDENTITY_REINJECT_ENABLED=false "${RENDER_ARGS[@]}"
 	exit 0
 fi
 
-exec "${RENDER_ARGS[@]}"
+exec env UNATTENDED_IDENTITY_REINJECT_ENABLED=false "${RENDER_ARGS[@]}"
