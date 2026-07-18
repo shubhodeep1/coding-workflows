@@ -998,32 +998,44 @@ def test_render_prompt_py_inline_prompt_uses_canonical_prompt_root_template() ->
 def test_render_prompt_py_identity_recall_reports_canonical_prompt_load_failure_details() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_identity_load_fail_") as td:
 		root = Path(td)
-		render_script = root / "scripts" / "render_prompt.py"
+		render_driver = root / "scripts" / "render_prompt_driver.py"
 		(root / "prompts").mkdir(parents=True, exist_ok=True)
 		prompt_file = root / "runtime" / "mode-synthetic-load-inline.txt"
 		canonical_prompt = root / "prompts" / "mode-synthetic-load.txt"
-		render_script.parent.mkdir(parents=True, exist_ok=True)
+		render_driver.parent.mkdir(parents=True, exist_ok=True)
 		prompt_file.parent.mkdir(parents=True, exist_ok=True)
 		prompt_file.write_text("Runtime wrapper prelude.\n\nBody follows.\n", encoding="utf-8")
 		canonical_prompt.write_text(
 			"# tier: DEFAULT\nRole: synthetic planner. Goal: surface load failures.\n",
 			encoding="utf-8",
 		)
-		render_script.write_text(
-			RENDER_PROMPT_PY.read_text(encoding="utf-8").replace(
-				"\tif not prompt_path.is_file():\n",
-				(
-					f"\tif prompt_path == Path({str(canonical_prompt)!r}):\n"
-					f"\t\traise PromptLoadError(\"Unable to read prompt file '{canonical_prompt}': synthetic load failure\")\n"
-					"\tif not prompt_path.is_file():\n"
-				),
-				1,
-			),
+		render_driver.write_text(
+			"from __future__ import annotations\n"
+			"import importlib.util\n"
+			"import sys\n"
+			"from pathlib import Path\n\n"
+			f"MODULE_PATH = Path({str(RENDER_PROMPT_PY)!r})\n"
+			f"CANONICAL_PROMPT = Path({str(canonical_prompt)!r}).resolve()\n\n"
+			"spec = importlib.util.spec_from_file_location('render_prompt_under_test', MODULE_PATH)\n"
+			"if spec is None or spec.loader is None:\n"
+			"\traise RuntimeError(f'Unable to load renderer from {MODULE_PATH}')\n"
+			"module = importlib.util.module_from_spec(spec)\n"
+			"sys.modules[spec.name] = module\n"
+			"spec.loader.exec_module(module)\n\n"
+			"real_load_prompt = module.load_prompt\n\n"
+			"def synthetic_load_prompt(prompt_path: Path) -> str:\n"
+			"\tif Path(prompt_path).resolve() == CANONICAL_PROMPT:\n"
+			"\t\traise module.PromptLoadError(\n"
+			"\t\t\tf\"Unable to read prompt file '{CANONICAL_PROMPT}': synthetic load failure\"\n"
+			"\t\t)\n"
+			"\treturn real_load_prompt(prompt_path)\n\n"
+			"module.load_prompt = synthetic_load_prompt\n"
+			"raise SystemExit(module.main(sys.argv[1:]))\n",
 			encoding="utf-8",
 		)
 
 		baseline_proc = subprocess.run(
-			[sys.executable, str(render_script), str(prompt_file)],
+			[sys.executable, str(render_driver), str(prompt_file)],
 			cwd=str(root),
 			env=_base_env(),
 			text=True,
@@ -1033,7 +1045,7 @@ def test_render_prompt_py_identity_recall_reports_canonical_prompt_load_failure_
 		identity_env = _base_env()
 		identity_env["UNATTENDED_IDENTITY_REINJECT_ENABLED"] = "true"
 		identity_proc = subprocess.run(
-			[sys.executable, str(render_script), str(prompt_file)],
+			[sys.executable, str(render_driver), str(prompt_file)],
 			cwd=str(root),
 			env=identity_env,
 			text=True,
