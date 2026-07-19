@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. What specifically should be improved?\nChoices:\nA. One workflow or script \u2014 name the exact file(s) or phase (RECOMMENDED)\nB. One prompt or documentation surface \u2014 name the exact file(s)\nC. A cross-cutting pipeline behavior \u2014 name the affected workflows/scripts\nD. Other \u2014 describe the exact feature/path to change\nQ2. What is the current problem with it?\nChoices:\nA. It is failing or behaving incorrectly \u2014 include the observed behavior, error, or run/log reference (RECOMMENDED)\nB. It works, but is too slow, noisy, or expensive \u2014 name the step and the pain point\nC. A capability is missing \u2014 describe the missing behavior\nD. The docs/operator guidance is unclear or outdated \u2014 name the section and what is wrong\nQ3. What outcome should this change deliver?\nChoices:\nA. A minimal fix for one concrete problem, preserving existing behavior otherwise (RECOMMENDED)\nB. An improvement to one measurable metric \u2014 name the metric/target\nC. Specific docs/tests/contracts updates that codify the intended behavior\nD. Other \u2014 state the acceptance criteria clearly",
+  "fingerprint": "03b109ccdf3bb7e544b38c3ce48f65ccb9ca38684a54b3e22f3cd59f6cf1cf0d",
+  "lineage": {
+    "issue_number": 3700,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29679657073",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29679657073",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260719082307_8759ae406d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3700,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "29679657073"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #3700 needs clarification",
+  "timestamps": {
+    "created_at": "2026-07-19T08:23:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
