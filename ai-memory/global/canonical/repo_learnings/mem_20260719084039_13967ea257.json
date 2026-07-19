@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Poll/orchestration behavior tends to require regression coverage for edge conditions in task state and unblock flows.",
   "timestamps": {
     "created_at": "2026-07-19T08:40:39Z",
