@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-07-17T11:47:35Z",
+  "tick_at": "2026-07-19T09:38:01Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,7 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 2
+    "tracking_issues": 3
   },
   "tracking_issues": [
     {
@@ -35,11 +35,10 @@
       "wave_complete": false
     },
     {
-      "current_wave": 4,
-      "integration_ahead_by": "37",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
         "merged": 0,
@@ -52,7 +51,28 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] Learn-Claude-Code learnings \u2014 adopt Phases A\u2013H into the unattended pipeline",
-      "total_waves": 8,
+      "total_waves": 0,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 1,
+      "integration_ahead_by": "0",
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 1,
+        "skipped": 0
+      },
+      "number": 3708,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[E2E Smoke Test] Review-Blocked Simulation (run 29679632273)",
+      "total_waves": 1,
       "wave_complete": false
     }
   ]
