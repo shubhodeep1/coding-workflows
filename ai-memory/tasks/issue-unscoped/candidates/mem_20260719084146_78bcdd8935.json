@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "At least one merged run updated README.md together with code, implying user-facing workflow changes should be documented when they affect how scripts are run or interpreted. When behavior changes are externally visible, update docs in the same PR so future runs and contributors follow the new contract.",
+  "fingerprint": "5ed46bde00af6d6e2037bca3084901ee5506fdcac1e9466bca853ede75ebd3ba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29680096827",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29680096827",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3690",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3692",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3694",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3695",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3698",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3691",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3693",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3696",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3697",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3699"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260719084146_78bcdd8935",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Repo docs are used as part of the operational contract, not just reference material.",
+  "timestamps": {
+    "created_at": "2026-07-19T08:41:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
