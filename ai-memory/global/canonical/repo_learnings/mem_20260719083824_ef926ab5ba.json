@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Contract changes should be guarded by focused tests that assert exact output shape or invariants.",
   "timestamps": {
     "created_at": "2026-07-19T08:38:24Z",
