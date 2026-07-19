@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Repo docs are used as part of the operational contract, not just reference material.",
   "timestamps": {
     "created_at": "2026-07-19T08:41:46Z",
