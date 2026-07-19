@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Changes to orchestrate_poll_process, orchestrate_lib, and task_state were paired with tests for unblocking behavior, suggesting subtle state-machine bugs are a recurring risk. This matters when adjusting polling, retries, or task gating, because small logic changes can alter when work resumes or stops.",
+  "fingerprint": "4b4a78949c3220948c91730160436538ed103c4ca08a7696b243019dbc625216",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29680096827",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29680096827",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3690",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3692",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3694",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3695",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3698",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3691",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3693",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3696",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3697",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3699"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260719084039_13967ea257",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Poll/orchestration behavior tends to require regression coverage for edge conditions in task state and unblock flows.",
+  "timestamps": {
+    "created_at": "2026-07-19T08:40:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
