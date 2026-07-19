@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Keep shell and Python prompt-rendering logic in sync; changes often need both entrypoints updated together.",
   "timestamps": {
     "created_at": "2026-07-19T08:37:14Z",
