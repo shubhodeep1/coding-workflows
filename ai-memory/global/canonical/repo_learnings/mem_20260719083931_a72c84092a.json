@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Transcript/archive and event-emission paths are coupled with workspace metadata, so changes can span multiple scripts.",
   "timestamps": {
     "created_at": "2026-07-19T08:39:31Z",
