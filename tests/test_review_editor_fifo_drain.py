@@ -238,6 +238,105 @@ echo OK
 	assert "OK" in res.stdout
 
 
+def test_run_budget_export_normalizes_soft_deadline_and_populates_env() -> None:
+	harness = f"""
+set -eu
+source {str(WATCHDOG_HELPERS_SCRIPT)!r}
+JOB_START_EPOCH=100
+REVIEW_SOFT_DEADLINE_MINUTES=bogus
+codex_run_budget_export
+printf 'minutes=%s\n' "$REVIEW_SOFT_DEADLINE_MINUTES"
+printf 'job_start=%s\n' "$JOB_START_EPOCH"
+printf 'budget_start=%s\n' "$CODEX_RUN_BUDGET_START_EPOCH"
+printf 'budget_deadline=%s\n' "$CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH"
+printf 'budget_total=%s\n' "$CODEX_RUN_BUDGET_TOTAL_SECS"
+"""
+	res = _run_bash(harness, timeout=15.0)
+	assert res.returncode == 0, res.stderr
+	assert "::warning::Invalid REVIEW_SOFT_DEADLINE_MINUTES='bogus'; defaulting to 210." in res.stderr
+	assert res.stdout == (
+		"minutes=210\n"
+		"job_start=100\n"
+		"budget_start=100\n"
+		"budget_deadline=12700\n"
+		"budget_total=12600\n"
+	)
+
+
+def test_run_budget_export_accepts_zero_padded_soft_deadline() -> None:
+	harness = f"""
+set -eu
+source {str(WATCHDOG_HELPERS_SCRIPT)!r}
+JOB_START_EPOCH=100
+REVIEW_SOFT_DEADLINE_MINUTES=0030
+codex_run_budget_export
+printf 'minutes=%s\n' "$REVIEW_SOFT_DEADLINE_MINUTES"
+printf 'budget_deadline=%s\n' "$CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH"
+printf 'budget_total=%s\n' "$CODEX_RUN_BUDGET_TOTAL_SECS"
+"""
+	res = _run_bash(harness, timeout=15.0)
+	assert res.returncode == 0, res.stderr
+	assert "Invalid REVIEW_SOFT_DEADLINE_MINUTES=" not in res.stderr
+	assert res.stdout == (
+		"minutes=30\n"
+		"budget_deadline=1900\n"
+		"budget_total=1800\n"
+	)
+
+
+def test_run_budget_export_ignores_unknown_initialize_keys() -> None:
+	harness = f"""
+set -eu
+source {str(WATCHDOG_HELPERS_SCRIPT)!r}
+codex_run_budget_initialize() {{
+	printf '%s\n' \
+		'JOB_START_EPOCH=100' \
+		'CODEX_RUN_BUDGET_START_EPOCH=100' \
+		'CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH=1900' \
+		'CODEX_RUN_BUDGET_TOTAL_SECS=1800' \
+		'REVIEW_SOFT_DEADLINE_MINUTES=30' \
+		'note=ignored'
+}}
+codex_run_budget_export
+printf 'note=%s\n' "${{note-unset}}"
+printf 'budget_total=%s\n' "$CODEX_RUN_BUDGET_TOTAL_SECS"
+"""
+	res = _run_bash(harness, timeout=15.0)
+	assert res.returncode == 0, res.stderr
+	assert res.stdout == (
+		"note=unset\n"
+		"budget_total=1800\n"
+	)
+
+
+def test_run_budget_summary_and_gate_share_the_same_contract() -> None:
+	harness = f"""
+set -eu
+source {str(WATCHDOG_HELPERS_SCRIPT)!r}
+now="$(date +%s)"
+export CODEX_RUN_BUDGET_START_EPOCH="$(( now - 30 ))"
+export CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH="$(( now + 20 ))"
+export CODEX_RUN_BUDGET_TOTAL_SECS="50"
+codex_run_budget_summary "$now"
+if codex_run_budget_phase_may_start 10; then echo "may_start_10=true"; else echo "may_start_10=false"; fi
+if codex_run_budget_phase_may_start 30; then echo "may_start_30=true"; else echo "may_start_30=false"; fi
+"""
+	res = _run_bash(harness, timeout=15.0)
+	assert res.returncode == 0, res.stderr
+	assert res.stdout == (
+		"budget_elapsed_secs=30 budget_remaining_secs=20\n"
+		"may_start_10=true\n"
+		"may_start_30=false\n"
+	)
+
+
+def test_editor_budget_cleanup_buffer_never_yields_negative_attempt_wall() -> None:
+	text = APPLY_FIXES_SCRIPT.read_text(encoding="utf-8")
+	assert 'budget_cap=$(( remaining - 120 ))' in text
+	assert 'if [ "${budget_cap}" -le 0 ]; then' in text
+	assert 'after reserving the 120s cleanup buffer' in text
+
+
 def test_editor_loop_bounds_the_drain_and_wires_the_reaper() -> None:
 	text = APPLY_FIXES_SCRIPT.read_text(encoding="utf-8")
 	# Grace bound is configurable with a safe default.

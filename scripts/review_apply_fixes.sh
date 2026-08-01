@@ -11,6 +11,10 @@ fi
 # shellcheck source=/dev/null
 source "${WATCHDOG_HELPERS}"
 
+if command -v codex_run_budget_export >/dev/null 2>&1; then
+	codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"
+fi
+
 # Source rate-limit-aware GH API helpers (provides gh_retry and the
 # Telegram admin alert on GH API rate-limit events).
 if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
@@ -1631,6 +1635,8 @@ case "${EDITOR_VERBOSITY}" in
     EDITOR_VERBOSITY="low"
     ;;
 esac
+# Shared run-budget helpers drive the soft deadline when available; the
+# legacy job-deadline math remains as a fail-open fallback for stale bundles.
 JOB_TIMEOUT_SECS=$((180 * 60))
 JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
 _hb_tmpdir=""
@@ -1666,9 +1672,25 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   fi
 
   now_epoch="$(date +%s)"
-  remaining=$(( JOB_DEADLINE - now_epoch ))
+  run_budget_summary=""
+  budget_deadline_label="soft deadline"
+  if command -v codex_run_budget_remaining_secs >/dev/null 2>&1; then
+    remaining="$(codex_run_budget_remaining_secs "${now_epoch}" 2>/dev/null || true)"
+    case "${remaining}" in
+      ''|*[!0-9]*) remaining="0" ;;
+    esac
+    if command -v codex_run_budget_summary >/dev/null 2>&1; then
+      run_budget_summary="$(codex_run_budget_summary "${now_epoch}" 2>/dev/null || true)"
+      if [ -n "${run_budget_summary}" ]; then
+        echo "Editor attempt ${attempt} run budget: ${run_budget_summary}"
+      fi
+    fi
+  else
+    remaining=$(( JOB_DEADLINE - now_epoch ))
+    budget_deadline_label="job deadline"
+  fi
   if [ "${remaining}" -lt "${EDITOR_MIN_ATTEMPT_SECS}" ]; then
-    echo "Skipping editor attempt ${attempt}: only ${remaining}s remain before job deadline (need ${EDITOR_MIN_ATTEMPT_SECS}s minimum)."
+    echo "Skipping editor attempt ${attempt}: only ${remaining}s remain before ${budget_deadline_label} (need ${EDITOR_MIN_ATTEMPT_SECS}s minimum)."
     break
   fi
   # Capacity-fallback: on the final editor attempt switch the editor model to
@@ -1680,9 +1702,13 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   fi
   emit_editor_substate "PreparingWorkspace" "${attempt}"
   # Cap this attempt's wall time to the lesser of EDITOR_MAX_WALL
-  # and the remaining budget minus a 2-min buffer for cleanup steps.
+  # and the remaining run budget minus a 2-min buffer for cleanup steps.
   attempt_wall="${EDITOR_MAX_WALL}"
   budget_cap=$(( remaining - 120 ))
+  if [ "${budget_cap}" -le 0 ]; then
+    echo "Skipping editor attempt ${attempt}: only ${remaining}s remain before ${budget_deadline_label} after reserving the 120s cleanup buffer."
+    break
+  fi
   if [ "${budget_cap}" -lt "${attempt_wall}" ]; then
     attempt_wall="${budget_cap}"
     echo "Editor attempt ${attempt}: capping wall time to ${attempt_wall}s (budget-limited, ${remaining}s remain)."
