@@ -179,7 +179,10 @@ reviewer_budget_remaining_secs_fallback() {
 
   case "${start_epoch_raw}" in
     ''|*[!0-9]*)
-      start_epoch="${now_epoch}"
+      # Match codex_run_budget_remaining_secs(): without a real anchor this
+      # fallback must fail closed instead of inventing a fresh soft deadline.
+      printf '%s\n' "0"
+      return 0
       ;;
     *)
       start_epoch="${start_epoch_raw}"

@@ -1475,6 +1475,102 @@ def _run_reviewer_failback_harness() -> dict[str, object]:
 		}
 
 
+def _run_reviewer_partial_finalize_budget_harness() -> dict[str, object]:
+	partial_finalize_budget_helper_block = _reviewer_partial_finalize_budget_helper_block()
+	run_reviewer_block = _reviewer_run_reviewer_block()
+	run_reviewer_pass_block = _reviewer_run_reviewer_pass_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-partial-finalize-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		runtime = tmp / "runtime"
+		home = tmp / "home"
+		runner_temp = tmp / "runner_temp"
+		seed_codex_home = tmp / "codex_home_seed"
+		reviews.mkdir()
+		runtime.mkdir()
+		home.mkdir()
+		runner_temp.mkdir()
+		seed_codex_home.mkdir()
+
+		prompt_file = runtime / "reviewer_prompt.patch"
+		prompt_file.write_text(PHASE_G_FLAKY_REVIEWER_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+		state_file = tmp / "state.txt"
+		github_env_file = tmp / "github_env.txt"
+		call_marker = tmp / "run_reviewer_called.txt"
+
+		env = os.environ.copy()
+		env.update({
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"RUNTIME_DIR": str(runtime),
+			"PROMPT_FILE": str(prompt_file),
+			"PR_NUMBER": "123",
+			"RUNNER_TEMP": str(runner_temp),
+			"HOME": str(home),
+			"CODEX_HOME": str(seed_codex_home),
+			"GITHUB_ENV": str(github_env_file),
+			"REVIEWER_REASONING_EFFORT": "xhigh",
+			"REVIEW_PR_STATE_POLL_INTERVAL_SECS": "10",
+			"REVIEW_SOFT_DEADLINE_MINUTES": "210",
+			"JOB_START_EPOCH": "",
+			"CODEX_RUN_BUDGET_START_EPOCH": "",
+			"CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH": "",
+			"CODEX_RUN_BUDGET_TOTAL_SECS": "",
+			"STATE_FILE": str(state_file),
+			"CALL_MARKER": str(call_marker),
+		})
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{partial_finalize_budget_helper_block}\n"
+				f"{run_reviewer_block}\n"
+				f"{run_reviewer_pass_block}\n"
+				"run_reviewer() {\n"
+				"\t: > \"${CALL_MARKER}\"\n"
+				"\treturn 97\n"
+				"}\n"
+				"get_active_reviewer_models_text() {\n"
+				"\tprintf 'x-ai/grok-4.20\\n'\n"
+				"}\n"
+				"prepare_reviewer_prompt_for_model() {\n"
+				"\tprintf '%s\\n' \"${2:-}\"\n"
+				"}\n"
+				"pass_successful=\"$(run_reviewer_pass \"review\" \"${PROMPT_FILE}\" \"xhigh\")\"\n"
+				"{\n"
+				"\tprintf 'PASS_SUCCESSFUL=%s\\n' \"${pass_successful}\"\n"
+				"\tprintf 'REQUEST_FILE=%s\\n' \"${REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE}\"\n"
+				"\tprintf 'GITHUB_ENV_FILE=%s\\n' \"${GITHUB_ENV}\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		state: dict[str, str] = {}
+		for raw_line in state_file.read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+
+		request_file = Path(state["REQUEST_FILE"])
+		github_env = Path(state["GITHUB_ENV_FILE"])
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			"request_file_content": request_file.read_text(encoding="utf-8"),
+			"github_env_content": github_env.read_text(encoding="utf-8"),
+			"reviewer_called": call_marker.exists(),
+		}
+
+
 def _run_reviewer_health_dispatch_logging_harness() -> dict[str, str]:
 	helper_block = _reviewer_failback_helper_block()
 	with tempfile.TemporaryDirectory(prefix="reviewer-health-dispatch-") as td:
@@ -1688,6 +1784,7 @@ def test_review_soft_deadline_budget_contract_is_wired() -> None:
 		"budget_deadline_label=\"soft deadline\"",
 		"request_editor_partial_finalize",
 		'editor_partial_finalize_reason="soft_deadline"',
+		'editor_partial_finalize_reason="refusal"',
 		'editor_partial_finalize_reason="recoverable_failure"',
 		'AUTOFIX_PARTIAL_FINALIZE_PHASE=editor',
 	):
@@ -2955,6 +3052,19 @@ def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_m
 	]
 
 
+def test_reviewer_soft_deadline_fallback_requests_partial_finalize_and_exits_green() -> None:
+	result = _run_reviewer_partial_finalize_budget_harness()
+	assert result["PASS_SUCCESSFUL"] == "0"
+	assert result["reviewer_called"] is False
+	assert "remaining run budget fallback is below 300s (0s remain)" in result["stderr"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true" in result["request_file_content"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_REASON=soft_deadline" in result["request_file_content"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_PHASE=reviewers" in result["request_file_content"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true" in result["github_env_content"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_REASON=soft_deadline" in result["github_env_content"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_PHASE=reviewers" in result["github_env_content"]
+
+
 def test_reviewer_health_dispatch_logs_to_stderr_only() -> None:
 	result = _run_reviewer_health_dispatch_logging_harness()
 	assert result["stdout"] == ""
@@ -3999,6 +4109,7 @@ def main() -> int:
 	test_agents_md_materiality_classifier_and_workflow_wiring()
 	test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers()
 	test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models()
+	test_reviewer_soft_deadline_fallback_requests_partial_finalize_and_exits_green()
 	test_reviewer_health_dispatch_logs_to_stderr_only()
 	test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipped()
 	test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions()

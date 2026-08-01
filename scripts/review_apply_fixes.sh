@@ -2294,7 +2294,14 @@ if [ -n "${_last_changes_lost_file}" ] && [ -s "${_last_changes_lost_file}" ]; t
   echo "Editor failed after retries; using last changes-lost output as summary to trigger workflow-level recovery."
 else
   if [ -z "${editor_partial_finalize_reason}" ]; then
-    editor_partial_finalize_reason="recoverable_failure"
+    if [ -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" ]; then
+      # Keep refusal runs distinct: the workflow validator still greps the
+      # fallback summary for the exact sentinel below to classify
+      # EDITOR_NOOP_REFUSAL and refusal-specific alerts correctly.
+      editor_partial_finalize_reason="refusal"
+    else
+      editor_partial_finalize_reason="recoverable_failure"
+    fi
   fi
   request_editor_partial_finalize "${editor_partial_finalize_reason}"
 
@@ -2325,6 +2332,33 @@ Runtime failure path:
 - partial finalize requested at the soft deadline before another editor attempt
 __EDITOR_SUMMARY__
     echo "Editor stopped for budget headroom; continuing with partial-finalize summary."
+  elif [ "${editor_partial_finalize_reason}" = "refusal" ]; then
+    cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
+Changes made:
+- none (editor returned a safety-policy refusal before another validated attempt could complete)
+
+Change status:
+- not-edited
+
+Already satisfied (suggested but already present):
+- none (editor stopped after a safety-policy refusal before another validated attempt could complete)
+
+Ignored suggestions (with short reason):
+- partial finalize requested after a safety-policy refusal before another validated attempt
+
+Reviewer files processed:
+- none (editor stopped after a safety-policy refusal before another validated attempt could complete)
+
+Review file issue audit:
+- none (editor stopped after a safety-policy refusal before another validated attempt could complete)
+
+Regression fingerprint:
+- unavailable (partial finalize after safety-policy refusal)
+
+Runtime failure path:
+- model refused (safety filter)
+__EDITOR_SUMMARY__
+    echo "Editor returned a safety-policy refusal; continuing with partial-finalize summary."
   else
     cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
 Changes made:

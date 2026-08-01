@@ -346,10 +346,14 @@ def test_editor_partial_finalize_contract_is_wired() -> None:
 		'AUTOFIX_PARTIAL_FINALIZE_PHASE=editor',
 		'REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED="$(normalize_review_soft_deadline_minutes "${REVIEW_SOFT_DEADLINE_MINUTES:-}")"',
 		'editor_partial_finalize_reason="soft_deadline"',
+		'editor_partial_finalize_reason="refusal"',
 		'editor_partial_finalize_reason="recoverable_failure"',
 		'partial finalize requested at the soft deadline before another editor attempt',
+		'partial finalize requested after a safety-policy refusal before another validated attempt',
 		'partial finalize requested after a recoverable editor failure before another validated attempt',
+		'model refused (safety filter)',
 		'Editor stopped for budget headroom; continuing with partial-finalize summary.',
+		'Editor returned a safety-policy refusal; continuing with partial-finalize summary.',
 		'Editor failed after retries; continuing with partial-finalize summary.',
 	):
 		assert expected in text
