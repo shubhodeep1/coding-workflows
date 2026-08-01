@@ -5060,6 +5060,7 @@ jobs:
             cat "${push_stderr_file}" >&2
             if [ "${push_exit}" -eq 0 ]; then
               echo "Push complete."
+              echo "AUTOFIX_EDITS_PUSHED=true" >> "$GITHUB_ENV"
               break
             fi
             if ! grep -qE '\[rejected\].*\((fetch first|non-fast-forward)\)' "${push_stderr_file}"; then
@@ -6003,6 +6004,12 @@ jobs:
         env:
           AUTOFIX_ITERATION_METRIC: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           EDITOR_COMMIT_PRODUCED: ${{ steps.commit_changes.outputs.did_commit }}
+          MAX_ITERATIONS_REACHED: ${{ steps.retrigger_guard.outputs.max_iterations_reached }}
+          SKIP_JUDGE: ${{ steps.retrigger_guard.outputs.skip_judge }}
+          RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}
+          JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}
+          JUDGE_ACTION: ${{ steps.rb_judge.outputs.judge_action }}
+          JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
         run: |
           set -euo pipefail
 
@@ -6052,6 +6059,16 @@ jobs:
             awk -F $'\t' -v state="${state}" '$2 == state { c++ } END { print c + 0 }' "${path}" 2>/dev/null || echo 0
           }
 
+          sanitize_nonnegative_int()
+          {
+            local value="${1:-0}"
+            if [[ "${value}" =~ ^[0-9]+$ ]]; then
+              echo "${value}"
+            else
+              echo 0
+            fi
+          }
+
           iteration_label="${AUTOFIX_ITERATION_METRIC:-unknown}"
           [ -n "${iteration_label}" ] || iteration_label="unknown"
 
@@ -6068,6 +6085,7 @@ jobs:
           consolidator_raw_file="${RUNTIME_DIR}/consolidator_raw.txt"
           parser_stats_file="${RUNTIME_DIR}/parser_stats.txt"
           ledger_status_file="${RUNTIME_DIR}/ledger_status.txt"
+          committed_files_file="${COMMITTED_FILES_FILE:-${RUNTIME_DIR}/committed_files.txt}"
 
           bundle_bytes="$(file_bytes "${reviewer_bundle_file}")"
           floor_tag_count="$(count_nonempty_lines "${floor_tags_file}")"
@@ -6123,6 +6141,380 @@ jobs:
               ;;
           esac
 
+          budget_total_secs="$(sanitize_nonnegative_int "${CODEX_RUN_BUDGET_TOTAL_SECS:-0}")"
+          budget_start_epoch="$(sanitize_nonnegative_int "${CODEX_RUN_BUDGET_START_EPOCH:-${JOB_START_EPOCH:-0}}")"
+          job_end_epoch="$(sanitize_nonnegative_int "$(date -u +%s 2>/dev/null || echo 0)")"
+          budget_elapsed_secs=0
+          if [ "${budget_start_epoch}" -gt 0 ] && [ "${job_end_epoch}" -ge "${budget_start_epoch}" ]; then
+            budget_elapsed_secs=$((job_end_epoch - budget_start_epoch))
+          fi
+          budget_remaining_secs=0
+          if [ "${budget_total_secs}" -gt 0 ] && [ "${budget_elapsed_secs}" -lt "${budget_total_secs}" ]; then
+            budget_remaining_secs=$((budget_total_secs - budget_elapsed_secs))
+          fi
+
+          resume_round="${AUTOFIX_RESUME_ROUND:-${RESUME_ROUND:-0}}"
+          if ! [[ "${resume_round}" =~ ^[0-9]+$ ]]; then
+            resume_round=0
+          fi
+
+          structured_summary_line="$(
+            BUDGET_ELAPSED_SECS="${budget_elapsed_secs}" \
+            BUDGET_TOTAL_SECS="${budget_total_secs}" \
+            BUDGET_REMAINING_SECS="${budget_remaining_secs}" \
+            RESUME_ROUND_SUMMARY="${resume_round}" \
+            REVIEWER_BUNDLE_FILE="${reviewer_bundle_file}" \
+            FLOOR_TAGS_FILE="${floor_tags_file}" \
+            CONSOLIDATOR_RAW_FILE="${consolidator_raw_file}" \
+            PARSER_STATS_FILE="${parser_stats_file}" \
+            LEDGER_STATUS_FILE="${ledger_status_file}" \
+            COMMITTED_FILES_FILE="${committed_files_file}" \
+            PYTHONDONTWRITEBYTECODE=1 \
+            python3 - <<'PY' || true
+          from __future__ import annotations
+          
+          import glob
+          import json
+          import os
+          import re
+          from pathlib import Path
+          
+          
+          def env(name: str, default: str = "") -> str:
+              return os.environ.get(name, default)
+          
+          
+          def bool_env(name: str) -> bool:
+              return env(name).strip().lower() == "true"
+          
+          
+          def int_env(name: str, default: int = 0) -> int:
+              raw = env(name).strip()
+              if not raw:
+                  return default
+              try:
+                  value = int(raw, 10)
+              except ValueError:
+                  return default
+              return value if value >= 0 else default
+          
+          
+          def env_path(name: str) -> Path | None:
+              raw = env(name).strip()
+              return Path(raw) if raw else None
+          
+          
+          def read_text(path: Path | None) -> str:
+              if path is None:
+                  return ""
+              try:
+                  return path.read_text(encoding="utf-8", errors="ignore")
+              except OSError:
+                  return ""
+          
+          
+          def file_exists(path: Path | None) -> bool:
+              return path is not None and path.exists()
+          
+          
+          def file_nonempty(path: Path | None) -> bool:
+              return path is not None and path.exists() and path.stat().st_size > 0
+          
+          
+          def max_attempt_from_text(text: str) -> int:
+              matches = [int(value) for value in re.findall(r"\battempt\s+([0-9]+)\b", text)]
+              return max(matches) if matches else 0
+          
+          
+          def reviewer_failure_class(status: str, log_text: str, output_text: str) -> str:
+              if status == "success":
+                  return "none"
+              if status == "pr_closed":
+                  return "pr_closed"
+              if status == "skipped_open":
+                  return "cached_open"
+              if status == "skipped_unmapped":
+                  retryable_output = re.findall(r"retryable failure \(([^)]+)\)", output_text)
+                  if retryable_output:
+                      return retryable_output[-1]
+                  retryable_log = re.findall(r"failure classified as retryable \(([^)]+)\)", log_text)
+                  if retryable_log:
+                      return retryable_log[-1]
+                  return "retryable_failure"
+          
+              retryable_log = re.findall(r"failure classified as retryable \(([^)]+)\)", log_text)
+              if retryable_log:
+                  return retryable_log[-1]
+              if "idle timeout" in log_text:
+                  return "idle_timeout"
+              if "max wall" in log_text:
+                  return "max_wall"
+              if "codex_stall_killed" in log_text or "killed by codex stall guard" in log_text:
+                  return "stall_guard"
+              if "produced empty output" in log_text:
+                  return "empty_output"
+              if "execution failed" in log_text:
+                  return "non_retryable"
+              if "codex CLI not found" in log_text or "codex CLI not found" in output_text:
+                  return "codex_cli_missing"
+              return "unknown"
+          
+          
+          runtime_dir = env_path("RUNTIME_DIR") or Path(".")
+          previous_reviews_dir = env_path("PREVIOUS_REVIEWS_DIR")
+          editor_summary_file = env_path("EDITOR_SUMMARY_FILE")
+          committed_files_file = env_path("COMMITTED_FILES_FILE")
+          
+          reviewer_slots: list[dict[str, object]] = []
+          if previous_reviews_dir is not None:
+              for status_path_str in sorted(glob.glob(str(previous_reviews_dir / "status_review_*.txt"))):
+                  status_path = Path(status_path_str)
+                  slot_name = status_path.stem.removeprefix("status_review_")
+                  status_value = read_text(status_path).strip() or "unknown"
+                  log_text = read_text(previous_reviews_dir / f"review_{slot_name}.log")
+                  output_text = read_text(previous_reviews_dir / f"review_{slot_name}.txt")
+                  attempt_count = max_attempt_from_text(log_text)
+                  if attempt_count == 0 and status_value in {"success", "failed", "pr_closed", "skipped_unmapped"} and (log_text or output_text):
+                      attempt_count = 1
+                  reviewer_slots.append({
+                      "slot": slot_name,
+                      "attempt_count": attempt_count,
+                      "status": status_value,
+                      "failure_class": reviewer_failure_class(status_value, log_text, output_text),
+                  })
+          
+          reviewers_phase_state = "completed" if reviewer_slots else "skipped"
+          
+          reviewer_bundle_file = env_path("REVIEWER_BUNDLE_FILE")
+          floor_tags_file = env_path("FLOOR_TAGS_FILE")
+          consolidator_raw_file = env_path("CONSOLIDATOR_RAW_FILE")
+          parser_stats_file = env_path("PARSER_STATS_FILE")
+          ledger_status_file = env_path("LEDGER_STATUS_FILE")
+          
+          consolidator_enabled = env("REVIEW_CONSOLIDATOR_ENABLED", "1") != "0"
+          if not consolidator_enabled:
+              consolidator_phase_state = "skipped"
+              consolidator_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "disabled"}
+          elif file_exists(consolidator_raw_file):
+              consolidator_phase_state = "completed"
+              consolidator_slot = {
+                  "attempt_count": 1,
+                  "status": "success" if file_nonempty(consolidator_raw_file) else "failed",
+                  "failure_class": "none" if file_nonempty(consolidator_raw_file) else "empty_output",
+              }
+          else:
+              consolidator_phase_state = "skipped"
+              consolidator_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
+          
+          if file_exists(parser_stats_file):
+              parser_phase_state = "completed"
+              parser_slot = {"attempt_count": 1, "status": "success", "failure_class": "none"}
+          else:
+              parser_phase_state = "skipped"
+              parser_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
+          
+          if file_exists(ledger_status_file):
+              ledger_phase_state = "completed"
+              ledger_slot = {"attempt_count": 1, "status": "success", "failure_class": "none"}
+          else:
+              ledger_phase_state = "skipped"
+              ledger_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
+          
+          editor_attempt_numbers: set[int] = set()
+          if previous_reviews_dir is not None:
+              for pattern in ("editor_attempt_*.txt", "editor_attempt_*.err", "editor_attempt_*_changes_lost.txt"):
+                  for path_str in glob.glob(str(previous_reviews_dir / pattern)):
+                      match = re.search(r"editor_attempt_(\d+)", Path(path_str).name)
+                      if match:
+                          editor_attempt_numbers.add(int(match.group(1)))
+          editor_attempt_count = max(editor_attempt_numbers) if editor_attempt_numbers else 0
+          editor_summary_exists = file_exists(editor_summary_file)
+          
+          if bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):
+              editor_phase_state = "completed"
+              editor_slot = {"attempt_count": max(editor_attempt_count, 1), "status": "failed", "failure_class": "empty_noop"}
+          elif bool_env("EDITOR_CHANGES_LOST"):
+              editor_phase_state = "completed"
+              editor_slot = {"attempt_count": max(editor_attempt_count, 1), "status": "failed", "failure_class": "changes_lost"}
+          elif bool_env("EDITOR_NOOP_SUSPICIOUS"):
+              editor_phase_state = "completed"
+              editor_slot = {
+                  "attempt_count": max(editor_attempt_count, 1),
+                  "status": "failed",
+                  "failure_class": "refusal" if bool_env("EDITOR_NOOP_REFUSAL") else "unexpected_noop",
+              }
+          elif editor_attempt_count > 0 or editor_summary_exists:
+              editor_phase_state = "completed"
+              editor_slot = {"attempt_count": max(editor_attempt_count, 1), "status": "success", "failure_class": "none"}
+          elif bool_env("PR_CLOSED"):
+              editor_phase_state = "skipped"
+              editor_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "pr_closed"}
+          elif bool_env("MAX_ITERATIONS_REACHED"):
+              editor_phase_state = "skipped"
+              editor_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "max_iterations_reached"}
+          else:
+              editor_phase_state = "skipped"
+              editor_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
+          
+          committed_files_text = read_text(committed_files_file)
+          commit_phase_observed = any(env(key).strip() for key in ("DID_COMMIT", "LEDGER_ONLY_COMMIT", "LEDGER_ONLY_COMMIT_STRICT")) or bool(committed_files_text.strip())
+          
+          if bool_env("DID_COMMIT"):
+              commit_phase_state = "completed"
+              commit_slot = {"attempt_count": 1, "status": "success", "failure_class": "none"}
+          elif "branch is not writable" in committed_files_text:
+              commit_phase_state = "completed"
+              commit_slot = {"attempt_count": 1, "status": "skipped", "failure_class": "not_writable"}
+          elif bool_env("MAX_ITERATIONS_REACHED"):
+              commit_phase_state = "skipped"
+              commit_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "max_iterations_reached"}
+          elif bool_env("PR_CLOSED"):
+              commit_phase_state = "skipped"
+              commit_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "pr_closed"}
+          elif bool_env("AUTOFIX_STALE_BASE_SKIP"):
+              commit_phase_state = "skipped"
+              commit_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "stale_base_skip"}
+          elif commit_phase_observed:
+              commit_phase_state = "completed"
+              commit_slot = {"attempt_count": 1, "status": "no_commit", "failure_class": "no_changes"}
+          else:
+              commit_phase_state = "skipped"
+              commit_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
+          
+          edits_pushed = bool_env("AUTOFIX_EDITS_PUSHED")
+          push_allowed = bool_env("CAN_PUSH")
+          push_needed = bool_env("DID_COMMIT") or bool_env("CONFLICT_RESOLVED")
+          if edits_pushed:
+              push_phase_state = "completed"
+              push_slot = {"attempt_count": 1, "status": "success", "failure_class": "none"}
+          elif bool_env("AUTOFIX_STALE_BASE_SKIP") and push_needed:
+              push_phase_state = "skipped"
+              push_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "stale_base_skip"}
+          elif bool_env("PR_CLOSED"):
+              push_phase_state = "skipped"
+              push_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "pr_closed"}
+          elif push_needed and not push_allowed:
+              push_phase_state = "skipped"
+              push_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "push_not_allowed"}
+          elif push_needed:
+              push_phase_state = "completed"
+              push_slot = {"attempt_count": 1, "status": "failed", "failure_class": "push_failed"}
+          else:
+              push_phase_state = "skipped"
+              push_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_needed"}
+          
+          max_iterations_reached = bool_env("MAX_ITERATIONS_REACHED")
+          skip_judge = bool_env("SKIP_JUDGE")
+          judge_handled = bool_env("JUDGE_HANDLED")
+          judge_action = env("JUDGE_ACTION").strip()
+          judge_skip_reason = env("JUDGE_SKIP_REASON").strip()
+          rb_judge_status = env("RB_JUDGE_STATUS").strip()
+          
+          if not max_iterations_reached or skip_judge:
+              rb_judge_phase_state = "skipped"
+              rb_judge_slot = {
+                  "attempt_count": 0,
+                  "status": "skipped",
+                  "failure_class": "skip_judge" if skip_judge else "not_invoked",
+              }
+          elif judge_handled:
+              rb_judge_phase_state = "completed"
+              rb_judge_slot = {"attempt_count": 1, "status": judge_action or "handled", "failure_class": "none"}
+          elif rb_judge_status == "failed":
+              rb_judge_phase_state = "completed"
+              rb_judge_slot = {"attempt_count": 1, "status": "failed", "failure_class": "judge_failed"}
+          elif judge_skip_reason:
+              rb_judge_phase_state = "completed"
+              rb_judge_slot = {"attempt_count": 1, "status": "skipped", "failure_class": judge_skip_reason}
+          else:
+              rb_judge_phase_state = "completed"
+              rb_judge_slot = {"attempt_count": 1, "status": "unhandled", "failure_class": "review_blocked"}
+          
+          
+          def determine_finalize_reason() -> str:
+              if bool_env("PR_CLOSED"):
+                  return "pr_closed"
+              if bool_env("AUTOFIX_STALE_BASE_SKIP"):
+                  return "stale_base_skip"
+              if bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):
+                  return "editor_empty_noop"
+              if bool_env("EDITOR_CHANGES_LOST"):
+                  redispatched = env("CHANGES_LOST_REDISPATCHED").strip()
+                  if redispatched == "true":
+                      return "editor_changes_lost_redispatched"
+                  if redispatched == "skipped_peer_inflight":
+                      return "editor_changes_lost_peer_inflight"
+                  return "editor_changes_lost"
+              if bool_env("EDITOR_NOOP_SUSPICIOUS") and bool_env("EDITOR_NOOP_REFUSAL"):
+                  return "editor_noop_refusal"
+              if bool_env("EDITOR_NOOP_SUSPICIOUS"):
+                  return "editor_noop_suspicious"
+              if max_iterations_reached and not skip_judge:
+                  if judge_handled:
+                      return f"rb_judge_{judge_action or 'handled'}"
+                  if rb_judge_status == "failed":
+                      return "rb_judge_failed"
+                  if judge_skip_reason:
+                      return f"rb_judge_skip_{judge_skip_reason}"
+                  return "rb_judge_review_blocked"
+              if push_needed and not push_allowed:
+                  return "push_not_allowed"
+              if push_needed and not edits_pushed:
+                  return "push_failed"
+              if bool_env("LEDGER_ONLY_COMMIT_STRICT"):
+                  return "clean_review_ledger_only"
+              if bool_env("LEDGER_ONLY_COMMIT"):
+                  return "clean_review_converged"
+              if edits_pushed and bool_env("CONFLICT_RESOLVED"):
+                  return "conflict_resolved_pushed"
+              if edits_pushed and bool_env("DID_COMMIT"):
+                  return "autofix_pushed"
+              return "clean_review_no_commit"
+          
+          
+          finalize_reason = determine_finalize_reason()
+          phase_order = [
+              ("reviewers", reviewers_phase_state),
+              ("consolidator", consolidator_phase_state),
+              ("parser", parser_phase_state),
+              ("ledger", ledger_phase_state),
+              ("editor", editor_phase_state),
+              ("commit", commit_phase_state),
+              ("push", push_phase_state),
+              ("rb_judge", rb_judge_phase_state),
+              ("finalize", "completed"),
+          ]
+          
+          summary = {
+              "completed_phases": [name for name, state in phase_order if state == "completed"],
+              "skipped_phases": [name for name, state in phase_order if state == "skipped"],
+              "slot_results": {
+                  "reviewers": reviewer_slots,
+                  "consolidator": consolidator_slot,
+                  "parser": parser_slot,
+                  "ledger": ledger_slot,
+                  "editor": editor_slot,
+                  "commit": commit_slot,
+                  "push": push_slot,
+                  "rb_judge": rb_judge_slot,
+                  "finalize": {"attempt_count": 1, "status": "emitted", "failure_class": "none"},
+              },
+              "budget_elapsed_secs": int_env("BUDGET_ELAPSED_SECS"),
+              "budget_total_secs": int_env("BUDGET_TOTAL_SECS"),
+              "budget_remaining_secs": int_env("BUDGET_REMAINING_SECS"),
+              "finalize_reason": finalize_reason,
+              "edits_pushed": edits_pushed,
+              "resume_round": int_env("RESUME_ROUND_SUMMARY"),
+          }
+          
+          print("REVIEW_AUTOFIX_RUN_SUMMARY_V1 " + json.dumps(summary, sort_keys=True, separators=(",", ":")))
+          PY
+          )"
+
+          if [ -z "${structured_summary_line}" ]; then
+            structured_summary_line='REVIEW_AUTOFIX_RUN_SUMMARY_V1 {"completed_phases":["finalize"],"skipped_phases":["reviewers","consolidator","parser","ledger","editor","commit","push","rb_judge"],"slot_results":{"reviewers":[],"consolidator":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"parser":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"ledger":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"editor":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"commit":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"push":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"rb_judge":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"finalize":{"attempt_count":1,"status":"emitted","failure_class":"none"}},"budget_elapsed_secs":0,"budget_total_secs":0,"budget_remaining_secs":0,"finalize_reason":"summary_emit_failed","edits_pushed":false,"resume_round":0}'
+          fi
+
           {
             echo "### Review Pipeline — Iteration ${iteration_label}"
             echo
@@ -6147,6 +6539,10 @@ jobs:
             echo "| Editor invoked | ${editor_invoked} |"
             echo "| CONSOLIDATOR_OVERRIDDEN count | ${override_count} |"
             echo "| Editor commit produced | ${editor_commit_produced} |"
+            echo "| Budget elapsed (secs) | ${budget_elapsed_secs} |"
+            echo "| Budget total (secs) | ${budget_total_secs} |"
+            echo "| Budget remaining (secs) | ${budget_remaining_secs} |"
+            echo "| Resume round | ${resume_round} |"
             echo
             echo "**Acceptance deltas vs prior iteration:**"
             echo "${reviewer_scope_note}"
@@ -6157,6 +6553,9 @@ jobs:
             fi
             echo
           } >> "${GITHUB_STEP_SUMMARY}"
+
+          printf '\n### Review Autofix Run Summary\n\n' >> "${GITHUB_STEP_SUMMARY}"
+          printf '%s\n' "${structured_summary_line}" | tee -a "${GITHUB_STEP_SUMMARY}"
 
       - name: Cleanup temporary artifacts
         if: always()
