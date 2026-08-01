@@ -3480,6 +3480,15 @@ def test_push_step_exports_edits_pushed_sentinel_for_summary_contract() -> None:
 	assert 'echo "AUTOFIX_EDITS_PUSHED=true" >> "$GITHUB_ENV"' in block
 
 
+def test_review_pipeline_summary_finalize_reason_distinguishes_push_not_allowed() -> None:
+	block = _step_block("Append review pipeline iteration summary")
+	assert re.search(
+		r'if max_iterations_reached and not skip_judge:.*?return "rb_judge_review_blocked"\n\s+if push_needed and not push_allowed:\n\s+return "push_not_allowed"\n\s+if push_needed and not edits_pushed:\n\s+return "push_failed"',
+		block,
+		re.S,
+	), "Summary finalize_reason contract must distinguish push-disabled runs before push_failed"
+
+
 def test_auto_merge_guard_honours_configured_orchestrator_branch_pattern() -> None:
 	block = _step_block("Enable auto-merge on PR")
 	helper_text = _auto_merge_helper_text()

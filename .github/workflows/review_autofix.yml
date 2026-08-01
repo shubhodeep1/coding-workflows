@@ -6457,6 +6457,8 @@ jobs:
                   if judge_skip_reason:
                       return f"rb_judge_skip_{judge_skip_reason}"
                   return "rb_judge_review_blocked"
+              if push_needed and not push_allowed:
+                  return "push_not_allowed"
               if push_needed and not edits_pushed:
                   return "push_failed"
               if bool_env("LEDGER_ONLY_COMMIT_STRICT"):
