@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-08-01T04:36:39Z",
+  "tick_at": "2026-08-01T05:44:27Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,7 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 2
+    "tracking_issues": 3
   },
   "tracking_issues": [
     {
@@ -52,6 +52,27 @@
       "status": "in-progress",
       "title": "[Orchestrator] Learn-Claude-Code learnings \u2014 adopt Phases A\u2013H into the unattended pipeline",
       "total_waves": 0,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 1,
+      "integration_ahead_by": "0",
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 1,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 3709,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Harden review_autofix soft-deadline finalization and resume safety",
+      "total_waves": 7,
       "wave_complete": false
     }
   ]
