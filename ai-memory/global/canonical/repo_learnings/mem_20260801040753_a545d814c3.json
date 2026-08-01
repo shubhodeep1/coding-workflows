@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Cross-cutting workflow updates often span orchestration, task-state, and archive/transcript scripts, so plan for multi-file coordination rather than isolated edits.",
   "timestamps": {
     "created_at": "2026-08-01T04:07:53Z",
