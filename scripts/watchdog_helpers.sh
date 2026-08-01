@@ -10,16 +10,24 @@ CODEX_RUN_BUDGET_DEFAULT_MINUTES="210"
 normalize_review_soft_deadline_minutes()
 {
 	local raw_value="${1:-${REVIEW_SOFT_DEADLINE_MINUTES:-${CODEX_RUN_BUDGET_DEFAULT_MINUTES}}}"
+	local normalized_value=""
 
 	case "${raw_value}" in
-		''|*[!0-9]*|0|0[0-9]*)
+		''|*[!0-9]*)
 			echo "::warning::Invalid REVIEW_SOFT_DEADLINE_MINUTES='${raw_value}'; defaulting to ${CODEX_RUN_BUDGET_DEFAULT_MINUTES}." >&2
 			printf '%s\n' "${CODEX_RUN_BUDGET_DEFAULT_MINUTES}"
 			return 0
 			;;
 	esac
 
-	printf '%s\n' "${raw_value}"
+	normalized_value="$(( 10#${raw_value} ))"
+	if [ "${normalized_value}" -le 0 ]; then
+		echo "::warning::Invalid REVIEW_SOFT_DEADLINE_MINUTES='${raw_value}'; defaulting to ${CODEX_RUN_BUDGET_DEFAULT_MINUTES}." >&2
+		printf '%s\n' "${CODEX_RUN_BUDGET_DEFAULT_MINUTES}"
+		return 0
+	fi
+
+	printf '%s\n' "${normalized_value}"
 }
 
 codex_run_budget_initialize()
@@ -57,7 +65,7 @@ codex_run_budget_export()
 
 	while IFS= read -r line; do
 		case "${line}" in
-			*=*) export "${line}" ;;
+			JOB_START_EPOCH=*|REVIEW_SOFT_DEADLINE_MINUTES=*|CODEX_RUN_BUDGET_*=*) export "${line}" ;;
 		esac
 	done <<EOF
 $(codex_run_budget_initialize "$@")

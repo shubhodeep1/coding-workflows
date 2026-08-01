@@ -1668,43 +1668,47 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
     echo "PR #${PR_NUMBER} was closed/merged — skipping editor."
     echo "PR_CLOSED=true" >> "$GITHUB_ENV"
-		exit 0
-	fi
+    exit 0
+  fi
 
-	now_epoch="$(date +%s)"
-	run_budget_summary=""
-	budget_deadline_label="soft deadline"
-	if command -v codex_run_budget_remaining_secs >/dev/null 2>&1; then
-		remaining="$(codex_run_budget_remaining_secs "${now_epoch}" 2>/dev/null || true)"
-		case "${remaining}" in
-			''|*[!0-9]*) remaining="0" ;;
-		esac
-		if command -v codex_run_budget_summary >/dev/null 2>&1; then
-			run_budget_summary="$(codex_run_budget_summary "${now_epoch}" 2>/dev/null || true)"
-			if [ -n "${run_budget_summary}" ]; then
-				echo "Editor attempt ${attempt} run budget: ${run_budget_summary}"
-			fi
-		fi
-	else
-		remaining=$(( JOB_DEADLINE - now_epoch ))
-		budget_deadline_label="job deadline"
-	fi
-	if [ "${remaining}" -lt "${EDITOR_MIN_ATTEMPT_SECS}" ]; then
-		echo "Skipping editor attempt ${attempt}: only ${remaining}s remain before ${budget_deadline_label} (need ${EDITOR_MIN_ATTEMPT_SECS}s minimum)."
-		break
-	fi
-	# Capacity-fallback: on the final editor attempt switch the editor model to
-	# MODEL_EDITOR_FALLBACK so a sustained gpt-5.4 saturation can be ridden out.
-	EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR}"
-	if [ "${attempt}" -eq "${editor_max_attempts}" ] && [ -n "${MODEL_EDITOR_FALLBACK:-}" ] && [ "${MODEL_EDITOR_FALLBACK}" != "${MODEL_EDITOR}" ]; then
-		EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR_FALLBACK}"
-		echo "Final editor attempt: switching model to fallback ${EDITOR_ATTEMPT_MODEL} (primary ${MODEL_EDITOR} capacity-limited)."
-	fi
-	emit_editor_substate "PreparingWorkspace" "${attempt}"
-	# Cap this attempt's wall time to the lesser of EDITOR_MAX_WALL
-	# and the remaining run budget minus a 2-min buffer for cleanup steps.
-	attempt_wall="${EDITOR_MAX_WALL}"
-	budget_cap=$(( remaining - 120 ))
+  now_epoch="$(date +%s)"
+  run_budget_summary=""
+  budget_deadline_label="soft deadline"
+  if command -v codex_run_budget_remaining_secs >/dev/null 2>&1; then
+    remaining="$(codex_run_budget_remaining_secs "${now_epoch}" 2>/dev/null || true)"
+    case "${remaining}" in
+      ''|*[!0-9]*) remaining="0" ;;
+    esac
+    if command -v codex_run_budget_summary >/dev/null 2>&1; then
+      run_budget_summary="$(codex_run_budget_summary "${now_epoch}" 2>/dev/null || true)"
+      if [ -n "${run_budget_summary}" ]; then
+        echo "Editor attempt ${attempt} run budget: ${run_budget_summary}"
+      fi
+    fi
+  else
+    remaining=$(( JOB_DEADLINE - now_epoch ))
+    budget_deadline_label="job deadline"
+  fi
+  if [ "${remaining}" -lt "${EDITOR_MIN_ATTEMPT_SECS}" ]; then
+    echo "Skipping editor attempt ${attempt}: only ${remaining}s remain before ${budget_deadline_label} (need ${EDITOR_MIN_ATTEMPT_SECS}s minimum)."
+    break
+  fi
+  # Capacity-fallback: on the final editor attempt switch the editor model to
+  # MODEL_EDITOR_FALLBACK so a sustained gpt-5.4 saturation can be ridden out.
+  EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR}"
+  if [ "${attempt}" -eq "${editor_max_attempts}" ] && [ -n "${MODEL_EDITOR_FALLBACK:-}" ] && [ "${MODEL_EDITOR_FALLBACK}" != "${MODEL_EDITOR}" ]; then
+    EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR_FALLBACK}"
+    echo "Final editor attempt: switching model to fallback ${EDITOR_ATTEMPT_MODEL} (primary ${MODEL_EDITOR} capacity-limited)."
+  fi
+  emit_editor_substate "PreparingWorkspace" "${attempt}"
+  # Cap this attempt's wall time to the lesser of EDITOR_MAX_WALL
+  # and the remaining run budget minus a 2-min buffer for cleanup steps.
+  attempt_wall="${EDITOR_MAX_WALL}"
+  budget_cap=$(( remaining - 120 ))
+  if [ "${budget_cap}" -le 0 ]; then
+    echo "Skipping editor attempt ${attempt}: only ${remaining}s remain before ${budget_deadline_label} after reserving the 120s cleanup buffer."
+    break
+  fi
   if [ "${budget_cap}" -lt "${attempt_wall}" ]; then
     attempt_wall="${budget_cap}"
     echo "Editor attempt ${attempt}: capping wall time to ${attempt_wall}s (budget-limited, ${remaining}s remain)."
