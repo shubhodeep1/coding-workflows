@@ -3403,6 +3403,24 @@ def test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain() -> 
 def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 	block = _step_block("Append review pipeline iteration summary")
 	assert "### Review Pipeline — Iteration ${iteration_label}" in block
+	assert "REVIEW_AUTOFIX_RUN_SUMMARY_V1" in block
+	assert "printf '\\n### Review Autofix Run Summary\\n\\n' >> \"${GITHUB_STEP_SUMMARY}\"" in block
+	assert "printf '%s\\n' \"${structured_summary_line}\" | tee -a \"${GITHUB_STEP_SUMMARY}\"" in block
+	for expected in (
+		'"completed_phases":',
+		'"skipped_phases":',
+		'"slot_results":',
+		'"attempt_count":',
+		'"status":',
+		'"failure_class":',
+		'"budget_elapsed_secs":',
+		'"budget_total_secs":',
+		'"budget_remaining_secs":',
+		'"finalize_reason":',
+		'"edits_pushed":',
+		'"resume_round":',
+	):
+		assert expected in block, f"Missing structured summary key contract: {expected}"
 	assert "reviewer_scope_label=\"full-diff\"" in block, (
 		"Summary step must not overclaim scoped reviewer behaviour before "
 		"review_run_reviewers.sh consumes REVIEW_REVIEWER_ITERATION_SCOPING"
@@ -3435,13 +3453,29 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		"${RUNTIME_DIR}/consolidator_raw.txt",
 		"${RUNTIME_DIR}/parser_stats.txt",
 		"${RUNTIME_DIR}/ledger_status.txt",
+		'COMMITTED_FILES_FILE="${committed_files_file}"',
 		"grep -c 'CONSOLIDATOR_OVERRIDDEN:' \"${EDITOR_SUMMARY_FILE}\"",
 		"EDITOR_COMMIT_PRODUCED: ${{ steps.commit_changes.outputs.did_commit }}",
+		"MAX_ITERATIONS_REACHED: ${{ steps.retrigger_guard.outputs.max_iterations_reached }}",
+		"SKIP_JUDGE: ${{ steps.retrigger_guard.outputs.skip_judge }}",
+		"RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}",
+		"JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}",
+		"JUDGE_ACTION: ${{ steps.rb_judge.outputs.judge_action }}",
+		"JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}",
+		'budget_total_secs="$(sanitize_nonnegative_int "${CODEX_RUN_BUDGET_TOTAL_SECS:-0}")"',
+		'budget_start_epoch="$(sanitize_nonnegative_int "${CODEX_RUN_BUDGET_START_EPOCH:-${JOB_START_EPOCH:-0}}")"',
+		'resume_round="${AUTOFIX_RESUME_ROUND:-${RESUME_ROUND:-0}}"',
+		'edits_pushed = bool_env("AUTOFIX_EDITS_PUSHED")',
 	):
 		assert artifact in block, f"Summary step is missing local metric source: {artifact}"
 	assert "gh api" not in block
 	assert "gh_retry" not in block
 	assert "curl https://api.github.com" not in block
+
+
+def test_push_step_exports_edits_pushed_sentinel_for_summary_contract() -> None:
+	block = _step_block("Push all pending commits")
+	assert 'echo "AUTOFIX_EDITS_PUSHED=true" >> "$GITHUB_ENV"' in block
 
 
 def test_auto_merge_guard_honours_configured_orchestrator_branch_pattern() -> None:
