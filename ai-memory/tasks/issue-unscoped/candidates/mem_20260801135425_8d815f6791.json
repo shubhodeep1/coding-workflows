@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:~6458\u20136461 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: When `push_needed` is true and `CAN_PUSH=false`, `determine_finalize_reason()` can return `push_failed` instead of `push_not_allowed`.\n  WHY: This produces conflicting terminal telemetry for permission-limited runs because the push slot and finalize reason disagree.\n- .github/workflows/review_autofix.yml:reviewer_failure_class function \u2014 the skipped_unmapped branch | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, qwen_qwen3_6-plus]\n  PROBLEM: When `status == \"skipped_unmapped\"`, `reviewer_failure_class()` returns an incorrect failure_class instead of a skip classification.\n  WHY: Reviewers differed on the exact fallback value (`unknown` vs `retryable_failure`), but both reported the same misclassification of a configuration-level skip as something else.\n- .github/workflows/review_autofix.yml:inside Append review pipeline iteration summary step (fallback block) | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The fallback conflates clean no-edit runs with swallowed summary-step failures.\n  WHY: The fail-open fallback hides whether the summary path failed or there was simply nothing to commit, making terminal telemetry ambiguous.\n- .github/workflows/review_autofix.yml:inside Append review pipeline iteration summary step (fallback block) | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The fallback JSON reports `slot_results.finalize` as successful even when summary emission failed.\n  WHY: This makes the finalize slot look successful despite a failed summary emit, producing incorrect telemetry for operators.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- `.github/workflows/review_autofix.yml:~6458\u20136461` | severity=critical | confidence=5\n  PROBLEM: When `push_needed` is true and `CAN_PUSH=false`, `finalize_reason` falls through to `push_failed` instead of `push_not_allowed`.\n  WHY: This yields conflicting terminal telemetry for permission-limited runs.\n- `.github/workflows/review_autofix.yml:inside reviewer_failure_class function (skipped_unmapped branch)` | severity=low | confidence=4\n  PROBLEM: The `skipped_unmapped` branch in `reviewer_failure_class()` falls through to return `\"unknown\"` instead of a meaningful classification.\n  WHY: A skipped reviewer entry will report `{\"status\": \"skipped_unmapped\", \"failure_class\": \"unknown\"}`, which misstates a designed skip as an unknown failure.\n- `.github/workflows/review_autofix.yml:inside Append review pipeline iteration summary step (fallback block)` | severity=low | confidence=4\n  PROBLEM: The fallback JSON block reports `slot_results.finalize` as `{\"status\":\"emitted\",\"failure_class\":\"none\"}` even when summary emission failed.\n  WHY: This makes the finalize slot look successful despite a failed summary emit, producing incorrect telemetry for operators.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- `.github/workflows/review_autofix.yml:reviewer_failure_class function \u2014 the `status == \"skipped_unmapped\"` branch, near the end of the embedded Python summary heredoc (the last `return \"retryable_failure\"` inside that `if` block)` | severity=low | confidence=4\n  PROBLEM: When a reviewer slot has `status == \"skipped_unmapped\"` and the log/output contains no retryable-failure pattern, `reviewer_failure_class()` still returns `retryable_failure`.\n  WHY: A configuration-level skip is not a transient runtime failure, so the summary JSON misleads operators and downstream parsers by classifying a designed skip as retryable.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "e66d396c3fce9eef6a03b4c2caddcc1bd8f861e8a8026bb3cd3254b0b82e9aa8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3714,
+    "run_id": "30700060069",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "30700060069",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260801135425_8d815f6791",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3714,
+    "run_id": "30700060069"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-01T13:54:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
