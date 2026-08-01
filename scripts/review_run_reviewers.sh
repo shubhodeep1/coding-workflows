@@ -119,6 +119,35 @@ emit_run_budget_gate_note() {
   fi
 }
 
+REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE="${RUNTIME_DIR:-.}/reviewers_partial_finalize_request.txt"
+
+reviewer_request_partial_finalize() {
+  local finalize_reason="$1"
+
+  export AUTOFIX_PARTIAL_FINALIZE_REQUESTED="true"
+  export AUTOFIX_PARTIAL_FINALIZE_REASON="${finalize_reason}"
+  export AUTOFIX_PARTIAL_FINALIZE_PHASE="reviewers"
+
+  mkdir -p "${RUNTIME_DIR}" 2>/dev/null || true
+  cat > "${REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE}" <<EOF
+AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true
+AUTOFIX_PARTIAL_FINALIZE_REASON=${finalize_reason}
+AUTOFIX_PARTIAL_FINALIZE_PHASE=reviewers
+EOF
+
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    {
+      echo "AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true"
+      echo "AUTOFIX_PARTIAL_FINALIZE_REASON=${finalize_reason}"
+      echo "AUTOFIX_PARTIAL_FINALIZE_PHASE=reviewers"
+    } >> "$GITHUB_ENV"
+  fi
+}
+
+reviewer_partial_finalize_requested() {
+  [ -f "${REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE}" ]
+}
+
 resolve_ledger_substate_helper() {
   local candidate
   for candidate in \
@@ -2599,6 +2628,19 @@ if [ -z "${REVIEWER_HEALTH_STATE_FILE}" ] && [ -n "${PR_NUMBER:-}" ] && [[ "${PR
   REVIEWER_HEALTH_STATE_FILE=".ai/review_runtime/pr-${PR_NUMBER}/reviewer_health_state.json"
 fi
 
+if ! command -v nag_reminder_enabled >/dev/null 2>&1; then
+  nag_reminder_enabled() { return 1; }
+fi
+if ! command -v nag_silent_round_threshold >/dev/null 2>&1; then
+  nag_silent_round_threshold() { printf '3\n'; }
+fi
+if ! command -v maybe_inject_nag >/dev/null 2>&1; then
+  maybe_inject_nag() { return 0; }
+fi
+if ! command -v emit_run_budget_gate_note >/dev/null 2>&1; then
+  emit_run_budget_gate_note() { return 0; }
+fi
+
 reviewer_circuit_breaker_enabled() {
   case "$(printf '%s' "${REVIEWER_CIRCUIT_BREAKER_ENABLED:-0}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
     1|true|yes|on) return 0 ;;
@@ -3487,7 +3529,10 @@ run_reviewer() {
   local status_file="${PREVIOUS_REVIEWS_DIR}/status_${output_prefix}_${safe_name}.txt"
   local log_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.log"
   local reviewer_idle_timeout="${HEARTBEAT_IDLE_TIMEOUT:-900}"
-  local reviewer_max_wall="${HEARTBEAT_MAX_WALL:-7200}"
+  local reviewer_default_max_wall="${HEARTBEAT_MAX_WALL:-7200}"
+  local reviewer_max_wall="${reviewer_default_max_wall}"
+  local reviewer_min_attempt_secs=300
+  local reviewer_budget_cleanup_buffer_secs=120
   local reviewer_pr_poll_interval_default=10
   local reviewer_pr_poll_interval_raw="${REVIEW_PR_STATE_POLL_INTERVAL_SECS:-${reviewer_pr_poll_interval_default}}"
   local reviewer_pr_poll_interval="${reviewer_pr_poll_interval_default}"
@@ -3518,6 +3563,81 @@ run_reviewer() {
   local reviewer_silent_rounds=0
 
   : > "${log_file}"
+
+  reviewer_budget_may_continue()
+  {
+    local attempt_label="$1"
+    local budget_deadline_label="soft deadline"
+    local budget_now_epoch
+    local budget_remaining_secs
+    local budget_cap_secs
+    local budget_summary=""
+
+    budget_now_epoch="$(date +%s)"
+    if command -v codex_run_budget_remaining_secs >/dev/null 2>&1; then
+      budget_remaining_secs="$(codex_run_budget_remaining_secs "${budget_now_epoch}" 2>/dev/null || true)"
+      case "${budget_remaining_secs}" in
+        ''|*[!0-9]*) budget_remaining_secs="0" ;;
+      esac
+      if command -v codex_run_budget_summary >/dev/null 2>&1; then
+        budget_summary="$(codex_run_budget_summary "${budget_now_epoch}" 2>/dev/null || true)"
+        if [ -n "${budget_summary}" ]; then
+          echo "Reviewer slot ${slot_model} (${effective_model}) ${attempt_label} run budget: ${budget_summary}" | tee -a "${log_file}" >&2
+        fi
+      fi
+    else
+      if [ -n "${JOB_DEADLINE:-}" ] && [[ "${JOB_DEADLINE}" =~ ^[0-9]+$ ]]; then
+        budget_remaining_secs=$(( JOB_DEADLINE - budget_now_epoch ))
+        budget_deadline_label="job deadline"
+      else
+        budget_remaining_secs=$(( reviewer_min_attempt_secs + reviewer_budget_cleanup_buffer_secs + reviewer_default_max_wall ))
+        budget_deadline_label="job deadline (unset; fail-open)"
+      fi
+    fi
+
+    reviewer_max_wall="${reviewer_default_max_wall}"
+    if [ "${budget_remaining_secs}" -lt "${reviewer_min_attempt_secs}" ]; then
+      printf 'Reviewer slot %s (%s) skipped — only %ss remain before %s (need %ss minimum for %s).\n' \
+        "${slot_model}" \
+        "${effective_model}" \
+        "${budget_remaining_secs}" \
+        "${budget_deadline_label}" \
+        "${reviewer_min_attempt_secs}" \
+        "${attempt_label}" | tee -a "${log_file}" >&2
+      printf 'Reviewer slot %s skipped because only %ss remain before %s (need %ss minimum for %s).\n' \
+        "${slot_model}" \
+        "${budget_remaining_secs}" \
+        "${budget_deadline_label}" \
+        "${reviewer_min_attempt_secs}" \
+        "${attempt_label}" > "${output_file}"
+      echo "skipped_budget" > "${status_file}"
+      return 1
+    fi
+
+    budget_cap_secs=$(( budget_remaining_secs - reviewer_budget_cleanup_buffer_secs ))
+    if [ "${budget_cap_secs}" -le 0 ]; then
+      printf 'Reviewer slot %s (%s) skipped — only %ss remain before %s after reserving the %ss cleanup buffer.\n' \
+        "${slot_model}" \
+        "${effective_model}" \
+        "${budget_remaining_secs}" \
+        "${budget_deadline_label}" \
+        "${reviewer_budget_cleanup_buffer_secs}" | tee -a "${log_file}" >&2
+      printf 'Reviewer slot %s skipped because only %ss remain before %s after reserving the %ss cleanup buffer.\n' \
+        "${slot_model}" \
+        "${budget_remaining_secs}" \
+        "${budget_deadline_label}" \
+        "${reviewer_budget_cleanup_buffer_secs}" > "${output_file}"
+      echo "skipped_budget" > "${status_file}"
+      return 1
+    fi
+
+    if [ "${budget_cap_secs}" -lt "${reviewer_max_wall}" ]; then
+      reviewer_max_wall="${budget_cap_secs}"
+      echo "Reviewer slot ${slot_model} (${effective_model}) ${attempt_label}: capping max wall to ${reviewer_max_wall}s (budget-limited, ${budget_remaining_secs}s remain)." | tee -a "${log_file}" >&2
+    fi
+
+    return 0
+  }
 
   if reviewer_circuit_breaker_enabled; then
     circuit_breaker_enabled=true
@@ -3593,6 +3713,11 @@ run_reviewer() {
   if [ "${circuit_breaker_enabled}" != "true" ]; then
     while [ "${attempt}" -le "${reviewer_max_attempts}" ]; do
       effective_model="${model}"
+      if ! reviewer_budget_may_continue "attempt ${attempt}"; then
+        rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+        rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+        return 0
+      fi
       if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
         if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
           emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
@@ -3630,6 +3755,11 @@ run_reviewer() {
 
   base_reasoning="$(reviewer_base_reasoning_effort "${reasoning_level}")"
   effective_model="${model}"
+  if ! reviewer_budget_may_continue "attempt 1"; then
+    rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+    rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+    return 0
+  fi
   if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
     if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
       emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
@@ -3672,6 +3802,11 @@ run_reviewer() {
   fi
   if [ -n "${retry_reasoning}" ]; then
     effective_model="${model}"
+    if ! reviewer_budget_may_continue "attempt 2 (cheaper reasoning ${retry_reasoning})"; then
+      rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+      rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+      return 0
+    fi
     if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
       if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
         emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
@@ -3727,6 +3862,11 @@ run_reviewer() {
     fallback_attempt_label="attempt 3 (retry ${fallback_model})"
   fi
   effective_model="${fallback_model}"
+  if ! reviewer_budget_may_continue "${fallback_attempt_label}"; then
+    rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+    rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+    return 0
+  fi
   if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
     if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
       emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
@@ -3759,6 +3899,11 @@ run_reviewer() {
     attempt=4
     while [ "${attempt}" -le "${reviewer_max_attempts}" ]; do
       effective_model="${fallback_model}"
+      if ! reviewer_budget_may_continue "attempt ${attempt} (extended retry ${fallback_model})"; then
+        rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+        rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+        return 0
+      fi
       if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
         if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
           emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
@@ -3828,8 +3973,16 @@ run_reviewer_pass() {
   local -a pass_models=()
   local -a pass_status_files=()
   local -a pass_log_files=()
+  local reviewer_pass_minimum_secs=300
 
-  emit_run_budget_gate_note "reviewer pass ${pass_prefix}" 1
+  emit_run_budget_gate_note "reviewer pass ${pass_prefix}" "${reviewer_pass_minimum_secs}"
+  if command -v codex_run_budget_phase_may_start >/dev/null 2>&1 \
+    && ! codex_run_budget_phase_may_start "${reviewer_pass_minimum_secs}"; then
+    echo "Reviewer pass ${pass_prefix}: remaining run budget is below ${reviewer_pass_minimum_secs}s — requesting partial finalize before launching another expensive pass." >&2
+    reviewer_request_partial_finalize "soft_deadline"
+    echo 0
+    return 0
+  fi
 
   while IFS= read -r model; do
     [ -z "${model}" ] && continue
@@ -3883,6 +4036,8 @@ run_reviewer_pass() {
   done
 
   local pass_successful=0
+  local pass_budget_skipped=0
+  local pass_hard_failures=0
   local sf_idx=0
   for sf in "${pass_status_files[@]}"; do
     local sf_model="${pass_models[$sf_idx]}"
@@ -3899,11 +4054,19 @@ run_reviewer_pass() {
         ;;
       pr_closed|skipped_unmapped|skipped_open)
         ;;
+      skipped_budget)
+        pass_budget_skipped=1
+        ;;
       *)
+        pass_hard_failures=$((pass_hard_failures + 1))
         echo "::warning::Reviewer ${sf_model} (${pass_prefix}): status='${sf_status:-<empty>}' — not counted as success. See ${pass_log_files[$((sf_idx - 1))]} for per-reviewer log." >&2
         ;;
     esac
   done
+
+  if [ "${pass_budget_skipped}" -ne 0 ] && [ "${pass_hard_failures}" -eq 0 ]; then
+    reviewer_request_partial_finalize "soft_deadline"
+  fi
 
   echo "${pass_successful}"
 }
@@ -3941,6 +4104,9 @@ build_cross_pollination_summary() {
   echo "${summary_file}"
 }
 
+rm -f "${REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE}" 2>/dev/null || true
+reviewers_successful=0
+
 if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   echo "Two-pass review enabled."
 
@@ -3951,6 +4117,11 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
 
   pass1_successful="$(run_reviewer_pass "pass1" "${PASS1_PROMPT_FILE}" "xhigh")"
   echo "Pass 1 complete: ${pass1_successful} reviewers successful."
+  reviewers_successful="${pass1_successful}"
+  if reviewer_partial_finalize_requested; then
+    echo "REVIEWERS_SUCCESSFUL=${reviewers_successful}" >> "$GITHUB_ENV"
+    exit 0
+  fi
 
   # Check for PR closure after pass 1
   if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
@@ -4048,6 +4219,10 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   pass2_successful="$(run_reviewer_pass "review" "${PASS2_PROMPT_FILE}" "${PASS2_REASONING}")"
   echo "Pass 2 complete: ${pass2_successful} reviewers successful."
   reviewers_successful="${pass2_successful}"
+  if reviewer_partial_finalize_requested; then
+    echo "REVIEWERS_SUCCESSFUL=${reviewers_successful}" >> "$GITHUB_ENV"
+    exit 0
+  fi
 
   # ── Consolidate all pass-2 reviewer outputs into REVIEWER_CONSENSUS_FILE ──
   # Feeds editor (review_apply_fixes.sh) + memory-record step.
@@ -4059,6 +4234,10 @@ else
   echo "Single-pass review mode."
   reviewers_successful="$(run_reviewer_pass "review" "${REVIEWER_PROMPT_FILE}" "")"
   echo "Review complete: ${reviewers_successful} reviewers successful."
+  if reviewer_partial_finalize_requested; then
+    echo "REVIEWERS_SUCCESSFUL=${reviewers_successful}" >> "$GITHUB_ENV"
+    exit 0
+  fi
 
   # Produce REVIEWER_CONSENSUS_FILE so the editor + memory-record step get the
   # same ledger shape they receive in two-pass mode. Hard-fails on summariser

@@ -1659,6 +1659,12 @@ def test_review_soft_deadline_budget_contract_is_wired() -> None:
 		'codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"',
 		"codex_run_budget_summary",
 		"codex_run_budget_phase_may_start",
+		'REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE="${RUNTIME_DIR:-.}/reviewers_partial_finalize_request.txt"',
+		'reviewer_pass_minimum_secs=300',
+		'reviewer_request_partial_finalize "soft_deadline"',
+		'AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true',
+		'AUTOFIX_PARTIAL_FINALIZE_PHASE=reviewers',
+		'echo "skipped_budget" > "${status_file}"',
 		'| tee -a "${budget_log_file}" >&2 || true',
 	):
 		assert expected in reviewers_text, f"missing reviewer budget wiring: {expected}"
@@ -1668,6 +1674,10 @@ def test_review_soft_deadline_budget_contract_is_wired() -> None:
 		'codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"',
 		"codex_run_budget_remaining_secs",
 		"budget_deadline_label=\"soft deadline\"",
+		"request_editor_partial_finalize",
+		'editor_partial_finalize_reason="soft_deadline"',
+		'editor_partial_finalize_reason="recoverable_failure"',
+		'AUTOFIX_PARTIAL_FINALIZE_PHASE=editor',
 	):
 		assert expected in apply_fixes_text, f"missing editor budget wiring: {expected}"
 
@@ -3417,6 +3427,11 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		'"budget_total_secs":',
 		'"budget_remaining_secs":',
 		'"finalize_reason":',
+		'"partial_finalize":',
+		'"partial_finalize_reason":',
+		'"partial_finalize_phase":',
+		'"partial_comment_posted":',
+		'"incomplete_phases":',
 		'"edits_pushed":',
 		'"resume_round":',
 	):
@@ -3467,12 +3482,79 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		'resume_round="${AUTOFIX_RESUME_ROUND:-${RESUME_ROUND:-0}}"',
 		'push_allowed = bool_env("CAN_PUSH")',
 		'edits_pushed = bool_env("AUTOFIX_EDITS_PUSHED")',
+		'partial_finalize = bool_env("AUTOFIX_PARTIAL_FINALIZE_REQUESTED")',
+		'partial_comment_posted = bool_env("AUTOFIX_PARTIAL_COMMENT_POSTED")',
+		'status_pass1_*.txt',
+		'if status == "skipped_budget":',
+		'return "soft_deadline"',
 	):
 		assert artifact in block, f"Summary step is missing local metric source: {artifact}"
 	assert '"failure_class": "push_not_allowed"' in block
 	assert "gh api" not in block
 	assert "gh_retry" not in block
 	assert "curl https://api.github.com" not in block
+
+
+def test_review_partial_finalize_workflow_path_is_wired() -> None:
+	early_save_block = _step_block("Save review-issue ledger")
+	partial_block = _step_block("Post partial finalize comment and persist runtime marker")
+	late_save_block = _step_block("Save review-issue ledger after partial finalize")
+
+	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" in early_save_block
+	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true'" in partial_block
+	for expected in (
+		"<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->",
+		"partial_finalize=true",
+		"reason=${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}",
+		"phase=${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}",
+		"completed_scope=${completed_scope_csv}",
+		"incomplete_scope=${incomplete_scope_csv}",
+		"validated_edits_committed=${validated_edits_committed}",
+		"edits_pushed=${edits_pushed}",
+		"resume_round=${resume_round}",
+		"partial_finalize.json",
+		'echo "AUTOFIX_PARTIAL_COMMENT_POSTED=true" >> "$GITHUB_ENV"',
+		'echo "AUTOFIX_RESUME_ROUND=${resume_round}" >> "$GITHUB_ENV"',
+	):
+		assert expected in partial_block, f"missing partial-finalize contract detail: {expected}"
+	for expected in (
+		".ai/review_issue_ledger/",
+		".ai/review_runtime/",
+		"REVIEW_LEDGER_PATH",
+	):
+		assert expected in late_save_block, f"missing persisted partial-finalize state path: {expected}"
+
+
+def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
+	for step_name in (
+		"Pre-editor stale-base gate",
+		"Install project dependencies (best-effort)",
+		"Switch reasoning effort for editor",
+		"Setup Serena for editor",
+		"Apply fixes with editor model",
+		"Run interim judge",
+		"Synthesize behavioural smoke",
+		"Post editor summary comment",
+		"Detect editor-claimed-but-uncommitted changes",
+		"Validate editor no-op disposition",
+		"Detect merge conflicts",
+		"Run Codex resolver, validate, stage, commit",
+		"Mark linked issues ready to merge",
+		"Enable auto-merge on PR",
+		"Telegram success",
+	):
+		block = _step_block(step_name)
+		assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" in block, (
+			f"step should skip during partial finalize: {step_name}"
+		)
+
+
+def test_review_pipeline_summary_finalize_reason_marks_partial_runs() -> None:
+	block = _step_block("Append review pipeline iteration summary")
+	assert re.search(
+		r'if partial_finalize:\n\s+return "partial_finalize"',
+		block,
+	), "summary finalize_reason contract should classify partial-finalize runs"
 
 
 def test_push_step_exports_edits_pushed_sentinel_for_summary_contract() -> None:

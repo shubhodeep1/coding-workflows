@@ -3250,7 +3250,7 @@ jobs:
         # GitHub API glitch never silently drops a review.
         # Claude-branch-review mode never runs the editor, so this
         # check (and the API calls it makes) is unnecessary.
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         id: pre_editor_stale_base_gate
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -3286,7 +3286,7 @@ jobs:
           esac
 
       - name: Install project dependencies (best-effort)
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         run: |
           set -euo pipefail
           # Install project dependencies so the editor can validate fixes
@@ -3318,7 +3318,7 @@ jobs:
           fi
 
       - name: Switch reasoning effort for editor
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         run: |
           set -euo pipefail
           sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
@@ -3345,7 +3345,7 @@ jobs:
           echo "Enabled reasoning summaries (auto) for editor phase"
 
       - name: Setup Serena for editor
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.SERENA_ENABLED == 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.SERENA_ENABLED == 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -3372,7 +3372,7 @@ jobs:
           fi
 
       - name: Apply fixes with editor model
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3539,7 +3539,7 @@ jobs:
           bash "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
 
       - name: Run interim judge
-        if: env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         env:
           ROUND_NUMBER: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -3548,7 +3548,7 @@ jobs:
           bash "${SUPPORT_SCRIPTS_DIR}/review_run_judge_interim.sh"
 
       - name: Synthesize behavioural smoke
-        if: env.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED == 'true' && env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: env.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED == 'true' && env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         continue-on-error: true
         env:
           ROUND_NUMBER: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
@@ -3564,7 +3564,7 @@ jobs:
       # commit, or interim-judge path failed partway so cross-iteration state
       # remains best-effort and fail-open.
       - name: Save review-issue ledger
-        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
@@ -3575,7 +3575,7 @@ jobs:
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Post editor summary comment
-        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -3705,7 +3705,7 @@ jobs:
         # DID land real source-file edits.  Running this detector against
         # such a commit produces a false-positive EDITOR_CHANGES_LOST alert
         # (bitsafe.io PR #177 / run 25653654000).
-        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'"
         run: |
           set -euo pipefail
 
@@ -3944,7 +3944,7 @@ jobs:
         # short-circuit independently on `max_iterations_reached != 'true'`,
         # so leaving the env var unset on these runs does not relax any
         # auto-merge safety.
-        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'"
         run: |
           set -euo pipefail
 
@@ -4037,7 +4037,7 @@ jobs:
         # which in turn fires the (futile) Codex resolver and produces a
         # `FAILED_STEPS=1` cascade that the e2e poller treats as the proximate
         # failure (analysis: e2e-smoke-failure-25126757724.md §B/D).
-        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -4313,7 +4313,7 @@ jobs:
         # step. On max_iterations_reached runs, EDITOR_NOOP_SUSPICIOUS stays
         # unset, so this guard is a no-op and MERGE_CONFLICT can legitimately
         # come from the detect step above.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -4347,7 +4347,7 @@ jobs:
         # review_conflict_resolve.sh fires the immediate orchestrator-poll
         # dispatch so the integration judge takes over without waiting for
         # the */5 cron tick.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         timeout-minutes: 170
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -4515,7 +4515,7 @@ jobs:
           fi
 
       - name: Telegram conflict resolution message
-        if: success() && env.CONFLICT_RESOLVED == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: success() && env.CONFLICT_RESOLVED == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -4549,7 +4549,7 @@ jobs:
         # head f11d6dc while editor commit 005824e was still local) and the
         # docstring at scripts/review_commit_changes.sh:32-41 for the same
         # rationale that already governs EDITOR_CHANGES_LOST at :3315-3326.
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -4953,7 +4953,7 @@ jobs:
         # `${AUTOFIX_SKIP_SELF_TRIGGERED:-false}`, so the default is `false`
         # and the [ai-autofix] synchronize is NOT skipped). The autofix loop now actually "keeps going
         # until there are no edits" instead of converging on a stale head.
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -5290,12 +5290,173 @@ jobs:
             echo "::warning::Could not dispatch review workflow via workflow_dispatch; the synchronize event from the push will trigger the next review run instead. To enable dispatch (avoids merge-ref resolution issues), add a workflow_dispatch trigger with a pr_number input and an optional allow_workflow_edits boolean input to your caller workflow. Ensure GH_PAT can dispatch workflows (classic PAT: repo+workflow; fine-grained PAT: Actions read/write)."
           fi
 
+      - name: Post partial finalize comment and persist runtime marker
+        if: "success() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AUTOFIX_ITERATION_METRIC: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
+          EDITOR_COMMIT_PRODUCED: ${{ steps.commit_changes.outputs.did_commit }}
+        run: |
+          set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          resume_round="${AUTOFIX_ITERATION_METRIC:-0}"
+          if ! [[ "${resume_round}" =~ ^[0-9]+$ ]]; then
+            resume_round=0
+          fi
+          echo "AUTOFIX_RESUME_ROUND=${resume_round}" >> "$GITHUB_ENV"
+
+          completed_scope_items=()
+          incomplete_scope_items=()
+          if [ "${AUTOFIX_PARTIAL_FINALIZE_PHASE:-}" = "reviewers" ]; then
+            if compgen -G "${PREVIOUS_REVIEWS_DIR}/status_pass1_*.txt" >/dev/null; then
+              completed_scope_items+=(reviewers_pass1)
+              if [ -s "${PREVIOUS_REVIEWS_DIR}/consensus_pass1.txt" ]; then
+                completed_scope_items+=(reviewers_pass1_consensus)
+              fi
+              incomplete_scope_items+=(reviewers_pass2)
+            elif [ "${ENABLE_REVIEWER_TWO_PASS:-true}" = "false" ] && compgen -G "${PREVIOUS_REVIEWS_DIR}/status_review_*.txt" >/dev/null; then
+              completed_scope_items+=(reviewers_started)
+              incomplete_scope_items+=(reviewers)
+            else
+              if [ "${ENABLE_REVIEWER_TWO_PASS:-true}" = "false" ]; then
+                incomplete_scope_items+=(reviewers)
+              else
+                incomplete_scope_items+=(reviewers_pass1 reviewers_pass2)
+              fi
+            fi
+            incomplete_scope_items+=(consolidator parser ledger editor)
+          else
+            if compgen -G "${PREVIOUS_REVIEWS_DIR}/status_review_*.txt" >/dev/null || compgen -G "${PREVIOUS_REVIEWS_DIR}/status_pass1_*.txt" >/dev/null; then
+              completed_scope_items+=(reviewers)
+            fi
+            [ -f "${RUNTIME_DIR}/consolidator_raw.txt" ] && completed_scope_items+=(consolidator)
+            [ -f "${RUNTIME_DIR}/parser_stats.txt" ] && completed_scope_items+=(parser)
+            [ -f "${RUNTIME_DIR}/ledger_status.txt" ] && completed_scope_items+=(ledger)
+            incomplete_scope_items+=(editor)
+          fi
+
+          if [ "${#completed_scope_items[@]}" -gt 0 ]; then
+            completed_scope_csv="$(IFS=,; echo "${completed_scope_items[*]}")"
+          else
+            completed_scope_csv="none"
+          fi
+          if [ "${#incomplete_scope_items[@]}" -gt 0 ]; then
+            incomplete_scope_csv="$(IFS=,; echo "${incomplete_scope_items[*]}")"
+          else
+            incomplete_scope_csv="none"
+          fi
+          completed_scope_human="$(printf '%s' "${completed_scope_csv}" | sed 's/,/, /g')"
+          incomplete_scope_human="$(printf '%s' "${incomplete_scope_csv}" | sed 's/,/, /g')"
+
+          validated_edits_committed="false"
+          if [ "${EDITOR_COMMIT_PRODUCED:-false}" = "true" ]; then
+            validated_edits_committed="true"
+          fi
+          edits_pushed="${AUTOFIX_EDITS_PUSHED:-false}"
+          partial_comment_posted="false"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          comment_body_file="$(mktemp)"
+
+          cat > "${comment_body_file}" <<EOF
+          <!-- REVIEW_AUTOFIX_PARTIAL_V1 -->
+          **AI review/autofix partial finalize**
+
+          This run finalized early after \`${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}\` in the \`${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}\` phase so the validated finalize tail could complete before the hard job timeout.
+
+          - Completed scope: ${completed_scope_human}
+          - Incomplete scope: ${incomplete_scope_human}
+          - Validated edits committed: ${validated_edits_committed}
+          - Edits pushed: ${edits_pushed}
+          - Resume round: ${resume_round}
+          - Run: ${run_url}
+
+          \`\`\`text
+          partial_finalize=true
+          reason=${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}
+          phase=${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}
+          completed_scope=${completed_scope_csv}
+          incomplete_scope=${incomplete_scope_csv}
+          validated_edits_committed=${validated_edits_committed}
+          edits_pushed=${edits_pushed}
+          resume_round=${resume_round}
+          \`\`\`
+          EOF
+
+          if gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="$(cat "${comment_body_file}")" >/dev/null 2>&1; then
+            partial_comment_posted="true"
+            echo "AUTOFIX_PARTIAL_COMMENT_POSTED=true" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Unable to post partial finalize comment after retries."
+          fi
+          rm -f "${comment_body_file}"
+
+          partial_marker_dir=".ai/review_runtime/pr-${PR_NUMBER}/round-${resume_round}"
+          mkdir -p "${partial_marker_dir}"
+          partial_marker_file="${partial_marker_dir}/partial_finalize.json"
+          PARTIAL_MARKER_FILE="${partial_marker_file}" \
+          PARTIAL_COMMENT_POSTED="${partial_comment_posted}" \
+          COMPLETED_SCOPE_CSV="${completed_scope_csv}" \
+          INCOMPLETE_SCOPE_CSV="${incomplete_scope_csv}" \
+          VALIDATED_EDITS_COMMITTED="${validated_edits_committed}" \
+          EDITS_PUSHED="${edits_pushed}" \
+          RESUME_ROUND_VALUE="${resume_round}" \
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+
+
+          def parse_bool(name: str) -> bool:
+              return os.environ.get(name, "").strip().lower() == "true"
+
+
+          def parse_csv(name: str) -> list[str]:
+              raw = os.environ.get(name, "").strip()
+              if not raw or raw == "none":
+                  return []
+              return [item for item in raw.split(",") if item]
+
+
+          payload = {
+              "schema_version": 1,
+              "partial_finalize": True,
+              "reason": os.environ.get("AUTOFIX_PARTIAL_FINALIZE_REASON", "").strip() or "unknown",
+              "phase": os.environ.get("AUTOFIX_PARTIAL_FINALIZE_PHASE", "").strip() or "unknown",
+              "completed_scope": parse_csv("COMPLETED_SCOPE_CSV"),
+              "incomplete_scope": parse_csv("INCOMPLETE_SCOPE_CSV"),
+              "validated_edits_committed": parse_bool("VALIDATED_EDITS_COMMITTED"),
+              "edits_pushed": parse_bool("EDITS_PUSHED"),
+              "resume_round": int(os.environ.get("RESUME_ROUND_VALUE", "0") or 0),
+              "comment_posted": parse_bool("PARTIAL_COMMENT_POSTED"),
+          }
+          Path(os.environ["PARTIAL_MARKER_FILE"]).write_text(
+              json.dumps(payload, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          echo "AUTOFIX_PARTIAL_MARKER_FILE=${partial_marker_file}" >> "$GITHUB_ENV"
+
+      - name: Save review-issue ledger after partial finalize
+        if: always() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_issue_ledger/
+            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/
+            ${{ steps.workspace_state.outputs.workspace_path }}/${{ env.REVIEW_LEDGER_PATH }}
+          key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
+
       - name: Telegram success
         # Clean-review-tail gate: matches the auto-merge / mark-ready siblings
         # above so the success notification only fires on a truly converged
         # iteration. See the comment block on "Enable auto-merge on PR" for
         # the LEDGER_ONLY_COMMIT_STRICT rationale.
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'"
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -6231,6 +6392,8 @@ jobs:
                   return "none"
               if status == "pr_closed":
                   return "pr_closed"
+              if status == "skipped_budget":
+                  return "soft_deadline"
               if status == "skipped_open":
                   return "cached_open"
               if status == "skipped_unmapped":
@@ -6267,14 +6430,19 @@ jobs:
           
           reviewer_slots: list[dict[str, object]] = []
           if previous_reviews_dir is not None:
-              for status_path_str in sorted(glob.glob(str(previous_reviews_dir / "status_review_*.txt"))):
+              reviewer_status_paths = sorted(glob.glob(str(previous_reviews_dir / "status_review_*.txt")))
+              reviewer_slot_prefix = "review"
+              if not reviewer_status_paths:
+                  reviewer_status_paths = sorted(glob.glob(str(previous_reviews_dir / "status_pass1_*.txt")))
+                  reviewer_slot_prefix = "pass1"
+              for status_path_str in reviewer_status_paths:
                   status_path = Path(status_path_str)
-                  slot_name = status_path.stem.removeprefix("status_review_")
+                  slot_name = status_path.stem.removeprefix(f"status_{reviewer_slot_prefix}_")
                   status_value = read_text(status_path).strip() or "unknown"
-                  log_text = read_text(previous_reviews_dir / f"review_{slot_name}.log")
-                  output_text = read_text(previous_reviews_dir / f"review_{slot_name}.txt")
+                  log_text = read_text(previous_reviews_dir / f"{reviewer_slot_prefix}_{slot_name}.log")
+                  output_text = read_text(previous_reviews_dir / f"{reviewer_slot_prefix}_{slot_name}.txt")
                   attempt_count = max_attempt_from_text(log_text)
-                  if attempt_count == 0 and status_value in {"success", "failed", "pr_closed", "skipped_unmapped"} and (log_text or output_text):
+                  if attempt_count == 0 and status_value in {"success", "failed", "pr_closed", "skipped_unmapped", "skipped_budget"} and (log_text or output_text):
                       attempt_count = 1
                   reviewer_slots.append({
                       "slot": slot_name,
@@ -6409,6 +6577,19 @@ jobs:
           judge_action = env("JUDGE_ACTION").strip()
           judge_skip_reason = env("JUDGE_SKIP_REASON").strip()
           rb_judge_status = env("RB_JUDGE_STATUS").strip()
+          partial_finalize = bool_env("AUTOFIX_PARTIAL_FINALIZE_REQUESTED")
+          partial_finalize_reason = env("AUTOFIX_PARTIAL_FINALIZE_REASON").strip()
+          partial_finalize_phase = env("AUTOFIX_PARTIAL_FINALIZE_PHASE").strip()
+          partial_comment_posted = bool_env("AUTOFIX_PARTIAL_COMMENT_POSTED")
+
+          incomplete_phases: list[str] = []
+          if partial_finalize:
+              if partial_finalize_phase == "reviewers":
+                  incomplete_phases = ["reviewers", "consolidator", "parser", "ledger", "editor"]
+              elif partial_finalize_phase == "editor":
+                  incomplete_phases = ["editor"]
+              elif partial_finalize_phase:
+                  incomplete_phases = [partial_finalize_phase]
           
           if not max_iterations_reached or skip_judge:
               rb_judge_phase_state = "skipped"
@@ -6436,6 +6617,8 @@ jobs:
                   return "pr_closed"
               if bool_env("AUTOFIX_STALE_BASE_SKIP"):
                   return "stale_base_skip"
+              if partial_finalize:
+                  return "partial_finalize"
               if bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):
                   return "editor_empty_noop"
               if bool_env("EDITOR_CHANGES_LOST"):
@@ -6503,6 +6686,11 @@ jobs:
               "budget_total_secs": int_env("BUDGET_TOTAL_SECS"),
               "budget_remaining_secs": int_env("BUDGET_REMAINING_SECS"),
               "finalize_reason": finalize_reason,
+              "partial_finalize": partial_finalize,
+              "partial_finalize_reason": partial_finalize_reason,
+              "partial_finalize_phase": partial_finalize_phase,
+              "partial_comment_posted": partial_comment_posted,
+              "incomplete_phases": incomplete_phases,
               "edits_pushed": edits_pushed,
               "resume_round": int_env("RESUME_ROUND_SUMMARY"),
           }
@@ -6512,7 +6700,7 @@ jobs:
           )"
 
           if [ -z "${structured_summary_line}" ]; then
-            structured_summary_line='REVIEW_AUTOFIX_RUN_SUMMARY_V1 {"completed_phases":["finalize"],"skipped_phases":["reviewers","consolidator","parser","ledger","editor","commit","push","rb_judge"],"slot_results":{"reviewers":[],"consolidator":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"parser":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"ledger":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"editor":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"commit":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"push":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"rb_judge":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"finalize":{"attempt_count":1,"status":"emitted","failure_class":"none"}},"budget_elapsed_secs":0,"budget_total_secs":0,"budget_remaining_secs":0,"finalize_reason":"summary_emit_failed","edits_pushed":false,"resume_round":0}'
+            structured_summary_line='REVIEW_AUTOFIX_RUN_SUMMARY_V1 {"completed_phases":["finalize"],"skipped_phases":["reviewers","consolidator","parser","ledger","editor","commit","push","rb_judge"],"slot_results":{"reviewers":[],"consolidator":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"parser":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"ledger":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"editor":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"commit":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"push":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"rb_judge":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"finalize":{"attempt_count":1,"status":"emitted","failure_class":"none"}},"budget_elapsed_secs":0,"budget_total_secs":0,"budget_remaining_secs":0,"finalize_reason":"summary_emit_failed","partial_finalize":false,"partial_finalize_reason":"","partial_finalize_phase":"","partial_comment_posted":false,"incomplete_phases":[],"edits_pushed":false,"resume_round":0}'
           fi
 
           {

@@ -337,6 +337,21 @@ def test_editor_budget_cleanup_buffer_never_yields_negative_attempt_wall() -> No
 	assert 'after reserving the 120s cleanup buffer' in text
 
 
+def test_editor_partial_finalize_contract_is_wired() -> None:
+	text = APPLY_FIXES_SCRIPT.read_text(encoding="utf-8")
+	for expected in (
+		"request_editor_partial_finalize()",
+		'AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true',
+		'AUTOFIX_PARTIAL_FINALIZE_REASON=${finalize_reason}',
+		'AUTOFIX_PARTIAL_FINALIZE_PHASE=editor',
+		'editor_partial_finalize_reason="soft_deadline"',
+		'editor_partial_finalize_reason="recoverable_failure"',
+		'partial finalize requested at the soft deadline before another editor attempt',
+		'Editor stopped for budget headroom; continuing with partial-finalize summary.',
+	):
+		assert expected in text
+
+
 def test_editor_loop_bounds_the_drain_and_wires_the_reaper() -> None:
 	text = APPLY_FIXES_SCRIPT.read_text(encoding="utf-8")
 	# Grace bound is configurable with a safe default.

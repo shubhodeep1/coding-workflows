@@ -627,6 +627,22 @@ emit_editor_substate() {
   bash "${ledger_substate_script}" "${args[@]}" || true
 }
 
+request_editor_partial_finalize() {
+  local finalize_reason="$1"
+
+  export AUTOFIX_PARTIAL_FINALIZE_REQUESTED="true"
+  export AUTOFIX_PARTIAL_FINALIZE_REASON="${finalize_reason}"
+  export AUTOFIX_PARTIAL_FINALIZE_PHASE="editor"
+
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    {
+      echo "AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true"
+      echo "AUTOFIX_PARTIAL_FINALIZE_REASON=${finalize_reason}"
+      echo "AUTOFIX_PARTIAL_FINALIZE_PHASE=editor"
+    } >> "$GITHUB_ENV"
+  fi
+}
+
 AUTOFIX_ITERATION="${AUTOFIX_ITERATION:-}"
 if [ -z "${AUTOFIX_ITERATION}" ]; then
   autofix_count=0
@@ -1656,6 +1672,7 @@ rm -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" 2>/dev/null || true
 
 attempt=1
 editor_max_attempts=3
+editor_partial_finalize_reason=""
 if nag_reminder_enabled; then
   editor_nag_attempt_limit="$(nag_silent_round_threshold)"
   if [ "${editor_nag_attempt_limit}" -gt "${editor_max_attempts}" ]; then
@@ -1691,6 +1708,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   fi
   if [ "${remaining}" -lt "${EDITOR_MIN_ATTEMPT_SECS}" ]; then
     echo "Skipping editor attempt ${attempt}: only ${remaining}s remain before ${budget_deadline_label} (need ${EDITOR_MIN_ATTEMPT_SECS}s minimum)."
+    editor_partial_finalize_reason="soft_deadline"
     break
   fi
   # Capacity-fallback: on the final editor attempt switch the editor model to
@@ -1707,6 +1725,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   budget_cap=$(( remaining - 120 ))
   if [ "${budget_cap}" -le 0 ]; then
     echo "Skipping editor attempt ${attempt}: only ${remaining}s remain before ${budget_deadline_label} after reserving the 120s cleanup buffer."
+    editor_partial_finalize_reason="soft_deadline"
     break
   fi
   if [ "${budget_cap}" -lt "${attempt_wall}" ]; then
@@ -2267,6 +2286,39 @@ if [ -n "${_last_changes_lost_file}" ] && [ -s "${_last_changes_lost_file}" ]; t
   cp "${_last_changes_lost_file}" "${EDITOR_SUMMARY_FILE}"
   echo "Editor failed after retries; using last changes-lost output as summary to trigger workflow-level recovery."
 else
+  if [ -z "${editor_partial_finalize_reason}" ]; then
+    editor_partial_finalize_reason="recoverable_failure"
+  fi
+  request_editor_partial_finalize "${editor_partial_finalize_reason}"
+
+  if [ "${editor_partial_finalize_reason}" = "soft_deadline" ]; then
+    cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
+Changes made:
+- none (editor deferred because the run budget was exhausted before another validated attempt could start)
+
+Change status:
+- not-edited
+
+Already satisfied (suggested but already present):
+- none (editor deferred before another validated attempt could start)
+
+Ignored suggestions (with short reason):
+- partial finalize requested at the soft deadline before another editor attempt
+
+Reviewer files processed:
+- none (editor deferred before another validated attempt could start)
+
+Review file issue audit:
+- none (editor deferred before another validated attempt could start)
+
+Regression fingerprint:
+- unavailable (partial finalize before another editor attempt)
+
+Runtime failure path:
+- partial finalize requested at the soft deadline before another editor attempt
+__EDITOR_SUMMARY__
+    echo "Editor stopped for budget headroom; continuing with partial-finalize summary."
+  else
   # The other fallback markers ("editor failed before producing",
   # "unavailable (editor fallback)") MUST remain verbatim to keep
   # lockstep with the in-step retry and the validator in
@@ -2306,6 +2358,7 @@ ${_runtime_failure_path_line}
 __EDITOR_SUMMARY__
   unset _runtime_failure_path_line
   echo "Editor failed after retries; continuing with fallback summary."
+  fi
 fi
 final_editor_err="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | sort -V | tail -n 1 || true)"
 if [ -n "${final_editor_err}" ] && [ -s "${final_editor_err}" ]; then
