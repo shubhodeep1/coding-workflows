@@ -499,6 +499,63 @@ PY
 	return 0
 }
 
+autofix_resume_truthy()
+{
+	case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+		1|true|yes|on)
+			return 0
+			;;
+	esac
+
+	return 1
+}
+
+autofix_resume_same_head_active()
+{
+	autofix_resume_truthy "${AUTOFIX_RESUME_RESTORED:-false}" || return 1
+	autofix_resume_truthy "${AUTOFIX_RESUME_SHOULD_CONTINUE:-false}" || return 1
+	case "${AUTOFIX_RESUME_STATE:-}" in
+		''|resumable)
+			return 0
+			;;
+	esac
+
+	return 1
+}
+
+autofix_resume_completed_scope_contains()
+{
+	local needle="$1"
+	local scope_item=""
+	local completed_scope="${AUTOFIX_RESUME_COMPLETED_SCOPE:-}"
+	local -a completed_scope_items=()
+
+	[ -n "${needle}" ] || return 1
+	IFS=',' read -r -a completed_scope_items <<< "${completed_scope}"
+	for scope_item in "${completed_scope_items[@]}"; do
+		scope_item="$(printf '%s' "${scope_item}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+		[ -n "${scope_item}" ] || continue
+		[ "${scope_item}" = "${needle}" ] && return 0
+	done
+
+	return 1
+}
+
+autofix_resume_can_reuse_stage()
+{
+	local scope_name="$1"
+	shift || true
+	local artifact_path=""
+
+	autofix_resume_same_head_active || return 1
+	autofix_resume_completed_scope_contains "${scope_name}" || return 1
+	for artifact_path in "$@"; do
+		[ -f "${artifact_path}" ] || return 1
+	done
+
+	return 0
+}
+
 if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
   echo "LAST_RUN_DIFF_FILE is missing or empty before editor stage; using placeholder context."
   echo "No previous AI autofix run diff is available." > "${LAST_RUN_DIFF_FILE}"
@@ -668,7 +725,9 @@ export AUTOFIX_ITERATION
 prepare_judge_interim_priors
 
 floor_rules_script=""
-if floor_rules_script="$(resolve_support_script review_floor_rules.sh)"; then
+if autofix_resume_can_reuse_stage "consolidator" "${FLOOR_TAGS_FILE}"; then
+	echo "Resume: reusing cached floor_tags.txt from same-head partial state."
+elif floor_rules_script="$(resolve_support_script review_floor_rules.sh)"; then
   if [ "${REVIEW_FLOOR_RULES_ENABLED:-1}" = "0" ]; then
     : > "${FLOOR_TAGS_FILE}"
     echo "stage=floor_rules disabled=1"
@@ -682,7 +741,9 @@ else
 fi
 
 consolidate_script=""
-if consolidate_script="$(resolve_support_script review_consolidate.sh)"; then
+if autofix_resume_can_reuse_stage "consolidator" "${CONSOLIDATOR_RAW_FILE}"; then
+	echo "Resume: reusing cached consolidator_raw.txt from same-head partial state."
+elif consolidate_script="$(resolve_support_script review_consolidate.sh)"; then
   if ! bash "${consolidate_script}"; then
     echo "::warning::review_consolidate.sh failed; continuing"
   fi
@@ -692,7 +753,9 @@ else
 fi
 
 parse_script=""
-if parse_script="$(resolve_support_script review_parse_consolidator.sh)"; then
+if autofix_resume_can_reuse_stage "parser" "${REVIEW_ISSUES_FILE}" "${PARSER_STATS_FILE}"; then
+	echo "Resume: reusing cached parser artifacts from same-head partial state."
+elif parse_script="$(resolve_support_script review_parse_consolidator.sh)"; then
   if ! bash "${parse_script}"; then
     echo "::warning::review_parse_consolidator.sh failed; continuing"
   fi
@@ -712,7 +775,9 @@ else
 fi
 
 ledger_script=""
-if ledger_script="$(resolve_support_script review_issue_ledger.sh)"; then
+if autofix_resume_can_reuse_stage "ledger" "${LEDGER_STATUS_FILE}"; then
+	echo "Resume: reusing cached ledger_status.txt from same-head partial state."
+elif ledger_script="$(resolve_support_script review_issue_ledger.sh)"; then
   if ! bash "${ledger_script}"; then
     echo "::warning::review_issue_ledger.sh failed; continuing without ledger context"
     : > "${LEDGER_STATUS_FILE}"
