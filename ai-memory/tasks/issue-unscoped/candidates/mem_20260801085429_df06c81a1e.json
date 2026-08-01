@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:112 | severity=medium | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `emit_run_budget_gate_note` pipes `printf` into `tee -a` under `set -euo pipefail`, so a log write failure can abort the reviewer run.\n  WHY: A missing parent directory, permission error, or full disk would turn a diagnostic append into a hard failure and stop the rest of the pass.\n- .github/workflows/review_autofix.yml:1535-1567 | severity=medium | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The soft-deadline normalization rejects valid zero-padded values like `0030`.\n  WHY: `REVIEW_SOFT_DEADLINE_MINUTES=0030` would be rejected and fall back to 210 minutes instead of normalizing to 30.\n- tests/test_review_autofix_review_pipeline_contract.py:1641-1677 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The contract test does not explicitly verify that zero-padded soft-deadline inputs normalize to the intended decimal value.\n  WHY: Without an explicit normalized-value assertion, the suite could miss a regression in zero-padded handling.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: scripts/review_run_reviewers.sh\n  Line or code reference: line 112\n  Problem: The `emit_run_budget_gate_note` function uses a `printf | tee -a ...` pipeline under `set -euo pipefail`, which can abort the entire reviewer run if the `tee` append fails (e.g., missing parent directory, permission issue, full disk).\n  Why it fails at runtime: A write failure from `tee` turns a diagnostic log into a hard failure path, stopping the rest of the reviewer pass.\n  ISSUE_CONFIDENCE: 5\n\n- File: .github/workflows/review_autofix.yml\n  Line or code reference: lines 1535-1567\n  Problem: The workflow's soft-deadline normalization includes a redundant check `0|0[0-9]*` that incorrectly rejects valid zero-padded values like `0030`.\n  Why it fails at runtime: Operator inputs such as `REVIEW_SOFT_DEADLINE_MINUTES=0030` would be rejected and default to 210 minutes instead of being normalized to 30 minutes.\n  ISSUE_CONFIDENCE: 5\n\n- File: tests/test_review_autofix_review_pipeline_contract.py\n  Line or code reference: lines 1641-1677\n  Problem: The contract test does not explicitly verify that zero-padded soft-deadline inputs normalize to the intended decimal value.\n  Why it fails at runtime: Without an explicit assertion on the normalized value, the suite could miss a regression in zero-padded handling.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "d60a50f288809ea3e4147e6ff2b09848947e612407ba2602e5dcb3947f4863d4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3711,
+    "run_id": "30690971604",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "30690971604",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260801085429_df06c81a1e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3711,
+    "run_id": "30690971604"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-01T08:54:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
