@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "When adjusting reviewer or review-run behavior, preserve the semantically important output contract and add a targeted regression test.",
   "timestamps": {
     "created_at": "2026-08-01T04:09:38Z",
