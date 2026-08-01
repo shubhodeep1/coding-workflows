@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.8,
+  "details": "Repo history shows changes to reviewer-related scripts paired with tests for the review contract. The durable lesson is that reviewer selection, formatting, and emitted metadata are part of the workflow interface, not implementation details. Keep the test focused on the externally visible contract to avoid regressions in downstream automation.",
+  "fingerprint": "d5c1313445045cc63bfee7dc80fea8ef95a140f0c539e566d8f352c3edd86680",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "30683229007",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "30683229007",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3690",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3692",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3694",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3695",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3698",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3691",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3693",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3696",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3697",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3699"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260801040938_5146163dfe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "When adjusting reviewer or review-run behavior, preserve the semantically important output contract and add a targeted regression test.",
+  "timestamps": {
+    "created_at": "2026-08-01T04:09:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
