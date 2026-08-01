@@ -468,6 +468,17 @@ def _parse_env_file(path: Path) -> dict[str, str]:
 	return parsed
 
 
+def _read_dir_text_files(path: Path, *, exclude_names: set[str] | None = None) -> dict[str, str]:
+	exclude = exclude_names or set()
+	if not path.exists():
+		return {}
+	return {
+		child.name: child.read_text(encoding="utf-8")
+		for child in sorted(path.iterdir())
+		if child.is_file() and child.name not in exclude
+	}
+
+
 def _git_clean_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
 	env = {
 		key: value
@@ -495,6 +506,45 @@ def _init_git_repo(repo: Path) -> str:
 		capture_output=True,
 		text=True,
 	).stdout.strip()
+
+
+def _run_restore_same_head_resume_step(
+	repo: Path,
+	*,
+	pr_number: str = "123",
+	review_max_resume_rounds: str = "3",
+	runtime_dir: Path | None = None,
+	reviews_dir: Path | None = None,
+) -> dict[str, object]:
+	restore_script = _step_run_script("Restore same-head partial resume state")
+	effective_runtime_dir = runtime_dir or (repo / "runtime")
+	effective_reviews_dir = reviews_dir or (repo / "reviews")
+	effective_runtime_dir.mkdir(parents=True, exist_ok=True)
+	effective_reviews_dir.mkdir(parents=True, exist_ok=True)
+	github_env_file = effective_runtime_dir / "github_env_restore.txt"
+	github_env_file.write_text("", encoding="utf-8")
+	result = subprocess.run(
+		["bash", "-c", f"set -euo pipefail\n{restore_script}"],
+		cwd=str(repo),
+		env=_git_clean_env({
+			"GITHUB_ENV": str(github_env_file),
+			"PR_NUMBER": pr_number,
+			"REVIEW_MAX_RESUME_ROUNDS": review_max_resume_rounds,
+			"PREVIOUS_REVIEWS_DIR": str(effective_reviews_dir),
+			"RUNTIME_DIR": str(effective_runtime_dir),
+			"PYTHONDONTWRITEBYTECODE": "1",
+		}),
+		check=True,
+		capture_output=True,
+		text=True,
+	)
+	return {
+		"stdout": result.stdout,
+		"stderr": result.stderr,
+		"github_env": _parse_env_file(github_env_file),
+		"restored_runtime_files": _read_dir_text_files(effective_runtime_dir, exclude_names={github_env_file.name}),
+		"restored_review_files": _read_dir_text_files(effective_reviews_dir),
+	}
 
 
 def _install_partial_finalize_mock_gh(bin_dir: Path, state_file: Path) -> None:
@@ -1788,8 +1838,12 @@ def _run_reviewer_zero_success_guard_harness(*, statuses: list[str]) -> dict[str
 		}
 
 
-def _run_restore_same_head_resume_harness(*, markers: list[dict[str, object]], review_max_resume_rounds: str = "3") -> dict[str, object]:
-	restore_script = _step_run_script("Restore same-head partial resume state")
+def _run_restore_same_head_resume_harness(
+	*,
+	markers: list[dict[str, object]],
+	review_max_resume_rounds: str = "3",
+	artifacts_by_round: dict[int, dict[str, dict[str, str]]] | None = None,
+) -> dict[str, object]:
 	with tempfile.TemporaryDirectory(prefix="review-resume-restore-") as td:
 		tmp = Path(td)
 		repo = tmp / "repo"
@@ -1809,26 +1863,20 @@ def _run_restore_same_head_resume_harness(*, markers: list[dict[str, object]], r
 				json.dumps(payload, sort_keys=True, indent=2) + "\n",
 				encoding="utf-8",
 			)
+			for directory_name, file_map in (artifacts_by_round or {}).get(round_value, {}).items():
+				directory = marker_dir / directory_name
+				directory.mkdir(parents=True, exist_ok=True)
+				for file_name, contents in file_map.items():
+					(directory / file_name).write_text(str(contents), encoding="utf-8")
 
-		github_env_file = tmp / "github_env.txt"
-		github_env_file.write_text("", encoding="utf-8")
-		result = subprocess.run(
-			["bash", "-c", f"set -euo pipefail\n{restore_script}"],
-			cwd=str(repo),
-			env=_git_clean_env({
-				"GITHUB_ENV": str(github_env_file),
-				"PR_NUMBER": "123",
-				"REVIEW_MAX_RESUME_ROUNDS": review_max_resume_rounds,
-				"PYTHONDONTWRITEBYTECODE": "1",
-			}),
-			check=True,
-			capture_output=True,
-			text=True,
+		result = _run_restore_same_head_resume_step(
+			repo,
+			review_max_resume_rounds=review_max_resume_rounds,
+			runtime_dir=tmp / "runtime_restored",
+			reviews_dir=tmp / "reviews_restored",
 		)
 		return {
-			"stdout": result.stdout,
-			"stderr": result.stderr,
-			"github_env": _parse_env_file(github_env_file),
+			**result,
 			"head_sha": head_sha,
 		}
 
@@ -1864,6 +1912,7 @@ def _build_partial_finalize_step_context(tmp: Path) -> dict[str, object]:
 	}
 	(reviews / "status_review_model_one.txt").write_text("success\n", encoding="utf-8")
 	(reviews / "review_model_one.txt").write_text("cached reviewer output\n", encoding="utf-8")
+	(runtime / "reviewer_consensus.txt").write_text("consensus sentinel\n", encoding="utf-8")
 	(runtime / "reviewer_bundle.txt").write_text("bundle sentinel\n", encoding="utf-8")
 	(runtime / "floor_tags.txt").write_text("CORRECTNESS & LOGIC\n", encoding="utf-8")
 	(runtime / "consolidator_raw.txt").write_text("consolidator sentinel\n", encoding="utf-8")
@@ -1884,6 +1933,8 @@ def _run_partial_finalize_step(
 	previous_env: dict[str, str] | None = None,
 	editor_summary_text: str | None = None,
 	committed_files_text: str | None = None,
+	runtime_dir: Path | None = None,
+	reviews_dir: Path | None = None,
 	review_max_resume_rounds: str = "3",
 	partial_phase: str = "editor",
 	partial_reason: str = "soft_deadline",
@@ -1892,11 +1943,13 @@ def _run_partial_finalize_step(
 ) -> dict[str, object]:
 	partial_script = _step_run_script("Post partial finalize comment and persist runtime marker")
 	repo = Path(context["repo"])
-	runtime = Path(context["runtime"])
-	reviews = Path(context["reviews"])
+	runtime = runtime_dir or Path(context["runtime"])
+	reviews = reviews_dir or Path(context["reviews"])
 	gh_state_file = Path(context["gh_state_file"])
-	editor_summary = Path(context["editor_summary"])
-	committed_files = Path(context["committed_files"])
+	runtime.mkdir(parents=True, exist_ok=True)
+	reviews.mkdir(parents=True, exist_ok=True)
+	editor_summary = runtime / "editor_summary.txt"
+	committed_files = runtime / "committed_files.txt"
 
 	if editor_summary_text is not None:
 		editor_summary.write_text(editor_summary_text, encoding="utf-8")
@@ -4043,10 +4096,19 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 
 def test_review_partial_finalize_workflow_path_is_wired() -> None:
 	early_save_block = _step_block("Save review-issue ledger")
+	restore_block = _step_block("Restore same-head partial resume state")
 	partial_block = _step_block("Post partial finalize comment and persist runtime marker")
 	late_save_block = _step_block("Save review-issue ledger after partial finalize")
 
 	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" in early_save_block
+	for expected in (
+		'CURRENT_PREVIOUS_REVIEWS_DIR="${PREVIOUS_REVIEWS_DIR:-}"',
+		'CURRENT_RUNTIME_DIR="${RUNTIME_DIR:-}"',
+		'"AUTOFIX_RESUME_RESTORED_ARTIFACT_COUNT": "0",',
+		'selected_marker_root / "previous_reviews"',
+		'selected_marker_root / "runtime"',
+	):
+		assert expected in restore_block, f"missing same-head restore artifact contract detail: {expected}"
 	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true'" in partial_block
 	assert "always() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true'" in partial_block
 	for expected in (
@@ -4064,13 +4126,16 @@ def test_review_partial_finalize_workflow_path_is_wired() -> None:
 		"resume_state=${RESUME_STATE}",
 		"resume_should_continue=${RESUME_SHOULD_CONTINUE}",
 		"partial_finalize.json",
-		'echo "AUTOFIX_PARTIAL_COMMENT_POSTED=true" >> "$GITHUB_ENV"',
-		'echo "AUTOFIX_RESUME_ROUND=${resume_round}" >> "$GITHUB_ENV"',
-		'echo "AUTOFIX_RESUME_HEAD_SHA=${current_head_sha}" >> "$GITHUB_ENV"',
-		'echo "AUTOFIX_RESUME_ROUND_LIMIT=${resume_round_limit}" >> "$GITHUB_ENV"',
-		'echo "AUTOFIX_RESUME_STATE=${RESUME_STATE}" >> "$GITHUB_ENV"',
-		'echo "AUTOFIX_RESUME_SHOULD_CONTINUE=${RESUME_SHOULD_CONTINUE}" >> "$GITHUB_ENV"',
+		'echo "AUTOFIX_PARTIAL_COMMENT_POSTED=${partial_comment_posted}"',
+		'echo "AUTOFIX_RESUME_ROUND=${resume_round}"',
+		'echo "AUTOFIX_RESUME_HEAD_SHA=${current_head_sha}"',
+		'echo "AUTOFIX_RESUME_ROUND_LIMIT=${resume_round_limit}"',
+		'echo "AUTOFIX_RESUME_STATE=${RESUME_STATE}"',
+		'echo "AUTOFIX_RESUME_SHOULD_CONTINUE=${RESUME_SHOULD_CONTINUE}"',
 		'"progress_fingerprint": os.environ.get("PROGRESS_FINGERPRINT_VALUE", "").strip(),',
+		'reviewer_consensus.txt',
+		'partial_marker_dir / "previous_reviews"',
+		'partial_marker_dir / "runtime"',
 	):
 		assert expected in partial_block, f"missing partial-finalize contract detail: {expected}"
 	for expected in (
@@ -4279,6 +4344,36 @@ def test_review_partial_finalize_marker_sets_round_budget_exhausted_terminal_sta
 	assert second["marker_payload"]["progress_fingerprint"] != first["marker_payload"]["progress_fingerprint"]
 	assert "resume_state=round_budget_exhausted" in second["latest_comment"]
 	assert "resume_should_continue=false" in second["latest_comment"]
+
+
+def test_same_head_partial_resume_restore_rehydrates_cached_artifacts_and_preserves_no_progress_across_run_dirs() -> None:
+	with tempfile.TemporaryDirectory(prefix="partial-finalize-cross-run-") as td:
+		root = Path(td)
+		context = _build_partial_finalize_step_context(root)
+		first = _run_partial_finalize_step(context)
+		restored_runtime = root / "runtime_restored"
+		restored_reviews = root / "reviews_restored"
+		restore = _run_restore_same_head_resume_step(
+			Path(context["repo"]),
+			runtime_dir=restored_runtime,
+			reviews_dir=restored_reviews,
+		)
+		second = _run_partial_finalize_step(
+			context,
+			previous_env=restore["github_env"],
+			runtime_dir=restored_runtime,
+			reviews_dir=restored_reviews,
+		)
+
+	assert restore["github_env"]["AUTOFIX_RESUME_RESTORED"] == "true"
+	assert int(restore["github_env"]["AUTOFIX_RESUME_RESTORED_ARTIFACT_COUNT"]) > 0
+	assert restore["restored_review_files"]["review_model_one.txt"] == "cached reviewer output\n"
+	assert restore["restored_review_files"]["status_review_model_one.txt"] == "success\n"
+	assert restore["restored_runtime_files"]["reviewer_consensus.txt"] == "consensus sentinel\n"
+	assert restore["restored_runtime_files"]["editor_summary.txt"] == "editor summary sentinel\n"
+	assert second["github_env"]["AUTOFIX_RESUME_STATE"] == "no_progress"
+	assert second["github_env"]["AUTOFIX_RESUME_SHOULD_CONTINUE"] == "false"
+	assert second["marker_payload"]["progress_fingerprint"] == first["marker_payload"]["progress_fingerprint"]
 
 
 def test_push_step_exports_edits_pushed_sentinel_for_summary_contract() -> None:
@@ -4729,6 +4824,7 @@ def main() -> int:
 	test_review_partial_resume_path_does_not_workflow_dispatch_without_new_push()
 	test_review_partial_finalize_marker_sets_no_progress_terminal_state()
 	test_review_partial_finalize_marker_sets_round_budget_exhausted_terminal_state()
+	test_same_head_partial_resume_restore_rehydrates_cached_artifacts_and_preserves_no_progress_across_run_dirs()
 	test_review_pipeline_slop_scan_wiring_is_flagged_fail_open_and_pre_commit_cleaned()
 	test_reviewer_and_consolidator_slop_scan_context_is_wired()
 	test_review_tier_resolver_routes_lite_standard_and_full_and_handles_overrides()

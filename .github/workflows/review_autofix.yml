@@ -1961,11 +1961,15 @@ jobs:
           resume_env_file="$(mktemp)"
           CURRENT_HEAD_SHA="${current_head_sha}" \
           RESUME_ROUND_LIMIT="${resume_round_limit}" \
+          CURRENT_PREVIOUS_REVIEWS_DIR="${PREVIOUS_REVIEWS_DIR:-}" \
+          CURRENT_RUNTIME_DIR="${RUNTIME_DIR:-}" \
           PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' > "${resume_env_file}"
           from __future__ import annotations
 
           import json
           import os
+          import shutil
+          import sys
           from pathlib import Path
 
 
@@ -2003,10 +2007,44 @@ jobs:
               return parsed if parsed >= 0 else 0
 
 
+          def optional_path(value: str) -> Path | None:
+              value = value.strip()
+              return Path(value) if value else None
+
+
+          def restore_cached_artifacts(source_dir: Path | None, destination_dir: Path | None) -> int:
+              restored = 0
+              if source_dir is None or destination_dir is None or not source_dir.is_dir():
+                  return restored
+              try:
+                  destination_dir.mkdir(parents=True, exist_ok=True)
+              except OSError as exc:
+                  print(
+                      f"::warning::Could not prepare resume artifact directory {destination_dir}: {exc}",
+                      file=sys.stderr,
+                  )
+                  return restored
+              for source_path in sorted(source_dir.iterdir()):
+                  if not source_path.is_file():
+                      continue
+                  try:
+                      shutil.copy2(source_path, destination_dir / source_path.name)
+                  except OSError as exc:
+                      print(
+                          f"::warning::Could not restore same-head artifact {source_path} -> {destination_dir / source_path.name}: {exc}",
+                          file=sys.stderr,
+                      )
+                      continue
+                  restored += 1
+              return restored
+
+
           current_head_sha = os.environ.get("CURRENT_HEAD_SHA", "").strip()
           resume_round_limit = os.environ.get("RESUME_ROUND_LIMIT", "3").strip() or "3"
           pr_number = os.environ.get("PR_NUMBER", "").strip() or "0"
           marker_root = Path(f".ai/review_runtime/pr-{pr_number}")
+          current_previous_reviews_dir = optional_path(os.environ.get("CURRENT_PREVIOUS_REVIEWS_DIR", ""))
+          current_runtime_dir = optional_path(os.environ.get("CURRENT_RUNTIME_DIR", ""))
 
           selected_payload: dict[str, object] | None = None
           selected_marker: Path | None = None
@@ -2048,6 +2086,7 @@ jobs:
               "AUTOFIX_RESUME_PHASE": "",
               "AUTOFIX_RESUME_COMMENT_POSTED": "false",
               "AUTOFIX_RESUME_MARKER_FILE": "",
+              "AUTOFIX_RESUME_RESTORED_ARTIFACT_COUNT": "0",
           }
 
           if selected_payload is not None and selected_marker is not None:
@@ -2058,6 +2097,16 @@ jobs:
               resume_should_continue = parse_bool(
                   selected_payload.get("resume_should_continue"),
                   default=(resume_state == "resumable"),
+              )
+              restored_artifact_count = 0
+              selected_marker_root = selected_marker.parent
+              restored_artifact_count += restore_cached_artifacts(
+                  selected_marker_root / "previous_reviews",
+                  current_previous_reviews_dir,
+              )
+              restored_artifact_count += restore_cached_artifacts(
+                  selected_marker_root / "runtime",
+                  current_runtime_dir,
               )
               exports.update(
                   {
@@ -2073,6 +2122,7 @@ jobs:
                       "AUTOFIX_RESUME_PHASE": str(selected_payload.get("phase", "") or ""),
                       "AUTOFIX_RESUME_COMMENT_POSTED": bool_to_env(parse_bool(selected_payload.get("comment_posted"))),
                       "AUTOFIX_RESUME_MARKER_FILE": selected_marker.as_posix(),
+                      "AUTOFIX_RESUME_RESTORED_ARTIFACT_COUNT": str(restored_artifact_count),
                   }
               )
 
@@ -2083,7 +2133,7 @@ jobs:
           cat "${resume_env_file}" >> "$GITHUB_ENV"
 
           if grep -q '^AUTOFIX_RESUME_RESTORED=true$' "${resume_env_file}"; then
-            echo "Restored same-head partial resume state from $(awk -F= '$1 == "AUTOFIX_RESUME_MARKER_FILE" { print $2 }' "${resume_env_file}" | tail -n 1)."
+            echo "Restored same-head partial resume state from $(awk -F= '$1 == "AUTOFIX_RESUME_MARKER_FILE" { print $2 }' "${resume_env_file}" | tail -n 1) with $(awk -F= '$1 == "AUTOFIX_RESUME_RESTORED_ARTIFACT_COUNT" { print $2 }' "${resume_env_file}" | tail -n 1) cached artifacts."
           else
             echo "No cached same-head partial resume state matched HEAD=${current_head_sha:-<unknown>}."
           fi
@@ -5554,9 +5604,9 @@ jobs:
               return value.strip().lower() == "true"
 
 
-          def describe_path(path_str: str) -> dict[str, object]:
+          def describe_path(path_str: str, artifact_label: str) -> dict[str, object]:
               path = Path(path_str)
-              entry: dict[str, object] = {"path": path.as_posix(), "exists": path.exists()}
+              entry: dict[str, object] = {"path": artifact_label, "exists": path.exists()}
               if not path.exists():
                   return entry
               try:
@@ -5581,9 +5631,9 @@ jobs:
           ):
               if previous_reviews_dir:
                   for matched_path in sorted(glob.glob(str(Path(previous_reviews_dir) / pattern))):
-                      artifacts.append(describe_path(matched_path))
+                      artifacts.append(describe_path(matched_path, f"previous_reviews/{Path(matched_path).name}"))
           for rel_path in (
-              "reviewer_bundle.txt",
+              "reviewer_consensus.txt",
               "floor_tags.txt",
               "consolidator_raw.txt",
               "parser_stats.txt",
@@ -5591,11 +5641,14 @@ jobs:
               "ledger_status.txt",
           ):
               if runtime_dir:
-                  artifacts.append(describe_path(str(Path(runtime_dir) / rel_path)))
-          for env_name in ("EDITOR_SUMMARY_FILE_PATH", "COMMITTED_FILES_FILE_PATH"):
+                  artifacts.append(describe_path(str(Path(runtime_dir) / rel_path), f"runtime/{rel_path}"))
+          for env_name, artifact_label in (
+              ("EDITOR_SUMMARY_FILE_PATH", "runtime/editor_summary.txt"),
+              ("COMMITTED_FILES_FILE_PATH", "runtime/committed_files.txt"),
+          ):
               candidate = os.environ.get(env_name, "").strip()
               if candidate:
-                  artifacts.append(describe_path(candidate))
+                  artifacts.append(describe_path(candidate, artifact_label))
 
           resume_round = 0
           try:
@@ -5731,11 +5784,14 @@ jobs:
           RESUME_STATE_VALUE="${RESUME_STATE}" \
           RESUME_SHOULD_CONTINUE_VALUE="${RESUME_SHOULD_CONTINUE}" \
           PROGRESS_FINGERPRINT_VALUE="${PROGRESS_FINGERPRINT}" \
+          PREVIOUS_REVIEWS_DIR_PATH="${PREVIOUS_REVIEWS_DIR:-}" \
+          RUNTIME_DIR_PATH="${RUNTIME_DIR:-}" \
           PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
           from __future__ import annotations
 
           import json
           import os
+          import shutil
           from pathlib import Path
 
 
@@ -5749,6 +5805,54 @@ jobs:
                   return []
               return [item for item in raw.split(",") if item]
 
+
+          def optional_path(name: str) -> Path | None:
+              raw = os.environ.get(name, "").strip()
+              return Path(raw) if raw else None
+
+
+          def copy_artifacts(source_paths: list[Path], destination_dir: Path) -> None:
+              copied_any = False
+              for source_path in source_paths:
+                  if not source_path.is_file():
+                      continue
+                  if not copied_any:
+                      destination_dir.mkdir(parents=True, exist_ok=True)
+                      copied_any = True
+                  shutil.copy2(source_path, destination_dir / source_path.name)
+
+
+          partial_marker_path = Path(os.environ["PARTIAL_MARKER_FILE"])
+          partial_marker_dir = partial_marker_path.parent
+          previous_reviews_dir = optional_path("PREVIOUS_REVIEWS_DIR_PATH")
+          runtime_dir = optional_path("RUNTIME_DIR_PATH")
+
+          previous_review_artifacts: list[Path] = []
+          if previous_reviews_dir is not None:
+              for pattern in (
+                  "status_pass1_*.txt",
+                  "status_review_*.txt",
+                  "pass1_*.txt",
+                  "review_*.txt",
+                  "consensus_pass1.txt",
+              ):
+                  previous_review_artifacts.extend(sorted(previous_reviews_dir.glob(pattern)))
+          copy_artifacts(previous_review_artifacts, partial_marker_dir / "previous_reviews")
+
+          runtime_artifacts: list[Path] = []
+          if runtime_dir is not None:
+              for file_name in (
+                  "reviewer_consensus.txt",
+                  "floor_tags.txt",
+                  "consolidator_raw.txt",
+                  "parser_stats.txt",
+                  "review_issues.txt",
+                  "ledger_status.txt",
+                  "editor_summary.txt",
+                  "committed_files.txt",
+              ):
+                  runtime_artifacts.append(runtime_dir / file_name)
+          copy_artifacts(runtime_artifacts, partial_marker_dir / "runtime")
 
           payload = {
               "schema_version": 1,
@@ -5767,7 +5871,7 @@ jobs:
               "progress_fingerprint": os.environ.get("PROGRESS_FINGERPRINT_VALUE", "").strip(),
               "comment_posted": parse_bool("PARTIAL_COMMENT_POSTED"),
           }
-          Path(os.environ["PARTIAL_MARKER_FILE"]).write_text(
+          partial_marker_path.write_text(
               json.dumps(payload, sort_keys=True, indent=2) + "\n",
               encoding="utf-8",
           )
