@@ -481,6 +481,13 @@ def _reviewer_failback_helper_block() -> str:
 	return text[start:end]
 
 
+def _reviewer_partial_finalize_budget_helper_block() -> str:
+	text = _reviewers_text()
+	start = text.index('REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE="${RUNTIME_DIR:-.}/reviewers_partial_finalize_request.txt"')
+	end = text.index("resolve_ledger_substate_helper() {", start)
+	return text[start:end]
+
+
 def _reviewer_run_reviewer_block() -> str:
 	text = _reviewers_text()
 	start = text.index("run_reviewer() {")
@@ -1304,6 +1311,7 @@ def _run_prepare_reviewer_scope_harness(*, last_run_changed_text: str, ledger_te
 			"scoped_active": files["scoped_active"].read_text(encoding="utf-8").strip(),
 		}
 def _run_reviewer_failback_harness() -> dict[str, object]:
+	partial_finalize_budget_helper_block = _reviewer_partial_finalize_budget_helper_block()
 	helper_block = _reviewer_failback_helper_block()
 	run_reviewer_block = _reviewer_run_reviewer_block()
 	run_reviewer_pass_block = _reviewer_run_reviewer_pass_block()
@@ -1372,6 +1380,7 @@ def _run_reviewer_failback_harness() -> dict[str, object]:
 				"bash",
 				"-c",
 				"set -euo pipefail\n"
+				f"{partial_finalize_budget_helper_block}\n"
 				f"{helper_block}\n"
 				f"{run_reviewer_block}\n"
 				f"{run_reviewer_pass_block}\n"
@@ -1659,6 +1668,8 @@ def test_review_soft_deadline_budget_contract_is_wired() -> None:
 		'codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"',
 		"codex_run_budget_summary",
 		"codex_run_budget_phase_may_start",
+		'REVIEWER_SOFT_DEADLINE_DEFAULT_MINUTES="210"',
+		"reviewer_budget_remaining_secs_fallback",
 		'REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE="${RUNTIME_DIR:-.}/reviewers_partial_finalize_request.txt"',
 		'reviewer_pass_minimum_secs=300',
 		'reviewer_request_partial_finalize "soft_deadline"',
@@ -1672,6 +1683,7 @@ def test_review_soft_deadline_budget_contract_is_wired() -> None:
 	apply_fixes_text = _apply_fixes_text()
 	for expected in (
 		'codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"',
+		'REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED="$(normalize_review_soft_deadline_minutes "${REVIEW_SOFT_DEADLINE_MINUTES:-}")"',
 		"codex_run_budget_remaining_secs",
 		"budget_deadline_label=\"soft deadline\"",
 		"request_editor_partial_finalize",
@@ -3502,6 +3514,7 @@ def test_review_partial_finalize_workflow_path_is_wired() -> None:
 
 	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" in early_save_block
 	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true'" in partial_block
+	assert "always() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true'" in partial_block
 	for expected in (
 		"<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->",
 		"partial_finalize=true",
@@ -3547,6 +3560,13 @@ def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
 		assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" in block, (
 			f"step should skip during partial finalize: {step_name}"
 		)
+
+
+def test_review_partial_finalize_keeps_commit_and_push_path_available() -> None:
+	commit_block = _step_block("Commit changes")
+	push_block = _step_block("Push all pending commits")
+	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" not in commit_block
+	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" not in push_block
 
 
 def test_review_pipeline_summary_finalize_reason_marks_partial_runs() -> None:

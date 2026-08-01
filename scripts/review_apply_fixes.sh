@@ -1653,7 +1653,14 @@ case "${EDITOR_VERBOSITY}" in
 esac
 # Shared run-budget helpers drive the soft deadline when available; the
 # legacy job-deadline math remains as a fail-open fallback for stale bundles.
-JOB_TIMEOUT_SECS=$((180 * 60))
+REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED="${REVIEW_SOFT_DEADLINE_MINUTES:-210}"
+if command -v normalize_review_soft_deadline_minutes >/dev/null 2>&1; then
+  REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED="$(normalize_review_soft_deadline_minutes "${REVIEW_SOFT_DEADLINE_MINUTES:-}")"
+fi
+case "${REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED}" in
+  ''|*[!0-9]*) REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED="210" ;;
+esac
+JOB_TIMEOUT_SECS=$(( REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED * 60 ))
 JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
 _hb_tmpdir=""
 _hb_fifo=""
@@ -2319,45 +2326,32 @@ Runtime failure path:
 __EDITOR_SUMMARY__
     echo "Editor stopped for budget headroom; continuing with partial-finalize summary."
   else
-  # The other fallback markers ("editor failed before producing",
-  # "unavailable (editor fallback)") MUST remain verbatim to keep
-  # lockstep with the in-step retry and the validator in
-  # review_autofix.yml (see probably_unnecessary_but_read_if_stuck.md
-  # §20.10). Only the Runtime failure path line varies per cause, and
-  # the refusal variant is recognised by an additive validator check
-  # that sets EDITOR_NOOP_REFUSAL alongside EDITOR_NOOP_SUSPICIOUS.
-  if [ -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" ]; then
-    _runtime_failure_path_line="- model refused (safety filter)"
-  else
-    _runtime_failure_path_line="- unavailable (editor fallback)"
-  fi
-  cat > "${EDITOR_SUMMARY_FILE}" <<__EDITOR_SUMMARY__
+    cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
 Changes made:
-- none (editor failed before producing a validated summary)
+- none (editor requested partial finalize after a recoverable failure before another validated attempt completed)
 
 Change status:
 - not-edited
 
 Already satisfied (suggested but already present):
-- none (editor failed before producing a validated summary)
+- none (editor stopped after a recoverable failure before another validated attempt completed)
 
 Ignored suggestions (with short reason):
-- editor failed after retries before final classification
+- partial finalize requested after a recoverable editor failure before another validated attempt
 
 Reviewer files processed:
-- none (editor failed before producing a validated summary)
+- none (editor stopped after a recoverable failure before another validated attempt completed)
 
 Review file issue audit:
-- none (editor failed before producing a validated summary)
+- none (editor stopped after a recoverable failure before another validated attempt completed)
 
 Regression fingerprint:
-- unavailable (editor fallback)
+- unavailable (partial finalize after recoverable editor failure)
 
 Runtime failure path:
-${_runtime_failure_path_line}
+- partial finalize requested after a recoverable editor failure before another validated attempt
 __EDITOR_SUMMARY__
-  unset _runtime_failure_path_line
-  echo "Editor failed after retries; continuing with fallback summary."
+    echo "Editor failed after retries; continuing with partial-finalize summary."
   fi
 fi
 final_editor_err="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | sort -V | tail -n 1 || true)"

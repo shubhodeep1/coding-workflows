@@ -120,6 +120,7 @@ emit_run_budget_gate_note() {
 }
 
 REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE="${RUNTIME_DIR:-.}/reviewers_partial_finalize_request.txt"
+REVIEWER_SOFT_DEADLINE_DEFAULT_MINUTES="210"
 
 reviewer_request_partial_finalize() {
   local finalize_reason="$1"
@@ -146,6 +147,53 @@ EOF
 
 reviewer_partial_finalize_requested() {
   [ -f "${REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE}" ]
+}
+
+reviewer_normalize_soft_deadline_minutes_fallback() {
+  local raw_value="${1:-${REVIEW_SOFT_DEADLINE_MINUTES:-${REVIEWER_SOFT_DEADLINE_DEFAULT_MINUTES}}}"
+  local normalized_value=""
+
+  case "${raw_value}" in
+    ''|*[!0-9]*)
+      printf '%s\n' "${REVIEWER_SOFT_DEADLINE_DEFAULT_MINUTES}"
+      return 0
+      ;;
+  esac
+
+  normalized_value="$(( 10#${raw_value} ))"
+  if [ "${normalized_value}" -le 0 ]; then
+    printf '%s\n' "${REVIEWER_SOFT_DEADLINE_DEFAULT_MINUTES}"
+    return 0
+  fi
+
+  printf '%s\n' "${normalized_value}"
+}
+
+reviewer_budget_remaining_secs_fallback() {
+  local now_epoch="${1:-$(date +%s)}"
+  local start_epoch_raw="${CODEX_RUN_BUDGET_START_EPOCH:-${JOB_START_EPOCH:-}}"
+  local start_epoch=""
+  local soft_deadline_minutes=""
+  local soft_deadline_epoch=""
+  local remaining_secs=""
+
+  case "${start_epoch_raw}" in
+    ''|*[!0-9]*)
+      start_epoch="${now_epoch}"
+      ;;
+    *)
+      start_epoch="${start_epoch_raw}"
+      ;;
+  esac
+
+  soft_deadline_minutes="$(reviewer_normalize_soft_deadline_minutes_fallback "${REVIEW_SOFT_DEADLINE_MINUTES:-}")"
+  soft_deadline_epoch="$(( start_epoch + (soft_deadline_minutes * 60) ))"
+  remaining_secs="$(( soft_deadline_epoch - now_epoch ))"
+  if [ "${remaining_secs}" -lt 0 ]; then
+    remaining_secs="0"
+  fi
+
+  printf '%s\n' "${remaining_secs}"
 }
 
 resolve_ledger_substate_helper() {
@@ -3586,13 +3634,8 @@ run_reviewer() {
         fi
       fi
     else
-      if [ -n "${JOB_DEADLINE:-}" ] && [[ "${JOB_DEADLINE}" =~ ^[0-9]+$ ]]; then
-        budget_remaining_secs=$(( JOB_DEADLINE - budget_now_epoch ))
-        budget_deadline_label="job deadline"
-      else
-        budget_remaining_secs=$(( reviewer_min_attempt_secs + reviewer_budget_cleanup_buffer_secs + reviewer_default_max_wall ))
-        budget_deadline_label="job deadline (unset; fail-open)"
-      fi
+      budget_remaining_secs="$(reviewer_budget_remaining_secs_fallback "${budget_now_epoch}")"
+      budget_deadline_label="soft deadline (fallback)"
     fi
 
     reviewer_max_wall="${reviewer_default_max_wall}"
@@ -3974,14 +4017,24 @@ run_reviewer_pass() {
   local -a pass_status_files=()
   local -a pass_log_files=()
   local reviewer_pass_minimum_secs=300
+  local reviewer_pass_remaining_secs=""
 
   emit_run_budget_gate_note "reviewer pass ${pass_prefix}" "${reviewer_pass_minimum_secs}"
-  if command -v codex_run_budget_phase_may_start >/dev/null 2>&1 \
-    && ! codex_run_budget_phase_may_start "${reviewer_pass_minimum_secs}"; then
-    echo "Reviewer pass ${pass_prefix}: remaining run budget is below ${reviewer_pass_minimum_secs}s — requesting partial finalize before launching another expensive pass." >&2
-    reviewer_request_partial_finalize "soft_deadline"
-    echo 0
-    return 0
+  if command -v codex_run_budget_phase_may_start >/dev/null 2>&1; then
+    if ! codex_run_budget_phase_may_start "${reviewer_pass_minimum_secs}"; then
+      echo "Reviewer pass ${pass_prefix}: remaining run budget is below ${reviewer_pass_minimum_secs}s — requesting partial finalize before launching another expensive pass." >&2
+      reviewer_request_partial_finalize "soft_deadline"
+      echo 0
+      return 0
+    fi
+  else
+    reviewer_pass_remaining_secs="$(reviewer_budget_remaining_secs_fallback)"
+    if [ "${reviewer_pass_remaining_secs}" -lt "${reviewer_pass_minimum_secs}" ]; then
+      echo "Reviewer pass ${pass_prefix}: remaining run budget fallback is below ${reviewer_pass_minimum_secs}s (${reviewer_pass_remaining_secs}s remain) — requesting partial finalize before launching another expensive pass." >&2
+      reviewer_request_partial_finalize "soft_deadline"
+      echo 0
+      return 0
+    fi
   fi
 
   while IFS= read -r model; do
