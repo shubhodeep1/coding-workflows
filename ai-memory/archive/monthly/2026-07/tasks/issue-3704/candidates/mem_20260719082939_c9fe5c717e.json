@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nActions taken:\n- Inspected `tests/e2e_smoke_canary.txt` to confirm current content and scope.\n- Checked the closest existing `decompose-run` pattern in `tests/e2e_smoke_canary_b.txt` and the author-decomposed smoke generator in `.github/workflows/test-and-mark-stable.yml`.\n- Checked representative canary consumers/spec text to detect scope conflicts before planning.\n\nPlanning ref context:\n- HEAD: `9a1b2252e3b921176be27d36a6c968e9d2f1c6f7`\n- Resolved checkout ref: `orchestrator/project-3703`\n- Symbolic branch: `orchestrator/project-3703`\n- Integration branch metadata: `orchestrator/project-3703`\n- Integration branch mismatch: `false`\n\nClarification mapping:\n- No QIDs were asked in clarify.\n- The auto-posted `/answer [auto-answered-by-orchestrator]` confirms continuation with no added scope changes.\n\nAutomation / operational impact:\n- Change type: modify one existing text fixture only.\n- Scheduler / PR-push entry point: none; no workflow wiring change is needed.\n- Long-running supervisor: none.\n- DB gate pattern: none.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt (following the existing `decompose-run` pattern already present in `tests/e2e_smoke_canary_b.txt`)\nScope-mode justification:\nThe issue explicitly constrains the work to `tests/e2e_smoke_canary.txt` and forbids touching any other file. The lowest-risk implementation is a scoped in-place fixture update: keep the already-correct first line, replace the current second line `run_id: 26151428977` with `decompose-run: 29679632273`, and preserve unrelated content such as the existing trailing `updated-by: ai-pipeline` line. Expanding into smoke-helper/spec alignment would violate the requested one-file scope and add risk without being required for this issue\u2019s acceptance criteria.\n\nAssumptions:\n- Preserve the existing third line (`updated-by: ai-pipeline`) and final newline because the issue only constrains lines 1-2 and asks to avoid unrelated churn.\n- Treat this as a fixture-only change even though some repo consumers still describe the older `run_id` shape.\n\nMissing-context notes:\n- None that block planning; the issue is fully specified for a one-file edit.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n  - Keep line 1 as exactly `status: ok` (it already matches on the planning ref).\n  - Replace line 2 with exactly `decompose-run: 29679632273`.\n  - Leave the remaining line(s) untouched to avoid unrelated churn.\n- No other files should change.\n\n## Functions or modules to implement\n- None. This is a direct text-fixture update only.\n\n## Data structures affected\n- The line-oriented content of `tests/e2e_smoke_canary.txt`:\n  - line 1: `status: ok`\n  - line 2: `decompose-run: 29679632273`\n  - line 3+: preserved as-is\n\n## API or interface changes\n- No external API or workflow interface changes.\n- Local fixture-interface change only: the second line in `tests/e2e_smoke_canary.txt` changes from a `run_id` key to a `decompose-run` key.\n\n## Decisions\n### D1 \u2014 Preserve the untouched trailing canary content\n- Chosen:\n  - Update only the required first two lines and preserve the existing `updated-by: ai-pipeline` line.\n- Alternatives considered:\n  - Rewrite the file down to exactly two lines.\n  - Fully overwrite the whole file even where content already matches.\n- Why:\n  - The issue only specifies lines 1-2 and explicitly asks to avoid unrelated content churn.\n\n### D2 \u2014 Do not widen this issue into a repo-wide canary-contract migration\n- Chosen:\n  - Keep the change scoped to `tests/e2e_smoke_canary.txt` only.\n- Alternatives considered:\n  - Also update `tests/e2e_smoke_canary_spec.txt`.\n  - Also update smoke helper text in `scripts/review_apply_fixes.sh` and `scripts/review_conflict_prepare.sh`.\n- Why:\n  - The issue explicitly forbids modifying any other file, so broader alignment belongs in a separate follow-up if needed.\n\n## Risks and edge cases\n- Conflict: the current repo still contains `run_id`-based references for this canary in `tests/e2e_smoke_canary_spec.txt` and representative smoke-helper text in `scripts/review_apply_fixes.sh` and `scripts/review_conflict_prepare.sh`, while this issue requests a `decompose-run` second line only in `tests/e2e_smoke_canary.txt`.\n- Ensure the implementation replaces line 2 rather than inserting a new line and leaving stale `run_id:` content in the file.\n- Avoid reformatting, deleting the trailing line, or changing any other path; acceptance is explicitly one-file scoped.\n\n## Testing considerations\n- Verify `tests/e2e_smoke_canary.txt` line 1 is exactly `status: ok`.\n- Verify `tests/e2e_smoke_canary.txt` line 2 is exactly `decompose-run: 29679632273`.\n- Verify the diff touches only `tests/e2e_smoke_canary.txt` (`git diff --name-only` / `git diff --stat` equivalent).\n- No repo-wide typecheck/lint/build is required for this text-only fixture change.\n\n## Pre-execution self-check\n- The checked-out ref matches the integration-branch metadata.\n- The target file exists on the planning ref.\n- The requested change is implementation-ready as a one-file, low-risk text edit.\n\nPLAN_SELF_CHECK: WARNING: Existing smoke spec/helper text still references the older `run_id` contract for `tests/e2e_smoke_canary.txt`, so this issue intentionally lands only the requested fixture change and leaves broader alignment for a separate follow-up if needed.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c06283296e2b34bbca698ce1bcf0387852b4b06b9fd6c0a3e1902c38f6f2c29b",
+  "lineage": {
+    "issue_number": 3704,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29679779456",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29679779456",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3704"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260719082939_c9fe5c717e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3704,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "29679779456"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3704",
+  "timestamps": {
+    "created_at": "2026-07-19T08:29:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

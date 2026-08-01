@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_semble_contract.py:144-147 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5]\n  PROBLEM: The contract test still expects MAIN_PRIMARY_BOOTSTRAP_SCRIPTS to exclude render_prompt.py, but the PR moved it into the main-primary list.\n  WHY: The assertion now compares against the pre-PR string, so the test raises AssertionError in CI when render_prompt.py appears in MAIN_PRIMARY_BOOTSTRAP_SCRIPTS.\n- tests/test_review_semble_contract.py:154 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5]\n  PROBLEM: The contract test still expects OPTIONAL_BOOTSTRAP_SCRIPTS to include render_prompt.py, but the PR removed it from that list.\n  WHY: The exact-string assertion now checks a pre-PR optional-bootstrap line, so it fails once render_prompt.py is no longer present.\n- tests/test_review_semble_contract.py:148-151 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The comment describing render_prompt.py as remaining optional is stale after the bootstrap reorganization.\n  WHY: The comment contradicts the new main-primary placement and will mislead future maintainers about the staging contract.\n- tests/test_orchestrate_poll_process.py:12997-12999 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The test still asserts the old MAIN_PRIMARY_BOOTSTRAP_SCRIPTS value without render_prompt.py.\n  WHY: The stage helper body now includes render_prompt.py in MAIN_PRIMARY_BOOTSTRAP_SCRIPTS, so the exact-string assertion fails.\n- tests/test_orchestrate_poll_process.py:13003-13005 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The test still asserts OPTIONAL_BOOTSTRAP_SCRIPTS contains render_prompt.py, and the surrounding comment is stale.\n  WHY: The PR removed render_prompt.py from OPTIONAL_BOOTSTRAP_SCRIPTS, so the substring assertion fails.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: tests/test_review_semble_contract.py\n  Line or code reference: lines 144-147\n  Problem: Exact-string assertion checks the old value of MAIN_PRIMARY_BOOTSTRAP_SCRIPTS, which does not include \"render_prompt.py\". The PR moved render_prompt.py into this list, so this assertion fails at runtime (the CI lint job already confirms this \u2014 AssertionError at line 144).\n  Why it fails at runtime: The substring match fails because the stage_helper text now contains `render_prompt.py` appended to MAIN_PRIMARY_BOOTSTRAP_SCRIPTS, but the assertion expects the old string without it. This blocks CI on every run.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- File: tests/test_review_semble_contract.py\n  Line or code reference: line 154\n  Problem: Exact-string assertion checks OPTIONAL_BOOTSTRAP_SCRIPTS still includes \"render_prompt.py\". The PR removed render_prompt.py from this list, so this assertion fails.\n  Why it fails at runtime: The substring match fails because the OPTIONAL_BOOTSTRAP_SCRIPTS line no longer contains `render_prompt.py` after the PR change. This also blocks CI.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- File: tests/test_orchestrate_poll_process.py\n  Line or code reference: lines 12997-12999\n  Problem: Exact-string assertion checks the old value of MAIN_PRIMARY_BOOTSTRAP_SCRIPTS without \"render_prompt.py\". Same root cause as the first finding, but in a different test file.\n  Why it fails at runtime: The stage_helper_body text now contains `render_prompt.py` in MAIN_PRIMARY_BOOTSTRAP_SCRIPTS, but the assertion expects the old three-entry string. This test will fail when run.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- File: tests/test_orchestrate_poll_process.py\n  Line or code reference: line 13005 (and stale comment at lines 13003-13004)\n  Problem: Exact-string assertion checks OPTIONAL_BOOTSTRAP_SCRIPTS still includes \"render_prompt.py\". The comment on line 13003-13004 says \"render_prompt.py is staged optionally on main so shim branches resolve their backend (PR #3057); keep this list in sync with review_autofix.yml.\" \u2014 this is now stale.\n  Why it fails at runtime: The OPTIONAL_BOOTSTRAP_SCRIPTS line no longer contains `render_prompt.py`. The substring assertion will fail.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- File: tests/test_review_semble_contract.py\n  Line or code reference: lines 148-151\n  Problem: Comment says \"The Python render-prompt backend also stays optional so shim-adopting branches bootstrap without breaking main-based callers.\" This is no longer true after the PR \u2014 render_prompt.py is now main-primary, not optional. The comment is stale and contradicts the new behavior.\n  Why it fails at runtime: Not a runtime failure, but the stale comment misleads future maintainers about the staging contract. It should be updated to reflect that render_prompt.py is now main-primary (fail-open, with branch fallback).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: tests/test_review_semble_contract.py\n  Line or code reference: 145-146, 154\n  Problem: The contract test was not updated to reflect the bootstrap script reorganization. Two assertions fail because they expect the OLD values: 1. Line 145-146 expects `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` to NOT include `render_prompt.py` 2. Line 154 expects `OPTIONAL_BOOTSTRAP_SCRIPTS` to include `render_prompt.py`\n  Why it fails at runtime: The test `test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena` fails with `AssertionError` because the PR moved `render_prompt.py` from `OPTIONAL_BOOTSTRAP_SCRIPTS` to `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` without updating the corresponding contract assertions. This causes CI lint job to fail.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "62d8d37db609871d462e80242209492cd4afe424d821ae6e80c96953824c8eba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28889135055",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28889135055",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260707184414_d6d0e329eb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28889135055"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-07T18:44:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

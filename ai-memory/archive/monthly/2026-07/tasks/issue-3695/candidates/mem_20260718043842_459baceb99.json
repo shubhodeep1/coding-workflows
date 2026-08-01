@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `09b2fc279f0c411c46cb8894d0817ab667a2674d` on `orchestrator/project-3627`\nIntegration branch check: matches metadata (`orchestrator/project-3627`)\n\nAutomation impact:\n- Change type: existing-code adjustment only; no new script, workflow, or supervisor.\n- Scheduler / PR-push entry point: existing `.github/workflows/workflow-log-analysis.yml:1137-1144` step that runs `python3 scripts/render_scenario_trace.py`.\n- Supervisor: none.\n- DB gate: none.\n- Removal registry: none.\n\nConflict detection:\n- The issue description is stale relative to this ref: `_parse_steps()` already keeps `current` outside the `for excerpt in log_excerpts` loop and finalizes it once after the loop in `scripts/render_scenario_trace.py:271-298`.\n- The claimed repro does not reproduce locally on this ref: `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_scenario_trace.py` passed, including `test_render_keeps_marker_block_open_across_excerpt_boundaries()` at `tests/test_render_scenario_trace.py:228-280` and the standalone runner coverage at `tests/test_render_scenario_trace.py:472-479`.\n\nScope-mode: Hold Scope\nReuse-audit: extends `scripts/render_scenario_trace.py` / `tests/test_render_scenario_trace.py`\nScope-mode justification: The safest plan is to hold the scope to the existing renderer and its existing unit coverage. The current branch already appears to contain the requested boundary fix and the targeted test passes, so no workflow/schema expansion is justified. If a hidden CI-only regression is re-proved, limit any edit to the existing parser path and preserve the current fail-open contract.\n\nFiles likely to change:\n- None expected on this ref if the issue is confirmed already satisfied.\n- If a fresh repro appears, limit edits to:\n  - `scripts/render_scenario_trace.py`\n  - `tests/test_render_scenario_trace.py`\n- No `.github/workflows/*` change is planned unless new evidence shows the workflow is invoking different code.\n\nFunctions or modules to implement:\n- Primary edit surface, only if a real regression is re-reproduced: `scripts/render_scenario_trace.py::_parse_steps()`\n- Preserve unchanged behavior in `scripts/render_scenario_trace.py::render()` so malformed runs still emit `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL` and do not abort parseable runs.\n\nData structures affected:\n- `_Block` lifetime across `log_excerpts`\n- Rendered `steps[]` ordering/content for `user_message` and `assistant_text`\n- No top-level trace schema change (`schema_version`, `run_id`, `phase`, `steps`) is planned\n\nAPI/interface changes:\n- None.\n- No CLI flag changes.\n- No workflow contract, log prefix, or schema-version change.\n\n## Decisions\n\n### D1 \u2014 Keep the fix surface limited to the existing renderer/test pair\n- Chosen: verify the current renderer/test pair first and only touch `scripts/render_scenario_trace.py` plus its existing test file if a new repro is found.\n- Alternatives considered: changing `.github/workflows/workflow-log-analysis.yml`, changing `.github/workflows/ci.yml`, or adding new helper modules.\n- Why: the current wiring already invokes the renderer and the CI coverage gate already exercises the test file; the reported bug is parser-local, not wiring-local.\n\n### D2 \u2014 Preserve the fail-open parse contract\n- Chosen: keep `render()`'s per-run try/except logging path unchanged.\n- Alternatives considered: converting parse failures into hard failures or adding new error-state output fields.\n- Why: the workflow is documented as local-only best-effort trace generation, and the existing workflow comments/tests rely on `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL` skip behavior instead of aborting the whole run.\n\nRisks and edge cases:\n- Highest-risk conflict: the issue may already be resolved on this ref, so speculative edits could reintroduce the bug.\n- If a failure still appears in CI, inspect the actual `log_excerpts` payload before editing; given the stale issue text, any remaining defect may be collector/input-shape related rather than the current `_parse_steps()` loop shape.\n- Preserve end-of-input finalization semantics: a block opened near the end of the final excerpt must still finalize once, after the full excerpt list is consumed.\n- The worktree already contains unrelated modifications in `scripts/render_prompt.py` and `scripts/render_prompt.sh`; implementation must leave them untouched.\n\nTesting considerations:\n- Required targeted check: `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_scenario_trace.py`\n- Boundary contract to watch: `test_render_keeps_marker_block_open_across_excerpt_boundaries()` in `tests/test_render_scenario_trace.py:228-280`\n- Standalone runner contract to watch: `main()` in `tests/test_render_scenario_trace.py:472-479`\n- Existing CI follow-up already covers the renderer through `.github/workflows/ci.yml:642-647`; no new test harness is needed.\n\nPre-execution self-check result:\n- Ref/branch matches orchestrator metadata.\n- No missing scalar input blocks planning.\n- Reuse stays within existing renderer/test surfaces; no net-new structure is needed.\n- Non-blocking concern: issue evidence conflicts with the current ref and local test result.\n\nActions taken:\n- Inspected `scripts/render_scenario_trace.py`, the cited boundary test, the standalone test runner, the existing workflow invocation, and the CI coverage gate.\n- Ran the standalone renderer test file locally on the planning ref.\n\nAssumptions:\n- The planning ref shown above is the intended implementation target.\n- No hidden alternate copy of the scenario-trace renderer exists outside the checked path.\n\nMissing-context notes:\n- No failing workflow-log-analysis artifact or run URL was provided to reconcile the stale issue narrative with the current passing local result.\n- Because the issue conflicts with the current ref, implementation should verify before editing and avoid speculative churn.\n\nPLAN_SELF_CHECK: WARNING: The issue description conflicts with `09b2fc279f0c411c46cb8894d0817ab667a2674d`; the requested cross-excerpt fix and targeted boundary test already appear present/passing on this ref.\nPLAN_SELF_CHECK: WARNING: The worktree has unrelated local edits in `scripts/render_prompt.py` and `scripts/render_prompt.sh`; keep any follow-up isolated from them.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "6a55d713c26f4c475bcb87dcd9fed3f540b81c54ceeea6086f4da92a470dc32c",
+  "lineage": {
+    "issue_number": 3695,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29630761423",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29630761423",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3695"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260718043842_459baceb99",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3695,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "29630761423"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3695",
+  "timestamps": {
+    "created_at": "2026-07-18T04:38:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

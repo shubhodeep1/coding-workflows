@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- file: scripts/review_apply_fixes.sh\n  location: line 1598\n  issue: Uses `-ge 3` instead of `-eq 3` or `-eq \"${max_attempts}\"` like plan.yml and implement.yml\n- file: tests/test_editor_capacity_fallback_contract.py\n  location: test_review_apply_fixes_switches_model_on_final_attempt function\n  issue: Unlike `test_plan_loop_switches_model_on_final_attempt` and `test_implement_loop_switches_model_on_final_attempt`, this test doesn't verify the condition that triggers the fallback\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "aba94ca2045bbfd6ae3b6509a304147cdae47dd3e5a6428961875eadb1b429b4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28679629876",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28679629876",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260703194232_7a139edadc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28679629876"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-07-03T19:42:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

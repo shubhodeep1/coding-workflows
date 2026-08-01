@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref:\n- HEAD: `e95117dff28c28d2869f6556158f71ef7982651e`\n- Branch: `orchestrator/project-3601`\n- Integration metadata: matches checkout (`Integration branch mismatch: false`)\n\nClarification mapping:\n- No Q-IDs were emitted in clarify.\n- `/answer [auto-answered-by-orchestrator]` therefore means \u201cproceed with the issue as written\u201d; there are no unresolved clarification answers to map.\n\nConflict check:\n- No issue/codebase naming or path conflict found.\n- The reported internal drift is confirmed: `prompts/mode-clarify.txt` contains the `CLARIFY_INFORMAL_SCORE` advisory block, while `prompts/_templates/mode-clarify.txt` currently omits it before `Mandatory Question Format`.\n\nScope-mode: Hold Scope\nReuse-audit: extends `prompts/_templates/mode-clarify.txt`\nScope-mode justification:\nThis is a local contract-restoration fix, not a new feature. The existing assembly path already resolves `prompts/mode-clarify.txt` through `prompts/_templates/mode-clarify.txt`, and the existing regression test already enforces byte-for-byte parity against the checked-in legacy prompt. The safest complete fix is to restore the missing advisory paragraph in the existing clarify template, in the same location and wording as the legacy prompt/Phase 4 plan text, while leaving renderer logic, workflow wiring, and test contracts unchanged. A new fragment/helper or a relaxed test would widen a contract-sensitive surface without improving correctness.\n\nAutomation / execution wiring:\n- Change type: modify an existing prompt template only; no new script, workflow, or entrypoint.\n- Existing automated coverage: the validate repo-check batch in `scripts/run_validation_repo_checks.sh` already executes `python3 tests/test_assemble_prompt.py`; no new scheduler or PR-push wiring is required.\n- Supervisor: none.\n- DB gate pattern: not applicable.\n- `docs/scripts-pending-removal.md`: not applicable.\n\nFiles likely to change:\n- `prompts/_templates/mode-clarify.txt` \u2014 add the missing `CLARIFY_INFORMAL_SCORE` advisory paragraph immediately before `Mandatory Question Format`.\n- `prompts/mode-clarify.txt` \u2014 likely unchanged; touch only if a refactor is unavoidable and the final assembled output remains byte-identical.\n- Optional only if implementation chooses refactor-over-inline edit: a clarify-specific prompt fragment under `prompts/`, but avoid this unless inline restoration cannot preserve the contract.\n\nFunctions or modules to implement:\n- Restore template parity by copying the existing advisory paragraph from `prompts/mode-clarify.txt` into `prompts/_templates/mode-clarify.txt` in the same location.\n- Keep `scripts/assemble_prompt.sh` source-resolution behavior unchanged; it already selects the template source for prompt assembly.\n- Do not \u201cfix\u201d the failure by weakening `tests/test_assemble_prompt.py` or by teaching assembly to ignore drift; the root cause is missing template content.\n\nData structures affected:\n- The clarify prompt template body in `prompts/_templates/mode-clarify.txt`.\n- The assembled byte output for `mode-clarify` emitted by `bash scripts/assemble_prompt.sh prompts/mode-clarify.txt`.\n- No JSON schema, env var, workflow input, or label/state data changes.\n\nAPI/interface changes:\n- No external API or workflow-interface change.\n- Internal contract restored: assembled `mode-clarify` output must remain byte-identical to checked-in `prompts/mode-clarify.txt`, including the advisory handling language for `CLARIFY_INFORMAL_SCORE`.\n\nRisks and edge cases:\n- `tests/test_assemble_prompt.py` normalizes line endings but otherwise compares full prompt bytes; any extra/missing blank line, changed wrapping, or punctuation drift will still fail.\n- The paragraph must stay before `Mandatory Question Format`; moving it elsewhere can preserve content but still change the prompt contract/order.\n- Copy from the current legacy prompt text, not a paraphrase, to avoid accidental byte drift.\n- Introducing a new shared fragment is wider scope; there is no existing fragment for this advisory, so inline restoration is the safer default.\n\nTesting considerations:\n- `PROMPT_PERSONA_PREFIX_ENABLED=false python3 tests/test_assemble_prompt.py`\n- `PROMPT_PERSONA_PREFIX_ENABLED=false bash scripts/assemble_prompt.sh prompts/mode-clarify.txt | diff -u prompts/mode-clarify.txt -`\n- `scripts/run_validation_repo_checks.sh \"python3 tests/test_assemble_prompt.py\"`\n- Only if anything beyond the clarify template changes (for example a shared fragment or render helper): `python3 tests/test_render_prompt_core_modes.py`\n\nAssumptions made:\n- `prompts/mode-clarify.txt` is the authoritative legacy snapshot because the assembly regression test compares assembled stdout directly to that file.\n- No broader prompt refactor is required; the failure is fully explained by the missing paragraph in the template source.\n\nMissing-context notes:\n- None blocking.\n\nPre-execution self-check result:\n- Ref check passed: planning is on `orchestrator/project-3601`, matching the integration-branch metadata.\n- Scope check passed: the fix is local, reuses existing assembly/test contracts, and needs no external inputs.\n- Verification check passed: the current diff failure is reproducible and directly maps to the missing advisory block.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "6587fafee4bf98d916c4d6c9377e562369329ae341bb6a788a06bd9c8905e66d",
+  "lineage": {
+    "issue_number": 3625,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29054447547",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29054447547",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3625"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260709222915_57b6b5d92b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3625,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "29054447547"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3625",
+  "timestamps": {
+    "created_at": "2026-07-09T22:29:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

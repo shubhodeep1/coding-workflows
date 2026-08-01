@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3664,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3664\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3665\",\"pr_number\":3665,\"branch\":\"ai/issue-3664\",\"run_id\":\"29259865488\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/29259865488\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/orchestrate_poll.yml\",\".gitignore\",\"README.md\",\"agents.md\",\"scripts/gh_helpers.sh\",\"scripts/mcp_handshake_probe.py\",\"scripts/orchestrate_poll_process.sh\",\"scripts/render_prompt.sh\",\"scripts/semble_helpers.sh\",\"scripts/serena_stats_emit.py\",\"scripts/setup_serena.sh\",\"scripts/targeted_file_context.py\",\"scripts/worktree_gc.sh\",\"scripts/worktree_registry.sh\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_orchestrate_poll_workflow_contract.py\",\"tests/test_worktree_gc.sh\",\"tests/test_worktree_name_validation.sh\",\"tests/test_worktree_registry.sh\"]}",
+  "fingerprint": "95002df2e3e5ba03000d585f9375075422d43dfddaeda84921a2e7f96b36c0c9",
+  "lineage": {
+    "issue_number": 3664,
+    "parent_ids": [],
+    "pr_number": 3665,
+    "run_id": "29259865488",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29259865488",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3665"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260713150717_70f663b596",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3664,
+    "level": "run",
+    "pr_number": 3665,
+    "run_id": "29259865488"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3664: https://github.com/shubhodeep1/coding-workflows/pull/3665",
+  "timestamps": {
+    "created_at": "2026-07-13T15:07:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

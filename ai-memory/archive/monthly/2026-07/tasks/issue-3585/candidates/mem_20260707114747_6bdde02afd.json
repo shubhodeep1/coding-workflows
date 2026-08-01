@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning basis: inspected `.github/workflows/test-and-mark-stable.yml`\u2019s `verify-cancel-on-close` step and the existing dedicated `tests/test_test_and_mark_stable_*.py` workflow-contract tests.\n\nPlanning ref: `orchestrator/project-3579` @ `8b504fd23108a60ed6fa1c6ffb3ffa2f3860fa89`\nClarification mapping: no `Q<ID>` questions were asked in clarify; `/answer [auto-answered-by-orchestrator]` is continuation only, so the issue body is the full scope source.\n\nAssumptions.\n- `files_touched` includes `.github/workflows/test-and-mark-stable.yml` and the requested dedicated regression-test file.\n- If the omitted \u201cdedicated new test file listed below\u201d is not separately pinned elsewhere, the repo\u2019s existing `tests/test_test_and_mark_stable_*.py` naming pattern is the intended destination.\n\nMissing-context notes.\n- The issue says the dedicated new test file is \u201clisted below,\u201d but that exact path is not present in the provided planning context.\n\nScope-mode: Hold Scope\nReuse-audit: extends `verify-cancel-on-close`\u2019s later `NEW_RUN_ID` single-fetch polling pattern and the existing dedicated `tests/test_test_and_mark_stable_*.py` contract-test style.\nScope-mode justification: The bug is confined to one legacy polling loop that duplicates the same `actions/runs/{id}` fetch per iteration. The minimum complete fix is to reuse the same-step single-fetch pattern already present in the later `NEW_RUN_ID` path, then add one narrow regression test that locks the contract without touching shared polling helpers, other workflows, or operator-facing behavior. Broadening this into helper extraction or wider polling cleanup would add risk without improving correctness for the scoped issue; per \u00a76 priorities, correctness is satisfied by removing the redundant fetch while preserving the current timeout, fallback, and messaging behavior.\n\n1. Files likely to change.\n- `.github/workflows/test-and-mark-stable.yml`\n  - `verify-cancel-on-close` step, closed-PR / pre-existing cancel-run wait loop only.\n  - Replace the two per-iteration `gh api \"repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}\"` calls with one fetch and local derivation of both `EXISTING_STATUS` and `EXISTING_CONCLUSION`.\n  - Leave the initial existing-run lookup and the later open-PR `NEW_RUN_ID` loop unchanged.\n- `tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py` (new; or the exact dedicated path already pinned by `files_touched`)\n  - Add a focused workflow-contract regression test for the closed-PR wait loop.\n\n2. Functions or modules to implement.\n- Workflow shell logic inside `.github/workflows/test-and-mark-stable.yml`:\n  - the `if [ \"${PR_STATE}\" = \"closed\" ]; then ... while ... done` branch in `verify-cancel-on-close`\n  - a new loop-local payload variable with a unique name (for example `EXISTING_RUN_JSON`) so the single fetched response can feed both field parses\n- New dedicated standalone Python test module following the adjacent pattern used by:\n  - `tests/test_test_and_mark_stable_plan_polling_guard.py`\n  - `tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py`\n\n3. Data structures affected.\n- GitHub Actions run JSON from `repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}`; only `.status` and `.conclusion` are consumed.\n- Shell variables in the closed-PR branch:\n  - preserved: `EXISTING_STATUS`, `EXISTING_CONCLUSION`, `EXISTING_RUN_ID`\n  - added: one temporary payload variable for the single fetched run object\n- No schema, label, prompt, memory, or workflow output contract changes.\n\n4. API or interface changes.\n- No external interface or operator-facing behavior changes.\n- Internal API usage only changes from two GitHub Actions run GETs per closed-PR poll iteration to one, while preserving:\n  - 600s timeout budget\n  - empty-string fallback on transient `gh api` failure\n  - existing success/error messaging and outputs\n\nFailure modes:\n- Transient `gh api actions/runs/{id}` failure\n  - Symptom: empty payload for that iteration\n  - Recovery path: preserve empty-string fallback for both derived fields, continue polling until the existing deadline, and keep the current timeout behavior\n- Run completes with non-success conclusion\n  - Symptom: same `concluded ...` error path\n  - Recovery path: unchanged failure message/status output\n- Run never reaches `completed`\n  - Symptom: same 600s timeout error\n  - Recovery path: unchanged timeout handling and `cancel_run_id` output\n\n5. Risks and edge cases.\n- Under `set -euo pipefail`, parsing an empty payload with `jq` will abort the step; the refactor must guard local parsing so transient API failures still degrade to `\"\"`, not shell exit.\n- Do not refactor shared polling helpers or the later `NEW_RUN_ID` loop; the issue explicitly scopes the fix to the older closed-PR wait loop.\n- The requested new test file path is not explicitly present in the provided context, so implementation should follow the established dedicated test-file naming pattern unless `files_touched` constrains it differently.\n\n6. Testing considerations.\n- Add a narrow contract test that reads `.github/workflows/test-and-mark-stable.yml`, isolates the `verify-cancel-on-close` closed-PR branch, and asserts:\n  - only one per-iteration `gh api \"repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}\"` fetch remains inside the wait loop\n  - both `EXISTING_STATUS` and `EXISTING_CONCLUSION` are derived locally from that single fetched payload\n  - the old duplicate per-field fetch pattern is absent from that loop body\n- Keep the test string-structure based, like the adjacent dedicated `test_test_and_mark_stable_*.py` modules, so it locks the regression without needing live GitHub access.\n- Validation target: run the new standalone test module directly with `python3`; optionally run the adjacent dedicated workflow-contract tests alongside it if the branch\u2019s normal Python test environment is available.\n\n7. Pre-execution self-check result.\n- Ref check: `orchestrator/project-3579` matches the issue\u2019s integration-branch metadata.\n- Reuse check: the same workflow step already contains a later single-fetch polling pattern, and the repo already has dedicated `test_test_and_mark_stable_*` contract tests to mirror.\n- Scope check: this plan stays within the requested surface (one workflow step + one regression test) and avoids unrelated helper, docs, or prompt churn.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "16a928849518bde10a35a9001f43a0fc8b53d744cf560b13690e3bbbe15646b9",
+  "lineage": {
+    "issue_number": 3585,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28863548147",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28863548147",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3585"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260707114747_6bdde02afd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3585,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28863548147"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3585",
+  "timestamps": {
+    "created_at": "2026-07-07T11:47:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref:\n- HEAD: `fc2409151c476056e1bf4bf33ca12e42230c2031`\n- Branch: `orchestrator/project-3579`\n- Integration branch metadata matches the checked-out ref.\n\nClarification mapping:\n- No `Q1`/`Q2` batch was needed.\n- `/answer [auto-answered-by-orchestrator]` only confirms continuation; there are no unresolved clarification inputs.\n\nAutomation / wiring:\n- Change type: modify an existing report only.\n- Scheduler / PR-push wiring: none.\n- New script or supervisor: none.\n- DB gate pattern: none.\n\nScope-mode: Hold Scope\nReuse-audit: extends `analysis/recommendation-processing-report.md`\u2019s existing per-doc outcome-ledger convention\nScope-mode justification:\nThe issue explicitly limits this work to a report-only closeout, forbids source-doc deletion in this issue, and asks for current-head validation rather than workflow/script edits. The minimum complete change is to fully classify the four named source docs inside the existing report structure, while avoiding any underlying automation/code changes. That preserves correctness and operational clarity without broadening scope.\n\n1. Files likely to change\n- `analysis/recommendation-processing-report.md` only.\n\nRead-only evidence inputs:\n- `analysis/workflow-optimization-2026-06-25.md`\n- `analysis/workflow-optimization-2026-06-26.md`\n- `analysis/workflow-optimization-2026-06-27.md`\n- `analysis/workflow-optimization-2026-06-28.md`\n- Current-head evidence files the report should cite in prose:\n  - `.github/workflows/workflow-log-analysis.yml`\n  - `.github/workflows/review_autofix.yml`\n  - `scripts/stage_workflow_support.sh`\n  - `scripts/collect_workflow_logs.py`\n  - `tests/test_collect_workflow_logs.py`\n  - `tests/test_workflow_checkout_integration_ref_audit.py`\n  - `scripts/slop_scan_local.py`\n  - `docs/INVENTORY.md`\n\n2. Functions or modules to implement\n- No runtime code modules.\n- Add one new batch section in `analysis/recommendation-processing-report.md`, immediately before `## Preserved machine-maintained artifacts`, for the 2026-06-25 through 2026-06-28 docs.\n- Add four `###` subsections, one per source filename.\n- For each subsection, classify every recommendation using the existing report style, with this semantic mapping:\n  - `VALID&SAFE` \u2192 `Implemented by sibling work` or `Already satisfied on this ref`\n  - `VALID-BUT-RISKY` \u2192 `Intentionally deferred`\n  - `STALE-or-already-done` \u2192 `Already satisfied on this ref`\n  - `INVALID` \u2192 explicit invalid/superseded note only where current HEAD disproves the recommendation\n- Deduplicate repeated recommendations inside each doc under stable short labels, as the existing report already does for repeated narrative asks.\n- Keep the 2026-06-26/27/28 appendix contract intact: their appendix tables all report `SAFE_TO_MERGE = 0`, so `RISKY_SKIP` and `NEEDS_VERIFICATION` findings stay deferred unless current HEAD now proves the exact change safe.\n\nCurrent-head evidence already verified and worth carrying into the report:\n- `.github/workflows/workflow-log-analysis.yml` now uses `vars.*` in the cited `if:` guards, not `env.*`.\n- `scripts/stage_workflow_support.sh` already includes `assemble_prompt.sh` in `REQUIRED_BOOTSTRAP_SCRIPTS`, and `.github/workflows/review_autofix.yml` already stages/backfills missing preflight support scripts from the checked-out support trees.\n- `scripts/collect_workflow_logs.py` and `tests/test_collect_workflow_logs.py` already classify 404/410 log archives as `partial_data:missing_log_archive`.\n- `tests/test_workflow_checkout_integration_ref_audit.py` already classifies `check_failure_triage.yml`.\n- `scripts/slop_scan_local.py` no longer has the historical assigned-lambda Ruff `E731` pattern.\n- `docs/INVENTORY.md` now lists `scripts/pr_checks_lib.sh`, so that exact historical inventory-gap symptom is stale even if \u201cmove parity earlier\u201d remains deferred.\n\n3. Data structures affected\n- Markdown heading structure and bullet taxonomy in `analysis/recommendation-processing-report.md` only.\n- The existing `## Processed source docs (104)` list/count should remain unchanged, because that section explicitly describes source docs \u201cno longer present under `analysis/`,\u201d while this issue explicitly says not to delete the four current source docs yet.\n- If needed, add one concise note in the report\u2019s final assumptions/conflicts area explaining that these four docs are triaged in-place and therefore were not added to the deleted-doc provenance list.\n\n4. API or interface changes\n- None.\n\n5. Potential risks or edge cases\n- The four docs mix narrative recommendations with appendix findings; do not double-count the same ask across both.\n- Some recommendations are now partially stale: the historical failure symptom is gone, but the broader optimization remains unshipped. Split those into \u201calready satisfied/stale\u201d versus \u201cstill deferred\u201d instead of giving one coarse status.\n- The 2026-06-26/27/28 appendix safety tags are load-bearing; do not convert `RISKY_SKIP` or `NEEDS_VERIFICATION` items into safe subset entries without exact current-head proof.\n- Preserve unrelated historical report sections verbatim; this change should append the new batch, not rewrite older batches.\n- Do not edit or delete the four source docs in this issue.\n- The planning context did not include an explicit `files_touched` block; keep the implementation to the report file only.\n\n6. Testing considerations\n- No repo code/test harness changes are needed for this report-only update.\n- Verify by:\n  - confirming only `analysis/recommendation-processing-report.md` changed,\n  - confirming the new batch section contains all four filenames,\n  - confirming the top deleted-doc provenance section was not repurposed,\n  - confirming the four source docs remain present and unmodified.\n\n7. Pre-execution self-check result\n- Ref/branch context is valid and matches integration metadata.\n- No missing clarification input remains.\n- No external/private scalar input is required.\n- The plan is implementable as a single-file report update.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "05e4e2def233b23df3aae1739d2e3a9659503a7cdbf9caa125446535666a200b",
+  "lineage": {
+    "issue_number": 3580,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28862389751",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28862389751",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3580"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260707112827_b72810060d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3580,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28862389751"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3580",
+  "timestamps": {
+    "created_at": "2026-07-07T11:28:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

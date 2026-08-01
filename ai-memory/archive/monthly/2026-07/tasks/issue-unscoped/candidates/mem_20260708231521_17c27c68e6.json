@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_update_repo_tree.py:1-342 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The test module defines 11 `test_*` functions but never invokes them, so running `python3 tests/test_update_repo_tree.py` exits 0 without executing any assertions.\n  WHY: The repo\u2019s CI runs Python tests by direct file execution, so all assertions are dead code and regressions in `tools/repo_tree/update_repo_tree.py` would pass unnoticed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Run `make generate` and then `make generate-check`; both tree blocks in `agents.md` should round-trip cleanly.\"\n  expected_change_site: tests/test_update_repo_tree.py\n  confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_6-plus]\n  EVIDENCE: The test file has no `if __name__ == \"__main__\":` block, so its assertions never run.\n- requirement: \"Validation: Run `make generate` and then `make generate-check`; both tree blocks in `agents.md` should round-trip cleanly.\"\n  expected_change_site: .github/workflows/ci.yml\n  confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  EVIDENCE: `.github/workflows/ci.yml` does not include `tests/test_update_repo_tree.py` in its test allowlist.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_update_repo_tree.py:1-342 | severity=BLOCKER | confidence=5\n  PROBLEM: The test module defines 11 `test_*` functions containing bare `assert` statements but provides no invocation mechanism.\n  WHY: Running `python3 tests/test_update_repo_tree.py` imports the module and exits 0 without executing a single assertion, so CI reports a green pass regardless of whether the tests fail.\n- Requirement: \"Run `make generate` and then `make generate-check`; both tree blocks in `agents.md` should round-trip cleanly.\"\n  Expected change site: tests/test_update_repo_tree.py \u2014 the file needs a test runner block so CI can actually verify round-trip correctness; alternatively, `.github/workflows/ci.yml` needs to include the file in its allowlist AND the file needs a runner\n  Evidence of absence: The test file has no `if __name__ == \"__main__\":` block and is not listed in `.github/workflows/ci.yml`.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_update_repo_tree.py:1-342 | severity=BLOCKER | confidence=5\n  PROBLEM: The test module defines 11 `test_*` functions but provides no runner mechanism.\n  WHY: `python3 tests/test_update_repo_tree.py` imports the module and exits 0 without executing any assertions, so all 11 test functions are dead code and regressions will pass undetected.\n- Requirement: \"Validation: Run `make generate` and then `make generate-check`; both tree blocks in `agents.md` should round-trip cleanly.\"\n  Expected change site: CI validation that ensures the new test file runs\n  Evidence of absence: `.github/workflows/ci.yml` does not include `tests/test_update_repo_tree.py` in its test allowlist.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_update_repo_tree.py:entry[12] | severity=BLOCKER | confidence=5\n  PROBLEM: CI runs Python tests via explicit `python3 tests/<file>.py` allowlists, but this new test file is not referenced and has no entry point, so its assertions never execute.\n  WHY: `python3 tests/test_update_repo_tree.py` would exit 0 without running any assertions, leaving critical repo-tree logic untested in CI.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_update_repo_tree.py:1-342 | severity=BLOCKER | confidence=5\n  PROBLEM: The module defines 11 `test_*` functions with bare `assert` statements but never calls any of them.\n  WHY: Running `python3 tests/test_update_repo_tree.py` imports the module, defines the functions, and exits 0 without executing a single assertion, so regressions in `update_repo_tree.py` go undetected.\n- Requirement: \"Validation: Run `make generate` and then `make generate-check`; both tree blocks in `agents.md` should round-trip cleanly.\"\n  Expected change site: `.github/workflows/ci.yml` test allowlist or a `if __name__ == \"__main__\":` guard in the test module itself\n  Evidence of absence: The full PR diff and LAST RUN DIFF contain no modification to `.github/workflows/ci.yml`, and the test module itself has no runner invocation.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "e8b78c244abe62954b78dda1dd9c5c99de278221f9f822a90d6dca0b9f6bdecb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3615,
+    "run_id": "28969529714",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28969529714",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260708231521_17c27c68e6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3615,
+    "run_id": "28969529714"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-08T23:15:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

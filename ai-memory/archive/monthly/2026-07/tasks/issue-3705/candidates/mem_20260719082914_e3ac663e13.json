@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref:\n- HEAD: `9a1b2252e3b921176be27d36a6c968e9d2f1c6f7`\n- Branch: `orchestrator/project-3703`\n- Integration branch metadata: `orchestrator/project-3703` (matches checkout)\n\nClarification mapping:\n- No `Q1`/`Q2` clarification was required.\n- The `/answer [auto-answered-by-orchestrator]` comment confirms the issue is fully specified and can proceed as written.\n\nAutomation / wiring:\n- Change type: only modifies existing repository content.\n- Scheduler / PR-push entry point: no new wiring; this smoke task is already defined by `.github/workflows/test-and-mark-stable.yml`.\n- Long-running supervisor: none.\n- DB gate pattern: not applicable.\n- `docs/scripts-pending-removal.md`: not applicable.\n\nScope-mode: Hold Scope\nReuse-audit: extends existing smoke canary fixture contract\nScope-mode justification:\nThis is a fully specified, one-file smoke-fixture update with an explicit scope lock to `tests/e2e_smoke_canary_b.txt`. Holding scope is the safest complete option: it satisfies the issue exactly, preserves backward compatibility, and avoids violating the acceptance criterion that no other files change. Expanding into workflow, prompt, or test edits would add churn without improving correctness; reducing scope would leave the requested run-id update undone.\n\nFiles likely to change:\n- `tests/e2e_smoke_canary_b.txt`\n  - Keep line 1 as exactly `status: ok`.\n  - Replace line 2 with exactly `decompose-run: 29679632273`.\n  - Preserve the file as a minimal two-line canary fixture with no unrelated whitespace/content churn.\n\nFunctions or modules to implement:\n- None. This is a fixture-only content edit; no shell, Python, workflow, or prompt logic should change.\n\nData structures affected:\n- Plain-text smoke canary record in `tests/e2e_smoke_canary_b.txt`:\n  - line 1: status field\n  - line 2: decompose-run field\n- No schema, JSON, YAML, label, or memory-record changes.\n\nAPI or interface changes:\n- None.\n- No workflow inputs/outputs, env vars, prompts, scripts, labels, or external interfaces change.\n\n## Decisions\n### D1 \u2014 Keep the fix strictly file-scoped\n- Chosen:\n  - Update only `tests/e2e_smoke_canary_b.txt`.\n- Alternatives considered:\n  - Touch related smoke files such as `tests/e2e_smoke_canary.txt` or `tests/e2e_smoke_canary_spec.txt`.\n  - Modify the workflow that generated the issue.\n  - Append a new run-id line instead of replacing the existing second line.\n- Why:\n  - The issue explicitly requires a single-file change.\n  - The existing workflow already describes this exact contract.\n  - Appending instead of replacing risks duplicate or malformed fixture content.\n\n### D2 \u2014 Treat the current file contents as a targeted replacement, not a rewrite campaign\n- Chosen:\n  - Perform the smallest safe edit needed to bring the first two lines to the required exact values.\n- Alternatives considered:\n  - Rebuild the file from a broader template.\n  - Introduce supporting test or helper changes.\n- Why:\n  - Current repo state already matches the intended fixture shape; only the stale run id differs.\n  - Minimal change best preserves formatting and avoids out-of-scope churn.\n\nPotential risks or edge cases:\n- The current file already has `status: ok` on line 1 and a previous run id on line 2; implementation must replace line 2, not append a third line.\n- Do not read from or depend on Issue 1 output; this task is intentionally self-contained and parallelizable.\n- Do not modify sibling canary files or workflow references; acceptance requires a one-file diff only.\n- Preserve exact key names and spacing; even small text drift would defeat the smoke contract.\n\nTesting considerations:\n- Verify `tests/e2e_smoke_canary_b.txt` is the only changed path in the diff.\n- Verify line 1 is exactly `status: ok`.\n- Verify line 2 is exactly `decompose-run: 29679632273`.\n- No broader typecheck/lint/build/test updates are needed for this text-only fixture change.\n\nPre-execution self-check result:\n- Codebase alignment / conflicts: none.\n- Target file exists on the planning ref and already uses the expected two-line smoke-fixture format.\n- Checkout branch matches the issue\u2019s integration-branch metadata.\n- No missing clarification, external dependency, or private input blocks implementation.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b834fedc2fa849be826cc604cabff897c1f21a31db446b9ee31a9cc3dfea3fdc",
+  "lineage": {
+    "issue_number": 3705,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29679783144",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29679783144",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3705"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260719082914_e3ac663e13",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3705,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "29679783144"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3705",
+  "timestamps": {
+    "created_at": "2026-07-19T08:29:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

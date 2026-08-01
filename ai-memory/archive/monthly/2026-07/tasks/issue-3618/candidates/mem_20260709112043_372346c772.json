@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `b270b377e11d61148f502038cc4cc7fbe2e52df7` on `orchestrator/project-3601` (matches integration branch metadata).\n\nClarification mapping:\n- No Q1/Q2 batch was issued in clarify.\n- `/answer [auto-answered-by-orchestrator]` only confirms continuation, so the scope remains exactly the issue body.\n\nScope-mode: Hold Scope\nReuse-audit: extends `scripts/generate_codex_model_reference.py` override-read/render path\n\nScope-mode justification:\nCurrent HEAD already contains the generator-side override plumbing (`OVERRIDES_PATH`, `load_optional_overrides`, `merge_model`, `render_notes`, `render_markdown`), and the issue explicitly forbids broadening into workflow-template, consumer-repo, or runtime-feature work. The minimum safe plan is therefore: add the two override YAML files, add the `agents.md` convention block in the exact requested location, regenerate `docs/codex-model-reference.md`, and touch the generator only if the new override file exposes a small render gap. That keeps the change additive, deterministic, and inside the requested surfaces.\n\nAutomation/wiring:\n- Change type: existing generator/docs extension plus two new override/config files.\n- Scheduler / PR-push wiring: none.\n- Long-running supervisor: not required.\n- DB gate: not applicable.\n\nFiles likely to change.\n- `scripts/codex_model_catalog_overrides.yaml` (new) \u2014 add the `openai/gpt-5.4` freeze example and explanatory note from Phase 6.\n- `prompts/.overrides.yaml` (new) \u2014 add the two `skip_validation: true` freeze entries and rationale text.\n- `scripts/generate_codex_model_reference.py` \u2014 only if the current override path needs a narrow tweak after the new YAML lands.\n- `docs/codex-model-reference.md` \u2014 regenerate so the `openai/gpt-5.4` row shows the frozen note.\n- `agents.md` \u2014 insert `## Override conventions` immediately after `## Stable-ID convention`.\n- Keep edits confined to the files above unless a focused generator test is added because the Python logic actually changes.\n\nFunctions or modules to implement.\n- Reuse the existing generator path in `scripts/generate_codex_model_reference.py`:\n  - `OVERRIDES_PATH` for discovery\n  - `load_optional_overrides()` for YAML parsing\n  - `merge_model()` for per-slug overlay\n  - `render_notes()` for note text + `(frozen)` marking\n  - `render_markdown()` for deterministic doc output\n- Add the two maintainer-facing YAML files only; do not add any runtime reader for `prompts/.overrides.yaml` in this phase.\n- Add the `agents.md` convention section describing when maintainers should use each override surface.\n\nData structures affected.\n- `scripts/codex_model_catalog_overrides.yaml`\n  - top-level `models:`\n  - per entry: `slug`, `overrides`, `notes`\n- `prompts/.overrides.yaml`\n  - top-level `files:`\n  - per entry: `path`, `skip_validation`, `reason`\n- Generator in-memory override map keyed by slug.\n- Generated markdown `notes` cell for rows with pinned override fields.\n\nAPI/interface changes.\n- No runtime or consumer-facing API changes.\n- New maintainer-facing override surfaces:\n  - `scripts/codex_model_catalog_overrides.yaml` for per-model frozen values\n  - `prompts/.overrides.yaml` for prompt freeze markers\n- `agents.md` becomes the canonical guidance for when to use each file.\n- `docs/codex-model-reference.md` now visibly communicates frozen override intent for `openai/gpt-5.4`.\n\nData flow:\n1. Base row comes from `scripts/codex_model_catalog.json`.\n2. `scripts/codex_model_catalog_overrides.yaml` overlays frozen fields and provides row notes.\n3. `scripts/generate_codex_model_reference.py` renders the merged row and appends `(frozen)` when override fields exist.\n4. `make generate` writes `docs/codex-model-reference.md`.\n5. `prompts/.overrides.yaml` is added as a documented future freeze registry only; nothing consumes it yet.\n\nCodebase conflicts to note.\n- Current HEAD already implements most of the requested generator behavior in `scripts/generate_codex_model_reference.py`; this phase may need little or no logic change there.\n- Current HEAD already sets `openai/gpt-5.4` `apply_patch_tool_type` to `function` in `scripts/codex_model_catalog.json`, so the new override freezes an existing value rather than changing the emitted value.\n- `docs/codex-model-reference.md` already documents optional overrides globally, but the current `openai/gpt-5.4` row still has `notes` = `\u2014`; this phase should make the note visible, not rework the catalog.\n\nRisks and edge cases.\n- Do not add prompt-rewriter, validation, or runtime behavior for `prompts/.overrides.yaml`; the issue explicitly keeps this phase documentary.\n- Keep `agents.md` surgical: insert the new section between `## Stable-ID convention` and `## Implement scope-lock label`, with no unrelated edits.\n- Preserve deterministic doc output; rely on the existing note sanitization/collapse behavior instead of hand-formatting markdown cells.\n- `make generate` also runs the repo-tree updater; confirm it does not introduce unrelated generated diffs.\n- No `docs/INVENTORY.md` update should be needed: the inventory parity globs track prompt `.txt` and `prompts/contracts/*.yml`, not hidden prompt YAML files like `prompts/.overrides.yaml`.\n\nTesting considerations.\n- Run `make generate`.\n- Inspect `docs/codex-model-reference.md` and confirm the `openai/gpt-5.4` row shows `apply_patch_tool_type | function` plus visible frozen note text.\n- Run `make generate-check`.\n- If `scripts/generate_codex_model_reference.py` changes materially, add or run a focused unit test for override parsing/rendering so the behavior is pinned independently of the generated doc diff.\n\nPre-execution self-check result.\n- Ref/branch context is consistent with orchestrator metadata.\n- No clarification blockers remain.\n- The plan stays inside the requested surfaces and excludes workflow-template, consumer-repo, and runtime-feature expansion.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "fcba3cdd104c7184d862c3f6b88149ffb702343ffa2c235ec214d090f7025732",
+  "lineage": {
+    "issue_number": 3618,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29014246626",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29014246626",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3618"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260709112043_372346c772",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3618,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "29014246626"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3618",
+  "timestamps": {
+    "created_at": "2026-07-09T11:20:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

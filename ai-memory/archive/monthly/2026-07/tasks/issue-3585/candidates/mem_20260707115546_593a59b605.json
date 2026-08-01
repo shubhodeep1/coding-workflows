@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3585,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3585\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3588\",\"pr_number\":3588,\"branch\":\"ai/issue-3585\",\"run_id\":\"28863810916\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/28863810916\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/test-and-mark-stable.yml\",\"tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py\"]}",
+  "fingerprint": "bc0f9f317fbb1d9b63aeb5154d35e1196c121fc212f76f46eeea4bef53695974",
+  "lineage": {
+    "issue_number": 3585,
+    "parent_ids": [],
+    "pr_number": 3588,
+    "run_id": "28863810916",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28863810916",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3588"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260707115546_593a59b605",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3585,
+    "level": "run",
+    "pr_number": 3588,
+    "run_id": "28863810916"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3585: https://github.com/shubhodeep1/coding-workflows/pull/3588",
+  "timestamps": {
+    "created_at": "2026-07-07T11:55:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

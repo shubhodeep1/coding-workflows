@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-3633` @ `66dccd1b55f210d279c2b2eae7ea54c9a43320a1`\nClarification interpretation: no clarification questions were required; `/answer [auto-answered-by-orchestrator]` only confirmed continuation.\n\nActions taken.\n- Inspected `tests/e2e_smoke_canary_b.txt`; line 1 already matches `status: ok`, and line 2 is currently stale (`decompose-run: 25567947079`).\n- Checked the representative existing canary fixture pattern in `tests/e2e_smoke_canary.txt`.\n- Verified the smoke-task contract in `.github/workflows/test-and-mark-stable.yml`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt smoke-canary fixture pattern\nScope-mode justification:\nThis request is fully specified, bounded to one declared `files_touched` path, and already names the exact final contents. Under the repo priorities (correctness and backward compatibility before speed), the safest plan is the smallest possible edit: keep the change confined to `tests/e2e_smoke_canary_b.txt`, preserve the required first line, and update the second line to the exact run ID from the issue. Broadening into workflows, tests, docs, or mirrored support-tree files would add risk without improving acceptance coverage.\n\nFiles likely to change.\n- `tests/e2e_smoke_canary_b.txt` \u2014 update the file so its first two lines are exactly:\n  - `status: ok`\n  - `decompose-run: 29154978313`\n\nFunctions or modules to implement.\n- None. This is a direct fixture-file content edit.\n- Follow the existing simple key/value canary-file style used by `tests/e2e_smoke_canary.txt`.\n\nData structures affected.\n- The two-line plain-text smoke canary payload at the top of `tests/e2e_smoke_canary_b.txt`.\n\nAPI/interface changes.\n- None. No workflow, prompt, CLI, or code interface changes are needed.\n\nRisks and edge cases.\n- Do not touch any similarly named file, especially `tests/e2e_smoke_canary.txt` or `.codex-workflow-src/tests/e2e_smoke_canary_b.txt`; the issue scope allows only the root `tests/e2e_smoke_canary_b.txt`.\n- Use the literal requested second line `decompose-run: 29154978313`; do not substitute a recomputed value.\n- Preserve exact spelling, colon spacing, line order, and avoid unrelated reformatting.\n\nTesting considerations.\n- Verify `tests/e2e_smoke_canary_b.txt` starts with the two required lines in order.\n- Verify the resulting diff touches only `tests/e2e_smoke_canary_b.txt`.\n- No broader validator or test changes are expected for this fixture-only update.\n\nPre-execution self-check result.\n- Planning ref matches integration branch metadata (`orchestrator/project-3633`); no branch mismatch.\n- No factual conflicts found between the issue and current repo state.\n- The task is implementation-ready within the declared single-file scope.\n\nAssumptions made.\n- None beyond the literal issue instructions.\n\nMissing-context notes.\n- None material.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e93f1fb8d128f463907c563082d0c4d6d90ae9c245d14a2f13155a7ecc68122d",
+  "lineage": {
+    "issue_number": 3635,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29155118723",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29155118723",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3635"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260711135717_ef3ca3eee2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3635,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "29155118723"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3635",
+  "timestamps": {
+    "created_at": "2026-07-11T13:57:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:14171-14192 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: jq `capture()` on `$issue.body` can throw on null/non-string bodies and the `|| echo '{}'` fallback makes the lookup appear successful, so the duplicate-backstop can miss an existing issue.\n  WHY: Reviewers agreed the search can return items whose body is null or otherwise non-matching, and the code treats the resulting empty object as a valid lookup result instead of failing closed.\n- scripts/orchestrate_poll_process.sh:14172-14172 | severity=critical | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The search query lacks `is:issue`, so GitHub search can return pull requests as well as issues, feeding the lookup failure path and allowing duplicate issue creation.\n  WHY: One reviewer called this a NIT and the other a BLOCKER; use the highest severity because the broader query directly enables the fail-open duplicate-creation path.\n- scripts/orchestrate_lib.py:2630-2648 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The `parse_tracking_body` docstring still says wave entries contain only `{id, title, priority}`, but the implementation now adds a `completed` boolean.\n  WHY: The documented contract no longer matches the returned shape, which can mislead callers and tests.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a third guard layer in commit 2e9aad4...the deferred-creation loop runs one live 'Tracking issue: #N' in:body search...when an issue already carrying that Local ID exists (open or closed), adopts it...If that lookup fails for the cycle it skips creation and retries (fail-closed). A pure-adoption cycle no longer posts a 'Created them now' comment.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh around lines 14184-14205\n  confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  EVIDENCE: The implementation uses `capture(\"Local ID: ...\")` without an explicit `is:issue` filter in the search query or `try/catch` error handling in the jq reduce; the reviewer says this could fail open rather than fail closed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:14171-14192 | severity=MAJOR | confidence=5\n  PROBLEM: The jq expression uses `capture(\"Local ID: ...\")` on `$issue.body`, which throws when body is null.\n  WHY: The search can return a pull request instead of an issue, and the fallback path can turn that failure into an empty object while still treating the lookup as successful.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:14171-14192 | confidence=5\n  PROBLEM: The jq `capture()` function can fail when a result lacks a `Local ID:` marker, and the fallback path can make the lookup look successful anyway.\n  WHY: When search results include PRs or issues without the marker, jq can error, `|| echo '{}'` returns a valid empty object, and the code can mark `DEFERRED_EXISTING_LOOKUP_OK=true` even though the lookup effectively failed.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:14184-14205 | severity=MAJOR | confidence=4\n  PROBLEM: The `capture()` function in jq can throw when the regex doesn't match, causing the entire reduce to fail and the fallback path to mark the lookup successful anyway.\n  WHY: If search results include PRs or issues without a `Local ID:` marker, jq exits non-zero, the fallback produces `{}`, and the code can proceed to mint duplicates instead of adopting the existing issue.\n- scripts/orchestrate_poll_process.sh:14172-14172 | severity=NIT | confidence=3\n  PROBLEM: The search query does not scope to issues only, so it can return pull requests that mention the tracking issue.\n  WHY: PRs referencing the tracking issue will appear in search results and can trigger the failure path described above, reducing the effectiveness of the duplicate backstop.\n- Requirement: \"Add a third guard layer in commit 2e9aad4...the deferred-creation loop runs one live 'Tracking issue: #N' in:body search...when an issue already carrying that Local ID exists (open or closed), adopts it...If that lookup fails for the cycle it skips creation and retries (fail-closed). A pure-adoption cycle no longer posts a 'Created them now' comment.\"\n  Expected change site: scripts/orchestrate_poll_process.sh around lines 14184-14205\n  Evidence of absence: The implementation uses `capture(\"Local ID: ...\")` without an explicit `is:issue` filter in the search query or `try/catch` error handling in the jq reduce. While the basic logic exists, the error handling around the jq/capture path is fragile and could fail open rather than fail closed.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/orchestrate_poll_process.sh:14172-14187 | confidence=5\n  PROBLEM: The jq `capture()` call throws in two concrete input scenarios that the GitHub search can return: any item whose `.body` is `null` or non-string, and pull requests returned because the query lacks `is:issue`.\n  WHY: In both cases jq exits non-zero, `2>/dev/null` silences the error, `|| echo '{}'` yields `{}`, and the subsequent type check succeeds on the empty object, setting `DEFERRED_EXISTING_LOOKUP_OK=true` and allowing duplicate issue creation.\n- scripts/orchestrate_poll_process.sh:14172-14172 | severity=BLOCKER | confidence=5\n  PROBLEM: The search query lacks `is:issue`, so GitHub's search API returns both issues and pull requests.\n  WHY: A matching PR can trigger the null-body failure path above, reset the map to `{}`, and cause the deferred-creation path to create a duplicate even though an issue already exists.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_lib.py:2630-2648 | severity=NIT | confidence=4\n  PROBLEM: The docstring still claims the returned wave entries contain only `{id, title, priority}`, but the implementation now injects a `completed` boolean.\n  WHY: Callers and tests that rely on the documented contract can break or misinterpret the extra field.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "ddf10f02e82f8f396cbc5c40fb129ae0a591b4fee17fb25228bcdec8ed6b58f3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3683,
+    "run_id": "29582892225",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29582892225",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260717140734_7131e248fd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3683,
+    "run_id": "29582892225"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-17T14:07:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

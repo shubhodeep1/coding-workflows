@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- (No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Cherry-pick 6890c57 from main (#3656) to reconcile the stale test on stable so that the Test & Mark Stable Release gate passes\n  expected_change_site: tests/test_assemble_prompt.py (the test that was failing on stable)\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603, qwen_qwen3_6-plus]\n  EVIDENCE: The PR DIFF and LAST RUN DIFF contain exactly this change (old rc=1 test renamed + rewritten to assert rc=0 + literal include preservation under the skip-syntax flag; references to #3647 and the renderer contract updated). The PR description confirms this is the minimal 1-file cherry-pick., The PR DESCRIPTION requests a single cherry-pick: reconcile the stale test `test_render_prompt_sh_body_with_include_line_hard_fails_without_input_already_assembled` in `tests/test_assemble_prompt.py` to assert the shipped `rc=0` contract (include line preserved verbatim when `RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1`). The PR DIFF contains exactly this change \u2014 one function renamed, comment updated from pre-#3647 to current-contract, assertions changed from `rc=1` (hard-fail) to `rc=0` (include survives verbatim, placeholder substitution still applied). The PR DESCRIPTION confirms \"1 file, +16/\u221212\". No deferred or additional deliverables are named.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: Cherry-pick of 6890c57 from main (#3656) to reconcile the stale test on stable so that the Test & Mark Stable Release gate passes\n  Expected change site: tests/test_assemble_prompt.py (the test that was failing on stable)\n  Evidence of absence: The PR DIFF and LAST RUN DIFF contain exactly this change (old rc=1 test renamed + rewritten to assert rc=0 + literal include preservation under the skip-syntax flag; references to #3647 and the renderer contract updated). The PR description confirms this is the minimal 1-file cherry-pick.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "530077ad7f63099b58aa1231bb439900bfff111daf725eb26e709e099a77b4d6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3667,
+    "run_id": "29311800197",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29311800197",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260714073226_802c6230f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3667,
+    "run_id": "29311800197"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-14T07:32:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `e5a14a91563de26a944786624609a79d97860880` on `orchestrator/project-3601` (matches integration branch metadata `orchestrator/project-3601`).\n\nClarification mapping: no `Q1`/`Q2` questions were issued in clarify; the `/answer [auto-answered-by-orchestrator]` comment adds no new constraints and confirms planning can proceed from the issue body.\n\nAutomation / wiring\n- Change type: modifies existing code only.\n- Entry point: `.github/workflows/ci.yml`, existing `CI` workflow, triggered on `pull_request` and `push` to `main` and `stable`.\n- New script or workflow: none.\n- Long-running supervisor: not required.\n- DB gate pattern: not applicable.\n- Removal-registry entry: not applicable.\n\nScope-mode: Hold Scope\nReuse-audit: extends existing CI lint-job direct-run Python test block in `.github/workflows/ci.yml`\nScope-mode justification: This is a narrow CI-wiring gap, not a feature build. The repo already contains the three missing tests, the workflow already uses the exact `PYTHONDONTWRITEBYTECODE=1 python3 tests/...` pattern nearby, and the acceptance criteria explicitly forbid broader workflow refactors. The complete fix is an additive extension of the existing command list and is well under the \u201cfinish the complete version when it costs only a few lines/minutes more\u201d threshold, so the safest path is to keep scope fixed on the single workflow file and avoid unrelated cleanup.\n\n1. Files likely to change\n- `.github/workflows/ci.yml` \u2014 extend the existing `lint` job\u2019s nearby direct-run Python test block (the one that already includes `tests/test_record_id_format_contract.py`) with explicit invocations for:\n  - `tests/test_clarify_informal_detect.py`\n  - `tests/test_repo_root_helper.py`\n  - `tests/test_generate_resource_id.py`\n- No other file changes are currently indicated by targeted repo inspection.\n\n2. Functions or modules to implement\n- No runtime Python/Bash modules need code changes.\n- Update the CI workflow\u2019s YAML command list so the existing direct-run test block executes the three missing tests using the same pattern already in use:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/<file>.py`\n- Keep `tests/test_record_id_format_contract.py` in that workflow block.\n- Preserve the current workflow/job structure; do not rename steps or refactor unrelated test groups.\n\n3. Data structures affected\n- GitHub Actions workflow YAML only.\n- Affected structure: the ordered shell command list inside the `lint` job\u2019s Python test step.\n- No schemas, persisted records, env-var contracts, or script interfaces change.\n\n4. API/interface changes\n- No external or user-facing API changes.\n- CI behavior change only: default `CI` runs will now fail on regressions in the three currently unwired tests.\n\n5. Risks and edge cases\n- The workflow uses an explicit per-file test list, so missing even one added command would leave part of the intended coverage gap open.\n- YAML indentation/style must stay intact; a misplaced line can break workflow parsing.\n- `tests/test_record_id_format_contract.py` must remain present in the workflow.\n- The `Drift check (generated docs)` step running `make generate-check` must remain unchanged.\n- Conflict check: none. On this planning ref, all three named test files exist, they are not referenced in `.github/workflows/ci.yml`, and `tests/test_record_id_format_contract.py` is still wired there.\n\n6. Testing considerations\n- After editing the workflow, rerun these exact direct-run commands:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_clarify_informal_detect.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_repo_root_helper.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_generate_resource_id.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_record_id_format_contract.py`\n- Run the affected `CI` workflow path (or let branch CI execute) and confirm the logs show the three new commands running successfully.\n- Verify the workflow still includes and runs `make generate-check`.\n- Baseline from this planning ref: all four direct-run test commands above already pass standalone, so the implementation work is CI wiring, not test repair.\n\n7. Pre-execution self-check result\n- Ref/integration context is consistent.\n- Clarification state is sufficient; no unanswered questions remain.\n- Existing repo pattern for reuse is clear; no net-new helper or script is needed.\n- No external/private input is required to implement the change.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a3026a77bf7cef23f41ce755b4006de40916973a91c9f04e5e4ee5133fa761a3",
+  "lineage": {
+    "issue_number": 3623,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29049861972",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29049861972",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3623"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260709210454_92788488c0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3623,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "29049861972"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3623",
+  "timestamps": {
+    "created_at": "2026-07-09T21:04:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/mode-judge-review-blocked.txt:top of file (header block) | severity=low | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The legacy prompt snapshots still diverge from the expected full prompt-regeneration structure because they only add the compaction block and omit the extra \u201c## Gotchas\u201d, cross-reference, and persona/header annotations.\n  WHY: The reviewer says the compaction block itself is present, but fuller regeneration checks would still flag the missing sections.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: All 28 legacy `prompts/mode-*.txt` files must contain exactly the same `<compaction-rules>` block (and structure) as the shared-prelude template outputs so that `python3 tests/test_assemble_prompt.py` and runtime validation never fail repository checks.\n  expected_change_site: All 28 `prompts/mode-*.txt` files\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: LAST RUN DIFF and PR CHANGED FILES lists only 27 mode files with the `<compaction-rules>` add; `prompts/mode-judge-review-blocked.txt`, `mode-judge-stall-recovery.txt`, and `mode-orchestrate-poll-judge.txt` (and others) remain unchanged and still lack the 10-line `<compaction-rules>` boilerplate.\n- requirement: \"Synchronize legacy mode prompts with the shared-prelude compaction rules\" and \"Treat the assembled template output as the source of truth\" for all 28 listed files (including mode-judge-review-blocked.txt, mode-judge-stall-recovery.txt, mode-orchestrate-poll-judge.txt, mode-judge-interim.txt, mode-orchestrate.txt, mode-extract-learnings.txt, etc.), with narrow scope limited to prompts + optional small helper update around assemble_prompt.sh; do not broaden to validation/ or workflow-templates/.\n  expected_change_site: `prompts/mode-*.txt` files (all 28) and potentially `scripts/assemble_prompt.sh` or `render_prompt.sh`\n  confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST_RUN_DIFF and PR_CHANGED_FILES show 27 files (all with identical boilerplate) plus render_prompt.sh + test_identity_recall_render.sh updates; at least 4 mode files still lack full Gotchas / cross-reference / header parity called out in the diagnosis, SEMBLE records, and previous reviewer findings; no regeneration helper invocation was added despite the \"if needed for deterministic regeneration\" clause.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\nTask-completeness/intent gaps (TASK_GAP)\n\nRequirement:\nAll 28 legacy `prompts/mode-*.txt` files must contain exactly the same `<compaction-rules>` block (and structure) as the shared-prelude template outputs so that `python3 tests/test_assemble_prompt.py` and runtime validation never fail repository checks.\nExpected change site:\nAll 28 `prompts/mode-*.txt` files (currently `prompts/mode-judge-review-blocked.txt`, `mode-judge-stall-recovery.txt`, `mode-orchestrate-poll-judge.txt` and others listed in the linked issue do not yet have the identical `<compaction-rules>` block; they still begin with role lines.)\nEvidence of absence:\nLAST RUN DIFF and PR CHANGED FILES lists only 27 mode files with the `<compaction-rules>` add; `prompts/mode-judge-review-blocked.txt`, `mode-judge-stall-recovery.txt`, and `mode-orchestrate-poll-judge.txt` (and others) remain unchanged and still lack the 10-line `<compaction-rules>` boilerplate.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\nFile: prompts/mode-judge-review-blocked.txt (and similarly mode-judge-stall-recovery.txt, mode-orchestrate-poll-judge.txt, mode-judge-interim.txt, mode-orchestrate.txt, etc.)\nLine or code reference: top of file (header block)\nProblem: These files received the standard `<compaction-rules>` boilerplate (identical 11-line addition) but are missing the \u201c## Gotchas\u201d, cross-reference to verification-loop/output-contract, or persona/header annotations referenced in SEMBLE memory records and prior reviewer consensus for full synchronization.\nWhy it fails at runtime: `test_assemble_prompt.py` (and downstream `run_validation_repo_checks.sh`) passes only because the compaction block itself matches; deeper renderer-foundation and identity-recall tests would flag the missing sections on a fuller prompt-regeneration run.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n\nTask-completeness/intent gaps (TASK_GAP)\n\nRequirement:\n\"Synchronize legacy mode prompts with the shared-prelude compaction rules\" and \"Treat the assembled template output as the source of truth\" for all 28 listed files (including mode-judge-review-blocked.txt, mode-judge-stall-recovery.txt, mode-orchestrate-poll-judge.txt, mode-judge-interim.txt, mode-orchestrate.txt, mode-extract-learnings.txt, etc.), with narrow scope limited to prompts + optional small helper update around assemble_prompt.sh; do not broaden to validation/ or workflow-templates/.\nExpected change site:\nprompts/mode-*.txt files (all 28) and potentially scripts/assemble_prompt.sh or render_prompt.sh\nEvidence of absence:\nLAST_RUN_DIFF and PR_CHANGED_FILES show 27 files (all with identical boilerplate) plus render_prompt.sh + test_identity_recall_render.sh updates; at least 4 mode files still lack full Gotchas / cross-reference / header parity called out in the diagnosis, SEMBLE records, and previous reviewer findings; no regeneration helper invocation was added despite the \"if needed for deterministic regeneration\" clause.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "ca65d84f5766e3df10d3069aa8a774ed6475cad32de5c54a4ec7e9ee454dc118",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3672,
+    "run_id": "29354916374",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29354916374",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260714183153_0c65178c49",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3672,
+    "run_id": "29354916374"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-07-14T18:31:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

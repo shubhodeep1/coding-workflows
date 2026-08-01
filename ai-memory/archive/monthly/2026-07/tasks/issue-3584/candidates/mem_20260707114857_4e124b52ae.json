@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan based on the current `CI` workflow and the closest existing direct-run workflow-contract test pattern.\n\nPlanning ref\n- HEAD: `8b504fd23108a60ed6fa1c6ffb3ffa2f3860fa89`\n- Branch: `orchestrator/project-3579`\n- Integration branch metadata: `orchestrator/project-3579`\n- Integration branch mismatch: `false`\n\nClarification mapping\n- No `Q1`/`Q2` clarification questions were issued for this issue.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as \u201cproceed with the issue as written; no extra scope constraints were added.\u201d\n\nAutomation/wiring\n- Change type: extend one existing workflow and add one CI-only regression test file; no new reusable script, scheduler, or supervisor.\n- Existing entry point to wire into: `.github/workflows/ci.yml`, workflow `CI`, triggered on `pull_request` and `push` for `main` and `stable`, `lint` job.\n- DB gate pattern: none.\n- Removal-registry impact: none.\n\nScope-mode: Hold Scope\nReuse-audit: extends `tests/test_phase_skip_gate_telemetry_contract.py`\nScope-mode justification: The requested fix is already narrow and complete: move one deterministic CI gate earlier and add one small regression guard so it stays there. The smallest safe implementation is to relocate the existing `Inventory parity` step immediately before the two workflow-log coverage gates, keep its run block unchanged, and add one direct-run contract test that pins both the relative order and the unchanged command text. Broader CI cleanup, script edits, or coverage-gate changes would add churn without improving the requested fail-fast behavior enough to justify expanding scope.\n\nFiles likely to change\n- `.github/workflows/ci.yml`\n  - Move the existing `Inventory parity` step into the early deterministic lint/validation cluster so it runs before:\n    - `Workflow log collector coverage gate`\n    - `Workflow log analyzer coverage gate`\n  - Preserve the `Inventory parity` run block exactly as-is.\n  - Add one dedicated direct-run step for the new regression test in the same early cluster, so the guard itself also fails before the expensive coverage gates.\n  - Keep unrelated step ordering unchanged beyond what is necessary to place these two checks before the coverage gates.\n- `tests/test_ci_inventory_parity_order_contract.py` (new; proposed path)\n  - Add a narrow direct-run contract test that reads `.github/workflows/ci.yml` and fails if `Inventory parity` appears after either coverage gate.\n\nFunctions or modules to implement\n- In `.github/workflows/ci.yml`\n  - Reposition `Inventory parity` so the local order becomes:\n    1. existing cheap direct-run unit/contract checks,\n    2. `Inventory parity`,\n    3. new inventory-parity-order regression test,\n    4. `Workflow log collector coverage gate`,\n    5. `Workflow log analyzer coverage gate`.\n  - Keep the parity command byte-for-byte identical:\n    - `PYTHONDONTWRITEBYTECODE=1 python3 tests/inventory_parity.py`\n  - Retain the existing `set -euo pipefail` wrapper.\n- In `tests/test_ci_inventory_parity_order_contract.py`\n  - `_workflow_text()` or equivalent helper to read `ci.yml`.\n  - A minimal order-check helper that keys off exact step markers/names, not loose substring matches.\n  - One assertion that `Inventory parity` is before `Workflow log collector coverage gate`.\n  - One assertion that `Inventory parity` is before `Workflow log analyzer coverage gate`.\n  - One narrow assertion that the `Inventory parity` step still contains the exact parity command text, since the issue explicitly requires command identity.\n  - `main()` entrypoint so CI can execute the file via `python3 tests/<file>.py`, matching repo convention.\n\nData structures affected\n- The ordered `steps:` list in the `lint` job of `.github/workflows/ci.yml`.\n- New test-local constants for:\n  - the three step names,\n  - the expected parity command text.\n- No schemas, memory records, labels, or database contracts are affected.\n\nAPI/interface changes\n- None.\n- No workflow inputs, env vars, scripts, external APIs, or user-facing interfaces change.\n- `tests/inventory_parity.py` remains unchanged; only its position in CI changes.\n\nRisks and edge cases\n- Conflict: the issue says the new regression test file is \u201clisted below,\u201d but the provided issue body does not actually include a file path. The plan assumes one new dedicated file under `tests/`; if the implement run injects a stricter scope lock with a different approved filename, use that approved path instead of widening scope.\n- The new test should match exact step names or exact step blocks; a naive raw-substring `.index()` check could produce false positives if the phrases ever appear in comments or shell text.\n- Keep the new regression-test step in the same early cluster; otherwise the guard could exist but still fail late.\n- Do not touch:\n  - `tests/inventory_parity.py`\n  - the coverage-gate commands\n  - coverage thresholds\n  - unrelated YAML formatting or neighboring CI steps\n\nTesting considerations\n- Run the new direct-run regression test:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_inventory_parity_order_contract.py`\n- Re-run the unchanged parity gate directly:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/inventory_parity.py`\n- Let normal CI exercise the unchanged workflow-log coverage gates; no local coverage-threshold work is needed because their commands and targets stay the same.\n- Keep the regression test text-based and dependency-light so it remains cheap and deterministic in the early CI cluster.\n\nAssumptions made due to ambiguity\n- No clarification QIDs were needed; the issue is sufficiently specific to plan directly.\n- The intended touched scope is `.github/workflows/ci.yml` plus one new dedicated `tests/test_*.py` file.\n- `tests/test_ci_inventory_parity_order_contract.py` is a proposed filename, not one supplied verbatim by the issue.\n\nMissing-context notes\n- The explicit new test-file path promised by the issue text is absent from the provided context.\n- No `files_touched` manifest was included in the prompt body, so this plan assumes the requested workflow file and one new CI test file are within the allowed scope.\n\nPre-execution self-check result\n- The plan stays within the requested fail-fast change and one narrow regression guard.\n- Reuse is satisfied by following the existing direct-run workflow-contract test pattern instead of introducing new test infrastructure.\n- No external docs, secrets, dependencies, migrations, or cross-workflow contract changes are required.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f622811fbf34751e6df8c822cebbaa293160b89e98aa8d93c084fdff6b5df9d7",
+  "lineage": {
+    "issue_number": 3584,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28863547245",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28863547245",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3584"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260707114857_4e124b52ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3584,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28863547245"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3584",
+  "timestamps": {
+    "created_at": "2026-07-07T11:48:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

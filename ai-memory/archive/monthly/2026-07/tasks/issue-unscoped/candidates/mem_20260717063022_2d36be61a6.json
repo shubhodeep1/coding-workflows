@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.py:571 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: `inject_identity_recall_block` declares `str | None` even though every return path produces a string.\n  WHY: The annotation is misleading and can induce unnecessary null-handling; severity was reported as MAJOR by deepseek and NIT by minimax, so consensus uses the higher severity.\n- scripts/render_prompt.py:639-643 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The `if updated_prompt_text is None:` branch in `apply_identity_recall_block` is unreachable because `inject_identity_recall_block` never returns `None`.\n  WHY: This is dead code in the fail-open path and adds a misleading `injection_failed` branch; severity was reported as MAJOR by deepseek and NIT by minimax/moonshot, so consensus uses the higher severity.\n- scripts/render_prompt.py:_find_identity_role_goal_line_end_offset, ~lines 544\u2013569 | severity=low | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `_find_identity_role_goal_line_end_offset` only recognizes paragraphs that start with `Role:`, while `extract_identity_recall_metadata` skips other preamble content before finding the first content paragraph.\n  WHY: On prompts whose first content paragraph is not `Role:`, the two helpers can disagree and the identity block may be injected after the wrong paragraph, creating a robustness gap.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/render_prompt.py:571 | severity=MAJOR | confidence=5\n  PROBLEM: Function `inject_identity_recall_block` declares return type `str | None` but every code path returns a concrete string.\n  WHY: The misleading type annotation causes static type checkers and developers to treat `None` as a possible return value, and forces unnecessary null-guard logic at the call site that can never execute. If a future refactor genuinely introduces a `None` return, the annotation ceases to be a warning and instead silently normalizes a case that the old code never handled.\n- scripts/render_prompt.py:639-640 | severity=MAJOR | confidence=5\n  PROBLEM: The `if updated_prompt_text is None:` guard inside `apply_identity_recall_block` is unreachable dead code because `inject_identity_recall_block` (called at line 638) never returns `None`.\n  WHY: The branch emits `emit_identity_reinject_parse_fail(mode_name, \"injection_failed\")` and returns the original text unchanged, but this path can never be reached. The dead code creates noise in the fail-open logic \u2014 developers reading this function will spend time reasoning about the `injection_failed` failure mode that cannot occur, and static analysis tools flag it.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/render_prompt.py:571 | severity=NIT | confidence=5\n  PROBLEM: Function `inject_identity_recall_block` declares return type `str | None` but all code paths return a string \u2014 there is no `return None` statement in the function body.\n  WHY: Not a functional failure, but the misleading type annotation can cause static type checkers and developers to incorrectly expect `None` as a possible return value, leading to unnecessary null checks at call sites.\n- scripts/render_prompt.py:639-643 | severity=NIT | confidence=5\n  PROBLEM: The `if updated_prompt_text is None:` check is dead code because `inject_identity_recall_block` never returns `None`. Every return statement in that function produces a string.\n  WHY: No runtime impact, but it creates unreachable code that clutters the fail-open logic and requires developers to reason about a path that cannot execute.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/render_prompt.py:571 | severity=MAJOR | confidence=5\n  PROBLEM: The function declares return type `str | None` but every code path returns a string.\n  WHY: This misleads static type checkers and developers into treating `None` as a possible return value, causing unnecessary null checks at call sites and hiding the fact that the function is actually total (always returns a string).\n- scripts/render_prompt.py:639-643 | severity=MAJOR | confidence=5\n  PROBLEM: The `if updated_prompt_text is None:` branch is unreachable dead code because `inject_identity_recall_block` (as currently implemented) never returns `None`. This adds noise to the fail-open logic and creates a dead code path that type checkers may flag. (2 related items)\n  WHY: Developers must reason about a failure path that cannot occur, and static analysis tools will flag the unreachable code. The `injection_failed` reason code is also misleading since injection cannot fail in this way.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/render_prompt.py:_find_identity_role_goal_line_end_offset, ~lines 544\u2013569 | severity=NIT | confidence=3\n  PROBLEM: the function only searches for paragraphs that start with a stripped `Role:` line, while `extract_identity_recall_metadata` extracts from the first non-skip content paragraph (skipping comments, Jinja markers, compaction-rules).\n  WHY: if a prompt file's first content line is not `Role:`, the two can disagree on which paragraph's end offset to use, and the identity block could be injected after the wrong paragraph.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "28573d92e5db6435f9ac7e1cf746e2b104ae73da8c174418873c30d1413459c3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3682,
+    "run_id": "29557984408",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29557984408",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260717063022_2d36be61a6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3682,
+    "run_id": "29557984408"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-17T06:30:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

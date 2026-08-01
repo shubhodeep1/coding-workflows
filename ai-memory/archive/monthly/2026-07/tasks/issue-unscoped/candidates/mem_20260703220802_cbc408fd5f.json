@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_editor_capacity_fallback_contract.py:27-29 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: FALLBACK_ENV_DEFAULT contains an embedded newline, so `test_workflows_declare_fallback_env()` cannot match the single-line YAML fallback declaration.\n  WHY: The contract test asserts against the workflow text for the fallback env line, and the multiline string formatting makes that comparison fail at runtime.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The new contract test must be directly executable via `python3 tests/<file>.py`.\n  expected_change_site: tests/test_editor_capacity_fallback_contract.py\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The module lacks an executable entrypoint; CI executes tests by calling `python3 tests/<file>.py`, but this file has no `if __name__ == \"__main__\":` runner.\n- requirement: The CI must run the new fallback contract test.\n  expected_change_site: .github/workflows/ci.yml contract-test block\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The contract-test step in `.github/workflows/ci.yml` runs `test_review_apply_fixes_smoke_deterministic.py` but does not reference `tests/test_editor_capacity_fallback_contract.py`.\n- requirement: Smoke test must align with the actual retry-loop structure after `editor_max_attempts` refactoring.\n  expected_change_site: tests/test_review_apply_fixes_smoke_deterministic.py\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The original code looked for the old hardcoded literal `attempt=1\\nwhile [ \"${attempt}\" -le 3 ]`, but `scripts/review_apply_fixes.sh` now uses `attempt=1\\neditor_max_attempts=3\\nwhile [ \"${attempt}\" -le \"${editor_max_attempts}\" ]`, causing the smoke test to fail.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_editor_capacity_fallback_contract.py:27-29 | severity=BLOCKER | confidence=5\n  PROBLEM: FALLBACK_ENV_DEFAULT string contains an embedded literal newline due to multi-line string formatting.\n  WHY: This breaks the contract assertion `test_workflows_declare_fallback_env()` because it searches for a single-line string against the actual single-line YAML declaration.\n- Requirement: The new contract test must be directly executable via `python3 tests/<file>.py`.\n  Expected change site: tests/test_editor_capacity_fallback_contract.py\n  Evidence of absence: The module lacks an executable entrypoint; CI executes tests by calling `python3 tests/<file>.py`, but this file has no `if __name__ == \"__main__\":` runner.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: The CI must run the new fallback contract test.\n  Expected change site: .github/workflows/ci.yml contract-test block\n  Evidence of absence: The contract-test step in `.github/workflows/ci.yml` runs `test_review_apply_fixes_smoke_deterministic.py` but does not reference `tests/test_editor_capacity_fallback_contract.py`.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: Smoke test must align with the actual retry-loop structure after `editor_max_attempts` refactoring.\n  Expected change site: tests/test_review_apply_fixes_smoke_deterministic.py\n  Evidence of absence: The original code looked for the old hardcoded literal `attempt=1\\nwhile [ \"${attempt}\" -le 3 ]`, but `scripts/review_apply_fixes.sh` now uses `attempt=1\\neditor_max_attempts=3\\nwhile [ \"${attempt}\" -le \"${editor_max_attempts}\" ]`, causing the smoke test to fail.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_editor_capacity_fallback_contract.py:27-29 | severity=BLOCKER | confidence=5\n  PROBLEM: The string contains an embedded newline, so `test_workflows_declare_fallback_env()` cannot match the single-line YAML declaration present in plan.yml:48-55, implement.yml:14-26, and review_autofix.yml:101-114.\n  WHY: The test raises `AssertionError` on the first workflow (the contract test itself will fail in CI).\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5f7bb14a62294b550fed539fbc07509b620ace051b7603ae2c8d8e8a88a59c67",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3573,
+    "run_id": "28683801341",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28683801341",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260703220802_cbc408fd5f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3573,
+    "run_id": "28683801341"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-03T22:08:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

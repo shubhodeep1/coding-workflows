@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-3579` @ `ffe56e5b1b7d5eb47d999b97249605278a9063dc` (integration metadata matched)\n\nActions taken:\n- Verified the cited stale-report anchors in `analysis/recommendation-processing-report.md`.\n- Confirmed current-HEAD evidence in the referenced workflow/test pairs for inventory-parity order, zero-candidate sweep exit, cancel-on-close single-fetch behavior, `ai:scope-blocked` latching, and editor-changes-lost redispatch parity.\n- Confirmed `analysis/workflow-optimization-2026-06-25.md` through `analysis/workflow-optimization-2026-06-28.md` remain deleted while their provenance entries are still listed in the consolidated report.\n\nScope-mode: Hold Scope\nReuse-audit: extends `analysis/recommendation-processing-report.md`\nScope-mode justification: This is a surgical, single-file ledger-reconciliation change. The only required \u201cfuller sweep\u201d is already inside the issue scope: audit the whole consolidated report for repeated mentions of the same landed safe-subset fixes, not just the 2026-06-25 through 2026-06-28 section. That whole-report pass is the complete option under the boil-the-lake rule because it costs little more than patching the cited lines alone, materially improves correctness, and adds no new dependency or interface. Everything beyond those verified stale statements\u2014especially hot-path, poller, batching, or label-orchestration work that still appears live\u2014should remain untouched unless the re-read proves another sentence is factually wrong on current HEAD.\n\nFiles likely to change\n- `analysis/recommendation-processing-report.md`\n  - Update the stale bullets/clauses for:\n    - repeated cancel-on-close duplicate-fetch claims (`218`, `271`, `287`, `297`, `302`, `341`, `414`, `540`, `686`, `701`, plus the compound clause at `737`)\n    - zero-candidate sweep claims (`332`, `718`)\n    - inventory parity ordering nuance (`717`)\n    - stale `ai:scope-blocked` verification text (`737`)\n    - stale editor-changes-lost redispatch text (`750`)\n  - Preserve the provenance list entries for the deleted 2026-06-25..28 source docs (`110-113`).\n- No other file changes planned; keep the deleted source docs absent.\n\nFunctions or modules to implement\n- No code modules; this is a markdown-ledger reconciliation.\n- Rework the report sections/bullets so they reflect current HEAD accurately:\n  1. Rewrite every repeated statement that still says the cancel-on-close wait loop fetches the same Actions run twice per iteration.\n  2. Reclassify both zero-candidate early-exit mentions to show that `review_autofix_sweep` now exits on `total == 0` before active-run snapshotting.\n  3. Rewrite the inventory-parity note to say the gate now runs before the long workflow-log coverage gates, while leaving any broader \u201cmove it to the earliest lint gate\u201d ask deferred if still true.\n  4. Remove/rephrase the stale \u201cunverified `ai:scope-blocked` latch\u201d clause.\n  5. Remove/rephrase the stale \u201cweaker raw editor-changes-lost redispatch branch\u201d clause.\n  6. For compound \u201cremain open\u201d bullets, carve out only the landed-safe-subset clauses and leave the other still-true risky/deferred items intact.\n\nData structures affected\n- The report\u2019s per-source-doc buckets: `Implemented by sibling work`, `Already satisfied on this ref`, `Intentionally deferred`.\n- Aggregate narrative bullets and doc-local finding IDs (`MERGE-*`, `API-*`, `BUG-*`, `DUP-*`), which are section-local labels rather than global enums.\n- The provenance list for deleted source docs.\n\nAPI/interface changes\n- None. This is a documentation-only reconciliation.\n- Grounding evidence for the rewrite:\n  - `.github/workflows/ci.yml:545-560` + `tests/test_ci_inventory_parity_order_contract.py:48-66`\n  - `.github/workflows/review_autofix_sweep.yml:95-107` + `tests/test_review_autofix_sweep_zero_candidate_fast_exit.py:50-110`\n  - `.github/workflows/test-and-mark-stable.yml:3042-3049` + `tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py:41-62`\n  - `.github/workflows/implement.yml:1520-1530,3652-3668` + `tests/test_files_touched_scope_guard.py:383-427`\n  - `.github/workflows/review_autofix.yml:5301-5339` + `tests/test_review_autofix_review_pipeline_contract.py:3344-3363`\n\nRisks and edge cases\n- The same short ID (for example `API-002` or `MERGE-001`) is reused across different source-doc sections for different findings; edits must be section-aware, not token-wide search/replace.\n- Several stale statements are embedded inside aggregate bullets; those need clause-level surgery so still-valid deferred findings remain.\n- Inventory parity is only partially landed relative to the older broader ask; do not overstate it as \u201cmoved to the earliest lint gate.\u201d\n- The zero-candidate fast exit is landed, but broader active-run batching/collapse work elsewhere in the report may still be valid and should stay deferred.\n- Keep the four source docs deleted; only the consolidated report should change.\n\nTesting considerations\n- No new tests expected; this should remain a docs-only diff.\n- After editing:\n  - re-scan `analysis/recommendation-processing-report.md` for stale phrases around cancel-on-close duplicate fetches, zero-candidate sweep, inventory parity ordering, `ai:scope-blocked`, and editor-changes-lost\n  - confirm the rewritten bullets distinguish landed safe subsets from still-deferred broader asks\n  - confirm the deleted 2026-06-25..28 source docs are still absent\n  - confirm `git diff --stat` shows only `analysis/recommendation-processing-report.md`\n\nAssumptions made due to ambiguity\n- The deliverable is limited to correcting the consolidated report because the cited workflow/test behavior is already present on current HEAD and the issue explicitly forbids restoring the deleted source docs.\n- Where a broader recommendation is only partially satisfied, the ledger should record the landed subset and leave the broader remainder deferred.\n\nMissing-context notes\n- None; the current ref provides sufficient evidence for a clear implementation plan.\n\nConflicts detected\n- No issue/codebase conflict. The code/test evidence supports the issue\u2019s claim that the consolidated report is stale.\n\nPre-execution self-check result\n- Ready for implementation: single-file scoped update, no missing external inputs, verified grounding for each targeted stale claim, and integration-branch metadata matches the checked-out ref.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "961aebd604ac22cd9d716e43a893cecfc8d9a5e080d15e408a3147f5dc011db2",
+  "lineage": {
+    "issue_number": 3597,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28893279252",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28893279252",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3597"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260707194047_3768ed8f61",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3597,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28893279252"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3597",
+  "timestamps": {
+    "created_at": "2026-07-07T19:40:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

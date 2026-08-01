@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3660,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3660\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3661\",\"pr_number\":3661,\"branch\":\"ai/issue-3660\",\"run_id\":\"29210331751\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/29210331751\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\".github/workflows/review_autofix.yml\",\"README.md\",\"agents.md\",\"prompts/_nag_reminders.txt\",\"scripts/nag_reminder.sh\",\"scripts/orchestrate_poll_process.sh\",\"scripts/review_apply_fixes.sh\",\"scripts/review_run_reviewers.sh\",\"scripts/stage_workflow_support.sh\",\"tests/test_nag_reminder.sh\",\"tests/test_nag_reminder_phases.sh\",\"tests/test_orchestrate_poll_workflow_contract.py\",\"tests/test_review_semble_contract.py\",\"unattended_system_instructions.md\"]}",
+  "fingerprint": "8fd9032c10b5fd8a88bb559121b220ef934da44f0ffdc65c36cb8af8c5462e32",
+  "lineage": {
+    "issue_number": 3660,
+    "parent_ids": [],
+    "pr_number": 3661,
+    "run_id": "29210331751",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29210331751",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3661"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260712223318_82bfd989ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3660,
+    "level": "run",
+    "pr_number": 3661,
+    "run_id": "29210331751"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3660: https://github.com/shubhodeep1/coding-workflows/pull/3661",
+  "timestamps": {
+    "created_at": "2026-07-12T22:33:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

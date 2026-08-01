@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.py:632-643 | severity=high | confidence=[4]\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: Distinct identity-recall failure paths now collapse into the same generic `metadata_extract_failed` reason, losing the original `phase_name_missing` and `identity_metadata_incomplete` signals.\n  WHY: qwen called this NIT and x-ai called it MAJOR; using high because the log reason collapse removes legacy diagnostic granularity for failures in the same code path.\n- scripts/render_prompt.py:612-620 | severity=low | confidence=[4]\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The shared try/except now reports both a missing canonical prompt and a load/read failure as `canonical_prompt_missing`.\n  WHY: This mislabels load failures as missing-file errors, which weakens runtime diagnosis even though the detail field still carries the exception text.\n- scripts/render_prompt.py:462-469 | severity=high | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `resolve_identity_source_prompt` changed from a `Path | None`-style missing-file result to raising on missing canonical prompts, altering the prior API contract.\n  WHY: Callers and tests that relied on the old `None`/legacy failure behavior can now see exceptions instead of the previous return flow.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Preserve fail-open IDENTITY_REINJECT_PARSE_FAIL behavior\" and retain the original fine-grained failure reasons for identity-recall parsing\n  expected_change_site: scripts/render_prompt.py (apply_identity_recall_block error-path tokens), tests/test_render_prompt_foundation.py\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: the three distinct failure reasons were collapsed to a single generic token (`metadata_extract_failed`), and the original `identity_metadata_incomplete` path is no longer reachable\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: scripts/render_prompt.py\n  Line or code reference: lines 612-620 (try/except wrapping resolve_identity_source_prompt and load_prompt)\n  Problem: The single try/except block catches both resolve_identity_source_prompt raising (the prompt file does not exist on any search path) and load_prompt raising (the file exists but cannot be read \u2014 permission error, encoding error, etc.) under the same reason token \"canonical_prompt_missing\".\n  Why it fails at runtime: Operators parsing IDENTITY_REINJECT_PARSE_FAIL logs will incorrectly diagnose a load failure as a missing-file error. The detail= field carries str(exc) which helps, but the reason= token is misleading for debugging automated render failures.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- File: scripts/render_prompt.py\n  Line or code reference: lines ~633 and ~638 (phase_name is None guard and identity_metadata extraction guard inside apply_identity_recall_block)\n  Problem: Three previously distinct failure reason tokens collapse to \"metadata_extract_failed\": the old \"phase_name_missing\" (canonical prompt found but its basename could not be resolved as a phase name) and \"identity_metadata_incomplete\" (role or mission parsed empty from the opening paragraph) both now emit \"metadata_extract_failed\", joining the existing metadata-extract-failure path.\n  Why it fails at runtime: Loss of diagnostic granularity in IDENTITY_REINJECT_PARSE_FAIL log lines. Operators and any log-based alerting keyed on the former tokens will miss these sub-classes.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/render_prompt.py\n  Line or code reference: 602-608 (emit_identity_reinject_parse_fail), 635, 632, 643 (apply_identity_recall_block)\n  Problem: All three distinct failure paths (canonical load error, phase_name None, metadata None or incomplete) now emit the identical generic `\"metadata_extract_failed\"` reason.\n  Why it fails at runtime: Legacy consumers, tests, or log parsers keyed on the original tokens (`canonical_prompt_missing`, `phase_name_missing`, `identity_metadata_incomplete`) lose signal; detail= quoting was correctly restored in the last autofix but the collapse of distinct reasons is a semantic regression.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- File: scripts/render_prompt.py\n  Line or code reference: 402-408 (_identity_reinject_enabled), 462-469 (resolve_identity_source_prompt), 37 (new constants)\n  Problem: resolve_identity_source_prompt signature changed from `-> Path | None` to `-> Path` (now raises PromptLoadError on missing canonical prompt); the previous shell wrapper's full duplicate implementation was removed entirely.\n  Why it fails at runtime: Any external caller or test that relied on the old None-return path or the exact legacy failure-reason strings will now see unhandled exceptions or missed log patterns.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: \"Move Phase B identity-recall injection into the canonical Python renderer so both entry points share one behavior path (scripts/render_prompt.py:1033-1083, scripts/render_prompt.sh:531-597). Normalize truthy parsing... Preserve fail-open IDENTITY_REINJECT_PARSE_FAIL behavior. Make the existing parity expectations pass... and keep README.md:1180 accurate in the same PR.\"\n  Expected change site: scripts/render_prompt.py (main injection call site, error-path tokens), tests/test_render_prompt_foundation.py (parity assertions)\n  Evidence of absence: The Python renderer now owns injection (moved before persona prefix; shell duplication removed); truthy parsing and README are updated; parity test passes on direct execution. However, the three distinct failure reasons were collapsed to a single generic token (metadata_extract_failed) and the original \"identity_metadata_incomplete\" path is no longer reachable\u2014violating the \"preserve fail-open IDENTITY_REINJECT_PARSE_FAIL behavior\" requirement that the original fine-grained reasons be retained.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "df15070bce631fa62e98739f36940a413c61428ecd1159d431fd1dd01134f1e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3697,
+    "run_id": "29633803167",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29633803167",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260718081657_234b41a6ec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3697,
+    "run_id": "29633803167"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-18T08:16:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

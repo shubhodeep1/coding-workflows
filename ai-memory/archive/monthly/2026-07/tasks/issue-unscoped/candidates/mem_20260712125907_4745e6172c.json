@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.sh:254-280 | severity=low | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The identifier `INPUT_ALREADY_ASSEMBLED_FLAG_ADDED` violates the new-identifier uniqueness contract and overlaps semantically with the existing `--input-already-assembled` / assembled-prompt concepts.\n  WHY: No immediate crash, but it creates a maintainability trap and potential future name-collision bugs when similar guards are added.\n- CHANGELOG.md:90-99 | severity=low | confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The changelog uses `PR #3548`, which auto-links to the local repository\u2019s PR 3548 instead of the consumer PR being referenced.\n  WHY: Misleading hyperlinks in release notes and GitHub UI; it creates noise for readers and automation.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"This should also be ported to `main`, or the next `main \u2192 stable` promotion will silently revert it.\"\n  expected_change_site: A separate PR or merge from `stable` into `main` carrying the same five-file changeset (scripts/render_prompt.sh, scripts/review_run_reviewers.sh, scripts/review_apply_fixes.sh, tests/test_assemble_prompt.py, CHANGELOG.md)\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: This PR targets the `stable` branch only; no associated cross-branch PR or merge action exists in the diff. Three prior editor summaries (entry 3, entry 6, entry 10) explicitly deferred this as out-of-scope for the stable worktree: \"completing that requirement needs a separate cross-branch merge/cherry-pick action outside this checked-out stable worktree.\" The requirement remains unmet at HEAD.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: \"This should also be ported to `main`, or the next `main \u2192 stable` promotion will silently revert it.\" (from PR description, final line of \"Target ref\" section)\n  Expected change site: A separate PR or merge from `stable` into `main` carrying the same five-file changeset (scripts/render_prompt.sh, scripts/review_run_reviewers.sh, scripts/review_apply_fixes.sh, tests/test_assemble_prompt.py, CHANGELOG.md)\n  Evidence of absence: This PR targets the `stable` branch only; no associated cross-branch PR or merge action exists in the diff. Three prior editor summaries (entry 3, entry 6, entry 10) explicitly deferred this as out-of-scope for the stable worktree: \"completing that requirement needs a separate cross-branch merge/cherry-pick action outside this checked-out stable worktree.\" The requirement remains unmet at HEAD.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/render_prompt.sh:254-280 | severity=NIT | confidence=4\n  PROBLEM: The identifier `INPUT_ALREADY_ASSEMBLED_FLAG_ADDED` violates the \"New identifier uniqueness\" contract and overlaps conceptually with the existing assembled-prompt / render-flag naming.\n  WHY: No immediate crash, but it creates a maintainability trap and potential for future name-collision bugs.\n- CHANGELOG.md:90-99 | severity=NIT | confidence=5\n  PROBLEM: The table uses `PR #3548` twice, which auto-links to the local repository\u2019s PR 3548 rather than the consumer PR being referenced.\n  WHY: Misleading hyperlinks in release notes and GitHub UI; it breaks reader expectations and creates noise for search/automation.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "8c502150b2a5cb4055e095b6c2415fed30ed26312ce3ad903fddbe8f04e87672",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3646,
+    "run_id": "29192078480",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29192078480",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260712125907_4745e6172c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3646,
+    "run_id": "29192078480"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-07-12T12:59:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.py:402-403 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: `_identity_reinject_enabled()` parses `UNATTENDED_IDENTITY_REINJECT_ENABLED` with strict equality against `\"true\"`, so common boolean values with capitalization or surrounding whitespace disable the feature.\n  WHY: This silently skips identity-recall injection for standard env-var conventions and is inconsistent with the file\u2019s established normalized flag parsing pattern.\n- README.md:1180 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The documentation still says `scripts/render_prompt.sh` implements and injects the identity-recall block, but the implementation now lives in `scripts/render_prompt.py`.\n  WHY: Readers will look in the wrong file to understand or debug the feature, and the docs can drift from the actual source of truth.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"the canonical renderer becomes the single source of truth, producing one correctly placed recall block with shell/Python parity and byte-stable flag-off output\"\n  expected_change_site: scripts/render_prompt.py function `_identity_reinject_enabled()` and README.md documentation table for `UNATTENDED_IDENTITY_REINJECT_ENABLED`\n  confidence=[4]\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  EVIDENCE: README.md still references `scripts/render_prompt.sh` as the implementation site even though the shell helpers were removed, and `_identity_reinject_enabled()` still uses a strict-equals check instead of the established `FALSEY_ENV_VALUES` normalization pattern.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/render_prompt.py:402-403 | severity=MAJOR | confidence=5\n  PROBLEM: The environment variable `UNATTENDED_IDENTITY_REINJECT_ENABLED` is parsed using strict string equality `== \"true\"` without trimming or lowercasing, making it sensitive to common variations like \"True\", \"TRUE\", or values with trailing whitespace.\n  WHY: Operators expecting typical boolean env-var handling will find the feature silently disabled, and this is inconsistent with the normalized env-flag pattern used elsewhere in the same file.\n- README.md:~line 1180 | severity=NIT | confidence=5\n  PROBLEM: The documentation says `scripts/render_prompt.sh` parses and injects the identity-recall block, but that implementation has moved entirely into `scripts/render_prompt.py`.\n  WHY: Readers will look in the wrong file to understand or debug the feature, and the docs can drift from the actual implementation.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/render_prompt.py:402-403 | severity=MAJOR | confidence=5\n  PROBLEM: The environment variable `UNATTENDED_IDENTITY_REINJECT_ENABLED` is parsed using strict string equality `== \"true\"` without trimming or lowercasing, making it sensitive to common variations like \"True\", \"TRUE\", or values with trailing whitespace.\n  WHY: Operators expecting typical boolean env-var handling will find the feature silently disabled because the strict comparison fails, and the inconsistency creates a maintenance hazard versus `_persona_prefix_enabled()`.\n- README.md: line 1180 | severity=NIT | confidence=5\n  PROBLEM: The documentation incorrectly states that `scripts/render_prompt.sh` parses and injects the identity-recall block, but the implementation has been moved entirely into `scripts/render_prompt.py`.\n  WHY: Operators reading the documentation will look in the wrong file to understand or debug the feature, and future refactors may reintroduce drift if the documented location is believed to be the source of truth.\n- Requirement: \"The canonical renderer becomes the single source of truth, producing one correctly placed recall block with shell/Python parity and byte-stable flag-off output\"\n  Expected change site: scripts/render_prompt.py function `_identity_reinject_enabled()` and README.md documentation\n  Evidence of absence: `_identity_reinject_enabled()` still uses inconsistent env-var parsing compared to `_persona_prefix_enabled()`, README.md still references `scripts/render_prompt.sh` as the implementation site rather than `scripts/render_prompt.py`, and neither file appears in LAST RUN CHANGED FILES.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/render_prompt.py:402-403 | severity=MAJOR | confidence=5\n  PROBLEM: The function checks `os.environ.get(\"UNATTENDED_IDENTITY_REINJECT_ENABLED\", \"false\") == \"true\"` using strict string equality without `.strip().lower()` normalization or the `FALSEY_ENV_VALUES` allowlist already defined at line 40.\n  WHY: Common operator values such as `\"True\"`, `\"TRUE\"`, `\" true\"`, or `\"1\"` silently disable the feature, causing the identity-recall injection to be skipped.\n- Requirement: The linked issue states the canonical renderer should become the single source of truth for identity recall, and the PR summary says to keep scope limited to the existing render path and interfaces with shell/Python parity and byte-stable flag-off output.\n  Expected change site: README.md documentation table for `UNATTENDED_IDENTITY_REINJECT_ENABLED` and `scripts/render_prompt.py`\n  Evidence of absence: README.md still attributes the identity-recall behavior to `scripts/render_prompt.sh`, and `_identity_reinject_enabled()` still uses a non-standard strict-equals check rather than the established `FALSEY_ENV_VALUES` pattern.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "9a4d391bfd0eec5a5797f3257d6902baf0ef3b34a34e92ccb422a4847f95d08f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3682,
+    "run_id": "29560538675",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29560538675",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260717072636_b3f7573ffa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3682,
+    "run_id": "29560538675"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-17T07:26:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

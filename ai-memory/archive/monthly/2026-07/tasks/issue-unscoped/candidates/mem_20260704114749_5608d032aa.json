@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/check_failure_triage.yml:52, 81 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: The YAML job gates use a case-sensitive comparison against `'false'`, so `CHECK_FAILURE_TRIAGE_ENABLED=FALSE` or `False` still runs the workflow even though the shell script now treats those values as disabled.\n  WHY: Both reviewers said this causes unnecessary checkout/codex setup and burns CI minutes before the script exits early; severity is the highest reported across reviewers.\n- .github/workflows/internal-check-failure-triage.yml:15 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: The YAML gate uses a case-sensitive comparison against `'false'`, so mixed-case disable values still trigger the workflow.\n  WHY: Both reviewers reported the same YAML/shell mismatch and the resulting unnecessary workflow execution.\n- workflow-templates/ai-check-failure-triage.yml:21 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: The template gate uses a case-sensitive comparison against `'false'`, so mixed-case disable values still trigger the workflow.\n  WHY: Both reviewers reported the same YAML/shell mismatch and the resulting unnecessary workflow execution.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: .github/workflows/check_failure_triage.yml\n  Line: 52, 81\n  Problem: The YAML workflow gates use case-sensitive string comparison `vars.CHECK_FAILURE_TRIAGE_ENABLED != 'false'`, so only exact lowercase 'false' disables the workflow at the YAML layer. This is inconsistent with the shell script's case-insensitive comparison added in the previous autofix run (`\"${ENABLED,,}\" = \"false\"`).\n  Why it fails at runtime: If a consumer sets `CHECK_FAILURE_TRIAGE_ENABLED=FALSE` or `CHECK_FAILURE_TRIAGE_ENABLED=False`, the YAML layer will run the workflow (not recognizing it as disabled), but the shell script will exit early as disabled. This causes unnecessary workflow execution (checkout/codex setup) before the early exit.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- File: .github/workflows/internal-check-failure-triage.yml\n  Line: 15\n  Problem: Same case-sensitive comparison issue - only exact lowercase 'false' disables the workflow at the YAML layer.\n  Why it fails at runtime: Same as above - uppercase or mixed-case disable values cause unnecessary workflow runs.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- File: workflow-templates/ai-check-failure-triage.yml\n  Line: 21\n  Problem: Same case-sensitive comparison issue - only exact lowercase 'false' disables the workflow.\n  Why it fails at runtime: Same as above.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: .github/workflows/check_failure_triage.yml, lines 52, 81\n  File: .github/workflows/internal-check-failure-triage.yml, line 15\n  File: workflow-templates/ai-check-failure-triage.yml, line 21\n  Line or code reference: `vars.CHECK_FAILURE_TRIAGE_ENABLED != 'false'`\n  Problem: The YAML job `if:` gates use a case-sensitive string comparison against lowercase `'false'`. The shell script's disable gate was just made case-insensitive in the last autofix run (`\"${ENABLED,,}\" = \"false\"`), creating a mismatch. If a consumer sets `CHECK_FAILURE_TRIAGE_ENABLED` to `FALSE` or `False` intending to disable the feature, the YAML gate evaluates `true` (job runs), triggering checkout and codex install. The shell script then correctly exits 0, but CI minutes and runner time are already consumed.\n  Why it fails at runtime: Unnecessary workflow runs burn CI quota when a consumer mis-cases the opt-out value. The shell no-ops correctly, so no incorrect triage issue is opened \u2014 this is a cost leak, not a functional defect. GitHub Actions expressions lack a `lower()` function on `vars.*`, making a clean case-insensitive YAML comparison non-trivial (would require enumerating variants or an intermediate env step).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- File: .github/workflows/check_failure_triage.yml\n  Line or code reference: Line 81, triage job `if:` gate: `vars.CHECK_FAILURE_TRIAGE_ENABLED != 'false'`\n  Problem: Same case-sensitivity asymmetry as the derive_check_name_key job above, but this is the heavier gate. When mis-cased, the triage job proceeds past the `always()` gate, performs checkout (`actions/checkout@v4`), runs the codex-cli install step, and sources the shell script before the shell exits.\n  Why it fails at runtime: Same as above \u2014 CI minutes consumed by setup that then no-ops. The `derive_check_name_key` gate (line 52) protects this job's dependency, so both gates must be mis-cased for the triage job to actually run, but the cost gate comment at line 69-74 explicitly states \"The job is skipped (no checkout / no codex install) when disabled\" which is not true for `FALSE`/`False` values.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "99009847305b3a23a817f44f9439b75c2dcbff148f9b0abc44e0866dfb21b724",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3574,
+    "run_id": "28703864909",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28703864909",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260704114749_5608d032aa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3574,
+    "run_id": "28703864909"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-04T11:47:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

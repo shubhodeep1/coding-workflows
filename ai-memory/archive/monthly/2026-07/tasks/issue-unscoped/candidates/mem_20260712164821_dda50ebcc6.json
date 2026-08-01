@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_assemble_prompt.py:297-308 | severity=high | confidence=[1-5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The rewritten test only checks that a specific stderr substring is absent, instead of asserting that stderr is completely empty on a successful run.\n  WHY: All reviewers flagged the same regression-coverage gap; severity ranged from NIT to MAJOR, so the consensus uses the highest severity and preserves the disagreement.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_assemble_prompt.py:301 | severity=MAJOR | confidence=5\n  PROBLEM: The rewritten test asserts `assert \"Included prompt fragment not found\" not in proc.stderr` (line 301) on a successful rc=0 result, but does not assert `assert proc.stderr == \"\"`.\n  WHY: If a future change to `render_prompt.sh` or `render_prompt.py` emits an unexpected warning or diagnostic to stderr during a successful render (rc=0), this test would still pass because it only checks for the absence of one specific error substring; the contract across this entire file is that successful `render_prompt.sh` invocations produce zero stderr output.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_assemble_prompt.py:301-302 | severity=MAJOR | confidence=5\n  PROBLEM: The rewritten test checks only that a specific error substring is absent from stderr (`assert \"Included prompt fragment not found\" not in proc.stderr`), but does not assert that stderr is completely empty (`assert proc.stderr == \"\"`).\n  WHY: Other successful `render_prompt.sh` tests in the same file (lines 77, 163, 192, 231, 261, 339) use `assert proc.stderr == \"\"` to ensure no unexpected warnings or diagnostics appear on a successful run, so this weaker assertion could allow future warnings or error messages to slip through while the test still passes.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_assemble_prompt.py:297-308 | severity=MAJOR | confidence=4\n  PROBLEM: Assertion is too permissive regarding stderr - checks only that a specific error message is absent rather than ensuring no stderr output at all.\n  WHY: This violates the contract shown in other similar tests in this file which assert proc.stderr == \"\" for successful runs, reducing regression coverage.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_assemble_prompt.py:300-301 | severity=NIT | confidence=5\n  PROBLEM: The rewritten test checks `assert \"Included prompt fragment not found\" not in proc.stderr` on the success path instead of asserting `proc.stderr == \"\"` as every other successful-render test in this file does (lines 77, 163, 192, 231, 261, 339).\n  WHY: A future change that emits any warning, diagnostic, or unexpected line to stderr while keeping rc=0 would silently pass this test; the weaker assertion provides no regression coverage for unexpected stderr output, unlike all sibling contract tests which enforce clean stderr on success.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_assemble_prompt.py:301 | severity=NIT | confidence=5\n  PROBLEM: The test asserts only that the specific error string is absent from `proc.stderr` instead of `assert proc.stderr == \"\"`.\n  WHY: Other successful `render_prompt.sh` tests in this file (and the adjacent `test_render_prompt_sh_input_already_assembled_keeps_include_line_literal`) enforce a completely empty stderr; a future change emitting a warning, diagnostic, or unrelated output on stderr while returning rc=0 would pass this test but violate the established contract for clean successful runs.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "f2a1c3c046efa0be279609d5e94844f7350b4b890ce12859d55c93419f30a8ce",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3656,
+    "run_id": "29199244971",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29199244971",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260712164821_dda50ebcc6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3656,
+    "run_id": "29199244971"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-12T16:48:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

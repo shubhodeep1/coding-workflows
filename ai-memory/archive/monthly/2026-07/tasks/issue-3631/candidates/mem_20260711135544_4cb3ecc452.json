@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `66dccd1b55f210d279c2b2eae7ea54c9a43320a1` on branch `main`.\nClarification mapping: no QIDs were issued; `/answer [auto-answered-by-clarify]` confirms the task is already fully specified.\n\nScope-mode: Hold Scope\nReuse-audit: extends existing e2e smoke canary full-overwrite contract (`.github/workflows/test-and-mark-stable.yml:490-505`)\nScope-mode justification: This is a deterministic one-file overwrite on an existing path. The complete safe implementation is to replace the entire contents of `tests/e2e_smoke_canary.txt` and stop there; expanding into workflows, prompts, or tests would violate the explicit one-file constraint and add risk without improving correctness. Under the repo priorities (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed), holding scope preserves correctness and backward compatibility with the existing smoke-canary contract.\n\nFiles likely to change.\n- `tests/e2e_smoke_canary.txt`\n\t- Overwrite the entire file so it contains exactly:\n\t\t- `status: ok`\n\t\t- `run_id: alt-29154978313`\n\t\t- `updated-by: ai-pipeline`\n- No other file should change.\n\nFunctions or modules to implement.\n- No code modules or functions.\n- Follow the established repo pattern for this canary: full-file overwrite rather than partial line edits.\n- Representative existing constraint shape is already exercised in `tests/test_implement_post_codex_recovery.py:3859-3864`.\n\nData structures affected.\n- One plain-text 3-line canary fixture with fixed key order:\n\t- `status`\n\t- `run_id`\n\t- `updated-by`\n- No schema, API payload, prompt contract, or memory-record changes.\n\nAPI/interface changes.\n- None.\n- The `openai/gpt-5.4` editor-model note is contextual only and does not require repository changes.\n\nRisks and edge cases.\n- Do a full overwrite so no stale text remains before or after the three required lines.\n- Preserve exact spelling, ordering, colon spacing, and the `alt-29154978313` value.\n- Keep the file to exactly three visible lines; by existing repo convention, retain a trailing newline after the final line without adding extra content.\n- Any edit outside `tests/e2e_smoke_canary.txt` would violate the issue constraints.\n\nTesting considerations.\n- Verify the final diff touches only `tests/e2e_smoke_canary.txt`.\n- Verify the final file content matches the requested 3-line literal exactly.\n- No test code or workflow contract updates are expected for this data-only change.\n\nPre-execution self-check result.\n- Target file exists on the planning ref.\n- Current file content already matches lines 1 and 3; only the `run_id` is stale (`26151428977` instead of `alt-29154978313`).\n- No issue/code conflict found.\n- Assumption: keep the existing smoke-canary trailing-newline convention from `.github/workflows/test-and-mark-stable.yml`.\n- Missing-context note: integration branch metadata is `unknown` in the planning context, but no mismatch was indicated and the requested change is scoped to `main`.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a8c80a7d48ae7476a683cf0cac402b8b365e31116da5596b5fe34c6a8427ccbc",
+  "lineage": {
+    "issue_number": 3631,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29155067561",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29155067561",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3631"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260711135544_4cb3ecc452",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3631,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "29155067561"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3631",
+  "timestamps": {
+    "created_at": "2026-07-11T13:55:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/repo_root.py:23-36 | severity=high | confidence=5\n  flagged_by: [mistral_mistral-small-2603]\n  PROBLEM: `_has_git_marker` accepts environment-controlled `GIT_DIR`/`GIT_WORK_TREE` paths, allowing trust-boundary manipulation of repo-root validation.\n  WHY: The helper resolves and validates attacker-influenced paths after reading the environment, so a malicious CI environment could make an arbitrary location appear as the repository root; x-ai_grok-4_20 disputed this as pre-existing and defensive.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR added a new generator script (scripts/generate_codex_model_reference.py) that produces the model-reference markdown consumed by the pipeline, but no dedicated test exercises its catalog-loading, overrides-merging, duplicate-slug detection, or check-vs-write mode behavior.\n  expected_change_site: tests/test_generate_codex_model_reference.py (or similar)\n  confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  EVIDENCE: All five newly added test scripts are wired into CI workflows, but no test_generate_codex_model_reference.py is invoked in any CI workflow and no such file exists in tests/.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/repo_root.py:23-36 | confidence=4\n  PROBLEM: Path traversal vulnerability through environment variable manipulation of `GIT_DIR`/`GIT_WORK_TREE`.\n  WHY: `_has_git_marker` uses `os.environ.get(\"GIT_DIR\")` and `os.environ.get(\"GIT_WORK_TREE\")` without validating that manipulated paths remain within the repository trust boundary, so `.resolve()` can accept attacker-influenced absolute paths.\n- scripts/repo_root.py:23-36 | confidence=5\n  PROBLEM: Environment variable manipulation of GIT_DIR/GIT_WORK_TREE bypasses repository root validation.\n  WHY: Attackers who set `$GIT_DIR` or `$GIT_WORK_TREE` to absolute paths can influence the validation logic, making harmful configurations appear valid at `.resolve()` time.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: (no file)\n  Requirement: The PR added a new generator script (scripts/generate_codex_model_reference.py) that produces the model-reference markdown consumed by the pipeline, but no dedicated test exercises its catalog-loading, overrides-merging, duplicate-slug detection, or check-vs-write mode behavior.\n  Expected change site: tests/test_generate_codex_model_reference.py (or similar)\n  Evidence of absence: All five newly added test scripts are wired into CI workflows, but no test_generate_codex_model_reference.py is invoked in any CI workflow and no such file exists in tests/.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "67437db4765bf12d8f36ecadcc0b39ec68ef61d6c42f7326b90db79db1620541",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3610,
+    "run_id": "29063160117",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29063160117",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260710040212_b7e9f7fcb0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3610,
+    "run_id": "29063160117"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-07-10T04:02:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

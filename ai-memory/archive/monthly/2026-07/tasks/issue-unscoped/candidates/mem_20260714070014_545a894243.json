@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/audit_consumer_drift.py:line ~386 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The new log prefix \"DRIFT_SCAN_RETRY\" is not registered in agents.md's contractual stable log prefixes list.\n  WHY: No runtime failure \u2014 this is an observability/contract gap, and downstream log-analysis tooling may miss retry events when scanning for DRIFT_SCAN_* patterns because DRIFT_SCAN_RETRY is not a declared contractual prefix.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/audit_consumer_drift.py:line ~386 | severity=low | confidence=3\n  PROBLEM: The new log prefix \"DRIFT_SCAN_RETRY\" is not registered in agents.md's contractual stable log prefixes list.\n  WHY: No runtime failure \u2014 this is an observability/contract gap. Workflow-log-analysis tooling may miss retry events when scanning for DRIFT_SCAN_* patterns because DRIFT_SCAN_RETRY is not a declared contractual prefix.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "82fb9a6f82d21a4e3c626b50889f7da5b900898f03de95f903d75ff339061acf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29311865896",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29311865896",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260714070014_545a894243",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "29311865896"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-07-14T07:00:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

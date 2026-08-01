@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/INVENTORY.md:Scripts section (between lines ~209 and ~212) | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `scripts/task_state.py` is git-tracked and referenced from `README.md` and `agents.md`, but is not listed under the Scripts section in `docs/INVENTORY.md`.\n  WHY: `tests/inventory_parity.py` fails in CI with `FAIL: docs/INVENTORY.md: Scripts: missing scripts/task_state.py`, so the merge gate blocks.\n- scripts/task_state.py:60-85 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603, moonshotai_kimi-k2_5]\n  PROBLEM: `_atomic_write_json` reports `path.parent` instead of `tasks_root` when refusing to traverse a symlink, so the diagnostic points at the wrong filesystem location.\n  WHY: operators investigating `TASK_STATE_WRITE_FAIL` / `refusing_to_traverse_symlink` can be misdirected to a directory that may not exist yet.\n- scripts/task_state.py:182-187 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5]\n  PROBLEM: `unblock_dependents()` calls `wave_dir.glob(\"*.json\")` without a symlink guard, so a symlink swap can let it traverse outside `.tasks/`.\n  WHY: the read/edit path can operate outside the intended boundary before `_atomic_write_json` refuses the later write.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The new script `scripts/task_state.py` must be documented in `docs/INVENTORY.md` under the Scripts section.\n  expected_change_site: docs/INVENTORY.md, Scripts section (after `scripts/targeted_file_context.py` or similar alphabetical position)\n  confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  EVIDENCE: `tests/inventory_parity.py` produces `FAIL: docs/INVENTORY.md: Scripts: missing scripts/task_state.py`, and the PR diff contains no hunk modifying `docs/INVENTORY.md`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- docs/INVENTORY.md:Scripts section (between lines ~209 and ~212) | severity=BLOCKER | confidence=5\n  PROBLEM: `scripts/task_state.py` is git-tracked and referenced from both `README.md` (line 1948) and `agents.md` (line 780), but is not listed under the Scripts section in `docs/INVENTORY.md`.\n  WHY: `tests/inventory_parity.py` runs in CI (`.github/workflows/ci.yml` line 607, also `mark-stable.yml` and `test-and-mark-stable.yml`) and detects this gap. Running the test on the current commit produces: `FAIL: docs/INVENTORY.md: Scripts: missing scripts/task_state.py`, plus two secondary failures for README.md and agents.md referencing an undocumented script. CI merge gate will block.\n- scripts/task_state.py:line 65 | severity=NIT | confidence=4\n  PROBLEM: When `tasks_root.is_symlink()` is True, the error message `refusing_to_traverse_symlink:{path.parent}` points at `path.parent` (e.g. `REPO_ROOT/.tasks/1/`) instead of the actual symlink `tasks_root` (e.g. `REPO_ROOT/.tasks/`).\n  WHY: The `path.parent` directory may not exist yet because `mkdir` has not run at that point, so the logged path misdirects the operator to a non-existent directory.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/task_state.py | Line or code reference: _atomic_write_json lines 60-69 | severity not stated | ISSUE_CONFIDENCE: 4\n  PROBLEM: error message for refusing_to_traverse_symlink uses path.parent instead of tasks_root/target tasks dir\n  WHY: operator likely sends investigation to wrong filesystem path; the path.logged may not even exist yet\n- scripts/task_state.py | Line or code reference: unblock_dependents lines 186-187, wave_dir.glob() call in unblock_dependents() lacks symlink guard | severity not stated | ISSUE_CONFIDENCE: 4\n  PROBLEM: if .tasks/ or wave directory becomes a symlink between the write step and the unblock step, the glob and following edits may traverse outside intended directory\n  WHY: writes could affect host filesystem outside .tasks/; violates write boundary intended by this PR\n- Requirement: new script `scripts/task_state.py` must be added to `docs/INVENTORY.md` under the Scripts section so that the inventory parity test (and CI) does not fail on merge\n  Expected change site: docs/INVENTORY.md (ensure `scripts/task_state.py` is listed under Scripts)\n  Evidence of absence: CI check `tests/inventory_parity.py` fails per pre-Consensus listing and raw review output, indicating the file is currently absent from the inventory\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/task_state.py: Lines 82-85 | severity=NIT | confidence=4\n  PROBLEM: When the tasks_root directory (REPO_ROOT/.tasks/) is a symlink, the error message incorrectly reports path.parent instead of tasks_root, misdirecting operators to a path that may not exist.\n  WHY: Diagnostic inaccuracy - the logged error points to the wrong filesystem location, making incident response harder.\n- Requirement: \"Add docs/INVENTORY.md\" - The new script scripts/task_state.py must be documented in docs/INVENTORY.md under the Scripts section.\n  Expected change site: docs/INVENTORY.md around line 88\n  Evidence of absence: The file docs/INVENTORY.md exists but scripts/task_state.py is not listed in the Scripts section. The inventory parity test (tests/inventory_parity.py) runs in CI and will fail when any scripts/* file is absent from the inventory.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "c45b05ff649fb963d07ac0ed9619b074742ada2d799b1a7966a9789cec175953",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3663,
+    "run_id": "29246775561",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29246775561",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260713133435_5def3fa465",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3663,
+    "run_id": "29246775561"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-13T13:34:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

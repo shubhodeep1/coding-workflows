@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `main` @ `f6fa71e34e9b969a023bd4cce624f7a37dd2a9f4` (integration branch metadata is empty; no explicit mismatch reported).\n\nClarification mapping: no Q1/Q2 were issued; `/answer [auto-answered-by-clarify]` confirms the task was already clear.\n\nActions taken: inspected `tests/e2e_smoke_canary.txt`, confirmed the matching alt-model smoke issue pattern in `.github/workflows/test-and-mark-stable.yml`, and searched references to ensure no other tracked file hard-codes the old or requested run id.\n\nMissing-context notes: none needed for planning; this is a fully specified single-file change.\n\nScope-mode: Hold Scope\nReuse-audit: extends smoke-canary overwrite contract in `.github/workflows/test-and-mark-stable.yml`\nScope-mode justification:\nThe issue is fully specified, the target file already exists, and the repository already has the same overwrite pattern for the alt-model smoke issue flow: overwrite `tests/e2e_smoke_canary.txt` with an exact three-line literal containing an `alt-...` run id. Expanding into workflows, tests, specs, or support-tree mirrors would violate the explicit \u201conly modify `tests/e2e_smoke_canary.txt`\u201d constraint without improving correctness. The minimum safe change is therefore a one-file in-place overwrite.\n\nAutomation/wiring impact.\n- No new script, scheduler/PR-push wiring, supervisor, or database work is needed.\n\nFiles likely to change.\n- `tests/e2e_smoke_canary.txt` \u2014 overwrite the full file so it becomes exactly:\n  - `status: ok`\n  - `run_id: alt-29198217777`\n  - `updated-by: ai-pipeline`\n  with a final newline and no extra content.\n- No other tracked file should change.\n\nFunctions or modules to implement.\n- None. This is a direct fixture-content replacement, not a code-path change.\n- Follow the existing overwrite pattern already documented in `.github/workflows/test-and-mark-stable.yml`; do not edit workflow or test logic.\n\nData structures affected.\n- One plain-text smoke-canary fixture with three ordered `key: value` lines: `status`, `run_id`, and `updated-by`.\n- The structure stays unchanged; only the `run_id` value changes from `26151428977` to `alt-29198217777`.\n\nAPI/interface changes.\n- None. File path, file format, and consuming workflow interfaces remain unchanged.\n\nRisks and edge cases.\n- Exactness matters: extra whitespace, CRLF line endings, missing final newline, reordered keys, or additional lines would violate the fixture contract.\n- Scope drift is the main operational risk; only `tests/e2e_smoke_canary.txt` should be staged.\n- The workspace may also contain an untracked support-tree mirror at `.codex-workflow-src/tests/e2e_smoke_canary.txt`; ignore it and edit only the tracked `tests/e2e_smoke_canary.txt`.\n- Conflict check: none. The target file exists, and the requested alt-prefixed `run_id` matches an existing alt-model smoke pattern already present in workflow source.\n\nTesting considerations.\n- Verify `tests/e2e_smoke_canary.txt` byte-for-byte against the expected 3-line literal, including the final newline.\n- Confirm the diff/staged changes show only `tests/e2e_smoke_canary.txt`.\n- No test or workflow contract updates are expected; no other tracked file hard-codes the current or requested run id.\n\nPre-execution self-check result.\n- Scope is fully specified and requires no further clarification.\n- The target file exists on the planning ref.\n- No blocker or issue/code mismatch was found.\n- The requested content aligns with an existing repo pattern.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "7138fd6b3ccee9df7d001287017e3e5509ce90e8c2eb414bf08c93e99d8fe7fb",
+  "lineage": {
+    "issue_number": 3649,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29198304814",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29198304814",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3649"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260712153448_1fda7ab9d0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3649,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "29198304814"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3649",
+  "timestamps": {
+    "created_at": "2026-07-12T15:34:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

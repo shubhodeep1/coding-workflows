@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping:\n- No `Q1`/`Q2` batch was asked in clarification. The only answer was `/answer [auto-answered-by-orchestrator]`, which maps to: \u201cthe issue description is sufficient; proceed with planning.\u201d\n\nPlanning ref: `orchestrator/project-3627` @ `089fd933aa39db2b6e512ba00c1db5e7c49cba1a`; integration branch metadata matches.\n\nAutomation/wiring:\n- Change type: modifies existing code only; no new script, supervisor, or DB gate.\n- Existing automated entry point: `.github/workflows/ci.yml` on `push` and `pull_request` for `main` and `stable`.\n- Runtime/data-store changes: none.\n\nConflict noted:\n- On this planning ref, the requested Phase H core work already exists: `prompts/mode-plan.txt`, `prompts/_templates/mode-plan.txt`, `scripts/lint_plan_decisions.py`, the CI wiring in `.github/workflows/ci.yml`, README flag docs, and focused tests. Treat this issue as a drift/alignment pass, not greenfield implementation.\n\nScope-mode: Hold Scope\nReuse-audit: extends `scripts/lint_plan_archival_completeness.py` / `.github/workflows/ci.yml` lint-step pattern and the existing plan prompt contract tests.\nScope-mode justification: Hold Scope is the safest path because the Phase H behavior is already present on `orchestrator/project-3627`, so correctness and backward compatibility now depend on avoiding duplicate reimplementation. The complete option here is a full audit of the intended Phase H surfaces (prompt contract, template parity, advisory linter, CI hook, tests, and operator docs) and then landing only any verified drift; that is only slightly more work than assuming the issue is still greenfield, and it better follows \u00a76 priorities: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n1. Files likely to change\n- `agents.md` \u2014 likely remaining concrete delta: document the already-live `DOCS_DECISION_LINT_ENABLED` operator contract so repo docs match `README.md` and the CI workflow.\n- Audit-only / change only if mismatch is found:\n  - `.github/workflows/ci.yml`\n  - `scripts/lint_plan_decisions.py`\n  - `prompts/mode-plan.txt`\n  - `prompts/_templates/mode-plan.txt`\n  - `tests/test_lint_plan_decisions.py`\n  - `tests/test_plan_scope_mode_contract.py`\n\n2. Functions or modules to implement\n- No net-new helper or workflow is expected.\n- Reuse the existing `scripts/lint_plan_decisions.py` surfaces (`discover_plan_files`, `lint_file`, `main`) if any bug/drift is found.\n- Reuse the existing `Plan decisions advisory lint` step in `.github/workflows/ci.yml`; preserve its `continue-on-error: true`, stderr capture, and `DOCS_DECISION_LINT_ENABLED`-gated replay behavior.\n\n3. Data structures affected\n- The markdown plan convention already in use:\n  - `## Decisions`\n  - `### D<n> \u2014 <title>`\n  - required bullets: `Chosen`, `Alternatives considered`, `Why`\n- Existing operator flag surface: `DOCS_DECISION_LINT_ENABLED` (documented in `README.md`, wired in CI).\n\n4. API/interface changes\n- No new external API, CLI, database, or workflow trigger.\n- Preserve current behavior:\n  - linter exits `0`\n  - advisories go to stderr\n  - CI only replays advisories into logs/step summary when `DOCS_DECISION_LINT_ENABLED=true`\n- If `agents.md` is updated, that is documentation for an existing interface, not a new one.\n\n## Decisions\n\n### D1 \u2014 Treat Phase H as drift-fix work on this ref\n- **Chosen:** plan for verification and minimal alignment only.\n- **Alternatives considered:**\n  - **Re-implement Phase H end-to-end** \u2014 rejected because the linter, CI step, prompt contract, and tests already exist on this ref.\n  - **Declare a pure no-op** \u2014 rejected because there is still a plausible docs-parity gap (`agents.md`) and the rollout should have a concrete, minimal deliverable if drift is confirmed.\n- **Why:** this is the smallest safe path that avoids duplicating already-working behavior.\n\n### D2 \u2014 Preserve advisory lint semantics\n- **Chosen:** keep the linter warning-only, exit-0, and `DOCS_DECISION_LINT_ENABLED`-gated in CI.\n- **Alternatives considered:**\n  - **Always print advisories in CI** \u2014 rejected because the current `docs/plans/*.md` corpus still produces legacy warnings.\n  - **Fail CI on missing Decisions blocks** \u2014 rejected because the current rollout is intentionally fail-open and the existing corpus is not fully backfilled.\n- **Why:** preserves backward compatibility and operational clarity.\n\n5. Risks and edge cases\n- Current-ref conflict: the issue reads like greenfield work, but the branch already contains the feature; the biggest risk is accidental duplicate or broader-than-needed changes.\n- Legacy corpus noise: running `python3 scripts/lint_plan_decisions.py` on this ref currently emits 10 advisory warnings across older `docs/plans/*.md` files, so any change that removes flag gating or fail-open behavior will create noisy CI immediately.\n- Prompt parity: if prompt text is touched, keep `prompts/mode-plan.txt` and `prompts/_templates/mode-plan.txt` aligned and preserve the existing contract tests.\n- Historical-plan drift: `docs/plans/learn-claude-code-learnings-plan.md` still contains historical prose describing Phase H as future work; treat that as stale background, not current branch truth, unless the issue explicitly asks for plan-doc cleanup.\n\n6. Testing considerations\n- Run:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_decisions.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_scope_mode_contract.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_reuse_audit_contract.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_diagrams_contract.py`\n- Optional smoke check:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_plan_decisions.py`\n  - confirm exit `0` and advisory-only output\n- If the change is doc-only in `agents.md`, still run the focused linter/prompt tests above to prove the already-live Phase H surfaces remain intact.\n\n7. Pre-execution self-check result\n- Implementation-ready as a narrow drift/alignment pass.\n- Assumption: because the issue body is sufficient and the core feature is already present on this ref, the intended remaining work is \u201cverify and backfill any residual contract/doc drift,\u201d not \u201crebuild the feature.\u201d\n- Missing-context note: the issue does not explicitly say whether an already-landed implementation should be closed as satisfied or should still receive a tiny parity cleanup; this plan assumes the latter so the rollout can make a concrete minimal change.\n\nPLAN_SELF_CHECK: WARNING: planning ref already contains the core Phase H linter/prompt/CI surfaces; limit implementation to verified drift such as docs parity instead of re-adding the feature.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3a6ac94acee403365cafac7a0306f8eeb17d8d805a3dff1c065b9b92bfc2683d",
+  "lineage": {
+    "issue_number": 3676,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29543756923",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29543756923",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3676"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260717001107_d8f12e8e6b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3676,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "29543756923"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3676",
+  "timestamps": {
+    "created_at": "2026-07-17T00:11:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

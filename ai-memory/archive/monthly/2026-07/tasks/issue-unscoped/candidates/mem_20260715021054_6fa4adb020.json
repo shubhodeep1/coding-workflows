@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:643-648 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_6-plus]\n  PROBLEM: The coverage gate enforces `--fail-under=80` for `scripts/render_scenario_trace.py`, but the current test coverage is only 77%, so the CI job fails.\n  WHY: Both reviewers confirmed the same blocker from the CI run (`Coverage failure: total of 77 is less than fail-under=80`); they differ only on the cited line number, not on the root cause.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: 80% coverage threshold for `scripts/render_scenario_trace.py` (enforced in `.github/workflows/ci.yml:647` via `--fail-under=80`).\n  expected_change_site: `tests/test_render_scenario_trace.py`\n  confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  EVIDENCE: Current test suite (`tests/test_render_scenario_trace.py`) has three tests covering the happy-path trace output (all four step types), fail-open behavior on malformed runs, and the run-id filter, but still only reaches 77% coverage; the unexercised branches are `_build_tool_result_step` fallback paths, `_parse_tool_call_payload` JSON/non-JSON variants, `_parse_steps` empty/non-dict run branches, `render` invalid runs/missing fields branches, `_detect_marker` spacing edge case, `_split_timestamp` no-prefix branch, and `_finalize_block` unknown-kind branch.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/ci.yml:645-648 | severity=critical | confidence=5\n  PROBLEM: The coverage gate step enforces `--fail-under=80` for `scripts/render_scenario_trace.py`, but the test suite in `tests/test_render_scenario_trace.py` (236 lines, 3 test functions) only reaches 77% statement coverage. The threshold and the current test surface are mismatched.\n  WHY: The lint CI job (run 29380016018, job 87241461087) exits with code 2 and the message `Coverage failure: total of 77 is less than fail-under=80`. This blocks the lint job on every PR push. The failure is confirmed by the `failed[1]` entry in the CI check-runs context with `conclusion: failure` and a log_tail containing the exact coverage output.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- Requirement: 80% coverage threshold for `scripts/render_scenario_trace.py` (enforced in `.github/workflows/ci.yml:647` via `--fail-under=80`).\n  Expected change site: `tests/test_render_scenario_trace.py`\n  Evidence of absence: Current test suite (`tests/test_render_scenario_trace.py`) has three tests covering the happy-path trace output (all four step types), fail-open behavior on malformed runs, and the run-id filter. These only reach 77% coverage. The following branches in `scripts/render_scenario_trace.py` (413 lines) are unexercised:\n(a) `_build_tool_result_step:` lines where `_looks_like_json(stripped)` is true but `payload` is not a dict (lines 228-233);\n(b) `_build_tool_result_step:` lines where `payload.get(\"output\")` is None and `\"result\"` key exists as fallback (lines 224-226);\n(c) `_build_tool_result_step:` lines where `payload.get(\"output\")` is None and `\"result\"` is also missing, so `json.dumps(payload)` is used (lines 227-229);\n(d) `_build_tool_result_step:` lines where `_looks_like_json` is false but `EXIT_STATUS_RE` does not match (lines 242-248, the final fallback return);\n(e) `_parse_tool_call_payload:` lines where JSON payload omits `\"args\"` but carries extra fields that become `args` via dict comprehension (lines 183-188);\n(f) `_parse_steps:` lines where a run has empty `log_excerpts` list (lines 295-297, the `continue` branch);\n(g) `_parse_steps:` lines where a `run` entry is not a dict (lines 287-290, the `continue` branch);\n(h) `render:` lines where `runs` is not a list (lines 314-321, the `emit_trace_log + return` branch);\n(i) `render:` lines where a `run` entry is missing `run_id` or `workflow_family` (lines 330-338, the `emit_trace_log + continue` branch);\n(j) `_detect_marker:` edge case where `text` starts with `[tool_result]` followed by a space (line 137, the `lstrip(\" :\")` behavior);\n(k) `_parse_tool_call_payload:` lines where the non-JSON tool_call has multiple lines of text args (lines 197-202);\n(l) `_split_timestamp:` lines where the line has no timestamp prefix (lines 129-132, the `return None, line` branch);\n(m) `_finalize_block:` lines where `block.kind` is none of the handled types (lines 272-274, the `return None` branch).\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "99afe3b40a2cefb455212f5aa1c3fce2f83ed6cdf804345860b90327fad11ff6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3638,
+    "run_id": "29380016175",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29380016175",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260715021054_6fa4adb020",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3638,
+    "run_id": "29380016175"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-15T02:10:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

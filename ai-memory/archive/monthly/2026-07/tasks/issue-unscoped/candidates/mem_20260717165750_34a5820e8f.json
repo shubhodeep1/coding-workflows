@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Phase A \u2014 document compaction discipline and add transcript archiving\" \u2014 align all documentation references to match the sanitized filename format produced by scripts/transcript_archive.sh\n  expected_change_site: docs/plans/learn-claude-code-learnings-plan.md (lines 104, 336, 358)\n  confidence=[4]\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  EVIDENCE: grep confirms three remaining instances of `.transcripts/<run_id>-<phase>-<ts>.json` in the plan document at lines 104, 336, and 358, while all other live surfaces (.github/workflows/implement.yml, agents.md, prompts/*, scripts/review_apply_fixes.sh, probably_unnecessary_but_read_if_stuck.md, tests) have already been updated to `.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json`.\n- requirement: \"Phase A \u2014 document compaction discipline and add transcript archiving\" / \"Implement: Phase A \u2014 document compaction discipline and add transcript archiving\"\n  expected_change_site: All live compaction-rules blocks, agents.md, probably_unnecessary_but_read_if_stuck.md, README.md, tests, scripts/review_apply_fixes.sh, and .github/workflows/implement.yml (plus removal of extraneous Phase-B identity-reinject code)\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The PR (and the last_run_diff that this reviewer pass inspects) has updated the transcript-archive filename references from `<run_id>-<phase>` to `<sanitized-run_id>-<sanitized-phase>` across every prompt surface, documentation, test expectations, and the implement.yml heredoc. The Phase-B shell identity-reinject block has been surgically reverted in the judge-fix round (scripts/render_prompt.sh now delegates cleanly to render_prompt.py; no duplicate implementation remains). The linked-issue deliverable is satisfied on HEAD.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- TASK_GAP\n  Requirement: \"Phase A \u2014 document compaction discipline and add transcript archiving\" \u2014 align all documentation references to match the sanitized filename format produced by scripts/transcript_archive.sh\n  Expected change site: docs/plans/learn-claude-code-learnings-plan.md (lines ~104, 336, 358)\n  Evidence of absence: grep confirms three remaining instances of `.transcripts/<run_id>-<phase>-<ts>.json` in the plan document, whereas all live runtime surfaces (prompts, workflows, agents.md, tests) have been updated to `.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json`. The LAST RUN DIFF successfully removed the Phase B shell identity-reinject code from scripts/render_prompt.sh, bringing the PR back to Phase A scope. Only this archival plan document remains inconsistent.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- TASK_GAP\n  Requirement: \"Implement: Phase A \u2014 document compaction discipline and add transcript archiving\" \u2014 per issue #3684 and tracking issue #3627, Phase A deliverables include aligning all live prompt/documentation surfaces with the actual sanitized archive filename `.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json` produced by `scripts/transcript_archive.sh`. Three references in `docs/plans/learn-claude-code-learnings-plan.md` still use the old unsanitized form `<run_id>-<phase>`.\n  Expected change site: `docs/plans/learn-claude-code-learnings-plan.md` (lines 104, 336, 358).\n  Evidence of absence: grep confirms three instances of `.transcripts/<run_id>-<phase>-<ts>.json` in the plan doc at lines 104, 336, and 358, while every other live surface (.github/workflows/implement.yml, agents.md, prompts/*, scripts/review_apply_fixes.sh, probably_unnecessary_but_read_if_stuck.md, tests) has already been updated to the sanitized form.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- TASK_GAP\n  Requirement: Phase A \u2014 document compaction discipline and add transcript archiving (issue #3684, part of tracking #3627)\n  Expected change site: All live compaction-rules blocks, agents.md, probably_unnecessary_but_read_if_stuck.md, README.md, tests, scripts/review_apply_fixes.sh, and .github/workflows/implement.yml (plus removal of extraneous Phase-B identity-reinject code)\n  Evidence of absence: The PR (and the last_run_diff that this reviewer pass inspects) has updated the transcript-archive filename references from `<run_id>-<phase>` to `<sanitized-run_id>-<sanitized-phase>` across every prompt surface, documentation, test expectations, and the implement.yml heredoc. The Phase-B shell identity-reinject block has been surgically reverted in the judge-fix round (scripts/render_prompt.sh now delegates cleanly to render_prompt.py; no duplicate implementation remains). The linked-issue deliverable is satisfied on HEAD.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "d189a7d9da684f0e45fbe51e058311971277b7f3b0d0057eb542f8fd30f73a56",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3685,
+    "run_id": "29593312649",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29593312649",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260717165750_34a5820e8f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3685,
+    "run_id": "29593312649"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-07-17T16:57:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

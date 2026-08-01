@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `7a16bff0763d66d43a8c25aa83ab1ba2095a2f3c` on `orchestrator/project-3627` (integration metadata matches).\nClarification mapping: no `Q1`/`Q2` questions were asked; `/answer [auto-answered-by-orchestrator]` adds no extra constraints.\nInspection summary: checked the current worktree helper/poller/test surfaces on this ref and ran the shipped worktree shell tests.\n\nScope-mode: Hold Scope\nReuse-audit: extends existing `scripts/worktree_registry.sh` / `scripts/worktree_gc.sh` / poller worktree wiring\nScope-mode justification:\nThe requested Phase F behavior is already present on `orchestrator/project-3627`: the registry helper, GC wrapper, poller wiring, and dedicated tests already exist on this ref. Under the repo\u2019s priority order (security, correctness, backward compatibility, operational clarity, performance, speed), the safest plan is to keep scope fixed to verification and issue closure unless a concrete defect is found. Do not broaden into unrelated worktree refactors just to create a diff.\n\nFiles likely to change.\n- None expected if implement-phase verification confirms the shipped Phase F behavior.\n- Only if verification finds a real defect in the existing implementation:\n  - `scripts/worktree_registry.sh`\n  - `scripts/worktree_gc.sh`\n  - `scripts/orchestrate_poll_process.sh`\n  - `.github/workflows/orchestrate_poll.yml`\n  - `tests/test_worktree_registry.sh`\n  - `tests/test_worktree_gc.sh`\n  - `tests/test_worktree_name_validation.sh`\n  - `tests/test_orchestrate_poll_workflow_contract.py`\n  - `tests/test_orchestrate_poll_process.py`\n\nFunctions or modules to implement.\n- No net-new module is planned.\n- Verify the existing Phase F surfaces first:\n  - `scripts/worktree_registry.sh`: `worktree_registry_register`, `worktree_registry_deregister`, `worktree_registry_list`, `worktree_registry_gc`\n  - `scripts/worktree_gc.sh`: active-run snapshot selection and fail-open wrapper logic\n  - `scripts/orchestrate_poll_process.sh`: `worktree_registry_enabled`, `worktree_registry_register`, `worktree_registry_deregister`, plus the wrapped worktree lifecycle callsites\n  - `.github/workflows/orchestrate_poll.yml`: `ORCH_WORKTREE_REGISTRY_ENABLED`, `ORCH_WORKTREE_TTL_SECS`, support-script staging, and post-poll GC step\n- If those surfaces are intact, implement phase should use the repo\u2019s existing already-implemented/no-op path instead of inventing edits.\n\nData structures affected.\n- `.worktrees/index.json` with `schema_version: \"worktree_registry.v1.json\"` and entry fields:\n  `name`, `path`, `branch`, `task_id`, `created_at`, `owner_phase`, `owner_run_id`\n- `.worktrees/index.lock` for atomic `flock`-guarded writes\n- Active-run snapshot input consumed by GC (`workflow_runs[]`)\n- Existing env/contract surfaces:\n  `ORCH_WORKTREE_REGISTRY_ENABLED`, `ORCH_WORKTREE_TTL_SECS`,\n  `WORKTREE_REGISTER_INVALID_NAME`, `WORKTREE_REGISTER`,\n  `WORKTREE_DEREGISTER`, `WORKTREE_GC`, `WORKTREE_REGISTRY_REBUILD`,\n  `WORKTREE_REGISTER_FAIL`, `WORKTREE_DEREGISTER_FAIL`\n\nAPI/interface changes.\n- None planned.\n- Preserve the existing CLI contract of `scripts/worktree_registry.sh` (`register`, `deregister`, `list`, `gc`), the existing env vars, and the existing log-prefix/schema contracts.\n\n## Decisions\n\n### D1 \u2014 Treat Phase F as already shipped on the planning ref\n- Chosen:\n  - Plan for verification and no-op closure unless a concrete defect is found.\n- Alternatives considered:\n  - Force a code change anyway.\n  - Broaden into every current worktree user.\n- Why:\n  - Current ref already contains the helper scripts, poller wiring, GC step, and dedicated tests, and the targeted shell tests pass locally.\n\n### D2 \u2014 Keep any fallback edits constrained to the existing worktree-registry surfaces\n- Chosen:\n  - If verification exposes a real gap, edit only the helper/poller/test files listed above.\n- Alternatives considered:\n  - Refactor unrelated worktree callsites or rename interfaces.\n- Why:\n  - This is the smallest safe change set and preserves backward-compatible env vars, log prefixes, and registry schema.\n\nRisks and edge cases.\n- Conflict with current ref: the issue says \u201cadd\u201d Phase F, but the feature already exists on this branch; unnecessary churn is the main risk.\n- Historical-spec drift: the older Phase F doc section mentions `scripts/review_conflict_resolve.sh` as a worktree caller, but that script no longer owns a `git worktree` lifecycle on this ref.\n- Any fallback fix must preserve:\n  - invalid-name rejection,\n  - invalid-registry rebuild behavior,\n  - TTL clamping,\n  - fail-open preservation when active-run metadata is unavailable,\n  - no GC of worktrees owned by active runs.\n- Avoid cosmetic/docs-only edits just to satisfy a stale issue.\n\nTesting considerations.\n- Already run during planning and passing:\n  - `bash tests/test_worktree_registry.sh`\n  - `bash tests/test_worktree_gc.sh`\n  - `bash tests/test_worktree_name_validation.sh`\n- If any code change is actually required, rerun the three shell tests above plus the existing poller/workflow contract tests:\n  - `tests/test_orchestrate_poll_workflow_contract.py`\n  - `tests/test_orchestrate_poll_process.py`\n- Current CI already includes the three shell tests, so any fallback code change should continue to satisfy that contract.\n\nAssumptions and missing-context notes.\n- Assumption: the checked-out integration branch is the correct source of truth for implementation planning.\n- Missing context: this issue body does not describe any follow-on delta beyond the historical Phase F spec, so the plan avoids inventing new requirements.\n\nPre-execution self-check result.\n- Implementation-ready as a verification-first, no-op-expected plan.\n- No integration-branch mismatch was found.\n\nPLAN_SELF_CHECK: WARNING: The requested Phase F work appears already implemented on `orchestrator/project-3627`; implement phase should verify and close without inventing extra edits.\nPLAN_SELF_CHECK: WARNING: The historical Phase F spec mentions a review-conflict worktree caller that no longer exists on this ref, so that doc text should not be treated as a fresh code requirement.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "85f4abe65989caae7c10bc92e12a217e469d41da71d5a6005ad43368833898ae",
+  "lineage": {
+    "issue_number": 3690,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "29624540113",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "29624540113",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3690"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260718011143_7359202736",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3690,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "29624540113"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3690",
+  "timestamps": {
+    "created_at": "2026-07-18T01:11:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
