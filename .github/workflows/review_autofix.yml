@@ -6382,6 +6382,7 @@ jobs:
               commit_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
           
           edits_pushed = bool_env("AUTOFIX_EDITS_PUSHED")
+          push_allowed = bool_env("CAN_PUSH")
           push_needed = bool_env("DID_COMMIT") or bool_env("CONFLICT_RESOLVED")
           if edits_pushed:
               push_phase_state = "completed"
@@ -6392,6 +6393,9 @@ jobs:
           elif bool_env("PR_CLOSED"):
               push_phase_state = "skipped"
               push_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "pr_closed"}
+          elif push_needed and not push_allowed:
+              push_phase_state = "skipped"
+              push_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "push_not_allowed"}
           elif push_needed:
               push_phase_state = "completed"
               push_slot = {"attempt_count": 1, "status": "failed", "failure_class": "push_failed"}

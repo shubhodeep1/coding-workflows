@@ -3465,9 +3465,11 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		'budget_total_secs="$(sanitize_nonnegative_int "${CODEX_RUN_BUDGET_TOTAL_SECS:-0}")"',
 		'budget_start_epoch="$(sanitize_nonnegative_int "${CODEX_RUN_BUDGET_START_EPOCH:-${JOB_START_EPOCH:-0}}")"',
 		'resume_round="${AUTOFIX_RESUME_ROUND:-${RESUME_ROUND:-0}}"',
+		'push_allowed = bool_env("CAN_PUSH")',
 		'edits_pushed = bool_env("AUTOFIX_EDITS_PUSHED")',
 	):
 		assert artifact in block, f"Summary step is missing local metric source: {artifact}"
+	assert '"failure_class": "push_not_allowed"' in block
 	assert "gh api" not in block
 	assert "gh_retry" not in block
 	assert "curl https://api.github.com" not in block
