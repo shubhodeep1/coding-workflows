@@ -3277,6 +3277,12 @@ reviewer_classify_retryable_failure() {
   local cmd_rc="$1"
   local wd_reason="$2"
   local stderr_file="$3"
+  local stall_state="${4:-}"
+
+  if [ "${stall_state}" = "killed" ]; then
+    printf 'stall_guard\n'
+    return 0
+  fi
 
   case "${wd_reason}" in
     idle_timeout|max_wall)
@@ -3304,6 +3310,32 @@ reviewer_classify_retryable_failure() {
   fi
 
   return 1
+}
+
+reviewer_log_advance_action() {
+  local next_action="$1"
+  local next_attempt="${2:-}"
+  local advance_reason="${3:-${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class:-}}}"
+  local next_model="${4:-}"
+  local current_model="${effective_model:-${slot_model:-unknown}}"
+  local line=""
+
+  [ -n "${log_file:-}" ] || return 0
+  [ -n "${slot_model:-}" ] || return 0
+
+  if [ -z "${advance_reason}" ]; then
+    advance_reason="unknown"
+  fi
+
+  line="REVIEWER_ADVANCE: slot=${slot_model} model=${current_model} reason=${advance_reason} next_action=${next_action}"
+  if [ -n "${next_attempt}" ]; then
+    line="${line} next_attempt=${next_attempt}"
+  fi
+  if [ -n "${next_model}" ]; then
+    line="${line} next_model=${next_model}"
+  fi
+
+  echo "${line}" | tee -a "${log_file}"
 }
 
 reviewer_output_has_explicit_none() {
@@ -3621,7 +3653,7 @@ execute_reviewer_attempt() {
     sed 's/^/  | /' "${tmp_stderr}" | tee -a "${log_file}"
   fi
 
-  REVIEWER_ATTEMPT_RETRYABLE_CLASS="$(reviewer_classify_retryable_failure "${cmd_rc}" "${wd_reason}" "${tmp_stderr}" || true)"
+  REVIEWER_ATTEMPT_RETRYABLE_CLASS="$(reviewer_classify_retryable_failure "${cmd_rc}" "${wd_reason}" "${tmp_stderr}" "${stall_state}" || true)"
   if [ -n "${REVIEWER_ATTEMPT_RETRYABLE_CLASS}" ]; then
     echo "Reviewer slot ${slot_model} (${effective_model}) failure classified as retryable (${REVIEWER_ATTEMPT_RETRYABLE_CLASS}) on ${attempt_label}." | tee -a "${log_file}"
     REVIEWER_ATTEMPT_OUTCOME="retryable_failure"
@@ -3867,11 +3899,20 @@ run_reviewer() {
           ;;
         silent_retry)
           ;;
+        retryable_failure)
+          final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class}}"
+          if [ "${attempt}" -lt "${reviewer_max_attempts}" ]; then
+            reviewer_log_advance_action "retry_same_model" "$((attempt + 1))" "${final_retryable_class}" "${model}"
+          fi
+          ;;
       esac
       attempt=$((attempt + 1))
       sleep 2
     done
 
+    if [ -n "${final_retryable_class}" ]; then
+      reviewer_log_advance_action "terminal_failure" "" "${final_retryable_class}"
+    fi
     echo "Reviewer ${model} failed after retries." > "${output_file}"
     echo "failed" > "${status_file}"
     echo "Reviewer ${model} failed after ${reviewer_max_attempts} attempts." | tee -a "${log_file}"
@@ -3930,10 +3971,12 @@ run_reviewer() {
   if [ -n "${retry_reasoning}" ]; then
     effective_model="${model}"
     if ! reviewer_budget_may_continue "attempt 2 (cheaper reasoning ${retry_reasoning})"; then
+      reviewer_log_advance_action "skip_budget" "" "${final_retryable_class}" "${model}"
       rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
       rm -rf "${reviewer_codex_home}" 2>/dev/null || true
       return 0
     fi
+    reviewer_log_advance_action "retry_cheaper_reasoning" "2" "${final_retryable_class}" "${model}"
     if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
       if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
         emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
@@ -3975,6 +4018,7 @@ run_reviewer() {
   fallback_model="$(reviewer_failback_target_for_model "${model}" || true)"
   if [ -z "${fallback_model}" ]; then
     echo "REVIEWER_FAILBACK_UNMAPPED: ${model}" | tee -a "${log_file}"
+    reviewer_log_advance_action "skip_unmapped" "" "${final_retryable_class}"
     reviewer_record_health_outcome "${model}" "retryable_failure" "" "${final_retryable_class}" "${log_file}"
     printf 'Reviewer slot %s skipped after retryable failure (%s); no same-family failback mapping is available.\n' "${model}" "${final_retryable_class:-retryable_failure}" > "${output_file}"
     echo "skipped_unmapped" > "${status_file}"
@@ -3990,10 +4034,12 @@ run_reviewer() {
   fi
   effective_model="${fallback_model}"
   if ! reviewer_budget_may_continue "${fallback_attempt_label}"; then
+    reviewer_log_advance_action "skip_budget" "" "${final_retryable_class}" "${fallback_model}"
     rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
     rm -rf "${reviewer_codex_home}" 2>/dev/null || true
     return 0
   fi
+  reviewer_log_advance_action "failback" "3" "${final_retryable_class}" "${fallback_model}"
   if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
     if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
       emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
@@ -4027,10 +4073,12 @@ run_reviewer() {
     while [ "${attempt}" -le "${reviewer_max_attempts}" ]; do
       effective_model="${fallback_model}"
       if ! reviewer_budget_may_continue "attempt ${attempt} (extended retry ${fallback_model})"; then
+        reviewer_log_advance_action "skip_budget" "" "${final_retryable_class}" "${fallback_model}"
         rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
         rm -rf "${reviewer_codex_home}" 2>/dev/null || true
         return 0
       fi
+      reviewer_log_advance_action "retry_extended" "${attempt}" "${final_retryable_class}" "${fallback_model}"
       if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
         if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
           emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
@@ -4063,6 +4111,7 @@ run_reviewer() {
     done
   fi
 
+  reviewer_log_advance_action "terminal_failure" "" "${final_retryable_class}" "${fallback_model}"
   reviewer_record_health_outcome "${model}" "retryable_failure" "${fallback_model}" "${final_retryable_class}" "${log_file}"
   final_failure_message="Reviewer ${model} failed after circuit-breaker failback."
   if [ "${reviewer_max_attempts}" -gt 3 ]; then

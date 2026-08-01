@@ -172,6 +172,9 @@ env:
   REVIEW_MAX_RESUME_ROUNDS: ${{ vars.REVIEW_MAX_RESUME_ROUNDS || '3' }}
   CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}
   CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}
+  CODEX_STALL_GUARD_ENABLED: ${{ vars.CODEX_STALL_GUARD_ENABLED || 'true' }}
+  CODEX_STALL_TIMEOUT_SECONDS: ${{ vars.CODEX_STALL_TIMEOUT_SECONDS || '600' }}
+  CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
   REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || 'false' }}
   REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}
@@ -1193,6 +1196,9 @@ jobs:
       REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}
       REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}
       REVIEW_SOFT_DEADLINE_MINUTES: ${{ vars.REVIEW_SOFT_DEADLINE_MINUTES || '210' }}
+      CODEX_STALL_GUARD_ENABLED: ${{ vars.CODEX_STALL_GUARD_ENABLED || 'true' }}
+      CODEX_STALL_TIMEOUT_SECONDS: ${{ vars.CODEX_STALL_TIMEOUT_SECONDS || '600' }}
+      CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}
       REVIEW_MAX_RESUME_ROUNDS: ${{ vars.REVIEW_MAX_RESUME_ROUNDS || '3' }}
       REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}
       REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}
@@ -6837,9 +6843,27 @@ jobs:
           def max_attempt_from_text(text: str) -> int:
               matches = [int(value) for value in re.findall(r"\battempt\s+([0-9]+)\b", text)]
               return max(matches) if matches else 0
+
+
+          def reviewer_stall_kill_count(log_text: str) -> int:
+              return sum(1 for line in log_text.splitlines() if "recorded codex_stall_killed on " in line)
+
+
+          def reviewer_stall_recovery_next_action(log_text: str) -> str:
+              next_action = ""
+              for line in log_text.splitlines():
+                  if not line.startswith("REVIEWER_ADVANCE: "):
+                      continue
+                  if "reason=stall_guard" not in line:
+                      continue
+                  match = re.search(r"\bnext_action=([A-Za-z0-9_:-]+)", line)
+                  if match is not None:
+                      next_action = match.group(1)
+              return next_action
           
           
           def reviewer_failure_class(status: str, log_text: str, output_text: str) -> str:
+              stall_guard_logged = reviewer_stall_kill_count(log_text) > 0 or "killed by codex stall guard" in log_text
               if status == "success":
                   return "none"
               if status == "pr_closed":
@@ -6849,6 +6873,8 @@ jobs:
               if status == "skipped_open":
                   return "cached_open"
               if status == "skipped_unmapped":
+                  if stall_guard_logged:
+                      return "stall_guard"
                   retryable_output = re.findall(r"retryable failure \(([^)]+)\)", output_text)
                   if retryable_output:
                       return retryable_output[-1]
@@ -6857,6 +6883,8 @@ jobs:
                       return retryable_log[-1]
                   return "retryable_failure"
           
+              if stall_guard_logged:
+                  return "stall_guard"
               retryable_log = re.findall(r"failure classified as retryable \(([^)]+)\)", log_text)
               if retryable_log:
                   return retryable_log[-1]
@@ -6894,6 +6922,8 @@ jobs:
                   log_text = read_text(previous_reviews_dir / f"{reviewer_slot_prefix}_{slot_name}.log")
                   output_text = read_text(previous_reviews_dir / f"{reviewer_slot_prefix}_{slot_name}.txt")
                   attempt_count = max_attempt_from_text(log_text)
+                  stall_kill_count = reviewer_stall_kill_count(log_text)
+                  stall_recovery_next_action = reviewer_stall_recovery_next_action(log_text)
                   if attempt_count == 0 and status_value in {"success", "failed", "pr_closed", "skipped_unmapped", "skipped_budget"} and (log_text or output_text):
                       attempt_count = 1
                   reviewer_slots.append({
@@ -6901,6 +6931,9 @@ jobs:
                       "attempt_count": attempt_count,
                       "status": status_value,
                       "failure_class": reviewer_failure_class(status_value, log_text, output_text),
+                      "stall_kill_count": stall_kill_count,
+                      "stall_recovery_next_action": stall_recovery_next_action,
+                      "stall_recovered": bool(stall_kill_count and status_value == "success"),
                   })
           
           reviewers_phase_state = "completed" if reviewer_slots else "skipped"
@@ -7052,6 +7085,15 @@ jobs:
                   incomplete_phases = ["editor"]
               elif partial_finalize_phase:
                   incomplete_phases = [partial_finalize_phase]
+
+          stall_recovery = {
+              "killed_attempts": sum(int(slot.get("stall_kill_count", 0)) for slot in reviewer_slots),
+              "advanced_slots": sum(1 for slot in reviewer_slots if str(slot.get("stall_recovery_next_action", "")).strip()),
+              "recovered_slots": sum(1 for slot in reviewer_slots if bool(slot.get("stall_recovered"))),
+              "partial_finalize_requested": bool(
+                  partial_finalize and partial_finalize_phase == "reviewers" and any(int(slot.get("stall_kill_count", 0)) > 0 for slot in reviewer_slots)
+              ),
+          }
           
           if not max_iterations_reached or skip_judge:
               rb_judge_phase_state = "skipped"
@@ -7149,6 +7191,7 @@ jobs:
               "budget_elapsed_secs": int_env("BUDGET_ELAPSED_SECS"),
               "budget_total_secs": int_env("BUDGET_TOTAL_SECS"),
               "budget_remaining_secs": int_env("BUDGET_REMAINING_SECS"),
+              "stall_recovery": stall_recovery,
               "finalize_reason": finalize_reason,
               "partial_finalize": partial_finalize,
               "partial_finalize_reason": partial_finalize_reason,
@@ -7174,7 +7217,7 @@ jobs:
           )"
 
           if [ -z "${structured_summary_line}" ]; then
-            structured_summary_line='REVIEW_AUTOFIX_RUN_SUMMARY_V1 {"completed_phases":["finalize"],"skipped_phases":["reviewers","consolidator","parser","ledger","editor","commit","push","rb_judge"],"slot_results":{"reviewers":[],"consolidator":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"parser":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"ledger":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"editor":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"commit":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"push":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"rb_judge":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"finalize":{"attempt_count":1,"status":"emitted","failure_class":"none"}},"budget_elapsed_secs":0,"budget_total_secs":0,"budget_remaining_secs":0,"finalize_reason":"summary_emit_failed","partial_finalize":false,"partial_finalize_reason":"","partial_finalize_phase":"","partial_comment_posted":false,"incomplete_phases":[],"edits_pushed":false,"resume_round":0,"resume_restored":false,"resume_head_sha":"","resume_round_limit":0,"resume_state":"fresh","resume_should_continue":false,"resume_source_reason":"","resume_source_phase":"","resume_comment_posted":false,"resume_completed_scope":[],"resume_incomplete_scope":[]}'
+            structured_summary_line='REVIEW_AUTOFIX_RUN_SUMMARY_V1 {"completed_phases":["finalize"],"skipped_phases":["reviewers","consolidator","parser","ledger","editor","commit","push","rb_judge"],"slot_results":{"reviewers":[],"consolidator":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"parser":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"ledger":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"editor":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"commit":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"push":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"rb_judge":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"finalize":{"attempt_count":1,"status":"emitted","failure_class":"none"}},"budget_elapsed_secs":0,"budget_total_secs":0,"budget_remaining_secs":0,"stall_recovery":{"advanced_slots":0,"killed_attempts":0,"partial_finalize_requested":false,"recovered_slots":0},"finalize_reason":"summary_emit_failed","partial_finalize":false,"partial_finalize_reason":"","partial_finalize_phase":"","partial_comment_posted":false,"incomplete_phases":[],"edits_pushed":false,"resume_round":0,"resume_restored":false,"resume_head_sha":"","resume_round_limit":0,"resume_state":"fresh","resume_should_continue":false,"resume_source_reason":"","resume_source_phase":"","resume_comment_posted":false,"resume_completed_scope":[],"resume_incomplete_scope":[]}'
           fi
 
           {
