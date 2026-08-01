@@ -16,6 +16,20 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 HEARTBEAT_SCRIPT = REPO_ROOT / "scripts" / "codex_heartbeat.sh"
 
 
+def _heartbeat_test_env() -> dict[str, str]:
+	env = os.environ.copy()
+	for key in (
+		"JOB_START_EPOCH",
+		"REVIEW_SOFT_DEADLINE_MINUTES",
+		"CODEX_RUN_BUDGET_START_EPOCH",
+		"CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH",
+		"CODEX_RUN_BUDGET_TOTAL_SECS",
+	):
+		env.pop(key, None)
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	return env
+
+
 def _pid_is_running(pid: int) -> bool:
 	try:
 		os.kill(pid, 0)
@@ -47,8 +61,7 @@ def test_codex_heartbeat_emits_idle_lines_without_polluting_child_streams() -> N
 		activity_file = tmp / "activity.txt"
 		stdin_payload = "prompt-from-stdin\nsecond-line\n"
 
-		env = os.environ.copy()
-		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		env = _heartbeat_test_env()
 		env["CODEX_HEARTBEAT_ENABLED"] = "1"
 		env["CODEX_HEARTBEAT_INTERVAL_SECS"] = "1"
 
@@ -120,8 +133,7 @@ def test_codex_heartbeat_appends_budget_fields_when_run_budget_env_present() -> 
 		stdout_file = tmp / "child.stdout"
 		stderr_file = tmp / "child.stderr"
 
-		env = os.environ.copy()
-		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		env = _heartbeat_test_env()
 		env["CODEX_HEARTBEAT_ENABLED"] = "1"
 		env["CODEX_HEARTBEAT_INTERVAL_SECS"] = "1"
 		now_epoch = int(time.time())
@@ -185,8 +197,7 @@ def test_codex_heartbeat_disabled_still_tracks_child_activity() -> None:
 		stderr_file = tmp / "child.stderr"
 		activity_file = tmp / "activity.txt"
 
-		env = os.environ.copy()
-		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		env = _heartbeat_test_env()
 		env["CODEX_HEARTBEAT_ENABLED"] = "0"
 		env["CODEX_HEARTBEAT_INTERVAL_SECS"] = "1"
 
@@ -229,8 +240,7 @@ def test_codex_heartbeat_disabled_still_tracks_child_activity() -> None:
 def test_codex_heartbeat_keeps_emitting_while_descendant_holds_pipes_open() -> None:
 	with tempfile.TemporaryDirectory(prefix="codex-heartbeat-descendant-") as td:
 		tmp = Path(td)
-		env = os.environ.copy()
-		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		env = _heartbeat_test_env()
 		env["CODEX_HEARTBEAT_ENABLED"] = "1"
 		env["CODEX_HEARTBEAT_INTERVAL_SECS"] = "1"
 
@@ -273,8 +283,7 @@ def test_codex_heartbeat_timeout_kill_after_does_not_leave_child_running() -> No
 	with tempfile.TemporaryDirectory(prefix="codex-heartbeat-timeout-") as td:
 		tmp = Path(td)
 		child_pid_file = tmp / "child.pid"
-		env = os.environ.copy()
-		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		env = _heartbeat_test_env()
 		env["CODEX_HEARTBEAT_ENABLED"] = "0"
 		child_pid: int | None = None
 

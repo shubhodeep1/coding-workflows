@@ -67,6 +67,20 @@ CALLER_CONTRACTS = [
 ]
 
 
+def _stall_guard_test_env() -> dict[str, str]:
+	env = os.environ.copy()
+	for key in (
+		"JOB_START_EPOCH",
+		"REVIEW_SOFT_DEADLINE_MINUTES",
+		"CODEX_RUN_BUDGET_START_EPOCH",
+		"CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH",
+		"CODEX_RUN_BUDGET_TOTAL_SECS",
+	):
+		env.pop(key, None)
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	return env
+
+
 def _pid_is_running(pid: int) -> bool:
 	try:
 		os.kill(pid, 0)
@@ -120,8 +134,7 @@ def _run_guard_for_contract(
 	heartbeat_dir = tmp / "heartbeats"
 	child_pid_file = tmp / "child.pid"
 
-	env = os.environ.copy()
-	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env = _stall_guard_test_env()
 	env["CODEX_HEARTBEAT_ENABLED"] = "1"
 	env["CODEX_HEARTBEAT_INTERVAL_SECS"] = "1"
 	env["CODEX_STALL_GUARD_ENABLED"] = "true" if stall_guard_enabled else "false"
@@ -267,8 +280,7 @@ def test_codex_stall_guard_observe_only_records_event_idle_without_killing_child
 		heartbeat_dir = tmp / "heartbeats"
 		child_pid_file = tmp / "child.pid"
 
-		env = os.environ.copy()
-		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		env = _stall_guard_test_env()
 		env["CODEX_HEARTBEAT_ENABLED"] = "1"
 		env["CODEX_HEARTBEAT_INTERVAL_SECS"] = "1"
 		env["CODEX_STALL_GUARD_ENABLED"] = "false"
@@ -338,8 +350,7 @@ def test_codex_stall_guard_kill_mode_terminates_idle_child_and_returns_nonzero()
 		child_pid_file = tmp / "child.pid"
 		child_pid: int | None = None
 
-		env = os.environ.copy()
-		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		env = _stall_guard_test_env()
 		env["CODEX_HEARTBEAT_ENABLED"] = "1"
 		env["CODEX_HEARTBEAT_INTERVAL_SECS"] = "1"
 		env["CODEX_STALL_GUARD_ENABLED"] = "true"
@@ -402,8 +413,7 @@ def test_codex_stall_guard_heartbeat_appends_budget_fields_when_run_budget_env_p
 		status_file = tmp / "guard.status"
 		heartbeat_dir = tmp / "heartbeats"
 
-		env = os.environ.copy()
-		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		env = _stall_guard_test_env()
 		env["CODEX_HEARTBEAT_ENABLED"] = "1"
 		env["CODEX_HEARTBEAT_INTERVAL_SECS"] = "1"
 		env["CODEX_STALL_GUARD_ENABLED"] = "false"
