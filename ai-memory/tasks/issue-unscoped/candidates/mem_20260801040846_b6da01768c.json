@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "Recent merges modified `scripts/emit_event.py`, `scripts/emit_event.sh`, and `scripts/transcript_archive.sh`, along with regression coverage for plan-scope mode and log prefixes. This indicates the repo treats emitted events, archived transcripts, and log formatting as an integrated contract. It matters whenever output is consumed by later automation or by CI checks.",
+  "fingerprint": "f7946a8a784b7c62e9bee205070e926e13b138954d4fbd4246545e63e370a21c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "30683229007",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "30683229007",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3690",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3692",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3694",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3695",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3698",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3691",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3693",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3696",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3697",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3699"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260801040846_b6da01768c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Event emission and transcript archiving are tightly coupled; changes to one should be checked against log-prefix and archive contract tests.",
+  "timestamps": {
+    "created_at": "2026-08-01T04:08:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
