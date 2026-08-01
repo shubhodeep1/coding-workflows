@@ -5,13 +5,33 @@
   "entry_id": "processed_command_3710_5150054389_approved",
   "issue_number": 3710,
   "metadata": {
+    "branch": "ai/issue-3710",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/review_autofix.yml",
+      "README.md",
+      "scripts/codex_heartbeat.sh",
+      "scripts/codex_stall_guard.sh",
+      "scripts/review_apply_fixes.sh",
+      "scripts/review_run_reviewers.sh",
+      "scripts/watchdog_helpers.sh",
+      "tests/test_codex_heartbeat.py",
+      "tests/test_codex_stall_guard_scripts.py",
+      "tests/test_review_autofix_review_pipeline_contract.py",
+      "tests/test_review_editor_fifo_drain.py"
+    ],
+    "issue_number": 3710,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3710",
+    "pr_number": 3711,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3711",
+    "run_attempt": "1",
+    "run_id": "30686534891",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/30686534891"
   },
   "run_attempt": 1,
   "run_id": "30686534891",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-08-01T05:50:05Z",
+  "status": "completed",
+  "timestamp": "2026-08-01T06:08:07Z",
   "workflow": "implement"
 }
