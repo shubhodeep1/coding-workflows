@@ -337,6 +337,28 @@ def test_editor_budget_cleanup_buffer_never_yields_negative_attempt_wall() -> No
 	assert 'after reserving the 120s cleanup buffer' in text
 
 
+def test_editor_partial_finalize_contract_is_wired() -> None:
+	text = APPLY_FIXES_SCRIPT.read_text(encoding="utf-8")
+	for expected in (
+		"request_editor_partial_finalize()",
+		'AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true',
+		'AUTOFIX_PARTIAL_FINALIZE_REASON=${finalize_reason}',
+		'AUTOFIX_PARTIAL_FINALIZE_PHASE=editor',
+		'REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED="$(normalize_review_soft_deadline_minutes "${REVIEW_SOFT_DEADLINE_MINUTES:-}")"',
+		'editor_partial_finalize_reason="soft_deadline"',
+		'editor_partial_finalize_reason="refusal"',
+		'editor_partial_finalize_reason="recoverable_failure"',
+		'partial finalize requested at the soft deadline before another editor attempt',
+		'partial finalize requested after a safety-policy refusal before another validated attempt',
+		'partial finalize requested after a recoverable editor failure before another validated attempt',
+		'model refused (safety filter)',
+		'Editor stopped for budget headroom; continuing with partial-finalize summary.',
+		'Editor returned a safety-policy refusal; continuing with partial-finalize summary.',
+		'Editor failed after retries; continuing with partial-finalize summary.',
+	):
+		assert expected in text
+
+
 def test_editor_loop_bounds_the_drain_and_wires_the_reaper() -> None:
 	text = APPLY_FIXES_SCRIPT.read_text(encoding="utf-8")
 	# Grace bound is configurable with a safe default.

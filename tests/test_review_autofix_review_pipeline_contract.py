@@ -481,6 +481,13 @@ def _reviewer_failback_helper_block() -> str:
 	return text[start:end]
 
 
+def _reviewer_partial_finalize_budget_helper_block() -> str:
+	text = _reviewers_text()
+	start = text.index('REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE="${RUNTIME_DIR:-.}/reviewers_partial_finalize_request.txt"')
+	end = text.index("resolve_ledger_substate_helper() {", start)
+	return text[start:end]
+
+
 def _reviewer_run_reviewer_block() -> str:
 	text = _reviewers_text()
 	start = text.index("run_reviewer() {")
@@ -1304,6 +1311,7 @@ def _run_prepare_reviewer_scope_harness(*, last_run_changed_text: str, ledger_te
 			"scoped_active": files["scoped_active"].read_text(encoding="utf-8").strip(),
 		}
 def _run_reviewer_failback_harness() -> dict[str, object]:
+	partial_finalize_budget_helper_block = _reviewer_partial_finalize_budget_helper_block()
 	helper_block = _reviewer_failback_helper_block()
 	run_reviewer_block = _reviewer_run_reviewer_block()
 	run_reviewer_pass_block = _reviewer_run_reviewer_pass_block()
@@ -1372,6 +1380,7 @@ def _run_reviewer_failback_harness() -> dict[str, object]:
 				"bash",
 				"-c",
 				"set -euo pipefail\n"
+				f"{partial_finalize_budget_helper_block}\n"
 				f"{helper_block}\n"
 				f"{run_reviewer_block}\n"
 				f"{run_reviewer_pass_block}\n"
@@ -1463,6 +1472,102 @@ def _run_reviewer_failback_harness() -> dict[str, object]:
 			**state,
 			**artifact_contents,
 			"health_state": json.loads(health_file.read_text(encoding="utf-8")),
+		}
+
+
+def _run_reviewer_partial_finalize_budget_harness() -> dict[str, object]:
+	partial_finalize_budget_helper_block = _reviewer_partial_finalize_budget_helper_block()
+	run_reviewer_block = _reviewer_run_reviewer_block()
+	run_reviewer_pass_block = _reviewer_run_reviewer_pass_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-partial-finalize-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		runtime = tmp / "runtime"
+		home = tmp / "home"
+		runner_temp = tmp / "runner_temp"
+		seed_codex_home = tmp / "codex_home_seed"
+		reviews.mkdir()
+		runtime.mkdir()
+		home.mkdir()
+		runner_temp.mkdir()
+		seed_codex_home.mkdir()
+
+		prompt_file = runtime / "reviewer_prompt.patch"
+		prompt_file.write_text(PHASE_G_FLAKY_REVIEWER_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+		state_file = tmp / "state.txt"
+		github_env_file = tmp / "github_env.txt"
+		call_marker = tmp / "run_reviewer_called.txt"
+
+		env = os.environ.copy()
+		env.update({
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"RUNTIME_DIR": str(runtime),
+			"PROMPT_FILE": str(prompt_file),
+			"PR_NUMBER": "123",
+			"RUNNER_TEMP": str(runner_temp),
+			"HOME": str(home),
+			"CODEX_HOME": str(seed_codex_home),
+			"GITHUB_ENV": str(github_env_file),
+			"REVIEWER_REASONING_EFFORT": "xhigh",
+			"REVIEW_PR_STATE_POLL_INTERVAL_SECS": "10",
+			"REVIEW_SOFT_DEADLINE_MINUTES": "210",
+			"JOB_START_EPOCH": "",
+			"CODEX_RUN_BUDGET_START_EPOCH": "",
+			"CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH": "",
+			"CODEX_RUN_BUDGET_TOTAL_SECS": "",
+			"STATE_FILE": str(state_file),
+			"CALL_MARKER": str(call_marker),
+		})
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{partial_finalize_budget_helper_block}\n"
+				f"{run_reviewer_block}\n"
+				f"{run_reviewer_pass_block}\n"
+				"run_reviewer() {\n"
+				"\t: > \"${CALL_MARKER}\"\n"
+				"\treturn 97\n"
+				"}\n"
+				"get_active_reviewer_models_text() {\n"
+				"\tprintf 'x-ai/grok-4.20\\n'\n"
+				"}\n"
+				"prepare_reviewer_prompt_for_model() {\n"
+				"\tprintf '%s\\n' \"${2:-}\"\n"
+				"}\n"
+				"pass_successful=\"$(run_reviewer_pass \"review\" \"${PROMPT_FILE}\" \"xhigh\")\"\n"
+				"{\n"
+				"\tprintf 'PASS_SUCCESSFUL=%s\\n' \"${pass_successful}\"\n"
+				"\tprintf 'REQUEST_FILE=%s\\n' \"${REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE}\"\n"
+				"\tprintf 'GITHUB_ENV_FILE=%s\\n' \"${GITHUB_ENV}\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		state: dict[str, str] = {}
+		for raw_line in state_file.read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+
+		request_file = Path(state["REQUEST_FILE"])
+		github_env = Path(state["GITHUB_ENV_FILE"])
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			"request_file_content": request_file.read_text(encoding="utf-8"),
+			"github_env_content": github_env.read_text(encoding="utf-8"),
+			"reviewer_called": call_marker.exists(),
 		}
 
 
@@ -1659,6 +1764,14 @@ def test_review_soft_deadline_budget_contract_is_wired() -> None:
 		'codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"',
 		"codex_run_budget_summary",
 		"codex_run_budget_phase_may_start",
+		'REVIEWER_SOFT_DEADLINE_DEFAULT_MINUTES="210"',
+		"reviewer_budget_remaining_secs_fallback",
+		'REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE="${RUNTIME_DIR:-.}/reviewers_partial_finalize_request.txt"',
+		'reviewer_pass_minimum_secs=300',
+		'reviewer_request_partial_finalize "soft_deadline"',
+		'AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true',
+		'AUTOFIX_PARTIAL_FINALIZE_PHASE=reviewers',
+		'echo "skipped_budget" > "${status_file}"',
 		'| tee -a "${budget_log_file}" >&2 || true',
 	):
 		assert expected in reviewers_text, f"missing reviewer budget wiring: {expected}"
@@ -1666,8 +1779,14 @@ def test_review_soft_deadline_budget_contract_is_wired() -> None:
 	apply_fixes_text = _apply_fixes_text()
 	for expected in (
 		'codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"',
+		'REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED="$(normalize_review_soft_deadline_minutes "${REVIEW_SOFT_DEADLINE_MINUTES:-}")"',
 		"codex_run_budget_remaining_secs",
 		"budget_deadline_label=\"soft deadline\"",
+		"request_editor_partial_finalize",
+		'editor_partial_finalize_reason="soft_deadline"',
+		'editor_partial_finalize_reason="refusal"',
+		'editor_partial_finalize_reason="recoverable_failure"',
+		'AUTOFIX_PARTIAL_FINALIZE_PHASE=editor',
 	):
 		assert expected in apply_fixes_text, f"missing editor budget wiring: {expected}"
 
@@ -2933,6 +3052,19 @@ def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_m
 	]
 
 
+def test_reviewer_soft_deadline_fallback_requests_partial_finalize_and_exits_green() -> None:
+	result = _run_reviewer_partial_finalize_budget_harness()
+	assert result["PASS_SUCCESSFUL"] == "0"
+	assert result["reviewer_called"] is False
+	assert "remaining run budget fallback is below 300s (0s remain)" in result["stderr"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true" in result["request_file_content"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_REASON=soft_deadline" in result["request_file_content"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_PHASE=reviewers" in result["request_file_content"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true" in result["github_env_content"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_REASON=soft_deadline" in result["github_env_content"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_PHASE=reviewers" in result["github_env_content"]
+
+
 def test_reviewer_health_dispatch_logs_to_stderr_only() -> None:
 	result = _run_reviewer_health_dispatch_logging_harness()
 	assert result["stdout"] == ""
@@ -3417,6 +3549,11 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		'"budget_total_secs":',
 		'"budget_remaining_secs":',
 		'"finalize_reason":',
+		'"partial_finalize":',
+		'"partial_finalize_reason":',
+		'"partial_finalize_phase":',
+		'"partial_comment_posted":',
+		'"incomplete_phases":',
 		'"edits_pushed":',
 		'"resume_round":',
 	):
@@ -3467,12 +3604,87 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		'resume_round="${AUTOFIX_RESUME_ROUND:-${RESUME_ROUND:-0}}"',
 		'push_allowed = bool_env("CAN_PUSH")',
 		'edits_pushed = bool_env("AUTOFIX_EDITS_PUSHED")',
+		'partial_finalize = bool_env("AUTOFIX_PARTIAL_FINALIZE_REQUESTED")',
+		'partial_comment_posted = bool_env("AUTOFIX_PARTIAL_COMMENT_POSTED")',
+		'status_pass1_*.txt',
+		'if status == "skipped_budget":',
+		'return "soft_deadline"',
 	):
 		assert artifact in block, f"Summary step is missing local metric source: {artifact}"
 	assert '"failure_class": "push_not_allowed"' in block
 	assert "gh api" not in block
 	assert "gh_retry" not in block
 	assert "curl https://api.github.com" not in block
+
+
+def test_review_partial_finalize_workflow_path_is_wired() -> None:
+	early_save_block = _step_block("Save review-issue ledger")
+	partial_block = _step_block("Post partial finalize comment and persist runtime marker")
+	late_save_block = _step_block("Save review-issue ledger after partial finalize")
+
+	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" in early_save_block
+	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true'" in partial_block
+	assert "always() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true'" in partial_block
+	for expected in (
+		"<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->",
+		"partial_finalize=true",
+		"reason=${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}",
+		"phase=${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}",
+		"completed_scope=${completed_scope_csv}",
+		"incomplete_scope=${incomplete_scope_csv}",
+		"validated_edits_committed=${validated_edits_committed}",
+		"edits_pushed=${edits_pushed}",
+		"resume_round=${resume_round}",
+		"partial_finalize.json",
+		'echo "AUTOFIX_PARTIAL_COMMENT_POSTED=true" >> "$GITHUB_ENV"',
+		'echo "AUTOFIX_RESUME_ROUND=${resume_round}" >> "$GITHUB_ENV"',
+	):
+		assert expected in partial_block, f"missing partial-finalize contract detail: {expected}"
+	for expected in (
+		".ai/review_issue_ledger/",
+		".ai/review_runtime/",
+		"REVIEW_LEDGER_PATH",
+	):
+		assert expected in late_save_block, f"missing persisted partial-finalize state path: {expected}"
+
+
+def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
+	for step_name in (
+		"Pre-editor stale-base gate",
+		"Install project dependencies (best-effort)",
+		"Switch reasoning effort for editor",
+		"Setup Serena for editor",
+		"Apply fixes with editor model",
+		"Run interim judge",
+		"Synthesize behavioural smoke",
+		"Post editor summary comment",
+		"Detect editor-claimed-but-uncommitted changes",
+		"Validate editor no-op disposition",
+		"Detect merge conflicts",
+		"Run Codex resolver, validate, stage, commit",
+		"Mark linked issues ready to merge",
+		"Enable auto-merge on PR",
+		"Telegram success",
+	):
+		block = _step_block(step_name)
+		assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" in block, (
+			f"step should skip during partial finalize: {step_name}"
+		)
+
+
+def test_review_partial_finalize_keeps_commit_and_push_path_available() -> None:
+	commit_block = _step_block("Commit changes")
+	push_block = _step_block("Push all pending commits")
+	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" not in commit_block
+	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" not in push_block
+
+
+def test_review_pipeline_summary_finalize_reason_marks_partial_runs() -> None:
+	block = _step_block("Append review pipeline iteration summary")
+	assert re.search(
+		r'if partial_finalize:\n\s+return "partial_finalize"',
+		block,
+	), "summary finalize_reason contract should classify partial-finalize runs"
 
 
 def test_push_step_exports_edits_pushed_sentinel_for_summary_contract() -> None:
@@ -3897,6 +4109,7 @@ def main() -> int:
 	test_agents_md_materiality_classifier_and_workflow_wiring()
 	test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers()
 	test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models()
+	test_reviewer_soft_deadline_fallback_requests_partial_finalize_and_exits_green()
 	test_reviewer_health_dispatch_logs_to_stderr_only()
 	test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipped()
 	test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions()
