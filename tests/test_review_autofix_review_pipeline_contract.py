@@ -1641,13 +1641,17 @@ def test_review_soft_deadline_budget_contract_is_wired() -> None:
 	init_step_block = _step_block("Initialize runtime workspace")
 	for expected in (
 		'review_soft_deadline_minutes="${REVIEW_SOFT_DEADLINE_MINUTES:-210}"',
+		'review_soft_deadline_minutes_raw="${review_soft_deadline_minutes}"',
 		"Invalid REVIEW_SOFT_DEADLINE_MINUTES=",
+		'review_soft_deadline_minutes="$(( 10#${review_soft_deadline_minutes} ))"',
+		'if [ "${review_soft_deadline_minutes}" -le 0 ]; then',
 		'echo "REVIEW_SOFT_DEADLINE_MINUTES=${review_soft_deadline_minutes}"',
 		'echo "CODEX_RUN_BUDGET_START_EPOCH=${job_start_epoch}"',
 		'echo "CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH=${codex_run_budget_soft_deadline_epoch}"',
 		'echo "CODEX_RUN_BUDGET_TOTAL_SECS=${codex_run_budget_total_secs}"',
 	):
 		assert expected in init_step_block, f"missing budget init wiring: {expected}"
+	assert "0[0-9]*" not in init_step_block, "workflow init should accept zero-padded soft deadlines"
 
 	reviewers_text = _reviewers_text()
 	for expected in (
@@ -1655,6 +1659,7 @@ def test_review_soft_deadline_budget_contract_is_wired() -> None:
 		'codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"',
 		"codex_run_budget_summary",
 		"codex_run_budget_phase_may_start",
+		'| tee -a "${budget_log_file}" >&2 || true',
 	):
 		assert expected in reviewers_text, f"missing reviewer budget wiring: {expected}"
 

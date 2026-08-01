@@ -109,7 +109,7 @@ emit_run_budget_gate_note() {
       "${budget_scope}" \
       "${budget_summary}" \
       "${may_start}" \
-      "${minimum_required_secs}" | tee -a "${budget_log_file}" >&2
+      "${minimum_required_secs}" | tee -a "${budget_log_file}" >&2 || true
   else
     printf 'Run budget at %s: %s may_start=%s minimum_required_secs=%s\n' \
       "${budget_scope}" \
