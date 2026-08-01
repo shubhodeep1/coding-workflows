@@ -1022,7 +1022,6 @@ the way to a fix PR without human action.
 | `STALL_THRESHOLD_DONE_MINUTES` | `120` | Stall threshold for review/autofix phase |
 | `REVIEW_RUN_MAX_RUNTIME_MINUTES` | `250` | Freshness window the in-flight/zombie guards apply to review-family runs (AI Review, Internal Review, Review Autofix); they can run past the stall threshold up to the 240-min job timeout; floored at `STALL_THRESHOLD_MINUTES` |
 | `REVIEW_SOFT_DEADLINE_MINUTES` | `210` | Default-on soft run budget for review/autofix. The workflow exports `JOB_START_EPOCH` and `CODEX_RUN_BUDGET_*` from it, `CODEX_HEARTBEAT` lines add `budget_elapsed_secs` / `budget_remaining_secs` when the contract is present, and the terminal `REVIEW_AUTOFIX_RUN_SUMMARY_V1` record reports the run's final budget totals. Soft-deadline or recoverable partial-finalize exits remain green after the validated finalize tail runs, while genuine config/auth/push/input faults still fail red. |
-| `REVIEW_MAX_RESUME_ROUNDS` | `3` | Maximum same-head partial-resume rounds before `review_autofix.yml` terminalizes the cached partial state as `round_budget_exhausted`; same-head no-progress rounds terminalize earlier as `no_progress`. |
 | `STALL_THRESHOLD_READY_TO_MERGE_MINUTES` | `60` | Stall threshold for ready-to-merge phase |
 | `STALL_THRESHOLD_REVIEW_BLOCKED_MINUTES` | `120` | Stall threshold for `ai:review-blocked` phase; past threshold the poller dispatches `review_rb_judge_dispatch.yml` to run `review_rb_judge.sh` against the linked PR |
 | `MAX_STALL_RECOVERIES_PER_ISSUE` | `5` | Max stall recovery attempts per issue before skipping (declarative `STALL_RECOVERY_ACTIONS` + optional `run_stall_judge` escalation) |
@@ -1187,6 +1186,7 @@ the way to a fix PR without human action.
 | `UNATTENDED_NAG_SILENT_ROUNDS` | `3` | Consecutive silent-turn threshold before nag-reminder injection in the review editor, review reviewers, and orchestrate-poll judge paths. Invalid or out-of-range values clamp conservatively to `3`. |
 | `WORKFLOW_LOG_SCENARIO_TRACE_ENABLED` | `false` | Enables the additive local-only `.ai/workflow_traces/<run_id>.scenario.json` renderer in `workflow-log-analysis.yml`; parseable runs emit `WORKFLOW_SCENARIO_TRACE_WRITTEN`, per-run parser drift fail-opens with `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL`. |
 | `EVENTS_JSONL_ENABLED` | `false` | Opt-in append-only JSONL mirror for stable workflow-event prefixes. When `true`, supported emitters append `.events/run-<GITHUB_RUN_ID\|local>.jsonl` under `GITHUB_WORKSPACE` after writing the original text line/comment marker; write failures emit `EVENTS_EMIT_FAIL` and fail open, so existing stderr/comment behavior remains authoritative. |
+| `REVIEW_MAX_RESUME_ROUNDS` | `3` | Maximum same-head partial-resume rounds before `review_autofix.yml` terminalizes the cached partial state as `round_budget_exhausted`; same-head no-progress rounds terminalize earlier as `no_progress`. |
 
 ## Semantic Cache (Clarification Only)
 
