@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.92,
+  "details": "Several merged fixes touched `scripts/render_prompt.py` and `scripts/render_prompt.sh` together, with tests updated to lock in the intended contract. When changing prompt generation behavior, expect the CLI wrapper and Python logic to drift unless both are kept aligned. Add or adjust a narrow test that exercises the exact output shape.",
+  "fingerprint": "b628f99061fe77e2f6fe33ec1c9ec21e663b6ef7c2d4c6edcf646428f60b4e93",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "30683229007",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "30683229007",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3690",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3692",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3694",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3695",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3698",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3691",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3693",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3696",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3697",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3699"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260801040605_31bfc85192",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Prompt-rendering changes in this repo usually require updating both the Python implementation and the shell wrapper, plus a focused regression test.",
+  "timestamps": {
+    "created_at": "2026-08-01T04:06:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
