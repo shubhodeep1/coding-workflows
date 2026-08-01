@@ -148,6 +148,19 @@ def _shell_rc(returncode: int) -> int:
 	return 128 + abs(returncode)
 
 
+def _budget_suffix_for_now() -> str:
+	start_epoch_raw = os.environ.get("CODEX_RUN_BUDGET_START_EPOCH", "")
+	soft_deadline_epoch_raw = os.environ.get("CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH", "")
+	if not start_epoch_raw.isdigit() or not soft_deadline_epoch_raw.isdigit():
+		return ""
+	now_epoch = int(time.time())
+	start_epoch = int(start_epoch_raw)
+	soft_deadline_epoch = int(soft_deadline_epoch_raw)
+	budget_elapsed = max(0, now_epoch - start_epoch)
+	budget_remaining = max(0, soft_deadline_epoch - now_epoch)
+	return f" budget_elapsed_secs={budget_elapsed} budget_remaining_secs={budget_remaining}"
+
+
 stdout_handle, close_stdout = _open_output(STDOUT_FILE, sys.stdout.buffer)
 stderr_handle, close_stderr = _open_output(STDERR_FILE, sys.stderr.buffer)
 KILL_GRACE_SECS = 0.5
@@ -257,7 +270,7 @@ try:
 			# Descendants can outlive the direct child briefly; gating on
 			# child.poll() would let next_heartbeat_at go stale and busy-spin.
 			elapsed = int(time.monotonic() - last_output_at)
-			os.write(2, f"CODEX_HEARTBEAT: phase={PHASE} elapsed_secs={elapsed}\n".encode("utf-8"))
+			os.write(2, f"CODEX_HEARTBEAT: phase={PHASE} elapsed_secs={elapsed}{_budget_suffix_for_now()}\n".encode("utf-8"))
 			_write_activity_marker()
 			next_heartbeat_at += INTERVAL_SECS
 			while next_heartbeat_at <= time.monotonic():

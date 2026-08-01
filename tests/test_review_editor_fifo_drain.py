@@ -238,6 +238,52 @@ echo OK
 	assert "OK" in res.stdout
 
 
+def test_run_budget_export_normalizes_soft_deadline_and_populates_env() -> None:
+	harness = f"""
+set -eu
+source {str(WATCHDOG_HELPERS_SCRIPT)!r}
+JOB_START_EPOCH=100
+REVIEW_SOFT_DEADLINE_MINUTES=bogus
+codex_run_budget_export
+printf 'minutes=%s\n' "$REVIEW_SOFT_DEADLINE_MINUTES"
+printf 'job_start=%s\n' "$JOB_START_EPOCH"
+printf 'budget_start=%s\n' "$CODEX_RUN_BUDGET_START_EPOCH"
+printf 'budget_deadline=%s\n' "$CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH"
+printf 'budget_total=%s\n' "$CODEX_RUN_BUDGET_TOTAL_SECS"
+"""
+	res = _run_bash(harness, timeout=15.0)
+	assert res.returncode == 0, res.stderr
+	assert "::warning::Invalid REVIEW_SOFT_DEADLINE_MINUTES='bogus'; defaulting to 210." in res.stderr
+	assert res.stdout == (
+		"minutes=210\n"
+		"job_start=100\n"
+		"budget_start=100\n"
+		"budget_deadline=12700\n"
+		"budget_total=12600\n"
+	)
+
+
+def test_run_budget_summary_and_gate_share_the_same_contract() -> None:
+	harness = f"""
+set -eu
+source {str(WATCHDOG_HELPERS_SCRIPT)!r}
+now="$(date +%s)"
+export CODEX_RUN_BUDGET_START_EPOCH="$(( now - 30 ))"
+export CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH="$(( now + 20 ))"
+export CODEX_RUN_BUDGET_TOTAL_SECS="50"
+codex_run_budget_summary "$now"
+if codex_run_budget_phase_may_start 10; then echo "may_start_10=true"; else echo "may_start_10=false"; fi
+if codex_run_budget_phase_may_start 30; then echo "may_start_30=true"; else echo "may_start_30=false"; fi
+"""
+	res = _run_bash(harness, timeout=15.0)
+	assert res.returncode == 0, res.stderr
+	assert res.stdout == (
+		"budget_elapsed_secs=30 budget_remaining_secs=20\n"
+		"may_start_10=true\n"
+		"may_start_30=false\n"
+	)
+
+
 def test_editor_loop_bounds_the_drain_and_wires_the_reaper() -> None:
 	text = APPLY_FIXES_SCRIPT.read_text(encoding="utf-8")
 	# Grace bound is configurable with a safe default.

@@ -1581,6 +1581,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}",
 		"REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}",
 		"REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}",
+		"REVIEW_SOFT_DEADLINE_MINUTES: ${{ vars.REVIEW_SOFT_DEADLINE_MINUTES || '210' }}",
 		"CONTEXT_BUDGET_WARN_RATIO: ${{ vars.CONTEXT_BUDGET_WARN_RATIO || '0.7' }}",
 		"MAX_PROMPT_TOKENS_FOR_PHASE: ${{ vars.MAX_PROMPT_TOKENS_FOR_PHASE || '' }}",
 		"CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}",
@@ -1626,6 +1627,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}",
 		"REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}",
 		"REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}",
+		"REVIEW_SOFT_DEADLINE_MINUTES: ${{ vars.REVIEW_SOFT_DEADLINE_MINUTES || '210' }}",
 		"AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}",
 		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
 		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}",
@@ -1633,6 +1635,36 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}",
 	):
 		assert workflow.count(expected) >= 2, f"Missing workflow-level + codex-agent env wiring: {expected}"
+
+
+def test_review_soft_deadline_budget_contract_is_wired() -> None:
+	init_step_block = _step_block("Initialize runtime workspace")
+	for expected in (
+		'review_soft_deadline_minutes="${REVIEW_SOFT_DEADLINE_MINUTES:-210}"',
+		"Invalid REVIEW_SOFT_DEADLINE_MINUTES=",
+		'echo "REVIEW_SOFT_DEADLINE_MINUTES=${review_soft_deadline_minutes}"',
+		'echo "CODEX_RUN_BUDGET_START_EPOCH=${job_start_epoch}"',
+		'echo "CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH=${codex_run_budget_soft_deadline_epoch}"',
+		'echo "CODEX_RUN_BUDGET_TOTAL_SECS=${codex_run_budget_total_secs}"',
+	):
+		assert expected in init_step_block, f"missing budget init wiring: {expected}"
+
+	reviewers_text = _reviewers_text()
+	for expected in (
+		'WATCHDOG_HELPERS="${SUPPORT_SCRIPTS_DIR:-scripts}/watchdog_helpers.sh"',
+		'codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"',
+		"codex_run_budget_summary",
+		"codex_run_budget_phase_may_start",
+	):
+		assert expected in reviewers_text, f"missing reviewer budget wiring: {expected}"
+
+	apply_fixes_text = _apply_fixes_text()
+	for expected in (
+		'codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"',
+		"codex_run_budget_remaining_secs",
+		"budget_deadline_label=\"soft deadline\"",
+	):
+		assert expected in apply_fixes_text, f"missing editor budget wiring: {expected}"
 
 
 def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> None:
@@ -3791,6 +3823,7 @@ def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_
 
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
+	test_review_soft_deadline_budget_contract_is_wired()
 	test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated()
 	test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated()
 	test_collect_pr_check_runs_helper_closes_direct_log_redirect_response()

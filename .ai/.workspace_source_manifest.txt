@@ -108,6 +108,7 @@ analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
 analysis/workflow-optimization-2026-07-11.md
 analysis/workflow-optimization-2026-07-12.md
+analysis/workflow-optimization-2026-07-19.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
@@ -129,6 +130,7 @@ docs/completed/sub-issue-test-runs-spike.md
 docs/completed/symphony-inspired-improvements-plan.md
 docs/deploy-activation/README.md
 docs/gsd-future-improvements.md
+docs/hardenaireviewprompt.md
 docs/how-it-works.md
 docs/plans/apply-ai-tools-learnings-plan.md
 docs/plans/awesome-claude-code-learnings-plan.md

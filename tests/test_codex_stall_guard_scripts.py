@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import tempfile
@@ -394,6 +395,76 @@ def test_codex_stall_guard_kill_mode_terminates_idle_child_and_returns_nonzero()
 			_kill_pid_if_running(child_pid)
 
 
+def test_codex_stall_guard_heartbeat_appends_budget_fields_when_run_budget_env_present() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex-stall-guard-budget-") as td:
+		tmp = Path(td)
+		stdout_file = tmp / "child.stdout"
+		status_file = tmp / "guard.status"
+		heartbeat_dir = tmp / "heartbeats"
+
+		env = os.environ.copy()
+		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		env["CODEX_HEARTBEAT_ENABLED"] = "1"
+		env["CODEX_HEARTBEAT_INTERVAL_SECS"] = "1"
+		env["CODEX_STALL_GUARD_ENABLED"] = "false"
+		env["CODEX_STALL_TIMEOUT_SECONDS"] = "10"
+		env["CODEX_STALL_KILL_GRACE_SECONDS"] = "1"
+		env["CODEX_STALL_HEARTBEAT_DIR"] = str(heartbeat_dir)
+		env["GITHUB_RUN_ID"] = "123456"
+		env["PR_NUMBER"] = "3044"
+		now_epoch = int(time.time())
+		env["CODEX_RUN_BUDGET_START_EPOCH"] = str(now_epoch - 5)
+		env["CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH"] = str(now_epoch + 90)
+		env["CODEX_RUN_BUDGET_TOTAL_SECS"] = "95"
+
+		result = subprocess.run(
+			[
+				"bash",
+				str(STALL_GUARD_SCRIPT),
+				"--phase",
+				"stall_guard_budget_test",
+				"--stdout-file",
+				str(stdout_file),
+				"--status-file",
+				str(status_file),
+				"--",
+				"python3",
+				"-c",
+				(
+					"import sys, time; "
+					"print('start'); sys.stdout.flush(); "
+					"time.sleep(2.4)"
+				),
+			],
+			env=env,
+			capture_output=True,
+			text=True,
+			timeout=20,
+		)
+
+		assert result.returncode == 0, result.stderr
+		heartbeat_lines = [
+			line
+			for line in result.stderr.splitlines()
+			if line.startswith("CODEX_HEARTBEAT: phase=stall_guard_budget_test elapsed_secs=")
+		]
+		assert heartbeat_lines, result.stderr
+
+		budget_samples: list[tuple[int, int, int]] = []
+		for line in heartbeat_lines:
+			match = re.fullmatch(
+				r"CODEX_HEARTBEAT: phase=stall_guard_budget_test elapsed_secs=(\d+) budget_elapsed_secs=(\d+) budget_remaining_secs=(\d+)",
+				line,
+			)
+			assert match is not None, heartbeat_lines
+			budget_samples.append(tuple(int(match.group(i)) for i in (1, 2, 3)))
+
+		assert budget_samples[0][1] >= 5, heartbeat_lines
+		assert budget_samples[-1][1] >= budget_samples[0][1], heartbeat_lines
+		assert budget_samples[-1][2] <= budget_samples[0][2], heartbeat_lines
+		assert stdout_file.read_text(encoding="utf-8") == "start\n"
+
+
 def test_stall_guard_script_and_callers_keep_the_expected_contract() -> None:
 	expectations = {
 		"scripts/codex_stall_guard.sh": [
@@ -402,6 +473,8 @@ def test_stall_guard_script_and_callers_keep_the_expected_contract() -> None:
 			"codex_stall_guard failed to write status file",
 			"last_event_kind",
 			"CODEX_STALL_TIMEOUT_SECONDS",
+			"budget_elapsed_secs",
+			"budget_remaining_secs",
 		],
 		"scripts/review_run_reviewers.sh": [
 			"CODEX_STALL_GUARD_HELPER",
@@ -462,6 +535,7 @@ def test_stall_guard_script_and_callers_keep_the_expected_contract() -> None:
 def main() -> int:
 	test_codex_stall_guard_observe_only_records_event_idle_without_killing_child()
 	test_codex_stall_guard_kill_mode_terminates_idle_child_and_returns_nonzero()
+	test_codex_stall_guard_heartbeat_appends_budget_fields_when_run_budget_env_present()
 	test_stall_guard_caller_contracts_cover_observe_only_mode()
 	test_stall_guard_caller_contracts_cover_kill_mode()
 	test_stall_guard_script_and_callers_keep_the_expected_contract()

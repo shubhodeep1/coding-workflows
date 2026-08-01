@@ -32,6 +32,15 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
 
+WATCHDOG_HELPERS="${SUPPORT_SCRIPTS_DIR:-scripts}/watchdog_helpers.sh"
+if [ -f "${WATCHDOG_HELPERS}" ]; then
+  # shellcheck source=/dev/null
+  source "${WATCHDOG_HELPERS}"
+  if command -v codex_run_budget_export >/dev/null 2>&1; then
+    codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"
+  fi
+fi
+
 emit_context_budget_warn_for_prompt() {
   local phase="$1"
   local prompt_path="$2"
@@ -74,6 +83,41 @@ PY
 
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
+
+emit_run_budget_gate_note() {
+  local budget_scope="$1"
+  local minimum_required_secs="${2:-1}"
+  local budget_log_file="${3:-}"
+  local budget_now_epoch="${4:-$(date +%s)}"
+  local budget_summary=""
+  local may_start="unknown"
+
+  if ! command -v codex_run_budget_summary >/dev/null 2>&1; then
+    return 0
+  fi
+  budget_summary="$(codex_run_budget_summary "${budget_now_epoch}" 2>/dev/null || true)"
+  [ -n "${budget_summary}" ] || return 0
+  if command -v codex_run_budget_phase_may_start >/dev/null 2>&1; then
+    if codex_run_budget_phase_may_start "${minimum_required_secs}"; then
+      may_start="true"
+    else
+      may_start="false"
+    fi
+  fi
+  if [ -n "${budget_log_file}" ]; then
+    printf 'Run budget at %s: %s may_start=%s minimum_required_secs=%s\n' \
+      "${budget_scope}" \
+      "${budget_summary}" \
+      "${may_start}" \
+      "${minimum_required_secs}" | tee -a "${budget_log_file}" >&2
+  else
+    printf 'Run budget at %s: %s may_start=%s minimum_required_secs=%s\n' \
+      "${budget_scope}" \
+      "${budget_summary}" \
+      "${may_start}" \
+      "${minimum_required_secs}" >&2
+  fi
+}
 
 resolve_ledger_substate_helper() {
   local candidate
@@ -3142,6 +3186,8 @@ execute_reviewer_attempt() {
   REVIEWER_ATTEMPT_CMD_RC=0
   REVIEWER_ATTEMPT_SILENT=true
 
+  emit_run_budget_gate_note "reviewer attempt ${attempt_label}" 1 "${log_file}"
+
   emit_reviewer_substate "PreparingWorkspace" "${attempt_number}"
 
   reviewer_prepare_reasoning_configs \
@@ -3782,6 +3828,8 @@ run_reviewer_pass() {
   local -a pass_models=()
   local -a pass_status_files=()
   local -a pass_log_files=()
+
+  emit_run_budget_gate_note "reviewer pass ${pass_prefix}" 1
 
   while IFS= read -r model; do
     [ -z "${model}" ] && continue

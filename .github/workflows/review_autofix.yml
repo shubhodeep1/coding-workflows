@@ -168,6 +168,7 @@ env:
   # scripts/targeted_file_context.py docstring for semantics. Set to 0
   # to disable inlining entirely. Default matches implement.yml.
   TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
+  REVIEW_SOFT_DEADLINE_MINUTES: ${{ vars.REVIEW_SOFT_DEADLINE_MINUTES || '210' }}
   CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}
   CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
@@ -1190,6 +1191,7 @@ jobs:
       REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}
       REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}
       REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}
+      REVIEW_SOFT_DEADLINE_MINUTES: ${{ vars.REVIEW_SOFT_DEADLINE_MINUTES || '210' }}
       REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}
       REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}
       REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}
@@ -1531,11 +1533,27 @@ jobs:
           RUNTIME_DIR="/tmp/codex-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RANDOM}"
           PREVIOUS_REVIEWS_DIR="${RUNTIME_DIR}/previous_reviews"
           RUNTIME_CONTEXT_DIR="${RUNTIME_DIR}/runtime_context"
+          job_start_epoch="$(date +%s)"
+          review_soft_deadline_minutes="${REVIEW_SOFT_DEADLINE_MINUTES:-210}"
+
+          case "${review_soft_deadline_minutes}" in
+            ''|*[!0-9]*|0|0[0-9]*)
+              echo "::warning::Invalid REVIEW_SOFT_DEADLINE_MINUTES='${review_soft_deadline_minutes}'; defaulting to 210." >&2
+              review_soft_deadline_minutes="210"
+              ;;
+          esac
+
+          codex_run_budget_total_secs="$(( review_soft_deadline_minutes * 60 ))"
+          codex_run_budget_soft_deadline_epoch="$(( job_start_epoch + codex_run_budget_total_secs ))"
 
           mkdir -p "${PREVIOUS_REVIEWS_DIR}" "${RUNTIME_CONTEXT_DIR}"
 
           {
-            echo "JOB_START_EPOCH=$(date +%s)"
+            echo "JOB_START_EPOCH=${job_start_epoch}"
+            echo "REVIEW_SOFT_DEADLINE_MINUTES=${review_soft_deadline_minutes}"
+            echo "CODEX_RUN_BUDGET_START_EPOCH=${job_start_epoch}"
+            echo "CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH=${codex_run_budget_soft_deadline_epoch}"
+            echo "CODEX_RUN_BUDGET_TOTAL_SECS=${codex_run_budget_total_secs}"
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
             echo "PREVIOUS_REVIEWS_DIR=${PREVIOUS_REVIEWS_DIR}"
             echo "RUNTIME_CONTEXT_DIR=${RUNTIME_CONTEXT_DIR}"

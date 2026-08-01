@@ -216,6 +216,19 @@ def _emit_wrapper_stderr(line: str) -> None:
 		return
 
 
+def _budget_suffix_for_now() -> str:
+	start_epoch_raw = os.environ.get("CODEX_RUN_BUDGET_START_EPOCH", "")
+	soft_deadline_epoch_raw = os.environ.get("CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH", "")
+	if not start_epoch_raw.isdigit() or not soft_deadline_epoch_raw.isdigit():
+		return ""
+	now_epoch = int(time.time())
+	start_epoch = int(start_epoch_raw)
+	soft_deadline_epoch = int(soft_deadline_epoch_raw)
+	budget_elapsed = max(0, now_epoch - start_epoch)
+	budget_remaining = max(0, soft_deadline_epoch - now_epoch)
+	return f" budget_elapsed_secs={budget_elapsed} budget_remaining_secs={budget_remaining}"
+
+
 stdout_handle, close_stdout = _open_output(STDOUT_FILE, sys.stdout.buffer)
 stderr_handle, close_stderr = _open_output(STDERR_FILE, sys.stderr.buffer)
 kill_timer: threading.Timer | None = None
@@ -393,7 +406,7 @@ try:
 		now = time.monotonic()
 		if HEARTBEAT_ENABLED and now >= next_heartbeat_at:
 			elapsed = int(now - last_child_event_monotonic)
-			_emit_wrapper_stderr(f"CODEX_HEARTBEAT: phase={PHASE} elapsed_secs={elapsed}\n")
+			_emit_wrapper_stderr(f"CODEX_HEARTBEAT: phase={PHASE} elapsed_secs={elapsed}{_budget_suffix_for_now()}\n")
 			_write_activity_marker()
 			next_heartbeat_at += HEARTBEAT_INTERVAL_SECS
 			while next_heartbeat_at <= time.monotonic():
