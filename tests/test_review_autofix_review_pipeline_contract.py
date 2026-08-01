@@ -434,6 +434,143 @@ def _step_block(step_name: str) -> str:
 	raise AssertionError(f"Step not found in workflow: {step_name}")
 
 
+def _step_run_script(step_name: str) -> str:
+	block_lines = _step_block(step_name).splitlines()
+	run_idx = -1
+	run_indent = -1
+	for idx, line in enumerate(block_lines):
+		if line.strip() == "run: |":
+			run_idx = idx
+			run_indent = len(line) - len(line.lstrip(" "))
+			break
+	if run_idx < 0:
+		raise AssertionError(f"run block not found in workflow step: {step_name}")
+
+	script_lines: list[str] = []
+	for line in block_lines[run_idx + 1:]:
+		if line.strip():
+			indent = len(line) - len(line.lstrip(" "))
+			if indent <= run_indent:
+				break
+		script_lines.append(line)
+
+	script = textwrap.dedent("\n".join(script_lines)).strip("\n")
+	return script + ("\n" if script else "")
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+	parsed: dict[str, str] = {}
+	for raw_line in path.read_text(encoding="utf-8").splitlines():
+		if "=" not in raw_line:
+			continue
+		key, value = raw_line.split("=", 1)
+		parsed[key] = value
+	return parsed
+
+
+def _git_clean_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
+	env = {
+		key: value
+		for key, value in os.environ.items()
+		if not key.startswith("GIT_") and key not in {"BASH_ENV", "ENV"}
+	}
+	if overrides:
+		env.update(overrides)
+	return env
+
+
+def _init_git_repo(repo: Path) -> str:
+	env = _git_clean_env()
+	subprocess.run(["git", "init"], cwd=str(repo), env=env, check=True, capture_output=True, text=True)
+	subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(repo), env=env, check=True, capture_output=True, text=True)
+	subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo), env=env, check=True, capture_output=True, text=True)
+	(repo / "README.md").write_text("seed\n", encoding="utf-8")
+	subprocess.run(["git", "add", "README.md"], cwd=str(repo), env=env, check=True, capture_output=True, text=True)
+	subprocess.run(["git", "commit", "-m", "seed"], cwd=str(repo), env=env, check=True, capture_output=True, text=True)
+	return subprocess.run(
+		["git", "rev-parse", "HEAD"],
+		cwd=str(repo),
+		env=env,
+		check=True,
+		capture_output=True,
+		text=True,
+	).stdout.strip()
+
+
+def _install_partial_finalize_mock_gh(bin_dir: Path, state_file: Path) -> None:
+	gh_script = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+if state_path.exists():
+	state = json.loads(state_path.read_text(encoding="utf-8"))
+else:
+	state = {}
+args = sys.argv[1:]
+
+
+def save() -> None:
+	state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def api_path() -> str:
+	idx = 1
+	takes_value = {"--jq", "-f", "-F", "-H", "-X", "--input"}
+	no_value = {"--paginate", "--slurp", "-i"}
+	while idx < len(args):
+		arg = args[idx]
+		if arg in takes_value:
+			idx += 2
+			continue
+		if arg in no_value:
+			idx += 1
+			continue
+		if arg.startswith("-"):
+			idx += 1
+			continue
+		return arg
+	return ""
+
+
+def first_form_value(prefix: str) -> str:
+	for idx, arg in enumerate(args):
+		if arg == "-f" and idx + 1 < len(args):
+			value = args[idx + 1]
+			if value.startswith(prefix):
+				return value.split("=", 1)[1]
+	return ""
+
+
+state.setdefault("calls", []).append(args)
+
+if args[:1] == ["api"]:
+	path = api_path()
+	if path == "/rate_limit":
+		save()
+		sys.stdout.write("HTTP/1.1 200 OK\nx-ratelimit-reset: 0\n")
+		sys.exit(0)
+	if "/issues/" in path and path.endswith("/comments"):
+		state.setdefault("issue_comments", []).append({
+			"path": path,
+			"body": first_form_value("body="),
+		})
+		save()
+		sys.stdout.write("{}\n")
+		sys.exit(0)
+
+save()
+sys.stderr.write(f"mock gh: unsupported args: {args!r}\n")
+sys.exit(1)
+'''
+	mock_path = bin_dir / "gh"
+	mock_path.write_text(gh_script, encoding="utf-8")
+	mock_path.chmod(0o755)
+	state_file.write_text("{}", encoding="utf-8")
+
+
 def _dispatch_fallback_chain_slice(step_name: str) -> str:
 	block = _step_block(step_name)
 	lines = block.splitlines()
@@ -1651,6 +1788,260 @@ def _run_reviewer_zero_success_guard_harness(*, statuses: list[str]) -> dict[str
 		}
 
 
+def _run_restore_same_head_resume_harness(*, markers: list[dict[str, object]], review_max_resume_rounds: str = "3") -> dict[str, object]:
+	restore_script = _step_run_script("Restore same-head partial resume state")
+	with tempfile.TemporaryDirectory(prefix="review-resume-restore-") as td:
+		tmp = Path(td)
+		repo = tmp / "repo"
+		repo.mkdir()
+		head_sha = _init_git_repo(repo)
+		marker_root = repo / ".ai" / "review_runtime" / "pr-123"
+		marker_root.mkdir(parents=True)
+
+		for marker in markers:
+			payload = dict(marker)
+			if payload.get("head_sha") == "__HEAD__":
+				payload["head_sha"] = head_sha
+			round_value = int(payload["resume_round"])
+			marker_dir = marker_root / f"round-{round_value}"
+			marker_dir.mkdir(parents=True, exist_ok=True)
+			(marker_dir / "partial_finalize.json").write_text(
+				json.dumps(payload, sort_keys=True, indent=2) + "\n",
+				encoding="utf-8",
+			)
+
+		github_env_file = tmp / "github_env.txt"
+		github_env_file.write_text("", encoding="utf-8")
+		result = subprocess.run(
+			["bash", "-c", f"set -euo pipefail\n{restore_script}"],
+			cwd=str(repo),
+			env=_git_clean_env({
+				"GITHUB_ENV": str(github_env_file),
+				"PR_NUMBER": "123",
+				"REVIEW_MAX_RESUME_ROUNDS": review_max_resume_rounds,
+				"PYTHONDONTWRITEBYTECODE": "1",
+			}),
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"github_env": _parse_env_file(github_env_file),
+			"head_sha": head_sha,
+		}
+
+
+def _build_partial_finalize_step_context(tmp: Path) -> dict[str, object]:
+	repo = tmp / "repo"
+	repo.mkdir()
+	head_sha = _init_git_repo(repo)
+	runtime = repo / "runtime"
+	reviews = repo / "reviews"
+	runtime.mkdir()
+	reviews.mkdir()
+	support_scripts_dir = tmp / "support_scripts"
+	support_scripts_dir.mkdir()
+	(support_scripts_dir / "gh_helpers.sh").write_text(
+		"#!/usr/bin/env bash\nset -euo pipefail\ngh_retry() { \"$@\"; }\n",
+		encoding="utf-8",
+	)
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	gh_state_file = tmp / "gh_state.json"
+	_install_partial_finalize_mock_gh(bin_dir, gh_state_file)
+
+	paths = {
+		"repo": repo,
+		"runtime": runtime,
+		"reviews": reviews,
+		"support_scripts_dir": support_scripts_dir,
+		"bin_dir": bin_dir,
+		"gh_state_file": gh_state_file,
+		"editor_summary": runtime / "editor_summary.txt",
+		"committed_files": runtime / "committed_files.txt",
+	}
+	(reviews / "status_review_model_one.txt").write_text("success\n", encoding="utf-8")
+	(reviews / "review_model_one.txt").write_text("cached reviewer output\n", encoding="utf-8")
+	(runtime / "reviewer_bundle.txt").write_text("bundle sentinel\n", encoding="utf-8")
+	(runtime / "floor_tags.txt").write_text("CORRECTNESS & LOGIC\n", encoding="utf-8")
+	(runtime / "consolidator_raw.txt").write_text("consolidator sentinel\n", encoding="utf-8")
+	(runtime / "parser_stats.txt").write_text("parsed_blocks=1\npassthrough_blocks=0\nline_unverified=0\n", encoding="utf-8")
+	(runtime / "review_issues.txt").write_text("issue sentinel\n", encoding="utf-8")
+	(runtime / "ledger_status.txt").write_text(
+		"issue-1\tNEW\t0\tscripts/review_apply_fixes.sh:1\tCORRECTNESS & LOGIC\t[]\n",
+		encoding="utf-8",
+	)
+	Path(paths["editor_summary"]).write_text("editor summary sentinel\n", encoding="utf-8")
+	Path(paths["committed_files"]).write_text("", encoding="utf-8")
+	return {"head_sha": head_sha, **paths}
+
+
+def _run_partial_finalize_step(
+	context: dict[str, object],
+	*,
+	previous_env: dict[str, str] | None = None,
+	editor_summary_text: str | None = None,
+	committed_files_text: str | None = None,
+	review_max_resume_rounds: str = "3",
+	partial_phase: str = "editor",
+	partial_reason: str = "soft_deadline",
+	edits_pushed: str = "false",
+	editor_commit_produced: str = "false",
+) -> dict[str, object]:
+	partial_script = _step_run_script("Post partial finalize comment and persist runtime marker")
+	repo = Path(context["repo"])
+	runtime = Path(context["runtime"])
+	reviews = Path(context["reviews"])
+	gh_state_file = Path(context["gh_state_file"])
+	editor_summary = Path(context["editor_summary"])
+	committed_files = Path(context["committed_files"])
+
+	if editor_summary_text is not None:
+		editor_summary.write_text(editor_summary_text, encoding="utf-8")
+	if committed_files_text is not None:
+		committed_files.write_text(committed_files_text, encoding="utf-8")
+
+	run_index = len(json.loads(gh_state_file.read_text(encoding="utf-8") or "{}").get("issue_comments", [])) + 1
+	github_env_file = runtime / f"github_env_run_{run_index}.txt"
+	github_env_file.write_text("", encoding="utf-8")
+	resume_env = previous_env or {}
+	result = subprocess.run(
+		["bash", "-c", f"set -euo pipefail\n{partial_script}"],
+		cwd=str(repo),
+		env=_git_clean_env({
+			"PATH": f"{context['bin_dir']}:{os.environ.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"SUPPORT_SCRIPTS_DIR": str(context["support_scripts_dir"]),
+			"GITHUB_ENV": str(github_env_file),
+			"GH_TOKEN": "test-token",
+			"PR_NUMBER": "123",
+			"RUNTIME_DIR": str(runtime),
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"EDITOR_SUMMARY_FILE": str(editor_summary),
+			"COMMITTED_FILES_FILE": str(committed_files),
+			"GITHUB_REPOSITORY": "owner/repo",
+			"WORKFLOW_RUN_URL": "https://github.com/owner/repo/actions/runs/12345",
+			"AUTOFIX_PARTIAL_FINALIZE_REASON": partial_reason,
+			"AUTOFIX_PARTIAL_FINALIZE_PHASE": partial_phase,
+			"AUTOFIX_EDITS_PUSHED": edits_pushed,
+			"EDITOR_COMMIT_PRODUCED": editor_commit_produced,
+			"REVIEW_MAX_RESUME_ROUNDS": review_max_resume_rounds,
+			"AUTOFIX_RESUME_ROUND": resume_env.get("AUTOFIX_RESUME_ROUND", "0"),
+			"AUTOFIX_RESUME_PROGRESS_FINGERPRINT": resume_env.get("AUTOFIX_RESUME_PROGRESS_FINGERPRINT", ""),
+			"AUTOFIX_RESUME_HEAD_SHA": resume_env.get("AUTOFIX_RESUME_HEAD_SHA", str(context["head_sha"])),
+			"AUTOFIX_RESUME_ROUND_LIMIT": resume_env.get("AUTOFIX_RESUME_ROUND_LIMIT", review_max_resume_rounds),
+			"PYTHONDONTWRITEBYTECODE": "1",
+		}),
+		check=True,
+		capture_output=True,
+		text=True,
+	)
+	github_env = _parse_env_file(github_env_file)
+	marker_path = Path(github_env["AUTOFIX_PARTIAL_MARKER_FILE"])
+	if not marker_path.is_absolute():
+		marker_path = repo / marker_path
+	marker_payload = json.loads(marker_path.read_text(encoding="utf-8"))
+	gh_state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+	issue_comments = gh_state.get("issue_comments", []) if isinstance(gh_state, dict) else []
+	latest_comment = issue_comments[-1]["body"] if issue_comments else ""
+	return {
+		"stdout": result.stdout,
+		"stderr": result.stderr,
+		"github_env": github_env,
+		"marker_payload": marker_payload,
+		"latest_comment": latest_comment,
+		"gh_state": gh_state,
+	}
+
+
+def _run_reviewer_resume_cached_success_harness() -> dict[str, object]:
+	partial_finalize_budget_helper_block = _reviewer_partial_finalize_budget_helper_block()
+	run_reviewer_pass_block = _reviewer_run_reviewer_pass_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-resume-cached-success-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		runtime = tmp / "runtime"
+		reviews.mkdir()
+		runtime.mkdir()
+
+		prompt_file = runtime / "reviewer_prompt.patch"
+		prompt_file.write_text(PHASE_G_FLAKY_REVIEWER_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+		called_models_file = tmp / "called_models.txt"
+		state_file = tmp / "state.txt"
+		github_env_file = tmp / "github_env.txt"
+
+		cached_model = "x-ai/grok-4.20"
+		rerun_model = "moonshotai/kimi-k2.5"
+		cached_safe_name = cached_model.translate(str.maketrans({"/": "_", ".": "_", ":": "_"}))
+		rerun_safe_name = rerun_model.translate(str.maketrans({"/": "_", ".": "_", ":": "_"}))
+		(reviews / f"status_review_{cached_safe_name}.txt").write_text("success\n", encoding="utf-8")
+		(reviews / f"review_{cached_safe_name}.txt").write_text("cached reviewer output\n", encoding="utf-8")
+		(reviews / f"review_{cached_safe_name}.log").write_text("cached log\n", encoding="utf-8")
+		(reviews / f"status_review_{rerun_safe_name}.txt").write_text("failed\n", encoding="utf-8")
+		(reviews / f"review_{rerun_safe_name}.txt").write_text("stale failure output\n", encoding="utf-8")
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				"emit_run_budget_gate_note() { :; }\n"
+				"reviewer_circuit_breaker_enabled() { return 1; }\n"
+				f"{partial_finalize_budget_helper_block}\n"
+				f"{run_reviewer_pass_block}\n"
+				"run_reviewer() {\n"
+				"\tlocal model=\"$1\"\n"
+				"\tlocal safe_name=\"$2\"\n"
+				"\tlocal output_prefix=\"${3:-review}\"\n"
+				"\tprintf '%s\\n' \"${model}\" >> \"${CALLED_MODELS_FILE}\"\n"
+				"\tprintf 'fresh reviewer output for %s\\n' \"${model}\" > \"${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.txt\"\n"
+				"\techo success > \"${PREVIOUS_REVIEWS_DIR}/status_${output_prefix}_${safe_name}.txt\"\n"
+				"\tprintf 'fresh log for %s\\n' \"${model}\" > \"${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.log\"\n"
+				"}\n"
+				"get_active_reviewer_models_text() {\n"
+				f"\tprintf '{cached_model}\\n{rerun_model}\\n'\n"
+				"}\n"
+				"pass_successful=\"$(run_reviewer_pass \"review\" \"${PROMPT_FILE}\" \"xhigh\")\"\n"
+				"{\n"
+				"\tprintf 'PASS_SUCCESSFUL=%s\\n' \"${pass_successful}\"\n"
+				"\tprintf 'CALLED_MODELS_FILE=%s\\n' \"${CALLED_MODELS_FILE}\"\n"
+				f"\tprintf 'CACHED_LOG_FILE=%s\\n' \"${{PREVIOUS_REVIEWS_DIR}}/review_{cached_safe_name}.log\"\n"
+				f"\tprintf 'RERUN_OUTPUT_FILE=%s\\n' \"${{PREVIOUS_REVIEWS_DIR}}/review_{rerun_safe_name}.txt\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env={
+				**os.environ,
+				"PREVIOUS_REVIEWS_DIR": str(reviews),
+				"RUNTIME_DIR": str(runtime),
+				"PROMPT_FILE": str(prompt_file),
+				"GITHUB_ENV": str(github_env_file),
+				"REVIEWER_REASONING_EFFORT": "xhigh",
+				"REVIEW_PR_STATE_POLL_INTERVAL_SECS": "10",
+				"AUTOFIX_RESUME_RESTORED": "true",
+				"AUTOFIX_RESUME_SHOULD_CONTINUE": "true",
+				"AUTOFIX_RESUME_STATE": "resumable",
+				"CALLED_MODELS_FILE": str(called_models_file),
+				"STATE_FILE": str(state_file),
+			},
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		state = _parse_env_file(state_file)
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			"called_models": called_models_file.read_text(encoding="utf-8").splitlines() if called_models_file.exists() else [],
+			"cached_log": Path(state["CACHED_LOG_FILE"]).read_text(encoding="utf-8"),
+			"rerun_output": Path(state["RERUN_OUTPUT_FILE"]).read_text(encoding="utf-8"),
+		}
+
+
 def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 	workflow = _workflow_text()
 	for expected in (
@@ -1695,6 +2086,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}",
 		"REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}",
 		"SLOP_SCAN_ENABLED: ${{ vars.SLOP_SCAN_ENABLED || 'true' }}",
+		"REVIEW_MAX_RESUME_ROUNDS: ${{ vars.REVIEW_MAX_RESUME_ROUNDS || '3' }}",
 		"AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}",
 		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
 		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}",
@@ -3556,6 +3948,16 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		'"incomplete_phases":',
 		'"edits_pushed":',
 		'"resume_round":',
+		'"resume_restored":',
+		'"resume_head_sha":',
+		'"resume_round_limit":',
+		'"resume_state":',
+		'"resume_should_continue":',
+		'"resume_source_reason":',
+		'"resume_source_phase":',
+		'"resume_comment_posted":',
+		'"resume_completed_scope":',
+		'"resume_incomplete_scope":',
 	):
 		assert expected in block, f"Missing structured summary key contract: {expected}"
 	assert "reviewer_scope_label=\"full-diff\"" in block, (
@@ -3582,6 +3984,12 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		"| Editor invoked | ${editor_invoked} |",
 		"| CONSOLIDATOR_OVERRIDDEN count | ${override_count} |",
 		"| Editor commit produced | ${editor_commit_produced} |",
+		"| Resume round | ${resume_round} |",
+		"| Resume restored | ${resume_restored} |",
+		"| Resume state | ${resume_state} |",
+		"| Resume round limit | ${resume_round_limit} |",
+		"| Resume should continue | ${resume_should_continue} |",
+		"| Resume head SHA | ${resume_head_sha:-none} |",
 	):
 		assert expected in block, f"Missing summary row contract: {expected}"
 	for artifact in (
@@ -3602,12 +4010,28 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		'budget_total_secs="$(sanitize_nonnegative_int "${CODEX_RUN_BUDGET_TOTAL_SECS:-0}")"',
 		'budget_start_epoch="$(sanitize_nonnegative_int "${CODEX_RUN_BUDGET_START_EPOCH:-${JOB_START_EPOCH:-0}}")"',
 		'resume_round="${AUTOFIX_RESUME_ROUND:-${RESUME_ROUND:-0}}"',
+		'resume_round_limit="$(sanitize_nonnegative_int "${AUTOFIX_RESUME_ROUND_LIMIT:-0}")"',
+		'resume_restored="${AUTOFIX_RESUME_RESTORED:-false}"',
+		'resume_head_sha="${AUTOFIX_RESUME_HEAD_SHA:-}"',
+		'resume_state="${AUTOFIX_RESUME_STATE:-fresh}"',
+		'resume_should_continue="${AUTOFIX_RESUME_SHOULD_CONTINUE:-false}"',
 		'push_allowed = bool_env("CAN_PUSH")',
 		'edits_pushed = bool_env("AUTOFIX_EDITS_PUSHED")',
 		'partial_finalize = bool_env("AUTOFIX_PARTIAL_FINALIZE_REQUESTED")',
 		'partial_comment_posted = bool_env("AUTOFIX_PARTIAL_COMMENT_POSTED")',
+		'resume_restored = bool_env("AUTOFIX_RESUME_RESTORED")',
+		'resume_head_sha = env("AUTOFIX_RESUME_HEAD_SHA").strip()',
+		'resume_round_limit = int_env("AUTOFIX_RESUME_ROUND_LIMIT")',
+		'resume_state = env("AUTOFIX_RESUME_STATE", "fresh").strip() or "fresh"',
+		'resume_should_continue = bool_env("AUTOFIX_RESUME_SHOULD_CONTINUE")',
+		'resume_source_reason = env("AUTOFIX_RESUME_REASON").strip()',
+		'resume_source_phase = env("AUTOFIX_RESUME_PHASE").strip()',
+		'resume_comment_posted = bool_env("AUTOFIX_RESUME_COMMENT_POSTED")',
+		'resume_completed_scope = csv_env_list("AUTOFIX_RESUME_COMPLETED_SCOPE")',
+		'resume_incomplete_scope = csv_env_list("AUTOFIX_RESUME_INCOMPLETE_SCOPE")',
 		'status_pass1_*.txt',
 		'if status == "skipped_budget":',
+		'if resume_state in {"no_progress", "round_budget_exhausted"} and not resume_should_continue:',
 		'return "soft_deadline"',
 	):
 		assert artifact in block, f"Summary step is missing local metric source: {artifact}"
@@ -3634,10 +4058,19 @@ def test_review_partial_finalize_workflow_path_is_wired() -> None:
 		"incomplete_scope=${incomplete_scope_csv}",
 		"validated_edits_committed=${validated_edits_committed}",
 		"edits_pushed=${edits_pushed}",
+		"head_sha=${current_head_sha}",
 		"resume_round=${resume_round}",
+		"resume_round_limit=${resume_round_limit}",
+		"resume_state=${RESUME_STATE}",
+		"resume_should_continue=${RESUME_SHOULD_CONTINUE}",
 		"partial_finalize.json",
 		'echo "AUTOFIX_PARTIAL_COMMENT_POSTED=true" >> "$GITHUB_ENV"',
 		'echo "AUTOFIX_RESUME_ROUND=${resume_round}" >> "$GITHUB_ENV"',
+		'echo "AUTOFIX_RESUME_HEAD_SHA=${current_head_sha}" >> "$GITHUB_ENV"',
+		'echo "AUTOFIX_RESUME_ROUND_LIMIT=${resume_round_limit}" >> "$GITHUB_ENV"',
+		'echo "AUTOFIX_RESUME_STATE=${RESUME_STATE}" >> "$GITHUB_ENV"',
+		'echo "AUTOFIX_RESUME_SHOULD_CONTINUE=${RESUME_SHOULD_CONTINUE}" >> "$GITHUB_ENV"',
+		'"progress_fingerprint": os.environ.get("PROGRESS_FINGERPRINT_VALUE", "").strip(),',
 	):
 		assert expected in partial_block, f"missing partial-finalize contract detail: {expected}"
 	for expected in (
@@ -3682,9 +4115,170 @@ def test_review_partial_finalize_keeps_commit_and_push_path_available() -> None:
 def test_review_pipeline_summary_finalize_reason_marks_partial_runs() -> None:
 	block = _step_block("Append review pipeline iteration summary")
 	assert re.search(
-		r'if partial_finalize:\n\s+return "partial_finalize"',
+		r'if resume_state in \{"no_progress", "round_budget_exhausted"\} and not resume_should_continue:\n\s+return resume_state\n\s+if partial_finalize:\n\s+return "partial_finalize"',
 		block,
 	), "summary finalize_reason contract should classify partial-finalize runs"
+
+
+def test_same_head_partial_resume_restore_prefers_latest_matching_marker_and_ignores_other_heads() -> None:
+	result = _run_restore_same_head_resume_harness(
+		markers=[
+			{
+				"resume_round": 1,
+				"head_sha": "other-head-one",
+				"resume_state": "resumable",
+				"resume_should_continue": True,
+				"completed_scope": ["reviewers"],
+				"incomplete_scope": ["editor"],
+				"progress_fingerprint": "fp-other-1",
+				"reason": "soft_deadline",
+				"phase": "editor",
+				"comment_posted": False,
+			},
+			{
+				"resume_round": 2,
+				"head_sha": "__HEAD__",
+				"resume_state": "resumable",
+				"resume_should_continue": True,
+				"completed_scope": ["reviewers"],
+				"incomplete_scope": ["editor"],
+				"progress_fingerprint": "fp-match-2",
+				"reason": "soft_deadline",
+				"phase": "editor",
+				"comment_posted": False,
+			},
+			{
+				"resume_round": 4,
+				"head_sha": "__HEAD__",
+				"resume_state": "round_budget_exhausted",
+				"resume_should_continue": False,
+				"completed_scope": ["reviewers", "consolidator", "parser"],
+				"incomplete_scope": ["ledger", "editor"],
+				"progress_fingerprint": "fp-match-4",
+				"reason": "soft_deadline",
+				"phase": "editor",
+				"comment_posted": True,
+			},
+		],
+	)
+	github_env = result["github_env"]
+	assert github_env["AUTOFIX_RESUME_RESTORED"] == "true"
+	assert github_env["AUTOFIX_RESUME_TERMINAL"] == "true"
+	assert github_env["AUTOFIX_RESUME_ROUND"] == "4"
+	assert github_env["AUTOFIX_RESUME_ROUND_LIMIT"] == "3"
+	assert github_env["AUTOFIX_RESUME_STATE"] == "round_budget_exhausted"
+	assert github_env["AUTOFIX_RESUME_SHOULD_CONTINUE"] == "false"
+	assert github_env["AUTOFIX_RESUME_HEAD_SHA"] == result["head_sha"]
+	assert github_env["AUTOFIX_RESUME_COMPLETED_SCOPE"] == "reviewers,consolidator,parser"
+	assert github_env["AUTOFIX_RESUME_INCOMPLETE_SCOPE"] == "ledger,editor"
+	assert github_env["AUTOFIX_RESUME_PROGRESS_FINGERPRINT"] == "fp-match-4"
+	assert github_env["AUTOFIX_RESUME_REASON"] == "soft_deadline"
+	assert github_env["AUTOFIX_RESUME_PHASE"] == "editor"
+	assert github_env["AUTOFIX_RESUME_COMMENT_POSTED"] == "true"
+	assert github_env["AUTOFIX_RESUME_MARKER_FILE"].endswith("round-4/partial_finalize.json")
+	assert "Restored same-head partial resume state" in result["stdout"]
+
+
+def test_same_head_partial_resume_restore_fails_open_when_no_marker_matches_head() -> None:
+	result = _run_restore_same_head_resume_harness(
+		markers=[
+			{
+				"resume_round": 1,
+				"head_sha": "other-head-one",
+				"resume_state": "resumable",
+				"resume_should_continue": True,
+				"completed_scope": ["reviewers"],
+				"incomplete_scope": ["editor"],
+				"progress_fingerprint": "fp-other-1",
+				"reason": "soft_deadline",
+				"phase": "editor",
+				"comment_posted": False,
+			},
+			{
+				"resume_round": 3,
+				"head_sha": "other-head-two",
+				"resume_state": "no_progress",
+				"resume_should_continue": False,
+				"completed_scope": ["reviewers", "consolidator"],
+				"incomplete_scope": ["editor"],
+				"progress_fingerprint": "fp-other-3",
+				"reason": "soft_deadline",
+				"phase": "editor",
+				"comment_posted": True,
+			},
+		],
+	)
+	github_env = result["github_env"]
+	assert github_env["AUTOFIX_RESUME_RESTORED"] == "false"
+	assert github_env["AUTOFIX_RESUME_TERMINAL"] == "false"
+	assert github_env["AUTOFIX_RESUME_ROUND"] == "0"
+	assert github_env["AUTOFIX_RESUME_ROUND_LIMIT"] == "3"
+	assert github_env["AUTOFIX_RESUME_STATE"] == "fresh"
+	assert github_env["AUTOFIX_RESUME_SHOULD_CONTINUE"] == "false"
+	assert github_env["AUTOFIX_RESUME_HEAD_SHA"] == result["head_sha"]
+	assert github_env["AUTOFIX_RESUME_MARKER_FILE"] == ""
+	assert f"No cached same-head partial resume state matched HEAD={result['head_sha']}" in result["stdout"]
+
+
+def test_reviewer_resume_reuses_cached_successes_and_reruns_only_incomplete_slots() -> None:
+	result = _run_reviewer_resume_cached_success_harness()
+	assert result["PASS_SUCCESSFUL"] == "2"
+	assert result["called_models"] == ["moonshotai/kimi-k2.5"]
+	assert result["cached_log"].startswith("cached log\n")
+	assert result["rerun_output"] == "fresh reviewer output for moonshotai/kimi-k2.5\n"
+	assert "Resume: reusing cached reviewer success for x-ai/grok-4.20 (review)." in result["stderr"]
+
+
+def test_review_partial_resume_path_does_not_workflow_dispatch_without_new_push() -> None:
+	block = _step_block("Re-trigger review via workflow_dispatch")
+	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" in block
+	assert "env.AUTOFIX_RESUME_TERMINAL != 'true'" in block
+
+
+def test_review_partial_finalize_marker_sets_no_progress_terminal_state() -> None:
+	with tempfile.TemporaryDirectory(prefix="partial-finalize-no-progress-") as td:
+		context = _build_partial_finalize_step_context(Path(td))
+		first = _run_partial_finalize_step(context)
+		second = _run_partial_finalize_step(context, previous_env=first["github_env"])
+
+	assert first["github_env"]["AUTOFIX_RESUME_STATE"] == "resumable"
+	assert first["github_env"]["AUTOFIX_RESUME_SHOULD_CONTINUE"] == "true"
+	assert second["github_env"]["AUTOFIX_RESUME_ROUND"] == "2"
+	assert second["github_env"]["AUTOFIX_RESUME_STATE"] == "no_progress"
+	assert second["github_env"]["AUTOFIX_RESUME_SHOULD_CONTINUE"] == "false"
+	assert second["github_env"]["AUTOFIX_RESUME_TERMINAL"] == "true"
+	assert second["marker_payload"]["resume_round"] == 2
+	assert second["marker_payload"]["resume_state"] == "no_progress"
+	assert second["marker_payload"]["resume_should_continue"] is False
+	assert second["marker_payload"]["progress_fingerprint"] == first["marker_payload"]["progress_fingerprint"]
+	assert "resume_state=no_progress" in second["latest_comment"]
+	assert "resume_should_continue=false" in second["latest_comment"]
+
+
+def test_review_partial_finalize_marker_sets_round_budget_exhausted_terminal_state() -> None:
+	with tempfile.TemporaryDirectory(prefix="partial-finalize-round-budget-") as td:
+		context = _build_partial_finalize_step_context(Path(td))
+		first = _run_partial_finalize_step(context, review_max_resume_rounds="2")
+		second = _run_partial_finalize_step(
+			context,
+			previous_env=first["github_env"],
+			review_max_resume_rounds="2",
+			editor_summary_text="editor summary changed\n",
+		)
+
+	assert first["github_env"]["AUTOFIX_RESUME_STATE"] == "resumable"
+	assert second["github_env"]["AUTOFIX_RESUME_ROUND"] == "2"
+	assert second["github_env"]["AUTOFIX_RESUME_ROUND_LIMIT"] == "2"
+	assert second["github_env"]["AUTOFIX_RESUME_STATE"] == "round_budget_exhausted"
+	assert second["github_env"]["AUTOFIX_RESUME_SHOULD_CONTINUE"] == "false"
+	assert second["github_env"]["AUTOFIX_RESUME_TERMINAL"] == "true"
+	assert second["marker_payload"]["resume_round"] == 2
+	assert second["marker_payload"]["resume_round_limit"] == 2
+	assert second["marker_payload"]["resume_state"] == "round_budget_exhausted"
+	assert second["marker_payload"]["resume_should_continue"] is False
+	assert second["marker_payload"]["progress_fingerprint"] != first["marker_payload"]["progress_fingerprint"]
+	assert "resume_state=round_budget_exhausted" in second["latest_comment"]
+	assert "resume_should_continue=false" in second["latest_comment"]
 
 
 def test_push_step_exports_edits_pushed_sentinel_for_summary_contract() -> None:
@@ -4129,6 +4723,12 @@ def main() -> int:
 	test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain()
 	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()
+	test_same_head_partial_resume_restore_prefers_latest_matching_marker_and_ignores_other_heads()
+	test_same_head_partial_resume_restore_fails_open_when_no_marker_matches_head()
+	test_reviewer_resume_reuses_cached_successes_and_reruns_only_incomplete_slots()
+	test_review_partial_resume_path_does_not_workflow_dispatch_without_new_push()
+	test_review_partial_finalize_marker_sets_no_progress_terminal_state()
+	test_review_partial_finalize_marker_sets_round_budget_exhausted_terminal_state()
 	test_review_pipeline_slop_scan_wiring_is_flagged_fail_open_and_pre_commit_cleaned()
 	test_reviewer_and_consolidator_slop_scan_context_is_wired()
 	test_review_tier_resolver_routes_lite_standard_and_full_and_handles_overrides()

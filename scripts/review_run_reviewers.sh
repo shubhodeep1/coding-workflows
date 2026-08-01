@@ -149,6 +149,87 @@ reviewer_partial_finalize_requested() {
   [ -f "${REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE}" ]
 }
 
+reviewer_resume_env_truthy() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+    1|true|yes|on)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+reviewer_same_head_resume_active() {
+  reviewer_resume_env_truthy "${AUTOFIX_RESUME_RESTORED:-false}" || return 1
+  reviewer_resume_env_truthy "${AUTOFIX_RESUME_SHOULD_CONTINUE:-false}" || return 1
+  case "${AUTOFIX_RESUME_STATE:-}" in
+    ''|resumable)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+reviewer_resume_completed_scope_contains() {
+  local needle="$1"
+  local scope_item=""
+  local completed_scope="${AUTOFIX_RESUME_COMPLETED_SCOPE:-}"
+  local -a completed_scope_items=()
+
+  [ -n "${needle}" ] || return 1
+  IFS=',' read -r -a completed_scope_items <<< "${completed_scope}"
+  for scope_item in "${completed_scope_items[@]}"; do
+    scope_item="$(printf '%s' "${scope_item}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -n "${scope_item}" ] || continue
+    [ "${scope_item}" = "${needle}" ] && return 0
+  done
+
+  return 1
+}
+
+reviewer_count_success_statuses() {
+  local prefix="$1"
+  local status_file=""
+  local successful=0
+
+  for status_file in "${PREVIOUS_REVIEWS_DIR}"/status_"${prefix}"_*.txt; do
+    [ -f "${status_file}" ] || continue
+    if [ "$(cat "${status_file}" 2>/dev/null || true)" = "success" ]; then
+      successful=$((successful + 1))
+    fi
+  done
+
+  printf '%s\n' "${successful}"
+}
+
+reviewer_resume_can_skip_reviewers() {
+  reviewer_same_head_resume_active || return 1
+  reviewer_resume_completed_scope_contains "reviewers" || return 1
+  [ -s "${REVIEWER_CONSENSUS_FILE:-}" ] || return 1
+  compgen -G "${PREVIOUS_REVIEWS_DIR}/status_review_*.txt" >/dev/null || return 1
+  return 0
+}
+
+reviewer_resume_can_skip_pass1() {
+  reviewer_same_head_resume_active || return 1
+  reviewer_resume_completed_scope_contains "reviewers_pass1" || return 1
+  reviewer_resume_completed_scope_contains "reviewers_pass1_consensus" || return 1
+  compgen -G "${PREVIOUS_REVIEWS_DIR}/status_pass1_*.txt" >/dev/null || return 1
+  [ -s "${PREVIOUS_REVIEWS_DIR}/consensus_pass1.txt" ] || return 1
+  return 0
+}
+
+reviewer_resume_should_reuse_success_slot() {
+  local status_file="$1"
+  local output_file="$2"
+
+  reviewer_same_head_resume_active || return 1
+  [ -f "${status_file}" ] || return 1
+  [ -s "${output_file}" ] || return 1
+  [ "$(cat "${status_file}" 2>/dev/null || true)" = "success" ]
+}
+
 reviewer_normalize_soft_deadline_minutes_fallback() {
   local raw_value="${1:-${REVIEW_SOFT_DEADLINE_MINUTES:-${REVIEWER_SOFT_DEADLINE_DEFAULT_MINUTES}}}"
   local normalized_value=""
@@ -4056,6 +4137,11 @@ run_reviewer_pass() {
     pass_status_files+=("${status_file}")
     pass_log_files+=("${log_file}")
 
+    if reviewer_resume_should_reuse_success_slot "${status_file}" "${output_file}"; then
+      printf 'Resume: reusing cached reviewer success for %s (%s).\n' "${model}" "${pass_prefix}" | tee -a "${log_file}" >&2
+      continue
+    fi
+
     if reviewer_circuit_breaker_enabled; then
       reviewer_health_dispatch_prepare "${model}"
       if [ "${REVIEWER_HEALTH_DISPATCH_DECISION}" = "skip_open" ]; then
@@ -4163,37 +4249,57 @@ build_cross_pollination_summary() {
 rm -f "${REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE}" 2>/dev/null || true
 reviewers_successful=0
 
+if reviewer_resume_can_skip_reviewers; then
+  reviewers_successful="$(reviewer_count_success_statuses "review")"
+  echo "Resume: same-head cached reviewer outputs already cover the full reviewer phase; skipping reviewer rerun."
+  echo "REVIEWERS_SUCCESSFUL=${reviewers_successful}" >> "$GITHUB_ENV"
+  exit 0
+fi
+
 if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   echo "Two-pass review enabled."
-
-  # ── PASS 1: broad sweep at xhigh thinking ──
-  echo "=== PASS 1: Broad sweep (xhigh reasoning) ==="
-  PASS1_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass1.txt"
-  assemble_reviewer_prompt "${PASS1_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"
-
-  pass1_successful="$(run_reviewer_pass "pass1" "${PASS1_PROMPT_FILE}" "xhigh")"
-  echo "Pass 1 complete: ${pass1_successful} reviewers successful."
-  reviewers_successful="${pass1_successful}"
-  if reviewer_partial_finalize_requested; then
-    echo "REVIEWERS_SUCCESSFUL=${reviewers_successful}" >> "$GITHUB_ENV"
-    exit 0
-  fi
-
-  # Check for PR closure after pass 1
-  if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
-    echo "PR #${PR_NUMBER} was closed/merged during pass 1 — exiting cleanly."
-    echo "PR_CLOSED=true" >> "$GITHUB_ENV"
-    exit 0
-  fi
-
-  # ── Consolidate all pass-1 reviewer outputs into one ledger ──
-  # One codex-cli call (gpt-5.4-mini, medium reasoning by default — see
-  # XPOLL_SUMMARISER_REASONING) produces a consensus ledger + per-reviewer
-  # sections. Retries 3×; hard-fails the workflow on final failure
-  # (triggers job-level Telegram failure alert).
   PASS1_LEDGER_FILE="${PREVIOUS_REVIEWS_DIR}/consensus_pass1.txt"
-  bash "${SUMMARISER_SCRIPT}" --prefix pass1 --output "${PASS1_LEDGER_FILE}"
-  echo "Pass-1 consensus ledger: $(wc -c < "${PASS1_LEDGER_FILE}" 2>/dev/null || echo 0) bytes"
+
+  if reviewer_resume_can_skip_pass1; then
+    pass1_successful="$(reviewer_count_success_statuses "pass1")"
+    echo "Resume: same-head cached pass-1 reviewer outputs already cover pass 1; reusing ${PASS1_LEDGER_FILE}."
+    echo "Pass 1 complete: ${pass1_successful} reviewers successful (cached resume)."
+    reviewers_successful="${pass1_successful}"
+  else
+    # ── PASS 1: broad sweep at xhigh thinking ──
+    echo "=== PASS 1: Broad sweep (xhigh reasoning) ==="
+    PASS1_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass1.txt"
+    assemble_reviewer_prompt "${PASS1_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"
+
+    pass1_successful="$(run_reviewer_pass "pass1" "${PASS1_PROMPT_FILE}" "xhigh")"
+    echo "Pass 1 complete: ${pass1_successful} reviewers successful."
+    reviewers_successful="${pass1_successful}"
+    if reviewer_partial_finalize_requested; then
+      echo "REVIEWERS_SUCCESSFUL=${reviewers_successful}" >> "$GITHUB_ENV"
+      exit 0
+    fi
+
+    # Check for PR closure after pass 1
+    if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+      echo "PR #${PR_NUMBER} was closed/merged during pass 1 — exiting cleanly."
+      echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+      exit 0
+    fi
+
+    # ── Consolidate all pass-1 reviewer outputs into one ledger ──
+    # One codex-cli call (gpt-5.4-mini, medium reasoning by default — see
+    # XPOLL_SUMMARISER_REASONING) produces a consensus ledger + per-reviewer
+    # sections. Retries 3×; hard-fails the workflow on final failure
+    # (triggers job-level Telegram failure alert).
+    bash "${SUMMARISER_SCRIPT}" --prefix pass1 --output "${PASS1_LEDGER_FILE}"
+    echo "Pass-1 consensus ledger: $(wc -c < "${PASS1_LEDGER_FILE}" 2>/dev/null || echo 0) bytes"
+  fi
+
+  if [ ! -s "${PASS1_LEDGER_FILE}" ] && [ "${pass1_successful:-0}" -gt 0 ] && [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    echo "Resume: regenerating missing pass-1 consensus ledger from cached pass-1 reviewer outputs."
+    bash "${SUMMARISER_SCRIPT}" --prefix pass1 --output "${PASS1_LEDGER_FILE}"
+    echo "Pass-1 consensus ledger: $(wc -c < "${PASS1_LEDGER_FILE}" 2>/dev/null || echo 0) bytes"
+  fi
 
   # ── Build cross-pollination summary (header-wrapped ledger) ──
   CROSS_POLLINATION_FILE="$(build_cross_pollination_summary "${PASS1_LEDGER_FILE}")"

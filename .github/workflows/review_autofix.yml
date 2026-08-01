@@ -169,6 +169,7 @@ env:
   # to disable inlining entirely. Default matches implement.yml.
   TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
   REVIEW_SOFT_DEADLINE_MINUTES: ${{ vars.REVIEW_SOFT_DEADLINE_MINUTES || '210' }}
+  REVIEW_MAX_RESUME_ROUNDS: ${{ vars.REVIEW_MAX_RESUME_ROUNDS || '3' }}
   CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}
   CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
@@ -1192,6 +1193,7 @@ jobs:
       REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}
       REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}
       REVIEW_SOFT_DEADLINE_MINUTES: ${{ vars.REVIEW_SOFT_DEADLINE_MINUTES || '210' }}
+      REVIEW_MAX_RESUME_ROUNDS: ${{ vars.REVIEW_MAX_RESUME_ROUNDS || '3' }}
       REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}
       REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}
       REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}
@@ -1939,6 +1941,154 @@ jobs:
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-
+
+      - name: Restore same-head partial resume state
+        if: env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        run: |
+          set -euo pipefail
+
+          current_head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+          if [ -z "${current_head_sha}" ]; then
+            echo "::warning::Unable to resolve git HEAD for partial-resume restore; continuing without same-head resume state."
+          fi
+
+          resume_round_limit="${REVIEW_MAX_RESUME_ROUNDS:-3}"
+          if ! [[ "${resume_round_limit}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::warning::Invalid REVIEW_MAX_RESUME_ROUNDS='${resume_round_limit}'; falling back to 3."
+            resume_round_limit=3
+          fi
+
+          resume_env_file="$(mktemp)"
+          CURRENT_HEAD_SHA="${current_head_sha}" \
+          RESUME_ROUND_LIMIT="${resume_round_limit}" \
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' > "${resume_env_file}"
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+
+
+          def bool_to_env(value: bool) -> str:
+              return "true" if value else "false"
+
+
+          def parse_list(value: object) -> list[str]:
+              if not isinstance(value, list):
+                  return []
+              parsed: list[str] = []
+              for item in value:
+                  if isinstance(item, str) and item.strip():
+                      parsed.append(item.strip())
+              return parsed
+
+
+          def parse_bool(value: object, default: bool = False) -> bool:
+              if isinstance(value, bool):
+                  return value
+              if isinstance(value, str):
+                  normalized = value.strip().lower()
+                  if normalized in {"1", "true", "yes", "on"}:
+                      return True
+                  if normalized in {"0", "false", "no", "off"}:
+                      return False
+              return default
+
+
+          def sanitize_round(value: object) -> int:
+              try:
+                  parsed = int(value)
+              except (TypeError, ValueError):
+                  return 0
+              return parsed if parsed >= 0 else 0
+
+
+          current_head_sha = os.environ.get("CURRENT_HEAD_SHA", "").strip()
+          resume_round_limit = os.environ.get("RESUME_ROUND_LIMIT", "3").strip() or "3"
+          pr_number = os.environ.get("PR_NUMBER", "").strip() or "0"
+          marker_root = Path(f".ai/review_runtime/pr-{pr_number}")
+
+          selected_payload: dict[str, object] | None = None
+          selected_marker: Path | None = None
+          selected_sort_key: tuple[int, int, str] = (-1, -1, "")
+          if current_head_sha and marker_root.is_dir():
+              for marker_path in sorted(marker_root.glob("round-*/partial_finalize.json")):
+                  try:
+                      payload = json.loads(marker_path.read_text(encoding="utf-8"))
+                  except (OSError, json.JSONDecodeError):
+                      continue
+                  if not isinstance(payload, dict):
+                      continue
+                  head_sha = payload.get("head_sha")
+                  if not isinstance(head_sha, str) or head_sha.strip() != current_head_sha:
+                      continue
+                  resume_round = sanitize_round(payload.get("resume_round"))
+                  try:
+                      marker_mtime_ns = marker_path.stat().st_mtime_ns
+                  except OSError:
+                      marker_mtime_ns = -1
+                  sort_key = (resume_round, marker_mtime_ns, marker_path.as_posix())
+                  if sort_key > selected_sort_key:
+                      selected_sort_key = sort_key
+                      selected_payload = payload
+                      selected_marker = marker_path
+
+          exports = {
+              "AUTOFIX_RESUME_RESTORED": "false",
+              "AUTOFIX_RESUME_TERMINAL": "false",
+              "AUTOFIX_RESUME_ROUND": "0",
+              "AUTOFIX_RESUME_ROUND_LIMIT": resume_round_limit,
+              "AUTOFIX_RESUME_STATE": "fresh",
+              "AUTOFIX_RESUME_SHOULD_CONTINUE": "false",
+              "AUTOFIX_RESUME_HEAD_SHA": current_head_sha,
+              "AUTOFIX_RESUME_COMPLETED_SCOPE": "",
+              "AUTOFIX_RESUME_INCOMPLETE_SCOPE": "",
+              "AUTOFIX_RESUME_PROGRESS_FINGERPRINT": "",
+              "AUTOFIX_RESUME_REASON": "",
+              "AUTOFIX_RESUME_PHASE": "",
+              "AUTOFIX_RESUME_COMMENT_POSTED": "false",
+              "AUTOFIX_RESUME_MARKER_FILE": "",
+          }
+
+          if selected_payload is not None and selected_marker is not None:
+              resume_state = selected_payload.get("resume_state")
+              if not isinstance(resume_state, str) or not resume_state.strip():
+                  resume_state = "resumable"
+              resume_state = resume_state.strip()
+              resume_should_continue = parse_bool(
+                  selected_payload.get("resume_should_continue"),
+                  default=(resume_state == "resumable"),
+              )
+              exports.update(
+                  {
+                      "AUTOFIX_RESUME_RESTORED": "true",
+                      "AUTOFIX_RESUME_TERMINAL": bool_to_env(not resume_should_continue),
+                      "AUTOFIX_RESUME_ROUND": str(sanitize_round(selected_payload.get("resume_round"))),
+                      "AUTOFIX_RESUME_STATE": resume_state,
+                      "AUTOFIX_RESUME_SHOULD_CONTINUE": bool_to_env(resume_should_continue),
+                      "AUTOFIX_RESUME_COMPLETED_SCOPE": ",".join(parse_list(selected_payload.get("completed_scope"))),
+                      "AUTOFIX_RESUME_INCOMPLETE_SCOPE": ",".join(parse_list(selected_payload.get("incomplete_scope"))),
+                      "AUTOFIX_RESUME_PROGRESS_FINGERPRINT": str(selected_payload.get("progress_fingerprint", "") or ""),
+                      "AUTOFIX_RESUME_REASON": str(selected_payload.get("reason", "") or ""),
+                      "AUTOFIX_RESUME_PHASE": str(selected_payload.get("phase", "") or ""),
+                      "AUTOFIX_RESUME_COMMENT_POSTED": bool_to_env(parse_bool(selected_payload.get("comment_posted"))),
+                      "AUTOFIX_RESUME_MARKER_FILE": selected_marker.as_posix(),
+                  }
+              )
+
+          for key, value in exports.items():
+              print(f"{key}={value}")
+          PY
+
+          cat "${resume_env_file}" >> "$GITHUB_ENV"
+
+          if grep -q '^AUTOFIX_RESUME_RESTORED=true$' "${resume_env_file}"; then
+            echo "Restored same-head partial resume state from $(awk -F= '$1 == "AUTOFIX_RESUME_MARKER_FILE" { print $2 }' "${resume_env_file}" | tail -n 1)."
+          else
+            echo "No cached same-head partial resume state matched HEAD=${current_head_sha:-<unknown>}."
+          fi
+
+          rm -f "${resume_env_file}"
 
       - name: Detect smoke test and tune LLM settings
         env:
@@ -2814,7 +2964,7 @@ jobs:
         # skipped for deterministic stale-base or structurally unmergeable PRs.
         # Ordinary content conflicts continue to the existing late
         # Detect merge conflicts + resolver path below.
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
@@ -3056,7 +3206,7 @@ jobs:
           fi
 
       - name: Run reviewer models
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         id: reviewers
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -3104,7 +3254,7 @@ jobs:
           retention-days: 7
 
       - name: Post AI Materiality Advisory comment
-        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -3250,7 +3400,7 @@ jobs:
         # GitHub API glitch never silently drops a review.
         # Claude-branch-review mode never runs the editor, so this
         # check (and the API calls it makes) is unnecessary.
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         id: pre_editor_stale_base_gate
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -3286,7 +3436,7 @@ jobs:
           esac
 
       - name: Install project dependencies (best-effort)
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         run: |
           set -euo pipefail
           # Install project dependencies so the editor can validate fixes
@@ -3318,7 +3468,7 @@ jobs:
           fi
 
       - name: Switch reasoning effort for editor
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         run: |
           set -euo pipefail
           sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
@@ -3345,7 +3495,7 @@ jobs:
           echo "Enabled reasoning summaries (auto) for editor phase"
 
       - name: Setup Serena for editor
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.SERENA_ENABLED == 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.SERENA_ENABLED == 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -3372,7 +3522,7 @@ jobs:
           fi
 
       - name: Apply fixes with editor model
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3530,7 +3680,7 @@ jobs:
           fi
 
       - name: Commit changes
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         id: commit_changes
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -3539,7 +3689,7 @@ jobs:
           bash "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
 
       - name: Run interim judge
-        if: env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
+        if: env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           ROUND_NUMBER: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -3548,7 +3698,7 @@ jobs:
           bash "${SUPPORT_SCRIPTS_DIR}/review_run_judge_interim.sh"
 
       - name: Synthesize behavioural smoke
-        if: env.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED == 'true' && env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
+        if: env.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED == 'true' && env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         continue-on-error: true
         env:
           ROUND_NUMBER: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
@@ -3575,7 +3725,7 @@ jobs:
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Post editor summary comment
-        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'"
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -3705,7 +3855,7 @@ jobs:
         # DID land real source-file edits.  Running this detector against
         # such a commit produces a false-positive EDITOR_CHANGES_LOST alert
         # (bitsafe.io PR #177 / run 25653654000).
-        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'"
+        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         run: |
           set -euo pipefail
 
@@ -3944,7 +4094,7 @@ jobs:
         # short-circuit independently on `max_iterations_reached != 'true'`,
         # so leaving the env var unset on these runs does not relax any
         # auto-merge safety.
-        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'"
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         run: |
           set -euo pipefail
 
@@ -4037,7 +4187,7 @@ jobs:
         # which in turn fires the (futile) Codex resolver and produces a
         # `FAILED_STEPS=1` cascade that the e2e poller treats as the proximate
         # failure (analysis: e2e-smoke-failure-25126757724.md §B/D).
-        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -4313,7 +4463,7 @@ jobs:
         # step. On max_iterations_reached runs, EDITOR_NOOP_SUSPICIOUS stays
         # unset, so this guard is a no-op and MERGE_CONFLICT can legitimately
         # come from the detect step above.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -4347,7 +4497,7 @@ jobs:
         # review_conflict_resolve.sh fires the immediate orchestrator-poll
         # dispatch so the integration judge takes over without waiting for
         # the */5 cron tick.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         timeout-minutes: 170
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -4515,7 +4665,7 @@ jobs:
           fi
 
       - name: Telegram conflict resolution message
-        if: success() && env.CONFLICT_RESOLVED == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
+        if: success() && env.CONFLICT_RESOLVED == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -4549,7 +4699,7 @@ jobs:
         # head f11d6dc while editor commit 005824e was still local) and the
         # docstring at scripts/review_commit_changes.sh:32-41 for the same
         # rationale that already governs EDITOR_CHANGES_LOST at :3315-3326.
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -4953,7 +5103,7 @@ jobs:
         # `${AUTOFIX_SKIP_SELF_TRIGGERED:-false}`, so the default is `false`
         # and the [ai-autofix] synchronize is NOT skipped). The autofix loop now actually "keeps going
         # until there are no edits" instead of converging on a stale head.
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -4970,7 +5120,7 @@ jobs:
         # are pushed together AFTER labeling and auto-merge are configured.
         # This avoids a concurrency self-cancel race where the synchronize
         # event from an earlier push would kill subsequent steps.
-        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
@@ -5112,7 +5262,7 @@ jobs:
         #      added workflow_dispatch to their caller workflow template).
         #   2. Caller workflow parsed from github.workflow_ref — fallback for
         #      consumer repos whose caller workflow has workflow_dispatch.
-        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CURRENT_RUN_ID: ${{ github.run_id }}
@@ -5294,18 +5444,36 @@ jobs:
         if: "always() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          AUTOFIX_ITERATION_METRIC: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           EDITOR_COMMIT_PRODUCED: ${{ steps.commit_changes.outputs.did_commit }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
-          resume_round="${AUTOFIX_ITERATION_METRIC:-0}"
-          if ! [[ "${resume_round}" =~ ^[0-9]+$ ]]; then
-            resume_round=0
+          current_head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+          if [ -z "${current_head_sha}" ]; then
+            echo "::warning::Unable to resolve git HEAD for partial finalize marker; restoring same-head resume may fail open on the next run."
           fi
-          echo "AUTOFIX_RESUME_ROUND=${resume_round}" >> "$GITHUB_ENV"
+
+          previous_resume_round="${AUTOFIX_RESUME_ROUND:-0}"
+          if ! [[ "${previous_resume_round}" =~ ^[0-9]+$ ]]; then
+            previous_resume_round=0
+          fi
+          previous_progress_fingerprint="${AUTOFIX_RESUME_PROGRESS_FINGERPRINT:-}"
+          previous_resume_head_sha="${AUTOFIX_RESUME_HEAD_SHA:-}"
+          if [ -n "${current_head_sha}" ] && [ -n "${previous_resume_head_sha}" ] && [ "${previous_resume_head_sha}" != "${current_head_sha}" ]; then
+            previous_resume_round=0
+            previous_progress_fingerprint=""
+          fi
+
+          resume_round="$((previous_resume_round + 1))"
+          resume_round_limit="${AUTOFIX_RESUME_ROUND_LIMIT:-${REVIEW_MAX_RESUME_ROUNDS:-3}}"
+          if ! [[ "${resume_round_limit}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::warning::Invalid REVIEW_MAX_RESUME_ROUNDS='${resume_round_limit}'; falling back to 3."
+            resume_round_limit=3
+          fi
 
           completed_scope_items=()
           incomplete_scope_items=()
@@ -5356,7 +5524,150 @@ jobs:
           fi
           edits_pushed="${AUTOFIX_EDITS_PUSHED:-false}"
           partial_comment_posted="false"
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          resume_eval_file="$(mktemp)"
+          CURRENT_HEAD_SHA="${current_head_sha}" \
+          PREVIOUS_PROGRESS_FINGERPRINT="${previous_progress_fingerprint}" \
+          PREVIOUS_REVIEWS_DIR_PATH="${PREVIOUS_REVIEWS_DIR:-}" \
+          RUNTIME_DIR_PATH="${RUNTIME_DIR:-}" \
+          EDITOR_SUMMARY_FILE_PATH="${EDITOR_SUMMARY_FILE:-}" \
+          COMMITTED_FILES_FILE_PATH="${COMMITTED_FILES_FILE:-}" \
+          COMPLETED_SCOPE_CSV="${completed_scope_csv}" \
+          INCOMPLETE_SCOPE_CSV="${incomplete_scope_csv}" \
+          RESUME_ROUND_VALUE="${resume_round}" \
+          RESUME_ROUND_LIMIT_VALUE="${resume_round_limit}" \
+          PARTIAL_PHASE="${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}" \
+          PARTIAL_REASON="${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}" \
+          VALIDATED_EDITS_COMMITTED="${validated_edits_committed}" \
+          EDITS_PUSHED="${edits_pushed}" \
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' > "${resume_eval_file}"
+          from __future__ import annotations
+
+          import glob
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+
+          def parse_bool(value: str) -> bool:
+              return value.strip().lower() == "true"
+
+
+          def describe_path(path_str: str) -> dict[str, object]:
+              path = Path(path_str)
+              entry: dict[str, object] = {"path": path.as_posix(), "exists": path.exists()}
+              if not path.exists():
+                  return entry
+              try:
+                  data = path.read_bytes()
+              except OSError:
+                  entry["read_error"] = True
+                  return entry
+              entry["size"] = len(data)
+              entry["sha256"] = hashlib.sha256(data).hexdigest()
+              return entry
+
+
+          artifacts: list[dict[str, object]] = []
+          previous_reviews_dir = os.environ.get("PREVIOUS_REVIEWS_DIR_PATH", "").strip()
+          runtime_dir = os.environ.get("RUNTIME_DIR_PATH", "").strip()
+          for pattern in (
+              "status_pass1_*.txt",
+              "status_review_*.txt",
+              "pass1_*.txt",
+              "review_*.txt",
+              "consensus_pass1.txt",
+          ):
+              if previous_reviews_dir:
+                  for matched_path in sorted(glob.glob(str(Path(previous_reviews_dir) / pattern))):
+                      artifacts.append(describe_path(matched_path))
+          for rel_path in (
+              "reviewer_bundle.txt",
+              "floor_tags.txt",
+              "consolidator_raw.txt",
+              "parser_stats.txt",
+              "review_issues.txt",
+              "ledger_status.txt",
+          ):
+              if runtime_dir:
+                  artifacts.append(describe_path(str(Path(runtime_dir) / rel_path)))
+          for env_name in ("EDITOR_SUMMARY_FILE_PATH", "COMMITTED_FILES_FILE_PATH"):
+              candidate = os.environ.get(env_name, "").strip()
+              if candidate:
+                  artifacts.append(describe_path(candidate))
+
+          resume_round = 0
+          try:
+              resume_round = int(os.environ.get("RESUME_ROUND_VALUE", "0") or 0)
+          except ValueError:
+              resume_round = 0
+          if resume_round < 0:
+              resume_round = 0
+
+          resume_round_limit = 3
+          try:
+              resume_round_limit = int(os.environ.get("RESUME_ROUND_LIMIT_VALUE", "3") or 3)
+          except ValueError:
+              resume_round_limit = 3
+          if resume_round_limit <= 0:
+              resume_round_limit = 3
+
+          fingerprint_payload = {
+              "head_sha": os.environ.get("CURRENT_HEAD_SHA", "").strip(),
+              "completed_scope": os.environ.get("COMPLETED_SCOPE_CSV", "").strip(),
+              "incomplete_scope": os.environ.get("INCOMPLETE_SCOPE_CSV", "").strip(),
+              "validated_edits_committed": parse_bool(os.environ.get("VALIDATED_EDITS_COMMITTED", "false")),
+              "edits_pushed": parse_bool(os.environ.get("EDITS_PUSHED", "false")),
+              "artifacts": artifacts,
+          }
+          progress_fingerprint = hashlib.sha256(
+              json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+          ).hexdigest()
+
+          previous_progress_fingerprint = os.environ.get("PREVIOUS_PROGRESS_FINGERPRINT", "").strip()
+          resume_state = "resumable"
+          resume_should_continue = True
+          if previous_progress_fingerprint and previous_progress_fingerprint == progress_fingerprint:
+              resume_state = "no_progress"
+              resume_should_continue = False
+          elif resume_round >= resume_round_limit:
+              resume_state = "round_budget_exhausted"
+              resume_should_continue = False
+
+          print(f"PROGRESS_FINGERPRINT={progress_fingerprint}")
+          print(f"RESUME_STATE={resume_state}")
+          print(f"RESUME_SHOULD_CONTINUE={'true' if resume_should_continue else 'false'}")
+          print(f"RESUME_TERMINAL={'true' if not resume_should_continue else 'false'}")
+          print(f"TERMINAL_REASON={resume_state if not resume_should_continue else ''}")
+          PY
+          set -a
+          # shellcheck disable=SC1090
+          source "${resume_eval_file}"
+          set +a
+          rm -f "${resume_eval_file}"
+
+          {
+            echo "AUTOFIX_RESUME_ROUND=${resume_round}"
+            echo "AUTOFIX_RESUME_ROUND_LIMIT=${resume_round_limit}"
+            echo "AUTOFIX_RESUME_HEAD_SHA=${current_head_sha}"
+            echo "AUTOFIX_RESUME_COMPLETED_SCOPE=${completed_scope_csv}"
+            echo "AUTOFIX_RESUME_INCOMPLETE_SCOPE=${incomplete_scope_csv}"
+            echo "AUTOFIX_RESUME_PROGRESS_FINGERPRINT=${PROGRESS_FINGERPRINT}"
+            echo "AUTOFIX_RESUME_STATE=${RESUME_STATE}"
+            echo "AUTOFIX_RESUME_SHOULD_CONTINUE=${RESUME_SHOULD_CONTINUE}"
+            echo "AUTOFIX_RESUME_TERMINAL=${RESUME_TERMINAL}"
+            echo "AUTOFIX_RESUME_REASON=${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}"
+            echo "AUTOFIX_RESUME_PHASE=${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}"
+          } >> "$GITHUB_ENV"
+
+          resume_state_human="$(printf '%s' "${RESUME_STATE}" | tr '_' ' ')"
+          if [ "${RESUME_SHOULD_CONTINUE}" = "true" ]; then
+            resume_state_note="Another same-head continuation run can resume from this marker."
+          else
+            resume_state_note="Same-head resume stops here because ${resume_state_human}."
+          fi
+
           comment_body_file="$(mktemp)"
 
           cat > "${comment_body_file}" <<EOF
@@ -5365,12 +5676,17 @@ jobs:
 
           This run finalized early after \`${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}\` in the \`${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}\` phase so the validated finalize tail could complete before the hard job timeout.
 
+          ${resume_state_note}
+
           - Completed scope: ${completed_scope_human}
           - Incomplete scope: ${incomplete_scope_human}
           - Validated edits committed: ${validated_edits_committed}
           - Edits pushed: ${edits_pushed}
-          - Resume round: ${resume_round}
-          - Run: ${run_url}
+          - Resume state: ${RESUME_STATE}
+          - Resume round: ${resume_round} of ${resume_round_limit}
+          - Same-head continuation: ${RESUME_SHOULD_CONTINUE}
+          - Head SHA: ${current_head_sha:-unknown}
+          - Run: ${WORKFLOW_RUN_URL}
 
           \`\`\`text
           partial_finalize=true
@@ -5380,28 +5696,41 @@ jobs:
           incomplete_scope=${incomplete_scope_csv}
           validated_edits_committed=${validated_edits_committed}
           edits_pushed=${edits_pushed}
+          head_sha=${current_head_sha}
           resume_round=${resume_round}
+          resume_round_limit=${resume_round_limit}
+          resume_state=${RESUME_STATE}
+          resume_should_continue=${RESUME_SHOULD_CONTINUE}
           \`\`\`
           EOF
 
-          if gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="$(cat "${comment_body_file}")" >/dev/null 2>&1; then
+          if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="$(cat "${comment_body_file}")" >/dev/null 2>&1; then
             partial_comment_posted="true"
-            echo "AUTOFIX_PARTIAL_COMMENT_POSTED=true" >> "$GITHUB_ENV"
           else
             echo "::warning::Unable to post partial finalize comment after retries."
           fi
           rm -f "${comment_body_file}"
+
+          {
+            echo "AUTOFIX_PARTIAL_COMMENT_POSTED=${partial_comment_posted}"
+            echo "AUTOFIX_RESUME_COMMENT_POSTED=${partial_comment_posted}"
+          } >> "$GITHUB_ENV"
 
           partial_marker_dir=".ai/review_runtime/pr-${PR_NUMBER}/round-${resume_round}"
           mkdir -p "${partial_marker_dir}"
           partial_marker_file="${partial_marker_dir}/partial_finalize.json"
           PARTIAL_MARKER_FILE="${partial_marker_file}" \
           PARTIAL_COMMENT_POSTED="${partial_comment_posted}" \
+          CURRENT_HEAD_SHA="${current_head_sha}" \
           COMPLETED_SCOPE_CSV="${completed_scope_csv}" \
           INCOMPLETE_SCOPE_CSV="${incomplete_scope_csv}" \
           VALIDATED_EDITS_COMMITTED="${validated_edits_committed}" \
           EDITS_PUSHED="${edits_pushed}" \
           RESUME_ROUND_VALUE="${resume_round}" \
+          RESUME_ROUND_LIMIT_VALUE="${resume_round_limit}" \
+          RESUME_STATE_VALUE="${RESUME_STATE}" \
+          RESUME_SHOULD_CONTINUE_VALUE="${RESUME_SHOULD_CONTINUE}" \
+          PROGRESS_FINGERPRINT_VALUE="${PROGRESS_FINGERPRINT}" \
           PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
           from __future__ import annotations
 
@@ -5426,11 +5755,16 @@ jobs:
               "partial_finalize": True,
               "reason": os.environ.get("AUTOFIX_PARTIAL_FINALIZE_REASON", "").strip() or "unknown",
               "phase": os.environ.get("AUTOFIX_PARTIAL_FINALIZE_PHASE", "").strip() or "unknown",
+              "head_sha": os.environ.get("CURRENT_HEAD_SHA", "").strip(),
               "completed_scope": parse_csv("COMPLETED_SCOPE_CSV"),
               "incomplete_scope": parse_csv("INCOMPLETE_SCOPE_CSV"),
               "validated_edits_committed": parse_bool("VALIDATED_EDITS_COMMITTED"),
               "edits_pushed": parse_bool("EDITS_PUSHED"),
               "resume_round": int(os.environ.get("RESUME_ROUND_VALUE", "0") or 0),
+              "resume_round_limit": int(os.environ.get("RESUME_ROUND_LIMIT_VALUE", "0") or 0),
+              "resume_state": os.environ.get("RESUME_STATE_VALUE", "").strip() or "resumable",
+              "resume_should_continue": parse_bool("RESUME_SHOULD_CONTINUE_VALUE"),
+              "progress_fingerprint": os.environ.get("PROGRESS_FINGERPRINT_VALUE", "").strip(),
               "comment_posted": parse_bool("PARTIAL_COMMENT_POSTED"),
           }
           Path(os.environ["PARTIAL_MARKER_FILE"]).write_text(
@@ -5439,6 +5773,7 @@ jobs:
           )
           PY
           echo "AUTOFIX_PARTIAL_MARKER_FILE=${partial_marker_file}" >> "$GITHUB_ENV"
+          echo "AUTOFIX_RESUME_MARKER_FILE=${partial_marker_file}" >> "$GITHUB_ENV"
 
       - name: Save review-issue ledger after partial finalize
         if: always() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
@@ -5456,7 +5791,7 @@ jobs:
         # above so the success notification only fires on a truly converged
         # iteration. See the comment block on "Enable auto-merge on PR" for
         # the LEDGER_ONLY_COMMIT_STRICT rationale.
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -6318,6 +6653,11 @@ jobs:
           if ! [[ "${resume_round}" =~ ^[0-9]+$ ]]; then
             resume_round=0
           fi
+          resume_round_limit="$(sanitize_nonnegative_int "${AUTOFIX_RESUME_ROUND_LIMIT:-0}")"
+          resume_restored="${AUTOFIX_RESUME_RESTORED:-false}"
+          resume_head_sha="${AUTOFIX_RESUME_HEAD_SHA:-}"
+          resume_state="${AUTOFIX_RESUME_STATE:-fresh}"
+          resume_should_continue="${AUTOFIX_RESUME_SHOULD_CONTINUE:-false}"
 
           structured_summary_line="$(
             BUDGET_ELAPSED_SECS="${budget_elapsed_secs}" \
@@ -6347,8 +6687,16 @@ jobs:
           
           def bool_env(name: str) -> bool:
               return env(name).strip().lower() == "true"
-          
-          
+
+
+          def csv_env_list(name: str) -> list[str]:
+              raw = env(name).strip()
+              if not raw:
+                  return []
+              values = [item.strip() for item in raw.split(",") if item.strip()]
+              return [item for item in values if item != "none"]
+
+
           def int_env(name: str, default: int = 0) -> int:
               raw = env(name).strip()
               if not raw:
@@ -6581,9 +6929,19 @@ jobs:
           partial_finalize_reason = env("AUTOFIX_PARTIAL_FINALIZE_REASON").strip()
           partial_finalize_phase = env("AUTOFIX_PARTIAL_FINALIZE_PHASE").strip()
           partial_comment_posted = bool_env("AUTOFIX_PARTIAL_COMMENT_POSTED")
+          resume_restored = bool_env("AUTOFIX_RESUME_RESTORED")
+          resume_head_sha = env("AUTOFIX_RESUME_HEAD_SHA").strip()
+          resume_round_limit = int_env("AUTOFIX_RESUME_ROUND_LIMIT")
+          resume_state = env("AUTOFIX_RESUME_STATE", "fresh").strip() or "fresh"
+          resume_should_continue = bool_env("AUTOFIX_RESUME_SHOULD_CONTINUE")
+          resume_source_reason = env("AUTOFIX_RESUME_REASON").strip()
+          resume_source_phase = env("AUTOFIX_RESUME_PHASE").strip()
+          resume_comment_posted = bool_env("AUTOFIX_RESUME_COMMENT_POSTED")
+          resume_completed_scope = csv_env_list("AUTOFIX_RESUME_COMPLETED_SCOPE")
+          resume_incomplete_scope = csv_env_list("AUTOFIX_RESUME_INCOMPLETE_SCOPE")
 
-          incomplete_phases: list[str] = []
-          if partial_finalize:
+          incomplete_phases: list[str] = list(resume_incomplete_scope)
+          if not incomplete_phases and partial_finalize:
               if partial_finalize_phase == "reviewers":
                   incomplete_phases = ["reviewers", "consolidator", "parser", "ledger", "editor"]
               elif partial_finalize_phase == "editor":
@@ -6617,6 +6975,8 @@ jobs:
                   return "pr_closed"
               if bool_env("AUTOFIX_STALE_BASE_SKIP"):
                   return "stale_base_skip"
+              if resume_state in {"no_progress", "round_budget_exhausted"} and not resume_should_continue:
+                  return resume_state
               if partial_finalize:
                   return "partial_finalize"
               if bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):
@@ -6693,6 +7053,16 @@ jobs:
               "incomplete_phases": incomplete_phases,
               "edits_pushed": edits_pushed,
               "resume_round": int_env("RESUME_ROUND_SUMMARY"),
+              "resume_restored": resume_restored,
+              "resume_head_sha": resume_head_sha,
+              "resume_round_limit": resume_round_limit,
+              "resume_state": resume_state,
+              "resume_should_continue": resume_should_continue,
+              "resume_source_reason": resume_source_reason,
+              "resume_source_phase": resume_source_phase,
+              "resume_comment_posted": resume_comment_posted,
+              "resume_completed_scope": resume_completed_scope,
+              "resume_incomplete_scope": resume_incomplete_scope,
           }
           
           print("REVIEW_AUTOFIX_RUN_SUMMARY_V1 " + json.dumps(summary, sort_keys=True, separators=(",", ":")))
@@ -6700,7 +7070,7 @@ jobs:
           )"
 
           if [ -z "${structured_summary_line}" ]; then
-            structured_summary_line='REVIEW_AUTOFIX_RUN_SUMMARY_V1 {"completed_phases":["finalize"],"skipped_phases":["reviewers","consolidator","parser","ledger","editor","commit","push","rb_judge"],"slot_results":{"reviewers":[],"consolidator":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"parser":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"ledger":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"editor":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"commit":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"push":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"rb_judge":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"finalize":{"attempt_count":1,"status":"emitted","failure_class":"none"}},"budget_elapsed_secs":0,"budget_total_secs":0,"budget_remaining_secs":0,"finalize_reason":"summary_emit_failed","partial_finalize":false,"partial_finalize_reason":"","partial_finalize_phase":"","partial_comment_posted":false,"incomplete_phases":[],"edits_pushed":false,"resume_round":0}'
+            structured_summary_line='REVIEW_AUTOFIX_RUN_SUMMARY_V1 {"completed_phases":["finalize"],"skipped_phases":["reviewers","consolidator","parser","ledger","editor","commit","push","rb_judge"],"slot_results":{"reviewers":[],"consolidator":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"parser":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"ledger":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"editor":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"commit":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"push":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"rb_judge":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"finalize":{"attempt_count":1,"status":"emitted","failure_class":"none"}},"budget_elapsed_secs":0,"budget_total_secs":0,"budget_remaining_secs":0,"finalize_reason":"summary_emit_failed","partial_finalize":false,"partial_finalize_reason":"","partial_finalize_phase":"","partial_comment_posted":false,"incomplete_phases":[],"edits_pushed":false,"resume_round":0,"resume_restored":false,"resume_head_sha":"","resume_round_limit":0,"resume_state":"fresh","resume_should_continue":false,"resume_source_reason":"","resume_source_phase":"","resume_comment_posted":false,"resume_completed_scope":[],"resume_incomplete_scope":[]}'
           fi
 
           {
@@ -6731,6 +7101,11 @@ jobs:
             echo "| Budget total (secs) | ${budget_total_secs} |"
             echo "| Budget remaining (secs) | ${budget_remaining_secs} |"
             echo "| Resume round | ${resume_round} |"
+            echo "| Resume restored | ${resume_restored} |"
+            echo "| Resume state | ${resume_state} |"
+            echo "| Resume round limit | ${resume_round_limit} |"
+            echo "| Resume should continue | ${resume_should_continue} |"
+            echo "| Resume head SHA | ${resume_head_sha:-none} |"
             echo
             echo "**Acceptance deltas vs prior iteration:**"
             echo "${reviewer_scope_note}"
