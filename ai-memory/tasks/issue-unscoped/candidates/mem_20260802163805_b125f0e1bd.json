@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_semble_contract.py:216-218 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The contract test still asserts two removed source patterns in `scripts/review_run_reviewers.sh`: the old `printf`-style `%s` skip message and the `if [ \"${reviewer_max_attempts}\" -gt 3 ]; then` guard.\n  WHY: The PR refactored `run_reviewer()` to use shell variable interpolation and a unified retry loop, so those exact literals no longer exist and the exact-string assertions now fail in CI.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_semble_contract.py:216 | severity=BLOCKER | confidence=5\n  PROBLEM: The test assertion `assert 'Reviewer slot %s skipped after retryable failure (%s); no same-family failback mapping is available.\\n' in reviewers` expects the old `printf`-style `%s` format string in `scripts/review_run_reviewers.sh`, but the PR refactoring replaced the direct `printf` call with a `REVIEWER_RETRY_PLAN_MESSAGE` variable using shell `${model}` and `${final_retryable_class:-retryable_failure}` interpolation at line 4158.\n  WHY: `tests/test_review_semble_contract.py` fails at `main()` with `AssertionError` because the plain-text grep assertion does not match the refactored source. This is a real CI failure (lint check failed) confirmed by `pr_check_runs_context.txt`.\n- tests/test_review_semble_contract.py:218 | severity=BLOCKER | confidence=5\n  PROBLEM: The test assertion `assert 'if [ \"${reviewer_max_attempts}\" -gt 3 ]; then' in reviewers` expects the old separate extended-retry guard block in `scripts/review_run_reviewers.sh`, but the refactoring of `run_reviewer()` replaced that separate `while` loop with a unified retry loop where `reviewer_slot_retry_limit` (default 3, configurable via `REVIEWER_SLOT_RETRYABLE_FAILURE_LIMIT`) absorbs the extended attempts.\n  WHY: This is a second `AssertionError` at `test_review_semble_contract.py:main()` \u2014 the plain-text contract assertion cannot match the refactored source. Combined with the first failure, this makes the entire contract test fail and blocks CI.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_semble_contract.py:216 | severity=BLOCKER | confidence=5\n  PROBLEM: The contract test asserts that a specific printf-style format string with `%s` placeholders exists in `scripts/review_run_reviewers.sh`, but the implementation was refactored to use shell variable expansion instead.\n  WHY: The test `test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena` fails with AssertionError because the literal string `Reviewer slot %s skipped after retryable failure (%s); no same-family failback mapping is available.\\n` no longer appears in the source code. The new implementation uses `REVIEWER_RETRY_PLAN_MESSAGE=\"Reviewer slot ${model} skipped after retryable failure (${final_retryable_class:-retryable_failure}); no same-family failback mapping is available.\"` with shell variable interpolation.\n- tests/test_review_semble_contract.py:218 | severity=BLOCKER | confidence=5\n  PROBLEM: The contract test asserts that the conditional `if [ \"${reviewer_max_attempts}\" -gt 3 ]; then` exists in `scripts/review_run_reviewers.sh`, but this guard was removed during the refactoring of the retry loop.\n  WHY: The test fails because the unified retry loop implementation no longer contains this specific conditional check. The extended retry logic is now handled via `reviewer_slot_retry_limit` and `reviewer_max_attempts` coordination within the main while loop.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_review_semble_contract.py:216 | severity=BLOCKER | confidence=5\n  PROBLEM: The assertion expects the old `printf` format string `'Reviewer slot %s skipped after retryable failure (%s); no same-family failback mapping is available.\\n'` to exist in `scripts/review_run_reviewers.sh`. The PR replaced that `printf` call with a `REVIEWER_RETRY_PLAN_MESSAGE` variable using shell interpolation (`${model}` / `${final_retryable_class:-retryable_failure}`), so the `%s` format string no longer appears in the script.\n  WHY: The `lint` job runs this test which `grep`s the reviewers script for that literal format string. Since the string is gone, the test raises `AssertionError`, failing the `lint` check-run and blocking merge.\n- tests/test_review_semble_contract.py:218 | severity=BLOCKER | confidence=5\n  PROBLEM: The assertion expects the old `if [ \"${reviewer_max_attempts}\" -gt 3 ]; then` guard to exist in `scripts/review_run_reviewers.sh`. The PR's unified retry loop (`reviewer_slot_retry_limit`) subsumed the extended-retry `while` loop that this conditional controlled, so the literal no longer appears in the script.\n  WHY: Same as above \u2014 the contract test greps for the old conditional, does not find it, and raises `AssertionError`, failing the `lint` job.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===",
+  "fingerprint": "e0a4aef1469955ac831d2b2a12e534f829ad2afe82c58dafd52ada5cb94ea084",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3712,
+    "run_id": "30754771948",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "30754771948",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260802163805_b125f0e1bd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3712,
+    "run_id": "30754771948"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-02T16:38:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
