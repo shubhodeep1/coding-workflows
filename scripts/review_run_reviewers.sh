@@ -32,6 +32,15 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
 
+WATCHDOG_HELPERS="${SUPPORT_SCRIPTS_DIR:-scripts}/watchdog_helpers.sh"
+if [ -f "${WATCHDOG_HELPERS}" ]; then
+  # shellcheck source=/dev/null
+  source "${WATCHDOG_HELPERS}"
+  if command -v codex_run_budget_export >/dev/null 2>&1; then
+    codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"
+  fi
+fi
+
 emit_context_budget_warn_for_prompt() {
   local phase="$1"
   local prompt_path="$2"
@@ -74,6 +83,202 @@ PY
 
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
+
+emit_run_budget_gate_note() {
+  local budget_scope="$1"
+  local minimum_required_secs="${2:-1}"
+  local budget_log_file="${3:-}"
+  local budget_now_epoch="${4:-$(date +%s)}"
+  local budget_summary=""
+  local may_start="unknown"
+
+  if ! command -v codex_run_budget_summary >/dev/null 2>&1; then
+    return 0
+  fi
+  budget_summary="$(codex_run_budget_summary "${budget_now_epoch}" 2>/dev/null || true)"
+  [ -n "${budget_summary}" ] || return 0
+  if command -v codex_run_budget_phase_may_start >/dev/null 2>&1; then
+    if codex_run_budget_phase_may_start "${minimum_required_secs}"; then
+      may_start="true"
+    else
+      may_start="false"
+    fi
+  fi
+  if [ -n "${budget_log_file}" ]; then
+    printf 'Run budget at %s: %s may_start=%s minimum_required_secs=%s\n' \
+      "${budget_scope}" \
+      "${budget_summary}" \
+      "${may_start}" \
+      "${minimum_required_secs}" | tee -a "${budget_log_file}" >&2 || true
+  else
+    printf 'Run budget at %s: %s may_start=%s minimum_required_secs=%s\n' \
+      "${budget_scope}" \
+      "${budget_summary}" \
+      "${may_start}" \
+      "${minimum_required_secs}" >&2
+  fi
+}
+
+REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE="${RUNTIME_DIR:-.}/reviewers_partial_finalize_request.txt"
+REVIEWER_SOFT_DEADLINE_DEFAULT_MINUTES="210"
+
+reviewer_request_partial_finalize() {
+  local finalize_reason="$1"
+
+  export AUTOFIX_PARTIAL_FINALIZE_REQUESTED="true"
+  export AUTOFIX_PARTIAL_FINALIZE_REASON="${finalize_reason}"
+  export AUTOFIX_PARTIAL_FINALIZE_PHASE="reviewers"
+
+  mkdir -p "${RUNTIME_DIR}" 2>/dev/null || true
+  cat > "${REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE}" <<EOF
+AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true
+AUTOFIX_PARTIAL_FINALIZE_REASON=${finalize_reason}
+AUTOFIX_PARTIAL_FINALIZE_PHASE=reviewers
+EOF
+
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    {
+      echo "AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true"
+      echo "AUTOFIX_PARTIAL_FINALIZE_REASON=${finalize_reason}"
+      echo "AUTOFIX_PARTIAL_FINALIZE_PHASE=reviewers"
+    } >> "$GITHUB_ENV"
+  fi
+}
+
+reviewer_partial_finalize_requested() {
+  [ -f "${REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE}" ]
+}
+
+reviewer_resume_env_truthy() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+    1|true|yes|on)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+reviewer_same_head_resume_active() {
+  reviewer_resume_env_truthy "${AUTOFIX_RESUME_RESTORED:-false}" || return 1
+  reviewer_resume_env_truthy "${AUTOFIX_RESUME_SHOULD_CONTINUE:-false}" || return 1
+  case "${AUTOFIX_RESUME_STATE:-}" in
+    ''|resumable)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+reviewer_resume_completed_scope_contains() {
+  local needle="$1"
+  local scope_item=""
+  local completed_scope="${AUTOFIX_RESUME_COMPLETED_SCOPE:-}"
+  local -a completed_scope_items=()
+
+  [ -n "${needle}" ] || return 1
+  IFS=',' read -r -a completed_scope_items <<< "${completed_scope}"
+  for scope_item in "${completed_scope_items[@]}"; do
+    scope_item="$(printf '%s' "${scope_item}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -n "${scope_item}" ] || continue
+    [ "${scope_item}" = "${needle}" ] && return 0
+  done
+
+  return 1
+}
+
+reviewer_count_success_statuses() {
+  local prefix="$1"
+  local status_file=""
+  local successful=0
+
+  for status_file in "${PREVIOUS_REVIEWS_DIR}"/status_"${prefix}"_*.txt; do
+    [ -f "${status_file}" ] || continue
+    if [ "$(cat "${status_file}" 2>/dev/null || true)" = "success" ]; then
+      successful=$((successful + 1))
+    fi
+  done
+
+  printf '%s\n' "${successful}"
+}
+
+reviewer_resume_can_skip_reviewers() {
+  reviewer_same_head_resume_active || return 1
+  reviewer_resume_completed_scope_contains "reviewers" || return 1
+  [ -s "${REVIEWER_CONSENSUS_FILE:-}" ] || return 1
+  compgen -G "${PREVIOUS_REVIEWS_DIR}/status_review_*.txt" >/dev/null || return 1
+  return 0
+}
+
+reviewer_resume_can_skip_pass1() {
+  reviewer_same_head_resume_active || return 1
+  reviewer_resume_completed_scope_contains "reviewers_pass1" || return 1
+  reviewer_resume_completed_scope_contains "reviewers_pass1_consensus" || return 1
+  compgen -G "${PREVIOUS_REVIEWS_DIR}/status_pass1_*.txt" >/dev/null || return 1
+  [ -s "${PREVIOUS_REVIEWS_DIR}/consensus_pass1.txt" ] || return 1
+  return 0
+}
+
+reviewer_resume_should_reuse_success_slot() {
+  local status_file="$1"
+  local output_file="$2"
+
+  reviewer_same_head_resume_active || return 1
+  [ -f "${status_file}" ] || return 1
+  [ -s "${output_file}" ] || return 1
+  [ "$(cat "${status_file}" 2>/dev/null || true)" = "success" ]
+}
+
+reviewer_normalize_soft_deadline_minutes_fallback() {
+  local raw_value="${1:-${REVIEW_SOFT_DEADLINE_MINUTES:-${REVIEWER_SOFT_DEADLINE_DEFAULT_MINUTES}}}"
+  local normalized_value=""
+
+  case "${raw_value}" in
+    ''|*[!0-9]*)
+      printf '%s\n' "${REVIEWER_SOFT_DEADLINE_DEFAULT_MINUTES}"
+      return 0
+      ;;
+  esac
+
+  normalized_value="$(( 10#${raw_value} ))"
+  if [ "${normalized_value}" -le 0 ]; then
+    printf '%s\n' "${REVIEWER_SOFT_DEADLINE_DEFAULT_MINUTES}"
+    return 0
+  fi
+
+  printf '%s\n' "${normalized_value}"
+}
+
+reviewer_budget_remaining_secs_fallback() {
+  local now_epoch="${1:-$(date +%s)}"
+  local start_epoch_raw="${CODEX_RUN_BUDGET_START_EPOCH:-${JOB_START_EPOCH:-}}"
+  local start_epoch=""
+  local soft_deadline_minutes=""
+  local soft_deadline_epoch=""
+  local remaining_secs=""
+
+  case "${start_epoch_raw}" in
+    ''|*[!0-9]*)
+      # Match codex_run_budget_remaining_secs(): without a real anchor this
+      # fallback must fail closed instead of inventing a fresh soft deadline.
+      printf '%s\n' "0"
+      return 0
+      ;;
+    *)
+      start_epoch="${start_epoch_raw}"
+      ;;
+  esac
+
+  soft_deadline_minutes="$(reviewer_normalize_soft_deadline_minutes_fallback "${REVIEW_SOFT_DEADLINE_MINUTES:-}")"
+  soft_deadline_epoch="$(( start_epoch + (soft_deadline_minutes * 60) ))"
+  remaining_secs="$(( soft_deadline_epoch - now_epoch ))"
+  if [ "${remaining_secs}" -lt 0 ]; then
+    remaining_secs="0"
+  fi
+
+  printf '%s\n' "${remaining_secs}"
+}
 
 resolve_ledger_substate_helper() {
   local candidate
@@ -2555,6 +2760,19 @@ if [ -z "${REVIEWER_HEALTH_STATE_FILE}" ] && [ -n "${PR_NUMBER:-}" ] && [[ "${PR
   REVIEWER_HEALTH_STATE_FILE=".ai/review_runtime/pr-${PR_NUMBER}/reviewer_health_state.json"
 fi
 
+if ! command -v nag_reminder_enabled >/dev/null 2>&1; then
+  nag_reminder_enabled() { return 1; }
+fi
+if ! command -v nag_silent_round_threshold >/dev/null 2>&1; then
+  nag_silent_round_threshold() { printf '3\n'; }
+fi
+if ! command -v maybe_inject_nag >/dev/null 2>&1; then
+  maybe_inject_nag() { return 0; }
+fi
+if ! command -v emit_run_budget_gate_note >/dev/null 2>&1; then
+  emit_run_budget_gate_note() { return 0; }
+fi
+
 reviewer_circuit_breaker_enabled() {
   case "$(printf '%s' "${REVIEWER_CIRCUIT_BREAKER_ENABLED:-0}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
     1|true|yes|on) return 0 ;;
@@ -2569,6 +2787,153 @@ reviewer_failback_max_retries() {
     0) printf '0\n' ;;
     *) printf '1\n' ;;
   esac
+}
+
+reviewer_slot_retryable_failure_limit() {
+  local raw="${REVIEWER_SLOT_RETRYABLE_FAILURE_LIMIT:-3}"
+  case "${raw}" in
+    ''|*[!0-9]*) printf '3\n' ;;
+    0) printf '1\n' ;;
+    *) printf '%s\n' "${raw}" ;;
+  esac
+}
+
+reviewer_slot_backoff_base_secs() {
+  local raw="${REVIEWER_SLOT_BACKOFF_BASE_SECS:-2}"
+  case "${raw}" in
+    ''|*[!0-9]*) printf '2\n' ;;
+    *) printf '%s\n' "${raw}" ;;
+  esac
+}
+
+reviewer_slot_backoff_cap_secs() {
+  local raw="${REVIEWER_SLOT_BACKOFF_CAP_SECS:-30}"
+  case "${raw}" in
+    ''|*[!0-9]*) printf '30\n' ;;
+    *) printf '%s\n' "${raw}" ;;
+  esac
+}
+
+reviewer_slot_backoff_budget_ratio() {
+  local raw="${REVIEWER_SLOT_BACKOFF_BUDGET_RATIO:-0.05}"
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${raw}" <<'PY'
+import re
+import sys
+
+raw = sys.argv[1].strip()
+if not re.fullmatch(r"(?:0(?:\.\d+)?|1(?:\.0+)?)", raw):
+    print("0.05")
+    raise SystemExit(0)
+
+try:
+    value = float(raw)
+except ValueError:
+    print("0.05")
+    raise SystemExit(0)
+
+if value < 0.0 or value > 1.0:
+    print("0.05")
+else:
+    print(raw)
+PY
+}
+
+reviewer_sanitize_nonnegative_int() {
+  local raw="${1:-0}"
+  case "${raw}" in
+    ''|*[!0-9]*) printf '0\n' ;;
+    *) printf '%s\n' "${raw}" ;;
+  esac
+}
+
+reviewer_slot_backoff_budget_secs() {
+  local total_secs="${1:-0}"
+  local ratio=""
+  ratio="$(reviewer_slot_backoff_budget_ratio)"
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${total_secs}" "${ratio}" <<'PY'
+import math
+import sys
+
+try:
+    total = int(sys.argv[1])
+except ValueError:
+    total = 0
+try:
+    ratio = float(sys.argv[2])
+except ValueError:
+    ratio = 0.05
+
+if total <= 0 or ratio <= 0.0:
+    print("0")
+else:
+    print(str(max(0, math.floor(total * ratio))))
+PY
+}
+
+reviewer_slot_backoff_ceiling() {
+  local failure_count="${1:-1}"
+  local base_secs=""
+  local cap_secs=""
+  local ceiling=0
+  local idx=1
+
+  base_secs="$(reviewer_slot_backoff_base_secs)"
+  cap_secs="$(reviewer_slot_backoff_cap_secs)"
+  case "${failure_count}" in
+    ''|*[!0-9]*) failure_count=1 ;;
+  esac
+  if [ "${failure_count}" -lt 1 ]; then
+    failure_count=1
+  fi
+  if [ "${base_secs}" -le 0 ] || [ "${cap_secs}" -le 0 ]; then
+    printf '0\n'
+    return 0
+  fi
+
+  ceiling="${base_secs}"
+  if [ "${ceiling}" -gt "${cap_secs}" ]; then
+    ceiling="${cap_secs}"
+  fi
+  while [ "${idx}" -lt "${failure_count}" ] && [ "${ceiling}" -lt "${cap_secs}" ]; do
+    ceiling=$(( ceiling * 2 ))
+    if [ "${ceiling}" -gt "${cap_secs}" ]; then
+      ceiling="${cap_secs}"
+    fi
+    idx=$((idx + 1))
+  done
+  printf '%s\n' "${ceiling}"
+}
+
+reviewer_random_int_upto() {
+  local ceiling="${1:-0}"
+  case "${ceiling}" in
+    ''|*[!0-9]*) ceiling=0 ;;
+  esac
+  if [ "${ceiling}" -le 0 ]; then
+    printf '0\n'
+    return 0
+  fi
+  printf '%s\n' "$(( RANDOM % (ceiling + 1) ))"
+}
+
+reviewer_cache_status_for_model() {
+  local model_name="$1"
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "${model_name}" <<'PY'
+import sys
+
+try:
+    from openrouter_prompt_cache import is_cache_disabled, should_add_explicit_breakpoint
+except ModuleNotFoundError:
+    from scripts.openrouter_prompt_cache import is_cache_disabled, should_add_explicit_breakpoint
+
+model = sys.argv[1]
+if is_cache_disabled():
+    print("disabled")
+elif should_add_explicit_breakpoint(model):
+    print("supported")
+else:
+    print("unsupported")
+PY
 }
 
 reviewer_health_open_threshold() {
@@ -3059,6 +3424,12 @@ reviewer_classify_retryable_failure() {
   local cmd_rc="$1"
   local wd_reason="$2"
   local stderr_file="$3"
+  local stall_state="${4:-}"
+
+  if [ "${stall_state}" = "killed" ]; then
+    printf 'stall_guard\n'
+    return 0
+  fi
 
   case "${wd_reason}" in
     idle_timeout|max_wall)
@@ -3086,6 +3457,102 @@ reviewer_classify_retryable_failure() {
   fi
 
   return 1
+}
+
+reviewer_log_advance_action() {
+  local next_action="$1"
+  local next_attempt="${2:-}"
+  local advance_reason="${3:-${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class:-}}}"
+  local next_model="${4:-}"
+  local current_model="${effective_model:-${slot_model:-unknown}}"
+  local line=""
+
+  [ -n "${log_file:-}" ] || return 0
+  [ -n "${slot_model:-}" ] || return 0
+
+  if [ -z "${advance_reason}" ]; then
+    advance_reason="unknown"
+  fi
+
+  case "${next_action}" in
+    failback|retry_same_model|retry_extended|skip_budget)
+      if [ -n "${next_model}" ]; then
+        current_model="${next_model}"
+      fi
+      ;;
+  esac
+
+  line="REVIEWER_ADVANCE: slot=${slot_model} model=${current_model} reason=${advance_reason} next_action=${next_action}"
+  if [ -n "${next_attempt}" ]; then
+    line="${line} next_attempt=${next_attempt}"
+  fi
+  if [ -n "${next_model}" ]; then
+    line="${line} next_model=${next_model}"
+  fi
+
+  echo "${line}" | tee -a "${log_file}"
+}
+
+reviewer_log_cache_attempt() {
+  local attempt_number="$1"
+  local base_prompt_file="$2"
+  local effective_prompt_file="$3"
+  local log_dest="$4"
+  local slot_name="$5"
+  local model_name="$6"
+  local cache_status="unknown"
+  local prompt_reused="false"
+
+  REVIEWER_CACHE_LAST_STATUS="unknown"
+  REVIEWER_CACHE_LAST_PROMPT_REUSED="false"
+
+  if [ -n "${model_name}" ]; then
+    cache_status="$(reviewer_cache_status_for_model "${model_name}" 2>/dev/null || echo unknown)"
+  fi
+  if [ -n "${base_prompt_file}" ] && [ -n "${effective_prompt_file}" ] && cmp -s "${base_prompt_file}" "${effective_prompt_file}" 2>/dev/null; then
+    prompt_reused="true"
+  fi
+
+  REVIEWER_CACHE_LAST_STATUS="${cache_status}"
+  REVIEWER_CACHE_LAST_PROMPT_REUSED="${prompt_reused}"
+
+  if [ -n "${log_dest}" ] && [ -n "${slot_name}" ] && [ -n "${model_name}" ]; then
+    printf 'REVIEWER_CACHE: slot=%s model=%s attempt=%s status=%s prompt_reused=%s\n' \
+      "${slot_name}" \
+      "${model_name}" \
+      "${attempt_number}" \
+      "${cache_status}" \
+      "${prompt_reused}" | tee -a "${log_dest}"
+  fi
+}
+
+reviewer_log_slot_state() {
+  local log_dest="$1"
+  local slot_name="$2"
+  local retryable_failure_count="$3"
+  local retryable_failure_classes="$4"
+  local backoff_sleep_secs_total="$5"
+  local slot_retry_budget_exhausted="$6"
+  local fallback_model_used="$7"
+  local cache_status="$8"
+  local cache_reuse_attempted="$9"
+
+  [ -n "${log_dest}" ] || return 0
+  [ -n "${slot_name}" ] || return 0
+
+  if [ -z "${retryable_failure_classes}" ]; then
+    retryable_failure_classes="none"
+  fi
+
+  printf 'REVIEWER_SLOT_STATE: slot=%s retryable_failure_count=%s retryable_failure_classes=%s backoff_sleep_secs_total=%s slot_retry_budget_exhausted=%s fallback_model_used=%s cache_status=%s cache_reuse_attempted=%s\n' \
+    "${slot_name}" \
+    "${retryable_failure_count:-0}" \
+    "${retryable_failure_classes}" \
+    "${backoff_sleep_secs_total:-0}" \
+    "${slot_retry_budget_exhausted:-false}" \
+    "${fallback_model_used:-false}" \
+    "${cache_status:-unknown}" \
+    "${cache_reuse_attempted:-false}" | tee -a "${log_dest}"
 }
 
 reviewer_output_has_explicit_none() {
@@ -3142,6 +3609,8 @@ execute_reviewer_attempt() {
   REVIEWER_ATTEMPT_CMD_RC=0
   REVIEWER_ATTEMPT_SILENT=true
 
+  emit_run_budget_gate_note "reviewer attempt ${attempt_label}" 1 "${log_file}"
+
   emit_reviewer_substate "PreparingWorkspace" "${attempt_number}"
 
   reviewer_prepare_reasoning_configs \
@@ -3184,6 +3653,14 @@ execute_reviewer_attempt() {
     reviewer_effective_prompt_file="${prompt_file}"
     echo "::warning::Reviewer slot ${slot_model} (${effective_model}) could not create attempt prompt copy on ${attempt_label}; continuing with the base prompt." | tee -a "${log_file}" >&2
   fi
+
+  reviewer_log_cache_attempt \
+    "${attempt_number}" \
+    "${prompt_file}" \
+    "${reviewer_effective_prompt_file}" \
+    "${log_file}" \
+    "${slot_model}" \
+    "${effective_model}"
 
   tmp_output="$(mktemp)"
   tmp_stderr="$(mktemp)"
@@ -3401,7 +3878,7 @@ execute_reviewer_attempt() {
     sed 's/^/  | /' "${tmp_stderr}" | tee -a "${log_file}"
   fi
 
-  REVIEWER_ATTEMPT_RETRYABLE_CLASS="$(reviewer_classify_retryable_failure "${cmd_rc}" "${wd_reason}" "${tmp_stderr}" || true)"
+  REVIEWER_ATTEMPT_RETRYABLE_CLASS="$(reviewer_classify_retryable_failure "${cmd_rc}" "${wd_reason}" "${tmp_stderr}" "${stall_state}" || true)"
   if [ -n "${REVIEWER_ATTEMPT_RETRYABLE_CLASS}" ]; then
     echo "Reviewer slot ${slot_model} (${effective_model}) failure classified as retryable (${REVIEWER_ATTEMPT_RETRYABLE_CLASS}) on ${attempt_label}." | tee -a "${log_file}"
     REVIEWER_ATTEMPT_OUTCOME="retryable_failure"
@@ -3441,7 +3918,10 @@ run_reviewer() {
   local status_file="${PREVIOUS_REVIEWS_DIR}/status_${output_prefix}_${safe_name}.txt"
   local log_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.log"
   local reviewer_idle_timeout="${HEARTBEAT_IDLE_TIMEOUT:-900}"
-  local reviewer_max_wall="${HEARTBEAT_MAX_WALL:-7200}"
+  local reviewer_default_max_wall="${HEARTBEAT_MAX_WALL:-7200}"
+  local reviewer_max_wall="${reviewer_default_max_wall}"
+  local reviewer_min_attempt_secs=300
+  local reviewer_budget_cleanup_buffer_secs=120
   local reviewer_pr_poll_interval_default=10
   local reviewer_pr_poll_interval_raw="${REVIEW_PR_STATE_POLL_INTERVAL_SECS:-${reviewer_pr_poll_interval_default}}"
   local reviewer_pr_poll_interval="${reviewer_pr_poll_interval_default}"
@@ -3452,11 +3932,9 @@ run_reviewer() {
   local reviewer_max_attempts=3
   local reviewer_nag_attempt_limit=""
   local attempt=1
-  local circuit_breaker_enabled=false
   local base_reasoning=""
   local retry_reasoning=""
   local fallback_model=""
-  local fallback_attempt_label=""
   local final_failure_message=""
   local final_retryable_class=""
   local reviewer_codex_root=""
@@ -3470,11 +3948,320 @@ run_reviewer() {
   local slot_model="${model}"
   local effective_model="${model}"
   local reviewer_silent_rounds=0
+  local reviewer_slot_retry_limit=3
+  local slot_retryable_failure_count=0
+  local slot_retryable_failure_classes=""
+  local slot_backoff_sleep_secs_total=0
+  local slot_retry_budget_exhausted=false
+  local slot_fallback_model_used=false
+  local slot_cache_status="unknown"
+  local slot_cache_reuse_attempted=false
+  local slot_cheaper_retry_used=false
+  local slot_failback_attempted=false
+  local next_attempt_label="attempt 1"
+  local next_attempt_reasoning=""
+  local next_attempt_model="${model}"
+  local attempt_label_current=""
+  local attempt_reasoning_current=""
+  local REVIEWER_RETRY_PLAN_ACTION=""
+  local REVIEWER_RETRY_PLAN_MODEL=""
+  local REVIEWER_RETRY_PLAN_REASONING=""
+  local REVIEWER_RETRY_PLAN_LABEL=""
+  local REVIEWER_RETRY_PLAN_STATUS=""
+  local REVIEWER_RETRY_PLAN_MESSAGE=""
+  local REVIEWER_BACKOFF_RESULT="ok"
 
   : > "${log_file}"
 
-  if reviewer_circuit_breaker_enabled; then
-    circuit_breaker_enabled=true
+  reviewer_cleanup()
+  {
+    rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+    rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+  }
+
+  reviewer_emit_slot_state()
+  {
+    reviewer_log_slot_state \
+      "${log_file}" \
+      "${slot_model}" \
+      "${slot_retryable_failure_count}" \
+      "${slot_retryable_failure_classes}" \
+      "${slot_backoff_sleep_secs_total}" \
+      "${slot_retry_budget_exhausted}" \
+      "${slot_fallback_model_used}" \
+      "${slot_cache_status}" \
+      "${slot_cache_reuse_attempted}"
+  }
+
+  reviewer_track_retryable_class()
+  {
+    local retryable_class="$1"
+    [ -n "${retryable_class}" ] || return 0
+    case ",${slot_retryable_failure_classes}," in
+      *,"${retryable_class}",*)
+        return 0
+        ;;
+    esac
+    if [ -n "${slot_retryable_failure_classes}" ]; then
+      slot_retryable_failure_classes="${slot_retryable_failure_classes},${retryable_class}"
+    else
+      slot_retryable_failure_classes="${retryable_class}"
+    fi
+  }
+
+  reviewer_budget_remaining_now()
+  {
+    local budget_now_epoch=""
+    local budget_remaining_secs=""
+
+    budget_now_epoch="$(date +%s)"
+    if command -v codex_run_budget_remaining_secs >/dev/null 2>&1; then
+      budget_remaining_secs="$(codex_run_budget_remaining_secs "${budget_now_epoch}" 2>/dev/null || true)"
+    else
+      budget_remaining_secs="$(reviewer_budget_remaining_secs_fallback "${budget_now_epoch}")"
+    fi
+
+    case "${budget_remaining_secs}" in
+      ''|*[!0-9]*) budget_remaining_secs="0" ;;
+    esac
+    printf '%s\n' "${budget_remaining_secs}"
+  }
+
+  reviewer_sleep_in_chunks()
+  {
+    local sleep_secs="${1:-0}"
+    case "${sleep_secs}" in
+      ''|*[!0-9]*) sleep_secs=0 ;;
+    esac
+    if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+      return 1
+    fi
+    while [ "${sleep_secs}" -gt 0 ]; do
+      if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+        return 1
+      fi
+      sleep 1
+      sleep_secs=$((sleep_secs - 1))
+    done
+    return 0
+  }
+
+  reviewer_apply_retry_backoff()
+  {
+    local next_attempt_number="$1"
+    local next_action="$2"
+    local next_model="$3"
+    local requested_ceiling=0
+    local capped_ceiling=0
+    local requested_sleep_secs=0
+    local backoff_budget_total_secs=0
+    local backoff_budget_remaining_secs=0
+    local run_budget_remaining_secs=0
+    local remaining_after_min_attempt_secs=0
+    local budget_limited=false
+    local backoff_total_after_sleep=0
+
+    REVIEWER_BACKOFF_RESULT="ok"
+    requested_ceiling="$(reviewer_slot_backoff_ceiling "${slot_retryable_failure_count}")"
+    capped_ceiling="${requested_ceiling}"
+
+    if [ "${capped_ceiling}" -lt 0 ]; then
+      capped_ceiling=0
+    fi
+
+    if [ "$(reviewer_sanitize_nonnegative_int "${CODEX_RUN_BUDGET_TOTAL_SECS:-0}")" -gt 0 ]; then
+      backoff_budget_total_secs="$(reviewer_slot_backoff_budget_secs "${CODEX_RUN_BUDGET_TOTAL_SECS:-0}")"
+      if [ "${backoff_budget_total_secs}" -gt 0 ]; then
+        backoff_budget_remaining_secs=$(( backoff_budget_total_secs - slot_backoff_sleep_secs_total ))
+        if [ "${backoff_budget_remaining_secs}" -lt 0 ]; then
+          backoff_budget_remaining_secs=0
+        fi
+        if [ "${backoff_budget_remaining_secs}" -lt "${capped_ceiling}" ]; then
+          capped_ceiling="${backoff_budget_remaining_secs}"
+          budget_limited=true
+        fi
+      fi
+    fi
+
+    run_budget_remaining_secs="$(reviewer_budget_remaining_now)"
+    if [ "${run_budget_remaining_secs}" -gt 0 ]; then
+      remaining_after_min_attempt_secs=$(( run_budget_remaining_secs - reviewer_min_attempt_secs ))
+      if [ "${remaining_after_min_attempt_secs}" -lt 0 ]; then
+        remaining_after_min_attempt_secs=0
+      fi
+      if [ "${remaining_after_min_attempt_secs}" -lt "${capped_ceiling}" ]; then
+        capped_ceiling="${remaining_after_min_attempt_secs}"
+        budget_limited=true
+      fi
+    fi
+
+    if [ "${capped_ceiling}" -lt 0 ]; then
+      capped_ceiling=0
+    fi
+
+    if [ "${requested_ceiling}" -gt 0 ] && [ "${capped_ceiling}" -eq 0 ] && [ "${budget_limited}" = "true" ]; then
+      REVIEWER_BACKOFF_RESULT="budget_exhausted"
+      return 1
+    fi
+
+    requested_sleep_secs="$(reviewer_random_int_upto "${capped_ceiling}")"
+    backoff_total_after_sleep=$(( slot_backoff_sleep_secs_total + requested_sleep_secs ))
+    printf 'REVIEWER_BACKOFF: slot=%s model=%s reason=%s next_action=%s next_attempt=%s sleep_secs=%s total_sleep_secs=%s\n' \
+      "${slot_model}" \
+      "${effective_model}" \
+      "${final_retryable_class:-retryable_failure}" \
+      "${next_action}" \
+      "${next_attempt_number}" \
+      "${requested_sleep_secs}" \
+      "${backoff_total_after_sleep}" | tee -a "${log_file}"
+
+    if ! reviewer_sleep_in_chunks "${requested_sleep_secs}"; then
+      REVIEWER_BACKOFF_RESULT="pr_closed"
+      return 1
+    fi
+
+    slot_backoff_sleep_secs_total="${backoff_total_after_sleep}"
+    if [ -n "${next_model}" ]; then
+      slot_cache_status="$(reviewer_cache_status_for_model "${next_model}" 2>/dev/null || echo unknown)"
+    fi
+    return 0
+  }
+
+  reviewer_plan_retry_after_retryable_failure()
+  {
+    local current_attempt_number="$1"
+    local next_attempt_number=$((current_attempt_number + 1))
+
+    REVIEWER_RETRY_PLAN_ACTION=""
+    REVIEWER_RETRY_PLAN_MODEL=""
+    REVIEWER_RETRY_PLAN_REASONING=""
+    REVIEWER_RETRY_PLAN_LABEL=""
+    REVIEWER_RETRY_PLAN_STATUS=""
+    REVIEWER_RETRY_PLAN_MESSAGE=""
+
+    if [ -n "${retry_reasoning}" ] \
+      && [ "${slot_cheaper_retry_used}" != "true" ] \
+      && [ "${effective_model}" = "${model}" ] \
+      && [ "${slot_retryable_failure_count}" -lt "${reviewer_slot_retry_limit}" ]; then
+      slot_cheaper_retry_used=true
+      REVIEWER_RETRY_PLAN_ACTION="retry_cheaper_reasoning"
+      REVIEWER_RETRY_PLAN_MODEL="${model}"
+      REVIEWER_RETRY_PLAN_REASONING="${retry_reasoning}"
+      REVIEWER_RETRY_PLAN_LABEL="attempt ${next_attempt_number} (cheaper reasoning ${retry_reasoning})"
+      return 0
+    fi
+
+    if [ "${slot_failback_attempted}" != "true" ]; then
+      slot_failback_attempted=true
+      if [ -z "${fallback_model}" ]; then
+        REVIEWER_RETRY_PLAN_STATUS="skipped_unmapped"
+        REVIEWER_RETRY_PLAN_MESSAGE="Reviewer slot ${model} skipped after retryable failure (${final_retryable_class:-retryable_failure}); no same-family failback mapping is available."
+        return 1
+      fi
+      slot_fallback_model_used=true
+      if [ "${fallback_model}" = "${model}" ]; then
+        REVIEWER_RETRY_PLAN_ACTION="retry_same_model"
+        REVIEWER_RETRY_PLAN_LABEL="attempt ${next_attempt_number} (retry ${fallback_model})"
+      else
+        REVIEWER_RETRY_PLAN_ACTION="failback"
+        REVIEWER_RETRY_PLAN_LABEL="attempt ${next_attempt_number} (failback ${fallback_model})"
+      fi
+      REVIEWER_RETRY_PLAN_MODEL="${fallback_model}"
+      REVIEWER_RETRY_PLAN_REASONING="${base_reasoning}"
+      return 0
+    fi
+
+    if [ "${slot_fallback_model_used}" = "true" ] && [ "${slot_retryable_failure_count}" -lt "${reviewer_slot_retry_limit}" ] && [ "${next_attempt_number}" -le "${reviewer_max_attempts}" ]; then
+      REVIEWER_RETRY_PLAN_ACTION="retry_extended"
+      REVIEWER_RETRY_PLAN_MODEL="${effective_model}"
+      REVIEWER_RETRY_PLAN_REASONING="${base_reasoning}"
+      REVIEWER_RETRY_PLAN_LABEL="attempt ${next_attempt_number} (extended retry ${effective_model})"
+      return 0
+    fi
+
+    REVIEWER_RETRY_PLAN_STATUS="failed"
+    if [ "${slot_retryable_failure_count}" -ge "${reviewer_slot_retry_limit}" ]; then
+      final_failure_message="Reviewer ${model} failed after reaching the slot retryable-failure limit (${reviewer_slot_retry_limit})."
+    else
+      final_failure_message="Reviewer ${model} failed after retryable failure recovery was exhausted."
+    fi
+    REVIEWER_RETRY_PLAN_MESSAGE="${final_failure_message}"
+    return 1
+  }
+
+  reviewer_budget_may_continue()
+  {
+    local attempt_label="$1"
+    local budget_deadline_label="soft deadline"
+    local budget_now_epoch
+    local budget_remaining_secs
+    local budget_cap_secs
+    local budget_summary=""
+
+    budget_now_epoch="$(date +%s)"
+    if command -v codex_run_budget_remaining_secs >/dev/null 2>&1; then
+      budget_remaining_secs="$(codex_run_budget_remaining_secs "${budget_now_epoch}" 2>/dev/null || true)"
+      case "${budget_remaining_secs}" in
+        ''|*[!0-9]*) budget_remaining_secs="0" ;;
+      esac
+      if command -v codex_run_budget_summary >/dev/null 2>&1; then
+        budget_summary="$(codex_run_budget_summary "${budget_now_epoch}" 2>/dev/null || true)"
+        if [ -n "${budget_summary}" ]; then
+          echo "Reviewer slot ${slot_model} (${effective_model}) ${attempt_label} run budget: ${budget_summary}" | tee -a "${log_file}" >&2
+        fi
+      fi
+    else
+      budget_remaining_secs="$(reviewer_budget_remaining_secs_fallback "${budget_now_epoch}")"
+      budget_deadline_label="soft deadline (fallback)"
+    fi
+
+    reviewer_max_wall="${reviewer_default_max_wall}"
+    if [ "${budget_remaining_secs}" -lt "${reviewer_min_attempt_secs}" ]; then
+      printf 'Reviewer slot %s (%s) skipped — only %ss remain before %s (need %ss minimum for %s).\n' \
+        "${slot_model}" \
+        "${effective_model}" \
+        "${budget_remaining_secs}" \
+        "${budget_deadline_label}" \
+        "${reviewer_min_attempt_secs}" \
+        "${attempt_label}" | tee -a "${log_file}" >&2
+      printf 'Reviewer slot %s skipped because only %ss remain before %s (need %ss minimum for %s).\n' \
+        "${slot_model}" \
+        "${budget_remaining_secs}" \
+        "${budget_deadline_label}" \
+        "${reviewer_min_attempt_secs}" \
+        "${attempt_label}" > "${output_file}"
+      echo "skipped_budget" > "${status_file}"
+      return 1
+    fi
+
+    budget_cap_secs=$(( budget_remaining_secs - reviewer_budget_cleanup_buffer_secs ))
+    if [ "${budget_cap_secs}" -le 0 ]; then
+      printf 'Reviewer slot %s (%s) skipped — only %ss remain before %s after reserving the %ss cleanup buffer.\n' \
+        "${slot_model}" \
+        "${effective_model}" \
+        "${budget_remaining_secs}" \
+        "${budget_deadline_label}" \
+        "${reviewer_budget_cleanup_buffer_secs}" | tee -a "${log_file}" >&2
+      printf 'Reviewer slot %s skipped because only %ss remain before %s after reserving the %ss cleanup buffer.\n' \
+        "${slot_model}" \
+        "${budget_remaining_secs}" \
+        "${budget_deadline_label}" \
+        "${reviewer_budget_cleanup_buffer_secs}" > "${output_file}"
+      echo "skipped_budget" > "${status_file}"
+      return 1
+    fi
+
+    if [ "${budget_cap_secs}" -lt "${reviewer_max_wall}" ]; then
+      reviewer_max_wall="${budget_cap_secs}"
+      echo "Reviewer slot ${slot_model} (${effective_model}) ${attempt_label}: capping max wall to ${reviewer_max_wall}s (budget-limited, ${budget_remaining_secs}s remain)." | tee -a "${log_file}" >&2
+    fi
+
+    return 0
+  }
+
+  reviewer_slot_retry_limit="$(reviewer_slot_retryable_failure_limit)"
+  if [ "${reviewer_slot_retry_limit}" -gt "${reviewer_max_attempts}" ]; then
+    reviewer_max_attempts="${reviewer_slot_retry_limit}"
   fi
 
   if nag_reminder_enabled; then
@@ -3544,217 +4331,157 @@ run_reviewer() {
     reviewer_alt_config_path=""
   fi
 
-  if [ "${circuit_breaker_enabled}" != "true" ]; then
-    while [ "${attempt}" -le "${reviewer_max_attempts}" ]; do
-      effective_model="${model}"
-      if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
-        if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
-          emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
-        fi
-        context_budget_warn_models_emitted="${context_budget_warn_models_emitted} ${effective_model}"
-      fi
-      execute_reviewer_attempt "attempt ${attempt}" "${attempt}" "${reasoning_level}"
-      case "${REVIEWER_ATTEMPT_OUTCOME}" in
-        success)
-          echo "success" > "${status_file}"
-          rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-          rm -rf "${reviewer_codex_home}" 2>/dev/null || true
-          return 0
-          ;;
-        pr_closed)
-          echo "pr_closed" > "${status_file}"
-          rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-          rm -rf "${reviewer_codex_home}" 2>/dev/null || true
-          return 0
-          ;;
-        silent_retry)
-          ;;
-      esac
-      attempt=$((attempt + 1))
-      sleep 2
-    done
-
-    echo "Reviewer ${model} failed after retries." > "${output_file}"
-    echo "failed" > "${status_file}"
-    echo "Reviewer ${model} failed after ${reviewer_max_attempts} attempts." | tee -a "${log_file}"
-    rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-    rm -rf "${reviewer_codex_home}" 2>/dev/null || true
-    return 0
-  fi
-
   base_reasoning="$(reviewer_base_reasoning_effort "${reasoning_level}")"
-  effective_model="${model}"
-  if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
-    if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
-      emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
-    fi
-    context_budget_warn_models_emitted="${context_budget_warn_models_emitted} ${effective_model}"
-  fi
-  execute_reviewer_attempt "attempt 1" "1" "${base_reasoning}"
-  case "${REVIEWER_ATTEMPT_OUTCOME}" in
-    success)
-      reviewer_record_health_outcome "${model}" "primary_success" "${model}" "" "${log_file}"
-      echo "success" > "${status_file}"
-      rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-      rm -rf "${reviewer_codex_home}" 2>/dev/null || true
-      return 0
-      ;;
-    pr_closed)
-      echo "pr_closed" > "${status_file}"
-      rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-      rm -rf "${reviewer_codex_home}" 2>/dev/null || true
-      return 0
-      ;;
-    silent_retry)
-      ;;
-    retryable_failure)
-      final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-retryable_failure}"
-      ;;
-    *)
-      reviewer_record_health_outcome "${model}" "non_retryable_failure" "${model}" "non_retryable" "${log_file}"
-      echo "Reviewer ${model} failed after circuit-breaker primary attempt." > "${output_file}"
-      echo "failed" > "${status_file}"
-      echo "Reviewer ${model} failed after circuit-breaker primary attempt." | tee -a "${log_file}"
-      rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-      rm -rf "${reviewer_codex_home}" 2>/dev/null || true
-      return 0
-      ;;
-  esac
-
   if [ "$(reviewer_failback_max_retries)" -gt 0 ]; then
     retry_reasoning="$(reviewer_next_lower_reasoning_effort "${base_reasoning}" || true)"
   fi
-  if [ -n "${retry_reasoning}" ]; then
-    effective_model="${model}"
+  fallback_model="$(reviewer_failback_target_for_model "${model}" || true)"
+
+  next_attempt_reasoning="${base_reasoning}"
+  while [ "${attempt}" -le "${reviewer_max_attempts}" ]; do
+    effective_model="${next_attempt_model}"
+    attempt_label_current="${next_attempt_label}"
+    attempt_reasoning_current="${next_attempt_reasoning}"
+
+    if ! reviewer_budget_may_continue "${attempt_label_current}"; then
+      if [ "${slot_retryable_failure_count}" -gt 0 ]; then
+        slot_retry_budget_exhausted=true
+        reviewer_log_advance_action "skip_budget" "" "${final_retryable_class}" "${effective_model}"
+      fi
+      reviewer_emit_slot_state
+      reviewer_cleanup
+      return 0
+    fi
+
     if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
       if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
         emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
       fi
       context_budget_warn_models_emitted="${context_budget_warn_models_emitted} ${effective_model}"
     fi
-    execute_reviewer_attempt "attempt 2 (cheaper reasoning ${retry_reasoning})" "2" "${retry_reasoning}"
+
+    execute_reviewer_attempt "${attempt_label_current}" "${attempt}" "${attempt_reasoning_current}"
+    slot_cache_status="${REVIEWER_CACHE_LAST_STATUS:-${slot_cache_status}}"
+    if [ "${attempt}" -gt 1 ] \
+      && [ "${REVIEWER_CACHE_LAST_STATUS:-unknown}" = "supported" ] \
+      && [ "${REVIEWER_CACHE_LAST_PROMPT_REUSED:-false}" = "true" ]; then
+      slot_cache_reuse_attempted=true
+    fi
+
     case "${REVIEWER_ATTEMPT_OUTCOME}" in
       success)
-        reviewer_record_health_outcome "${model}" "primary_success" "${model}" "" "${log_file}"
+        if [ "${slot_fallback_model_used}" = "true" ]; then
+          reviewer_record_health_outcome "${model}" "retryable_failure" "${effective_model}" "${final_retryable_class}" "${log_file}"
+        else
+          reviewer_record_health_outcome "${model}" "primary_success" "${effective_model}" "" "${log_file}"
+        fi
         echo "success" > "${status_file}"
-        rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-        rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+        reviewer_emit_slot_state
+        reviewer_cleanup
         return 0
         ;;
       pr_closed)
         echo "pr_closed" > "${status_file}"
-        rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-        rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+        reviewer_emit_slot_state
+        reviewer_cleanup
         return 0
         ;;
       silent_retry)
+        final_retryable_class="${final_retryable_class:-silent_retry}"
+        if [ "${attempt}" -lt "${reviewer_max_attempts}" ]; then
+          next_attempt_model="${effective_model}"
+          next_attempt_reasoning="${attempt_reasoning_current}"
+          next_attempt_label="attempt $((attempt + 1))"
+          attempt=$((attempt + 1))
+          continue
+        fi
         ;;
       retryable_failure)
-        final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class}}"
+        final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class:-retryable_failure}}"
+        slot_retryable_failure_count=$((slot_retryable_failure_count + 1))
+        reviewer_track_retryable_class "${final_retryable_class}"
+        if reviewer_plan_retry_after_retryable_failure "${attempt}"; then
+          if [ "${REVIEWER_RETRY_PLAN_ACTION}" = "failback" ] || [ "${REVIEWER_RETRY_PLAN_ACTION}" = "retry_same_model" ]; then
+            echo "REVIEWER_FAILBACK: ${model} -> ${REVIEWER_RETRY_PLAN_MODEL} reason=${final_retryable_class:-retryable_failure}" | tee -a "${log_file}"
+          fi
+          reviewer_log_advance_action "${REVIEWER_RETRY_PLAN_ACTION}" "$((attempt + 1))" "${final_retryable_class}" "${REVIEWER_RETRY_PLAN_MODEL}"
+          if ! reviewer_apply_retry_backoff "$((attempt + 1))" "${REVIEWER_RETRY_PLAN_ACTION}" "${REVIEWER_RETRY_PLAN_MODEL}"; then
+            case "${REVIEWER_BACKOFF_RESULT}" in
+              pr_closed)
+                echo "pr_closed" > "${status_file}"
+                reviewer_emit_slot_state
+                reviewer_cleanup
+                return 0
+                ;;
+              budget_exhausted)
+                slot_retry_budget_exhausted=true
+                reviewer_log_advance_action "skip_budget" "" "${final_retryable_class}" "${REVIEWER_RETRY_PLAN_MODEL}"
+                reviewer_record_health_outcome "${model}" "retryable_failure" "${effective_model}" "${final_retryable_class}" "${log_file}"
+                printf 'Reviewer slot %s skipped after retryable failure (%s) because the retry backoff budget was exhausted.\n' \
+                  "${model}" \
+                  "${final_retryable_class:-retryable_failure}" > "${output_file}"
+                echo "skipped_budget" > "${status_file}"
+                reviewer_emit_slot_state
+                reviewer_cleanup
+                return 0
+                ;;
+            esac
+          fi
+          next_attempt_model="${REVIEWER_RETRY_PLAN_MODEL}"
+          next_attempt_reasoning="${REVIEWER_RETRY_PLAN_REASONING}"
+          next_attempt_label="${REVIEWER_RETRY_PLAN_LABEL}"
+          attempt=$((attempt + 1))
+          continue
+        fi
+
+        case "${REVIEWER_RETRY_PLAN_STATUS}" in
+          skipped_unmapped)
+            echo "REVIEWER_FAILBACK_UNMAPPED: ${model}" | tee -a "${log_file}"
+            reviewer_log_advance_action "skip_unmapped" "" "${final_retryable_class}"
+            reviewer_record_health_outcome "${model}" "retryable_failure" "" "${final_retryable_class}" "${log_file}"
+            printf '%s\n' "${REVIEWER_RETRY_PLAN_MESSAGE}" > "${output_file}"
+            echo "skipped_unmapped" > "${status_file}"
+            reviewer_emit_slot_state
+            reviewer_cleanup
+            return 0
+            ;;
+          *)
+            reviewer_log_advance_action "terminal_failure" "" "${final_retryable_class}" "${effective_model}"
+            reviewer_record_health_outcome "${model}" "retryable_failure" "${effective_model}" "${final_retryable_class}" "${log_file}"
+            printf '%s\n' "${REVIEWER_RETRY_PLAN_MESSAGE:-Reviewer ${model} failed after retryable failure recovery was exhausted.}" > "${output_file}"
+            echo "failed" > "${status_file}"
+            echo "${REVIEWER_RETRY_PLAN_MESSAGE:-Reviewer ${model} failed after retryable failure recovery was exhausted.}" | tee -a "${log_file}"
+            reviewer_emit_slot_state
+            reviewer_cleanup
+            return 0
+            ;;
+        esac
         ;;
       *)
-        reviewer_record_health_outcome "${model}" "non_retryable_failure" "${model}" "non_retryable" "${log_file}"
-        echo "Reviewer ${model} failed after cheaper-reasoning retry." > "${output_file}"
+        reviewer_record_health_outcome "${model}" "non_retryable_failure" "${effective_model}" "non_retryable" "${log_file}"
+        final_failure_message="Reviewer ${model} failed after non-retryable error on ${attempt_label_current}."
+        printf '%s\n' "${final_failure_message}" > "${output_file}"
         echo "failed" > "${status_file}"
-        echo "Reviewer ${model} failed after cheaper-reasoning retry." | tee -a "${log_file}"
-        rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-        rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+        echo "${final_failure_message}" | tee -a "${log_file}"
+        reviewer_emit_slot_state
+        reviewer_cleanup
         return 0
         ;;
     esac
-  fi
 
-  fallback_model="$(reviewer_failback_target_for_model "${model}" || true)"
-  if [ -z "${fallback_model}" ]; then
-    echo "REVIEWER_FAILBACK_UNMAPPED: ${model}" | tee -a "${log_file}"
-    reviewer_record_health_outcome "${model}" "retryable_failure" "" "${final_retryable_class}" "${log_file}"
-    printf 'Reviewer slot %s skipped after retryable failure (%s); no same-family failback mapping is available.\n' "${model}" "${final_retryable_class:-retryable_failure}" > "${output_file}"
-    echo "skipped_unmapped" > "${status_file}"
-    rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-    rm -rf "${reviewer_codex_home}" 2>/dev/null || true
-    return 0
-  fi
-  echo "REVIEWER_FAILBACK: ${model} -> ${fallback_model} reason=${final_retryable_class:-retryable_failure}" | tee -a "${log_file}"
+    attempt=$((attempt + 1))
+  done
 
-  fallback_attempt_label="attempt 3 (failback ${fallback_model})"
-  if [ "${fallback_model}" = "${model}" ]; then
-    fallback_attempt_label="attempt 3 (retry ${fallback_model})"
+  if [ -n "${final_retryable_class}" ]; then
+    reviewer_log_advance_action "terminal_failure" "" "${final_retryable_class}" "${effective_model}"
   fi
-  effective_model="${fallback_model}"
-  if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
-    if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
-      emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
-    fi
-    context_budget_warn_models_emitted="${context_budget_warn_models_emitted} ${effective_model}"
-  fi
-  execute_reviewer_attempt "${fallback_attempt_label}" "3" "${base_reasoning}"
-  case "${REVIEWER_ATTEMPT_OUTCOME}" in
-    success)
-      reviewer_record_health_outcome "${model}" "retryable_failure" "${fallback_model}" "${final_retryable_class}" "${log_file}"
-      echo "success" > "${status_file}"
-      rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-      rm -rf "${reviewer_codex_home}" 2>/dev/null || true
-      return 0
-      ;;
-    pr_closed)
-      echo "pr_closed" > "${status_file}"
-      rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-      rm -rf "${reviewer_codex_home}" 2>/dev/null || true
-      return 0
-      ;;
-    silent_retry)
-      ;;
-    retryable_failure)
-      final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class}}"
-      ;;
-  esac
-
-  if [ "${reviewer_max_attempts}" -gt 3 ]; then
-    attempt=4
-    while [ "${attempt}" -le "${reviewer_max_attempts}" ]; do
-      effective_model="${fallback_model}"
-      if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
-        if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
-          emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
-        fi
-        context_budget_warn_models_emitted="${context_budget_warn_models_emitted} ${effective_model}"
-      fi
-      execute_reviewer_attempt "attempt ${attempt} (extended retry ${fallback_model})" "${attempt}" "${base_reasoning}"
-      case "${REVIEWER_ATTEMPT_OUTCOME}" in
-        success)
-          reviewer_record_health_outcome "${model}" "retryable_failure" "${fallback_model}" "${final_retryable_class}" "${log_file}"
-          echo "success" > "${status_file}"
-          rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-          rm -rf "${reviewer_codex_home}" 2>/dev/null || true
-          return 0
-          ;;
-        pr_closed)
-          echo "pr_closed" > "${status_file}"
-          rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-          rm -rf "${reviewer_codex_home}" 2>/dev/null || true
-          return 0
-          ;;
-        silent_retry)
-          ;;
-        retryable_failure)
-          final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class}}"
-          ;;
-      esac
-      attempt=$((attempt + 1))
-      sleep 2
-    done
-  fi
-
-  reviewer_record_health_outcome "${model}" "retryable_failure" "${fallback_model}" "${final_retryable_class}" "${log_file}"
-  final_failure_message="Reviewer ${model} failed after circuit-breaker failback."
-  if [ "${reviewer_max_attempts}" -gt 3 ]; then
-    final_failure_message="Reviewer ${model} failed after ${reviewer_max_attempts} circuit-breaker attempts."
-  fi
-  echo "${final_failure_message}" > "${output_file}"
+  reviewer_record_health_outcome "${model}" "retryable_failure" "${effective_model}" "${final_retryable_class:-silent_retry}" "${log_file}"
+  final_failure_message="Reviewer ${model} failed after ${reviewer_max_attempts} attempts."
+  printf '%s\n' "${final_failure_message}" > "${output_file}"
   echo "failed" > "${status_file}"
   echo "${final_failure_message}" | tee -a "${log_file}"
-  rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
-  rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+  reviewer_emit_slot_state
+  reviewer_cleanup
   return 0
 }
 # ── Two-pass reviewer architecture ──────────────────────────────────────
@@ -3782,6 +4509,26 @@ run_reviewer_pass() {
   local -a pass_models=()
   local -a pass_status_files=()
   local -a pass_log_files=()
+  local reviewer_pass_minimum_secs=300
+  local reviewer_pass_remaining_secs=""
+
+  emit_run_budget_gate_note "reviewer pass ${pass_prefix}" "${reviewer_pass_minimum_secs}"
+  if command -v codex_run_budget_phase_may_start >/dev/null 2>&1; then
+    if ! codex_run_budget_phase_may_start "${reviewer_pass_minimum_secs}"; then
+      echo "Reviewer pass ${pass_prefix}: remaining run budget is below ${reviewer_pass_minimum_secs}s — requesting partial finalize before launching another expensive pass." >&2
+      reviewer_request_partial_finalize "soft_deadline"
+      echo 0
+      return 0
+    fi
+  else
+    reviewer_pass_remaining_secs="$(reviewer_budget_remaining_secs_fallback)"
+    if [ "${reviewer_pass_remaining_secs}" -lt "${reviewer_pass_minimum_secs}" ]; then
+      echo "Reviewer pass ${pass_prefix}: remaining run budget fallback is below ${reviewer_pass_minimum_secs}s (${reviewer_pass_remaining_secs}s remain) — requesting partial finalize before launching another expensive pass." >&2
+      reviewer_request_partial_finalize "soft_deadline"
+      echo 0
+      return 0
+    fi
+  fi
 
   while IFS= read -r model; do
     [ -z "${model}" ] && continue
@@ -3798,6 +4545,11 @@ run_reviewer_pass() {
     pass_models+=("${model}")
     pass_status_files+=("${status_file}")
     pass_log_files+=("${log_file}")
+
+    if reviewer_resume_should_reuse_success_slot "${status_file}" "${output_file}"; then
+      printf 'Resume: reusing cached reviewer success for %s (%s).\n' "${model}" "${pass_prefix}" | tee -a "${log_file}" >&2
+      continue
+    fi
 
     if reviewer_circuit_breaker_enabled; then
       reviewer_health_dispatch_prepare "${model}"
@@ -3835,6 +4587,8 @@ run_reviewer_pass() {
   done
 
   local pass_successful=0
+  local pass_budget_skipped=0
+  local pass_hard_failures=0
   local sf_idx=0
   for sf in "${pass_status_files[@]}"; do
     local sf_model="${pass_models[$sf_idx]}"
@@ -3851,11 +4605,19 @@ run_reviewer_pass() {
         ;;
       pr_closed|skipped_unmapped|skipped_open)
         ;;
+      skipped_budget)
+        pass_budget_skipped=1
+        ;;
       *)
+        pass_hard_failures=$((pass_hard_failures + 1))
         echo "::warning::Reviewer ${sf_model} (${pass_prefix}): status='${sf_status:-<empty>}' — not counted as success. See ${pass_log_files[$((sf_idx - 1))]} for per-reviewer log." >&2
         ;;
     esac
   done
+
+  if [ "${pass_budget_skipped}" -ne 0 ] && [ "${pass_hard_failures}" -eq 0 ]; then
+    reviewer_request_partial_finalize "soft_deadline"
+  fi
 
   echo "${pass_successful}"
 }
@@ -3893,32 +4655,60 @@ build_cross_pollination_summary() {
   echo "${summary_file}"
 }
 
+rm -f "${REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE}" 2>/dev/null || true
+reviewers_successful=0
+
+if reviewer_resume_can_skip_reviewers; then
+  reviewers_successful="$(reviewer_count_success_statuses "review")"
+  echo "Resume: same-head cached reviewer outputs already cover the full reviewer phase; skipping reviewer rerun."
+  echo "REVIEWERS_SUCCESSFUL=${reviewers_successful}" >> "$GITHUB_ENV"
+  exit 0
+fi
+
 if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   echo "Two-pass review enabled."
+  PASS1_LEDGER_FILE="${PREVIOUS_REVIEWS_DIR}/consensus_pass1.txt"
 
-  # ── PASS 1: broad sweep at xhigh thinking ──
-  echo "=== PASS 1: Broad sweep (xhigh reasoning) ==="
-  PASS1_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass1.txt"
-  assemble_reviewer_prompt "${PASS1_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"
+  if reviewer_resume_can_skip_pass1; then
+    pass1_successful="$(reviewer_count_success_statuses "pass1")"
+    echo "Resume: same-head cached pass-1 reviewer outputs already cover pass 1; reusing ${PASS1_LEDGER_FILE}."
+    echo "Pass 1 complete: ${pass1_successful} reviewers successful (cached resume)."
+    reviewers_successful="${pass1_successful}"
+  else
+    # ── PASS 1: broad sweep at xhigh thinking ──
+    echo "=== PASS 1: Broad sweep (xhigh reasoning) ==="
+    PASS1_PROMPT_FILE="${RUNTIME_DIR}/reviewer_prompt_pass1.txt"
+    assemble_reviewer_prompt "${PASS1_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"
 
-  pass1_successful="$(run_reviewer_pass "pass1" "${PASS1_PROMPT_FILE}" "xhigh")"
-  echo "Pass 1 complete: ${pass1_successful} reviewers successful."
+    pass1_successful="$(run_reviewer_pass "pass1" "${PASS1_PROMPT_FILE}" "xhigh")"
+    echo "Pass 1 complete: ${pass1_successful} reviewers successful."
+    reviewers_successful="${pass1_successful}"
+    if reviewer_partial_finalize_requested; then
+      echo "REVIEWERS_SUCCESSFUL=${reviewers_successful}" >> "$GITHUB_ENV"
+      exit 0
+    fi
 
-  # Check for PR closure after pass 1
-  if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
-    echo "PR #${PR_NUMBER} was closed/merged during pass 1 — exiting cleanly."
-    echo "PR_CLOSED=true" >> "$GITHUB_ENV"
-    exit 0
+    # Check for PR closure after pass 1
+    if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+      echo "PR #${PR_NUMBER} was closed/merged during pass 1 — exiting cleanly."
+      echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+      exit 0
+    fi
+
+    # ── Consolidate all pass-1 reviewer outputs into one ledger ──
+    # One codex-cli call (gpt-5.4-mini, medium reasoning by default — see
+    # XPOLL_SUMMARISER_REASONING) produces a consensus ledger + per-reviewer
+    # sections. Retries 3×; hard-fails the workflow on final failure
+    # (triggers job-level Telegram failure alert).
+    bash "${SUMMARISER_SCRIPT}" --prefix pass1 --output "${PASS1_LEDGER_FILE}"
+    echo "Pass-1 consensus ledger: $(wc -c < "${PASS1_LEDGER_FILE}" 2>/dev/null || echo 0) bytes"
   fi
 
-  # ── Consolidate all pass-1 reviewer outputs into one ledger ──
-  # One codex-cli call (gpt-5.4-mini, medium reasoning by default — see
-  # XPOLL_SUMMARISER_REASONING) produces a consensus ledger + per-reviewer
-  # sections. Retries 3×; hard-fails the workflow on final failure
-  # (triggers job-level Telegram failure alert).
-  PASS1_LEDGER_FILE="${PREVIOUS_REVIEWS_DIR}/consensus_pass1.txt"
-  bash "${SUMMARISER_SCRIPT}" --prefix pass1 --output "${PASS1_LEDGER_FILE}"
-  echo "Pass-1 consensus ledger: $(wc -c < "${PASS1_LEDGER_FILE}" 2>/dev/null || echo 0) bytes"
+  if [ ! -s "${PASS1_LEDGER_FILE}" ] && [ "${pass1_successful:-0}" -gt 0 ] && [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    echo "Resume: regenerating missing pass-1 consensus ledger from cached pass-1 reviewer outputs."
+    bash "${SUMMARISER_SCRIPT}" --prefix pass1 --output "${PASS1_LEDGER_FILE}"
+    echo "Pass-1 consensus ledger: $(wc -c < "${PASS1_LEDGER_FILE}" 2>/dev/null || echo 0) bytes"
+  fi
 
   # ── Build cross-pollination summary (header-wrapped ledger) ──
   CROSS_POLLINATION_FILE="$(build_cross_pollination_summary "${PASS1_LEDGER_FILE}")"
@@ -4000,6 +4790,10 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   pass2_successful="$(run_reviewer_pass "review" "${PASS2_PROMPT_FILE}" "${PASS2_REASONING}")"
   echo "Pass 2 complete: ${pass2_successful} reviewers successful."
   reviewers_successful="${pass2_successful}"
+  if reviewer_partial_finalize_requested; then
+    echo "REVIEWERS_SUCCESSFUL=${reviewers_successful}" >> "$GITHUB_ENV"
+    exit 0
+  fi
 
   # ── Consolidate all pass-2 reviewer outputs into REVIEWER_CONSENSUS_FILE ──
   # Feeds editor (review_apply_fixes.sh) + memory-record step.
@@ -4011,6 +4805,10 @@ else
   echo "Single-pass review mode."
   reviewers_successful="$(run_reviewer_pass "review" "${REVIEWER_PROMPT_FILE}" "")"
   echo "Review complete: ${reviewers_successful} reviewers successful."
+  if reviewer_partial_finalize_requested; then
+    echo "REVIEWERS_SUCCESSFUL=${reviewers_successful}" >> "$GITHUB_ENV"
+    exit 0
+  fi
 
   # Produce REVIEWER_CONSENSUS_FILE so the editor + memory-record step get the
   # same ledger shape they receive in two-pass mode. Hard-fails on summariser

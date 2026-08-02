@@ -506,28 +506,37 @@ def test_review_apply_fixes_breaks_retry_loop_on_safety_refusal() -> None:
 
 
 def test_review_apply_fixes_fallback_distinguishes_refusal() -> None:
-	"""The fallback summary writer must emit a distinct
-	`Runtime failure path: - model refused (safety filter)` line when
-	the refusal flag is present, while preserving the other markers
-	(`editor failed before producing`, `unavailable (editor fallback)`)
-	verbatim — lockstep with the validator's Check 1 and the in-step
-	retry's `_instep_retry_summary_unusable` flag MUST be maintained."""
+	"""The fallback summary writer must keep the refusal-specific
+	partial-finalize summary distinct from the soft-deadline and generic
+	recoverable-failure summaries so downstream refusal detection stays
+	anchored to the dedicated heredoc branch."""
 	text = _review_apply_fixes_text()
-	assert '_runtime_failure_path_line="- model refused (safety filter)"' in text, (
-		"Fallback writer must set the refusal-specific Runtime failure "
-		"path line when `editor_refused.flag` exists."
+	assert 'elif [ "${editor_partial_finalize_reason}" = "refusal" ]; then' in text, (
+		"Fallback writer must keep a dedicated refusal branch so the "
+		"refusal-specific summary cannot drift into the generic fallback paths."
 	)
-	assert '_runtime_failure_path_line="- unavailable (editor fallback)"' in text, (
-		"Non-refusal fallback path must keep the original "
-		"`unavailable (editor fallback)` Runtime failure path text — "
-		"removal would break lockstep with the validator and in-step retry."
+	assert "- none (editor deferred because the run budget was exhausted before another validated attempt could start)" in text, (
+		"Soft-deadline partial-finalize summary must remain distinct from the "
+		"refusal and recoverable-failure summaries."
 	)
-	# The lockstep markers must remain in the heredoc body verbatim.
-	assert "- none (editor failed before producing a validated summary)" in text, (
-		"Lockstep marker `editor failed before producing a validated "
-		"summary` removed from fallback — would break the validator's "
-		"Check 1 grep and the in-step retry's `_instep_retry_summary_unusable` "
-		"detection (see probably_unnecessary_but_read_if_stuck.md §20.10)."
+	assert "- none (editor returned a safety-policy refusal before another validated attempt could complete)" in text, (
+		"Refusal partial-finalize summary must remain distinct so downstream "
+		"refusal detection keeps the dedicated sentinel path."
+	)
+	assert "- none (editor requested partial finalize after a recoverable failure before another validated attempt completed)" in text, (
+		"Generic recoverable-failure partial-finalize summary must remain "
+		"distinct from the refusal branch."
+	)
+	assert "Runtime failure path:\n- partial finalize requested at the soft deadline before another editor attempt" in text, (
+		"Soft-deadline fallback must keep its dedicated Runtime failure path."
+	)
+	assert "Runtime failure path:\n- model refused (safety filter)" in text, (
+		"Refusal fallback must keep the refusal-specific Runtime failure path "
+		"line when `editor_refused.flag` exists."
+	)
+	assert "Runtime failure path:\n- partial finalize requested after a recoverable editor failure before another validated attempt" in text, (
+		"Recoverable-failure fallback must keep its dedicated Runtime failure "
+		"path instead of collapsing into the refusal branch."
 	)
 
 

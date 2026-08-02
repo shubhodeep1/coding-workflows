@@ -375,6 +375,13 @@ def test_review_autofix_wires_escape_threshold_and_failure_comment_suppression()
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in body
 	assert 'ensure_label_exists "ai:resolver-escalated" "${{ github.repository }}"' in body
 	assert body.count("env.RESOLVER_ESCALATED != 'true'") >= 2
+	assert "- name: Post partial finalize comment and persist runtime marker" in body
+	assert "<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->" in body
+	assert "partial_finalize.json" in body
+	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true'" in body
+	assert body.index("Post partial finalize comment and persist runtime marker") < body.index(
+		"Post review-blocked comment on PR (workflow failure)"
+	)
 
 
 def test_resolve_script_baseline_fallback_and_comment_gate_contract() -> None:

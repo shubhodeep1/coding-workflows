@@ -142,6 +142,10 @@ env:
   REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}
   REVIEWER_CIRCUIT_BREAKER_ENABLED: ${{ vars.REVIEWER_CIRCUIT_BREAKER_ENABLED || '0' }}
   REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}
+  REVIEWER_SLOT_RETRYABLE_FAILURE_LIMIT: ${{ vars.REVIEWER_SLOT_RETRYABLE_FAILURE_LIMIT || '3' }}
+  REVIEWER_SLOT_BACKOFF_BASE_SECS: ${{ vars.REVIEWER_SLOT_BACKOFF_BASE_SECS || '2' }}
+  REVIEWER_SLOT_BACKOFF_CAP_SECS: ${{ vars.REVIEWER_SLOT_BACKOFF_CAP_SECS || '30' }}
+  REVIEWER_SLOT_BACKOFF_BUDGET_RATIO: ${{ vars.REVIEWER_SLOT_BACKOFF_BUDGET_RATIO || '0.05' }}
   REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}
   REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}
   # Editor (codex apply-fixes loop). Production defaults to xhigh
@@ -168,8 +172,13 @@ env:
   # scripts/targeted_file_context.py docstring for semantics. Set to 0
   # to disable inlining entirely. Default matches implement.yml.
   TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
+  REVIEW_SOFT_DEADLINE_MINUTES: ${{ vars.REVIEW_SOFT_DEADLINE_MINUTES || '210' }}
+  REVIEW_MAX_RESUME_ROUNDS: ${{ vars.REVIEW_MAX_RESUME_ROUNDS || '3' }}
   CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}
   CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}
+  CODEX_STALL_GUARD_ENABLED: ${{ vars.CODEX_STALL_GUARD_ENABLED || 'true' }}
+  CODEX_STALL_TIMEOUT_SECONDS: ${{ vars.CODEX_STALL_TIMEOUT_SECONDS || '600' }}
+  CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
   REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || 'false' }}
   REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}
@@ -1188,8 +1197,17 @@ jobs:
       REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}
       REVIEWER_CIRCUIT_BREAKER_ENABLED: ${{ vars.REVIEWER_CIRCUIT_BREAKER_ENABLED || '0' }}
       REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}
+      REVIEWER_SLOT_RETRYABLE_FAILURE_LIMIT: ${{ vars.REVIEWER_SLOT_RETRYABLE_FAILURE_LIMIT || '3' }}
+      REVIEWER_SLOT_BACKOFF_BASE_SECS: ${{ vars.REVIEWER_SLOT_BACKOFF_BASE_SECS || '2' }}
+      REVIEWER_SLOT_BACKOFF_CAP_SECS: ${{ vars.REVIEWER_SLOT_BACKOFF_CAP_SECS || '30' }}
+      REVIEWER_SLOT_BACKOFF_BUDGET_RATIO: ${{ vars.REVIEWER_SLOT_BACKOFF_BUDGET_RATIO || '0.05' }}
       REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}
       REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}
+      REVIEW_SOFT_DEADLINE_MINUTES: ${{ vars.REVIEW_SOFT_DEADLINE_MINUTES || '210' }}
+      CODEX_STALL_GUARD_ENABLED: ${{ vars.CODEX_STALL_GUARD_ENABLED || 'true' }}
+      CODEX_STALL_TIMEOUT_SECONDS: ${{ vars.CODEX_STALL_TIMEOUT_SECONDS || '600' }}
+      CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}
+      REVIEW_MAX_RESUME_ROUNDS: ${{ vars.REVIEW_MAX_RESUME_ROUNDS || '3' }}
       REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}
       REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}
       REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}
@@ -1531,11 +1549,35 @@ jobs:
           RUNTIME_DIR="/tmp/codex-pr-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RANDOM}"
           PREVIOUS_REVIEWS_DIR="${RUNTIME_DIR}/previous_reviews"
           RUNTIME_CONTEXT_DIR="${RUNTIME_DIR}/runtime_context"
+          job_start_epoch="$(date +%s)"
+          review_soft_deadline_minutes="${REVIEW_SOFT_DEADLINE_MINUTES:-210}"
+          review_soft_deadline_minutes_raw="${review_soft_deadline_minutes}"
+
+          case "${review_soft_deadline_minutes}" in
+            ''|*[!0-9]*)
+              echo "::warning::Invalid REVIEW_SOFT_DEADLINE_MINUTES='${review_soft_deadline_minutes}'; defaulting to 210." >&2
+              review_soft_deadline_minutes="210"
+              ;;
+            *)
+              review_soft_deadline_minutes="$(( 10#${review_soft_deadline_minutes} ))"
+              if [ "${review_soft_deadline_minutes}" -le 0 ]; then
+                echo "::warning::Invalid REVIEW_SOFT_DEADLINE_MINUTES='${review_soft_deadline_minutes_raw}'; defaulting to 210." >&2
+                review_soft_deadline_minutes="210"
+              fi
+              ;;
+          esac
+
+          codex_run_budget_total_secs="$(( review_soft_deadline_minutes * 60 ))"
+          codex_run_budget_soft_deadline_epoch="$(( job_start_epoch + codex_run_budget_total_secs ))"
 
           mkdir -p "${PREVIOUS_REVIEWS_DIR}" "${RUNTIME_CONTEXT_DIR}"
 
           {
-            echo "JOB_START_EPOCH=$(date +%s)"
+            echo "JOB_START_EPOCH=${job_start_epoch}"
+            echo "REVIEW_SOFT_DEADLINE_MINUTES=${review_soft_deadline_minutes}"
+            echo "CODEX_RUN_BUDGET_START_EPOCH=${job_start_epoch}"
+            echo "CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH=${codex_run_budget_soft_deadline_epoch}"
+            echo "CODEX_RUN_BUDGET_TOTAL_SECS=${codex_run_budget_total_secs}"
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
             echo "PREVIOUS_REVIEWS_DIR=${PREVIOUS_REVIEWS_DIR}"
             echo "RUNTIME_CONTEXT_DIR=${RUNTIME_CONTEXT_DIR}"
@@ -1913,6 +1955,204 @@ jobs:
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-
+
+      - name: Restore same-head partial resume state
+        if: env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        run: |
+          set -euo pipefail
+
+          current_head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+          if [ -z "${current_head_sha}" ]; then
+            echo "::warning::Unable to resolve git HEAD for partial-resume restore; continuing without same-head resume state."
+          fi
+
+          resume_round_limit="${REVIEW_MAX_RESUME_ROUNDS:-3}"
+          if ! [[ "${resume_round_limit}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::warning::Invalid REVIEW_MAX_RESUME_ROUNDS='${resume_round_limit}'; falling back to 3."
+            resume_round_limit=3
+          fi
+
+          resume_env_file="$(mktemp)"
+          CURRENT_HEAD_SHA="${current_head_sha}" \
+          RESUME_ROUND_LIMIT="${resume_round_limit}" \
+          CURRENT_PREVIOUS_REVIEWS_DIR="${PREVIOUS_REVIEWS_DIR:-}" \
+          CURRENT_RUNTIME_DIR="${RUNTIME_DIR:-}" \
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' > "${resume_env_file}"
+          from __future__ import annotations
+
+          import json
+          import os
+          import shutil
+          import sys
+          from pathlib import Path
+
+
+          def bool_to_env(value: bool) -> str:
+              return "true" if value else "false"
+
+
+          def parse_list(value: object) -> list[str]:
+              if not isinstance(value, list):
+                  return []
+              parsed: list[str] = []
+              for item in value:
+                  if isinstance(item, str) and item.strip():
+                      parsed.append(item.strip())
+              return parsed
+
+
+          def parse_bool(value: object, default: bool = False) -> bool:
+              if isinstance(value, bool):
+                  return value
+              if isinstance(value, str):
+                  normalized = value.strip().lower()
+                  if normalized in {"1", "true", "yes", "on"}:
+                      return True
+                  if normalized in {"0", "false", "no", "off"}:
+                      return False
+              return default
+
+
+          def sanitize_round(value: object) -> int:
+              try:
+                  parsed = int(value)
+              except (TypeError, ValueError):
+                  return 0
+              return parsed if parsed >= 0 else 0
+
+
+          def optional_path(value: str) -> Path | None:
+              value = value.strip()
+              return Path(value) if value else None
+
+
+          def restore_cached_artifacts(source_dir: Path | None, destination_dir: Path | None) -> int:
+              restored = 0
+              if source_dir is None or destination_dir is None or not source_dir.is_dir():
+                  return restored
+              try:
+                  destination_dir.mkdir(parents=True, exist_ok=True)
+              except OSError as exc:
+                  print(
+                      f"::warning::Could not prepare resume artifact directory {destination_dir}: {exc}",
+                      file=sys.stderr,
+                  )
+                  return restored
+              for source_path in sorted(source_dir.iterdir()):
+                  if not source_path.is_file():
+                      continue
+                  try:
+                      shutil.copy2(source_path, destination_dir / source_path.name)
+                  except OSError as exc:
+                      print(
+                          f"::warning::Could not restore same-head artifact {source_path} -> {destination_dir / source_path.name}: {exc}",
+                          file=sys.stderr,
+                      )
+                      continue
+                  restored += 1
+              return restored
+
+
+          current_head_sha = os.environ.get("CURRENT_HEAD_SHA", "").strip()
+          resume_round_limit = os.environ.get("RESUME_ROUND_LIMIT", "3").strip() or "3"
+          pr_number = os.environ.get("PR_NUMBER", "").strip() or "0"
+          marker_root = Path(f".ai/review_runtime/pr-{pr_number}")
+          current_previous_reviews_dir = optional_path(os.environ.get("CURRENT_PREVIOUS_REVIEWS_DIR", ""))
+          current_runtime_dir = optional_path(os.environ.get("CURRENT_RUNTIME_DIR", ""))
+
+          selected_payload: dict[str, object] | None = None
+          selected_marker: Path | None = None
+          selected_sort_key: tuple[int, int, str] = (-1, -1, "")
+          if current_head_sha and marker_root.is_dir():
+              for marker_path in sorted(marker_root.glob("round-*/partial_finalize.json")):
+                  try:
+                      payload = json.loads(marker_path.read_text(encoding="utf-8"))
+                  except (OSError, json.JSONDecodeError):
+                      continue
+                  if not isinstance(payload, dict):
+                      continue
+                  head_sha = payload.get("head_sha")
+                  if not isinstance(head_sha, str) or head_sha.strip() != current_head_sha:
+                      continue
+                  resume_round = sanitize_round(payload.get("resume_round"))
+                  try:
+                      marker_mtime_ns = marker_path.stat().st_mtime_ns
+                  except OSError:
+                      marker_mtime_ns = -1
+                  sort_key = (resume_round, marker_mtime_ns, marker_path.as_posix())
+                  if sort_key > selected_sort_key:
+                      selected_sort_key = sort_key
+                      selected_payload = payload
+                      selected_marker = marker_path
+
+          exports = {
+              "AUTOFIX_RESUME_RESTORED": "false",
+              "AUTOFIX_RESUME_TERMINAL": "false",
+              "AUTOFIX_RESUME_ROUND": "0",
+              "AUTOFIX_RESUME_ROUND_LIMIT": resume_round_limit,
+              "AUTOFIX_RESUME_STATE": "fresh",
+              "AUTOFIX_RESUME_SHOULD_CONTINUE": "false",
+              "AUTOFIX_RESUME_HEAD_SHA": current_head_sha,
+              "AUTOFIX_RESUME_COMPLETED_SCOPE": "",
+              "AUTOFIX_RESUME_INCOMPLETE_SCOPE": "",
+              "AUTOFIX_RESUME_PROGRESS_FINGERPRINT": "",
+              "AUTOFIX_RESUME_REASON": "",
+              "AUTOFIX_RESUME_PHASE": "",
+              "AUTOFIX_RESUME_COMMENT_POSTED": "false",
+              "AUTOFIX_RESUME_MARKER_FILE": "",
+              "AUTOFIX_RESUME_RESTORED_ARTIFACT_COUNT": "0",
+          }
+
+          if selected_payload is not None and selected_marker is not None:
+              resume_state = selected_payload.get("resume_state")
+              if not isinstance(resume_state, str) or not resume_state.strip():
+                  resume_state = "resumable"
+              resume_state = resume_state.strip()
+              resume_should_continue = parse_bool(
+                  selected_payload.get("resume_should_continue"),
+                  default=(resume_state == "resumable"),
+              )
+              restored_artifact_count = 0
+              selected_marker_root = selected_marker.parent
+              restored_artifact_count += restore_cached_artifacts(
+                  selected_marker_root / "previous_reviews",
+                  current_previous_reviews_dir,
+              )
+              restored_artifact_count += restore_cached_artifacts(
+                  selected_marker_root / "runtime",
+                  current_runtime_dir,
+              )
+              exports.update(
+                  {
+                      "AUTOFIX_RESUME_RESTORED": "true",
+                      "AUTOFIX_RESUME_TERMINAL": bool_to_env(not resume_should_continue),
+                      "AUTOFIX_RESUME_ROUND": str(sanitize_round(selected_payload.get("resume_round"))),
+                      "AUTOFIX_RESUME_STATE": resume_state,
+                      "AUTOFIX_RESUME_SHOULD_CONTINUE": bool_to_env(resume_should_continue),
+                      "AUTOFIX_RESUME_COMPLETED_SCOPE": ",".join(parse_list(selected_payload.get("completed_scope"))),
+                      "AUTOFIX_RESUME_INCOMPLETE_SCOPE": ",".join(parse_list(selected_payload.get("incomplete_scope"))),
+                      "AUTOFIX_RESUME_PROGRESS_FINGERPRINT": str(selected_payload.get("progress_fingerprint", "") or ""),
+                      "AUTOFIX_RESUME_REASON": str(selected_payload.get("reason", "") or ""),
+                      "AUTOFIX_RESUME_PHASE": str(selected_payload.get("phase", "") or ""),
+                      "AUTOFIX_RESUME_COMMENT_POSTED": bool_to_env(parse_bool(selected_payload.get("comment_posted"))),
+                      "AUTOFIX_RESUME_MARKER_FILE": selected_marker.as_posix(),
+                      "AUTOFIX_RESUME_RESTORED_ARTIFACT_COUNT": str(restored_artifact_count),
+                  }
+              )
+
+          for key, value in exports.items():
+              print(f"{key}={value}")
+          PY
+
+          cat "${resume_env_file}" >> "$GITHUB_ENV"
+
+          if grep -q '^AUTOFIX_RESUME_RESTORED=true$' "${resume_env_file}"; then
+            echo "Restored same-head partial resume state from $(awk -F= '$1 == "AUTOFIX_RESUME_MARKER_FILE" { print $2 }' "${resume_env_file}" | tail -n 1) with $(awk -F= '$1 == "AUTOFIX_RESUME_RESTORED_ARTIFACT_COUNT" { print $2 }' "${resume_env_file}" | tail -n 1) cached artifacts."
+          else
+            echo "No cached same-head partial resume state matched HEAD=${current_head_sha:-<unknown>}."
+          fi
+
+          rm -f "${resume_env_file}"
 
       - name: Detect smoke test and tune LLM settings
         env:
@@ -2788,7 +3028,7 @@ jobs:
         # skipped for deterministic stale-base or structurally unmergeable PRs.
         # Ordinary content conflicts continue to the existing late
         # Detect merge conflicts + resolver path below.
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
@@ -3030,7 +3270,7 @@ jobs:
           fi
 
       - name: Run reviewer models
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         id: reviewers
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -3078,7 +3318,7 @@ jobs:
           retention-days: 7
 
       - name: Post AI Materiality Advisory comment
-        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -3224,7 +3464,7 @@ jobs:
         # GitHub API glitch never silently drops a review.
         # Claude-branch-review mode never runs the editor, so this
         # check (and the API calls it makes) is unnecessary.
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         id: pre_editor_stale_base_gate
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -3260,7 +3500,7 @@ jobs:
           esac
 
       - name: Install project dependencies (best-effort)
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         run: |
           set -euo pipefail
           # Install project dependencies so the editor can validate fixes
@@ -3292,7 +3532,7 @@ jobs:
           fi
 
       - name: Switch reasoning effort for editor
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         run: |
           set -euo pipefail
           sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
@@ -3319,7 +3559,7 @@ jobs:
           echo "Enabled reasoning summaries (auto) for editor phase"
 
       - name: Setup Serena for editor
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.SERENA_ENABLED == 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.SERENA_ENABLED == 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -3346,7 +3586,7 @@ jobs:
           fi
 
       - name: Apply fixes with editor model
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -3503,8 +3743,61 @@ jobs:
             echo "::endgroup::"
           fi
 
+      - name: Decide partial-finalize validation/push safety
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        run: |
+          set -euo pipefail
+
+          validation_tail_can_complete="true"
+          edits_withheld_for_safety="false"
+          withheld_reason="none"
+
+          if [ "${AUTOFIX_PARTIAL_FINALIZE_REQUESTED:-false}" = "true" ]; then
+            workflow_timeout_source_path=".codex-workflow-src/.github/workflows/review_autofix.yml"
+            if [ ! -f "${workflow_timeout_source_path}" ]; then
+              workflow_timeout_source_path=".github/workflows/review_autofix.yml"
+            fi
+            if ! read -r job_timeout_minutes resolver_timeout_minutes < <(PYTHONDONTWRITEBYTECODE=1 python3 -c 'from pathlib import Path; import sys, yaml; workflow = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}; jobs = workflow.get("jobs") or {}; codex_agent_job = jobs.get("codex-agent") or {}; job_timeout_minutes = codex_agent_job.get("timeout-minutes"); resolver_timeout_minutes = next((step.get("timeout-minutes") for step in (codex_agent_job.get("steps") or []) if isinstance(step, dict) and step.get("name") == "Run Codex resolver, validate, stage, commit"), None); sys.exit(1) if not isinstance(job_timeout_minutes, int) or not isinstance(resolver_timeout_minutes, int) else print(job_timeout_minutes, resolver_timeout_minutes)' "${workflow_timeout_source_path}"); then
+              job_timeout_minutes="240"
+              resolver_timeout_minutes="170"
+            fi
+            # Requiring a full resolver window plus 10 minutes of
+            # smoke/detect/push slack keeps the partial-publish path inside the
+            # workflow's existing validation envelope instead of publishing
+            # edits that the current run cannot fully re-validate before the
+            # hard timeout.
+            job_timeout_total_secs=$(( job_timeout_minutes * 60 ))
+            partial_finalize_validation_minimum_secs=$(( (resolver_timeout_minutes * 60) + 600 ))
+            now_epoch="$(date +%s)"
+            budget_start_epoch="${CODEX_RUN_BUDGET_START_EPOCH:-${JOB_START_EPOCH:-}}"
+            hard_timeout_remaining_secs=0
+
+            if [[ "${budget_start_epoch}" =~ ^[0-9]+$ ]] && [ "${budget_start_epoch}" -gt 0 ] && [ "${now_epoch}" -ge "${budget_start_epoch}" ]; then
+              job_deadline_epoch=$(( budget_start_epoch + job_timeout_total_secs ))
+              hard_timeout_remaining_secs=$(( job_deadline_epoch - now_epoch ))
+              if [ "${hard_timeout_remaining_secs}" -lt 0 ]; then
+                hard_timeout_remaining_secs=0
+              fi
+            fi
+
+            if [ "${hard_timeout_remaining_secs}" -lt "${partial_finalize_validation_minimum_secs}" ]; then
+              validation_tail_can_complete="false"
+              edits_withheld_for_safety="true"
+              withheld_reason="insufficient_budget_for_validation_tail"
+              echo "Partial finalize publish-safety gate: findings-only fallback (hard_timeout_remaining_secs=${hard_timeout_remaining_secs}, minimum_required_secs=${partial_finalize_validation_minimum_secs})."
+            else
+              echo "Partial finalize publish-safety gate: validated tail remains available (hard_timeout_remaining_secs=${hard_timeout_remaining_secs}, minimum_required_secs=${partial_finalize_validation_minimum_secs})."
+            fi
+          fi
+
+          {
+            echo "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE=${validation_tail_can_complete}"
+            echo "AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY=${edits_withheld_for_safety}"
+            echo "AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON=${withheld_reason}"
+          } >> "$GITHUB_ENV"
+
       - name: Commit changes
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         id: commit_changes
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -3513,7 +3806,7 @@ jobs:
           bash "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
 
       - name: Run interim judge
-        if: env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           ROUND_NUMBER: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -3522,7 +3815,7 @@ jobs:
           bash "${SUPPORT_SCRIPTS_DIR}/review_run_judge_interim.sh"
 
       - name: Synthesize behavioural smoke
-        if: env.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED == 'true' && env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: env.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED == 'true' && env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         continue-on-error: true
         env:
           ROUND_NUMBER: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
@@ -3538,7 +3831,7 @@ jobs:
       # commit, or interim-judge path failed partway so cross-iteration state
       # remains best-effort and fail-open.
       - name: Save review-issue ledger
-        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
@@ -3549,7 +3842,7 @@ jobs:
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Post editor summary comment
-        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -3679,7 +3972,7 @@ jobs:
         # DID land real source-file edits.  Running this detector against
         # such a commit produces a false-positive EDITOR_CHANGES_LOST alert
         # (bitsafe.io PR #177 / run 25653654000).
-        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         run: |
           set -euo pipefail
 
@@ -3918,7 +4211,7 @@ jobs:
         # short-circuit independently on `max_iterations_reached != 'true'`,
         # so leaving the env var unset on these runs does not relax any
         # auto-merge safety.
-        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         run: |
           set -euo pipefail
 
@@ -4011,7 +4304,7 @@ jobs:
         # which in turn fires the (futile) Codex resolver and produces a
         # `FAILED_STEPS=1` cascade that the e2e poller treats as the proximate
         # failure (analysis: e2e-smoke-failure-25126757724.md §B/D).
-        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -4287,7 +4580,7 @@ jobs:
         # step. On max_iterations_reached runs, EDITOR_NOOP_SUSPICIOUS stays
         # unset, so this guard is a no-op and MERGE_CONFLICT can legitimately
         # come from the detect step above.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -4321,7 +4614,7 @@ jobs:
         # review_conflict_resolve.sh fires the immediate orchestrator-poll
         # dispatch so the integration judge takes over without waiting for
         # the */5 cron tick.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         timeout-minutes: 170
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -4489,7 +4782,7 @@ jobs:
           fi
 
       - name: Telegram conflict resolution message
-        if: success() && env.CONFLICT_RESOLVED == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: success() && env.CONFLICT_RESOLVED == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -4523,7 +4816,7 @@ jobs:
         # head f11d6dc while editor commit 005824e was still local) and the
         # docstring at scripts/review_commit_changes.sh:32-41 for the same
         # rationale that already governs EDITOR_CHANGES_LOST at :3315-3326.
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -4927,7 +5220,7 @@ jobs:
         # `${AUTOFIX_SKIP_SELF_TRIGGERED:-false}`, so the default is `false`
         # and the [ai-autofix] synchronize is NOT skipped). The autofix loop now actually "keeps going
         # until there are no edits" instead of converging on a stale head.
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -4944,7 +5237,7 @@ jobs:
         # are pushed together AFTER labeling and auto-merge are configured.
         # This avoids a concurrency self-cancel race where the synchronize
         # event from an earlier push would kill subsequent steps.
-        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
@@ -5034,6 +5327,7 @@ jobs:
             cat "${push_stderr_file}" >&2
             if [ "${push_exit}" -eq 0 ]; then
               echo "Push complete."
+              echo "AUTOFIX_EDITS_PUSHED=true" >> "$GITHUB_ENV"
               break
             fi
             if ! grep -qE '\[rejected\].*\((fetch first|non-fast-forward)\)' "${push_stderr_file}"; then
@@ -5085,7 +5379,7 @@ jobs:
         #      added workflow_dispatch to their caller workflow template).
         #   2. Caller workflow parsed from github.workflow_ref — fallback for
         #      consumer repos whose caller workflow has workflow_dispatch.
-        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CURRENT_RUN_ID: ${{ github.run_id }}
@@ -5263,12 +5557,438 @@ jobs:
             echo "::warning::Could not dispatch review workflow via workflow_dispatch; the synchronize event from the push will trigger the next review run instead. To enable dispatch (avoids merge-ref resolution issues), add a workflow_dispatch trigger with a pr_number input and an optional allow_workflow_edits boolean input to your caller workflow. Ensure GH_PAT can dispatch workflows (classic PAT: repo+workflow; fine-grained PAT: Actions read/write)."
           fi
 
+      - name: Post partial finalize comment and persist runtime marker
+        if: "always() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EDITOR_COMMIT_PRODUCED: ${{ steps.commit_changes.outputs.did_commit }}
+        run: |
+          set -euo pipefail
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          current_head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+          if [ -z "${current_head_sha}" ]; then
+            echo "::warning::Unable to resolve git HEAD for partial finalize marker; restoring same-head resume may fail open on the next run."
+          fi
+
+          previous_resume_round="${AUTOFIX_RESUME_ROUND:-0}"
+          if ! [[ "${previous_resume_round}" =~ ^[0-9]+$ ]]; then
+            previous_resume_round=0
+          fi
+          previous_progress_fingerprint="${AUTOFIX_RESUME_PROGRESS_FINGERPRINT:-}"
+          previous_resume_head_sha="${AUTOFIX_RESUME_HEAD_SHA:-}"
+          if [ -n "${current_head_sha}" ] && [ -n "${previous_resume_head_sha}" ] && [ "${previous_resume_head_sha}" != "${current_head_sha}" ]; then
+            previous_resume_round=0
+            previous_progress_fingerprint=""
+          fi
+
+          resume_round="$((previous_resume_round + 1))"
+          resume_round_limit="${AUTOFIX_RESUME_ROUND_LIMIT:-${REVIEW_MAX_RESUME_ROUNDS:-3}}"
+          if ! [[ "${resume_round_limit}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::warning::Invalid REVIEW_MAX_RESUME_ROUNDS='${resume_round_limit}'; falling back to 3."
+            resume_round_limit=3
+          fi
+
+          completed_scope_items=()
+          incomplete_scope_items=()
+          if [ "${AUTOFIX_PARTIAL_FINALIZE_PHASE:-}" = "reviewers" ]; then
+            if compgen -G "${PREVIOUS_REVIEWS_DIR}/status_pass1_*.txt" >/dev/null; then
+              completed_scope_items+=(reviewers_pass1)
+              if [ -s "${PREVIOUS_REVIEWS_DIR}/consensus_pass1.txt" ]; then
+                completed_scope_items+=(reviewers_pass1_consensus)
+              fi
+              incomplete_scope_items+=(reviewers_pass2)
+            elif [ "${ENABLE_REVIEWER_TWO_PASS:-true}" = "false" ] && compgen -G "${PREVIOUS_REVIEWS_DIR}/status_review_*.txt" >/dev/null; then
+              completed_scope_items+=(reviewers_started)
+              incomplete_scope_items+=(reviewers)
+            else
+              if [ "${ENABLE_REVIEWER_TWO_PASS:-true}" = "false" ]; then
+                incomplete_scope_items+=(reviewers)
+              else
+                incomplete_scope_items+=(reviewers_pass1 reviewers_pass2)
+              fi
+            fi
+            incomplete_scope_items+=(consolidator parser ledger editor)
+          else
+            if compgen -G "${PREVIOUS_REVIEWS_DIR}/status_review_*.txt" >/dev/null || compgen -G "${PREVIOUS_REVIEWS_DIR}/status_pass1_*.txt" >/dev/null; then
+              completed_scope_items+=(reviewers)
+            fi
+            [ -f "${RUNTIME_DIR}/consolidator_raw.txt" ] && completed_scope_items+=(consolidator)
+            [ -f "${RUNTIME_DIR}/parser_stats.txt" ] && completed_scope_items+=(parser)
+            [ -f "${RUNTIME_DIR}/ledger_status.txt" ] && completed_scope_items+=(ledger)
+            incomplete_scope_items+=(editor)
+          fi
+
+          if [ "${#completed_scope_items[@]}" -gt 0 ]; then
+            completed_scope_csv="$(IFS=,; echo "${completed_scope_items[*]}")"
+          else
+            completed_scope_csv="none"
+          fi
+          if [ "${#incomplete_scope_items[@]}" -gt 0 ]; then
+            incomplete_scope_csv="$(IFS=,; echo "${incomplete_scope_items[*]}")"
+          else
+            incomplete_scope_csv="none"
+          fi
+          completed_scope_human="$(printf '%s' "${completed_scope_csv}" | sed 's/,/, /g')"
+          incomplete_scope_human="$(printf '%s' "${incomplete_scope_csv}" | sed 's/,/, /g')"
+
+          validated_edits_committed="false"
+          if [ "${EDITOR_COMMIT_PRODUCED:-false}" = "true" ] || [ "${DID_COMMIT:-false}" = "true" ] || [ "${CONFLICT_RESOLVED:-false}" = "true" ]; then
+            validated_edits_committed="true"
+          fi
+          edits_pushed="${AUTOFIX_EDITS_PUSHED:-false}"
+          validation_tail_can_complete="${AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE:-true}"
+          edits_withheld_for_safety="${AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY:-false}"
+          withheld_reason="${AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON:-none}"
+          partial_comment_posted="false"
+
+          partial_publish_note="This run finalized early after \`${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}\` in the \`${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}\` phase so the validated finalize tail could complete before the hard job timeout."
+          if [ "${edits_withheld_for_safety}" = "true" ]; then
+            partial_publish_note="This run finalized early after \`${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}\` in the \`${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}\` phase. The remaining job headroom could not cover the existing validation/publish tail, so the workflow posted findings only and withheld any unpushed edits for safety."
+          fi
+
+          resume_eval_file="$(mktemp)"
+          CURRENT_HEAD_SHA="${current_head_sha}" \
+          PREVIOUS_PROGRESS_FINGERPRINT="${previous_progress_fingerprint}" \
+          PREVIOUS_REVIEWS_DIR_PATH="${PREVIOUS_REVIEWS_DIR:-}" \
+          RUNTIME_DIR_PATH="${RUNTIME_DIR:-}" \
+          EDITOR_SUMMARY_FILE_PATH="${EDITOR_SUMMARY_FILE:-}" \
+          COMMITTED_FILES_FILE_PATH="${COMMITTED_FILES_FILE:-}" \
+          COMPLETED_SCOPE_CSV="${completed_scope_csv}" \
+          INCOMPLETE_SCOPE_CSV="${incomplete_scope_csv}" \
+          RESUME_ROUND_VALUE="${resume_round}" \
+          RESUME_ROUND_LIMIT_VALUE="${resume_round_limit}" \
+          PARTIAL_PHASE="${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}" \
+          PARTIAL_REASON="${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}" \
+          VALIDATED_EDITS_COMMITTED="${validated_edits_committed}" \
+          EDITS_PUSHED="${edits_pushed}" \
+          VALIDATION_TAIL_CAN_COMPLETE="${validation_tail_can_complete}" \
+          EDITS_WITHHELD_FOR_SAFETY="${edits_withheld_for_safety}" \
+          WITHHELD_REASON="${withheld_reason}" \
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' > "${resume_eval_file}"
+          from __future__ import annotations
+
+          import glob
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+
+          def parse_bool(value: str) -> bool:
+              return value.strip().lower() == "true"
+
+
+          def describe_path(path_str: str, artifact_label: str) -> dict[str, object]:
+              path = Path(path_str)
+              entry: dict[str, object] = {"path": artifact_label, "exists": path.exists()}
+              if not path.exists():
+                  return entry
+              try:
+                  data = path.read_bytes()
+              except OSError:
+                  entry["read_error"] = True
+                  return entry
+              entry["size"] = len(data)
+              entry["sha256"] = hashlib.sha256(data).hexdigest()
+              return entry
+
+
+          artifacts: list[dict[str, object]] = []
+          previous_reviews_dir = os.environ.get("PREVIOUS_REVIEWS_DIR_PATH", "").strip()
+          runtime_dir = os.environ.get("RUNTIME_DIR_PATH", "").strip()
+          for pattern in (
+              "status_pass1_*.txt",
+              "status_review_*.txt",
+              "pass1_*.txt",
+              "review_*.txt",
+              "consensus_pass1.txt",
+          ):
+              if previous_reviews_dir:
+                  for matched_path in sorted(glob.glob(str(Path(previous_reviews_dir) / pattern))):
+                      artifacts.append(describe_path(matched_path, f"previous_reviews/{Path(matched_path).name}"))
+          for rel_path in (
+              "reviewer_consensus.txt",
+              "floor_tags.txt",
+              "consolidator_raw.txt",
+              "parser_stats.txt",
+              "review_issues.txt",
+              "ledger_status.txt",
+          ):
+              if runtime_dir:
+                  artifacts.append(describe_path(str(Path(runtime_dir) / rel_path), f"runtime/{rel_path}"))
+          for env_name, artifact_label in (
+              ("EDITOR_SUMMARY_FILE_PATH", "runtime/editor_summary.txt"),
+              ("COMMITTED_FILES_FILE_PATH", "runtime/committed_files.txt"),
+          ):
+              candidate = os.environ.get(env_name, "").strip()
+              if candidate:
+                  artifacts.append(describe_path(candidate, artifact_label))
+
+          resume_round = 0
+          try:
+              resume_round = int(os.environ.get("RESUME_ROUND_VALUE", "0") or 0)
+          except ValueError:
+              resume_round = 0
+          if resume_round < 0:
+              resume_round = 0
+
+          resume_round_limit = 3
+          try:
+              resume_round_limit = int(os.environ.get("RESUME_ROUND_LIMIT_VALUE", "3") or 3)
+          except ValueError:
+              resume_round_limit = 3
+          if resume_round_limit <= 0:
+              resume_round_limit = 3
+
+          fingerprint_payload = {
+              "head_sha": os.environ.get("CURRENT_HEAD_SHA", "").strip(),
+              "completed_scope": os.environ.get("COMPLETED_SCOPE_CSV", "").strip(),
+              "incomplete_scope": os.environ.get("INCOMPLETE_SCOPE_CSV", "").strip(),
+              "validated_edits_committed": parse_bool(os.environ.get("VALIDATED_EDITS_COMMITTED", "false")),
+              "edits_pushed": parse_bool(os.environ.get("EDITS_PUSHED", "false")),
+              "validation_tail_can_complete": parse_bool(os.environ.get("VALIDATION_TAIL_CAN_COMPLETE", "false")),
+              "edits_withheld_for_safety": parse_bool(os.environ.get("EDITS_WITHHELD_FOR_SAFETY", "false")),
+              "withheld_reason": os.environ.get("WITHHELD_REASON", "").strip() or "none",
+              "artifacts": artifacts,
+          }
+          progress_fingerprint = hashlib.sha256(
+              json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+          ).hexdigest()
+
+          previous_progress_fingerprint = os.environ.get("PREVIOUS_PROGRESS_FINGERPRINT", "").strip()
+          resume_state = "resumable"
+          resume_should_continue = True
+          if previous_progress_fingerprint and previous_progress_fingerprint == progress_fingerprint:
+              resume_state = "no_progress"
+              resume_should_continue = False
+          elif resume_round >= resume_round_limit:
+              resume_state = "round_budget_exhausted"
+              resume_should_continue = False
+
+          print(f"PROGRESS_FINGERPRINT={progress_fingerprint}")
+          print(f"RESUME_STATE={resume_state}")
+          print(f"RESUME_SHOULD_CONTINUE={'true' if resume_should_continue else 'false'}")
+          print(f"RESUME_TERMINAL={'true' if not resume_should_continue else 'false'}")
+          print(f"TERMINAL_REASON={resume_state if not resume_should_continue else ''}")
+          PY
+          set -a
+          # shellcheck disable=SC1090
+          source "${resume_eval_file}"
+          set +a
+          rm -f "${resume_eval_file}"
+
+          {
+            echo "AUTOFIX_RESUME_ROUND=${resume_round}"
+            echo "AUTOFIX_RESUME_ROUND_LIMIT=${resume_round_limit}"
+            echo "AUTOFIX_RESUME_HEAD_SHA=${current_head_sha}"
+            echo "AUTOFIX_RESUME_COMPLETED_SCOPE=${completed_scope_csv}"
+            echo "AUTOFIX_RESUME_INCOMPLETE_SCOPE=${incomplete_scope_csv}"
+            echo "AUTOFIX_RESUME_PROGRESS_FINGERPRINT=${PROGRESS_FINGERPRINT}"
+            echo "AUTOFIX_RESUME_STATE=${RESUME_STATE}"
+            echo "AUTOFIX_RESUME_SHOULD_CONTINUE=${RESUME_SHOULD_CONTINUE}"
+            echo "AUTOFIX_RESUME_TERMINAL=${RESUME_TERMINAL}"
+            echo "AUTOFIX_RESUME_REASON=${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}"
+            echo "AUTOFIX_RESUME_PHASE=${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}"
+          } >> "$GITHUB_ENV"
+
+          resume_state_human="$(printf '%s' "${RESUME_STATE}" | tr '_' ' ')"
+          if [ "${RESUME_SHOULD_CONTINUE}" = "true" ]; then
+            resume_state_note="Another same-head continuation run can resume from this marker."
+          else
+            resume_state_note="Same-head resume stops here because ${resume_state_human}."
+          fi
+
+          comment_body_file="$(mktemp)"
+
+          cat > "${comment_body_file}" <<EOF
+          <!-- REVIEW_AUTOFIX_PARTIAL_V1 -->
+          **AI review/autofix partial finalize**
+
+          ${partial_publish_note}
+
+          ${resume_state_note}
+
+          - Completed scope: ${completed_scope_human}
+          - Incomplete scope: ${incomplete_scope_human}
+          - Validated edits committed: ${validated_edits_committed}
+          - Edits pushed: ${edits_pushed}
+          - Validation tail can complete: ${validation_tail_can_complete}
+          - Edits withheld for safety: ${edits_withheld_for_safety}
+          - Withheld reason: ${withheld_reason}
+          - Resume state: ${RESUME_STATE}
+          - Resume round: ${resume_round} of ${resume_round_limit}
+          - Same-head continuation: ${RESUME_SHOULD_CONTINUE}
+          - Head SHA: ${current_head_sha:-unknown}
+          - Run: ${WORKFLOW_RUN_URL}
+
+          \`\`\`text
+          partial_finalize=true
+          reason=${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}
+          phase=${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}
+          completed_scope=${completed_scope_csv}
+          incomplete_scope=${incomplete_scope_csv}
+          validated_edits_committed=${validated_edits_committed}
+          edits_pushed=${edits_pushed}
+          validation_tail_can_complete=${validation_tail_can_complete}
+          edits_withheld_for_safety=${edits_withheld_for_safety}
+          withheld_reason=${withheld_reason}
+          head_sha=${current_head_sha}
+          resume_round=${resume_round}
+          resume_round_limit=${resume_round_limit}
+          resume_state=${RESUME_STATE}
+          resume_should_continue=${RESUME_SHOULD_CONTINUE}
+          \`\`\`
+          EOF
+
+          if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="$(cat "${comment_body_file}")" >/dev/null 2>&1; then
+            partial_comment_posted="true"
+          else
+            echo "::warning::Unable to post partial finalize comment after retries."
+          fi
+          rm -f "${comment_body_file}"
+
+          {
+            echo "AUTOFIX_PARTIAL_COMMENT_POSTED=${partial_comment_posted}"
+            echo "AUTOFIX_RESUME_COMMENT_POSTED=${partial_comment_posted}"
+          } >> "$GITHUB_ENV"
+
+          partial_marker_dir=".ai/review_runtime/pr-${PR_NUMBER}/round-${resume_round}"
+          mkdir -p "${partial_marker_dir}"
+          partial_marker_file="${partial_marker_dir}/partial_finalize.json"
+          PARTIAL_MARKER_FILE="${partial_marker_file}" \
+          PARTIAL_COMMENT_POSTED="${partial_comment_posted}" \
+          CURRENT_HEAD_SHA="${current_head_sha}" \
+          COMPLETED_SCOPE_CSV="${completed_scope_csv}" \
+          INCOMPLETE_SCOPE_CSV="${incomplete_scope_csv}" \
+          VALIDATED_EDITS_COMMITTED="${validated_edits_committed}" \
+          EDITS_PUSHED="${edits_pushed}" \
+          VALIDATION_TAIL_CAN_COMPLETE="${validation_tail_can_complete}" \
+          EDITS_WITHHELD_FOR_SAFETY="${edits_withheld_for_safety}" \
+          WITHHELD_REASON="${withheld_reason}" \
+          RESUME_ROUND_VALUE="${resume_round}" \
+          RESUME_ROUND_LIMIT_VALUE="${resume_round_limit}" \
+          RESUME_STATE_VALUE="${RESUME_STATE}" \
+          RESUME_SHOULD_CONTINUE_VALUE="${RESUME_SHOULD_CONTINUE}" \
+          PROGRESS_FINGERPRINT_VALUE="${PROGRESS_FINGERPRINT}" \
+          PREVIOUS_REVIEWS_DIR_PATH="${PREVIOUS_REVIEWS_DIR:-}" \
+          RUNTIME_DIR_PATH="${RUNTIME_DIR:-}" \
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+
+          def parse_bool(name: str) -> bool:
+              return os.environ.get(name, "").strip().lower() == "true"
+
+
+          def parse_csv(name: str) -> list[str]:
+              raw = os.environ.get(name, "").strip()
+              if not raw or raw == "none":
+                  return []
+              return [item for item in raw.split(",") if item]
+
+
+          def optional_path(name: str) -> Path | None:
+              raw = os.environ.get(name, "").strip()
+              return Path(raw) if raw else None
+
+
+          def copy_artifacts(source_paths: list[Path], destination_dir: Path) -> None:
+              copied_any = False
+              for source_path in source_paths:
+                  if not source_path.is_file():
+                      continue
+                  if not copied_any:
+                      destination_dir.mkdir(parents=True, exist_ok=True)
+                      copied_any = True
+                  shutil.copy2(source_path, destination_dir / source_path.name)
+
+
+          partial_marker_path = Path(os.environ["PARTIAL_MARKER_FILE"])
+          partial_marker_dir = partial_marker_path.parent
+          previous_reviews_dir = optional_path("PREVIOUS_REVIEWS_DIR_PATH")
+          runtime_dir = optional_path("RUNTIME_DIR_PATH")
+
+          previous_review_artifacts: list[Path] = []
+          if previous_reviews_dir is not None:
+              for pattern in (
+                  "status_pass1_*.txt",
+                  "status_review_*.txt",
+                  "pass1_*.txt",
+                  "review_*.txt",
+                  "consensus_pass1.txt",
+              ):
+                  previous_review_artifacts.extend(sorted(previous_reviews_dir.glob(pattern)))
+          copy_artifacts(previous_review_artifacts, partial_marker_dir / "previous_reviews")
+
+          runtime_artifacts: list[Path] = []
+          if runtime_dir is not None:
+              for file_name in (
+                  "reviewer_consensus.txt",
+                  "floor_tags.txt",
+                  "consolidator_raw.txt",
+                  "parser_stats.txt",
+                  "review_issues.txt",
+                  "ledger_status.txt",
+                  "editor_summary.txt",
+                  "committed_files.txt",
+              ):
+                  runtime_artifacts.append(runtime_dir / file_name)
+          copy_artifacts(runtime_artifacts, partial_marker_dir / "runtime")
+
+          payload = {
+              "schema_version": 1,
+              "partial_finalize": True,
+              "reason": os.environ.get("AUTOFIX_PARTIAL_FINALIZE_REASON", "").strip() or "unknown",
+              "phase": os.environ.get("AUTOFIX_PARTIAL_FINALIZE_PHASE", "").strip() or "unknown",
+              "head_sha": os.environ.get("CURRENT_HEAD_SHA", "").strip(),
+              "completed_scope": parse_csv("COMPLETED_SCOPE_CSV"),
+              "incomplete_scope": parse_csv("INCOMPLETE_SCOPE_CSV"),
+              "validated_edits_committed": parse_bool("VALIDATED_EDITS_COMMITTED"),
+              "edits_pushed": parse_bool("EDITS_PUSHED"),
+              "validation_tail_can_complete": parse_bool("VALIDATION_TAIL_CAN_COMPLETE"),
+              "edits_withheld_for_safety": parse_bool("EDITS_WITHHELD_FOR_SAFETY"),
+              "withheld_reason": os.environ.get("WITHHELD_REASON", "").strip() or "none",
+              "resume_round": int(os.environ.get("RESUME_ROUND_VALUE", "0") or 0),
+              "resume_round_limit": int(os.environ.get("RESUME_ROUND_LIMIT_VALUE", "0") or 0),
+              "resume_state": os.environ.get("RESUME_STATE_VALUE", "").strip() or "resumable",
+              "resume_should_continue": parse_bool("RESUME_SHOULD_CONTINUE_VALUE"),
+              "progress_fingerprint": os.environ.get("PROGRESS_FINGERPRINT_VALUE", "").strip(),
+              "comment_posted": parse_bool("PARTIAL_COMMENT_POSTED"),
+          }
+          partial_marker_path.write_text(
+              json.dumps(payload, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          echo "AUTOFIX_PARTIAL_MARKER_FILE=${partial_marker_file}" >> "$GITHUB_ENV"
+          echo "AUTOFIX_RESUME_MARKER_FILE=${partial_marker_file}" >> "$GITHUB_ENV"
+
+      - name: Save review-issue ledger after partial finalize
+        if: always() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_issue_ledger/
+            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/
+            ${{ steps.workspace_state.outputs.workspace_path }}/${{ env.REVIEW_LEDGER_PATH }}
+          key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
+
       - name: Telegram success
         # Clean-review-tail gate: matches the auto-merge / mark-ready siblings
         # above so the success notification only fires on a truly converged
         # iteration. See the comment block on "Enable auto-merge on PR" for
         # the LEDGER_ONLY_COMMIT_STRICT rationale.
-        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -5977,6 +6697,12 @@ jobs:
         env:
           AUTOFIX_ITERATION_METRIC: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           EDITOR_COMMIT_PRODUCED: ${{ steps.commit_changes.outputs.did_commit }}
+          MAX_ITERATIONS_REACHED: ${{ steps.retrigger_guard.outputs.max_iterations_reached }}
+          SKIP_JUDGE: ${{ steps.retrigger_guard.outputs.skip_judge }}
+          RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}
+          JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}
+          JUDGE_ACTION: ${{ steps.rb_judge.outputs.judge_action }}
+          JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
         run: |
           set -euo pipefail
 
@@ -6026,6 +6752,16 @@ jobs:
             awk -F $'\t' -v state="${state}" '$2 == state { c++ } END { print c + 0 }' "${path}" 2>/dev/null || echo 0
           }
 
+          sanitize_nonnegative_int()
+          {
+            local value="${1:-0}"
+            if [[ "${value}" =~ ^[0-9]+$ ]]; then
+              echo "${value}"
+            else
+              echo 0
+            fi
+          }
+
           iteration_label="${AUTOFIX_ITERATION_METRIC:-unknown}"
           [ -n "${iteration_label}" ] || iteration_label="unknown"
 
@@ -6042,6 +6778,7 @@ jobs:
           consolidator_raw_file="${RUNTIME_DIR}/consolidator_raw.txt"
           parser_stats_file="${RUNTIME_DIR}/parser_stats.txt"
           ledger_status_file="${RUNTIME_DIR}/ledger_status.txt"
+          committed_files_file="${COMMITTED_FILES_FILE:-${RUNTIME_DIR}/committed_files.txt}"
 
           bundle_bytes="$(file_bytes "${reviewer_bundle_file}")"
           floor_tag_count="$(count_nonempty_lines "${floor_tags_file}")"
@@ -6097,6 +6834,654 @@ jobs:
               ;;
           esac
 
+          budget_total_secs="$(sanitize_nonnegative_int "${CODEX_RUN_BUDGET_TOTAL_SECS:-0}")"
+          budget_start_epoch="$(sanitize_nonnegative_int "${CODEX_RUN_BUDGET_START_EPOCH:-${JOB_START_EPOCH:-0}}")"
+          job_end_epoch="$(sanitize_nonnegative_int "$(date -u +%s 2>/dev/null || echo 0)")"
+          budget_elapsed_secs=0
+          if [ "${budget_start_epoch}" -gt 0 ] && [ "${job_end_epoch}" -ge "${budget_start_epoch}" ]; then
+            budget_elapsed_secs=$((job_end_epoch - budget_start_epoch))
+          fi
+          budget_remaining_secs=0
+          if [ "${budget_total_secs}" -gt 0 ] && [ "${budget_elapsed_secs}" -lt "${budget_total_secs}" ]; then
+            budget_remaining_secs=$((budget_total_secs - budget_elapsed_secs))
+          fi
+
+          resume_round="${AUTOFIX_RESUME_ROUND:-${RESUME_ROUND:-0}}"
+          if ! [[ "${resume_round}" =~ ^[0-9]+$ ]]; then
+            resume_round=0
+          fi
+          resume_round_limit="$(sanitize_nonnegative_int "${AUTOFIX_RESUME_ROUND_LIMIT:-0}")"
+          resume_restored="${AUTOFIX_RESUME_RESTORED:-false}"
+          resume_head_sha="${AUTOFIX_RESUME_HEAD_SHA:-}"
+          resume_state="${AUTOFIX_RESUME_STATE:-fresh}"
+          resume_should_continue="${AUTOFIX_RESUME_SHOULD_CONTINUE:-false}"
+          partial_finalize_validation_tail_can_complete="${AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE:-false}"
+          partial_finalize_edits_withheld_for_safety="${AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY:-false}"
+          partial_finalize_withheld_reason="${AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON:-none}"
+
+          structured_summary_line="$(
+            BUDGET_ELAPSED_SECS="${budget_elapsed_secs}" \
+            BUDGET_TOTAL_SECS="${budget_total_secs}" \
+            BUDGET_REMAINING_SECS="${budget_remaining_secs}" \
+            RESUME_ROUND_SUMMARY="${resume_round}" \
+            REVIEWER_BUNDLE_FILE="${reviewer_bundle_file}" \
+            FLOOR_TAGS_FILE="${floor_tags_file}" \
+            CONSOLIDATOR_RAW_FILE="${consolidator_raw_file}" \
+            PARSER_STATS_FILE="${parser_stats_file}" \
+            LEDGER_STATUS_FILE="${ledger_status_file}" \
+            COMMITTED_FILES_FILE="${committed_files_file}" \
+            PYTHONDONTWRITEBYTECODE=1 \
+            python3 - <<'PY' || true
+          from __future__ import annotations
+
+          import glob
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+
+          def env(name: str, default: str = "") -> str:
+              return os.environ.get(name, default)
+
+
+          def bool_env(name: str) -> bool:
+              return env(name).strip().lower() == "true"
+
+
+          def csv_env_list(name: str) -> list[str]:
+              raw = env(name).strip()
+              if not raw:
+                  return []
+              values = [item.strip() for item in raw.split(",") if item.strip()]
+              return [item for item in values if item != "none"]
+
+
+          def int_env(name: str, default: int = 0) -> int:
+              raw = env(name).strip()
+              if not raw:
+                  return default
+              try:
+                  value = int(raw, 10)
+              except ValueError:
+                  return default
+              return value if value >= 0 else default
+
+
+          def env_path(name: str) -> Path | None:
+              raw = env(name).strip()
+              return Path(raw) if raw else None
+
+
+          def read_text(path: Path | None) -> str:
+              if path is None:
+                  return ""
+              try:
+                  return path.read_text(encoding="utf-8", errors="ignore")
+              except OSError:
+                  return ""
+
+
+          def file_exists(path: Path | None) -> bool:
+              return path is not None and path.exists()
+
+
+          def file_nonempty(path: Path | None) -> bool:
+              return path is not None and path.exists() and path.stat().st_size > 0
+
+
+          def max_attempt_from_text(text: str) -> int:
+              matches = [int(value) for value in re.findall(r"\battempt\s+([0-9]+)\b", text)]
+              return max(matches) if matches else 0
+
+
+          def reviewer_stall_kill_count(log_text: str) -> int:
+              return sum(1 for line in log_text.splitlines() if "recorded codex_stall_killed on " in line)
+
+
+          def reviewer_stall_recovery_next_action(log_text: str) -> str:
+              next_action = ""
+              for line in log_text.splitlines():
+                  if not line.startswith("REVIEWER_ADVANCE: "):
+                      continue
+                  if "reason=stall_guard" not in line:
+                      continue
+                  match = re.search(r"\bnext_action=([A-Za-z0-9_:-]+)", line)
+                  if match is not None:
+                      next_action = match.group(1)
+              return next_action
+
+
+          def parse_marker_fields(line: str, prefix: str) -> dict[str, str]:
+              if not line.startswith(prefix):
+                  return {}
+              fields: dict[str, str] = {}
+              for token in line[len(prefix):].strip().split():
+                  if "=" not in token:
+                      continue
+                  key, value = token.split("=", 1)
+                  fields[key] = value
+              return fields
+
+
+          def marker_int(value: str, default: int = 0) -> int:
+              try:
+                  parsed = int(str(value), 10)
+              except (TypeError, ValueError):
+                  return default
+              return parsed if parsed >= 0 else default
+
+
+          def marker_bool(value: str) -> bool:
+              return str(value).strip().lower() == "true"
+
+
+          def marker_fields_from_lines(text: str, prefix: str) -> list[dict[str, str]]:
+              rows: list[dict[str, str]] = []
+              for line in text.splitlines():
+                  candidate = parse_marker_fields(line, prefix)
+                  if candidate:
+                      rows.append(candidate)
+              return rows
+
+
+          def reviewer_last_slot_state_fields(log_text: str) -> dict[str, str]:
+              slot_state_rows = marker_fields_from_lines(log_text, "REVIEWER_SLOT_STATE: ")
+              return slot_state_rows[-1] if slot_state_rows else {}
+
+
+          def reviewer_retryable_failure_classes(
+              log_text: str,
+              output_text: str,
+              slot_state_fields: dict[str, str],
+          ) -> list[str]:
+              raw = slot_state_fields.get("retryable_failure_classes", "").strip()
+              if raw and raw != "none":
+                  return [value for value in raw.split(",") if value]
+              classes: list[str] = []
+              for value in re.findall(r"failure classified as retryable \(([^)]+)\)", log_text):
+                  if value not in classes:
+                      classes.append(value)
+              for value in re.findall(r"retryable failure \(([^)]+)\)", output_text):
+                  if value not in classes:
+                      classes.append(value)
+              return classes
+
+
+          def reviewer_retryable_failure_count(
+              status: str,
+              log_text: str,
+              output_text: str,
+              slot_state_fields: dict[str, str],
+              retryable_failure_classes: list[str],
+          ) -> int:
+              raw = slot_state_fields.get("retryable_failure_count", "").strip()
+              if raw:
+                  return marker_int(raw)
+              count = len(re.findall(r"failure classified as retryable \([^)]+\)", log_text))
+              if count > 0:
+                  return count
+              if status in {"failed", "skipped_unmapped", "skipped_budget"} and retryable_failure_classes:
+                  return 1
+              if re.search(r"retryable failure \([^)]+\)", output_text):
+                  return 1
+              return 0
+
+
+          def reviewer_backoff_sleep_secs_total(log_text: str, slot_state_fields: dict[str, str]) -> int:
+              raw = slot_state_fields.get("backoff_sleep_secs_total", "").strip()
+              if raw:
+                  return marker_int(raw)
+              total_sleep_secs = 0
+              for fields in marker_fields_from_lines(log_text, "REVIEWER_BACKOFF: "):
+                  total_sleep_secs += marker_int(fields.get("sleep_secs", "0"))
+              return total_sleep_secs
+
+
+          def reviewer_slot_retry_budget_exhausted(
+              log_text: str,
+              output_text: str,
+              slot_state_fields: dict[str, str],
+          ) -> bool:
+              raw = slot_state_fields.get("slot_retry_budget_exhausted", "").strip()
+              if raw:
+                  return marker_bool(raw)
+              combined = f"{log_text}\n{output_text}"
+              return "retry backoff budget was exhausted" in combined
+
+
+          def reviewer_fallback_model_used(log_text: str, slot_state_fields: dict[str, str]) -> bool:
+              raw = slot_state_fields.get("fallback_model_used", "").strip()
+              if raw:
+                  return marker_bool(raw)
+              return (
+                  "REVIEWER_FAILBACK:" in log_text
+                  or "next_action=failback" in log_text
+                  or "next_action=retry_extended" in log_text
+              )
+
+
+          def reviewer_cache_status(log_text: str, slot_state_fields: dict[str, str]) -> str:
+              raw = slot_state_fields.get("cache_status", "").strip()
+              if raw:
+                  return raw
+              cache_rows = marker_fields_from_lines(log_text, "REVIEWER_CACHE: ")
+              if cache_rows:
+                  return cache_rows[-1].get("status", "unknown") or "unknown"
+              return "unknown"
+
+
+          def reviewer_cache_reuse_attempted(
+              log_text: str,
+              slot_state_fields: dict[str, str],
+          ) -> bool:
+              raw = slot_state_fields.get("cache_reuse_attempted", "").strip()
+              if raw:
+                  return marker_bool(raw)
+              for fields in marker_fields_from_lines(log_text, "REVIEWER_CACHE: "):
+                  if fields.get("status") != "supported":
+                      continue
+                  if fields.get("prompt_reused") != "true":
+                      continue
+                  if marker_int(fields.get("attempt", "0")) > 1:
+                      return True
+              return False
+
+
+          def reviewer_cache_read_input_tokens_total(log_text: str) -> int:
+              total_cache_read_input_tokens = 0
+              for fields in marker_fields_from_lines(log_text, "INFO: openrouter usage "):
+                  total_cache_read_input_tokens += marker_int(fields.get("cache_read_input_tokens", "0"))
+              return total_cache_read_input_tokens
+
+
+          def reviewer_failure_class(status: str, log_text: str, output_text: str) -> str:
+              stall_guard_logged = reviewer_stall_kill_count(log_text) > 0 or "killed by codex stall guard" in log_text
+              if status == "success":
+                  return "none"
+              if status == "pr_closed":
+                  return "pr_closed"
+              if status == "skipped_budget":
+                  return "soft_deadline"
+              if status == "skipped_open":
+                  return "cached_open"
+              if status == "skipped_unmapped":
+                  if stall_guard_logged:
+                      return "stall_guard"
+                  retryable_output = re.findall(r"retryable failure \(([^)]+)\)", output_text)
+                  if retryable_output:
+                      return retryable_output[-1]
+                  retryable_log = re.findall(r"failure classified as retryable \(([^)]+)\)", log_text)
+                  if retryable_log:
+                      return retryable_log[-1]
+                  return "retryable_failure"
+
+              if stall_guard_logged:
+                  return "stall_guard"
+              retryable_log = re.findall(r"failure classified as retryable \(([^)]+)\)", log_text)
+              if retryable_log:
+                  return retryable_log[-1]
+              if "idle timeout" in log_text:
+                  return "idle_timeout"
+              if "max wall" in log_text:
+                  return "max_wall"
+              if "codex_stall_killed" in log_text or "killed by codex stall guard" in log_text:
+                  return "stall_guard"
+              if "produced empty output" in log_text:
+                  return "empty_output"
+              if "execution failed" in log_text:
+                  return "non_retryable"
+              if "codex CLI not found" in log_text or "codex CLI not found" in output_text:
+                  return "codex_cli_missing"
+              return "unknown"
+
+
+          runtime_dir = env_path("RUNTIME_DIR") or Path(".")
+          previous_reviews_dir = env_path("PREVIOUS_REVIEWS_DIR")
+          editor_summary_file = env_path("EDITOR_SUMMARY_FILE")
+          committed_files_file = env_path("COMMITTED_FILES_FILE")
+
+          reviewer_slots: list[dict[str, object]] = []
+          if previous_reviews_dir is not None:
+              reviewer_status_paths = sorted(glob.glob(str(previous_reviews_dir / "status_review_*.txt")))
+              reviewer_slot_prefix = "review"
+              if not reviewer_status_paths:
+                  reviewer_status_paths = sorted(glob.glob(str(previous_reviews_dir / "status_pass1_*.txt")))
+                  reviewer_slot_prefix = "pass1"
+              for status_path_str in reviewer_status_paths:
+                  status_path = Path(status_path_str)
+                  slot_name = status_path.stem.removeprefix(f"status_{reviewer_slot_prefix}_")
+                  status_value = read_text(status_path).strip() or "unknown"
+                  log_text = read_text(previous_reviews_dir / f"{reviewer_slot_prefix}_{slot_name}.log")
+                  output_text = read_text(previous_reviews_dir / f"{reviewer_slot_prefix}_{slot_name}.txt")
+                  slot_state_fields = reviewer_last_slot_state_fields(log_text)
+                  retryable_failure_classes = reviewer_retryable_failure_classes(log_text, output_text, slot_state_fields)
+                  attempt_count = max_attempt_from_text(log_text)
+                  stall_kill_count = reviewer_stall_kill_count(log_text)
+                  stall_recovery_next_action = reviewer_stall_recovery_next_action(log_text)
+                  if attempt_count == 0 and status_value in {"success", "failed", "pr_closed", "skipped_unmapped", "skipped_budget"} and (log_text or output_text):
+                      attempt_count = 1
+                  reviewer_slots.append({
+                      "slot": slot_name,
+                      "attempt_count": attempt_count,
+                      "status": status_value,
+                      "failure_class": reviewer_failure_class(status_value, log_text, output_text),
+                      "stall_kill_count": stall_kill_count,
+                      "stall_recovery_next_action": stall_recovery_next_action,
+                      "stall_recovered": bool(stall_kill_count and status_value == "success"),
+                      "retryable_failure_count": reviewer_retryable_failure_count(
+                          status_value,
+                          log_text,
+                          output_text,
+                          slot_state_fields,
+                          retryable_failure_classes,
+                      ),
+                      "retryable_failure_classes": retryable_failure_classes,
+                      "backoff_sleep_secs_total": reviewer_backoff_sleep_secs_total(log_text, slot_state_fields),
+                      "slot_retry_budget_exhausted": reviewer_slot_retry_budget_exhausted(log_text, output_text, slot_state_fields),
+                      "fallback_model_used": reviewer_fallback_model_used(log_text, slot_state_fields),
+                      "cache_status": reviewer_cache_status(log_text, slot_state_fields),
+                      "cache_reuse_attempted": reviewer_cache_reuse_attempted(log_text, slot_state_fields),
+                      "cache_read_input_tokens_total": reviewer_cache_read_input_tokens_total(log_text),
+                  })
+
+          reviewers_phase_state = "completed" if reviewer_slots else "skipped"
+
+          reviewer_bundle_file = env_path("REVIEWER_BUNDLE_FILE")
+          floor_tags_file = env_path("FLOOR_TAGS_FILE")
+          consolidator_raw_file = env_path("CONSOLIDATOR_RAW_FILE")
+          parser_stats_file = env_path("PARSER_STATS_FILE")
+          ledger_status_file = env_path("LEDGER_STATUS_FILE")
+
+          consolidator_enabled = env("REVIEW_CONSOLIDATOR_ENABLED", "1") != "0"
+          if not consolidator_enabled:
+              consolidator_phase_state = "skipped"
+              consolidator_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "disabled"}
+          elif file_exists(consolidator_raw_file):
+              consolidator_phase_state = "completed"
+              consolidator_slot = {
+                  "attempt_count": 1,
+                  "status": "success" if file_nonempty(consolidator_raw_file) else "failed",
+                  "failure_class": "none" if file_nonempty(consolidator_raw_file) else "empty_output",
+              }
+          else:
+              consolidator_phase_state = "skipped"
+              consolidator_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
+
+          if file_exists(parser_stats_file):
+              parser_phase_state = "completed"
+              parser_slot = {"attempt_count": 1, "status": "success", "failure_class": "none"}
+          else:
+              parser_phase_state = "skipped"
+              parser_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
+
+          if file_exists(ledger_status_file):
+              ledger_phase_state = "completed"
+              ledger_slot = {"attempt_count": 1, "status": "success", "failure_class": "none"}
+          else:
+              ledger_phase_state = "skipped"
+              ledger_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
+
+          editor_attempt_numbers: set[int] = set()
+          if previous_reviews_dir is not None:
+              for pattern in ("editor_attempt_*.txt", "editor_attempt_*.err", "editor_attempt_*_changes_lost.txt"):
+                  for path_str in glob.glob(str(previous_reviews_dir / pattern)):
+                      match = re.search(r"editor_attempt_(\d+)", Path(path_str).name)
+                      if match:
+                          editor_attempt_numbers.add(int(match.group(1)))
+          editor_attempt_count = max(editor_attempt_numbers) if editor_attempt_numbers else 0
+          editor_summary_exists = file_exists(editor_summary_file)
+
+          if bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):
+              editor_phase_state = "completed"
+              editor_slot = {"attempt_count": max(editor_attempt_count, 1), "status": "failed", "failure_class": "empty_noop"}
+          elif bool_env("EDITOR_CHANGES_LOST"):
+              editor_phase_state = "completed"
+              editor_slot = {"attempt_count": max(editor_attempt_count, 1), "status": "failed", "failure_class": "changes_lost"}
+          elif bool_env("EDITOR_NOOP_SUSPICIOUS"):
+              editor_phase_state = "completed"
+              editor_slot = {
+                  "attempt_count": max(editor_attempt_count, 1),
+                  "status": "failed",
+                  "failure_class": "refusal" if bool_env("EDITOR_NOOP_REFUSAL") else "unexpected_noop",
+              }
+          elif editor_attempt_count > 0 or editor_summary_exists:
+              editor_phase_state = "completed"
+              editor_slot = {"attempt_count": max(editor_attempt_count, 1), "status": "success", "failure_class": "none"}
+          elif bool_env("PR_CLOSED"):
+              editor_phase_state = "skipped"
+              editor_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "pr_closed"}
+          elif bool_env("MAX_ITERATIONS_REACHED"):
+              editor_phase_state = "skipped"
+              editor_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "max_iterations_reached"}
+          else:
+              editor_phase_state = "skipped"
+              editor_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
+
+          committed_files_text = read_text(committed_files_file)
+          commit_phase_observed = any(env(key).strip() for key in ("DID_COMMIT", "LEDGER_ONLY_COMMIT", "LEDGER_ONLY_COMMIT_STRICT")) or bool(committed_files_text.strip())
+
+          partial_finalize_validation_tail_can_complete = bool_env("AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE")
+          partial_finalize_edits_withheld_for_safety = bool_env("AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY")
+          partial_finalize_withheld_reason = env("AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON").strip() or "none"
+
+          if bool_env("DID_COMMIT"):
+              commit_phase_state = "completed"
+              commit_slot = {"attempt_count": 1, "status": "success", "failure_class": "none"}
+          elif "branch is not writable" in committed_files_text:
+              commit_phase_state = "completed"
+              commit_slot = {"attempt_count": 1, "status": "skipped", "failure_class": "not_writable"}
+          elif bool_env("MAX_ITERATIONS_REACHED"):
+              commit_phase_state = "skipped"
+              commit_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "max_iterations_reached"}
+          elif bool_env("PR_CLOSED"):
+              commit_phase_state = "skipped"
+              commit_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "pr_closed"}
+          elif bool_env("AUTOFIX_STALE_BASE_SKIP"):
+              commit_phase_state = "skipped"
+              commit_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "stale_base_skip"}
+          elif partial_finalize_edits_withheld_for_safety:
+              commit_phase_state = "completed"
+              commit_slot = {"attempt_count": 1, "status": "skipped", "failure_class": "withheld_for_safety"}
+          elif commit_phase_observed:
+              commit_phase_state = "completed"
+              commit_slot = {"attempt_count": 1, "status": "no_commit", "failure_class": "no_changes"}
+          else:
+              commit_phase_state = "skipped"
+              commit_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
+
+          edits_pushed = bool_env("AUTOFIX_EDITS_PUSHED")
+          push_allowed = bool_env("CAN_PUSH")
+          push_needed = bool_env("DID_COMMIT") or bool_env("CONFLICT_RESOLVED")
+          if edits_pushed:
+              push_phase_state = "completed"
+              push_slot = {"attempt_count": 1, "status": "success", "failure_class": "none"}
+          elif bool_env("AUTOFIX_STALE_BASE_SKIP") and push_needed:
+              push_phase_state = "skipped"
+              push_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "stale_base_skip"}
+          elif bool_env("PR_CLOSED"):
+              push_phase_state = "skipped"
+              push_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "pr_closed"}
+          elif partial_finalize_edits_withheld_for_safety:
+              push_phase_state = "skipped"
+              push_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "withheld_for_safety"}
+          elif push_needed and not push_allowed:
+              push_phase_state = "skipped"
+              push_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "push_not_allowed"}
+          elif push_needed:
+              push_phase_state = "completed"
+              push_slot = {"attempt_count": 1, "status": "failed", "failure_class": "push_failed"}
+          else:
+              push_phase_state = "skipped"
+              push_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_needed"}
+
+          max_iterations_reached = bool_env("MAX_ITERATIONS_REACHED")
+          skip_judge = bool_env("SKIP_JUDGE")
+          judge_handled = bool_env("JUDGE_HANDLED")
+          judge_action = env("JUDGE_ACTION").strip()
+          judge_skip_reason = env("JUDGE_SKIP_REASON").strip()
+          rb_judge_status = env("RB_JUDGE_STATUS").strip()
+          partial_finalize = bool_env("AUTOFIX_PARTIAL_FINALIZE_REQUESTED")
+          partial_finalize_reason = env("AUTOFIX_PARTIAL_FINALIZE_REASON").strip()
+          partial_finalize_phase = env("AUTOFIX_PARTIAL_FINALIZE_PHASE").strip()
+          partial_comment_posted = bool_env("AUTOFIX_PARTIAL_COMMENT_POSTED")
+          resume_restored = bool_env("AUTOFIX_RESUME_RESTORED")
+          resume_head_sha = env("AUTOFIX_RESUME_HEAD_SHA").strip()
+          resume_round_limit = int_env("AUTOFIX_RESUME_ROUND_LIMIT")
+          resume_state = env("AUTOFIX_RESUME_STATE", "fresh").strip() or "fresh"
+          resume_should_continue = bool_env("AUTOFIX_RESUME_SHOULD_CONTINUE")
+          resume_source_reason = env("AUTOFIX_RESUME_REASON").strip()
+          resume_source_phase = env("AUTOFIX_RESUME_PHASE").strip()
+          resume_comment_posted = bool_env("AUTOFIX_RESUME_COMMENT_POSTED")
+          resume_completed_scope = csv_env_list("AUTOFIX_RESUME_COMPLETED_SCOPE")
+          resume_incomplete_scope = csv_env_list("AUTOFIX_RESUME_INCOMPLETE_SCOPE")
+
+          incomplete_phases: list[str] = list(resume_incomplete_scope)
+          if not incomplete_phases and partial_finalize:
+              if partial_finalize_phase == "reviewers":
+                  incomplete_phases = ["reviewers", "consolidator", "parser", "ledger", "editor"]
+              elif partial_finalize_phase == "editor":
+                  incomplete_phases = ["editor"]
+              elif partial_finalize_phase:
+                  incomplete_phases = [partial_finalize_phase]
+
+          stall_recovery = {
+              "killed_attempts": sum(int(slot.get("stall_kill_count", 0)) for slot in reviewer_slots),
+              "advanced_slots": sum(1 for slot in reviewer_slots if str(slot.get("stall_recovery_next_action", "")).strip()),
+              "recovered_slots": sum(1 for slot in reviewer_slots if bool(slot.get("stall_recovered"))),
+              "partial_finalize_requested": bool(
+                  partial_finalize and partial_finalize_phase == "reviewers" and any(int(slot.get("stall_kill_count", 0)) > 0 for slot in reviewer_slots)
+              ),
+          }
+
+          if not max_iterations_reached or skip_judge:
+              rb_judge_phase_state = "skipped"
+              rb_judge_slot = {
+                  "attempt_count": 0,
+                  "status": "skipped",
+                  "failure_class": "skip_judge" if skip_judge else "not_invoked",
+              }
+          elif judge_handled:
+              rb_judge_phase_state = "completed"
+              rb_judge_slot = {"attempt_count": 1, "status": judge_action or "handled", "failure_class": "none"}
+          elif rb_judge_status == "failed":
+              rb_judge_phase_state = "completed"
+              rb_judge_slot = {"attempt_count": 1, "status": "failed", "failure_class": "judge_failed"}
+          elif judge_skip_reason:
+              rb_judge_phase_state = "completed"
+              rb_judge_slot = {"attempt_count": 1, "status": "skipped", "failure_class": judge_skip_reason}
+          else:
+              rb_judge_phase_state = "completed"
+              rb_judge_slot = {"attempt_count": 1, "status": "unhandled", "failure_class": "review_blocked"}
+
+
+          def determine_finalize_reason() -> str:
+              if bool_env("PR_CLOSED"):
+                  return "pr_closed"
+              if bool_env("AUTOFIX_STALE_BASE_SKIP"):
+                  return "stale_base_skip"
+              if resume_state in {"no_progress", "round_budget_exhausted"} and not resume_should_continue:
+                  return resume_state
+              if partial_finalize:
+                  return "partial_finalize"
+              if bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):
+                  return "editor_empty_noop"
+              if bool_env("EDITOR_CHANGES_LOST"):
+                  redispatched = env("CHANGES_LOST_REDISPATCHED").strip()
+                  if redispatched == "true":
+                      return "editor_changes_lost_redispatched"
+                  if redispatched == "skipped_peer_inflight":
+                      return "editor_changes_lost_peer_inflight"
+                  return "editor_changes_lost"
+              if bool_env("EDITOR_NOOP_SUSPICIOUS") and bool_env("EDITOR_NOOP_REFUSAL"):
+                  return "editor_noop_refusal"
+              if bool_env("EDITOR_NOOP_SUSPICIOUS"):
+                  return "editor_noop_suspicious"
+              if max_iterations_reached and not skip_judge:
+                  if judge_handled:
+                      return f"rb_judge_{judge_action or 'handled'}"
+                  if rb_judge_status == "failed":
+                      return "rb_judge_failed"
+                  if judge_skip_reason:
+                      return f"rb_judge_skip_{judge_skip_reason}"
+                  return "rb_judge_review_blocked"
+              if push_needed and not push_allowed:
+                  return "push_not_allowed"
+              if push_needed and not edits_pushed:
+                  return "push_failed"
+              if bool_env("LEDGER_ONLY_COMMIT_STRICT"):
+                  return "clean_review_ledger_only"
+              if bool_env("LEDGER_ONLY_COMMIT"):
+                  return "clean_review_converged"
+              if edits_pushed and bool_env("CONFLICT_RESOLVED"):
+                  return "conflict_resolved_pushed"
+              if edits_pushed and bool_env("DID_COMMIT"):
+                  return "autofix_pushed"
+              return "clean_review_no_commit"
+
+
+          finalize_reason = determine_finalize_reason()
+          phase_order = [
+              ("reviewers", reviewers_phase_state),
+              ("consolidator", consolidator_phase_state),
+              ("parser", parser_phase_state),
+              ("ledger", ledger_phase_state),
+              ("editor", editor_phase_state),
+              ("commit", commit_phase_state),
+              ("push", push_phase_state),
+              ("rb_judge", rb_judge_phase_state),
+              ("finalize", "completed"),
+          ]
+
+          summary = {
+              "completed_phases": [name for name, state in phase_order if state == "completed"],
+              "skipped_phases": [name for name, state in phase_order if state == "skipped"],
+              "slot_results": {
+                  "reviewers": reviewer_slots,
+                  "consolidator": consolidator_slot,
+                  "parser": parser_slot,
+                  "ledger": ledger_slot,
+                  "editor": editor_slot,
+                  "commit": commit_slot,
+                  "push": push_slot,
+                  "rb_judge": rb_judge_slot,
+                  "finalize": {"attempt_count": 1, "status": "emitted", "failure_class": "none"},
+              },
+              "budget_elapsed_secs": int_env("BUDGET_ELAPSED_SECS"),
+              "budget_total_secs": int_env("BUDGET_TOTAL_SECS"),
+              "budget_remaining_secs": int_env("BUDGET_REMAINING_SECS"),
+              "stall_recovery": stall_recovery,
+              "finalize_reason": finalize_reason,
+              "partial_finalize": partial_finalize,
+              "partial_finalize_reason": partial_finalize_reason,
+              "partial_finalize_phase": partial_finalize_phase,
+              "partial_finalize_validation_tail_can_complete": partial_finalize_validation_tail_can_complete,
+              "partial_finalize_edits_withheld_for_safety": partial_finalize_edits_withheld_for_safety,
+              "partial_finalize_withheld_reason": partial_finalize_withheld_reason,
+              "partial_comment_posted": partial_comment_posted,
+              "incomplete_phases": incomplete_phases,
+              "edits_pushed": edits_pushed,
+              "resume_round": int_env("RESUME_ROUND_SUMMARY"),
+              "resume_restored": resume_restored,
+              "resume_head_sha": resume_head_sha,
+              "resume_round_limit": resume_round_limit,
+              "resume_state": resume_state,
+              "resume_should_continue": resume_should_continue,
+              "resume_source_reason": resume_source_reason,
+              "resume_source_phase": resume_source_phase,
+              "resume_comment_posted": resume_comment_posted,
+              "resume_completed_scope": resume_completed_scope,
+              "resume_incomplete_scope": resume_incomplete_scope,
+          }
+
+          print("REVIEW_AUTOFIX_RUN_SUMMARY_V1 " + json.dumps(summary, sort_keys=True, separators=(",", ":")))
+          PY
+          )"
+
+          if [ -z "${structured_summary_line}" ]; then
+            structured_summary_line='REVIEW_AUTOFIX_RUN_SUMMARY_V1 {"completed_phases":["finalize"],"skipped_phases":["reviewers","consolidator","parser","ledger","editor","commit","push","rb_judge"],"slot_results":{"reviewers":[],"consolidator":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"parser":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"ledger":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"editor":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"commit":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"push":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"rb_judge":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"finalize":{"attempt_count":1,"status":"emitted","failure_class":"none"}},"budget_elapsed_secs":0,"budget_total_secs":0,"budget_remaining_secs":0,"stall_recovery":{"advanced_slots":0,"killed_attempts":0,"partial_finalize_requested":false,"recovered_slots":0},"finalize_reason":"summary_emit_failed","partial_finalize":false,"partial_finalize_reason":"","partial_finalize_phase":"","partial_finalize_validation_tail_can_complete":false,"partial_finalize_edits_withheld_for_safety":false,"partial_finalize_withheld_reason":"none","partial_comment_posted":false,"incomplete_phases":[],"edits_pushed":false,"resume_round":0,"resume_restored":false,"resume_head_sha":"","resume_round_limit":0,"resume_state":"fresh","resume_should_continue":false,"resume_source_reason":"","resume_source_phase":"","resume_comment_posted":false,"resume_completed_scope":[],"resume_incomplete_scope":[]}'
+          fi
+
           {
             echo "### Review Pipeline — Iteration ${iteration_label}"
             echo
@@ -6121,6 +7506,18 @@ jobs:
             echo "| Editor invoked | ${editor_invoked} |"
             echo "| CONSOLIDATOR_OVERRIDDEN count | ${override_count} |"
             echo "| Editor commit produced | ${editor_commit_produced} |"
+            echo "| Budget elapsed (secs) | ${budget_elapsed_secs} |"
+            echo "| Budget total (secs) | ${budget_total_secs} |"
+            echo "| Budget remaining (secs) | ${budget_remaining_secs} |"
+            echo "| Partial validation tail can complete | ${partial_finalize_validation_tail_can_complete} |"
+            echo "| Partial edits withheld for safety | ${partial_finalize_edits_withheld_for_safety} |"
+            echo "| Partial withheld reason | ${partial_finalize_withheld_reason} |"
+            echo "| Resume round | ${resume_round} |"
+            echo "| Resume restored | ${resume_restored} |"
+            echo "| Resume state | ${resume_state} |"
+            echo "| Resume round limit | ${resume_round_limit} |"
+            echo "| Resume should continue | ${resume_should_continue} |"
+            echo "| Resume head SHA | ${resume_head_sha:-none} |"
             echo
             echo "**Acceptance deltas vs prior iteration:**"
             echo "${reviewer_scope_note}"
@@ -6131,6 +7528,9 @@ jobs:
             fi
             echo
           } >> "${GITHUB_STEP_SUMMARY}"
+
+          printf '\n### Review Autofix Run Summary\n\n' >> "${GITHUB_STEP_SUMMARY}"
+          printf '%s\n' "${structured_summary_line}" | tee -a "${GITHUB_STEP_SUMMARY}"
 
       - name: Cleanup temporary artifacts
         if: always()

@@ -11,6 +11,10 @@ fi
 # shellcheck source=/dev/null
 source "${WATCHDOG_HELPERS}"
 
+if command -v codex_run_budget_export >/dev/null 2>&1; then
+	codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"
+fi
+
 # Source rate-limit-aware GH API helpers (provides gh_retry and the
 # Telegram admin alert on GH API rate-limit events).
 if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
@@ -495,6 +499,63 @@ PY
 	return 0
 }
 
+autofix_resume_truthy()
+{
+	case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+		1|true|yes|on)
+			return 0
+			;;
+	esac
+
+	return 1
+}
+
+autofix_resume_same_head_active()
+{
+	autofix_resume_truthy "${AUTOFIX_RESUME_RESTORED:-false}" || return 1
+	autofix_resume_truthy "${AUTOFIX_RESUME_SHOULD_CONTINUE:-false}" || return 1
+	case "${AUTOFIX_RESUME_STATE:-}" in
+		''|resumable)
+			return 0
+			;;
+	esac
+
+	return 1
+}
+
+autofix_resume_completed_scope_contains()
+{
+	local needle="$1"
+	local scope_item=""
+	local completed_scope="${AUTOFIX_RESUME_COMPLETED_SCOPE:-}"
+	local -a completed_scope_items=()
+
+	[ -n "${needle}" ] || return 1
+	IFS=',' read -r -a completed_scope_items <<< "${completed_scope}"
+	for scope_item in "${completed_scope_items[@]}"; do
+		scope_item="$(printf '%s' "${scope_item}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+		[ -n "${scope_item}" ] || continue
+		[ "${scope_item}" = "${needle}" ] && return 0
+	done
+
+	return 1
+}
+
+autofix_resume_can_reuse_stage()
+{
+	local scope_name="$1"
+	shift || true
+	local artifact_path=""
+
+	autofix_resume_same_head_active || return 1
+	autofix_resume_completed_scope_contains "${scope_name}" || return 1
+	for artifact_path in "$@"; do
+		[ -f "${artifact_path}" ] || return 1
+	done
+
+	return 0
+}
+
 if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
   echo "LAST_RUN_DIFF_FILE is missing or empty before editor stage; using placeholder context."
   echo "No previous AI autofix run diff is available." > "${LAST_RUN_DIFF_FILE}"
@@ -623,6 +684,22 @@ emit_editor_substate() {
   bash "${ledger_substate_script}" "${args[@]}" || true
 }
 
+request_editor_partial_finalize() {
+  local finalize_reason="$1"
+
+  export AUTOFIX_PARTIAL_FINALIZE_REQUESTED="true"
+  export AUTOFIX_PARTIAL_FINALIZE_REASON="${finalize_reason}"
+  export AUTOFIX_PARTIAL_FINALIZE_PHASE="editor"
+
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    {
+      echo "AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true"
+      echo "AUTOFIX_PARTIAL_FINALIZE_REASON=${finalize_reason}"
+      echo "AUTOFIX_PARTIAL_FINALIZE_PHASE=editor"
+    } >> "$GITHUB_ENV"
+  fi
+}
+
 AUTOFIX_ITERATION="${AUTOFIX_ITERATION:-}"
 if [ -z "${AUTOFIX_ITERATION}" ]; then
   autofix_count=0
@@ -648,7 +725,9 @@ export AUTOFIX_ITERATION
 prepare_judge_interim_priors
 
 floor_rules_script=""
-if floor_rules_script="$(resolve_support_script review_floor_rules.sh)"; then
+if autofix_resume_can_reuse_stage "consolidator" "${FLOOR_TAGS_FILE}"; then
+	echo "Resume: reusing cached floor_tags.txt from same-head partial state."
+elif floor_rules_script="$(resolve_support_script review_floor_rules.sh)"; then
   if [ "${REVIEW_FLOOR_RULES_ENABLED:-1}" = "0" ]; then
     : > "${FLOOR_TAGS_FILE}"
     echo "stage=floor_rules disabled=1"
@@ -662,7 +741,9 @@ else
 fi
 
 consolidate_script=""
-if consolidate_script="$(resolve_support_script review_consolidate.sh)"; then
+if autofix_resume_can_reuse_stage "consolidator" "${CONSOLIDATOR_RAW_FILE}"; then
+	echo "Resume: reusing cached consolidator_raw.txt from same-head partial state."
+elif consolidate_script="$(resolve_support_script review_consolidate.sh)"; then
   if ! bash "${consolidate_script}"; then
     echo "::warning::review_consolidate.sh failed; continuing"
   fi
@@ -672,7 +753,9 @@ else
 fi
 
 parse_script=""
-if parse_script="$(resolve_support_script review_parse_consolidator.sh)"; then
+if autofix_resume_can_reuse_stage "parser" "${REVIEW_ISSUES_FILE}" "${PARSER_STATS_FILE}"; then
+	echo "Resume: reusing cached parser artifacts from same-head partial state."
+elif parse_script="$(resolve_support_script review_parse_consolidator.sh)"; then
   if ! bash "${parse_script}"; then
     echo "::warning::review_parse_consolidator.sh failed; continuing"
   fi
@@ -692,7 +775,9 @@ else
 fi
 
 ledger_script=""
-if ledger_script="$(resolve_support_script review_issue_ledger.sh)"; then
+if autofix_resume_can_reuse_stage "ledger" "${LEDGER_STATUS_FILE}"; then
+	echo "Resume: reusing cached ledger_status.txt from same-head partial state."
+elif ledger_script="$(resolve_support_script review_issue_ledger.sh)"; then
   if ! bash "${ledger_script}"; then
     echo "::warning::review_issue_ledger.sh failed; continuing without ledger context"
     : > "${LEDGER_STATUS_FILE}"
@@ -1631,7 +1716,24 @@ case "${EDITOR_VERBOSITY}" in
     EDITOR_VERBOSITY="low"
     ;;
 esac
-JOB_TIMEOUT_SECS=$((180 * 60))
+# Shared run-budget helpers drive the soft deadline when available; the
+# legacy job-deadline math remains as a fail-open fallback for stale bundles.
+REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED="${REVIEW_SOFT_DEADLINE_MINUTES:-210}"
+if command -v normalize_review_soft_deadline_minutes >/dev/null 2>&1; then
+  REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED="$(normalize_review_soft_deadline_minutes "${REVIEW_SOFT_DEADLINE_MINUTES:-}")"
+fi
+case "${REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED}" in
+  ''|*[!0-9]*)
+    echo "::warning::Invalid REVIEW_SOFT_DEADLINE_MINUTES='${REVIEW_SOFT_DEADLINE_MINUTES:-}'; defaulting to 210."
+    REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED="210"
+    ;;
+esac
+REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED="$(( 10#${REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED} ))"
+if [ "${REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED}" -le 0 ]; then
+  echo "::warning::Invalid REVIEW_SOFT_DEADLINE_MINUTES='${REVIEW_SOFT_DEADLINE_MINUTES:-}'; defaulting to 210."
+  REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED="210"
+fi
+JOB_TIMEOUT_SECS=$(( REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED * 60 ))
 JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
 _hb_tmpdir=""
 _hb_fifo=""
@@ -1650,6 +1752,7 @@ rm -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" 2>/dev/null || true
 
 attempt=1
 editor_max_attempts=3
+editor_partial_finalize_reason=""
 if nag_reminder_enabled; then
   editor_nag_attempt_limit="$(nag_silent_round_threshold)"
   if [ "${editor_nag_attempt_limit}" -gt "${editor_max_attempts}" ]; then
@@ -1666,9 +1769,26 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   fi
 
   now_epoch="$(date +%s)"
-  remaining=$(( JOB_DEADLINE - now_epoch ))
+  run_budget_summary=""
+  budget_deadline_label="soft deadline"
+  if command -v codex_run_budget_remaining_secs >/dev/null 2>&1; then
+    remaining="$(codex_run_budget_remaining_secs "${now_epoch}" 2>/dev/null || true)"
+    case "${remaining}" in
+      ''|*[!0-9]*) remaining="0" ;;
+    esac
+    if command -v codex_run_budget_summary >/dev/null 2>&1; then
+      run_budget_summary="$(codex_run_budget_summary "${now_epoch}" 2>/dev/null || true)"
+      if [ -n "${run_budget_summary}" ]; then
+        echo "Editor attempt ${attempt} run budget: ${run_budget_summary}"
+      fi
+    fi
+  else
+    remaining=$(( JOB_DEADLINE - now_epoch ))
+    budget_deadline_label="job deadline"
+  fi
   if [ "${remaining}" -lt "${EDITOR_MIN_ATTEMPT_SECS}" ]; then
-    echo "Skipping editor attempt ${attempt}: only ${remaining}s remain before job deadline (need ${EDITOR_MIN_ATTEMPT_SECS}s minimum)."
+    echo "Skipping editor attempt ${attempt}: only ${remaining}s remain before ${budget_deadline_label} (need ${EDITOR_MIN_ATTEMPT_SECS}s minimum)."
+    editor_partial_finalize_reason="soft_deadline"
     break
   fi
   # Capacity-fallback: on the final editor attempt switch the editor model to
@@ -1680,9 +1800,14 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   fi
   emit_editor_substate "PreparingWorkspace" "${attempt}"
   # Cap this attempt's wall time to the lesser of EDITOR_MAX_WALL
-  # and the remaining budget minus a 2-min buffer for cleanup steps.
+  # and the remaining run budget minus a 2-min buffer for cleanup steps.
   attempt_wall="${EDITOR_MAX_WALL}"
   budget_cap=$(( remaining - 120 ))
+  if [ "${budget_cap}" -le 0 ]; then
+    echo "Skipping editor attempt ${attempt}: only ${remaining}s remain before ${budget_deadline_label} after reserving the 120s cleanup buffer."
+    editor_partial_finalize_reason="soft_deadline"
+    break
+  fi
   if [ "${budget_cap}" -lt "${attempt_wall}" ]; then
     attempt_wall="${budget_cap}"
     echo "Editor attempt ${attempt}: capping wall time to ${attempt_wall}s (budget-limited, ${remaining}s remain)."
@@ -2241,45 +2366,100 @@ if [ -n "${_last_changes_lost_file}" ] && [ -s "${_last_changes_lost_file}" ]; t
   cp "${_last_changes_lost_file}" "${EDITOR_SUMMARY_FILE}"
   echo "Editor failed after retries; using last changes-lost output as summary to trigger workflow-level recovery."
 else
-  # The other fallback markers ("editor failed before producing",
-  # "unavailable (editor fallback)") MUST remain verbatim to keep
-  # lockstep with the in-step retry and the validator in
-  # review_autofix.yml (see probably_unnecessary_but_read_if_stuck.md
-  # §20.10). Only the Runtime failure path line varies per cause, and
-  # the refusal variant is recognised by an additive validator check
-  # that sets EDITOR_NOOP_REFUSAL alongside EDITOR_NOOP_SUSPICIOUS.
-  if [ -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" ]; then
-    _runtime_failure_path_line="- model refused (safety filter)"
-  else
-    _runtime_failure_path_line="- unavailable (editor fallback)"
+  if [ -z "${editor_partial_finalize_reason}" ]; then
+    if [ -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" ]; then
+      # Keep refusal runs distinct: the workflow validator still greps the
+      # fallback summary for the exact sentinel below to classify
+      # EDITOR_NOOP_REFUSAL and refusal-specific alerts correctly.
+      editor_partial_finalize_reason="refusal"
+    else
+      editor_partial_finalize_reason="recoverable_failure"
+    fi
   fi
-  cat > "${EDITOR_SUMMARY_FILE}" <<__EDITOR_SUMMARY__
+  request_editor_partial_finalize "${editor_partial_finalize_reason}"
+
+  if [ "${editor_partial_finalize_reason}" = "soft_deadline" ]; then
+    cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
 Changes made:
-- none (editor failed before producing a validated summary)
+- none (editor deferred because the run budget was exhausted before another validated attempt could start)
 
 Change status:
 - not-edited
 
 Already satisfied (suggested but already present):
-- none (editor failed before producing a validated summary)
+- none (editor deferred before another validated attempt could start)
 
 Ignored suggestions (with short reason):
-- editor failed after retries before final classification
+- partial finalize requested at the soft deadline before another editor attempt
 
 Reviewer files processed:
-- none (editor failed before producing a validated summary)
+- none (editor deferred before another validated attempt could start)
 
 Review file issue audit:
-- none (editor failed before producing a validated summary)
+- none (editor deferred before another validated attempt could start)
 
 Regression fingerprint:
-- unavailable (editor fallback)
+- unavailable (partial finalize before another editor attempt)
 
 Runtime failure path:
-${_runtime_failure_path_line}
+- partial finalize requested at the soft deadline before another editor attempt
 __EDITOR_SUMMARY__
-  unset _runtime_failure_path_line
-  echo "Editor failed after retries; continuing with fallback summary."
+    echo "Editor stopped for budget headroom; continuing with partial-finalize summary."
+  elif [ "${editor_partial_finalize_reason}" = "refusal" ]; then
+    cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
+Changes made:
+- none (editor returned a safety-policy refusal before another validated attempt could complete)
+
+Change status:
+- not-edited
+
+Already satisfied (suggested but already present):
+- none (editor stopped after a safety-policy refusal before another validated attempt could complete)
+
+Ignored suggestions (with short reason):
+- partial finalize requested after a safety-policy refusal before another validated attempt
+
+Reviewer files processed:
+- none (editor stopped after a safety-policy refusal before another validated attempt could complete)
+
+Review file issue audit:
+- none (editor stopped after a safety-policy refusal before another validated attempt could complete)
+
+Regression fingerprint:
+- unavailable (partial finalize after safety-policy refusal)
+
+Runtime failure path:
+- model refused (safety filter)
+__EDITOR_SUMMARY__
+    echo "Editor returned a safety-policy refusal; continuing with partial-finalize summary."
+  else
+    cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
+Changes made:
+- none (editor requested partial finalize after a recoverable failure before another validated attempt completed)
+
+Change status:
+- not-edited
+
+Already satisfied (suggested but already present):
+- none (editor stopped after a recoverable failure before another validated attempt completed)
+
+Ignored suggestions (with short reason):
+- partial finalize requested after a recoverable editor failure before another validated attempt
+
+Reviewer files processed:
+- none (editor stopped after a recoverable failure before another validated attempt completed)
+
+Review file issue audit:
+- none (editor stopped after a recoverable failure before another validated attempt completed)
+
+Regression fingerprint:
+- unavailable (partial finalize after recoverable editor failure)
+
+Runtime failure path:
+- partial finalize requested after a recoverable editor failure before another validated attempt
+__EDITOR_SUMMARY__
+    echo "Editor failed after retries; continuing with partial-finalize summary."
+  fi
 fi
 final_editor_err="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | sort -V | tail -n 1 || true)"
 if [ -n "${final_editor_err}" ] && [ -s "${final_editor_err}" ]; then
