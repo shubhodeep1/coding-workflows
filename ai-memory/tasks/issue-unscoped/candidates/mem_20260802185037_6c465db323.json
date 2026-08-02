@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:508-533 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: `test_review_apply_fixes_fallback_distinguishes_refusal` still asserts removed `_runtime_failure_path_line` strings that no longer exist after the fallback-summary heredoc refactor.\n  WHY: The live `scripts/review_apply_fixes.sh` now emits static heredocs with the refusal text inline, so the old variable-based grep fails; severity disagreement: blocker vs major.\n- tests/test_review_autofix_review_pipeline_contract.py:1626, 1789, 1921, 2049, 2572 | severity=high | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The reviewer harness coverage for the new budget environment may be incomplete in `_run_reviewer_partial_finalize_budget_harness` and `_run_reviewer_resume_cached_success_harness`.\n  WHY: Without `CODEX_RUN_BUDGET_START_EPOCH`, `CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH`, and `CODEX_RUN_BUDGET_TOTAL_SECS`, the synthetic contract tests can short-circuit before exercising retry/failback/stall/resume logic.\n- tests/test_review_autofix_review_pipeline_contract.py:~2618-2620 | severity=medium | confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `_run_reviewer_resume_cached_success_harness` prints a hardcoded `/tmp/codex-pr-30759795348-1-11118/previous_reviews/...` path instead of `${PREVIOUS_REVIEWS_DIR}/review_{cached_safe_name}.log`.\n  WHY: The harness writes the log into a temp `PREVIOUS_REVIEWS_DIR`, so the test later dereferences a non-existent hardcoded path and hits `FileNotFoundError`.\n- scripts/review_run_reviewers.sh:4174-4188 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The `retry_extended` branch is dead code after the slot-retry-budget and retry helper logic.\n  WHY: The branch can no longer execute, so it adds unreachable logic without changing runtime behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:516-530 | severity=critical | confidence=5\n  PROBLEM: The test asserts three string patterns that no longer exist in scripts/review_apply_fixes.sh after the PR refactored the fallback summary generation from a shared _runtime_failure_path_line variable plus a single heredoc into three distinct static heredocs (soft_deadline, refusal, recoverable_failure).\n  WHY: The CI lint check confirmed this failure at HEAD SHA 8f67a082; the test greps for literal strings that were removed during the refactor, while the refusal sentinel is now inline in the refusal heredoc.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:~508-533 | severity=critical | confidence=5\n  PROBLEM: The test `test_review_apply_fixes_fallback_distinguishes_refusal` asserts that `scripts/review_apply_fixes.sh` contains the literal assignment `_runtime_failure_path_line=\"- model refused (safety filter)\"`, but the PR refactored the fallback summary generation to use three static heredoc templates instead of the shared variable-based approach.\n  WHY: The CI lint check executes the test against the live `scripts/review_apply_fixes.sh`, which now contains the refusal text inline in the heredoc, so the old variable assignment assertion fails.\n- tests/test_review_autofix_review_pipeline_contract.py:~1626, ~1789, ~1921, ~2049, ~2572 | severity=high | confidence=4\n  PROBLEM: The reviewer harness functions `_run_reviewer_failback_harness`, `_run_reviewer_slot_retry_budget_harness`, `_run_reviewer_stall_recovery_harness`, `_run_reviewer_silent_retry_harness`, and `_run_reviewer_resume_cached_success_harness` were updated, but the harness for partial finalize budget and the resume-cached-success harness may not have complete coverage of all the budget environment variables needed for the synthetic soft-deadline contract.\n  WHY: Without the complete budget env, including `CODEX_RUN_BUDGET_START_EPOCH`, `CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH`, and `CODEX_RUN_BUDGET_TOTAL_SECS`, the tests can short-circuit at the budget guard before exercising the retry/failback/stall/resume logic.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:~516 | severity=critical | confidence=5\n  PROBLEM: The test asserts `'_runtime_failure_path_line=\"- model refused (safety filter)\"' in text` but the PR removed that variable assignment from `scripts/review_apply_fixes.sh`.\n  WHY: The CI lint step runs this test against the live script, and the containment check for the removed variable pattern fails.\n- tests/test_review_autofix_review_pipeline_contract.py:~2618-2620 | severity=medium | confidence=5\n  PROBLEM: The two state-output `printf` lines use a hardcoded path `$/tmp/codex-pr-30759795348-1-11118/previous_reviews/review_{cached_safe_name}.log` instead of `${PREVIOUS_REVIEWS_DIR}/review_{cached_safe_name}.log`.\n  WHY: The harness creates `PREVIOUS_REVIEWS_DIR` as a fresh temp directory, so the Python test later reads a non-existent hardcoded file and raises `FileNotFoundError`.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_run_reviewers.sh:4174-4188 | severity=low | confidence=4\n  PROBLEM: The `retry_extended` branch is unreachable after the slot-retry-budget logic and the reviewer_plan_retry_after_retryable_failure helper.\n  WHY: The code still contains dead logic that can never execute, so it adds unreachable complexity without changing runtime behavior.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "ca4869b1ea1374303128b457842ffe1459f87877928c010468067f0d99f502f1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3712,
+    "run_id": "30759795348",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "30759795348",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260802185037_6c465db323",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3712,
+    "run_id": "30759795348"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-02T18:50:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
