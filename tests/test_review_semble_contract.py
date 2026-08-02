@@ -213,9 +213,9 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert 'Reviewer ${model} failed after ${reviewer_max_attempts} attempts.' in reviewers
 	assert 'echo "REVIEWER_FAILBACK_UNMAPPED: ${model}" | tee -a "${log_file}"' in reviewers
 	assert 'reviewer_record_health_outcome "${model}" "retryable_failure" "" "${final_retryable_class}" "${log_file}"' in reviewers
-	assert 'Reviewer slot %s skipped after retryable failure (%s); no same-family failback mapping is available.\\n' in reviewers
+	assert 'Reviewer slot ${model} skipped after retryable failure (${final_retryable_class:-retryable_failure}); no same-family failback mapping is available.' in reviewers
 	assert 'echo "skipped_unmapped" > "${status_file}"' in reviewers
-	assert 'if [ "${reviewer_max_attempts}" -gt 3 ]; then' in reviewers
+	assert 'if [ "${slot_fallback_model_used}" = "true" ] && [ "${slot_retryable_failure_count}" -lt "${reviewer_slot_retry_limit}" ] && [ "${next_attempt_number}" -le "${reviewer_max_attempts}" ]; then' in reviewers
 	assert 'reviewer_nag_counter_for_attempt=$((reviewer_silent_rounds + 1))' in reviewers
 	assert 'reviewer_nag_block="$(maybe_inject_nag "review-reviewer" "${reviewer_nag_counter_for_attempt}")"' in reviewers
 	assert 'if [ "${REVIEWER_ATTEMPT_SILENT}" = "true" ] && nag_reminder_enabled; then' in reviewers
