@@ -110,6 +110,8 @@ if [ "${AUTOFIX_PARTIAL_FINALIZE_REQUESTED:-false}" = "true" ] && [ "${AUTOFIX_P
   withheld_reason="${AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON:-validation_tail_incomplete}"
   echo "Partial finalize findings-only fallback: discarding local edits before commit (${withheld_reason})."
   git reset --hard HEAD >/dev/null 2>&1 || true
+  # Keep this list aligned with any persisted review/runtime directories that
+  # must survive a findings-only partial-finalize cleanup.
   git clean -ffdx \
     -e .ai \
     -e .serena \
