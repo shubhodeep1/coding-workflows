@@ -12,6 +12,12 @@
 #   COMMITTED_FILES_FILE              Path where a per-line list of committed paths is written.
 #   IS_WORKFLOW_SOURCE_REPO           "true" on the coding-workflows repo itself.
 #   ALLOW_WORKFLOW_EDITS              "true" to allow editor changes under .github/workflows.
+#   AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE
+#                                    "false" to suppress commit/push because the
+#                                    existing validation tail cannot finish safely.
+#   AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON
+#                                    Machine-readable reason for the findings-only
+#                                    partial-finalize fallback.
 #   WRITE_GUARDS_ENABLED              "true" to enforce write-guard policy; false logs a bypass and continues.
 #   RUNTIME_DIR                       Ephemeral per-run directory.
 #   PRE_EDITOR_STATE_FILE             Optional snapshot of pre-editor tree state.
@@ -97,6 +103,24 @@ echo "ledger_only_commit_strict=false" >> "$GITHUB_OUTPUT"
 if [ "${CAN_PUSH:-false}" != "true" ]; then
   echo "Skipping commit/push: branch is not writable from this workflow."
   echo "- commit skipped (branch is not writable from this workflow)" > "${COMMITTED_FILES_FILE}"
+  exit 0
+fi
+
+if [ "${AUTOFIX_PARTIAL_FINALIZE_REQUESTED:-false}" = "true" ] && [ "${AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE:-true}" != "true" ]; then
+  withheld_reason="${AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON:-validation_tail_incomplete}"
+  echo "Partial finalize findings-only fallback: discarding local edits before commit (${withheld_reason})."
+  git reset --hard HEAD >/dev/null 2>&1 || true
+  git clean -ffdx \
+    -e .ai \
+    -e .serena \
+    -e scripts \
+    -e prompts \
+    -e .github/ai \
+    -e .github/scripts \
+    -e .github/prompts \
+    -e .codex-workflow-src \
+    -e .codex-workflow-src-main >/dev/null 2>&1 || true
+  echo "- none (edits withheld for safety: ${withheld_reason})" > "${COMMITTED_FILES_FILE}"
   exit 0
 fi
 
