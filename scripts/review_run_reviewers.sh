@@ -4033,6 +4033,9 @@ run_reviewer() {
     case "${sleep_secs}" in
       ''|*[!0-9]*) sleep_secs=0 ;;
     esac
+    if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+      return 1
+    fi
     while [ "${sleep_secs}" -gt 0 ]; do
       if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
         return 1
@@ -4112,11 +4115,9 @@ run_reviewer() {
       "${requested_sleep_secs}" \
       "${backoff_total_after_sleep}" | tee -a "${log_file}"
 
-    if [ "${requested_sleep_secs}" -gt 0 ]; then
-      if ! reviewer_sleep_in_chunks "${requested_sleep_secs}"; then
-        REVIEWER_BACKOFF_RESULT="pr_closed"
-        return 1
-      fi
+    if ! reviewer_sleep_in_chunks "${requested_sleep_secs}"; then
+      REVIEWER_BACKOFF_RESULT="pr_closed"
+      return 1
     fi
 
     slot_backoff_sleep_secs_total="${backoff_total_after_sleep}"
