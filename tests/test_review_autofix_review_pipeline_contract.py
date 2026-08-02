@@ -1803,6 +1803,113 @@ def _run_reviewer_stall_recovery_harness() -> dict[str, object]:
 		}
 
 
+def _run_reviewer_silent_retry_harness() -> dict[str, object]:
+	partial_finalize_budget_helper_block = _reviewer_partial_finalize_budget_helper_block()
+	helper_block = _reviewer_failback_helper_block()
+	run_reviewer_block = _reviewer_run_reviewer_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-silent-retry-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		runtime = tmp / "runtime"
+		home = tmp / "home"
+		runner_temp = tmp / "runner_temp"
+		bin_dir = tmp / "bin"
+		seed_codex_home = tmp / "codex_home_seed"
+		reviews.mkdir()
+		runtime.mkdir()
+		home.mkdir()
+		runner_temp.mkdir()
+		bin_dir.mkdir()
+		seed_codex_home.mkdir()
+
+		prompt_file = runtime / "reviewer_prompt.patch"
+		prompt_file.write_text(PHASE_G_FLAKY_REVIEWER_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+		attempt_log_file = tmp / "attempts.txt"
+		state_file = tmp / "state.txt"
+		github_env_file = tmp / "github_env.txt"
+
+		codex_stub = bin_dir / "codex"
+		codex_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+		codex_stub.chmod(0o755)
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"RUNTIME_DIR": str(runtime),
+			"PROMPT_FILE": str(prompt_file),
+			"PR_NUMBER": "123",
+			"RUNNER_TEMP": str(runner_temp),
+			"HOME": str(home),
+			"CODEX_HOME": str(seed_codex_home),
+			"GITHUB_ENV": str(github_env_file),
+			"REVIEWER_CIRCUIT_BREAKER_ENABLED": "0",
+			"REVIEWER_REASONING_EFFORT": "xhigh",
+			"HEARTBEAT_IDLE_TIMEOUT": "30",
+			"HEARTBEAT_MAX_WALL": "30",
+			"REVIEW_PR_STATE_POLL_INTERVAL_SECS": "10",
+			"ATTEMPT_LOG_FILE": str(attempt_log_file),
+			"STATE_FILE": str(state_file),
+		})
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{partial_finalize_budget_helper_block}\n"
+				f"{helper_block}\n"
+				f"{run_reviewer_block}\n"
+				"execute_reviewer_attempt() {\n"
+				"\tlocal _attempt_label=\"${1:-}\"\n"
+				"\tprintf '%s\\n' \"${_attempt_label}\" >> \"${ATTEMPT_LOG_FILE}\"\n"
+				"\tREVIEWER_ATTEMPT_OUTCOME=\"silent_retry\"\n"
+				"\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"\"\n"
+				"\tREVIEWER_ATTEMPT_CMD_RC=0\n"
+				"\treturn 0\n"
+				"}\n"
+				"prepare_reviewer_prompt_for_model() {\n"
+				"\tprintf '%s\\n' \"${2:-}\"\n"
+				"}\n"
+				"mapped_model=\"x-ai/grok-4.20\"\n"
+				"mapped_safe_name=\"$(printf '%s' \"${mapped_model}\" | tr '/.:' '___')\"\n"
+				"run_reviewer \"${mapped_model}\" \"${mapped_safe_name}\" \"mapped\" \"${PROMPT_FILE}\" \"xhigh\"\n"
+				"{\n"
+				"\tprintf 'MAPPED_STATUS_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/status_mapped_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'MAPPED_OUTPUT_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/mapped_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'MAPPED_LOG_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/mapped_${mapped_safe_name}.log\"\n"
+				"\tprintf 'ATTEMPT_LOG_FILE=%s\\n' \"${ATTEMPT_LOG_FILE}\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		state: dict[str, str] = {}
+		for raw_line in state_file.read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+
+		artifact_contents = {
+			f"{key}_CONTENT": Path(path).read_text(encoding="utf-8")
+			for key, path in state.items()
+			if key.endswith("_FILE")
+		}
+
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			**artifact_contents,
+		}
+
+
 def _run_review_pipeline_summary_step_harness() -> dict[str, object]:
 	summary_script = _step_run_script("Append review pipeline iteration summary")
 	with tempfile.TemporaryDirectory(prefix="review-pipeline-summary-") as td:
@@ -3745,6 +3852,14 @@ def test_stall_guard_retryable_failures_log_deterministic_reviewer_advance() -> 
 	]
 
 
+def test_silent_retry_exhaustion_logs_terminal_failure_reason() -> None:
+	result = _run_reviewer_silent_retry_harness()
+	assert result["MAPPED_STATUS_FILE_CONTENT"].strip() == "failed"
+	assert "REVIEWER_ADVANCE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 reason=silent_retry next_action=terminal_failure" in result["MAPPED_LOG_FILE_CONTENT"]
+	assert "reason=unknown" not in result["MAPPED_LOG_FILE_CONTENT"]
+	assert result["ATTEMPT_LOG_FILE_CONTENT"].splitlines() == ["attempt 1", "attempt 2", "attempt 3"]
+
+
 def test_reviewer_soft_deadline_fallback_requests_partial_finalize_and_exits_green() -> None:
 	result = _run_reviewer_partial_finalize_budget_harness()
 	assert result["PASS_SUCCESSFUL"] == "0"
@@ -5075,6 +5190,7 @@ def main() -> int:
 	test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers()
 	test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models()
 	test_stall_guard_retryable_failures_log_deterministic_reviewer_advance()
+	test_silent_retry_exhaustion_logs_terminal_failure_reason()
 	test_reviewer_soft_deadline_fallback_requests_partial_finalize_and_exits_green()
 	test_reviewer_health_dispatch_logs_to_stderr_only()
 	test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipped()

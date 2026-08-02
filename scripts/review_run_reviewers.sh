@@ -3898,6 +3898,7 @@ run_reviewer() {
           return 0
           ;;
         silent_retry)
+          final_retryable_class="${final_retryable_class:-silent_retry}"
           ;;
         retryable_failure)
           final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class}}"
@@ -3950,6 +3951,7 @@ run_reviewer() {
       return 0
       ;;
     silent_retry)
+      final_retryable_class="${final_retryable_class:-silent_retry}"
       ;;
     retryable_failure)
       final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-retryable_failure}"
@@ -3999,6 +4001,7 @@ run_reviewer() {
         return 0
         ;;
       silent_retry)
+        final_retryable_class="${final_retryable_class:-silent_retry}"
         ;;
       retryable_failure)
         final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class}}"
@@ -4062,6 +4065,7 @@ run_reviewer() {
       return 0
       ;;
     silent_retry)
+      final_retryable_class="${final_retryable_class:-silent_retry}"
       ;;
     retryable_failure)
       final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class}}"
@@ -4101,6 +4105,7 @@ run_reviewer() {
           return 0
           ;;
         silent_retry)
+          final_retryable_class="${final_retryable_class:-silent_retry}"
           ;;
         retryable_failure)
           final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class}}"
