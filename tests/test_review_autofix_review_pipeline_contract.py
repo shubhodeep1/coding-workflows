@@ -544,6 +544,17 @@ def _git_clean_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
 	return env
 
 
+def _reviewer_harness_budget_env() -> dict[str, str]:
+	run_budget_start_epoch = int(time.time())
+	return {
+		"JOB_START_EPOCH": str(run_budget_start_epoch),
+		"CODEX_RUN_BUDGET_START_EPOCH": str(run_budget_start_epoch),
+		"CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH": str(run_budget_start_epoch + 600),
+		"CODEX_RUN_BUDGET_TOTAL_SECS": "600",
+		"REVIEW_SOFT_DEADLINE_MINUTES": "10",
+	}
+
+
 def _init_git_repo(repo: Path) -> str:
 	env = _git_clean_env()
 	subprocess.run(["git", "init"], cwd=str(repo), env=env, check=True, capture_output=True, text=True)
@@ -1615,6 +1626,7 @@ def _run_reviewer_failback_harness() -> dict[str, object]:
 			"ATTEMPT_LOG_FILE": str(attempt_log_file),
 			"STATE_FILE": str(state_file),
 		})
+		env.update(_reviewer_harness_budget_env())
 
 		result = subprocess.run(
 			[
@@ -1777,10 +1789,8 @@ def _run_reviewer_slot_retry_budget_harness() -> dict[str, object]:
 			"REVIEW_PR_STATE_POLL_INTERVAL_SECS": "10",
 			"ATTEMPT_LOG_FILE": str(attempt_log_file),
 			"STATE_FILE": str(state_file),
-			"CODEX_RUN_BUDGET_TOTAL_SECS": "600",
-			"CODEX_RUN_BUDGET_START_EPOCH": str(int(time.time())),
-			"REVIEW_SOFT_DEADLINE_MINUTES": "10",
 		})
+		env.update(_reviewer_harness_budget_env())
 
 		result = subprocess.run(
 			[
@@ -1911,6 +1921,7 @@ def _run_reviewer_stall_recovery_harness() -> dict[str, object]:
 			"ATTEMPT_LOG_FILE": str(attempt_log_file),
 			"STATE_FILE": str(state_file),
 		})
+		env.update(_reviewer_harness_budget_env())
 
 		result = subprocess.run(
 			[
@@ -2038,6 +2049,7 @@ def _run_reviewer_silent_retry_harness() -> dict[str, object]:
 			"ATTEMPT_LOG_FILE": str(attempt_log_file),
 			"STATE_FILE": str(state_file),
 		})
+		env.update(_reviewer_harness_budget_env())
 
 		result = subprocess.run(
 			[
@@ -2560,6 +2572,21 @@ def _run_reviewer_resume_cached_success_harness() -> dict[str, object]:
 		(reviews / f"review_{cached_safe_name}.log").write_text("cached log\n", encoding="utf-8")
 		(reviews / f"status_review_{rerun_safe_name}.txt").write_text("failed\n", encoding="utf-8")
 		(reviews / f"review_{rerun_safe_name}.txt").write_text("stale failure output\n", encoding="utf-8")
+		env = {
+			**os.environ,
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"RUNTIME_DIR": str(runtime),
+			"PROMPT_FILE": str(prompt_file),
+			"GITHUB_ENV": str(github_env_file),
+			"REVIEWER_REASONING_EFFORT": "xhigh",
+			"REVIEW_PR_STATE_POLL_INTERVAL_SECS": "10",
+			"AUTOFIX_RESUME_RESTORED": "true",
+			"AUTOFIX_RESUME_SHOULD_CONTINUE": "true",
+			"AUTOFIX_RESUME_STATE": "resumable",
+			"CALLED_MODELS_FILE": str(called_models_file),
+			"STATE_FILE": str(state_file),
+		}
+		env.update(_reviewer_harness_budget_env())
 
 		result = subprocess.run(
 			[
@@ -2591,20 +2618,7 @@ def _run_reviewer_resume_cached_success_harness() -> dict[str, object]:
 				"} > \"${STATE_FILE}\"\n",
 			],
 			cwd=str(REPO_ROOT),
-			env={
-				**os.environ,
-				"PREVIOUS_REVIEWS_DIR": str(reviews),
-				"RUNTIME_DIR": str(runtime),
-				"PROMPT_FILE": str(prompt_file),
-				"GITHUB_ENV": str(github_env_file),
-				"REVIEWER_REASONING_EFFORT": "xhigh",
-				"REVIEW_PR_STATE_POLL_INTERVAL_SECS": "10",
-				"AUTOFIX_RESUME_RESTORED": "true",
-				"AUTOFIX_RESUME_SHOULD_CONTINUE": "true",
-				"AUTOFIX_RESUME_STATE": "resumable",
-				"CALLED_MODELS_FILE": str(called_models_file),
-				"STATE_FILE": str(state_file),
-			},
+			env=env,
 			check=True,
 			capture_output=True,
 			text=True,
