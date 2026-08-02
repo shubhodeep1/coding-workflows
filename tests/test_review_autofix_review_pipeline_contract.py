@@ -12,6 +12,7 @@ import re
 import subprocess
 import tempfile
 import textwrap
+import time
 from pathlib import Path
 
 
@@ -1662,6 +1663,138 @@ def _run_reviewer_failback_harness() -> dict[str, object]:
 		}
 
 
+def _run_reviewer_slot_retry_budget_harness() -> dict[str, object]:
+	partial_finalize_budget_helper_block = _reviewer_partial_finalize_budget_helper_block()
+	helper_block = _reviewer_failback_helper_block()
+	run_reviewer_block = _reviewer_run_reviewer_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-slot-retry-budget-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		runtime = tmp / "runtime"
+		home = tmp / "home"
+		runner_temp = tmp / "runner_temp"
+		bin_dir = tmp / "bin"
+		seed_codex_home = tmp / "codex_home_seed"
+		reviews.mkdir()
+		runtime.mkdir()
+		home.mkdir()
+		runner_temp.mkdir()
+		bin_dir.mkdir()
+		seed_codex_home.mkdir()
+
+		prompt_file = runtime / "reviewer_prompt.patch"
+		prompt_file.write_text(PHASE_G_FLAKY_REVIEWER_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+		failback_file = tmp / "reviewer_failback_chains.json"
+		failback_file.write_text(REVIEWER_FAILBACK_CHAINS.read_text(encoding="utf-8"), encoding="utf-8")
+
+		catalog_file = tmp / "codex_model_catalog.json"
+		catalog_file.write_text(MODEL_CATALOG.read_text(encoding="utf-8"), encoding="utf-8")
+
+		attempt_log_file = tmp / "attempts.tsv"
+		state_file = tmp / "state.txt"
+		github_env_file = tmp / "github_env.txt"
+
+		codex_stub = bin_dir / "codex"
+		codex_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+		codex_stub.chmod(0o755)
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"RUNTIME_DIR": str(runtime),
+			"PROMPT_FILE": str(prompt_file),
+			"PR_NUMBER": "123",
+			"RUNNER_TEMP": str(runner_temp),
+			"HOME": str(home),
+			"CODEX_HOME": str(seed_codex_home),
+			"GITHUB_ENV": str(github_env_file),
+			"REVIEWER_CIRCUIT_BREAKER_ENABLED": "0",
+			"REVIEWER_FAILBACK_MAX_RETRIES": "1",
+			"REVIEWER_FAILBACK_CHAINS_FILE": str(failback_file),
+			"REVIEWER_MODEL_CATALOG_FILE": str(catalog_file),
+			"REVIEWER_SLOT_RETRYABLE_FAILURE_LIMIT": "3",
+			"REVIEWER_SLOT_BACKOFF_BASE_SECS": "0",
+			"REVIEWER_SLOT_BACKOFF_CAP_SECS": "0",
+			"REVIEWER_SLOT_BACKOFF_BUDGET_RATIO": "0.05",
+			"REVIEWER_REASONING_EFFORT": "xhigh",
+			"HEARTBEAT_IDLE_TIMEOUT": "30",
+			"HEARTBEAT_MAX_WALL": "30",
+			"REVIEW_PR_STATE_POLL_INTERVAL_SECS": "10",
+			"ATTEMPT_LOG_FILE": str(attempt_log_file),
+			"STATE_FILE": str(state_file),
+			"CODEX_RUN_BUDGET_TOTAL_SECS": "600",
+			"CODEX_RUN_BUDGET_START_EPOCH": str(int(time.time())),
+			"REVIEW_SOFT_DEADLINE_MINUTES": "10",
+		})
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{partial_finalize_budget_helper_block}\n"
+				f"{helper_block}\n"
+				f"{run_reviewer_block}\n"
+				"execute_reviewer_attempt() {\n"
+				"\tlocal _attempt_label=\"${1:-}\"\n"
+				"\tlocal _attempt_number=\"${2:-}\"\n"
+				"\tlocal _attempt_reasoning=\"${3:-}\"\n"
+				"\treviewer_log_cache_attempt \"${_attempt_number}\" \"${PROMPT_FILE}\" \"${PROMPT_FILE}\" \"${log_file}\" \"${slot_model}\" \"${effective_model}\"\n"
+				"\tprintf '%s\t%s\t%s\t%s\n' \"${slot_model}\" \"${effective_model}\" \"${_attempt_reasoning:-<empty>}\" \"${_attempt_label}\" >> \"${ATTEMPT_LOG_FILE}\"\n"
+				"\tif [ \"${_attempt_number}\" -gt 1 ]; then\n"
+				"\t\tcache_read_input_tokens=3500\n"
+				"\telse\n"
+				"\t\tcache_read_input_tokens=0\n"
+				"\tfi\n"
+				"\tprintf 'INFO: openrouter usage phase=review call=mapped model=%s cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=4000 completion_tokens=100 total_tokens=4100 cache_creation_input_tokens=0 cache_read_input_tokens=%s\n' \"${effective_model}\" \"${cache_read_input_tokens}\" >> \"${log_file}\"\n"
+				"\tREVIEWER_ATTEMPT_OUTCOME=\"retryable_failure\"\n"
+				"\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"rate_limit\"\n"
+				"\tREVIEWER_ATTEMPT_CMD_RC=1\n"
+				"\treturn 0\n"
+				"}\n"
+				"prepare_reviewer_prompt_for_model() {\n"
+				"\tprintf '%s\\n' \"${2:-}\"\n"
+				"}\n"
+				"mapped_model=\"x-ai/grok-4.20\"\n"
+				"mapped_safe_name=\"$(printf '%s' \"${mapped_model}\" | tr '/.:' '___')\"\n"
+				"run_reviewer \"${mapped_model}\" \"${mapped_safe_name}\" \"mapped\" \"${PROMPT_FILE}\" \"xhigh\"\n"
+				"{\n"
+				"\tprintf 'MAPPED_STATUS_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/status_mapped_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'MAPPED_OUTPUT_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/mapped_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'MAPPED_LOG_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/mapped_${mapped_safe_name}.log\"\n"
+				"\tprintf 'ATTEMPT_LOG_FILE=%s\\n' \"${ATTEMPT_LOG_FILE}\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		state: dict[str, str] = {}
+		for raw_line in state_file.read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+
+		artifact_contents = {
+			f"{key}_CONTENT": Path(path).read_text(encoding="utf-8")
+			for key, path in state.items()
+			if key.endswith("_FILE")
+		}
+
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			**artifact_contents,
+		}
+
+
 def _run_reviewer_stall_recovery_harness() -> dict[str, object]:
 	partial_finalize_budget_helper_block = _reviewer_partial_finalize_budget_helper_block()
 	helper_block = _reviewer_failback_helper_block()
@@ -1933,10 +2066,15 @@ def _run_review_pipeline_summary_step_harness() -> dict[str, object]:
 		(reviews / "status_review_model_one.txt").write_text("success\n", encoding="utf-8")
 		(reviews / "review_model_one.txt").write_text("fresh reviewer output\n", encoding="utf-8")
 		(reviews / "review_model_one.log").write_text(
+			"REVIEWER_CACHE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 attempt=1 status=supported prompt_reused=true\n"
 			"Reviewer slot x-ai/grok-4.20 (x-ai/grok-4.20) recorded codex_stall_killed on attempt 1 (exit=137).\n"
 			"Reviewer slot x-ai/grok-4.20 (x-ai/grok-4.20) failure classified as retryable (stall_guard) on attempt 1.\n"
 			"REVIEWER_ADVANCE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 reason=stall_guard next_action=retry_cheaper_reasoning next_attempt=2 next_model=x-ai/grok-4.20\n"
-			"Reviewer slot x-ai/grok-4.20 (x-ai/grok-4.20) succeeded on attempt 2.\n",
+			"REVIEWER_BACKOFF: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 reason=stall_guard next_action=retry_cheaper_reasoning next_attempt=2 sleep_secs=2 total_sleep_secs=2\n"
+			"REVIEWER_CACHE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 attempt=2 status=supported prompt_reused=true\n"
+			"INFO: openrouter usage phase=review call=review model=x-ai/grok-4.20 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=4000 completion_tokens=100 total_tokens=4100 cache_creation_input_tokens=0 cache_read_input_tokens=120\n"
+			"Reviewer slot x-ai/grok-4.20 (x-ai/grok-4.20) succeeded on attempt 2.\n"
+			"REVIEWER_SLOT_STATE: slot=x-ai/grok-4.20 retryable_failure_count=1 retryable_failure_classes=stall_guard backoff_sleep_secs_total=2 slot_retry_budget_exhausted=false fallback_model_used=false cache_status=supported cache_reuse_attempted=true\n",
 			encoding="utf-8",
 		)
 
@@ -1946,9 +2084,12 @@ def _run_review_pipeline_summary_step_harness() -> dict[str, object]:
 			encoding="utf-8",
 		)
 		(reviews / "review_model_two.log").write_text(
+			"REVIEWER_CACHE: slot=moonshotai/kimi-k2.5 model=moonshotai/kimi-k2.5 attempt=1 status=unsupported prompt_reused=true\n"
 			"Reviewer slot moonshotai/kimi-k2.5 (moonshotai/kimi-k2.5) recorded codex_stall_killed on attempt 1 (exit=137).\n"
 			"Reviewer slot moonshotai/kimi-k2.5 (moonshotai/kimi-k2.5) failure classified as retryable (timeout) on attempt 1.\n"
-			"REVIEWER_ADVANCE: slot=moonshotai/kimi-k2.5 model=moonshotai/kimi-k2.5 reason=stall_guard next_action=skip_unmapped\n",
+			"REVIEWER_ADVANCE: slot=moonshotai/kimi-k2.5 model=moonshotai/kimi-k2.5 reason=stall_guard next_action=skip_unmapped\n"
+			"INFO: openrouter usage phase=review call=review model=moonshotai/kimi-k2.5 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=2800 completion_tokens=80 total_tokens=2880 cache_creation_input_tokens=0 cache_read_input_tokens=0\n"
+			"REVIEWER_SLOT_STATE: slot=moonshotai/kimi-k2.5 retryable_failure_count=1 retryable_failure_classes=timeout backoff_sleep_secs_total=0 slot_retry_budget_exhausted=false fallback_model_used=false cache_status=unsupported cache_reuse_attempted=false\n",
 			encoding="utf-8",
 		)
 
@@ -2452,6 +2593,10 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}",
 		"REVIEWER_CIRCUIT_BREAKER_ENABLED: ${{ vars.REVIEWER_CIRCUIT_BREAKER_ENABLED || '0' }}",
 		"REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}",
+		"REVIEWER_SLOT_RETRYABLE_FAILURE_LIMIT: ${{ vars.REVIEWER_SLOT_RETRYABLE_FAILURE_LIMIT || '3' }}",
+		"REVIEWER_SLOT_BACKOFF_BASE_SECS: ${{ vars.REVIEWER_SLOT_BACKOFF_BASE_SECS || '2' }}",
+		"REVIEWER_SLOT_BACKOFF_CAP_SECS: ${{ vars.REVIEWER_SLOT_BACKOFF_CAP_SECS || '30' }}",
+		"REVIEWER_SLOT_BACKOFF_BUDGET_RATIO: ${{ vars.REVIEWER_SLOT_BACKOFF_BUDGET_RATIO || '0.05' }}",
 		"REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}",
 		"REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}",
 		"REVIEW_SOFT_DEADLINE_MINUTES: ${{ vars.REVIEW_SOFT_DEADLINE_MINUTES || '210' }}",
@@ -2509,6 +2654,10 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}",
 		"REVIEWER_CIRCUIT_BREAKER_ENABLED: ${{ vars.REVIEWER_CIRCUIT_BREAKER_ENABLED || '0' }}",
 		"REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}",
+		"REVIEWER_SLOT_RETRYABLE_FAILURE_LIMIT: ${{ vars.REVIEWER_SLOT_RETRYABLE_FAILURE_LIMIT || '3' }}",
+		"REVIEWER_SLOT_BACKOFF_BASE_SECS: ${{ vars.REVIEWER_SLOT_BACKOFF_BASE_SECS || '2' }}",
+		"REVIEWER_SLOT_BACKOFF_CAP_SECS: ${{ vars.REVIEWER_SLOT_BACKOFF_CAP_SECS || '30' }}",
+		"REVIEWER_SLOT_BACKOFF_BUDGET_RATIO: ${{ vars.REVIEWER_SLOT_BACKOFF_BUDGET_RATIO || '0.05' }}",
 		"REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}",
 		"REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}",
 		"REVIEW_SOFT_DEADLINE_MINUTES: ${{ vars.REVIEW_SOFT_DEADLINE_MINUTES || '210' }}",
@@ -3831,6 +3980,37 @@ def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_m
 	]
 
 
+def test_slot_retry_budget_stops_rate_limited_slot_after_bounded_attempts() -> None:
+	result = _run_reviewer_slot_retry_budget_harness()
+	assert result["MAPPED_STATUS_FILE_CONTENT"].strip() == "failed"
+	assert "slot retryable-failure limit (3)" in result["MAPPED_OUTPUT_FILE_CONTENT"]
+	assert result["ATTEMPT_LOG_FILE_CONTENT"].splitlines() == [
+		"x-ai/grok-4.20\tx-ai/grok-4.20\txhigh\tattempt 1",
+		"x-ai/grok-4.20\tx-ai/grok-4.20\thigh\tattempt 2 (cheaper reasoning high)",
+		"x-ai/grok-4.20\tx-ai/grok-4.1-fast\txhigh\tattempt 3 (failback x-ai/grok-4.1-fast)",
+	]
+	assert result["MAPPED_LOG_FILE_CONTENT"].count("REVIEWER_BACKOFF: ") == 2
+	assert "attempt 4" not in result["MAPPED_LOG_FILE_CONTENT"]
+	assert (
+		"REVIEWER_ADVANCE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 reason=rate_limit "
+		"next_action=retry_cheaper_reasoning next_attempt=2 next_model=x-ai/grok-4.20"
+	) in result["MAPPED_LOG_FILE_CONTENT"]
+	assert (
+		"REVIEWER_ADVANCE: slot=x-ai/grok-4.20 model=x-ai/grok-4.1-fast reason=rate_limit "
+		"next_action=failback next_attempt=3 next_model=x-ai/grok-4.1-fast"
+	) in result["MAPPED_LOG_FILE_CONTENT"]
+	assert (
+		"REVIEWER_SLOT_STATE: slot=x-ai/grok-4.20 retryable_failure_count=3 "
+		"retryable_failure_classes=rate_limit backoff_sleep_secs_total=0 "
+		"slot_retry_budget_exhausted=false fallback_model_used=true cache_status=supported "
+		"cache_reuse_attempted=true"
+	) in result["MAPPED_LOG_FILE_CONTENT"]
+	assert (
+		"REVIEWER_CACHE: slot=x-ai/grok-4.20 model=x-ai/grok-4.1-fast attempt=3 "
+		"status=supported prompt_reused=true"
+	) in result["MAPPED_LOG_FILE_CONTENT"]
+
+
 def test_stall_guard_retryable_failures_log_deterministic_reviewer_advance() -> None:
 	result = _run_reviewer_stall_recovery_harness()
 	health_state = result["health_state"]
@@ -4356,6 +4536,14 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		'"stall_kill_count":',
 		'"stall_recovery_next_action":',
 		'"stall_recovered":',
+		'"retryable_failure_count":',
+		'"retryable_failure_classes":',
+		'"backoff_sleep_secs_total":',
+		'"slot_retry_budget_exhausted":',
+		'"fallback_model_used":',
+		'"cache_status":',
+		'"cache_reuse_attempted":',
+		'"cache_read_input_tokens_total":',
 		'"budget_elapsed_secs":',
 		'"budget_total_secs":',
 		'"budget_remaining_secs":',
@@ -4449,6 +4637,10 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		'resume_comment_posted = bool_env("AUTOFIX_RESUME_COMMENT_POSTED")',
 		'resume_completed_scope = csv_env_list("AUTOFIX_RESUME_COMPLETED_SCOPE")',
 		'resume_incomplete_scope = csv_env_list("AUTOFIX_RESUME_INCOMPLETE_SCOPE")',
+		'"REVIEWER_BACKOFF: "',
+		'"REVIEWER_CACHE: "',
+		'"REVIEWER_SLOT_STATE: "',
+		'"INFO: openrouter usage "',
 		'status_pass1_*.txt',
 		'if status == "skipped_budget":',
 		'if resume_state in {"no_progress", "round_budget_exhausted"} and not resume_should_continue:',
@@ -4471,11 +4663,27 @@ def test_review_pipeline_summary_reports_stall_recovery_for_retried_and_skipped_
 	assert slots["model_one"]["stall_kill_count"] == 1
 	assert slots["model_one"]["stall_recovery_next_action"] == "retry_cheaper_reasoning"
 	assert slots["model_one"]["stall_recovered"] is True
+	assert slots["model_one"]["retryable_failure_count"] == 1
+	assert slots["model_one"]["retryable_failure_classes"] == ["stall_guard"]
+	assert slots["model_one"]["backoff_sleep_secs_total"] == 2
+	assert slots["model_one"]["slot_retry_budget_exhausted"] is False
+	assert slots["model_one"]["fallback_model_used"] is False
+	assert slots["model_one"]["cache_status"] == "supported"
+	assert slots["model_one"]["cache_reuse_attempted"] is True
+	assert slots["model_one"]["cache_read_input_tokens_total"] == 120
 
 	assert slots["model_two"]["failure_class"] == "stall_guard"
 	assert slots["model_two"]["stall_kill_count"] == 1
 	assert slots["model_two"]["stall_recovery_next_action"] == "skip_unmapped"
 	assert slots["model_two"]["stall_recovered"] is False
+	assert slots["model_two"]["retryable_failure_count"] == 1
+	assert slots["model_two"]["retryable_failure_classes"] == ["timeout"]
+	assert slots["model_two"]["backoff_sleep_secs_total"] == 0
+	assert slots["model_two"]["slot_retry_budget_exhausted"] is False
+	assert slots["model_two"]["fallback_model_used"] is False
+	assert slots["model_two"]["cache_status"] == "unsupported"
+	assert slots["model_two"]["cache_reuse_attempted"] is False
+	assert slots["model_two"]["cache_read_input_tokens_total"] == 0
 
 	assert summary["stall_recovery"] == {
 		"advanced_slots": 2,
