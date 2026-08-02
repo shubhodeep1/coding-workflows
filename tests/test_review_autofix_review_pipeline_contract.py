@@ -15,6 +15,8 @@ import textwrap
 import time
 from pathlib import Path
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
@@ -459,13 +461,23 @@ def _step_run_script(step_name: str) -> str:
 	return script + ("\n" if script else "")
 
 
+def _extract_review_autofix_timeout_minutes(workflow_text: str) -> tuple[int, int]:
+	workflow = yaml.safe_load(workflow_text) or {}
+	jobs = workflow.get("jobs") or {}
+	codex_agent_job = jobs.get("codex-agent") or {}
+	job_timeout_minutes = codex_agent_job.get("timeout-minutes")
+	resolver_timeout_minutes = None
+	for step in codex_agent_job.get("steps") or []:
+		if isinstance(step, dict) and step.get("name") == "Run Codex resolver, validate, stage, commit":
+			resolver_timeout_minutes = step.get("timeout-minutes")
+			break
+	assert isinstance(job_timeout_minutes, int), "codex-agent timeout-minutes not found"
+	assert isinstance(resolver_timeout_minutes, int), "resolver step timeout-minutes not found"
+	return job_timeout_minutes, resolver_timeout_minutes
+
+
 def _review_autofix_timeout_minutes() -> tuple[int, int]:
-	text = _workflow_text()
-	job_match = re.search(r"(?ms)^  codex-agent:\n.*?^    timeout-minutes:\s*(\d+)\s*$", text)
-	resolver_match = re.search(r"(?ms)^      - name: Run Codex resolver, validate, stage, commit\n.*?^        timeout-minutes:\s*(\d+)\s*$", text)
-	assert job_match, "codex-agent timeout-minutes not found"
-	assert resolver_match, "resolver step timeout-minutes not found"
-	return int(job_match.group(1)), int(resolver_match.group(1))
+	return _extract_review_autofix_timeout_minutes(_workflow_text())
 
 
 def _parse_env_file(path: Path) -> dict[str, str]:
@@ -4839,6 +4851,12 @@ def test_review_partial_finalize_publish_safety_gate_is_wired() -> None:
 		'if [ "${AUTOFIX_PARTIAL_FINALIZE_REQUESTED:-false}" = "true" ]; then',
 		'workflow_timeout_source_path=".codex-workflow-src/.github/workflows/review_autofix.yml"',
 		'workflow_timeout_source_path=".github/workflows/review_autofix.yml"',
+		'import sys, yaml',
+		'workflow = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}',
+		'codex_agent_job = jobs.get("codex-agent") or {}',
+		'resolver_timeout_minutes = next((step.get("timeout-minutes")',
+		'step.get("name") == "Run Codex resolver, validate, stage, commit"',
+		'sys.exit(1) if not isinstance(job_timeout_minutes, int) or not isinstance(resolver_timeout_minutes, int) else print(job_timeout_minutes, resolver_timeout_minutes)',
 		'job_timeout_total_secs=$(( job_timeout_minutes * 60 ))',
 		'partial_finalize_validation_minimum_secs=$(( (resolver_timeout_minutes * 60) + 600 ))',
 		'hard_timeout_remaining_secs=$(( job_deadline_epoch - now_epoch ))',
@@ -4848,6 +4866,23 @@ def test_review_partial_finalize_publish_safety_gate_is_wired() -> None:
 		'echo "AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON=${withheld_reason}"',
 	):
 		assert expected in block, f"missing partial-finalize safety-gate contract detail: {expected}"
+
+
+def test_review_partial_finalize_timeout_extractor_handles_structured_yaml_layout() -> None:
+	workflow_text = textwrap.dedent(
+		"""\
+		jobs:
+		  codex-agent:
+		    steps:
+		      - name: Bootstrap
+		        timeout-minutes: 5
+		      - name: Run Codex resolver, validate, stage, commit
+		        timeout-minutes: 170
+		    timeout-minutes: 240
+		"""
+	)
+
+	assert _extract_review_autofix_timeout_minutes(workflow_text) == (240, 170)
 
 
 def test_review_partial_finalize_publish_safety_gate_keeps_validated_path_when_budget_remains() -> None:
@@ -5685,6 +5720,7 @@ def main() -> int:
 	test_review_pipeline_summary_reports_partial_finalize_validated_push()
 	test_review_pipeline_summary_reports_partial_finalize_withheld_for_safety()
 	test_review_partial_finalize_publish_safety_gate_is_wired()
+	test_review_partial_finalize_timeout_extractor_handles_structured_yaml_layout()
 	test_review_partial_finalize_publish_safety_gate_keeps_validated_path_when_budget_remains()
 	test_review_partial_finalize_publish_safety_gate_prefers_codex_budget_start_epoch_when_withholding()
 	test_review_partial_finalize_workflow_path_is_wired()

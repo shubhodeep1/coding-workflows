@@ -3757,7 +3757,7 @@ jobs:
             if [ ! -f "${workflow_timeout_source_path}" ]; then
               workflow_timeout_source_path=".github/workflows/review_autofix.yml"
             fi
-            if ! read -r job_timeout_minutes resolver_timeout_minutes < <(PYTHONDONTWRITEBYTECODE=1 python3 -c 'from pathlib import Path; import re, sys; text = Path(sys.argv[1]).read_text(encoding="utf-8"); job_match = re.search(r"(?ms)^  codex-agent:\n.*?^    timeout-minutes:\s*(\d+)\s*$", text); resolver_match = re.search(r"(?ms)^      - name: Run Codex resolver, validate, stage, commit\n.*?^        timeout-minutes:\s*(\d+)\s*$", text); sys.exit(1) if not job_match or not resolver_match else print(job_match.group(1), resolver_match.group(1))' "${workflow_timeout_source_path}"); then
+            if ! read -r job_timeout_minutes resolver_timeout_minutes < <(PYTHONDONTWRITEBYTECODE=1 python3 -c 'from pathlib import Path; import sys, yaml; workflow = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}; jobs = workflow.get("jobs") or {}; codex_agent_job = jobs.get("codex-agent") or {}; job_timeout_minutes = codex_agent_job.get("timeout-minutes"); resolver_timeout_minutes = next((step.get("timeout-minutes") for step in (codex_agent_job.get("steps") or []) if isinstance(step, dict) and step.get("name") == "Run Codex resolver, validate, stage, commit"), None); sys.exit(1) if not isinstance(job_timeout_minutes, int) or not isinstance(resolver_timeout_minutes, int) else print(job_timeout_minutes, resolver_timeout_minutes)' "${workflow_timeout_source_path}"); then
               job_timeout_minutes="240"
               resolver_timeout_minutes="170"
             fi
