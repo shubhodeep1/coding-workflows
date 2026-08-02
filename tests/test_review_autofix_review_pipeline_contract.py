@@ -459,6 +459,15 @@ def _step_run_script(step_name: str) -> str:
 	return script + ("\n" if script else "")
 
 
+def _review_autofix_timeout_minutes() -> tuple[int, int]:
+	text = _workflow_text()
+	job_match = re.search(r"(?ms)^  codex-agent:\n.*?^    timeout-minutes:\s*(\d+)\s*$", text)
+	resolver_match = re.search(r"(?ms)^      - name: Run Codex resolver, validate, stage, commit\n.*?^        timeout-minutes:\s*(\d+)\s*$", text)
+	assert job_match, "codex-agent timeout-minutes not found"
+	assert resolver_match, "resolver step timeout-minutes not found"
+	return int(job_match.group(1)), int(resolver_match.group(1))
+
+
 def _parse_env_file(path: Path) -> dict[str, str]:
 	parsed: dict[str, str] = {}
 	for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -478,6 +487,38 @@ def _read_dir_text_files(path: Path, *, exclude_names: set[str] | None = None) -
 		for child in sorted(path.iterdir())
 		if child.is_file() and child.name not in exclude
 	}
+
+
+def _run_partial_finalize_publish_safety_gate_step(
+	*,
+	partial_finalize_requested: str = "true",
+	job_start_epoch: str = "",
+	codex_run_budget_start_epoch: str = "",
+) -> dict[str, object]:
+	gate_script = _step_run_script("Decide partial-finalize validation/push safety")
+	with tempfile.TemporaryDirectory(prefix="review-partial-finalize-gate-") as td:
+		tmp = Path(td)
+		github_env_file = tmp / "github_env.txt"
+		github_env_file.write_text("", encoding="utf-8")
+		result = subprocess.run(
+			["bash", "-c", f"set -euo pipefail\n{gate_script}"],
+			cwd=str(REPO_ROOT),
+			env=_git_clean_env({
+				"GITHUB_ENV": str(github_env_file),
+				"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": partial_finalize_requested,
+				"JOB_START_EPOCH": job_start_epoch,
+				"CODEX_RUN_BUDGET_START_EPOCH": codex_run_budget_start_epoch,
+				"PYTHONDONTWRITEBYTECODE": "1",
+			}),
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"github_env": _parse_env_file(github_env_file),
+		}
 
 
 def _git_clean_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
@@ -4796,8 +4837,10 @@ def test_review_partial_finalize_publish_safety_gate_is_wired() -> None:
 	block = _step_block("Decide partial-finalize validation/push safety")
 	for expected in (
 		'if [ "${AUTOFIX_PARTIAL_FINALIZE_REQUESTED:-false}" = "true" ]; then',
-		'job_timeout_total_secs=$(( 240 * 60 ))',
-		'partial_finalize_validation_minimum_secs=$(( (170 * 60) + 600 ))',
+		'workflow_timeout_source_path=".codex-workflow-src/.github/workflows/review_autofix.yml"',
+		'workflow_timeout_source_path=".github/workflows/review_autofix.yml"',
+		'job_timeout_total_secs=$(( job_timeout_minutes * 60 ))',
+		'partial_finalize_validation_minimum_secs=$(( (resolver_timeout_minutes * 60) + 600 ))',
 		'hard_timeout_remaining_secs=$(( job_deadline_epoch - now_epoch ))',
 		'withheld_reason="insufficient_budget_for_validation_tail"',
 		'echo "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE=${validation_tail_can_complete}"',
@@ -4805,6 +4848,36 @@ def test_review_partial_finalize_publish_safety_gate_is_wired() -> None:
 		'echo "AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON=${withheld_reason}"',
 	):
 		assert expected in block, f"missing partial-finalize safety-gate contract detail: {expected}"
+
+
+def test_review_partial_finalize_publish_safety_gate_keeps_validated_path_when_budget_remains() -> None:
+	job_timeout_minutes, resolver_timeout_minutes = _review_autofix_timeout_minutes()
+	assert job_timeout_minutes * 60 > (resolver_timeout_minutes * 60) + 600
+	now_epoch = int(time.time())
+	result = _run_partial_finalize_publish_safety_gate_step(job_start_epoch=str(now_epoch - 60))
+
+	assert "validated tail remains available" in result["stdout"]
+	assert result["github_env"] == {
+		"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "true",
+		"AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY": "false",
+		"AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON": "none",
+	}
+
+
+def test_review_partial_finalize_publish_safety_gate_prefers_codex_budget_start_epoch_when_withholding() -> None:
+	job_timeout_minutes, _resolver_timeout_minutes = _review_autofix_timeout_minutes()
+	now_epoch = int(time.time())
+	result = _run_partial_finalize_publish_safety_gate_step(
+		job_start_epoch=str(now_epoch - 60),
+		codex_run_budget_start_epoch=str(now_epoch - (job_timeout_minutes * 60)),
+	)
+
+	assert "findings-only fallback" in result["stdout"]
+	assert result["github_env"] == {
+		"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false",
+		"AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY": "true",
+		"AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON": "insufficient_budget_for_validation_tail",
+	}
 
 
 def test_review_partial_finalize_workflow_path_is_wired() -> None:
@@ -5612,6 +5685,8 @@ def main() -> int:
 	test_review_pipeline_summary_reports_partial_finalize_validated_push()
 	test_review_pipeline_summary_reports_partial_finalize_withheld_for_safety()
 	test_review_partial_finalize_publish_safety_gate_is_wired()
+	test_review_partial_finalize_publish_safety_gate_keeps_validated_path_when_budget_remains()
+	test_review_partial_finalize_publish_safety_gate_prefers_codex_budget_start_epoch_when_withholding()
 	test_review_partial_finalize_workflow_path_is_wired()
 	test_review_partial_finalize_comment_and_marker_report_validated_push_state()
 	test_review_partial_finalize_comment_and_marker_report_withheld_state()

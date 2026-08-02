@@ -3753,13 +3753,21 @@ jobs:
           withheld_reason="none"
 
           if [ "${AUTOFIX_PARTIAL_FINALIZE_REQUESTED:-false}" = "true" ]; then
-            # Match the job-level timeout-minutes: 240 above. Requiring a full
-            # 170-minute resolver window plus 10 minutes of smoke/detect/push
-            # slack keeps the partial-publish path inside the workflow's
-            # existing validation envelope instead of publishing edits that the
-            # current run cannot fully re-validate before the hard timeout.
-            job_timeout_total_secs=$(( 240 * 60 ))
-            partial_finalize_validation_minimum_secs=$(( (170 * 60) + 600 ))
+            workflow_timeout_source_path=".codex-workflow-src/.github/workflows/review_autofix.yml"
+            if [ ! -f "${workflow_timeout_source_path}" ]; then
+              workflow_timeout_source_path=".github/workflows/review_autofix.yml"
+            fi
+            if ! read -r job_timeout_minutes resolver_timeout_minutes < <(PYTHONDONTWRITEBYTECODE=1 python3 -c 'from pathlib import Path; import re, sys; text = Path(sys.argv[1]).read_text(encoding="utf-8"); job_match = re.search(r"(?ms)^  codex-agent:\n.*?^    timeout-minutes:\s*(\d+)\s*$", text); resolver_match = re.search(r"(?ms)^      - name: Run Codex resolver, validate, stage, commit\n.*?^        timeout-minutes:\s*(\d+)\s*$", text); sys.exit(1) if not job_match or not resolver_match else print(job_match.group(1), resolver_match.group(1))' "${workflow_timeout_source_path}"); then
+              job_timeout_minutes="240"
+              resolver_timeout_minutes="170"
+            fi
+            # Requiring a full resolver window plus 10 minutes of
+            # smoke/detect/push slack keeps the partial-publish path inside the
+            # workflow's existing validation envelope instead of publishing
+            # edits that the current run cannot fully re-validate before the
+            # hard timeout.
+            job_timeout_total_secs=$(( job_timeout_minutes * 60 ))
+            partial_finalize_validation_minimum_secs=$(( (resolver_timeout_minutes * 60) + 600 ))
             now_epoch="$(date +%s)"
             budget_start_epoch="${CODEX_RUN_BUDGET_START_EPOCH:-${JOB_START_EPOCH:-}}"
             hard_timeout_remaining_secs=0
