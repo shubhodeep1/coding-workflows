@@ -490,6 +490,7 @@ def test_stall_guard_script_and_callers_keep_the_expected_contract() -> None:
 			"CODEX_STALL_GUARD_HELPER",
 			"--phase review_run_reviewers",
 			"codex_stall_killed",
+			"REVIEWER_ADVANCE:",
 		],
 		"scripts/review_apply_fixes.sh": [
 			"CODEX_STALL_GUARD_HELPER",
