@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:3312-3343 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: reviewer_log_advance_action can emit advance_reason=\"unknown\" when neither retryable-class variable is set.\n  WHY: this makes terminal REVIEWER_ADVANCE lines nondeterministic for silent-retry exhaustion and weakens the stall-recovery contract.\n- .github/workflows/review_autofix.yml:6873-7099 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: the summary regex only records next_action when the line also contains reason=stall_guard, so non-stall-guard advances are dropped from stall_recovery_next_action.\n  WHY: this leaves per-slot stall recovery reporting incomplete for budget-skip, unmapped, and terminal_failure paths.\n- README.md (multiple locations) + .github/workflows/review_autofix.yml:Env-var default comments and wiring blocks | severity=high | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: CODEX_STALL_GUARD_ENABLED is documented as \"false (true by default in review/autofix)\", but the workflow still applies `|| 'true'` in top-level and job env blocks, creating a declared-vs-effective default mismatch for non-review phases.\n  WHY: phases other than review/autofix inherit the stall-guard default unintentionally.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: README documents the default-on stall recovery behavior, idle-cap knob, and log signals.\n  expected_change_site: README.md (review/autofix env-var documentation and run-summary contract sections)\n  confidence=4\n  flagged_by: [minimax_minimax-m2_5, mistralai_mistral-small-2603, x-ai_grok-4_20]\n  EVIDENCE: The README edits document REVIEWER_ADVANCE and stall_recovery counters, but do not explicitly state that CODEX_STALL_GUARD_ENABLED defaults to true only for review/autofix, that the 600 s idle cap is chosen to fire before the 210-minute soft deadline and legacy 900-second watchdog, or the precise stall_guard failure-class semantics.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: \"README documents the default-on stall recovery behavior, idle-cap knob, and log signals.\"\n  Expected change site: README.md (review/autofix env-var documentation section around lines 105-112 and run-summary contract section around lines 1425-1433)\n  Evidence of absence: The README does document the `REVIEWER_ADVANCE:` log format and the `stall_recovery` summary fields. However, the primary env-var documentation at lines 105-112 for `CODEX_STALL_GUARD_ENABLED` currently states the default as \"No\" with a parenthetical note about review/autofix, but the acceptance criteria require explicit \"default-on\" documentation. The run-summary section correctly documents the log format and recovery counters.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement:\nREADME documents the default-on stall recovery behavior, idle-cap timeout knob, and log signals.\nExpected change site:\nREADME.md (review/autofix env-var and run-summary contract sections)\nEvidence of absence:\n- The last-run edit and PR diff updated wording around `REVIEWER_ADVANCE: slot=... model=... reason=... next_action=...` and `stall_recovery.{killed_attempts,advanced_slots,recovered_slots,partial_finalize_requested}`.\n- README.md does not explicitly document that `CODEX_STALL_GUARD_ENABLED` now defaults to `true` only for review/autofix (while remaining `false` elsewhere).\n- README.md does not explicitly document the 600 s idle cap being deliberately below the 210 min soft deadline.\n- README.md does not explicitly document the precise `REVIEWER_ADVANCE` + `stall_guard` failure-class semantics.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/review_run_reviewers.sh\n  Line: reviewer_log_advance_action (new helper ~3312-3343) + calls in silent_retry/retryable_failure branches\n  Problem: The helper falls back to `advance_reason=\"unknown\"` when neither `REVIEWER_ATTEMPT_RETRYABLE_CLASS` nor `final_retryable_class` is set.\n  Why it fails at runtime: Terminal `REVIEWER_ADVANCE` line becomes non-deterministic for certain retryable classes, breaking the \"deterministic advance\" contract and making log-based stall-recovery diagnosis brittle.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- File: .github/workflows/review_autofix.yml\n  Line: reviewer_stall_recovery_next_action Python helper (~6873-6880) + summary construction (~7085-7099)\n  Problem: The regex only captures `next_action=...` when the line also contains `reason=stall_guard`.\n  Why it fails at runtime: Non-stall-guard advances (budget-skip, unmapped, terminal_failure, etc.) are silently dropped from the per-slot `stall_recovery_next_action` field.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- File: README.md (multiple locations) + .github/workflows/review_autofix.yml\n  Line: Env-var default comments and wiring blocks\n  Problem: The default change for `CODEX_STALL_GUARD_ENABLED` is now documented as `false (true by default in review/autofix)`, but the workflow YAML still uses `|| 'true'` in the top-level env block and the codex-agent job block without a phase-specific guard.\n  Why it fails at runtime: Other phases (implement, validate, orchestrate_poll) now inherit the review default unintentionally, widening the stall-guard blast radius beyond the scoped intent of issue #3719.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n- Requirement: \"README documents the default-on stall recovery behavior, idle-cap knob, and log signals.\"\n  Expected change site: README.md (review/autofix env-var section + run-summary contract)\n  Evidence of absence:\n  - The last-run edit tightened wording around `REVIEWER_ADVANCE: slot=... model=... reason=... next_action=...` and added `stall_recovery.{killed_attempts,advanced_slots,recovered_slots,partial_finalize_requested}` to the summary contract, but does not explicitly document that `CODEX_STALL_GUARD_ENABLED` now defaults to `true` only for review/autofix (while remaining `false` elsewhere), that the 600s idle cap was chosen to fire before the 210-min soft deadline and the legacy 900s reviewer watchdog, or the precise semantics of `stall_guard` failure-class + `REVIEWER_ADVANCE` transitions.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "9d4d3de1ab95557a0ea99dafff5ef71af1cc45c1a109ea4e76a6e6cf1f7c85a8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3720,
+    "run_id": "30727869079",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "30727869079",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260802025616_1051c701cc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3720,
+    "run_id": "30727869079"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-02T02:56:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
