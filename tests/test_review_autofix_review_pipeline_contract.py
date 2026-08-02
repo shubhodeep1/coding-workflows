@@ -15,6 +15,8 @@ import textwrap
 import time
 from pathlib import Path
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
@@ -459,6 +461,25 @@ def _step_run_script(step_name: str) -> str:
 	return script + ("\n" if script else "")
 
 
+def _extract_review_autofix_timeout_minutes(workflow_text: str) -> tuple[int, int]:
+	workflow = yaml.safe_load(workflow_text) or {}
+	jobs = workflow.get("jobs") or {}
+	codex_agent_job = jobs.get("codex-agent") or {}
+	job_timeout_minutes = codex_agent_job.get("timeout-minutes")
+	resolver_timeout_minutes = None
+	for step in codex_agent_job.get("steps") or []:
+		if isinstance(step, dict) and step.get("name") == "Run Codex resolver, validate, stage, commit":
+			resolver_timeout_minutes = step.get("timeout-minutes")
+			break
+	assert isinstance(job_timeout_minutes, int), "codex-agent timeout-minutes not found"
+	assert isinstance(resolver_timeout_minutes, int), "resolver step timeout-minutes not found"
+	return job_timeout_minutes, resolver_timeout_minutes
+
+
+def _review_autofix_timeout_minutes() -> tuple[int, int]:
+	return _extract_review_autofix_timeout_minutes(_workflow_text())
+
+
 def _parse_env_file(path: Path) -> dict[str, str]:
 	parsed: dict[str, str] = {}
 	for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -478,6 +499,38 @@ def _read_dir_text_files(path: Path, *, exclude_names: set[str] | None = None) -
 		for child in sorted(path.iterdir())
 		if child.is_file() and child.name not in exclude
 	}
+
+
+def _run_partial_finalize_publish_safety_gate_step(
+	*,
+	partial_finalize_requested: str = "true",
+	job_start_epoch: str = "",
+	codex_run_budget_start_epoch: str = "",
+) -> dict[str, object]:
+	gate_script = _step_run_script("Decide partial-finalize validation/push safety")
+	with tempfile.TemporaryDirectory(prefix="review-partial-finalize-gate-") as td:
+		tmp = Path(td)
+		github_env_file = tmp / "github_env.txt"
+		github_env_file.write_text("", encoding="utf-8")
+		result = subprocess.run(
+			["bash", "-c", f"set -euo pipefail\n{gate_script}"],
+			cwd=str(REPO_ROOT),
+			env=_git_clean_env({
+				"GITHUB_ENV": str(github_env_file),
+				"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": partial_finalize_requested,
+				"JOB_START_EPOCH": job_start_epoch,
+				"CODEX_RUN_BUDGET_START_EPOCH": codex_run_budget_start_epoch,
+				"PYTHONDONTWRITEBYTECODE": "1",
+			}),
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"github_env": _parse_env_file(github_env_file),
+		}
 
 
 def _git_clean_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
@@ -2043,7 +2096,7 @@ def _run_reviewer_silent_retry_harness() -> dict[str, object]:
 		}
 
 
-def _run_review_pipeline_summary_step_harness() -> dict[str, object]:
+def _run_review_pipeline_summary_step_harness(*, extra_env: dict[str, str] | None = None) -> dict[str, object]:
 	summary_script = _step_run_script("Append review pipeline iteration summary")
 	with tempfile.TemporaryDirectory(prefix="review-pipeline-summary-") as td:
 		tmp = Path(td)
@@ -2105,6 +2158,8 @@ def _run_review_pipeline_summary_step_harness() -> dict[str, object]:
 			"REVIEWERS_SUCCESSFUL": "1",
 			"REVIEW_CONSOLIDATOR_ENABLED": "1",
 		})
+		if extra_env:
+			env.update(extra_env)
 
 		result = subprocess.run(
 			["bash", "-c", f"set -euo pipefail\n{summary_script}"],
@@ -2405,6 +2460,9 @@ def _run_partial_finalize_step(
 	partial_reason: str = "soft_deadline",
 	edits_pushed: str = "false",
 	editor_commit_produced: str = "false",
+	validation_tail_can_complete: str = "true",
+	edits_withheld_for_safety: str = "false",
+	withheld_reason: str = "none",
 ) -> dict[str, object]:
 	partial_script = _step_run_script("Post partial finalize comment and persist runtime marker")
 	repo = Path(context["repo"])
@@ -2428,8 +2486,8 @@ def _run_partial_finalize_step(
 	result = subprocess.run(
 		["bash", "-c", f"set -euo pipefail\n{partial_script}"],
 		cwd=str(repo),
-		env=_git_clean_env({
-			"PATH": f"{context['bin_dir']}:{os.environ.get('PATH', '')}",
+			env=_git_clean_env({
+				"PATH": f"{context['bin_dir']}:{os.environ.get('PATH', '')}",
 			"MOCK_GH_STATE_FILE": str(gh_state_file),
 			"SUPPORT_SCRIPTS_DIR": str(context["support_scripts_dir"]),
 			"GITHUB_ENV": str(github_env_file),
@@ -2440,11 +2498,14 @@ def _run_partial_finalize_step(
 			"EDITOR_SUMMARY_FILE": str(editor_summary),
 			"COMMITTED_FILES_FILE": str(committed_files),
 			"GITHUB_REPOSITORY": "owner/repo",
-			"WORKFLOW_RUN_URL": "https://github.com/owner/repo/actions/runs/12345",
-			"AUTOFIX_PARTIAL_FINALIZE_REASON": partial_reason,
-			"AUTOFIX_PARTIAL_FINALIZE_PHASE": partial_phase,
-			"AUTOFIX_EDITS_PUSHED": edits_pushed,
-			"EDITOR_COMMIT_PRODUCED": editor_commit_produced,
+				"WORKFLOW_RUN_URL": "https://github.com/owner/repo/actions/runs/12345",
+				"AUTOFIX_PARTIAL_FINALIZE_REASON": partial_reason,
+				"AUTOFIX_PARTIAL_FINALIZE_PHASE": partial_phase,
+				"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": validation_tail_can_complete,
+				"AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY": edits_withheld_for_safety,
+				"AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON": withheld_reason,
+				"AUTOFIX_EDITS_PUSHED": edits_pushed,
+				"EDITOR_COMMIT_PRODUCED": editor_commit_produced,
 			"REVIEW_MAX_RESUME_ROUNDS": review_max_resume_rounds,
 			"AUTOFIX_RESUME_ROUND": resume_env.get("AUTOFIX_RESUME_ROUND", "0"),
 			"AUTOFIX_RESUME_PROGRESS_FINGERPRINT": resume_env.get("AUTOFIX_RESUME_PROGRESS_FINGERPRINT", ""),
@@ -4552,6 +4613,9 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		'"partial_finalize":',
 		'"partial_finalize_reason":',
 		'"partial_finalize_phase":',
+		'"partial_finalize_validation_tail_can_complete":',
+		'"partial_finalize_edits_withheld_for_safety":',
+		'"partial_finalize_withheld_reason":',
 		'"partial_comment_posted":',
 		'"incomplete_phases":',
 		'"edits_pushed":',
@@ -4592,6 +4656,9 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		"| Editor invoked | ${editor_invoked} |",
 		"| CONSOLIDATOR_OVERRIDDEN count | ${override_count} |",
 		"| Editor commit produced | ${editor_commit_produced} |",
+		"| Partial validation tail can complete | ${partial_finalize_validation_tail_can_complete} |",
+		"| Partial edits withheld for safety | ${partial_finalize_edits_withheld_for_safety} |",
+		"| Partial withheld reason | ${partial_finalize_withheld_reason} |",
 		"| Resume round | ${resume_round} |",
 		"| Resume restored | ${resume_restored} |",
 		"| Resume state | ${resume_state} |",
@@ -4623,9 +4690,15 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		'resume_head_sha="${AUTOFIX_RESUME_HEAD_SHA:-}"',
 		'resume_state="${AUTOFIX_RESUME_STATE:-fresh}"',
 		'resume_should_continue="${AUTOFIX_RESUME_SHOULD_CONTINUE:-false}"',
+		'partial_finalize_validation_tail_can_complete="${AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE:-false}"',
+		'partial_finalize_edits_withheld_for_safety="${AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY:-false}"',
+		'partial_finalize_withheld_reason="${AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON:-none}"',
 		'push_allowed = bool_env("CAN_PUSH")',
 		'edits_pushed = bool_env("AUTOFIX_EDITS_PUSHED")',
 		'partial_finalize = bool_env("AUTOFIX_PARTIAL_FINALIZE_REQUESTED")',
+		'partial_finalize_validation_tail_can_complete = bool_env("AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE")',
+		'partial_finalize_edits_withheld_for_safety = bool_env("AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY")',
+		'partial_finalize_withheld_reason = env("AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON").strip() or "none"',
 		'partial_comment_posted = bool_env("AUTOFIX_PARTIAL_COMMENT_POSTED")',
 		'resume_restored = bool_env("AUTOFIX_RESUME_RESTORED")',
 		'resume_head_sha = env("AUTOFIX_RESUME_HEAD_SHA").strip()',
@@ -4648,6 +4721,7 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 	):
 		assert artifact in block, f"Summary step is missing local metric source: {artifact}"
 	assert '"failure_class": "push_not_allowed"' in block
+	assert '"failure_class": "withheld_for_safety"' in block
 	assert "gh api" not in block
 	assert "gh_retry" not in block
 	assert "curl https://api.github.com" not in block
@@ -4693,6 +4767,154 @@ def test_review_pipeline_summary_reports_stall_recovery_for_retried_and_skipped_
 	}
 
 
+def test_review_pipeline_summary_reports_partial_finalize_validated_push() -> None:
+	result = _run_review_pipeline_summary_step_harness(
+		extra_env={
+			"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_REASON": "soft_deadline",
+			"AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor",
+			"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY": "false",
+			"AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON": "none",
+			"AUTOFIX_PARTIAL_COMMENT_POSTED": "true",
+			"AUTOFIX_RESUME_ROUND": "1",
+			"AUTOFIX_RESUME_ROUND_LIMIT": "3",
+			"AUTOFIX_RESUME_STATE": "resumable",
+			"AUTOFIX_RESUME_SHOULD_CONTINUE": "true",
+			"AUTOFIX_RESUME_HEAD_SHA": "head-sha-123",
+			"DID_COMMIT": "true",
+			"AUTOFIX_EDITS_PUSHED": "true",
+		},
+	)
+	summary = result["summary"]
+
+	assert summary["partial_finalize"] is True
+	assert summary["partial_finalize_reason"] == "soft_deadline"
+	assert summary["partial_finalize_phase"] == "editor"
+	assert summary["partial_finalize_validation_tail_can_complete"] is True
+	assert summary["partial_finalize_edits_withheld_for_safety"] is False
+	assert summary["partial_finalize_withheld_reason"] == "none"
+	assert summary["finalize_reason"] == "partial_finalize"
+	assert summary["slot_results"]["commit"]["failure_class"] == "none"
+	assert summary["slot_results"]["push"]["failure_class"] == "none"
+	assert summary["edits_pushed"] is True
+	assert "| Partial validation tail can complete | true |" in result["step_summary"]
+	assert "| Partial edits withheld for safety | false |" in result["step_summary"]
+	assert "| Partial withheld reason | none |" in result["step_summary"]
+
+
+def test_review_pipeline_summary_reports_partial_finalize_withheld_for_safety() -> None:
+	result = _run_review_pipeline_summary_step_harness(
+		extra_env={
+			"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_REASON": "soft_deadline",
+			"AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor",
+			"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false",
+			"AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON": "insufficient_budget_for_validation_tail",
+			"AUTOFIX_PARTIAL_COMMENT_POSTED": "true",
+			"AUTOFIX_RESUME_ROUND": "1",
+			"AUTOFIX_RESUME_ROUND_LIMIT": "3",
+			"AUTOFIX_RESUME_STATE": "resumable",
+			"AUTOFIX_RESUME_SHOULD_CONTINUE": "true",
+			"AUTOFIX_RESUME_HEAD_SHA": "head-sha-456",
+		},
+	)
+	summary = result["summary"]
+
+	assert summary["partial_finalize"] is True
+	assert summary["partial_finalize_reason"] == "soft_deadline"
+	assert summary["partial_finalize_phase"] == "editor"
+	assert summary["partial_finalize_validation_tail_can_complete"] is False
+	assert summary["partial_finalize_edits_withheld_for_safety"] is True
+	assert summary["partial_finalize_withheld_reason"] == "insufficient_budget_for_validation_tail"
+	assert summary["finalize_reason"] == "partial_finalize"
+	assert summary["slot_results"]["commit"] == {
+		"attempt_count": 1,
+		"status": "skipped",
+		"failure_class": "withheld_for_safety",
+	}
+	assert summary["slot_results"]["push"] == {
+		"attempt_count": 0,
+		"status": "skipped",
+		"failure_class": "withheld_for_safety",
+	}
+	assert summary["edits_pushed"] is False
+	assert "| Partial validation tail can complete | false |" in result["step_summary"]
+	assert "| Partial edits withheld for safety | true |" in result["step_summary"]
+	assert "| Partial withheld reason | insufficient_budget_for_validation_tail |" in result["step_summary"]
+
+
+def test_review_partial_finalize_publish_safety_gate_is_wired() -> None:
+	block = _step_block("Decide partial-finalize validation/push safety")
+	for expected in (
+		'if [ "${AUTOFIX_PARTIAL_FINALIZE_REQUESTED:-false}" = "true" ]; then',
+		'workflow_timeout_source_path=".codex-workflow-src/.github/workflows/review_autofix.yml"',
+		'workflow_timeout_source_path=".github/workflows/review_autofix.yml"',
+		'import sys, yaml',
+		'workflow = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}',
+		'codex_agent_job = jobs.get("codex-agent") or {}',
+		'resolver_timeout_minutes = next((step.get("timeout-minutes")',
+		'step.get("name") == "Run Codex resolver, validate, stage, commit"',
+		'sys.exit(1) if not isinstance(job_timeout_minutes, int) or not isinstance(resolver_timeout_minutes, int) else print(job_timeout_minutes, resolver_timeout_minutes)',
+		'job_timeout_total_secs=$(( job_timeout_minutes * 60 ))',
+		'partial_finalize_validation_minimum_secs=$(( (resolver_timeout_minutes * 60) + 600 ))',
+		'hard_timeout_remaining_secs=$(( job_deadline_epoch - now_epoch ))',
+		'withheld_reason="insufficient_budget_for_validation_tail"',
+		'echo "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE=${validation_tail_can_complete}"',
+		'echo "AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY=${edits_withheld_for_safety}"',
+		'echo "AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON=${withheld_reason}"',
+	):
+		assert expected in block, f"missing partial-finalize safety-gate contract detail: {expected}"
+
+
+def test_review_partial_finalize_timeout_extractor_handles_structured_yaml_layout() -> None:
+	workflow_text = textwrap.dedent(
+		"""\
+		jobs:
+		  codex-agent:
+		    steps:
+		      - name: Bootstrap
+		        timeout-minutes: 5
+		      - name: Run Codex resolver, validate, stage, commit
+		        timeout-minutes: 170
+		    timeout-minutes: 240
+		"""
+	)
+
+	assert _extract_review_autofix_timeout_minutes(workflow_text) == (240, 170)
+
+
+def test_review_partial_finalize_publish_safety_gate_keeps_validated_path_when_budget_remains() -> None:
+	job_timeout_minutes, resolver_timeout_minutes = _review_autofix_timeout_minutes()
+	assert job_timeout_minutes * 60 > (resolver_timeout_minutes * 60) + 600
+	now_epoch = int(time.time())
+	result = _run_partial_finalize_publish_safety_gate_step(job_start_epoch=str(now_epoch - 60))
+
+	assert "validated tail remains available" in result["stdout"]
+	assert result["github_env"] == {
+		"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "true",
+		"AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY": "false",
+		"AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON": "none",
+	}
+
+
+def test_review_partial_finalize_publish_safety_gate_prefers_codex_budget_start_epoch_when_withholding() -> None:
+	job_timeout_minutes, _resolver_timeout_minutes = _review_autofix_timeout_minutes()
+	now_epoch = int(time.time())
+	result = _run_partial_finalize_publish_safety_gate_step(
+		job_start_epoch=str(now_epoch - 60),
+		codex_run_budget_start_epoch=str(now_epoch - (job_timeout_minutes * 60)),
+	)
+
+	assert "findings-only fallback" in result["stdout"]
+	assert result["github_env"] == {
+		"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false",
+		"AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY": "true",
+		"AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON": "insufficient_budget_for_validation_tail",
+	}
+
+
 def test_review_partial_finalize_workflow_path_is_wired() -> None:
 	early_save_block = _step_block("Save review-issue ledger")
 	restore_block = _step_block("Restore same-head partial resume state")
@@ -4719,11 +4941,20 @@ def test_review_partial_finalize_workflow_path_is_wired() -> None:
 		"incomplete_scope=${incomplete_scope_csv}",
 		"validated_edits_committed=${validated_edits_committed}",
 		"edits_pushed=${edits_pushed}",
+		"validation_tail_can_complete=${validation_tail_can_complete}",
+		"edits_withheld_for_safety=${edits_withheld_for_safety}",
+		"withheld_reason=${withheld_reason}",
 		"head_sha=${current_head_sha}",
 		"resume_round=${resume_round}",
 		"resume_round_limit=${resume_round_limit}",
 		"resume_state=${RESUME_STATE}",
 		"resume_should_continue=${RESUME_SHOULD_CONTINUE}",
+		'VALIDATION_TAIL_CAN_COMPLETE="${validation_tail_can_complete}"',
+		'EDITS_WITHHELD_FOR_SAFETY="${edits_withheld_for_safety}"',
+		'WITHHELD_REASON="${withheld_reason}"',
+		'"validation_tail_can_complete": parse_bool("VALIDATION_TAIL_CAN_COMPLETE"),',
+		'"edits_withheld_for_safety": parse_bool("EDITS_WITHHELD_FOR_SAFETY"),',
+		'"withheld_reason": os.environ.get("WITHHELD_REASON", "").strip() or "none",',
 		"partial_finalize.json",
 		'echo "AUTOFIX_PARTIAL_COMMENT_POSTED=${partial_comment_posted}"',
 		'echo "AUTOFIX_RESUME_ROUND=${resume_round}"',
@@ -4745,6 +4976,64 @@ def test_review_partial_finalize_workflow_path_is_wired() -> None:
 		assert expected in late_save_block, f"missing persisted partial-finalize state path: {expected}"
 
 
+def test_review_partial_finalize_comment_and_marker_report_validated_push_state() -> None:
+	with tempfile.TemporaryDirectory(prefix="partial-finalize-validated-push-") as td:
+		context = _build_partial_finalize_step_context(Path(td))
+		result = _run_partial_finalize_step(
+			context,
+			edits_pushed="true",
+			editor_commit_produced="true",
+			validation_tail_can_complete="true",
+			edits_withheld_for_safety="false",
+			withheld_reason="none",
+		)
+
+	assert "so the validated finalize tail could complete before the hard job timeout." in result["latest_comment"]
+	assert "- Validated edits committed: true" in result["latest_comment"]
+	assert "- Edits pushed: true" in result["latest_comment"]
+	assert "- Validation tail can complete: true" in result["latest_comment"]
+	assert "- Edits withheld for safety: false" in result["latest_comment"]
+	assert "- Withheld reason: none" in result["latest_comment"]
+	assert "validated_edits_committed=true" in result["latest_comment"]
+	assert "edits_pushed=true" in result["latest_comment"]
+	assert "validation_tail_can_complete=true" in result["latest_comment"]
+	assert "edits_withheld_for_safety=false" in result["latest_comment"]
+	assert "withheld_reason=none" in result["latest_comment"]
+	assert result["marker_payload"]["validated_edits_committed"] is True
+	assert result["marker_payload"]["edits_pushed"] is True
+	assert result["marker_payload"]["validation_tail_can_complete"] is True
+	assert result["marker_payload"]["edits_withheld_for_safety"] is False
+	assert result["marker_payload"]["withheld_reason"] == "none"
+
+
+def test_review_partial_finalize_comment_and_marker_report_withheld_state() -> None:
+	with tempfile.TemporaryDirectory(prefix="partial-finalize-withheld-") as td:
+		context = _build_partial_finalize_step_context(Path(td))
+		result = _run_partial_finalize_step(
+			context,
+			validation_tail_can_complete="false",
+			edits_withheld_for_safety="true",
+			withheld_reason="insufficient_budget_for_validation_tail",
+		)
+
+	assert "The remaining job headroom could not cover the existing validation/publish tail, so the workflow posted findings only and withheld any unpushed edits for safety." in result["latest_comment"]
+	assert "- Validated edits committed: false" in result["latest_comment"]
+	assert "- Edits pushed: false" in result["latest_comment"]
+	assert "- Validation tail can complete: false" in result["latest_comment"]
+	assert "- Edits withheld for safety: true" in result["latest_comment"]
+	assert "- Withheld reason: insufficient_budget_for_validation_tail" in result["latest_comment"]
+	assert "validated_edits_committed=false" in result["latest_comment"]
+	assert "edits_pushed=false" in result["latest_comment"]
+	assert "validation_tail_can_complete=false" in result["latest_comment"]
+	assert "edits_withheld_for_safety=true" in result["latest_comment"]
+	assert "withheld_reason=insufficient_budget_for_validation_tail" in result["latest_comment"]
+	assert result["marker_payload"]["validated_edits_committed"] is False
+	assert result["marker_payload"]["edits_pushed"] is False
+	assert result["marker_payload"]["validation_tail_can_complete"] is False
+	assert result["marker_payload"]["edits_withheld_for_safety"] is True
+	assert result["marker_payload"]["withheld_reason"] == "insufficient_budget_for_validation_tail"
+
+
 def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
 	for step_name in (
 		"Pre-editor stale-base gate",
@@ -4752,13 +5041,7 @@ def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
 		"Switch reasoning effort for editor",
 		"Setup Serena for editor",
 		"Apply fixes with editor model",
-		"Run interim judge",
-		"Synthesize behavioural smoke",
 		"Post editor summary comment",
-		"Detect editor-claimed-but-uncommitted changes",
-		"Validate editor no-op disposition",
-		"Detect merge conflicts",
-		"Run Codex resolver, validate, stage, commit",
 		"Mark linked issues ready to merge",
 		"Enable auto-merge on PR",
 		"Telegram success",
@@ -4767,13 +5050,27 @@ def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
 		assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" in block, (
 			f"step should skip during partial finalize: {step_name}"
 		)
+	for step_name in (
+		"Run interim judge",
+		"Synthesize behavioural smoke",
+		"Detect editor-claimed-but-uncommitted changes",
+		"Validate editor no-op disposition",
+		"Detect merge conflicts",
+		"Prepare merge-conflict resolver prompt and pre-snapshot",
+		"Run Codex resolver, validate, stage, commit",
+		"Push all pending commits",
+	):
+		block = _step_block(step_name)
+		assert "(env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')" in block, (
+			f"step should stay available only when the partial-finalize validation tail can complete: {step_name}"
+		)
 
 
 def test_review_partial_finalize_keeps_commit_and_push_path_available() -> None:
 	commit_block = _step_block("Commit changes")
 	push_block = _step_block("Push all pending commits")
 	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" not in commit_block
-	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" not in push_block
+	assert "(env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')" in push_block
 
 
 def test_review_pipeline_summary_finalize_reason_marks_partial_runs() -> None:
@@ -5420,6 +5717,15 @@ def main() -> int:
 	test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain()
 	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()
 	test_review_pipeline_summary_reports_stall_recovery_for_retried_and_skipped_slots()
+	test_review_pipeline_summary_reports_partial_finalize_validated_push()
+	test_review_pipeline_summary_reports_partial_finalize_withheld_for_safety()
+	test_review_partial_finalize_publish_safety_gate_is_wired()
+	test_review_partial_finalize_timeout_extractor_handles_structured_yaml_layout()
+	test_review_partial_finalize_publish_safety_gate_keeps_validated_path_when_budget_remains()
+	test_review_partial_finalize_publish_safety_gate_prefers_codex_budget_start_epoch_when_withholding()
+	test_review_partial_finalize_workflow_path_is_wired()
+	test_review_partial_finalize_comment_and_marker_report_validated_push_state()
+	test_review_partial_finalize_comment_and_marker_report_withheld_state()
 	test_same_head_partial_resume_restore_prefers_latest_matching_marker_and_ignores_other_heads()
 	test_same_head_partial_resume_restore_fails_open_when_no_marker_matches_head()
 	test_reviewer_resume_reuses_cached_successes_and_reruns_only_incomplete_slots()

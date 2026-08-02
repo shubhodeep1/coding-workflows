@@ -429,6 +429,8 @@ def test_editor_targeted_file_context_and_prompt_render_path_passes_flags() -> N
 def test_commit_changes_drops_bootstrap_owned_serena_runtime_tree_before_staging() -> None:
 	commit_changes = _read(COMMIT_CHANGES)
 
+	assert 'if [ "${AUTOFIX_PARTIAL_FINALIZE_REQUESTED:-false}" = "true" ] && [ "${AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE:-true}" != "true" ]; then' in commit_changes
+	assert 'echo "- none (edits withheld for safety: ${withheld_reason})" > "${COMMITTED_FILES_FILE}"' in commit_changes
 	assert 'if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then' in commit_changes
 	assert "current_serena_project_hash=\"$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)\"" in commit_changes
 	assert 'if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then' in commit_changes
@@ -437,6 +439,68 @@ def test_commit_changes_drops_bootstrap_owned_serena_runtime_tree_before_staging
 	assert ".serena|.serena/*) continue ;;" in commit_changes
 	assert "':!.serena'" in commit_changes
 	assert "':!.serena/**'" in commit_changes
+
+
+def test_commit_changes_withheld_partial_finalize_discards_local_edits_and_exits_cleanly() -> None:
+	with tempfile.TemporaryDirectory(prefix="review-commit-withheld-") as tmp:
+		tmp_p = Path(tmp)
+		repo = tmp_p / "repo"
+		repo.mkdir()
+		git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+		subprocess.run(["git", "init"], cwd=str(repo), env=git_env, check=True, capture_output=True, text=True)
+		subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(repo), env=git_env, check=True, capture_output=True, text=True)
+		subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo), env=git_env, check=True, capture_output=True, text=True)
+
+		tracked_file = repo / "tracked.txt"
+		tracked_file.write_text("before\n", encoding="utf-8")
+		subprocess.run(["git", "add", "tracked.txt"], cwd=str(repo), env=git_env, check=True, capture_output=True, text=True)
+		subprocess.run(["git", "commit", "-m", "initial"], cwd=str(repo), env=git_env, check=True, capture_output=True, text=True)
+		head_before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), env=git_env, check=True, capture_output=True, text=True).stdout.strip()
+
+		tracked_file.write_text("after\n", encoding="utf-8")
+		untracked_file = repo / "scratch.txt"
+		untracked_file.write_text("temp\n", encoding="utf-8")
+
+		runtime_dir = tmp_p / "runtime"
+		runtime_dir.mkdir()
+		github_env = tmp_p / "github_env.txt"
+		github_output = tmp_p / "github_output.txt"
+		committed_files = tmp_p / "committed_files.txt"
+		result = subprocess.run(
+			["bash", "-c", 'cd "$1" && source "$2"', "bash", str(repo), str(COMMIT_CHANGES)],
+			env={
+				**git_env,
+				"GITHUB_ENV": str(github_env),
+				"GITHUB_OUTPUT": str(github_output),
+				"COMMITTED_FILES_FILE": str(committed_files),
+				"CAN_PUSH": "true",
+				"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true",
+				"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false",
+				"AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON": "insufficient_budget_for_validation_tail",
+				"WRITE_GUARDS_ENABLED": "false",
+				"RUNTIME_DIR": str(runtime_dir),
+				"PYTHONDONTWRITEBYTECODE": "1",
+			},
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		head_after = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), env=git_env, check=True, capture_output=True, text=True).stdout.strip()
+		status_after = subprocess.run(["git", "status", "--porcelain"], cwd=str(repo), env=git_env, check=True, capture_output=True, text=True).stdout.strip()
+
+		assert "Partial finalize findings-only fallback: discarding local edits before commit (insufficient_budget_for_validation_tail)." in result.stdout
+		assert head_after == head_before
+		assert tracked_file.read_text(encoding="utf-8") == "before\n"
+		assert not untracked_file.exists()
+		assert status_after == ""
+		assert committed_files.read_text(encoding="utf-8") == "- none (edits withheld for safety: insufficient_budget_for_validation_tail)\n"
+		assert "DID_COMMIT=false\n" in github_env.read_text(encoding="utf-8")
+		assert "LEDGER_ONLY_COMMIT=false\n" in github_env.read_text(encoding="utf-8")
+		assert "LEDGER_ONLY_COMMIT_STRICT=false\n" in github_env.read_text(encoding="utf-8")
+		assert "did_commit=false\n" in github_output.read_text(encoding="utf-8")
+		assert "ledger_only_commit=false\n" in github_output.read_text(encoding="utf-8")
+		assert "ledger_only_commit_strict=false\n" in github_output.read_text(encoding="utf-8")
 
 
 def test_conflict_prepare_and_resolve_wire_semble_query_and_prompt_append() -> None:
@@ -475,6 +539,7 @@ def main() -> int:
 	test_normalize_openrouter_usage_keeps_first_valid_usage_payload()
 	test_editor_targeted_file_context_and_prompt_render_path_passes_flags()
 	test_commit_changes_drops_bootstrap_owned_serena_runtime_tree_before_staging()
+	test_commit_changes_withheld_partial_finalize_discards_local_edits_and_exits_cleanly()
 	test_conflict_prepare_and_resolve_wire_semble_query_and_prompt_append()
 	print("OK: review_autofix Semble contract assertions hold")
 	return 0

@@ -3743,6 +3743,59 @@ jobs:
             echo "::endgroup::"
           fi
 
+      - name: Decide partial-finalize validation/push safety
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        run: |
+          set -euo pipefail
+
+          validation_tail_can_complete="true"
+          edits_withheld_for_safety="false"
+          withheld_reason="none"
+
+          if [ "${AUTOFIX_PARTIAL_FINALIZE_REQUESTED:-false}" = "true" ]; then
+            workflow_timeout_source_path=".codex-workflow-src/.github/workflows/review_autofix.yml"
+            if [ ! -f "${workflow_timeout_source_path}" ]; then
+              workflow_timeout_source_path=".github/workflows/review_autofix.yml"
+            fi
+            if ! read -r job_timeout_minutes resolver_timeout_minutes < <(PYTHONDONTWRITEBYTECODE=1 python3 -c 'from pathlib import Path; import sys, yaml; workflow = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}; jobs = workflow.get("jobs") or {}; codex_agent_job = jobs.get("codex-agent") or {}; job_timeout_minutes = codex_agent_job.get("timeout-minutes"); resolver_timeout_minutes = next((step.get("timeout-minutes") for step in (codex_agent_job.get("steps") or []) if isinstance(step, dict) and step.get("name") == "Run Codex resolver, validate, stage, commit"), None); sys.exit(1) if not isinstance(job_timeout_minutes, int) or not isinstance(resolver_timeout_minutes, int) else print(job_timeout_minutes, resolver_timeout_minutes)' "${workflow_timeout_source_path}"); then
+              job_timeout_minutes="240"
+              resolver_timeout_minutes="170"
+            fi
+            # Requiring a full resolver window plus 10 minutes of
+            # smoke/detect/push slack keeps the partial-publish path inside the
+            # workflow's existing validation envelope instead of publishing
+            # edits that the current run cannot fully re-validate before the
+            # hard timeout.
+            job_timeout_total_secs=$(( job_timeout_minutes * 60 ))
+            partial_finalize_validation_minimum_secs=$(( (resolver_timeout_minutes * 60) + 600 ))
+            now_epoch="$(date +%s)"
+            budget_start_epoch="${CODEX_RUN_BUDGET_START_EPOCH:-${JOB_START_EPOCH:-}}"
+            hard_timeout_remaining_secs=0
+
+            if [[ "${budget_start_epoch}" =~ ^[0-9]+$ ]] && [ "${budget_start_epoch}" -gt 0 ] && [ "${now_epoch}" -ge "${budget_start_epoch}" ]; then
+              job_deadline_epoch=$(( budget_start_epoch + job_timeout_total_secs ))
+              hard_timeout_remaining_secs=$(( job_deadline_epoch - now_epoch ))
+              if [ "${hard_timeout_remaining_secs}" -lt 0 ]; then
+                hard_timeout_remaining_secs=0
+              fi
+            fi
+
+            if [ "${hard_timeout_remaining_secs}" -lt "${partial_finalize_validation_minimum_secs}" ]; then
+              validation_tail_can_complete="false"
+              edits_withheld_for_safety="true"
+              withheld_reason="insufficient_budget_for_validation_tail"
+              echo "Partial finalize publish-safety gate: findings-only fallback (hard_timeout_remaining_secs=${hard_timeout_remaining_secs}, minimum_required_secs=${partial_finalize_validation_minimum_secs})."
+            else
+              echo "Partial finalize publish-safety gate: validated tail remains available (hard_timeout_remaining_secs=${hard_timeout_remaining_secs}, minimum_required_secs=${partial_finalize_validation_minimum_secs})."
+            fi
+          fi
+
+          {
+            echo "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE=${validation_tail_can_complete}"
+            echo "AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY=${edits_withheld_for_safety}"
+            echo "AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON=${withheld_reason}"
+          } >> "$GITHUB_ENV"
+
       - name: Commit changes
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         id: commit_changes
@@ -3753,7 +3806,7 @@ jobs:
           bash "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
 
       - name: Run interim judge
-        if: env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           ROUND_NUMBER: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -3762,7 +3815,7 @@ jobs:
           bash "${SUPPORT_SCRIPTS_DIR}/review_run_judge_interim.sh"
 
       - name: Synthesize behavioural smoke
-        if: env.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED == 'true' && env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: env.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED == 'true' && env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         continue-on-error: true
         env:
           ROUND_NUMBER: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
@@ -3919,7 +3972,7 @@ jobs:
         # DID land real source-file edits.  Running this detector against
         # such a commit produces a false-positive EDITOR_CHANGES_LOST alert
         # (bitsafe.io PR #177 / run 25653654000).
-        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
+        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         run: |
           set -euo pipefail
 
@@ -4158,7 +4211,7 @@ jobs:
         # short-circuit independently on `max_iterations_reached != 'true'`,
         # so leaving the env var unset on these runs does not relax any
         # auto-merge safety.
-        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'"
         run: |
           set -euo pipefail
 
@@ -4251,7 +4304,7 @@ jobs:
         # which in turn fires the (futile) Codex resolver and produces a
         # `FAILED_STEPS=1` cascade that the e2e poller treats as the proximate
         # failure (analysis: e2e-smoke-failure-25126757724.md §B/D).
-        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -4527,7 +4580,7 @@ jobs:
         # step. On max_iterations_reached runs, EDITOR_NOOP_SUSPICIOUS stays
         # unset, so this guard is a no-op and MERGE_CONFLICT can legitimately
         # come from the detect step above.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -4561,7 +4614,7 @@ jobs:
         # review_conflict_resolve.sh fires the immediate orchestrator-poll
         # dispatch so the integration judge takes over without waiting for
         # the */5 cron tick.
-        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         timeout-minutes: 170
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -5184,7 +5237,7 @@ jobs:
         # are pushed together AFTER labeling and auto-merge are configured.
         # This avoids a concurrency self-cancel race where the synchronize
         # event from an earlier push would kill subsequent steps.
-        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        if: success() && env.CAN_PUSH == 'true' && (env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TARGET_BRANCH: ${{ env.TARGET_BRANCH }}
@@ -5583,11 +5636,19 @@ jobs:
           incomplete_scope_human="$(printf '%s' "${incomplete_scope_csv}" | sed 's/,/, /g')"
 
           validated_edits_committed="false"
-          if [ "${EDITOR_COMMIT_PRODUCED:-false}" = "true" ]; then
+          if [ "${EDITOR_COMMIT_PRODUCED:-false}" = "true" ] || [ "${DID_COMMIT:-false}" = "true" ] || [ "${CONFLICT_RESOLVED:-false}" = "true" ]; then
             validated_edits_committed="true"
           fi
           edits_pushed="${AUTOFIX_EDITS_PUSHED:-false}"
+          validation_tail_can_complete="${AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE:-true}"
+          edits_withheld_for_safety="${AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY:-false}"
+          withheld_reason="${AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON:-none}"
           partial_comment_posted="false"
+
+          partial_publish_note="This run finalized early after \`${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}\` in the \`${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}\` phase so the validated finalize tail could complete before the hard job timeout."
+          if [ "${edits_withheld_for_safety}" = "true" ]; then
+            partial_publish_note="This run finalized early after \`${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}\` in the \`${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}\` phase. The remaining job headroom could not cover the existing validation/publish tail, so the workflow posted findings only and withheld any unpushed edits for safety."
+          fi
 
           resume_eval_file="$(mktemp)"
           CURRENT_HEAD_SHA="${current_head_sha}" \
@@ -5604,6 +5665,9 @@ jobs:
           PARTIAL_REASON="${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}" \
           VALIDATED_EDITS_COMMITTED="${validated_edits_committed}" \
           EDITS_PUSHED="${edits_pushed}" \
+          VALIDATION_TAIL_CAN_COMPLETE="${validation_tail_can_complete}" \
+          EDITS_WITHHELD_FOR_SAFETY="${edits_withheld_for_safety}" \
+          WITHHELD_REASON="${withheld_reason}" \
           PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' > "${resume_eval_file}"
           from __future__ import annotations
 
@@ -5686,6 +5750,9 @@ jobs:
               "incomplete_scope": os.environ.get("INCOMPLETE_SCOPE_CSV", "").strip(),
               "validated_edits_committed": parse_bool(os.environ.get("VALIDATED_EDITS_COMMITTED", "false")),
               "edits_pushed": parse_bool(os.environ.get("EDITS_PUSHED", "false")),
+              "validation_tail_can_complete": parse_bool(os.environ.get("VALIDATION_TAIL_CAN_COMPLETE", "false")),
+              "edits_withheld_for_safety": parse_bool(os.environ.get("EDITS_WITHHELD_FOR_SAFETY", "false")),
+              "withheld_reason": os.environ.get("WITHHELD_REASON", "").strip() or "none",
               "artifacts": artifacts,
           }
           progress_fingerprint = hashlib.sha256(
@@ -5741,7 +5808,7 @@ jobs:
           <!-- REVIEW_AUTOFIX_PARTIAL_V1 -->
           **AI review/autofix partial finalize**
 
-          This run finalized early after \`${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}\` in the \`${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}\` phase so the validated finalize tail could complete before the hard job timeout.
+          ${partial_publish_note}
 
           ${resume_state_note}
 
@@ -5749,6 +5816,9 @@ jobs:
           - Incomplete scope: ${incomplete_scope_human}
           - Validated edits committed: ${validated_edits_committed}
           - Edits pushed: ${edits_pushed}
+          - Validation tail can complete: ${validation_tail_can_complete}
+          - Edits withheld for safety: ${edits_withheld_for_safety}
+          - Withheld reason: ${withheld_reason}
           - Resume state: ${RESUME_STATE}
           - Resume round: ${resume_round} of ${resume_round_limit}
           - Same-head continuation: ${RESUME_SHOULD_CONTINUE}
@@ -5763,6 +5833,9 @@ jobs:
           incomplete_scope=${incomplete_scope_csv}
           validated_edits_committed=${validated_edits_committed}
           edits_pushed=${edits_pushed}
+          validation_tail_can_complete=${validation_tail_can_complete}
+          edits_withheld_for_safety=${edits_withheld_for_safety}
+          withheld_reason=${withheld_reason}
           head_sha=${current_head_sha}
           resume_round=${resume_round}
           resume_round_limit=${resume_round_limit}
@@ -5793,6 +5866,9 @@ jobs:
           INCOMPLETE_SCOPE_CSV="${incomplete_scope_csv}" \
           VALIDATED_EDITS_COMMITTED="${validated_edits_committed}" \
           EDITS_PUSHED="${edits_pushed}" \
+          VALIDATION_TAIL_CAN_COMPLETE="${validation_tail_can_complete}" \
+          EDITS_WITHHELD_FOR_SAFETY="${edits_withheld_for_safety}" \
+          WITHHELD_REASON="${withheld_reason}" \
           RESUME_ROUND_VALUE="${resume_round}" \
           RESUME_ROUND_LIMIT_VALUE="${resume_round_limit}" \
           RESUME_STATE_VALUE="${RESUME_STATE}" \
@@ -5878,6 +5954,9 @@ jobs:
               "incomplete_scope": parse_csv("INCOMPLETE_SCOPE_CSV"),
               "validated_edits_committed": parse_bool("VALIDATED_EDITS_COMMITTED"),
               "edits_pushed": parse_bool("EDITS_PUSHED"),
+              "validation_tail_can_complete": parse_bool("VALIDATION_TAIL_CAN_COMPLETE"),
+              "edits_withheld_for_safety": parse_bool("EDITS_WITHHELD_FOR_SAFETY"),
+              "withheld_reason": os.environ.get("WITHHELD_REASON", "").strip() or "none",
               "resume_round": int(os.environ.get("RESUME_ROUND_VALUE", "0") or 0),
               "resume_round_limit": int(os.environ.get("RESUME_ROUND_LIMIT_VALUE", "0") or 0),
               "resume_state": os.environ.get("RESUME_STATE_VALUE", "").strip() or "resumable",
@@ -6776,6 +6855,9 @@ jobs:
           resume_head_sha="${AUTOFIX_RESUME_HEAD_SHA:-}"
           resume_state="${AUTOFIX_RESUME_STATE:-fresh}"
           resume_should_continue="${AUTOFIX_RESUME_SHOULD_CONTINUE:-false}"
+          partial_finalize_validation_tail_can_complete="${AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE:-false}"
+          partial_finalize_edits_withheld_for_safety="${AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY:-false}"
+          partial_finalize_withheld_reason="${AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON:-none}"
 
           structured_summary_line="$(
             BUDGET_ELAPSED_SECS="${budget_elapsed_secs}" \
@@ -7178,7 +7260,11 @@ jobs:
           
           committed_files_text = read_text(committed_files_file)
           commit_phase_observed = any(env(key).strip() for key in ("DID_COMMIT", "LEDGER_ONLY_COMMIT", "LEDGER_ONLY_COMMIT_STRICT")) or bool(committed_files_text.strip())
-          
+
+          partial_finalize_validation_tail_can_complete = bool_env("AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE")
+          partial_finalize_edits_withheld_for_safety = bool_env("AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY")
+          partial_finalize_withheld_reason = env("AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON").strip() or "none"
+
           if bool_env("DID_COMMIT"):
               commit_phase_state = "completed"
               commit_slot = {"attempt_count": 1, "status": "success", "failure_class": "none"}
@@ -7194,6 +7280,9 @@ jobs:
           elif bool_env("AUTOFIX_STALE_BASE_SKIP"):
               commit_phase_state = "skipped"
               commit_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "stale_base_skip"}
+          elif partial_finalize_edits_withheld_for_safety:
+              commit_phase_state = "completed"
+              commit_slot = {"attempt_count": 1, "status": "skipped", "failure_class": "withheld_for_safety"}
           elif commit_phase_observed:
               commit_phase_state = "completed"
               commit_slot = {"attempt_count": 1, "status": "no_commit", "failure_class": "no_changes"}
@@ -7213,6 +7302,9 @@ jobs:
           elif bool_env("PR_CLOSED"):
               push_phase_state = "skipped"
               push_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "pr_closed"}
+          elif partial_finalize_edits_withheld_for_safety:
+              push_phase_state = "skipped"
+              push_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "withheld_for_safety"}
           elif push_needed and not push_allowed:
               push_phase_state = "skipped"
               push_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "push_not_allowed"}
@@ -7363,6 +7455,9 @@ jobs:
               "partial_finalize": partial_finalize,
               "partial_finalize_reason": partial_finalize_reason,
               "partial_finalize_phase": partial_finalize_phase,
+              "partial_finalize_validation_tail_can_complete": partial_finalize_validation_tail_can_complete,
+              "partial_finalize_edits_withheld_for_safety": partial_finalize_edits_withheld_for_safety,
+              "partial_finalize_withheld_reason": partial_finalize_withheld_reason,
               "partial_comment_posted": partial_comment_posted,
               "incomplete_phases": incomplete_phases,
               "edits_pushed": edits_pushed,
@@ -7384,7 +7479,7 @@ jobs:
           )"
 
           if [ -z "${structured_summary_line}" ]; then
-            structured_summary_line='REVIEW_AUTOFIX_RUN_SUMMARY_V1 {"completed_phases":["finalize"],"skipped_phases":["reviewers","consolidator","parser","ledger","editor","commit","push","rb_judge"],"slot_results":{"reviewers":[],"consolidator":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"parser":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"ledger":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"editor":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"commit":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"push":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"rb_judge":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"finalize":{"attempt_count":1,"status":"emitted","failure_class":"none"}},"budget_elapsed_secs":0,"budget_total_secs":0,"budget_remaining_secs":0,"stall_recovery":{"advanced_slots":0,"killed_attempts":0,"partial_finalize_requested":false,"recovered_slots":0},"finalize_reason":"summary_emit_failed","partial_finalize":false,"partial_finalize_reason":"","partial_finalize_phase":"","partial_comment_posted":false,"incomplete_phases":[],"edits_pushed":false,"resume_round":0,"resume_restored":false,"resume_head_sha":"","resume_round_limit":0,"resume_state":"fresh","resume_should_continue":false,"resume_source_reason":"","resume_source_phase":"","resume_comment_posted":false,"resume_completed_scope":[],"resume_incomplete_scope":[]}'
+            structured_summary_line='REVIEW_AUTOFIX_RUN_SUMMARY_V1 {"completed_phases":["finalize"],"skipped_phases":["reviewers","consolidator","parser","ledger","editor","commit","push","rb_judge"],"slot_results":{"reviewers":[],"consolidator":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"parser":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"ledger":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"editor":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"commit":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"push":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"rb_judge":{"attempt_count":0,"status":"skipped","failure_class":"summary_emit_failed"},"finalize":{"attempt_count":1,"status":"emitted","failure_class":"none"}},"budget_elapsed_secs":0,"budget_total_secs":0,"budget_remaining_secs":0,"stall_recovery":{"advanced_slots":0,"killed_attempts":0,"partial_finalize_requested":false,"recovered_slots":0},"finalize_reason":"summary_emit_failed","partial_finalize":false,"partial_finalize_reason":"","partial_finalize_phase":"","partial_finalize_validation_tail_can_complete":false,"partial_finalize_edits_withheld_for_safety":false,"partial_finalize_withheld_reason":"none","partial_comment_posted":false,"incomplete_phases":[],"edits_pushed":false,"resume_round":0,"resume_restored":false,"resume_head_sha":"","resume_round_limit":0,"resume_state":"fresh","resume_should_continue":false,"resume_source_reason":"","resume_source_phase":"","resume_comment_posted":false,"resume_completed_scope":[],"resume_incomplete_scope":[]}'
           fi
 
           {
@@ -7414,6 +7509,9 @@ jobs:
             echo "| Budget elapsed (secs) | ${budget_elapsed_secs} |"
             echo "| Budget total (secs) | ${budget_total_secs} |"
             echo "| Budget remaining (secs) | ${budget_remaining_secs} |"
+            echo "| Partial validation tail can complete | ${partial_finalize_validation_tail_can_complete} |"
+            echo "| Partial edits withheld for safety | ${partial_finalize_edits_withheld_for_safety} |"
+            echo "| Partial withheld reason | ${partial_finalize_withheld_reason} |"
             echo "| Resume round | ${resume_round} |"
             echo "| Resume restored | ${resume_restored} |"
             echo "| Resume state | ${resume_state} |"
