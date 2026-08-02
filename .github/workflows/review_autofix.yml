@@ -6873,18 +6873,18 @@ jobs:
             PYTHONDONTWRITEBYTECODE=1 \
             python3 - <<'PY' || true
           from __future__ import annotations
-          
+
           import glob
           import json
           import os
           import re
           from pathlib import Path
-          
-          
+
+
           def env(name: str, default: str = "") -> str:
               return os.environ.get(name, default)
-          
-          
+
+
           def bool_env(name: str) -> bool:
               return env(name).strip().lower() == "true"
 
@@ -6906,13 +6906,13 @@ jobs:
               except ValueError:
                   return default
               return value if value >= 0 else default
-          
-          
+
+
           def env_path(name: str) -> Path | None:
               raw = env(name).strip()
               return Path(raw) if raw else None
-          
-          
+
+
           def read_text(path: Path | None) -> str:
               if path is None:
                   return ""
@@ -6920,16 +6920,16 @@ jobs:
                   return path.read_text(encoding="utf-8", errors="ignore")
               except OSError:
                   return ""
-          
-          
+
+
           def file_exists(path: Path | None) -> bool:
               return path is not None and path.exists()
-          
-          
+
+
           def file_nonempty(path: Path | None) -> bool:
               return path is not None and path.exists() and path.stat().st_size > 0
-          
-          
+
+
           def max_attempt_from_text(text: str) -> int:
               matches = [int(value) for value in re.findall(r"\battempt\s+([0-9]+)\b", text)]
               return max(matches) if matches else 0
@@ -7093,8 +7093,8 @@ jobs:
               for fields in marker_fields_from_lines(log_text, "INFO: openrouter usage "):
                   total_cache_read_input_tokens += marker_int(fields.get("cache_read_input_tokens", "0"))
               return total_cache_read_input_tokens
-          
-          
+
+
           def reviewer_failure_class(status: str, log_text: str, output_text: str) -> str:
               stall_guard_logged = reviewer_stall_kill_count(log_text) > 0 or "killed by codex stall guard" in log_text
               if status == "success":
@@ -7115,7 +7115,7 @@ jobs:
                   if retryable_log:
                       return retryable_log[-1]
                   return "retryable_failure"
-          
+
               if stall_guard_logged:
                   return "stall_guard"
               retryable_log = re.findall(r"failure classified as retryable \(([^)]+)\)", log_text)
@@ -7134,13 +7134,13 @@ jobs:
               if "codex CLI not found" in log_text or "codex CLI not found" in output_text:
                   return "codex_cli_missing"
               return "unknown"
-          
-          
+
+
           runtime_dir = env_path("RUNTIME_DIR") or Path(".")
           previous_reviews_dir = env_path("PREVIOUS_REVIEWS_DIR")
           editor_summary_file = env_path("EDITOR_SUMMARY_FILE")
           committed_files_file = env_path("COMMITTED_FILES_FILE")
-          
+
           reviewer_slots: list[dict[str, object]] = []
           if previous_reviews_dir is not None:
               reviewer_status_paths = sorted(glob.glob(str(previous_reviews_dir / "status_review_*.txt")))
@@ -7184,15 +7184,15 @@ jobs:
                       "cache_reuse_attempted": reviewer_cache_reuse_attempted(log_text, slot_state_fields),
                       "cache_read_input_tokens_total": reviewer_cache_read_input_tokens_total(log_text),
                   })
-          
+
           reviewers_phase_state = "completed" if reviewer_slots else "skipped"
-          
+
           reviewer_bundle_file = env_path("REVIEWER_BUNDLE_FILE")
           floor_tags_file = env_path("FLOOR_TAGS_FILE")
           consolidator_raw_file = env_path("CONSOLIDATOR_RAW_FILE")
           parser_stats_file = env_path("PARSER_STATS_FILE")
           ledger_status_file = env_path("LEDGER_STATUS_FILE")
-          
+
           consolidator_enabled = env("REVIEW_CONSOLIDATOR_ENABLED", "1") != "0"
           if not consolidator_enabled:
               consolidator_phase_state = "skipped"
@@ -7207,21 +7207,21 @@ jobs:
           else:
               consolidator_phase_state = "skipped"
               consolidator_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
-          
+
           if file_exists(parser_stats_file):
               parser_phase_state = "completed"
               parser_slot = {"attempt_count": 1, "status": "success", "failure_class": "none"}
           else:
               parser_phase_state = "skipped"
               parser_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
-          
+
           if file_exists(ledger_status_file):
               ledger_phase_state = "completed"
               ledger_slot = {"attempt_count": 1, "status": "success", "failure_class": "none"}
           else:
               ledger_phase_state = "skipped"
               ledger_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
-          
+
           editor_attempt_numbers: set[int] = set()
           if previous_reviews_dir is not None:
               for pattern in ("editor_attempt_*.txt", "editor_attempt_*.err", "editor_attempt_*_changes_lost.txt"):
@@ -7231,7 +7231,7 @@ jobs:
                           editor_attempt_numbers.add(int(match.group(1)))
           editor_attempt_count = max(editor_attempt_numbers) if editor_attempt_numbers else 0
           editor_summary_exists = file_exists(editor_summary_file)
-          
+
           if bool_env("AUTOFIX_EDITOR_EMPTY_NOOP"):
               editor_phase_state = "completed"
               editor_slot = {"attempt_count": max(editor_attempt_count, 1), "status": "failed", "failure_class": "empty_noop"}
@@ -7257,7 +7257,7 @@ jobs:
           else:
               editor_phase_state = "skipped"
               editor_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
-          
+
           committed_files_text = read_text(committed_files_file)
           commit_phase_observed = any(env(key).strip() for key in ("DID_COMMIT", "LEDGER_ONLY_COMMIT", "LEDGER_ONLY_COMMIT_STRICT")) or bool(committed_files_text.strip())
 
@@ -7289,7 +7289,7 @@ jobs:
           else:
               commit_phase_state = "skipped"
               commit_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_invoked"}
-          
+
           edits_pushed = bool_env("AUTOFIX_EDITS_PUSHED")
           push_allowed = bool_env("CAN_PUSH")
           push_needed = bool_env("DID_COMMIT") or bool_env("CONFLICT_RESOLVED")
@@ -7314,7 +7314,7 @@ jobs:
           else:
               push_phase_state = "skipped"
               push_slot = {"attempt_count": 0, "status": "skipped", "failure_class": "not_needed"}
-          
+
           max_iterations_reached = bool_env("MAX_ITERATIONS_REACHED")
           skip_judge = bool_env("SKIP_JUDGE")
           judge_handled = bool_env("JUDGE_HANDLED")
@@ -7353,7 +7353,7 @@ jobs:
                   partial_finalize and partial_finalize_phase == "reviewers" and any(int(slot.get("stall_kill_count", 0)) > 0 for slot in reviewer_slots)
               ),
           }
-          
+
           if not max_iterations_reached or skip_judge:
               rb_judge_phase_state = "skipped"
               rb_judge_slot = {
@@ -7373,8 +7373,8 @@ jobs:
           else:
               rb_judge_phase_state = "completed"
               rb_judge_slot = {"attempt_count": 1, "status": "unhandled", "failure_class": "review_blocked"}
-          
-          
+
+
           def determine_finalize_reason() -> str:
               if bool_env("PR_CLOSED"):
                   return "pr_closed"
@@ -7418,8 +7418,8 @@ jobs:
               if edits_pushed and bool_env("DID_COMMIT"):
                   return "autofix_pushed"
               return "clean_review_no_commit"
-          
-          
+
+
           finalize_reason = determine_finalize_reason()
           phase_order = [
               ("reviewers", reviewers_phase_state),
@@ -7432,7 +7432,7 @@ jobs:
               ("rb_judge", rb_judge_phase_state),
               ("finalize", "completed"),
           ]
-          
+
           summary = {
               "completed_phases": [name for name, state in phase_order if state == "completed"],
               "skipped_phases": [name for name, state in phase_order if state == "skipped"],
@@ -7473,7 +7473,7 @@ jobs:
               "resume_completed_scope": resume_completed_scope,
               "resume_incomplete_scope": resume_incomplete_scope,
           }
-          
+
           print("REVIEW_AUTOFIX_RUN_SUMMARY_V1 " + json.dumps(summary, sort_keys=True, separators=(",", ":")))
           PY
           )"
