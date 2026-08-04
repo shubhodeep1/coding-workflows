@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-08-01T21:29:51Z",
+  "tick_at": "2026-08-04T14:50:20Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -55,11 +55,10 @@
       "wave_complete": false
     },
     {
-      "current_wave": 4,
-      "integration_ahead_by": "3",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
         "merged": 0,
@@ -72,7 +71,7 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] Harden review_autofix soft-deadline finalization and resume safety",
-      "total_waves": 7,
+      "total_waves": 0,
       "wave_complete": false
     }
   ]
