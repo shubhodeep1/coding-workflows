@@ -356,6 +356,8 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_editor_fifo_drain.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_assemble_changelog.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_changelog_fragment_contract.py
 
       - name: Sub-issue closing-PR resolution unit tests
         run: |

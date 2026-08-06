@@ -809,9 +809,17 @@ jobs:
               # them with a force-review override. Keeping a conflicted PR on
               # the codex-agent path resolves it in the same run instead.
               #
-              # Reviewer spend stays at its floor: review_run_reviewers.sh
-              # already drops doc-only and <=lite-LOC diffs to the lite tier,
-              # which is every PR that could have qualified for this skip.
+              # This is not free: the suppressed PR runs the full reviewer
+              # panel, because both tier-reduction paths in
+              # review_run_reviewers.sh ship disabled
+              # (REVIEW_TIER_RESOLVER_ENABLED defaults false,
+              # REVIEWER_RISK_TIER_ENABLED defaults 0), so the doc-only
+              # lite-tier branch is dead unless a repo opts in. The trade is
+              # still worth it: the alternative is a PR that sits unmergeable
+              # until the stall cron re-dispatches it with a force-review
+              # override — the same full panel, plus the stall. Repos that
+              # want the old behaviour can set
+              # AUTOFIX_SKIP_SUPPRESS_ON_CONFLICT=false.
               #
               # Fails open in both directions that matter: `mergeable` is
               # computed asynchronously by GitHub and is null on a freshly
