@@ -253,6 +253,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_reject_verify.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_recovery_pr_lookup.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_editor_fifo_drain.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_assemble_changelog.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_changelog_fragment_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_subissue_closing_pr.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_state_selfheal.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_loop_and_churn_fixes.py
@@ -481,7 +483,15 @@ jobs:
           # next release. A release must never fail because of changelog
           # bookkeeping.
 
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root .
+          # Fail open on the assembler itself, not just on the push: a single
+          # malformed fragment must never abort a release. assemble() writes
+          # CHANGELOG.md before unlinking fragments, so a mid-run failure can
+          # leave a half-assembled tree — restore it before continuing.
+          if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root .; then
+            echo "::warning::Changelog assembly failed; releasing without folding fragments."
+            git checkout -- CHANGELOG.md changelog.d 2>/dev/null || true
+            exit 0
+          fi
 
           if [ -z "$(git status --porcelain -- CHANGELOG.md changelog.d)" ]; then
             echo "No changelog fragments to fold — nothing to commit."
@@ -617,3 +627,43 @@ jobs:
           echo ""
           echo "Changelog notes:"
           cat "${{ steps.changelog.outputs.notes_file }}"
+
+  # ──────────────────────────────────────────────────────────────────
+  # Job 4: Sync stable → main (same as test-and-mark-stable.yml)
+  #
+  # The `release` job's changelog-assembly step pushes a commit to
+  # `stable` using the default GITHUB_TOKEN, and pushes made with
+  # GITHUB_TOKEN do not trigger workflows — so
+  # forward-merge-stable-to-main.yml would never fire on its own and
+  # `main` would silently drift behind the tagged stable release. Once
+  # that happens, promote-main-to-stable.yml's pre-flight ancestry check
+  # refuses the next promote run. Dispatching the forward-merge
+  # explicitly here closes that gap, mirroring the identical job in
+  # test-and-mark-stable.yml.
+  #
+  # Skipped on dry runs (no real release happened).
+  # ──────────────────────────────────────────────────────────────────
+  sync-to-main:
+    needs: [release]
+    if: >-
+      !inputs.dry_run &&
+      needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch forward-merge-stable-to-main
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          # --repo "${GITHUB_REPOSITORY}" is required: this job has no
+          # checkout step, so without it `gh workflow run` falls back to
+          # `git remote` detection and aborts with
+          # `fatal: not a git repository (or any of the parent directories): .git`.
+          gh workflow run forward-merge-stable-to-main.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref stable
+          echo "Dispatched forward-merge-stable-to-main.yml on stable branch."
+          echo "View runs: https://github.com/${GITHUB_REPOSITORY}/actions/workflows/forward-merge-stable-to-main.yml"

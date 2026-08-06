@@ -194,6 +194,47 @@ def test_release_assembly_fails_open() -> None:
 		assert 'if [ "${DRY_RUN}" = "true" ]' in step
 		assert 'git reset --hard "origin/${SOURCE_BRANCH}"' in step
 		assert "::warning::Could not push the assembled changelog" in step
+		# The assembler invocation itself must fail open too, not just the
+		# push: one malformed fragment must not abort the release.
+		assert "if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble" in step
+		assert "git checkout -- CHANGELOG.md changelog.d" in step
+
+
+def test_release_workflows_dispatch_the_forward_merge_to_main() -> None:
+	"""The assembly commit is pushed with GITHUB_TOKEN, which does not trigger
+	workflows — so forward-merge-stable-to-main must be dispatched explicitly
+	or `main` silently drifts behind the tagged stable release."""
+	for path in (MARK_STABLE, TEST_AND_MARK_STABLE):
+		workflow = _read(path)
+		assert "\n  sync-to-main:\n" in workflow, f"{path.name} has no sync-to-main job"
+		job = workflow.split("\n  sync-to-main:\n", 1)[1]
+		assert "gh workflow run forward-merge-stable-to-main.yml" in job
+		assert "needs: [release]" in job
+
+
+def test_consumer_sync_steps_fail_open() -> None:
+	"""Changelog scaffolding must never block wrapper delivery to consumers."""
+	workflow = _read(UPDATE_WORKFLOWS)
+	assert 'if ! PYTHONDONTWRITEBYTECODE=1 python3 "${ASSEMBLER}" ensure-assets' in workflow
+	assert 'if ! PYTHONDONTWRITEBYTECODE=1 python3 "${ASSEMBLER}" assemble --repo-root .' in workflow
+	assert "::warning::changelog ensure-assets failed" in workflow
+	assert "::warning::changelog assembly failed" in workflow
+	assert "git checkout -- CHANGELOG.md changelog.d" in workflow
+
+
+def test_new_test_suites_are_registered_in_ci() -> None:
+	"""A test suite no job runs protects nothing."""
+	for path in (
+		REPO_ROOT / ".github" / "workflows" / "ci.yml",
+		MARK_STABLE,
+		TEST_AND_MARK_STABLE,
+	):
+		workflow = _read(path)
+		for suite in (
+			"tests/test_assemble_changelog.py",
+			"tests/test_changelog_fragment_contract.py",
+		):
+			assert f"python3 {suite}" in workflow, f"{path.name} does not run {suite}"
 
 
 def test_consumer_sync_has_the_fifth_category_and_assembly() -> None:
@@ -218,7 +259,10 @@ def test_consumer_sync_commit_step_stages_and_reports_the_new_categories() -> No
 	assert "steps.changelog_sync.outputs.changelog_assets_has_changes == 'true'" in workflow
 	assert "steps.changelog_assemble.outputs.changelog_assembled == 'true'" in workflow
 	assert "/tmp/changelog_asset_files.txt" in commit_step
-	# Assembly deletes fragments, so staging must pick up removals.
+	# Assembly deletes fragments, so staging must pick up removals — gated on
+	# the working tree, not the step output, so an all-empty-fragment run
+	# still stages its deletions instead of repeating them every sync.
+	assert 'git status --porcelain -- CHANGELOG.md changelog.d' in commit_step
 	assert "git add -A -- CHANGELOG.md changelog.d" in commit_step
 	assert "Changelog fragment assets:" in commit_step
 

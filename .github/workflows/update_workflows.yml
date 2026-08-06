@@ -271,9 +271,18 @@ jobs:
             exit 0
           fi
 
-          PYTHONDONTWRITEBYTECODE=1 python3 "${ASSEMBLER}" ensure-assets \
+          # Fail open. Changelog scaffolding is the least important thing this
+          # job does; it must never be able to block wrapper delivery to the
+          # 12 consumer repos. A malformed .gitattributes or an unreadable
+          # path skips this category for the run and leaves the rest of the
+          # sync intact.
+          if ! PYTHONDONTWRITEBYTECODE=1 python3 "${ASSEMBLER}" ensure-assets \
             --repo-root . \
-            --changed-paths-file /tmp/changelog_asset_files.txt
+            --changed-paths-file /tmp/changelog_asset_files.txt; then
+            echo "::warning::changelog ensure-assets failed — skipping the changelog asset category this run."
+            rm -f /tmp/changelog_asset_files.txt
+            exit 0
+          fi
 
       - name: Assemble changelog fragments
         id: changelog_assemble
@@ -305,7 +314,15 @@ jobs:
             exit 0
           fi
 
-          PYTHONDONTWRITEBYTECODE=1 python3 "${ASSEMBLER}" assemble --repo-root .
+          # Fail open, same rationale as the asset step above. assemble()
+          # writes CHANGELOG.md before unlinking fragments, so a mid-run
+          # failure can leave a half-assembled tree — restore it so the sync
+          # never commits a partial changelog.
+          if ! PYTHONDONTWRITEBYTECODE=1 python3 "${ASSEMBLER}" assemble --repo-root .; then
+            echo "::warning::changelog assembly failed — leaving fragments in place for the next run."
+            git checkout -- CHANGELOG.md changelog.d 2>/dev/null || true
+            exit 0
+          fi
 
       - name: Compare and update workflow wrappers
         id: update
@@ -484,8 +501,12 @@ jobs:
             done < /tmp/changelog_asset_files.txt
           fi
           # Assembly both rewrites CHANGELOG.md and deletes the folded
-          # fragments, so stage with -A to pick up the removals.
-          if [ "${{ steps.changelog_assemble.outputs.changelog_assembled }}" = "true" ]; then
+          # fragments, so stage with -A to pick up the removals. Gate on the
+          # working tree rather than the step output, matching the release
+          # hosts: a run whose fragments were all empty deletes files without
+          # changing CHANGELOG.md, and those deletions still have to be
+          # staged or the next sync deletes the same files again forever.
+          if [ -n "$(git status --porcelain -- CHANGELOG.md changelog.d 2>/dev/null)" ]; then
             git add -A -- CHANGELOG.md changelog.d
           fi
 

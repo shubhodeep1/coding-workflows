@@ -3490,6 +3490,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_reject_verify.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_recovery_pr_lookup.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_editor_fifo_drain.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_assemble_changelog.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_changelog_fragment_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_subissue_closing_pr.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_state_selfheal.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_loop_and_churn_fixes.py
@@ -4859,7 +4861,15 @@ jobs:
           # release notes are extracted and the version tag is cut, and fails
           # open (reset to the remote tip) if the commit cannot be pushed.
 
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root .
+          # Fail open on the assembler itself, not just on the push: a single
+          # malformed fragment must never abort a release. assemble() writes
+          # CHANGELOG.md before unlinking fragments, so a mid-run failure can
+          # leave a half-assembled tree — restore it before continuing.
+          if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root .; then
+            echo "::warning::Changelog assembly failed; releasing without folding fragments."
+            git checkout -- CHANGELOG.md changelog.d 2>/dev/null || true
+            exit 0
+          fi
 
           if [ -z "$(git status --porcelain -- CHANGELOG.md changelog.d)" ]; then
             echo "No changelog fragments to fold — nothing to commit."
