@@ -275,10 +275,20 @@ jobs:
           # When the gate fires, the sibling `deterministic-skip-merge` job
           # adds `ai:review-skipped` to the PR, sets `ai:ready-to-merge` on
           # linked issues, and enables auto-merge — mirroring the tail of the
-          # normal codex-agent job. Merge-conflict resolution is NOT run on
-          # the skip path; conflicts fall through to the orchestrator stall
-          # recovery cron, which can re-dispatch with a force-review override.
+          # normal codex-agent job.
+          #
+          # Merge-conflict resolution still lives only on the codex-agent
+          # path, so a conflicted PR must not take the skip: when the PR
+          # reports mergeable=false (or mergeable_state=dirty) the candidate
+          # skip is suppressed and the PR stays on codex-agent, whose
+          # "Detect merge conflicts" step + resolver bring it back to
+          # mergeable in the same run instead of stalling until the
+          # orchestrator stall-recovery cron re-dispatches it. Set
+          # AUTOFIX_SKIP_SUPPRESS_ON_CONFLICT=false to restore the old
+          # fall-through-to-cron behaviour. Unknown mergeability (GitHub
+          # computes it asynchronously) fails open and keeps the skip.
           AUTOFIX_SKIP_DOC_ONLY: ${{ vars.AUTOFIX_SKIP_DOC_ONLY }}
+          AUTOFIX_SKIP_SUPPRESS_ON_CONFLICT: ${{ vars.AUTOFIX_SKIP_SUPPRESS_ON_CONFLICT }}
           AUTOFIX_SKIP_MAX_ADDITIONS: ${{ vars.AUTOFIX_SKIP_MAX_ADDITIONS }}
           AUTOFIX_SKIP_MAX_DELETIONS: ${{ vars.AUTOFIX_SKIP_MAX_DELETIONS }}
           # No-PR claude-branch-review path inputs (push-without-PR caller).
@@ -300,6 +310,8 @@ jobs:
           pr_labels=""
           pr_additions=""
           pr_deletions=""
+          pr_mergeable=""
+          pr_mergeable_state=""
           pr_title_cached="${PR_TITLE:-}"
           pr_body_cached="${PR_BODY:-}"
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
@@ -321,12 +333,15 @@ jobs:
           fi
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             # CLAUDE.md §15: extend the existing PR fetch to also return
-            # labels (force-review override check below) and per-PR
-            # additions/deletions totals (deterministic-skip size check).
-            # The /pulls/{n} endpoint already exposes these; using them
-            # avoids a paginated /files call on the small-diff branch.
+            # labels (force-review override check below), per-PR
+            # additions/deletions totals (deterministic-skip size check), and
+            # mergeable/mergeable_state (deterministic-skip conflict
+            # suppression below). The /pulls/{n} endpoint already exposes all
+            # of these; using them avoids a paginated /files call on the
+            # small-diff branch and adds no new API call for the conflict
+            # check.
             if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), title: (.title // ""), body: (.body // "")}' \
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
               2>/dev/null)"; then
               pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
               pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
@@ -334,6 +349,8 @@ jobs:
               pr_labels="$(printf '%s' "${_pr_gate}" | jq -r '(.labels // []) | join(",")' 2>/dev/null || echo "")"
               pr_additions="$(printf '%s' "${_pr_gate}" | jq -r '.additions // 0' 2>/dev/null || echo "")"
               pr_deletions="$(printf '%s' "${_pr_gate}" | jq -r '.deletions // 0' 2>/dev/null || echo "")"
+              pr_mergeable="$(printf '%s' "${_pr_gate}" | jq -r '.mergeable // ""' 2>/dev/null || echo "")"
+              pr_mergeable_state="$(printf '%s' "${_pr_gate}" | jq -r '.mergeable_state // ""' 2>/dev/null || echo "")"
               if [ -z "$(printf '%s' "${pr_title_cached}" | tr -d '[:space:]')" ]; then
                 pr_title_cached="$(printf '%s' "${_pr_gate}" | jq -r '.title // ""' 2>/dev/null || echo "")"
               fi
@@ -783,14 +800,43 @@ jobs:
                   ;;
               esac
 
-              if [ "${candidate_skip}" = "true" ] && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ]; then
+              # Conflict suppression. The skip path runs no merge-conflict
+              # resolution — the codex-agent job's "Detect merge conflicts"
+              # step and the resolver behind it are the only entry point, and
+              # deterministic skip bypasses that job entirely. So the cheapest
+              # PRs, whose only conflict is typically a shared doc, used to
+              # stall until the orchestrator stall-recovery cron re-dispatched
+              # them with a force-review override. Keeping a conflicted PR on
+              # the codex-agent path resolves it in the same run instead.
+              #
+              # Reviewer spend stays at its floor: review_run_reviewers.sh
+              # already drops doc-only and <=lite-LOC diffs to the lite tier,
+              # which is every PR that could have qualified for this skip.
+              #
+              # Fails open in both directions that matter: `mergeable` is
+              # computed asynchronously by GitHub and is null on a freshly
+              # pushed PR, and an API failure leaves both fields empty — in
+              # either case the skip stands, which is exactly today's
+              # behaviour. Only an explicit `mergeable=false` (or the
+              # unambiguous `mergeable_state=dirty`) suppresses it.
+              CONFLICT_SKIP_SUPPRESSED="false"
+              if [ "${candidate_skip}" = "true" ] \
+                && [ "${AUTOFIX_SKIP_SUPPRESS_ON_CONFLICT:-true}" != "false" ]; then
+                if [ "${pr_mergeable}" = "false" ] || [ "${pr_mergeable_state}" = "dirty" ]; then
+                  CONFLICT_SKIP_SUPPRESSED="true"
+                  echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=merge_conflict pr=${PR_NUMBER} mergeable=${pr_mergeable:-unknown} mergeable_state=${pr_mergeable_state:-unknown} candidate=${candidate_skip_reason}"
+                fi
+              fi
+
+              if [ "${candidate_skip}" = "true" ] && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ] \
+                && [ "${CONFLICT_SKIP_SUPPRESSED}" != "true" ]; then
                 DETERMINISTIC_SKIP="true"
                 DET_SKIP_REASON="${candidate_skip_reason}"
                 SHOULD_RUN="false"
                 SKIP_REASON="deterministic_skip_${candidate_skip_reason}"
               fi
 
-              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-skipped} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON} materiality_suppressed=${MATERIALITY_SKIP_SUPPRESSED}"
+              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-skipped} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON} materiality_suppressed=${MATERIALITY_SKIP_SUPPRESSED} conflict_suppressed=${CONFLICT_SKIP_SUPPRESSED}"
             fi
           fi
 
