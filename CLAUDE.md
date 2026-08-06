@@ -691,9 +691,136 @@ project's planned phases never shipped (see
 full forensic timeline in
 `docs/postmortems/2026-05-18-project-2734-stall.md`).
 
-## §20. CHANGELOG Style
+## §20. CHANGELOG Entries (MANDATORY)
 
-All `CHANGELOG.md` entries follow `docs/changelog-style.md`. PR review checks new entries against that guide's structure, voice rules, and audience split.
+**Never edit `CHANGELOG.md` directly.** Write a fragment file instead.
+Newest-entry-first insertion means every concurrently-open PR edits the same
+hunk at line 1 of `CHANGELOG.md`, so git must conflict, and each conflict
+costs a full LLM run through the merge-conflict resolver. One fragment file
+per PR makes the conflict impossible by construction: two PRs never touch the
+same path.
+
+### A) When an entry is required
+
+Add exactly one fragment when the PR changes **observable behaviour**:
+
+- new or changed CLI flags, env vars, repo vars, workflow inputs/outputs;
+- new or changed workflows, scheduled jobs, or supervisors;
+- behaviour changes an operator or consumer repo would notice, including
+  defaults, thresholds, retries, and failure modes;
+- new or changed DB collections, indexes, or contracts (§10);
+- security fixes and data-loss fixes;
+- anything that changes what a consumer repo receives on the next
+  `@stable` sync.
+
+Do **not** add a fragment for: pure refactors with no behaviour change,
+comment/typo/formatting-only edits, test-only changes, or changes to the
+fragment you are already shipping in this PR.
+
+If in doubt, add one — a redundant entry is cheap, a missing one is not.
+
+### B) Where it goes
+
+Create `changelog.d/<issue-or-pr>-<slug>.md`, e.g.
+`changelog.d/3712-soft-deadline-finalization.md`. The number is the issue or
+PR the work belongs to, the slug is a few kebab-case words. One fragment per
+PR. Never reuse another PR's filename — the unique path is the whole point.
+
+An optional first line names the section the entry belongs to:
+
+```md
+<!-- changelog: fixed -->
+- **Headline sentence.** …
+```
+
+Valid values: `added`, `changed`, `deprecated`, `removed`, `fixed`,
+`security`. The default is `added`. Everything after the marker is the entry
+body, copied verbatim.
+
+### C) How it reaches `CHANGELOG.md`
+
+`scripts/assemble_changelog.py` folds fragments into `CHANGELOG.md` and
+deletes them. It runs from automation only (§18.A/§18.B) — never by hand:
+
+- **this repo** — at release time, in the `release` job of
+  `.github/workflows/mark-stable.yml` and
+  `.github/workflows/test-and-mark-stable.yml`;
+- **consumer repos** — on the existing sync, in
+  `.github/workflows/update_workflows.yml`, which already commits and pushes
+  to the default branch (daily 04:00 UTC cron, plus the `@stable`
+  `repository_dispatch`).
+
+The assembler auto-detects the repo's layout, so both are supported with no
+per-repo configuration and no repo has to convert its changelog history:
+Keep a Changelog (`## [Unreleased]` with `### Added` / `### Changed` /
+`### Fixed` subsections) and bare `## YYYY-MM-DD` date headings, newest
+first. Insertion is purely additive — no existing changelog line is removed
+or reflowed.
+
+`.gitattributes` carries `CHANGELOG.md merge=union` as a backstop for direct
+edits that slip through. It is a *textual* union with no idea what a changelog
+entry is: it keeps both sides' lines and orders them by merge order rather
+than intent, and it applies to real `git merge` invocations (including CI
+merge replay), not to GitHub's server-side mergeability estimate. Treat it as
+the net under the mechanism, never as the mechanism.
+
+### D) Entry structure
+
+Follow this order when the information exists:
+
+1. **Headline** — 1–2 sentences naming what shipped and the main
+   user-visible change.
+2. **Lead paragraph** — 3–5 sentences. Lead with what changed for users or
+   operators, not with implementation detail. Name the real workflow,
+   command, file, issue, or path when it helps the reader.
+3. **The numbers that matter** — a short table when the change has real
+   measurable details (exact counts, limits, schedules, paths, issue
+   numbers). Omit it when nothing measurable improves the entry.
+4. **Audience closing** — a short "What this means for \<audience\>"
+   paragraph making the operational takeaway explicit.
+5. **For contributors** — a final subsection, only when contributor-facing
+   detail would distract from the lead. Implementation notes, follow-up
+   details, and operator-only caveats go here.
+
+### E) Voice rules
+
+- Keep the lead user-facing; put contributor-only detail at the bottom.
+- Use real numbers, real filenames, real workflow names, and real labels
+  when they matter. Keep claims concrete and verifiable.
+- Prefer commas or periods where an em dash would only add drama.
+- Avoid AI-generic filler: `delve`, `robust`, `comprehensive`, `nuanced`,
+  `fundamental`, `Here's the kicker`, `The bottom line`.
+
+### F) Do not do this
+
+- Do not mention branch-internal version bumps unless they changed shipped
+  behaviour.
+- Do not narrate the PR's revision history.
+- Do not post-hoc rationalize why the scope ended up where it did.
+- Do not invent numbers, vague placeholders, or generic filenames.
+
+### G) Template
+
+```md
+<!-- changelog: added -->
+- <Headline sentence. Optional second sentence.>
+
+<Lead paragraph of 3 to 5 sentences. Start with user or operator impact.
+Include exact workflow names, paths, numbers, and filenames when they matter.>
+
+| The numbers that matter | Value |
+| --- | --- |
+| <metric> | <real value> |
+
+What this means for <audience>: <closing paragraph.>
+
+### For contributors
+
+<Optional contributor-only details that do not belong in the lead.>
+```
+
+PR review checks new fragments against this section's structure, voice
+rules, and audience split.
 
 ---
 

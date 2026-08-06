@@ -626,9 +626,18 @@ log analysis pipeline, semantic cache scope, wrapper pin policy) live in
 `./probably_unnecessary_but_read_if_stuck.md`. Read it only when needed —
 it is intentionally large.
 
-Future `CHANGELOG.md` entries also follow `docs/changelog-style.md`, which is
-the contributor-facing guide for release-summary structure, voice, and
-user-versus-contributor audience separation.
+`CHANGELOG.md` is never edited directly. Write one fragment per PR at
+`changelog.d/<issue-or-pr>-<slug>.md`; `scripts/assemble_changelog.py` folds
+fragments into `CHANGELOG.md` and deletes them, at release time here
+(`mark-stable.yml`, `test-and-mark-stable.yml`) and on the existing sync in
+consumer repos (`update_workflows.yml`). Because two PRs never touch the same
+path, concurrent PRs cannot conflict on the changelog. `CLAUDE.md` §20 is the
+authoritative, self-contained rule — when an entry is required, the fragment
+format, and the entry structure and voice rules — and it travels to every
+consumer repo verbatim through the root `CLAUDE.md` sync.
+`docs/changelog-style.md` is the longer-form contributor-facing companion and
+lives in this repo only; consumer repos do not receive it, so §20 must never
+depend on it.
 
 ## Review pipeline consolidator + ledger contract
 
