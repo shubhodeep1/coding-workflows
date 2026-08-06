@@ -178,6 +178,119 @@ def test_keep_a_changelog_creates_unreleased_section_when_absent() -> None:
 		assert text.index("- Brand new entry.") < text.index("## [v1.0.0]")
 
 
+def test_fragment_body_headings_are_not_treated_as_categories() -> None:
+	"""Regression: §20's own template ends every entry with `### For contributors`.
+
+	Once such a fragment is folded, a boundary scanner that accepted any
+	`### Word` would treat that prose heading as a category marker — appending
+	the next release's Added entry into the middle of the previous entry, and
+	creating new categories out of canonical order. Two folds are required to
+	surface it: the first plants the heading, the second trips over it.
+	"""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "CHANGELOG.md").write_text(KAC_CHANGELOG, encoding="utf-8")
+
+		_fragment(
+			root,
+			"10-first.md",
+			"<!-- changelog: added -->\n"
+			"- **First entry.**\n\nWhat this means for operators: something.\n\n"
+			"### For contributors\n\nImplementation notes.\n",
+		)
+		assert _run("assemble", "--repo-root", str(root)).returncode == 0
+		after_first = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+		assert "### For contributors" in after_first
+
+		_fragment(root, "20-second.md", "<!-- changelog: added -->\n- **Second added entry.**\n")
+		_fragment(root, "21-third.md", "<!-- changelog: deprecated -->\n- **Something deprecated.**\n")
+		assert _run("assemble", "--repo-root", str(root)).returncode == 0
+		text = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+
+		assert _removed_lines(after_first, text) == []
+		# The new Added entry belongs to the Added category — above ### Changed,
+		# not spliced into the previous entry's contributor notes.
+		assert text.index("- **Second added entry.**") < text.index("### For contributors")
+		# Deprecated lands in canonical order between Added and Fixed, not
+		# wherever the prose heading happened to sit.
+		assert text.index("### Added") < text.index("### Deprecated") < text.index("### Fixed")
+		assert text.index("### Deprecated") < text.index("## [v1.1.0]")
+
+
+def test_fragment_body_h2_does_not_truncate_the_unreleased_block() -> None:
+	"""Same failure mode one level up: a `## ` line inside a folded entry."""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "CHANGELOG.md").write_text(KAC_CHANGELOG, encoding="utf-8")
+		_fragment(
+			root,
+			"10-first.md",
+			"<!-- changelog: added -->\n- **Entry with a prose H2.**\n\n## Background\n\nDetail.\n",
+		)
+		assert _run("assemble", "--repo-root", str(root)).returncode == 0
+		after_first = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+
+		_fragment(root, "20-second.md", "<!-- changelog: fixed -->\n- **Later fix.**\n")
+		assert _run("assemble", "--repo-root", str(root)).returncode == 0
+		text = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+
+		assert _removed_lines(after_first, text) == []
+		# The fix joins the real ### Fixed section, past the prose H2.
+		assert text.index("## Background") < text.index("- **Later fix.**")
+		assert text.index("### Fixed") < text.index("- **Later fix.**")
+		assert text.index("- **Later fix.**") < text.index("## [v1.1.0]")
+
+
+def test_new_categories_are_created_in_canonical_order_at_block_end() -> None:
+	"""Pins the _apply_insertions tie-break: two categories, same insertion index."""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		source = "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Existing.\n\n## [v1.0.0] - 2026-01-01\n\n- Released.\n"
+		(root / "CHANGELOG.md").write_text(source, encoding="utf-8")
+		_fragment(root, "10-sec.md", "<!-- changelog: security -->\n- Sec entry.\n")
+		_fragment(root, "11-dep.md", "<!-- changelog: deprecated -->\n- Dep entry.\n")
+
+		assert _run("assemble", "--repo-root", str(root)).returncode == 0
+		text = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+
+		assert _removed_lines(source, text) == []
+		assert text.index("### Added") < text.index("### Deprecated") < text.index("### Security")
+		assert text.index("### Security") < text.index("## [v1.0.0]")
+
+
+def test_crlf_changelog_keeps_its_line_endings() -> None:
+	"""Rewriting CRLF as LF would change every line — and, with merge=union,
+	let the next merge union two files that differ everywhere."""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		changelog = root / "CHANGELOG.md"
+		changelog.write_bytes(KAC_CHANGELOG.replace("\n", "\r\n").encode("utf-8"))
+		_fragment(root, "10-one.md", "<!-- changelog: fixed -->\n- CRLF entry.\n")
+
+		result = _run("assemble", "--repo-root", str(root))
+		raw = changelog.read_bytes()
+
+		assert result.returncode == 0, result.stderr
+		assert b"\r\n" in raw
+		assert raw.replace(b"\r\n", b"") .count(b"\n") == 0, "stray LF-only line survived"
+		assert "- CRLF entry." in raw.decode("utf-8")
+		assert _removed_lines(KAC_CHANGELOG, raw.decode("utf-8").replace("\r\n", "\n")) == []
+
+
+def test_crlf_gitattributes_keeps_its_line_endings() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		attributes = root / ".gitattributes"
+		attributes.write_bytes(b"*.png binary\r\n")
+
+		assert _run("ensure-assets", "--repo-root", str(root)).returncode == 0
+		raw = attributes.read_bytes()
+
+		assert b"\r\n" in raw
+		assert raw.replace(b"\r\n", b"").count(b"\n") == 0
+		assert b"CHANGELOG.md merge=union" in raw
+
+
 def test_upstream_changelog_assembly_removes_no_line() -> None:
 	"""The real repo CHANGELOG.md, not a fixture — additive on live content."""
 	with tempfile.TemporaryDirectory() as tmp:
@@ -325,6 +438,10 @@ def test_empty_fragment_injects_nothing_but_is_cleaned_up() -> None:
 		assert result.returncode == 0, result.stderr
 		assert (root / "CHANGELOG.md").read_text(encoding="utf-8") == DATE_CHANGELOG
 		assert not (root / "changelog.d" / "10-empty.md").exists()
+		# The deletion is a real working-tree change the caller must stage,
+		# otherwise the consumer sync re-deletes the same file every run.
+		assert "changed=true" in result.stdout
+		assert "had no body" in result.stdout
 
 
 def test_dry_run_writes_nothing() -> None:

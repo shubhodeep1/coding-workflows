@@ -103,8 +103,17 @@ CATEGORY_MARKER = re.compile(r"^<!--\s*changelog:\s*([A-Za-z]+)\s*-->\s*$")
 UNRELEASED_HEADING = re.compile(r"^##\s+\[unreleased\]", re.IGNORECASE)
 BRACKET_H2 = re.compile(r"^##\s+\[")
 DATE_HEADING = re.compile(r"^##\s+(\d{4}-\d{2}-\d{2})\s*$")
-ANY_H2 = re.compile(r"^##\s")
 SUBSECTION_HEADING = re.compile(r"^###\s+([A-Za-z][A-Za-z ]*?)\s*$")
+
+# Section boundaries are recognised by SHAPE, not by "any `## ` line".
+# Fragment bodies are copied verbatim and legitimately contain their own
+# headings — §20's own entry template ends with a `### For contributors`
+# subsection. Once such a fragment is folded, a boundary scanner that
+# accepted any `## `/`### ` line would treat that prose heading as a section
+# marker and splice the next release's entries into the middle of the
+# previous one. Only the two shapes this assembler itself emits count:
+# `## [version]` (Keep a Changelog) and `## YYYY-MM-DD` (date headings).
+SECTION_H2 = re.compile(r"^##\s+(?:\[|\d{4}-\d{2}-\d{2}\s*$)")
 
 DEFAULT_NEW_CHANGELOG = "# Changelog\n\nAll notable changes to this project are documented in this file.\n"
 
@@ -112,6 +121,31 @@ DEFAULT_NEW_CHANGELOG = "# Changelog\n\nAll notable changes to this project are 
 # ──────────────────────────────────────────────────────────────────
 # Fragment discovery and parsing
 # ──────────────────────────────────────────────────────────────────
+
+
+def read_text_preserving_newlines(path: Path) -> tuple[str, str]:
+	"""Return ``(text_with_lf_endings, dominant_line_terminator)``.
+
+	CRLF must survive a fold. Rewriting a CRLF changelog as LF would rewrite
+	every line — breaking the purely-additive guarantee outright, and, with
+	the shipped ``CHANGELOG.md merge=union`` attribute, letting the next merge
+	union two whole files that differ on every line.
+	"""
+	# Plain open(), not Path.read_text(newline=...): the newline kwarg was only
+	# added to Path.read_text in Python 3.13 and CI pins 3.12.
+	with open(path, "r", encoding="utf-8", newline="") as handle:
+		raw = handle.read()
+	crlf = raw.count("\r\n")
+	lf_only = raw.count("\n") - crlf
+	terminator = "\r\n" if crlf > lf_only else "\n"
+	return raw.replace("\r\n", "\n"), terminator
+
+
+def write_text_with_newlines(path: Path, text: str, terminator: str) -> None:
+	"""Write LF-normalised ``text`` back using the file's own terminator."""
+	payload = text.replace("\n", terminator) if terminator != "\n" else text
+	with open(path, "w", encoding="utf-8", newline="") as handle:
+		handle.write(payload)
 
 
 def iter_fragment_paths(fragments_dir: Path) -> list[Path]:
@@ -191,7 +225,7 @@ def detect_layout(text: str) -> str:
 
 def _first_h2_index(lines: list[str]) -> int | None:
 	for index, line in enumerate(lines):
-		if ANY_H2.match(line):
+		if SECTION_H2.match(line):
 			return index
 	return None
 
@@ -202,6 +236,19 @@ def _content_end(lines: list[str], start: int, stop: int) -> int:
 	while end > start and lines[end - 1].strip() == "":
 		end -= 1
 	return end
+
+
+def _heading_body_start(lines: list[str], heading: int, stop: int) -> int:
+	"""First index where a section's body may be inserted, under its heading.
+
+	Skips exactly one blank line after the heading so the inserted entry keeps
+	the file's existing heading/blank/body shape, and never runs past ``stop``
+	(an empty section).
+	"""
+	index = heading + 1
+	if index < stop and lines[index].strip() == "":
+		index += 1
+	return min(index, stop)
 
 
 def _category_rank(name: str) -> int:
@@ -265,17 +312,25 @@ def _plan_keep_a_changelog(lines: list[str], grouped: dict[str, list[list[str]]]
 
 	block_end = len(lines)
 	for index in range(unreleased + 1, len(lines)):
-		if ANY_H2.match(lines[index]):
+		if SECTION_H2.match(lines[index]):
 			block_end = index
 			break
 
 	# Existing subsections of the Unreleased block, in file order.
+	#
+	# Only RECOGNISED category names count. Entry bodies are copied verbatim
+	# and carry their own headings — §20's template ends every entry with a
+	# `### For contributors` subsection — so accepting any `### Word` here
+	# would make a folded entry's prose heading act as a category boundary.
+	# The next release would then append into the middle of the previous
+	# entry, and create new categories out of canonical order, corrupting the
+	# document a little more on every release.
 	subsections: list[tuple[str, int, int]] = []
 	starts: list[tuple[str, int]] = []
 	for index in range(unreleased + 1, block_end):
 		match = SUBSECTION_HEADING.match(lines[index])
-		if match:
-			starts.append((match.group(1).strip(), index))
+		if match and match.group(1).strip().lower() in CATEGORY_BY_LOWER:
+			starts.append((CATEGORY_BY_LOWER[match.group(1).strip().lower()], index))
 	for position, (name, start) in enumerate(starts):
 		stop = starts[position + 1][1] if position + 1 < len(starts) else block_end
 		subsections.append((name, start, stop))
@@ -301,7 +356,14 @@ def _plan_keep_a_changelog(lines: list[str], grouped: dict[str, list[list[str]]]
 		existing = by_lower.get(category.lower())
 		if existing is not None:
 			_, start, stop = existing
-			insertions.append((_content_end(lines, start, stop), [""] + payload_body))
+			# Insert at the TOP of the category, directly under its heading —
+			# not at the end. Entries carry their own trailing subsections
+			# (§20's template ends with `### For contributors`), so appending
+			# to the category's end would drop the new entry underneath the
+			# previous entry's contributor notes and read as part of it.
+			# Top insertion also matches the newest-first convention both
+			# supported layouts already use.
+			insertions.append((_heading_body_start(lines, start, stop), payload_body + [""]))
 			continue
 
 		successor = None
@@ -336,11 +398,15 @@ def _plan_date_headings(lines: list[str], bodies: list[list[str]], day: str) -> 
 		if match and match.group(1) == day:
 			stop = len(lines)
 			for index in range(first_h2 + 1, len(lines)):
-				if ANY_H2.match(lines[index]):
+				if SECTION_H2.match(lines[index]):
 					stop = index
 					break
+			# Top of the day's section, for the same reason as the Keep a
+			# Changelog branch: entries carry trailing subsections, and
+			# newest-first is the convention these changelogs already use.
 			return _apply_insertions(
-				lines, [(_content_end(lines, first_h2 + 1, stop), [""] + payload_body)]
+				lines,
+				[(_heading_body_start(lines, first_h2, stop), payload_body + [""])],
 			)
 		return _apply_insertions(
 			lines, [(first_h2, [f"## {day}", ""] + payload_body + [""])]
@@ -368,10 +434,11 @@ def assemble(
 	fragment_paths = iter_fragment_paths(fragments_dir)
 
 	if changelog_path.is_file():
-		original = changelog_path.read_text(encoding="utf-8")
+		original, terminator = read_text_preserving_newlines(changelog_path)
 		created = False
 	else:
 		original = DEFAULT_NEW_CHANGELOG
+		terminator = "\n"
 		created = True
 
 	layout = detect_layout(original)
@@ -400,17 +467,22 @@ def assemble(
 		if body
 	]
 
+	empty = [path.name for path, (_c, body) in zip(fragment_paths, parsed) if not body]
+
 	if not usable:
+		# Every fragment was empty. They are still removed — but that removal
+		# is a real working-tree change the caller must stage, otherwise the
+		# consumer sync deletes the same files again on every run forever.
 		for path in fragment_paths:
 			if not dry_run:
 				path.unlink()
 		return {
 			"layout": layout,
 			"fragments": [path.name for path in fragment_paths],
-			"changed": False,
+			"changed": bool(fragment_paths),
 			"created": False,
 			"changelog": relative,
-			"empty_fragments": [path.name for path in fragment_paths],
+			"empty_fragments": empty,
 		}
 
 	lines = original.split("\n")
@@ -429,7 +501,7 @@ def assemble(
 
 	if not dry_run:
 		changelog_path.parent.mkdir(parents=True, exist_ok=True)
-		changelog_path.write_text(text, encoding="utf-8")
+		write_text_with_newlines(changelog_path, text, terminator)
 		for path in fragment_paths:
 			path.unlink()
 
@@ -439,6 +511,7 @@ def assemble(
 		"changed": text != original or created,
 		"created": created,
 		"changelog": relative,
+		"empty_fragments": empty,
 		"text": text,
 	}
 
@@ -461,9 +534,9 @@ def ensure_gitattributes(gitattributes_path: Path, dry_run: bool) -> bool:
 	block = _render_managed_block()
 
 	if gitattributes_path.is_file():
-		original = gitattributes_path.read_text(encoding="utf-8")
+		original, terminator = read_text_preserving_newlines(gitattributes_path)
 	else:
-		original = ""
+		original, terminator = "", "\n"
 
 	lines = original.split("\n") if original else []
 
@@ -492,7 +565,7 @@ def ensure_gitattributes(gitattributes_path: Path, dry_run: bool) -> bool:
 	if text == original:
 		return False
 	if not dry_run:
-		gitattributes_path.write_text(text, encoding="utf-8")
+		write_text_with_newlines(gitattributes_path, text, terminator)
 	return True
 
 
@@ -630,6 +703,10 @@ def main(argv: list[str] | None = None) -> int:
 		)
 		for name in fragments:
 			print(f"CHANGELOG_ASSEMBLE_V1: fragment={name}")
+		# An empty fragment is removed but contributes nothing — surface it so
+		# a silently-dropped entry is visible in the run log.
+		for name in result.get("empty_fragments") or []:
+			print(f"::warning::Changelog fragment '{name}' had no body; removed without adding an entry.")
 		if changed:
 			changed_paths = [str(result["changelog"]), FRAGMENTS_DIRNAME]
 		write_github_output(
