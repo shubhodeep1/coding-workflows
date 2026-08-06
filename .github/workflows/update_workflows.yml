@@ -237,6 +237,76 @@ jobs:
             echo "Top-level CLAUDE.md already up to date."
           fi
 
+      - name: Sync changelog fragment assets from upstream
+        id: changelog_sync
+        run: |
+          set -euo pipefail
+
+          # Fifth sync category (CLAUDE.md §20). Consumer repos hit constant
+          # CHANGELOG.md merge conflicts because newest-entry-first insertion
+          # makes every concurrent PR edit the same hunk at line 1. The fix is
+          # the changelog.d/ fragment workflow: one file per PR, so two PRs
+          # never touch the same path. This step lands the scaffolding that
+          # makes the mechanism real in the consumer:
+          #   - changelog.d/.gitkeep — the directory agents write fragments to.
+          #   - .gitattributes — the managed `CHANGELOG.md merge=union` block,
+          #     a backstop for direct edits that bypass fragments.
+          # Semantics differ deliberately from the .claude/ sync above: this is
+          # ADDITIVE ONLY. .gitattributes is edited through a delimited managed
+          # block, so consumer-local attribute rules are preserved rather than
+          # overwritten, and an existing changelog.d/ is never emptied.
+          # Runs upstream's scripts/assemble_changelog.py from the @stable
+          # support checkout — the consumer never carries a copy, so the rule
+          # in CLAUDE.md §20 and the machinery implementing it cannot drift.
+
+          UPSTREAM_DIR="${{ steps.fetch.outputs.upstream_dir }}"
+          UPSTREAM_SCRIPTS_DIR="$(dirname "${UPSTREAM_DIR}")/scripts"
+          ASSEMBLER="${UPSTREAM_SCRIPTS_DIR}/assemble_changelog.py"
+
+          echo "changelog_assets_has_changes=false" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/changelog_asset_files.txt
+
+          if [ ! -f "${ASSEMBLER}" ]; then
+            echo "Upstream has no scripts/assemble_changelog.py at this ref — nothing to sync."
+            exit 0
+          fi
+
+          PYTHONDONTWRITEBYTECODE=1 python3 "${ASSEMBLER}" ensure-assets \
+            --repo-root . \
+            --changed-paths-file /tmp/changelog_asset_files.txt
+
+      - name: Assemble changelog fragments
+        id: changelog_assemble
+        run: |
+          set -euo pipefail
+
+          # Consumer-side assembly host (CLAUDE.md §18.A/§18.B — folded into
+          # automation that already runs, no operator action). Consumer repos
+          # have no release workflow and no push-triggered wrapper, so this
+          # sync job — which already commits and pushes to the default branch
+          # below — is the only existing automation that can fold fragments
+          # into CHANGELOG.md. Assembly therefore lands on the next sync run
+          # (daily 04:00 UTC cron, or immediately on the @stable
+          # repository_dispatch) rather than at merge time.
+          #
+          # The assembler auto-detects the repo's layout: Keep a Changelog
+          # (## [Unreleased] + ### subsections) upstream, bare ## YYYY-MM-DD
+          # date headings in consumers such as tele-funtoken-msg-scoring. No
+          # consumer has to convert its changelog history.
+
+          UPSTREAM_DIR="${{ steps.fetch.outputs.upstream_dir }}"
+          UPSTREAM_SCRIPTS_DIR="$(dirname "${UPSTREAM_DIR}")/scripts"
+          ASSEMBLER="${UPSTREAM_SCRIPTS_DIR}/assemble_changelog.py"
+
+          echo "changelog_assembled=false" >> "$GITHUB_OUTPUT"
+
+          if [ ! -f "${ASSEMBLER}" ]; then
+            echo "Upstream has no scripts/assemble_changelog.py at this ref — skipping assembly."
+            exit 0
+          fi
+
+          PYTHONDONTWRITEBYTECODE=1 python3 "${ASSEMBLER}" assemble --repo-root .
+
       - name: Compare and update workflow wrappers
         id: update
         run: |
@@ -381,7 +451,7 @@ jobs:
           fi
 
       - name: Commit and push updates
-        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true'
+        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true'
         run: |
           set -euo pipefail
 
@@ -406,6 +476,17 @@ jobs:
               [ -n "$changed_path" ] || continue
               git add -- "$changed_path"
             done < /tmp/claude_md_changed_file.txt
+          fi
+          if [ -f /tmp/changelog_asset_files.txt ] && [ -s /tmp/changelog_asset_files.txt ]; then
+            while IFS= read -r changed_path; do
+              [ -n "$changed_path" ] || continue
+              git add -- "$changed_path"
+            done < /tmp/changelog_asset_files.txt
+          fi
+          # Assembly both rewrites CHANGELOG.md and deletes the folded
+          # fragments, so stage with -A to pick up the removals.
+          if [ "${{ steps.changelog_assemble.outputs.changelog_assembled }}" = "true" ]; then
+            git add -A -- CHANGELOG.md changelog.d
           fi
 
           COMMIT_BODY=""
@@ -446,6 +527,19 @@ jobs:
           fi
           if [ -n "$CLAUDE_MD_CHANGED_LIST" ]; then
             COMMIT_BODY="${COMMIT_BODY}Top-level CLAUDE.md:\n${CLAUDE_MD_CHANGED_LIST}\n"
+          fi
+          CHANGELOG_ASSET_LIST=""
+          if [ -f /tmp/changelog_asset_files.txt ] && [ -s /tmp/changelog_asset_files.txt ]; then
+            while IFS= read -r changed_path; do
+              [ -n "$changed_path" ] || continue
+              CHANGELOG_ASSET_LIST="${CHANGELOG_ASSET_LIST}• ${changed_path}\n"
+            done < /tmp/changelog_asset_files.txt
+          fi
+          if [ -n "$CHANGELOG_ASSET_LIST" ]; then
+            COMMIT_BODY="${COMMIT_BODY}Changelog fragment assets:\n${CHANGELOG_ASSET_LIST}\n"
+          fi
+          if [ "${{ steps.changelog_assemble.outputs.changelog_assembled }}" = "true" ]; then
+            COMMIT_BODY="${COMMIT_BODY}Changelog fragments assembled into CHANGELOG.md (${{ steps.changelog_assemble.outputs.changelog_fragment_count }} fragment(s), layout ${{ steps.changelog_assemble.outputs.changelog_layout }}).\n"
           fi
 
           if git diff --cached --quiet; then

@@ -457,6 +457,67 @@ jobs:
           ref: ${{ needs.source.outputs.branch }}
           fetch-depth: 0
 
+      - name: Assemble changelog fragments
+        id: changelog_assemble
+        env:
+          SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # Upstream assembly host (CLAUDE.md §20, §18.A/§18.B). Agents write
+          # one changelog.d/<issue-or-pr>-<slug>.md fragment per PR instead of
+          # editing CHANGELOG.md, so concurrent PRs never touch the same path
+          # and cannot conflict. This step folds the accumulated fragments into
+          # CHANGELOG.md's ## [Unreleased] section and deletes them, before the
+          # release notes are extracted and the version tag is cut, so the tag
+          # carries the assembled changelog.
+          #
+          # Fails open: if the assembled commit cannot be pushed (branch
+          # protection, a concurrent push that survives the retry loop), the
+          # working tree is reset to the remote tip so the tag below still
+          # points at pushed history, and the fragments simply wait for the
+          # next release. A release must never fail because of changelog
+          # bookkeeping.
+
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root .
+
+          if [ -z "$(git status --porcelain -- CHANGELOG.md changelog.d)" ]; then
+            echo "No changelog fragments to fold — nothing to commit."
+            exit 0
+          fi
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "Dry run — assembled CHANGELOG.md left uncommitted."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A -- CHANGELOG.md changelog.d
+          git commit -m "chore: assemble changelog fragments for ${VERSION}"
+
+          pushed="false"
+          delay=2
+          for attempt in 1 2 3 4; do
+            if git push origin "HEAD:${SOURCE_BRANCH}"; then
+              pushed="true"
+              break
+            fi
+            echo "::warning::Push of assembled changelog failed (attempt ${attempt}); retrying in ${delay}s."
+            sleep "${delay}"
+            delay=$((delay * 2))
+            git fetch origin "${SOURCE_BRANCH}" || true
+            git rebase "origin/${SOURCE_BRANCH}" || { git rebase --abort || true; break; }
+          done
+
+          if [ "${pushed}" != "true" ]; then
+            echo "::warning::Could not push the assembled changelog to ${SOURCE_BRANCH}; releasing without it. Fragments remain in changelog.d/ for the next release."
+            git fetch origin "${SOURCE_BRANCH}"
+            git reset --hard "origin/${SOURCE_BRANCH}"
+          fi
+
       - name: Extract changelog for this version
         id: changelog
         run: |

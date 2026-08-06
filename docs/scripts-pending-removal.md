@@ -133,3 +133,15 @@ Copy this block when adding a new entry:
   - `gh run list --workflow workspace-cache-maintenance.yml --limit 5 -R shubhodeep1/coding-workflows` shows recent scheduled/manual runs completing with `success`.
 - `gh cache list --repo shubhodeep1/coding-workflows --limit 100 --key workspace-v1- --sort created_at --order desc` still shows bounded workspace cache families (newest 3 retained per family) so the maintenance job remains operationally useful.
 - **Owner:** @shubhodeep1
+
+### `scripts/assemble_changelog.py`
+
+- **Introduced in:** claude/validate-consumer-issue-1zebie (2026-08-06)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. The script is the only thing that folds `changelog.d/` fragments into `CHANGELOG.md`; removing it without a replacement strands every fragment and silently stops changelog assembly in this repo and in all 12 consumers listed in `.github/ai/consumer_repos.json`.
+- **Removal preflight checks:**
+  - `rg -n 'assemble_changelog\.py' .github/workflows/` returns no hits — no workflow (release-time in `mark-stable.yml` / `test-and-mark-stable.yml`, consumer-side in `update_workflows.yml`) still invokes it.
+  - `ls -A changelog.d/` shows only `.gitkeep` in this repo, and the same holds for every repo in `.github/ai/consumer_repos.json` — no unassembled fragment would be stranded by the removal.
+  - `rg -n 'changelog\.d' CLAUDE.md prompts/mode-implement.txt prompts/_templates/mode-implement.txt` returns no hits — §20 and both implement prompts have been migrated to whatever replaces the fragment workflow, so agents are no longer told to write fragments nothing will fold.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_assemble_changelog.py && PYTHONDONTWRITEBYTECODE=1 python3 tests/test_changelog_fragment_contract.py` — both suites removed or migrated alongside the script rather than left asserting a mechanism that no longer exists.
+- **Owner:** @shubhodeep1
