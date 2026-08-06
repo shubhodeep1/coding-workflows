@@ -47,9 +47,18 @@ Restrictions:
 
 Sibling-conflict discipline: if the issue body lists `files_touched:` (machine
 or prose form) or names files in scope/acceptance, stay inside that set.
-Prefer append-only edits in shared docs (`README.md`, `agents.md`, CHANGELOG)
-under existing `<!-- anchor:NAME -->` HTML anchors rather than reflowing
-prose. Do not delete, rename, or reorder anchors.
+Prefer append-only edits in shared docs (`README.md`, `agents.md`) under
+existing `<!-- anchor:NAME -->` HTML anchors rather than reflowing prose. Do
+not delete, rename, or reorder anchors.
+
+Changelog discipline: never edit `CHANGELOG.md` directly — newest-entry-first
+insertion makes every concurrent PR collide on the same hunk at line 1. When
+the issue changes observable behaviour, write exactly one fragment file at
+`changelog.d/<issue-or-pr>-<slug>.md` instead. An optional first line
+`<!-- changelog: fixed -->` names the section (`added`, `changed`,
+`deprecated`, `removed`, `fixed`, `security`; default `added`); everything
+after it is the entry body. Automation folds fragments into `CHANGELOG.md`
+and deletes them — do not fold them yourself.
 
 Scope-lock discipline: if the implementation context says an `ai:scope:<glob>`
 label is active for this issue, edit only files matching that glob. If the
