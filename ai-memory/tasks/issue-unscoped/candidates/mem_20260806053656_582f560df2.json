@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/mark-stable.yml:Lines 462-530 (Assemble changelog fragments step) | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The assembly step pushes a commit to `stable` using the default `GITHUB_TOKEN`, so `forward-merge-stable-to-main.yml` would not fire on its own.\n  WHY: The reviewer explicitly treats this as advisory, noting that the new `sync-to-main` job dispatches the forward-merge workflow and closes the gap.\n- scripts/assemble_changelog.py:main() function, lines 674-679 (the OSError handler for the assemble command) | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: When `assemble()` raises `OSError`, `main()` returns 1 without resetting `GITHUB_OUTPUT`, which could leave stale changelog output after a partial failure.\n  WHY: The reviewer says this is low-risk and defensive only, because the handler exits before `write_github_output` in practice.\n- .github/workflows/update_workflows.yml:\"Commit and push updates\" step, the `if git diff --cached --quiet` condition | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The step checks the staged index instead of the working tree, so fragment deletions plus `CHANGELOG.md` changes can be skipped until the next sync tick.\n  WHY: After `git add -A -- CHANGELOG.md changelog.d`, `git diff --cached --quiet` can return success even though meaningful working-tree changes remain, causing the commit to be skipped.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/mark-stable.yml:Lines 462-530 (Assemble changelog fragments step) | severity=NIT | confidence=3\n  PROBLEM: The assembly step pushes a commit to the `stable` branch using `git push origin \"HEAD:${SOURCE_BRANCH}\"` with the default `GITHUB_TOKEN`, so `forward-merge-stable-to-main.yml` would never fire on its own.\n  WHY: The reviewer says this is not a defect because the new `sync-to-main` job dispatches the forward-merge workflow and closes the gap.\n- File: scripts/assemble_changelog.py\n  Location: `main()` function, lines 674-679 (the OSError handler for the assemble command)\n  Issue: When `assemble()` raises OSError, `main()` returns 1 and does not call `write_github_output`, so `GITHUB_OUTPUT` could retain stale changelog outputs after a partial failure.\n  Suggested minimal fix: Add `write_github_output([(\"changelog_assembled\", \"false\"), (\"changelog_fragment_count\", \"0\"), (\"changelog_layout\", \"\")])` before `return 1` in the OSError handler.\n  Estimated lines changed: 3\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: .github/workflows/update_workflows.yml\n  Location: \"Commit and push updates\" step, the `if git diff --cached --quiet` condition\n  Issue: After `git add -A -- CHANGELOG.md changelog.d`, the staged area contains the deletion of fragments plus any `CHANGELOG.md` modification, but `git diff --cached --quiet` can still report nothing meaningful to commit for the working tree state.\n  Suggested minimal fix: Change `if git diff --cached --quiet; then` to `if ! git diff --quiet -- CHANGELOG.md changelog.d 2>/dev/null; then` so the check inspects the working tree rather than the staged area.\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "20ebc91481ef0ee82c46e4b904e1e96a67d56cc7521db8e080c774f5489e184a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "31073757304",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31073757304",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260806053656_582f560df2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "31073757304"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-06T05:36:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
