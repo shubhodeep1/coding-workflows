@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Several merged runs modified render_prompt.py and render_prompt.sh together, sometimes alongside scenario-trace generation and tests. If you change prompt composition or formatting, verify both entry points and their tests, because inconsistency between the shell wrapper and Python logic is a recurring risk.",
+  "fingerprint": "216448c2532d62ede60dfdcb8add09b6caa90bb5e22c9db80b50c855427edf09",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "31137037548",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31137037548",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3715",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3717",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3719",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3721",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3723",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3716",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3718",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3720",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3722",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3724"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260807011252_4b2ee0b191",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Prompt-rendering utilities are split between shell and Python implementations, so feature changes should keep both aligned.",
+  "timestamps": {
+    "created_at": "2026-08-07T01:12:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
