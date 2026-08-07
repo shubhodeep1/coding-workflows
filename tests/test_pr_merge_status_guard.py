@@ -405,7 +405,12 @@ def test_skipped_on_detached_head(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_skipped_on_default_branch(monkeypatch, tmp_path: Path) -> None:
-	assert _evaluate(monkeypatch, tmp_path, current_branch=lambda cwd: "main")[0] == 0
+	assert _evaluate(
+		monkeypatch,
+		tmp_path,
+		current_branch=lambda cwd: "main",
+		repo_slug=lambda cwd: pytest.fail("default branch should skip before repo lookup"),
+	)[0] == 0
 
 
 def test_escape_hatch_disables_the_guard(monkeypatch, tmp_path: Path) -> None:

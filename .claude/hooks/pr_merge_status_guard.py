@@ -509,6 +509,10 @@ def evaluate(payload: dict) -> tuple[int, str]:
 	if not branch:
 		# Detached HEAD, or not a git repo — nothing branch-shaped to check.
 		return 0, ""
+	base = default_branch(cwd)
+	if base and branch == base:
+		# Committing on the default branch is not the stranded-work scenario.
+		return 0, ""
 
 	slug = repo_slug(cwd)
 	if not slug:
@@ -539,11 +543,6 @@ def evaluate(payload: dict) -> tuple[int, str]:
 		_write_cache(slug, branch, pull_requests)
 
 	if offender is None:
-		return 0, ""
-
-	base = default_branch(cwd)
-	if base and branch == base:
-		# Committing on the default branch is not the stranded-work scenario.
 		return 0, ""
 	return 2, _block_message(offender, branch, base)
 
