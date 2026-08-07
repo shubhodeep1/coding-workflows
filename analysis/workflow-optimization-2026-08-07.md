@@ -425,3 +425,99 @@ Static sweep notes:
 | Code modularization | 8-10 | Large |
 | Expression size reduction | 2-4 | Medium |
 | Medium/Low fixes | 3-5 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-08-07)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is statically proven safe to consolidate without changing filters, retries, failure behavior, or concurrency boundaries. `NEEDS_VERIFICATION` means the overlap is real, but payload completeness, freshness, or fail-open/fail-closed semantics still need human proof. `RISKY_SKIP` means the overlap sits in retry/race-defensive code, so this pass records it for manual review only and does **not** authorize automation.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — NEEDS_VERIFICATION**
+  - **File paths:** `scripts/review_enable_auto_merge.sh:64-75`, `scripts/review_enable_auto_merge.sh:127-140`
+  - **Current call count:** 2 logical calls on the common path (1 paginated label snapshot + 1 PR metadata read).
+  - **Proposed call count:** 1 logical call if `/pulls/{n}` is verified to carry the complete label set needed by the `e2e-smoke-test` guard.
+  - **Endpoints:** `GET /repos/{owner}/{repo}/issues/{issue_number}/labels?per_page=100`; `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+  - **Evidence:**
+    ```sh
+    if PR_LABELS_RAW="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" --jq '.[].name' ... )"; then
+      if printf '%s\n' "${PR_LABELS_RAW}" | grep -qx 'e2e-smoke-test'; then
+        exit 0
+      fi
+    fi
+    ...
+    if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" ... )"; then
+      exit 0
+    fi
+    _orch_pr_head_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.head.ref // ""' ...)"
+    _orch_pr_body="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.body // ""' ...)"
+    ```
+  - **Proposed fix:** Verify whether `GET /pulls/{PR_NUMBER}` always exposes the full PR label set; if it does, extend the existing `_ORCH_PR_META_JSON` parse to read `.labels[].name`, keep the current fail-closed warning behavior, and delete the dedicated paginated labels call.
+  - **Safety rationale:** `NEEDS_VERIFICATION` because the current code explicitly defends against labels beyond page 1, and static reading cannot prove that `/pulls/{n}` preserves identical label completeness or fail-closed semantics.
+  - **Downstream signal:** Verify with a PR carrying more than 30 labels—including `e2e-smoke-test` past the first page—that `.labels` from `GET /pulls/{n}` matches the paginated `/issues/{pr}/labels` result and that the merged failure path still suppresses auto-merge on fetch failure.
+
+- **MERGE-002 — RISKY_SKIP**
+  - **File paths:** `.github/workflows/test-and-mark-stable.yml:1061-1069`, `.github/workflows/test-and-mark-stable.yml:1091-1096`
+  - **Current call count:** 3 logical `GET /pulls/{n}` reads on a stability attempt that succeeds immediately (2 SHA probes + 1 post-loop metadata read), with more reads on later stability attempts.
+  - **Proposed call count:** 2 logical reads on the winning attempt by carrying full PR JSON from the successful second probe into the closed/merged guard.
+  - **Endpoints:** `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+  - **Evidence:**
+    ```sh
+    for stability_attempt in 1 2 3 4 5; do
+      HEAD_A=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' ...)
+      sleep 3
+      HEAD_B=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' ...)
+      ...
+    done
+
+    PR_META=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" ...)
+    PR_STATE=$(printf '%s' "${PR_META}" | jq -r '.state // ""' ...)
+    PR_MERGED=$(printf '%s' "${PR_META}" | jq -r '.merged // false' ...)
+    ```
+  - **Proposed fix:** If manually approved, make the `HEAD_B` read capture full PR JSON, derive both `head.sha` and `{state, merged, merged_at, closed_at}` from that payload, and drop the third `GET /pulls/{n}` while keeping the two-read stability probe intact.
+  - **Safety rationale:** `RISKY_SKIP` because the overlap is inside a stability/retry loop that explicitly defends against GitHub indexing races.
+  - **Downstream signal:** Do **not** auto-implement; manual review must prove that reusing the successful second probe preserves the ≥3s stability check and does not hide a PR-close race that the third read currently catches.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — NEEDS_VERIFICATION**
+  - **File paths:** `.github/workflows/check_failure_triage.yml:118-147`, `scripts/check_failure_triage.sh:151-178`
+  - **Current call count:** 2 logical full-payload `GET /pulls/{n}` reads on the same-repo common path, excluding retries.
+  - **Proposed call count:** 1 logical full-payload read on the common path, with the existing script fetch retained only as a cache-miss/invalid-cache fallback.
+  - **Endpoints:** `GET /repos/{owner}/{repo}/pulls/{pull_number}` at both call sites
+  - **Evidence:**
+    ```sh
+    # workflow guard
+    if gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ inputs.pr_number }}" > "${pr_payload}" ...; then
+      ...
+    fi
+    HEAD_REPO="$(jq -r '.head.repo.full_name // ""' "${pr_payload}" ...)"
+
+    # script startup
+    if gh_api_json_to_file "${PR_JSON_FILE}" gh api "repos/${REPO}/pulls/${PR_NUMBER}"; then
+      PR_JSON="$(cat "${PR_JSON_FILE}")"
+    fi
+    PR_STATE="$(printf '%s' "${PR_JSON}" | jq -r '.state // ""')"
+    HEAD_REPO_FULL_NAME="$(printf '%s' "${PR_JSON}" | jq -r '.head.repo.full_name // ""')"
+    ```
+  - **Proposed fix:** Create/persist the runtime PR payload before `pr_origin_guard` exits (for example under `${RUNTIME_DIR}/pr_payload.json` or `${RUNNER_TEMP}`), pass that file path into `scripts/check_failure_triage.sh`, and have the script seed `PR_JSON` from the cached file before falling back to `gh_api_json_to_file`.
+  - **Safety rationale:** `NEEDS_VERIFICATION` because the second read currently doubles as a freshness check for `.state`, and static review cannot prove that a stale payload is acceptable after the intervening setup steps.
+  - **Downstream signal:** Verify whether a PR closing between `pr_origin_guard` and `Run check-failure triage` must suppress issue creation; if yes, reuse only cached non-volatile fields or add an explicit freshness strategy before deleting the second full `/pulls/{n}` fetch.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- API-001: NEEDS_VERIFICATION — the first GraphQL payload already covers `body`/`labels` for the closing-issue subset, but the implementation must preserve the branch/body-fallback set-difference logic.
+- BATCH-001: NEEDS_VERIFICATION — batching linked-issue label hydration is directionally correct, but the merged-PR validate-dispatch path must keep its current fail-open fallback behavior.
+- API-002: RISKY_SKIP — this lives in `scripts/orchestrate_poll_process.sh`’s actions-run cache / race-defense path, which this pass does not authorize for automatic consolidation.
+
+### Summary Counts
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | MERGE-001, REUSE-001 |
+| RISKY_SKIP | 1 | MERGE-002 |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
