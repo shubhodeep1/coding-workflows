@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:512-516 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The default-branch short-circuit still occurs after `repo_slug()` / lookup work instead of before it.\n  WHY: This violates the documented \"skip entirely on the default branch\" behavior and can cause unnecessary GitHub/cache work and fail-open warnings; both reviewers identified the early-return ordering regression.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:512-516 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The workflow-template mirror has the same default-branch short-circuit ordering regression.\n  WHY: The mirrored hook should match the root hook\u2019s no-op-on-default-branch contract, but this ordering still allows unnecessary lookup work before the early return.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The guard is skipped entirely on the default branch\"\n  expected_change_site: .claude/hooks/pr_merge_status_guard.py:evaluate() (and the identical copy in workflow-templates/.claude/hooks/pr_merge_status_guard.py)\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST_RUN_DIFF shows the default-branch short-circuit was moved after `repo_slug(cwd)` and the cache/PR lookup block; the test was updated to assert the early skip but the production path still performs the lookup.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .claude/hooks/pr_merge_status_guard.py:512-516 | severity=high | confidence=5\n  PROBLEM: The default-branch short-circuit should happen before any remote calls, but the previous autofix had moved it after `repo_slug()` / PR lookup.\n  WHY: Default-branch commits should be a no-op; this ordering wastes API budget and violates CLAUDE.md \u00a721.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:512-516 | severity=high | confidence=5\n  PROBLEM: Same issue as above; the consumer mirror must maintain parity with the root hook.\n  WHY: Consumer repos would perform unnecessary API calls on the default branch.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .claude/hooks/pr_merge_status_guard.py (and identical copy in workflow-templates/.claude/hooks/pr_merge_status_guard.py)\n  Line or code reference: evaluate() lines ~509-520\n  Problem: The default-branch early return was moved below `repo_slug(cwd)` and the cache/PR lookup in the previous autofix.\n  Why it fails at runtime: On the default branch with a cold cache this now performs unnecessary work and can emit a fail-open warning.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"The guard is skipped entirely on the default branch\"\n  Expected change site: .claude/hooks/pr_merge_status_guard.py:evaluate() (and the identical copy in workflow-templates/.claude/hooks/pr_merge_status_guard.py)\n  Evidence of absence: LAST_RUN_DIFF shows the default-branch short-circuit was moved *after* `repo_slug(cwd)` and the cache/PR lookup block; the test was updated to assert the early skip but the production path still performs the lookup.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "bb6df9cafe05564536264a617aa92ed6e65e27306e7fb5fc3417320c41639e31",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3735,
+    "run_id": "31150689083",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31150689083",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260807063235_6aa600dd86",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3735,
+    "run_id": "31150689083"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-07T06:32:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
