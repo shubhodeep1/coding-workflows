@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.9,
+  "details": "Multiple runs added or revised codex heartbeat, stall guard, and watchdog helper scripts in the same change set. This suggests the repo treats progress detection as a coordinated subsystem, so changes in one area often need matching logic and tests elsewhere to avoid regressions in run monitoring.",
+  "fingerprint": "d0a1365bc70526578fa727f3c3b4e44c7d095f33019eaa8690972245ba0b7d92",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "31137037548",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31137037548",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3715",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3717",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3719",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3721",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3723",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3716",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3718",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3720",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3722",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3724"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260807011042_30deb41724",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Stall-guard, heartbeat, and watchdog behavior are tightly coupled and should be changed together.",
+  "timestamps": {
+    "created_at": "2026-08-07T01:10:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
