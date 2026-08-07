@@ -342,6 +342,38 @@ def test_default_branch_uses_remote_head_when_local_refs_are_missing(monkeypatch
 	assert guard.default_branch("/repo") == "trunk"
 
 
+def test_default_branch_does_not_guess_local_main_over_remote_head(monkeypatch) -> None:
+	def _fake_run(argv, cwd, timeout):
+		lookup = {
+			("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): (1, "", ""),
+			("git", "ls-remote", "--symref", "origin", "HEAD"): (
+				0,
+				"ref: refs/heads/trunk\tHEAD\n0123456789abcdef\tHEAD\n",
+				"",
+			),
+		}
+		result = lookup.get(tuple(argv))
+		assert result is not None, f"unexpected argv: {argv}"
+		return result
+
+	monkeypatch.setattr(guard, "_run", _fake_run)
+	assert guard.default_branch("/repo") == "trunk"
+
+
+def test_default_branch_returns_empty_when_only_local_main_exists(monkeypatch) -> None:
+	def _fake_run(argv, cwd, timeout):
+		lookup = {
+			("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): (1, "", ""),
+			("git", "ls-remote", "--symref", "origin", "HEAD"): (1, "", ""),
+		}
+		result = lookup.get(tuple(argv))
+		assert result is not None, f"unexpected argv: {argv}"
+		return result
+
+	monkeypatch.setattr(guard, "_run", _fake_run)
+	assert guard.default_branch("/repo") == ""
+
+
 # ──────────────────────────────────────────────────────────────────
 # Fail-open contract
 # ──────────────────────────────────────────────────────────────────
