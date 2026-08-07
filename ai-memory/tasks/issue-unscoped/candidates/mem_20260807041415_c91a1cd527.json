@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:64-79, 212-231, 290-291, 352 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603, moonshotai_kimi-k2_5]\n  PROBLEM: `default_branch()` can fall back to `\"main\"` when `origin/HEAD` is unavailable and the repository uses a different default branch, so the guard's remediation commands can point at a non-existent remote branch.\n  WHY: This breaks the suggested recovery path at runtime in repos whose actual default branch is not `main` or `master`; the blocking behavior is still correct, but the guidance is broken.\n- .claude/hooks/pr_merge_status_guard.py:105-125 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The shell command parser splits on control operators before `shlex.split()`, so quoted operators inside arguments can prevent the hook from recognizing git subcommands.\n  WHY: If the parser misses `commit` or `push` because of quoting, the hook fails open and silently allows the command, bypassing the guard for valid command forms.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: .claude/hooks/pr_merge_status_guard.py\n  Line or code reference: lines 212-231, `default_branch()`\n  Problem: `default_branch()` falls back to returning `\"main\"` when `origin/HEAD` has no symbolic-ref AND neither `origin/main` nor `origin/master` exist. When the actual default branch is something else (e.g., `develop`, `trunk`), the remediation commands embedded in `_block_message()` \u2014 `git fetch origin {base}` and `git checkout -B {branch} origin/{base}` \u2014 target a non-existent remote branch and fail at runtime. The blocking decision itself remains correct (the guard still properly prevents the commit), but the user receives broken recovery guidance.\n  Why it fails at runtime: A user on a repo whose default branch is e.g. `develop` with `origin/HEAD` unset runs the suggested `git fetch origin main` which fails with \"fatal: couldn't find remote ref refs/heads/main\". The user is left blocked without a working remediation path in the error message. This is a guidance-quality issue, not a safety regression \u2014 the block is still correct, and a human can determine the right base branch.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: .claude/hooks/pr_merge_status_guard.py\n  Code: default_branch() fallback to \"main\"\n  Problem: When origin/HEAD and origin/{main,master} are unavailable, default_branch() falls back to \"main\", so the guard can emit remediation commands that target a non-existent branch.\n  Why it fails at runtime: For repos whose actual default branch is neither main nor master and where origin/HEAD has no symbolic-ref, the suggested commands like `git fetch origin main && git checkout -B <branch> origin/main` fail at runtime, leaving the user with broken guidance.\n  Line or code reference: lines ~64-79; lines ~290-291\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: .claude/hooks/pr_merge_status_guard.py\n  Line or code reference: lines 290-291 (default_branch function), and line 352 where it's used in _block_message\n  Problem: When origin/HEAD is unset and neither origin/main nor origin/master exists, default_branch() falls back to returning \"main\" even if the repository uses a different default branch (e.g., \"develop\", \"trunk\", or \"release\"). The remediation message in _block_message() then suggests `git checkout -B <branch> origin/main`, which will fail at runtime because that ref doesn't exist in such repositories.\n  Why it fails at runtime: The blocking logic itself is correct (the guard will still block commits to merged branches), but the user-facing remediation command is broken for repositories with non-standard default branch names when origin/HEAD is not configured.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- File: .claude/hooks/pr_merge_status_guard.py\n  Line or code reference: lines 105-125 (git_subcommands function)\n  Problem: The shell command parser splits on control operators (&&, ||, ;, |, etc.) before applying shlex.split(). For commands like `git commit -m \"fix: a; b\"`, the semicolon inside the quoted string causes a premature split, which can result in the parser failing to recognize the git subcommand.\n  Why it fails at runtime: When the parser fails to identify \"commit\" or \"push\" due to complex quoting with shell metacharacters, the hook silently allows the command (fail-open). While this is the safe direction, it means the guard is bypassed for certain legitimate commit command patterns.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "deda92ddc8ffd2c130455d322b30e377ba773ff203a28eabd6b95664575fdb3a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3735,
+    "run_id": "31144017493",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31144017493",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260807041415_c91a1cd527",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3735,
+    "run_id": "31144017493"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-07T04:14:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
