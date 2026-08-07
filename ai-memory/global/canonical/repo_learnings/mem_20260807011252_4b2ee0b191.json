@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Prompt-rendering utilities are split between shell and Python implementations, so feature changes should keep both aligned.",
   "timestamps": {
     "created_at": "2026-08-07T01:12:52Z",
