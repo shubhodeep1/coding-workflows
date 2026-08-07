@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Review autofix work tends to span the full pipeline, including reviewers, fix application, and retry/resolve paths.",
   "timestamps": {
     "created_at": "2026-08-07T01:11:47Z",
