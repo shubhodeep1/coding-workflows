@@ -824,6 +824,85 @@ rules, and audience split.
 
 ---
 
+## §21. Merged-PR Commit Guard (MANDATORY)
+
+**Never commit or push onto a branch whose pull request has already
+merged.** A merged PR is finished — it cannot track new work. Commits
+stacked on top of already-merged history land on a branch no open PR
+carries, so the work is stranded: it never reaches the default branch and
+is lost when the branch is deleted.
+
+This is a real failure mode for long-lived interactive sessions. A session
+that runs for days or weeks outlives the PR it opened; the PR merges
+mid-session and the model, working from context that predates the merge,
+keeps committing to the same branch.
+
+### A) The rule
+
+Before every `git commit` and `git push` in an interactive session, confirm
+the current branch is not sitting on a merged PR. If it is:
+
+1. Restart the branch from the latest default branch, **keeping the same
+   branch name**:
+   `git fetch origin <default> && git checkout -B <branch> origin/<default>`
+2. Re-apply the pending work and commit it there.
+3. Open a **new** pull request. The merged PR is not reusable, and §12.A's
+   single-PR rule does not apply across a merge boundary — the merged PR is
+   closed history, so the follow-up work is a new PR, not a split of an
+   existing one.
+
+If the branch carries unmerged commits beyond the merged history, rebase
+them onto the new base rather than discarding them.
+
+### B) Enforcement
+
+The rule is enforced deterministically by `.claude/hooks/pr_merge_status_guard.py`,
+wired as a `PreToolUse` hook on `Bash` in `.claude/settings.json`. Prose alone
+cannot enforce this — the instruction is furthest from the context window's live
+edge exactly when the session has run long enough for the merge to happen.
+
+The guard blocks a command only when all three conditions hold:
+
+1. A **merged** PR exists whose head ref is the current branch, **and**
+2. no **open** PR exists for the current branch, **and**
+3. that merged PR's head commit is an ancestor of `HEAD`.
+
+Condition 3 is what makes the guard self-clearing. Branch names are reused
+after the reset in §21.A, so the merged PR matches `--head <branch>`
+forever; ancestry is what separates "stacking on merged history" from
+"fresh work that reuses the name". No override flag is needed, and the
+guard goes quiet as soon as the branch is reset — before the new PR exists.
+
+### C) Fail-open contract
+
+Any inability to answer the question — `gh` missing, token expired or
+unauthenticated, network failure, unparseable hook payload, detached HEAD,
+not a git repo, undeterminable `<owner>/<repo>` — **allows** the command and
+emits a warning naming the branch. A guard that hard-blocks every commit
+whenever a token lapses would cost more than the bug it prevents.
+
+The guard is skipped entirely on the default branch, and when
+`CLAUDE_PR_MERGE_GUARD=off` is set (default: unset, i.e. enabled).
+
+### D) API-call budget
+
+Per §15, the guard issues **one** API call per guarded command — a single
+`state=all` request answers both the merged and the open question — and
+caches the result for 300 seconds keyed on `<slug>/<branch>`. Cached data may
+satisfy an *allow*; a *block* is always re-verified against a live call first,
+so opening a new PR clears the guard immediately instead of after the TTL.
+
+The call goes over REST (`gh api repos/<slug>/pulls`), **not** `gh pr list`.
+Claude Code Web's agent proxy serves only a pinned set of GraphQL operations
+and rejects the rest with HTTP 403, and `gh pr list` is GraphQL-backed — using
+it as the primary transport would make the guard fail open on every commit in
+exactly the long-running web sessions §21 exists to protect. `gh pr list`
+remains wired as a transport fallback for environments where REST is gated
+instead. The fallback is a retry of the same question on a different
+transport, never a second query.
+
+---
+
 ## FINAL REMINDER
 
 If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**
