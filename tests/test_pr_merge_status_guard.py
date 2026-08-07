@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +39,13 @@ def _load_guard():
 guard = _load_guard()
 
 
+def _git_env() -> dict[str, str]:
+	env = dict(os.environ)
+	for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+		env.pop(key, None)
+	return env
+
+
 # ──────────────────────────────────────────────────────────────────
 # Command parsing
 # ──────────────────────────────────────────────────────────────────
@@ -48,6 +56,7 @@ guard = _load_guard()
 	[
 		"git commit -m 'wip'",
 		'git commit -m "message with the word push in it"',
+		'git commit -m "message with ; && | operators"',
 		"git push -u origin feature",
 		"cd /repo && git commit --amend --no-edit",
 		"git add -A; git commit -m x",
@@ -311,6 +320,28 @@ def test_rest_call_targets_the_pulls_endpoint_with_one_request(monkeypatch) -> N
 	assert "head=o:feature/x" in argv
 
 
+def test_default_branch_uses_remote_head_when_local_refs_are_missing(monkeypatch) -> None:
+	def _fake_run(argv, cwd, timeout):
+		lookup = {
+			("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): (1, "", ""),
+			("git", "rev-parse", "--verify", "refs/remotes/origin/main"): (1, "", ""),
+			("git", "rev-parse", "--verify", "refs/remotes/origin/master"): (1, "", ""),
+			(
+				"git",
+				"ls-remote",
+				"--symref",
+				"origin",
+				"HEAD",
+			): (0, "ref: refs/heads/trunk\tHEAD\n0123456789abcdef\tHEAD\n", ""),
+		}
+		result = lookup.get(tuple(argv))
+		assert result is not None, f"unexpected argv: {argv}"
+		return result
+
+	monkeypatch.setattr(guard, "_run", _fake_run)
+	assert guard.default_branch("/repo") == "trunk"
+
+
 # ──────────────────────────────────────────────────────────────────
 # Fail-open contract
 # ──────────────────────────────────────────────────────────────────
@@ -344,6 +375,13 @@ def test_blocks_end_to_end(monkeypatch, tmp_path: Path) -> None:
 	assert "§21" in message
 	assert "git checkout -B feature/x origin/main" in message
 	assert "https://github.com/o/r/pull/41" in message
+
+
+def test_block_message_uses_a_placeholder_when_default_branch_is_unknown(monkeypatch, tmp_path: Path) -> None:
+	code, message = _evaluate(monkeypatch, tmp_path, default_branch=lambda cwd: "")
+	assert code == 2
+	assert "git fetch origin <default-branch>" in message
+	assert "could not determine the default branch automatically" in message
 
 
 def test_fails_open_when_gh_is_unavailable(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -449,7 +487,13 @@ def test_unguarded_command_exits_zero_without_touching_git() -> None:
 
 def _git(repo: Path, *args: str) -> str:
 	proc = subprocess.run(
-		["git", *args], cwd=repo, capture_output=True, text=True, check=True, timeout=30
+		["git", *args],
+		cwd=repo,
+		capture_output=True,
+		text=True,
+		check=True,
+		env=_git_env(),
+		timeout=30,
 	)
 	return proc.stdout.strip()
 
@@ -471,6 +515,9 @@ def merged_branch_repo(tmp_path: Path):
 	(repo / "seed.txt").write_text("seed\n", encoding="utf-8")
 	_git(repo, "add", "-A")
 	_git(repo, "commit", "-m", "seed")
+	seed_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "update-ref", "refs/remotes/origin/main", seed_sha)
+	_git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 
 	_git(repo, "checkout", "-b", "feature/x")
 	(repo / "work.txt").write_text("work\n", encoding="utf-8")
@@ -499,9 +546,7 @@ def merged_branch_repo(tmp_path: Path):
 
 
 def _run_hook(repo: Path, stub_bin: Path, command: str) -> subprocess.CompletedProcess:
-	import os
-
-	env = dict(os.environ)
+	env = _git_env()
 	env["PATH"] = f"{stub_bin}{os.pathsep}{env.get('PATH', '')}"
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env.pop("CLAUDE_PR_MERGE_GUARD", None)

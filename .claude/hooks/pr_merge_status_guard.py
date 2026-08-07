@@ -67,10 +67,11 @@ GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
 	{"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path"}
 )
 
-# Shell operators that separate independent commands within one Bash call.
-_SEGMENT_SPLIT_RE = re.compile(r"(?:\|\||&&|[;&|\n])")
+# Shell punctuation we treat as command separators when tokenizing a Bash line.
+_SHELL_PUNCTUATION_CHARS = ";&|\n"
 
 _SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+/[A-Za-z0-9._-]+$")
+_REMOTE_HEAD_BRANCH_RE = re.compile(r"^ref:\s+refs/heads/([^\s]+)\s+HEAD$", re.MULTILINE)
 
 _CACHE_TTL_SECONDS = 300
 _CACHE_DIR_NAME = "claude-pr-merge-guard"
@@ -113,6 +114,29 @@ def _run(argv: list[str], cwd: str | None, timeout: int) -> tuple[int, str, str]
 	return proc.returncode, proc.stdout, proc.stderr
 
 
+def _shell_segments(command: str) -> list[list[str]]:
+	"""Tokenize a shell command into command-sized segments.
+
+	Uses `shlex` over the full command so quoted separators such as `"a; b"`
+	stay inside their argument instead of splitting the command early.
+	"""
+	lexer = shlex.shlex(command, posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	lexer.whitespace = " \t\r"
+	lexer.whitespace_split = True
+	segments: list[list[str]] = []
+	current_segment: list[str] = []
+	for token in lexer:
+		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
+			if current_segment:
+				segments.append(current_segment)
+				current_segment = []
+			continue
+		current_segment.append(token)
+	if current_segment:
+		segments.append(current_segment)
+	return segments
+
+
 def git_subcommands(command: str) -> set[str]:
 	"""Return the set of git subcommands invoked by a shell command string.
 
@@ -123,16 +147,12 @@ def git_subcommands(command: str) -> set[str]:
 	since a false block is more disruptive than a missed check on a rare form.
 	"""
 	found: set[str] = set()
-	for segment in _SEGMENT_SPLIT_RE.split(command):
-		segment = segment.strip()
-		if not segment:
-			continue
-		try:
-			tokens = shlex.split(segment)
-		except ValueError:
-			# Unbalanced quotes — the segment is not something we can read.
-			continue
-
+	try:
+		segments = _shell_segments(command)
+	except ValueError:
+		# Unbalanced quotes — the command is not something we can read.
+		return found
+	for tokens in segments:
 		# Drop leading environment assignments (`GIT_DIR=... git commit`).
 		index = 0
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
@@ -210,7 +230,7 @@ def current_branch(cwd: str) -> str:
 
 
 def default_branch(cwd: str) -> str:
-	"""Best-effort default branch name; falls back to `main`."""
+	"""Best-effort default branch name; returns "" when it cannot be determined."""
 	code, out, _ = _run(
 		["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd, _GIT_TIMEOUT_SECONDS
 	)
@@ -228,7 +248,12 @@ def default_branch(cwd: str) -> str:
 		)
 		if code == 0:
 			return candidate
-	return "main"
+	code, out, _ = _run(["git", "ls-remote", "--symref", "origin", "HEAD"], cwd, _GIT_TIMEOUT_SECONDS)
+	if code == 0:
+		match = _REMOTE_HEAD_BRANCH_RE.search(out)
+		if match:
+			return match.group(1)
+	return ""
 
 
 def repo_slug(cwd: str) -> str:
@@ -415,6 +440,21 @@ def blocking_pull_request(pull_requests: list[dict], cwd: str) -> dict | None:
 
 def _block_message(pr: dict, branch: str, base: str) -> str:
 	number = pr.get("number")
+	reset_commands = (
+		f"  git fetch origin {base}\n"
+		f"  git checkout -B {branch} origin/{base}\n"
+	)
+	default_branch_note = ""
+	if not base:
+		reset_commands = (
+			f"  git fetch origin <default-branch>\n"
+			f"  git checkout -B {branch} origin/<default-branch>\n"
+		)
+		default_branch_note = (
+			f"The guard could not determine the default branch automatically; "
+			f"replace `<default-branch>` with your repo's real default branch.\n"
+			f"\n"
+		)
 	return (
 		f"BLOCKED by the merged-PR guard (CLAUDE.md §21).\n"
 		f"\n"
@@ -430,9 +470,9 @@ def _block_message(pr: dict, branch: str, base: str) -> str:
 		f"reused. Restart the branch from the default branch, keeping the same "
 		f"name, then redo the commit and open a NEW pull request:\n"
 		f"\n"
-		f"  git fetch origin {base}\n"
-		f"  git checkout -B {branch} origin/{base}\n"
+		f"{reset_commands}"
 		f"\n"
+		f"{default_branch_note}"
 		f"If the branch carries unmerged commits beyond the merged history, "
 		f"rebase them onto the new base instead of discarding them. Stash or "
 		f"re-apply any uncommitted work as needed, then retry.\n"
@@ -470,11 +510,6 @@ def evaluate(payload: dict) -> tuple[int, str]:
 		# Detached HEAD, or not a git repo — nothing branch-shaped to check.
 		return 0, ""
 
-	base = default_branch(cwd)
-	if branch == base:
-		# Committing on the default branch is not the stranded-work scenario.
-		return 0, ""
-
 	slug = repo_slug(cwd)
 	if not slug:
 		_warn(f"could not derive <owner>/<repo> from the git remote (branch `{branch}`)")
@@ -504,6 +539,11 @@ def evaluate(payload: dict) -> tuple[int, str]:
 		_write_cache(slug, branch, pull_requests)
 
 	if offender is None:
+		return 0, ""
+
+	base = default_branch(cwd)
+	if base and branch == base:
+		# Committing on the default branch is not the stranded-work scenario.
 		return 0, ""
 	return 2, _block_message(offender, branch, base)
 
