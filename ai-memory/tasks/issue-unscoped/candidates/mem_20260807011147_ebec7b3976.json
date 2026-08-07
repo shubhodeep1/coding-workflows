@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Merged changes frequently touched review_autofix workflow files alongside reviewer execution, fix application, FIFO draining, and conflict retry state tests. When editing review automation, plan for end-to-end effects rather than a single step, especially if the change impacts how fixes are gathered, applied, or retried.",
+  "fingerprint": "a168384ab63eae2e59fd0c18984b6d6beadd5920307ee37da0c06e1774490616",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "31137037548",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31137037548",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3715",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3717",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3719",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3721",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3723",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3716",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3718",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3720",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3722",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3724"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260807011147_ebec7b3976",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Review autofix work tends to span the full pipeline, including reviewers, fix application, and retry/resolve paths.",
+  "timestamps": {
+    "created_at": "2026-08-07T01:11:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
