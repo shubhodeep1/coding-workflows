@@ -297,3 +297,131 @@ TARGETED_CONTEXT_TELEMETRY source=semble target=reviewer-context request_bytes=.
 | `review_autofix_sweep.yml` non-empty ticks | Two batched active-run snapshots reused locally | Script inspection | Keep as-is; already good batching |
 | `scripts/gh_helpers.sh` `autofix_retrigger_has_inflight_peer()` | One `/actions/runs` query, emits `AUTOFIX_PEER_CHECK` | Script inspection | Keep as-is |
 | All sampled logs | No 429 / backoff bursts observed | Deep-dive logs and summaries | Main gain is fewer empty scheduled invocations, not per-call batching |
+
+## Deep Audit — Workflows & Scripts (2026-08-07)
+
+### Section 1: Bug & Correctness Sweep
+
+Repo-wide shell/YAML/security sweep did not surface new secret-exposure or broad unquoted-variable defects worth separate findings. The material correctness risks were both “read failed, but workflow treated it as a clean no-op” paths.
+
+- **BUG-001**
+  - **File path:** `.github/workflows/review_autofix.yml:911-925,944-953,1083-1101`
+  - **Severity:** High
+  - **Category tag:** bug
+  - **Description:** Two `review_autofix` paths collapse GitHub API read failures into successful “nothing to do” outcomes. In post-merge validate dispatch, the fallback GraphQL read at `914-919` uses raw `gh api graphql ... || true`, the PR text fallback at `925` uses raw `gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" ... || echo ""`, and the per-issue label check at `948-953` uses `gh issue view ... || true` and then treats empty output as `has_validate_label="false"`. In deterministic-skip merge, the linked-issue lookup at `1083-1088` also uses raw `gh api graphql ... || true`, and `1100-1101` logs “No linked issues found” and proceeds. A transient API failure can therefore skip standalone validate dispatch or skip linked-issue advancement on a successful workflow run.
+  - **Recommended fix:** Extract a shared linked-issue resolver that returns a tri-state result (`resolved`, `empty`, `read_failed`) instead of collapsing failures into `[]`/empty string. Wrap the GraphQL and REST fallbacks with `gh_retry`/`gh_retry_to_file` from `scripts/gh_helpers.sh:407-575`, and reuse the batching approach already present in `scripts/review_collect_pr_metadata.sh:70-171`. On `read_failed`, emit a warning and stop the no-op path rather than treating the data as absent.
+
+- **BUG-002**
+  - **File path:** `scripts/comprehensive_test_and_release_gh_api.sh:3-38`; representative consumers in `.github/workflows/test-and-mark-stable.yml:563-572,596-597,699-707` and `scripts/dispatch_and_watch_workflow_run.sh:221-305`
+  - **Severity:** Medium
+  - **Category tag:** bug
+  - **Description:** `gh_api_safe()` detects rate limiting, increases `RATE_LIMIT_BACKOFF`, sleeps, and then returns `1` at line `38` without retrying the same request. The calling workflows then coerce that failure into real-looking empty state (`""`, `0`, or `[]`). In `test-and-mark-stable.yml`, that can make labels/comments look absent; in `dispatch_and_watch_workflow_run.sh`, it can make a freshly dispatched run look unregistered or status-unknown until timeout.
+  - **Recommended fix:** Replace this bespoke helper with `scripts/gh_helpers.sh:407-575` (`gh_retry`, `gh_api_json_to_file`) or make `gh_api_safe()` perform its own bounded retry loop before returning failure. Callers should branch on “request failed” separately from “request succeeded with empty JSON”.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Excluding the already-documented empty scheduled sweep cadence waste, these were the highest-value API call reductions.
+
+- **API-001**
+  - **File path:** `.github/workflows/issue_pr_status.yml:209-265,362-406`
+  - **Severity:** Medium
+  - **Category tag:** api-redundancy
+  - **Description:** `issue_pr_status` already fetches `closingIssuesReferences.nodes { number body labels }` at `253-258`, and `classify_orchestrator_issues_from_payload()` at `209-234` already derives `TRACKING_ISSUES` and `MANAGED_ISSUES` from that payload. The workflow then builds `ORCH_ALIAS_FRAGMENT` and re-fetches `body` and `labels` for `LOOKUP_ISSUE_NUMBERS` at `362-373`, with an `N`-item REST fallback loop at `398-406`.
+  - **Current call count:** `2` GraphQL calls on the common path, plus up to `N` REST issue reads if the second batch fails.
+  - **Proposed call count:** `1` GraphQL call when `LOOKUP_ISSUE_NUMBERS` is a subset of `CLOSING_ISSUE_NUMBERS`; only batch-fetch the set difference when branch/body fallback adds extra issue numbers.
+  - **Existing pattern to extend:** Keep `classify_orchestrator_issues_from_payload()` as the primary classifier, or reuse `scripts/orchestrate_poll_process.sh:10774-10850` (`_fetch_candidate_issue_details_graphql()`).
+  - **Recommended fix:** Carry the first GraphQL payload forward as the authoritative classification source. Only construct `ORCH_ALIAS_FRAGMENT` for issue numbers introduced after the first call.
+
+- **BATCH-001**
+  - **File path:** `.github/workflows/review_autofix.yml:911-925,944-953`
+  - **Severity:** Medium
+  - **Category tag:** api-batching
+  - **Description:** The post-merge validate-dispatch step first resolves linked issues in batch (`914-919`) and may also fetch PR text once (`923-925`), but when labels are unknown it then performs `gh issue view --json labels` once per issue inside the loop at `944-953`. That is an avoidable `N+1` fallback.
+  - **Current call count:** `1` GraphQL call, optional `1` PR REST read, then `N` per-issue `gh issue view` calls when labels were not already supplied.
+  - **Proposed call count:** `2` GraphQL calls maximum, `0` per-issue REST reads.
+  - **Existing pattern to extend:** `.github/workflows/issue_pr_status.yml:362-373` alias batching, or `scripts/review_collect_pr_metadata.sh:70-171` (`_fetch_linked_issue_bodies_graphql()`).
+  - **Recommended fix:** When `POST_MERGE_LINKED_ISSUES_JSON` lacks labels, batch-hydrate all linked issue numbers once via an alias GraphQL query and pass `{number, labels}` into the loop.
+
+- **API-002**
+  - **File path:** `scripts/orchestrate_poll_process.sh:8551-8616,8741-8795`
+  - **Severity:** Low
+  - **Category tag:** api-redundancy
+  - **Description:** `_load_actions_runs_cached()` performs a conditional `in_progress` fetch at `8555-8566`, then unconditionally fetches `queued` at `8608-8610` and `completed` at `8613-8616` on every cache miss before `prime_phase_concurrency_snapshot()` consumes the merged blob. This is three Actions REST calls to build one local cache blob. [NEEDS VERIFICATION]
+  - **Current call count:** `3` REST calls per cache miss.
+  - **Proposed call count:** `1-2` REST calls per cache miss, depending on whether the completed-window data must stay separate. [NEEDS VERIFICATION]
+  - **Existing pattern to extend:** `_ACTIONS_RUNS_BLOB_CACHE` plus `prime_phase_concurrency_snapshot()`.
+  - **Recommended fix:** Make the cold-path cache loader fetch a single broader snapshot first and only fetch a dedicated completed window lazily if stall-diagnostics actually need it.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **DUP-001**
+  - **File path:** `scripts/gh_helpers.sh:548-562`; duplicates in `.github/workflows/orchestrate.yml:1012-1027`, `.github/workflows/plan.yml:1999-2017`, `.github/workflows/implement.yml:4885-4898`, `scripts/check_failure_triage.sh:58-79`, `scripts/implement_diagnose_post_codex_failure.sh:49-62`
+  - **Severity:** Low
+  - **Category tag:** duplication
+  - **Description:** `_safe_gh_jq` is already implemented canonically in `scripts/gh_helpers.sh`, but near-identical fallback copies are embedded in multiple workflows/scripts. They have already drifted: some emit the mktemp diagnostic, some suppress stderr entirely, and some omit the canonical error annotation.
+  - **Recommended fix:** Introduce a tiny shared bootstrap such as `scripts/gh_bootstrap.sh` that guarantees `gh_retry`, `_safe_gh_jq`, and `gh_api_json_to_file` are defined, then replace the inline copies in the listed callers with a single `source` call.
+
+- **DUP-002**
+  - **File path:** `.github/workflows/issue_pr_status.yml:253-295`; `.github/workflows/review_autofix.yml:914-939,4814-4936,5111-5126`; `scripts/review_collect_pr_metadata.sh:237-304`; `scripts/review_rb_judge.sh:834-854`
+  - **Severity:** Medium
+  - **Category tag:** duplication
+  - **Description:** Linked-issue resolution is reimplemented in at least four call chains: GraphQL `closingIssuesReferences`, then repo-scoped PR text fallback, then “no linked issues found” handling. The copies already diverge in caching, retry behavior, label hydration, and fail-open semantics.
+  - **Recommended fix:** Move this into a dedicated shared module, e.g. `scripts/linked_issue_helpers.sh`, with functions such as `fetch_closing_issue_nodes <repo> <pr_number>`, `fallback_issue_numbers_from_pr_text <repo> <title_body>`, and `hydrate_issue_labels_graphql <repo> <numbers_json>`. Update `issue_pr_status.yml`, the post-merge/deterministic-skip/late-review paths in `review_autofix.yml`, `scripts/review_collect_pr_metadata.sh`, and `scripts/review_rb_judge.sh` to call that module and reuse `scripts/gh_helpers.sh:1509-1524`.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+Repo-wide scan found no `if:` expressions near the 21,000-character ceiling (longest scanned `if:` was `163` characters) and no workflow file over `800 KB`; the largest workflow is `.github/workflows/review_autofix.yml` at `438,698` bytes. No scanned `run:` block exceeded the `18,000`-character High-risk threshold; the two blocks below exceeded the `15,000`-character Medium-risk threshold.
+
+- **EXPR-001**
+  - **File path:** `.github/workflows/plan.yml:998-1287`
+  - **Severity:** Medium
+  - **Category tag:** expression-limit
+  - **Estimated current expression length:** `16,837` characters
+  - **Remaining headroom:** `4,163` characters
+  - **Description:** The `Run Codex planning` step keeps a large inline prompt heredoc in the `run:` body (`1003-1210`) alongside multiple `${{ }}` interpolations and retry/progress-update logic. It is already within ~20% of GitHub’s hard expression ceiling.
+  - **Recommended fix:** Move the inline planning prompt into a checked-in prompt asset under `prompts/` (adjacent to `prompts/mode-plan.txt`) and render it via `scripts/render_prompt.sh`, leaving only small variable interpolation in workflow YAML.
+
+- **EXPR-002**
+  - **File path:** `.github/workflows/implement.yml:3675-3920`
+  - **Severity:** Medium
+  - **Category tag:** expression-limit
+  - **Estimated current expression length:** `15,979` characters
+  - **Remaining headroom:** `5,021` characters
+  - **Description:** The `Destructive-commit guard — label + alert on rejection` step combines two large branches (scope violation and destructive deletion), label mutations, issue-comment assembly, and Telegram alert formatting in one interpolated `run:` block.
+  - **Recommended fix:** Split the scope-block and destructive-delete handling into separate steps, or extract both branches into a new helper under `scripts/` so the workflow YAML only passes env/arguments.
+
+### Section 5: Cross-Cutting Concerns
+
+- **DEBT-001**
+  - **File path:** `scripts/orchestrate_poll_process.sh:1-18436`
+  - **Severity:** Low
+  - **Category tag:** tech-debt
+  - **Description:** `orchestrate_poll_process.sh` is now an audit and change-management hotspot: `18,436` lines and `931,029` bytes, with unrelated contracts (actions-runs cache, GraphQL batching, wave reconciliation, stall recovery, linked-PR handling) co-located in one file. That size materially raises review risk and makes targeted testing/reuse harder.
+  - **Recommended fix:** Split the file into domain modules (for example, `scripts/orchestrate/actions_runs_cache.sh`, `scripts/orchestrate/linked_pr_graphql.sh`, `scripts/orchestrate/stall_recovery.sh`, `scripts/orchestrate/tracking_sync.sh`) and keep `orchestrate_poll_process.sh` as a thin coordinator that sources them.
+
+Static sweep notes:
+- `scripts/check_workflow_script_refs.py` passed (`All workflow script references resolve to existing files.`).
+- `python -m py_compile scripts/*.py` passed.
+- No `TODO`/`FIXME`/`HACK`/`XXX` markers were found under `.github/workflows` or `scripts`.
+- I did not substantiate additional dead-code or shellcheck-only defects worth separate findings beyond the retry/helper drift issues above.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | BUG-001 |
+| Medium | 6 | BUG-002, API-001, BATCH-001, DUP-002, EXPR-001, EXPR-002 |
+| Low | 3 | API-002, DUP-001, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 1-3 | Medium |
+| API call optimization | 3-4 | Medium |
+| Code modularization | 8-10 | Large |
+| Expression size reduction | 2-4 | Medium |
+| Medium/Low fixes | 3-5 | Medium |
