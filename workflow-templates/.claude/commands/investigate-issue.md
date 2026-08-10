@@ -5,7 +5,9 @@ Investigate a problem reported against this repo, identify the root cause, and e
 - **`[CONSUMER-INTERNAL]`** — the bug is in **this** repo's own code / config / workflows, unrelated to the upstream workflow library. → Investigate **this** repo at **`main`** (the local working checkout). **Read-write: ship the fix** here (apply, verify, commit, push, open a PR).
 - **`[UPSTREAM]`** — the bug is in the upstream workflow library `shubhodeep1/coding-workflows`.
   - If **this repo *is* `shubhodeep1/coding-workflows`** (it consumes its own templates), investigate it at **`main`** and **ship the fix** here (read-write) — there is no separate downstream to hand off to.
-  - Otherwise (this is a *different* consumer repo), investigate `shubhodeep1/coding-workflows` pinned to the **upstream ref this consumer is actually running** (NOT `main`), and produce a **read-only** proposed fix the user takes to a `shubhodeep1/coding-workflows` session — a different repo's session cannot commit / push to the upstream library.
+  - Otherwise (this is a *different* consumer repo), investigate `shubhodeep1/coding-workflows` pinned to the **upstream ref this consumer is actually running** (NOT `main`). What happens next depends on whether the upstream library is **attached to this session** (see [Attached upstream checkout](#attached-upstream-checkout)):
+    - **Upstream attached** (a pushable local checkout of `shubhodeep1/coding-workflows` exists in this session) → finish the investigation exactly as below, then **auto-chain into `/validate-consumer-issue`** and ship the upstream fix in that checkout (apply, verify, commit, push, open a PR). The session *can* push upstream, so the hand-off to a human is unnecessary.
+    - **Upstream not attached** → produce a **read-only** proposed fix the user takes to a `shubhodeep1/coding-workflows` session — that session cannot commit / push to the upstream library. This is the unchanged legacy behaviour.
 - **`[BOTH]`** — coordinated change spanning both; handle each side by the matching rule above.
 
 Decide the classification from the parsed leads + the user's description + the evidence you gather. If it is genuinely unclear which side owns the root cause, investigate **both** sides and surface the ambiguity under **Open Questions** rather than guessing.
@@ -37,8 +39,40 @@ $ARGUMENTS
 
    - **`[CONSUMER-INTERNAL]`** → `TARGET_REPO = THIS_REPO`, `TARGET_REF = main` (the local working checkout). **Mode = read-write** (apply the fix per the Decision Rule in Step 9).
    - **`[UPSTREAM]` and `THIS_REPO == shubhodeep1/coding-workflows`** → `TARGET_REPO = shubhodeep1/coding-workflows`, `TARGET_REF = main`. **Mode = read-write**. Resolve `TARGET_SHA` to the current `main` tip via `mcp__github__list_commits` with `sha=main` (or read files directly from the local `main` checkout). Do **not** run the stable-pinning procedure below — this repo is the upstream, and the fix lands on `main`.
-   - **`[UPSTREAM]` and `THIS_REPO != shubhodeep1/coding-workflows`** → `TARGET_REPO = shubhodeep1/coding-workflows`, pinned to the **upstream ref this consumer is actually running** (the stable-pinning procedure below). **Mode = read-only** (propose the fix; the user takes it to a `shubhodeep1/coding-workflows` session).
-   - **`[BOTH]`** → run both the consumer-internal path and the upstream path; apply only the edits the current session is allowed to push (the `[CONSUMER-INTERNAL]` side, and the upstream side only when `THIS_REPO == shubhodeep1/coding-workflows`), and propose the rest read-only.
+   - **`[UPSTREAM]` and `THIS_REPO != shubhodeep1/coding-workflows`** → `TARGET_REPO = shubhodeep1/coding-workflows`, pinned to the **upstream ref this consumer is actually running** (the stable-pinning procedure below). The mode depends on `UPSTREAM_ATTACHED`, resolved by the [Attached upstream checkout](#attached-upstream-checkout) procedure below:
+     - `UPSTREAM_ATTACHED = yes` → **Mode = read-write-attached-upstream**. Investigate read-only against `UPSTREAM_SHA` exactly as in the read-only mode, then hand the finished diagnosis to the auto-chain in Step 9, which lands the fix in `UPSTREAM_CHECKOUT`.
+     - `UPSTREAM_ATTACHED = no` → **Mode = read-only** (propose the fix; the user takes it to a `shubhodeep1/coding-workflows` session). Unchanged legacy behaviour.
+   - **`[BOTH]`** → run both the consumer-internal path and the upstream path; apply only the edits the current session is allowed to push (the `[CONSUMER-INTERNAL]` side, and the upstream side when `THIS_REPO == shubhodeep1/coding-workflows` or `UPSTREAM_ATTACHED = yes`), and propose the rest read-only.
+
+   ### Attached upstream checkout
+
+   Resolve this **only** for the `[UPSTREAM]` / `[BOTH]` path when `THIS_REPO != shubhodeep1/coding-workflows` — when this repo *is* the library there is no second checkout to find. A session can have more than one repo attached (e.g. the user added `shubhodeep1/coding-workflows` alongside this consumer repo); when the upstream library is present as a **pushable working tree**, the read-only hand-off in Step 9 is replaced by the auto-chain.
+
+   Set two fields and record both in the **Evidence Ledger**:
+
+   - `UPSTREAM_CHECKOUT` — absolute path of the local `shubhodeep1/coding-workflows` working tree, or `none`.
+   - `UPSTREAM_ATTACHED` — `yes` only when every check below passes; otherwise `no`.
+
+   Detection (local only — no network, no repo mutation):
+
+   ```bash
+   # Find candidate working trees whose remotes point at the upstream library.
+   # Claude Code Web rewrites remotes to a local proxy
+   # (http://...@127.0.0.1:PORT/git/<owner>/<repo>), so match on the slug, not the host.
+   for candidate in "$PWD" "$PWD"/* "$PWD"/.. "$PWD"/../* "$HOME" "$HOME"/*; do
+     [ -d "$candidate/.git" ] || continue
+     git -C "$candidate" remote -v 2>/dev/null | grep -q 'shubhodeep1/coding-workflows' || continue
+     git -C "$candidate" rev-parse --show-toplevel 2>/dev/null
+   done | sort -u
+   ```
+
+   Then, for the candidate you selected (skip any tree that is `THIS_REPO`'s own checkout):
+
+   - **It is really the library** — the tree contains `workflow-templates/` and `.github/ai/consumer_repos.json`. A consumer repo that merely *mentions* the slug in a wrapper YAML is not the library.
+   - **It is clean** — `git -C "$UPSTREAM_CHECKOUT" status --porcelain` is empty. A dirty tree holds someone else's in-flight work; do **not** branch over it. Record `UPSTREAM_ATTACHED = no`, note the dirty tree under **Open Questions**, and take the read-only path.
+   - **It is reachable and pushable** — `git -C "$UPSTREAM_CHECKOUT" ls-remote --heads origin >/dev/null` succeeds, and `git -C "$UPSTREAM_CHECKOUT" push --dry-run origin HEAD:refs/heads/<probe-branch>` reports no permission error (`--dry-run` contacts the server without creating anything).
+
+   If more than one candidate qualifies, prefer the one whose `origin` slug matches exactly and record the others under **Open Questions**. If zero qualify, `UPSTREAM_CHECKOUT = none`, `UPSTREAM_ATTACHED = no` — and the command behaves exactly as it did before this section existed. **Never clone, fetch-into, or otherwise attach the upstream repo yourself**: an unattached upstream is a supported, unchanged outcome, not a problem to fix.
 
    ### Stable-pinning procedure (only for `[UPSTREAM]` when `THIS_REPO != shubhodeep1/coding-workflows`)
 
@@ -63,7 +97,7 @@ $ARGUMENTS
    - Record `UPSTREAM_TAG`, `UPSTREAM_SHA`, `PREVIOUS_UPSTREAM_TAG`, `PREVIOUS_UPSTREAM_SHA` in the **Evidence Ledger**. Every later upstream tool call MUST pass `ref=<UPSTREAM_SHA>`. Every citation should be written as `<owner>/<repo>@<UPSTREAM_TAG> (<short-sha>):<file>:<line>` so the reader sees both the human label and the canonical SHA.
    - If `UPSTREAM_SHA` cannot be resolved at all after retries (see **Retry Rule**), record this under **Inaccessible Resources** and stop — this path cannot produce a pinned analysis without a SHA. Do not silently fall back to `main`.
 
-   Record the chosen classification, `THIS_REPO`, `TARGET_REPO`, `TARGET_REF`/`TARGET_SHA`, and the mode (read-write vs read-only) in the **Evidence Ledger** before proceeding.
+   Record the chosen classification, `THIS_REPO`, `TARGET_REPO`, `TARGET_REF`/`TARGET_SHA`, the mode (read-write / read-write-attached-upstream / read-only), and — for the pinned upstream path — `UPSTREAM_ATTACHED` and `UPSTREAM_CHECKOUT` in the **Evidence Ledger** before proceeding.
 
 3. **Download any logs** referenced in the input — Choose the fetch tool by URL shape; `curl` against a rendered GitHub page returns HTML, not log content.
    - **GitHub Actions run / job URLs** (e.g. `https://github.com/<owner>/<repo>/actions/runs/<id>`, `.../runs/<id>/job/<id>`, `.../runs/<id>/attempts/<n>`): use the appropriate GitHub MCP tool (e.g. `mcp__github__get_workflow_run_logs`, `mcp__github__get_job_logs`, or whichever workflow-log tool is exposed in the current session — search `mcp__github__*` for `log`). When `GH_TOKEN` is set in the session environment (the SessionStart hook installs `gh` and authenticates with it), `gh run view --log <run-id> -R <owner>/<repo>`, `gh run view --log --job <job-id> -R <owner>/<repo>`, `gh run view --log-failed <run-id> -R <owner>/<repo>` (failed-step lines only), and `gh api repos/<owner>/<repo>/actions/runs/<id>/logs` are also available — see [Tool Access](#tool-access) for why `-R` is mandatory in this environment. These return the raw log payload. Do NOT `curl` these rendered URLs.
@@ -88,7 +122,7 @@ $ARGUMENTS
    - Other recent runs of the same workflow (regression vs. flake).
 
    **For an `[UPSTREAM]` issue, in `shubhodeep1/coding-workflows`:**
-   - When `THIS_REPO == shubhodeep1/coding-workflows`, read at `main` (`ref=main` or the local checkout). When `THIS_REPO` is a *different* consumer, use `mcp__github__get_file_contents` with `ref=<UPSTREAM_SHA>` for **every** read — never read upstream files at `main` in that case, because a fix proposed against `main` may not apply against the consumer's pinned wrapper.
+   - When `THIS_REPO == shubhodeep1/coding-workflows`, read at `main` (`ref=main` or the local checkout). When `THIS_REPO` is a *different* consumer, use `mcp__github__get_file_contents` with `ref=<UPSTREAM_SHA>` for **every** read — never read upstream files at `main` in that case, because a fix proposed against `main` may not apply against the consumer's pinned wrapper. **This holds even when `UPSTREAM_ATTACHED = yes`**: the attached checkout sits at whatever ref it was cloned to (usually the default branch), which is *not* what the consumer ran. Diagnose from `UPSTREAM_SHA`; use `UPSTREAM_CHECKOUT` only for writing in Step 9.
    - Reusable workflow that the wrapper calls (under `workflow-templates/` or `.github/workflows/`).
    - Scripts invoked by that workflow (under `scripts/`).
    - Prompt files invoked by those scripts (under `prompts/`).
@@ -126,22 +160,45 @@ $ARGUMENTS
      - All findings `EVIDENCE-BASED` and no missing/inaccessible resource blocks root cause or fix verification → design the fix, apply it, verify it (re-run the repro / failing test when feasible), commit, push, and open a PR. Do not ask. Report using the **Final output structure** afterward, with the applied fix and the branch / PR link.
      - Any `HYPOTHESIS` finding, or any missing/inaccessible resource that blocks root cause or fix verification → stop before editing. Report and ask the user how to proceed.
      - Add or extend a test when fixing a defect that lacked coverage; do not ship a behaviour fix without verification.
-   - **Read-only mode** — `[UPSTREAM]` when `THIS_REPO != shubhodeep1/coding-workflows`:
-     - Do **NOT** apply fixes. A different consumer's session cannot push to the upstream library. Surface the proposed diff (as a fenced code block with `file:line` anchors at `UPSTREAM_SHA`) labeled `[UPSTREAM]` and let the user open a `shubhodeep1/coding-workflows` session to implement it.
-   - **`[BOTH]`** — apply the side this session is allowed to push (the `[CONSUMER-INTERNAL]` side, and the upstream side only when `THIS_REPO == shubhodeep1/coding-workflows`); propose the rest read-only with the matching target-repo label.
+   - **Read-write-attached-upstream mode** — `[UPSTREAM]` when `THIS_REPO != shubhodeep1/coding-workflows` **and** `UPSTREAM_ATTACHED = yes`:
+     - Produce exactly what the read-only mode produces — the evidence-based proposed diff with `file:line` anchors at `UPSTREAM_SHA` — then run the [Auto-chain](#auto-chain-to-validate-consumer-issue-read-write-attached-upstream-mode-only) below instead of stopping at the hand-off.
+     - The same gate applies before chaining: any `HYPOTHESIS` finding, or any missing/inaccessible resource that blocks root cause or fix verification → do **not** chain. Report and ask, exactly as the other read-write modes do.
+   - **Read-only mode** — `[UPSTREAM]` when `THIS_REPO != shubhodeep1/coding-workflows` **and** `UPSTREAM_ATTACHED = no`:
+     - Do **NOT** apply fixes. With no upstream checkout attached, this session cannot push to the library. Surface the proposed diff (as a fenced code block with `file:line` anchors at `UPSTREAM_SHA`) labeled `[UPSTREAM]` and let the user open a `shubhodeep1/coding-workflows` session to implement it.
+   - **`[BOTH]`** — apply the side this session is allowed to push (the `[CONSUMER-INTERNAL]` side, and the upstream side when `THIS_REPO == shubhodeep1/coding-workflows` or `UPSTREAM_ATTACHED = yes`); propose the rest read-only with the matching target-repo label. Land and report the `[CONSUMER-INTERNAL]` side **first**, then chain the upstream side — one PR per repo; never mix files from two repos into one commit.
    - **Environmental** (service down, rate limit, runner outage) → no fix; mark as **environmental / non-actionable** and recommend re-running once the environment recovers.
 
    Label every fix with its **target repo**: `[CONSUMER]` (lands in `THIS_REPO`), `[UPSTREAM]` (lands in `shubhodeep1/coding-workflows`), or `[BOTH]`.
 
+   ### Auto-chain to `/validate-consumer-issue` (read-write-attached-upstream mode only)
+
+   The investigation above is unchanged and completes in full first — parsed leads, Evidence Ledger, root causes, the proposed upstream diff, and (for `[BOTH]`) the applied-and-pushed `[CONSUMER-INTERNAL]` fix. Only then:
+
+   1. **Resolve `UPSTREAM_BASE`** — the branch the upstream fix lands on, derived from the consumer's pin (`UPSTREAM_TAG`, resolved in Step 2):
+      - `UPSTREAM_TAG = stable`, or the pin could not be resolved → `UPSTREAM_BASE = stable`. This is the default and the common case.
+      - `UPSTREAM_TAG = main` → `UPSTREAM_BASE = main`.
+      - `UPSTREAM_TAG` is a version tag (`vX.Y.Z`) or a raw SHA → `UPSTREAM_BASE = stable`. A tag is not a mergeable PR base, so the fix lands on the `stable` **branch** even though it was validated at the pinned SHA. Say so in the report and the PR body, and if `stable` has moved past the pin, re-verify the fix against `stable` before pushing — the code there may differ from what the consumer ran.
+      - Whenever `UPSTREAM_BASE = stable`, carry the standing caveat: the fix must also be ported to `main`, or the next `main → stable` promotion silently reverts it.
+   2. **Invoke `/validate-consumer-issue`** with a self-contained argument — it re-validates independently and must not have to re-derive context:
+      - the reported issue: the symptom, `THIS_REPO` as the reporting consumer, and the upstream ref it was running (`UPSTREAM_TAG` + `UPSTREAM_SHA`);
+      - the proposed fix: the diff from this investigation with its `shubhodeep1/coding-workflows@<UPSTREAM_TAG> (<short-sha>):<file>:<line>` anchors;
+      - the landing target: `UPSTREAM_BASE` and `UPSTREAM_CHECKOUT` (the attached working tree it writes in);
+      - the consumer-side PR link, when `[BOTH]` already landed one.
+   3. **Respect its verdict.** `/validate-consumer-issue` owns the decision to land: it may return `MISCONFIG`, `NOT-REPRODUCIBLE`, or judge the proposed fix `INCORRECT` and derive a different one. Never override it, and never re-apply a fix it declined. Its two verdicts and its outcome ship alongside this command's output (Step 10).
+   4. **Work inside `UPSTREAM_CHECKOUT`** — every `git` invocation passes `-C "$UPSTREAM_CHECKOUT"`, never the consumer's tree: `git -C "$UPSTREAM_CHECKOUT" fetch origin "$UPSTREAM_BASE"`, then `git -C "$UPSTREAM_CHECKOUT" checkout -B <work-branch> "origin/$UPSTREAM_BASE"`. Name the branch for the fix and suffix it with the base (e.g. `claude/<slug>-stable`) so the target is obvious. Open the PR with `base = $UPSTREAM_BASE`, ready for review.
+   5. **Link, don't auto-close.** The upstream PR body references the consumer issue as `Refs <owner>/<repo>#<N>` — never `Fixes` / `Closes` / `Resolves`. Cross-repo auto-close keywords fire on merge, and an orchestrator-tracking issue closed that way kills the state machine that owns it.
+   6. **Push failure → fall back cleanly.** If the push is rejected (no write access to `shubhodeep1/coding-workflows`, protected branch, expired auth) after the **Retry Rule** retries for transient errors, restore the attached checkout to the state you found it in — `git -C "$UPSTREAM_CHECKOUT" checkout <original-branch>` then `git -C "$UPSTREAM_CHECKOUT" branch -D <work-branch>` — and revert to the read-only mode output: the proposed diff plus the instruction to open a `shubhodeep1/coding-workflows` session. Leave nothing half-applied in a tree the user did not ask you to modify, and report the push failure and its reason explicitly.
+
 10. **Final output structure** — Always produce, in this order:
-    - **Summary** (1–3 lines, including the parsed leads from Step 1, the Step 2 classification + mode, and the target ref — `@main` or `UPSTREAM_TAG (UPSTREAM_SHA)`)
+    - **Summary** (1–3 lines, including the parsed leads from Step 1, the Step 2 classification + mode, and the target ref — `@main` or `UPSTREAM_TAG (UPSTREAM_SHA)`; in read-write-attached-upstream mode also name `UPSTREAM_CHECKOUT` and `UPSTREAM_BASE`)
     - **Evidence Ledger** (numbered)
     - **Root Cause(s)** — confidence label, plus a target-repo label only when the root cause is a code defect (`[CONSUMER]` / `[UPSTREAM]` / `[BOTH]`). Environmental root causes are marked non-actionable instead and carry no target-repo label.
     - **Fix(es)** — for read-write modes, what was **applied** (with `<file>:<line>` anchors and the branch / PR link); for read-only mode, the **proposed** diff with `<repo>@<UPSTREAM_TAG> (<short-sha>):<file>:<line>`, target-repo label, confidence label, and rationale. Environmental issues do not get a Fix entry.
+    - **Upstream hand-off** — only in read-write-attached-upstream mode: the `/validate-consumer-issue` run's two verdicts (issue + fix), its outcome (landed / declined / asked), `UPSTREAM_BASE`, the upstream branch / PR link, and the port-to-`main` caveat when it landed on `stable`. If the push failed and the run fell back to read-only, say so here with the reason.
     - **Inaccessible Resources** — exact URLs the user must open manually, with what's needed from each and what conclusion is blocked without it
     - **Reproduction Result**
     - **Open Questions** — surface remaining ambiguity rather than guessing
-    - **Next Step for the User** — for read-write modes, the branch / PR to review; for read-only mode, a one-sentence instruction to open a `shubhodeep1/coding-workflows` session plus a copy-paste-ready prompt summarising the proposed change. If the only finding is environmental, instruct the user to re-run after the environment recovers and explain why no code change is recommended.
+    - **Next Step for the User** — for read-write modes, the branch / PR to review (in read-write-attached-upstream mode, both the upstream PR and, for `[BOTH]`, the consumer PR); for read-only mode, a one-sentence instruction to open a `shubhodeep1/coding-workflows` session plus a copy-paste-ready prompt summarising the proposed change. If the only finding is environmental, instruct the user to re-run after the environment recovers and explain why no code change is recommended.
 
 11. **Cleanup** — Remove every temp log file written to `/tmp/` during Step 3 when done.
 
@@ -158,8 +215,10 @@ GitHub reads can go through either of two equivalent paths — pick whichever is
 
 ## Rules
 
-- **Mode is set by the Step 2 classification, not assumed.** Read-write (apply, verify, commit, push, PR) for `[CONSUMER-INTERNAL]` issues and for `[UPSTREAM]` issues when `THIS_REPO == shubhodeep1/coding-workflows`. Read-only (propose a fix the user takes elsewhere) for `[UPSTREAM]` issues when `THIS_REPO` is a *different* consumer — that session cannot push to the upstream library. Never edit files in a repo this session cannot push to.
-- **Ref selection by case.** `[CONSUMER-INTERNAL]` → `THIS_REPO@main`. `[UPSTREAM]` + `THIS_REPO == shubhodeep1/coding-workflows` → `shubhodeep1/coding-workflows@main`. `[UPSTREAM]` + different consumer → pin every upstream read to `UPSTREAM_SHA` (the resolved SHA from Step 2, never the bare tag name — moving tags like `stable` can shift mid-investigation). Reading upstream files at `main` in the *pinned* case is a bug — that consumer is not running `main`.
+- **Mode is set by the Step 2 classification, not assumed.** Read-write (apply, verify, commit, push, PR) for `[CONSUMER-INTERNAL]` issues and for `[UPSTREAM]` issues when `THIS_REPO == shubhodeep1/coding-workflows`. Read-write-attached-upstream for `[UPSTREAM]` issues when `THIS_REPO` is a *different* consumer **and** a pushable upstream checkout is attached (`UPSTREAM_ATTACHED = yes`) — investigate read-only against `UPSTREAM_SHA`, then auto-chain into `/validate-consumer-issue` to land the fix in `UPSTREAM_CHECKOUT`. Read-only (propose a fix the user takes elsewhere) for `[UPSTREAM]` issues when `UPSTREAM_ATTACHED = no` — that session cannot push to the upstream library. Never edit files in a repo this session cannot push to.
+- **Attachment is detected, never created.** `UPSTREAM_ATTACHED` comes from the [Attached upstream checkout](#attached-upstream-checkout) checks — a real, clean, pushable working tree of `shubhodeep1/coding-workflows` present in the session. Do not clone, attach, or otherwise acquire the upstream repo to unlock the write path: an unattached upstream keeps the legacy read-only behaviour, which is a correct outcome and not a failure. A dirty attached tree counts as *not attached* — never branch over someone else's in-flight work.
+- **One repo per commit, one PR per repo.** The consumer fix and the upstream fix are separate commits in separate trees with separate PRs. Every write to the attached upstream tree goes through `git -C "$UPSTREAM_CHECKOUT"`; never stage upstream files from the consumer's working directory or vice versa.
+- **Ref selection by case.** `[CONSUMER-INTERNAL]` → `THIS_REPO@main`. `[UPSTREAM]` + `THIS_REPO == shubhodeep1/coding-workflows` → `shubhodeep1/coding-workflows@main`. `[UPSTREAM]` + different consumer → pin every upstream read to `UPSTREAM_SHA` (the resolved SHA from Step 2, never the bare tag name — moving tags like `stable` can shift mid-investigation). Reading upstream files at `main` in the *pinned* case is a bug — that consumer is not running `main`. **An attached upstream checkout does not change the read ref**: diagnosis stays pinned to `UPSTREAM_SHA`; `UPSTREAM_CHECKOUT` is a write target, and the branch the fix lands on is `UPSTREAM_BASE` (Step 9's auto-chain), which is not necessarily the same commit.
 - **Always download the complete log.** Never truncate or skip sections. When multiple log URLs are present, this rule applies to each — download every accessible log in full before drawing conclusions.
 - **Retry Rule**: For transient HTTP/GitHub errors (5xx, 429, timeouts, connection resets, DNS failures), retry with exponential backoff (2s, 4s, 8s, 16s — up to 4 retries) before declaring failure. Applies to every fetch: the log download, GitHub MCP calls, raw HTTP follow-ups.
 - **Inaccessible resources** — If a resource is still unreachable after retries, or returns a hard failure (401, 403, 404, 410), or is auth-walled / expired / private, record it under **Inaccessible Resources**:
