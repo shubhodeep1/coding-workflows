@@ -4510,6 +4510,8 @@ jobs:
           echo "====================================="
 
           merge_exit=0
+          merge_promisor_fetch_failure_seen=false
+          merge_promisor_initial_stderr=""
           # Capture git merge stderr so the failure annotation can surface
           # the real cause (e.g. "refusing to merge unrelated histories",
           # "Untracked working tree file … would be overwritten by merge").
@@ -4523,6 +4525,51 @@ jobs:
           # even when we wrap it in an annotation below.
           if [ -s "${MERGE_STDERR_FILE}" ]; then
             sed 's/^/git merge stderr: /' "${MERGE_STDERR_FILE}"
+          fi
+          if grep -qiE 'promisor remote|not our ref|could not fetch|fetch-pack|remote error: upload-pack' "${MERGE_STDERR_FILE}" 2>/dev/null; then
+            merge_promisor_fetch_failure_seen=true
+            merge_promisor_initial_stderr="$(tr '\n' ' ' < "${MERGE_STDERR_FILE}" 2>/dev/null | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+            merge_promisor_initial_stderr="${merge_promisor_initial_stderr:-<git merge produced no stderr>}"
+          fi
+
+          # Blobless partial clone recovery (the codex-agent checkout uses
+          # `filter: blob:none`): the 3-way merge lazy-fetches blob content
+          # from the promisor remote, and that batched on-demand fetch fails
+          # hard (exit 128) when any single OID in the batch is unreachable
+          # server-side ("not our ref" / "could not fetch ... from promisor
+          # remote") — even though the merge itself is well-formed. On that
+          # signature, drop the partial filter, refetch the merge inputs so
+          # every blob is materialised locally, and retry the merge once.
+          # Without this the step misreads an infrastructure fetch failure as
+          # a merge outcome and sets MERGE_CONFLICT=true off a hard
+          # ::error:: annotation on an otherwise-successful run.
+          #
+          # This mirrors the pre-review merge topology gate and
+          # scripts/review_conflict_prepare.sh; the refspec array is built
+          # locally because the deepen block above only defines
+          # _merge_base_refspecs on shallow clones.
+          if [ "${merge_exit}" -ne 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ] \
+             && [ "${merge_promisor_fetch_failure_seen}" = "true" ]; then
+            echo "::warning::Merge precheck hit a partial-clone promisor fetch failure; backfilling blobs and retrying the merge once."
+            git reset --hard HEAD >/dev/null 2>&1 || true
+            git config --unset-all remote.origin.partialclonefilter 2>/dev/null || true
+            _merge_backfill_refspecs=("refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")
+            if [ -n "${TARGET_BRANCH:-}" ]; then
+              _merge_backfill_refspecs+=("refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
+            fi
+            _refetch_rc=0
+            _refetch_stderr="$(git fetch --no-tags --prune --refetch origin "${_merge_backfill_refspecs[@]}" 2>&1 >/dev/null)" || _refetch_rc=$?
+            if [ "${_refetch_rc}" -ne 0 ]; then
+              _refetch_stderr="$(printf '%s' "${_refetch_stderr}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+              _refetch_stderr="${_refetch_stderr:-<git fetch produced no stderr>}"
+              echo "::warning::blob-backfill refetch failed during merge precheck; retrying the merge anyway. git fetch stderr: ${_refetch_stderr}"
+            fi
+            merge_exit=0
+            : > "${MERGE_STDERR_FILE}"
+            git merge --no-commit --no-ff "origin/${BASE_BRANCH}" 2> "${MERGE_STDERR_FILE}" || merge_exit=$?
+            if [ -s "${MERGE_STDERR_FILE}" ]; then
+              sed 's/^/git merge stderr (after blob backfill): /' "${MERGE_STDERR_FILE}"
+            fi
           fi
 
           # Restore the stashed dirs so later steps have them available.
@@ -4546,13 +4593,30 @@ jobs:
               # annotation (::error:: notations cannot span newlines).
               _merge_stderr_oneline="$(tr '\n' ' ' < "${MERGE_STDERR_FILE}" 2>/dev/null | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
               _merge_stderr_oneline="${_merge_stderr_oneline:-<git merge produced no stderr>}"
+              if [ "${merge_promisor_fetch_failure_seen}" = "true" ] && [ -n "${merge_promisor_initial_stderr}" ] \
+                 && [ "${merge_promisor_initial_stderr}" != "${_merge_stderr_oneline}" ]; then
+                _merge_stderr_oneline="${_merge_stderr_oneline} | initial promisor stderr: ${merge_promisor_initial_stderr}"
+              fi
               _merge_stderr_oneline="$(printf '%s' "${_merge_stderr_oneline}" | sed 's/%/%25/g; s/\r/%0D/g')"
               if grep -qi 'refusing to merge unrelated histories' "${MERGE_STDERR_FILE}" 2>/dev/null; then
                 _head_sha="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
                 _base_sha="$(git rev-parse --short "origin/${BASE_BRANCH}" 2>/dev/null || echo unknown)"
                 echo "::error::Merge precheck failed (exit ${merge_exit}): HEAD (${_head_sha}) and origin/${BASE_BRANCH} (${_base_sha}) have no common ancestor. This PR's branch was likely force-pushed to an orphan root, or ${BASE_BRANCH} was force-pushed since this branch diverged. Manual repair required: rebase the PR branch onto a current ${BASE_BRANCH} ancestor, or recreate the branch from ${BASE_BRANCH} and re-apply the changes. git stderr: ${_merge_stderr_oneline}"
               elif [ "${merge_exit}" -eq 128 ]; then
-                echo "::error::Merge precheck failed (exit 128): git merge aborted before entering merge state. See pre-merge diagnostics above. git stderr: ${_merge_stderr_oneline}"
+                if [ "${merge_promisor_fetch_failure_seen}" = "true" ] \
+                   || grep -qiE 'promisor remote|not our ref|could not fetch|fetch-pack|remote error: upload-pack' "${MERGE_STDERR_FILE}" 2>/dev/null; then
+                  # A partial-clone promisor fetch failure that survived the
+                  # blob-backfill retry above is an infrastructure error, not
+                  # a merge outcome. Fail OPEN with a ::warning:: so a run
+                  # that otherwise concludes success is not annotated as a
+                  # hard error. MERGE_CONFLICT stays true so the conflict
+                  # resolver still runs — review_conflict_prepare.sh replays
+                  # the merge with its own blob backfill and clears the flag
+                  # when the replay finds nothing to resolve.
+                  echo "::warning::Merge precheck: exit 128 from a partial-clone promisor fetch failure that survived the blob-backfill retry. Failing open to the conflict-resolver path. git stderr: ${_merge_stderr_oneline}"
+                else
+                  echo "::error::Merge precheck failed (exit 128): git merge aborted before entering merge state. See pre-merge diagnostics above. git stderr: ${_merge_stderr_oneline}"
+                fi
               else
                 echo "::warning::git merge exited ${merge_exit} without entering merge state — treating as conflict. git stderr: ${_merge_stderr_oneline}"
               fi
