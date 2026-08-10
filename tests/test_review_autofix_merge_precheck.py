@@ -286,3 +286,216 @@ def test_merge_conflict_env_var_set_on_exit_128():
         "Expected 'MERGE_CONFLICT=true' to be written to GITHUB_ENV after the "
         "exit-128 error annotation"
     )
+
+
+# ---------------------------------------------------------------------------
+# Fix 5: blobless partial-clone promisor-fetch recovery in the late detect step
+#
+# The codex-agent checkout uses `filter: blob:none`, so the 3-way merge
+# lazy-fetches blobs from the promisor remote and can fail with exit 128 on a
+# "not our ref" / "could not fetch ... from promisor remote" signature even
+# when the merge itself is well-formed.  The pre-review merge-topology gate and
+# scripts/review_conflict_prepare.sh already backfill and retry on that
+# signature; the late detect step must do the same, and must not report an
+# infrastructure failure as a hard ::error:: merge outcome.
+# ---------------------------------------------------------------------------
+
+PROMISOR_SIGNATURE_GREP = (
+    "grep -qiE 'promisor remote|not our ref|could not fetch|fetch-pack|"
+    "remote error: upload-pack'"
+)
+
+
+def _detect_step() -> str:
+    return _section(
+        "- name: Detect merge conflicts",
+        "\n      - name: Prepare merge-conflict resolver prompt and pre-snapshot",
+    )
+
+
+def test_detect_step_detects_promisor_fetch_failure_signature():
+    """The late detect step must classify the promisor-fetch stderr signature
+    instead of treating it as an ordinary merge failure."""
+    step = _detect_step()
+    assert "merge_promisor_fetch_failure_seen=false" in step, (
+        "Expected the detect step to initialise merge_promisor_fetch_failure_seen "
+        "before the merge probe"
+    )
+    assert PROMISOR_SIGNATURE_GREP in step, (
+        "Expected the detect step to grep git merge stderr for the partial-clone "
+        "promisor fetch failure signature"
+    )
+
+
+def test_detect_step_backfills_blobs_and_retries_merge_once():
+    """On the promisor signature the detect step must drop the partial filter,
+    refetch the merge inputs, and retry the merge exactly once."""
+    step = _detect_step()
+    assert "git config --unset-all remote.origin.partialclonefilter" in step, (
+        "Expected the detect step to unset remote.origin.partialclonefilter "
+        "before refetching blobs"
+    )
+    assert "git fetch --no-tags --prune --refetch origin" in step, (
+        "Expected the detect step to run a --refetch blob backfill"
+    )
+    # Exactly two merge invocations: the initial probe and the single retry.
+    merge_cmd = 'git merge --no-commit --no-ff "origin/${BASE_BRANCH}"'
+    assert step.count(merge_cmd) == 2, (
+        "Expected exactly two git merge invocations in the detect step (initial "
+        f"probe + one blob-backfill retry), found {step.count(merge_cmd)}"
+    )
+    assert "git merge stderr (after blob backfill): " in step, (
+        "Expected the retry to label its stderr so the two probes are "
+        "distinguishable in the raw CI log"
+    )
+
+
+def test_detect_step_backfill_refspecs_defined_outside_shallow_branch():
+    """The backfill refspec array must be built inside the recovery block, not
+    reused from the shallow-clone deepen path — `_merge_base_refspecs` is only
+    defined when .git/shallow exists and would be unset under `set -u`."""
+    step = _detect_step()
+    array_init = '_merge_backfill_refspecs=("refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")'
+    assert array_init in step, (
+        "Expected the recovery block to build its own _merge_backfill_refspecs array"
+    )
+    assert '"${_merge_backfill_refspecs[@]}"' in step, (
+        "Expected the --refetch call to expand _merge_backfill_refspecs"
+    )
+    assert '"${_merge_base_refspecs[@]}"' not in step.split(array_init)[1], (
+        "The blob-backfill refetch must not reuse the shallow-only "
+        "_merge_base_refspecs array"
+    )
+
+
+def test_surviving_promisor_failure_downgraded_to_warning():
+    """A promisor fetch failure that survives the retry is infrastructure, not a
+    merge outcome: it must produce a ::warning:: fail-open, while every other
+    exit-128 cause keeps its hard ::error::."""
+    step = _detect_step()
+    warning = "::warning::Merge precheck: exit 128 from a partial-clone promisor fetch failure"
+    error = "::error::Merge precheck failed (exit 128)"
+    warn_pos = step.find(warning)
+    err_pos = step.find(error)
+    assert warn_pos != -1, (
+        "Expected a ::warning:: fail-open for a promisor fetch failure surviving "
+        "the blob-backfill retry"
+    )
+    assert err_pos != -1, (
+        "The hard ::error:: must be preserved for non-promisor exit-128 causes"
+    )
+    # The warning is the guarded branch; the error is its else.
+    assert warn_pos < err_pos, (
+        "Expected the promisor ::warning:: branch to be evaluated before falling "
+        "back to the generic exit-128 ::error::"
+    )
+    assert step.count(PROMISOR_SIGNATURE_GREP) >= 2, (
+        "Expected the exit-128 classifier to re-check the promisor signature in "
+        "addition to the post-merge detection"
+    )
+
+
+def test_surviving_promisor_failure_still_sets_merge_conflict_true():
+    """Fail-open here means handing the run to the conflict resolver, which runs
+    its own merge replay with its own backfill and clears MERGE_CONFLICT when
+    that replay finds nothing to resolve — so MERGE_CONFLICT must stay true."""
+    step = _detect_step()
+    warn_pos = step.find(
+        "::warning::Merge precheck: exit 128 from a partial-clone promisor fetch failure"
+    )
+    assert warn_pos != -1, "promisor fail-open warning not found"
+    conflict_pos = step.find('echo "MERGE_CONFLICT=true" >> "$GITHUB_ENV"', warn_pos)
+    assert conflict_pos != -1, (
+        "Expected MERGE_CONFLICT=true to still be written after the promisor "
+        "fail-open warning so scripts/review_conflict_prepare.sh gets the run"
+    )
+
+
+def test_initial_promisor_stderr_preserved_in_annotation():
+    """After a retry the second probe's stderr may not carry the signature, so
+    the original promisor stderr must be appended to the annotation."""
+    step = _detect_step()
+    assert 'merge_promisor_initial_stderr=""' in step, (
+        "Expected the detect step to initialise merge_promisor_initial_stderr"
+    )
+    assert "| initial promisor stderr: ${merge_promisor_initial_stderr}" in step, (
+        "Expected the annotation to append the initial promisor stderr when the "
+        "retry produced a different message"
+    )
+
+
+def test_retry_exit_128_classifier_requires_retry_evidence():
+    """A retry-side exit 128 must not be downgraded just because the initial
+    probe saw the promisor signature; the retry must either repeat the
+    signature or emit no stderr at all."""
+    pre_review_step = _section(
+        "- name: Pre-review deterministic merge-topology gate",
+        "\n      - name: Run reviewer models",
+    )
+    detect_step = _detect_step()
+    for label, section in (
+        ("pre-review merge-topology gate", pre_review_step),
+        ("late detect-conflicts step", detect_step),
+    ):
+        classifier = section.split('elif [ "${merge_exit}" -eq 128 ]; then', 1)[1]
+        classifier_copy = '_merge_classifier_stderr_oneline="${_merge_stderr_oneline}"'
+        append_line = (
+            '_merge_stderr_oneline="${_merge_stderr_oneline} | initial promisor '
+            'stderr: ${merge_promisor_initial_stderr}"'
+        )
+        assert "merge_promisor_retry_stderr_matches=false" in section, (
+            f"Expected the {label} to track whether the retry itself still "
+            "matched the promisor signature"
+        )
+        assert "merge_promisor_retry_stderr_matches=true" in section, (
+            f"Expected the {label} to record a promisor-signature match from "
+            "the retry stderr"
+        )
+        assert classifier_copy in section, (
+            f"Expected the {label} to snapshot the retry stderr before "
+            "appending the initial promisor stderr"
+        )
+        assert section.find(classifier_copy) < section.find(append_line), (
+            f"Expected the {label} to preserve an unmutated retry-stderr copy "
+            "for the exit-128 classifier"
+        )
+        assert '[ "${merge_promisor_retry_stderr_matches}" = "true" ]' in classifier, (
+            f"Expected the {label} exit-128 classifier to key off the retry's "
+            "own promisor signature"
+        )
+        assert '[ "${_merge_classifier_stderr_oneline}" = "<git merge produced no stderr>" ]' in classifier, (
+            f"Expected the {label} to fall back to the initial promisor signal "
+            "only when the retry produced no stderr"
+        )
+        assert '[ "${_merge_stderr_oneline}" = "<git merge produced no stderr>" ]' not in classifier, (
+            f"Expected the {label} classifier to avoid comparing against the "
+            "mutated annotation string"
+        )
+        assert '|| grep -qiE \'promisor remote|not our ref|could not fetch|fetch-pack|remote error: upload-pack\'' not in classifier, (
+            f"The {label} must not treat the initial promisor flag alone as "
+            "enough to downgrade an unrelated retry-side exit 128"
+        )
+
+
+def test_all_merge_probes_share_the_promisor_recovery():
+    """Both merge probes in review_autofix.yml must carry the recovery — a probe
+    without it misreads a lazy-fetch failure as a merge outcome."""
+    wf = _workflow()
+    pre_review_step = _section(
+        "- name: Pre-review deterministic merge-topology gate",
+        "\n      - name: Run reviewer models",
+    )
+    detect_step = _detect_step()
+    for label, section in (
+        ("pre-review merge-topology gate", pre_review_step),
+        ("late detect-conflicts step", detect_step),
+    ):
+        assert "git config --unset-all remote.origin.partialclonefilter" in section, (
+            f"Expected the {label} to carry the partial-clone promisor recovery"
+        )
+    # No third, unguarded probe has crept in elsewhere in the workflow.
+    assert wf.count('git merge --no-commit --no-ff "origin/${BASE_BRANCH}"') == 4, (
+        "Expected exactly four merge invocations in review_autofix.yml (initial "
+        "probe + backfill retry, in each of the two merge-performing steps). A "
+        "new probe must carry the promisor recovery too."
+    )
