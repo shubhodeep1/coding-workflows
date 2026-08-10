@@ -3227,6 +3227,7 @@ jobs:
           merge_exit=0
           merge_promisor_fetch_failure_seen=false
           merge_promisor_initial_stderr=""
+          merge_promisor_retry_stderr_matches=false
           git merge --no-commit --no-ff "origin/${BASE_BRANCH}" 2> "${MERGE_STDERR_FILE}" || merge_exit=$?
           if [ -s "${MERGE_STDERR_FILE}" ]; then
             sed 's/^/git merge stderr: /' "${MERGE_STDERR_FILE}"
@@ -3260,10 +3261,14 @@ jobs:
               echo "::warning::blob-backfill refetch failed during pre-review merge gate; retrying the merge anyway. git fetch stderr: ${_refetch_stderr}"
             fi
             merge_exit=0
+            merge_promisor_retry_stderr_matches=false
             : > "${MERGE_STDERR_FILE}"
             git merge --no-commit --no-ff "origin/${BASE_BRANCH}" 2> "${MERGE_STDERR_FILE}" || merge_exit=$?
             if [ -s "${MERGE_STDERR_FILE}" ]; then
               sed 's/^/git merge stderr (after blob backfill): /' "${MERGE_STDERR_FILE}"
+            fi
+            if grep -qiE 'promisor remote|not our ref|could not fetch|fetch-pack|remote error: upload-pack' "${MERGE_STDERR_FILE}" 2>/dev/null; then
+              merge_promisor_retry_stderr_matches=true
             fi
           fi
 
@@ -3289,11 +3294,16 @@ jobs:
                   exit 0
                 fi
               elif [ "${merge_exit}" -eq 128 ]; then
-                if [ "${merge_promisor_fetch_failure_seen}" = "true" ] \
-                   || grep -qiE 'promisor remote|not our ref|could not fetch|fetch-pack|remote error: upload-pack' "${MERGE_STDERR_FILE}" 2>/dev/null; then
+                if [ "${merge_promisor_retry_stderr_matches}" = "true" ] \
+                   || { [ "${merge_promisor_fetch_failure_seen}" = "true" ] \
+                        && [ "${_merge_stderr_oneline}" = "<git merge produced no stderr>" ]; }; then
                   # A partial-clone promisor fetch failure that survived the
                   # blob-backfill retry above is an infrastructure error, not
-                  # a deterministic stale base. Fail OPEN so the reviewer +
+                  # a deterministic stale base. Use the retry probe's own
+                  # promisor signature when it is still present; fall back to
+                  # the initial probe only when the retry produced no stderr
+                  # at all. Any other retry-side exit-128 cause keeps the hard
+                  # error path below. Fail OPEN so the reviewer +
                   # conflict-resolver path still runs (the resolver runs its
                   # own merge with its own backfill) rather than skipping it.
                   echo "::warning::Pre-review merge topology gate: exit 128 from a partial-clone promisor fetch failure that survived the blob-backfill retry. Failing open to the reviewer/resolver path. git stderr: ${_merge_stderr_oneline}"
@@ -4512,6 +4522,7 @@ jobs:
           merge_exit=0
           merge_promisor_fetch_failure_seen=false
           merge_promisor_initial_stderr=""
+          merge_promisor_retry_stderr_matches=false
           # Capture git merge stderr so the failure annotation can surface
           # the real cause (e.g. "refusing to merge unrelated histories",
           # "Untracked working tree file … would be overwritten by merge").
@@ -4568,10 +4579,14 @@ jobs:
               echo "::warning::blob-backfill refetch failed during merge precheck; retrying the merge anyway. git fetch stderr: ${_merge_refetch_stderr}"
             fi
             merge_exit=0
+            merge_promisor_retry_stderr_matches=false
             : > "${MERGE_STDERR_FILE}"
             git merge --no-commit --no-ff "origin/${BASE_BRANCH}" 2> "${MERGE_STDERR_FILE}" || merge_exit=$?
             if [ -s "${MERGE_STDERR_FILE}" ]; then
               sed 's/^/git merge stderr (after blob backfill): /' "${MERGE_STDERR_FILE}"
+            fi
+            if grep -qiE 'promisor remote|not our ref|could not fetch|fetch-pack|remote error: upload-pack' "${MERGE_STDERR_FILE}" 2>/dev/null; then
+              merge_promisor_retry_stderr_matches=true
             fi
           fi
 
@@ -4606,11 +4621,16 @@ jobs:
                 _base_sha="$(git rev-parse --short "origin/${BASE_BRANCH}" 2>/dev/null || echo unknown)"
                 echo "::error::Merge precheck failed (exit ${merge_exit}): HEAD (${_head_sha}) and origin/${BASE_BRANCH} (${_base_sha}) have no common ancestor. This PR's branch was likely force-pushed to an orphan root, or ${BASE_BRANCH} was force-pushed since this branch diverged. Manual repair required: rebase the PR branch onto a current ${BASE_BRANCH} ancestor, or recreate the branch from ${BASE_BRANCH} and re-apply the changes. git stderr: ${_merge_stderr_oneline}"
               elif [ "${merge_exit}" -eq 128 ]; then
-                if [ "${merge_promisor_fetch_failure_seen}" = "true" ] \
-                   || grep -qiE 'promisor remote|not our ref|could not fetch|fetch-pack|remote error: upload-pack' "${MERGE_STDERR_FILE}" 2>/dev/null; then
+                if [ "${merge_promisor_retry_stderr_matches}" = "true" ] \
+                   || { [ "${merge_promisor_fetch_failure_seen}" = "true" ] \
+                        && [ "${_merge_stderr_oneline}" = "<git merge produced no stderr>" ]; }; then
                   # A partial-clone promisor fetch failure that survived the
                   # blob-backfill retry above is an infrastructure error, not
-                  # a merge outcome. Downgrade to a ::warning:: so the run's
+                  # a merge outcome. Use the retry probe's own promisor
+                  # signature when it is still present; fall back to the
+                  # initial probe only when the retry produced no stderr at
+                  # all. Any other retry-side exit-128 cause keeps the hard
+                  # error path below. Downgrade to a ::warning:: so the run's
                   # annotations stay honest, and fail OPEN into the resolver
                   # path with MERGE_CONFLICT=true:
                   # scripts/review_conflict_prepare.sh runs its own merge

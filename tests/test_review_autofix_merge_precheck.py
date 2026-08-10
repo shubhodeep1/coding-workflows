@@ -424,6 +424,42 @@ def test_initial_promisor_stderr_preserved_in_annotation():
     )
 
 
+def test_retry_exit_128_classifier_requires_retry_evidence():
+    """A retry-side exit 128 must not be downgraded just because the initial
+    probe saw the promisor signature; the retry must either repeat the
+    signature or emit no stderr at all."""
+    pre_review_step = _section(
+        "- name: Pre-review deterministic merge-topology gate",
+        "\n      - name: Run reviewer models",
+    )
+    detect_step = _detect_step()
+    for label, section in (
+        ("pre-review merge-topology gate", pre_review_step),
+        ("late detect-conflicts step", detect_step),
+    ):
+        classifier = section.split('elif [ "${merge_exit}" -eq 128 ]; then', 1)[1]
+        assert "merge_promisor_retry_stderr_matches=false" in section, (
+            f"Expected the {label} to track whether the retry itself still "
+            "matched the promisor signature"
+        )
+        assert "merge_promisor_retry_stderr_matches=true" in section, (
+            f"Expected the {label} to record a promisor-signature match from "
+            "the retry stderr"
+        )
+        assert '[ "${merge_promisor_retry_stderr_matches}" = "true" ]' in classifier, (
+            f"Expected the {label} exit-128 classifier to key off the retry's "
+            "own promisor signature"
+        )
+        assert '[ "${_merge_stderr_oneline}" = "<git merge produced no stderr>" ]' in classifier, (
+            f"Expected the {label} to fall back to the initial promisor signal "
+            "only when the retry produced no stderr"
+        )
+        assert '|| grep -qiE \'promisor remote|not our ref|could not fetch|fetch-pack|remote error: upload-pack\'' not in classifier, (
+            f"The {label} must not treat the initial promisor flag alone as "
+            "enough to downgrade an unrelated retry-side exit 128"
+        )
+
+
 def test_all_merge_probes_share_the_promisor_recovery():
     """Both merge probes in review_autofix.yml must carry the recovery — a probe
     without it misreads a lazy-fetch failure as a merge outcome."""
