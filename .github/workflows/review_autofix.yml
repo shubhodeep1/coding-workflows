@@ -3276,6 +3276,7 @@ jobs:
             if [ "${merge_exit}" -ne 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
               _merge_stderr_oneline="$(tr '\n' ' ' < "${MERGE_STDERR_FILE}" 2>/dev/null | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
               _merge_stderr_oneline="${_merge_stderr_oneline:-<git merge produced no stderr>}"
+              _merge_classifier_stderr_oneline="${_merge_stderr_oneline}"
               if [ "${merge_promisor_fetch_failure_seen}" = "true" ] && [ -n "${merge_promisor_initial_stderr}" ] \
                  && [ "${merge_promisor_initial_stderr}" != "${_merge_stderr_oneline}" ]; then
                 _merge_stderr_oneline="${_merge_stderr_oneline} | initial promisor stderr: ${merge_promisor_initial_stderr}"
@@ -3296,7 +3297,7 @@ jobs:
               elif [ "${merge_exit}" -eq 128 ]; then
                 if [ "${merge_promisor_retry_stderr_matches}" = "true" ] \
                    || { [ "${merge_promisor_fetch_failure_seen}" = "true" ] \
-                        && [ "${_merge_stderr_oneline}" = "<git merge produced no stderr>" ]; }; then
+                        && [ "${_merge_classifier_stderr_oneline}" = "<git merge produced no stderr>" ]; }; then
                   # A partial-clone promisor fetch failure that survived the
                   # blob-backfill retry above is an infrastructure error, not
                   # a deterministic stale base. Use the retry probe's own
@@ -4611,6 +4612,7 @@ jobs:
               # annotation (::error:: notations cannot span newlines).
               _merge_stderr_oneline="$(tr '\n' ' ' < "${MERGE_STDERR_FILE}" 2>/dev/null | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
               _merge_stderr_oneline="${_merge_stderr_oneline:-<git merge produced no stderr>}"
+              _merge_classifier_stderr_oneline="${_merge_stderr_oneline}"
               if [ "${merge_promisor_fetch_failure_seen}" = "true" ] && [ -n "${merge_promisor_initial_stderr}" ] \
                  && [ "${merge_promisor_initial_stderr}" != "${_merge_stderr_oneline}" ]; then
                 _merge_stderr_oneline="${_merge_stderr_oneline} | initial promisor stderr: ${merge_promisor_initial_stderr}"
@@ -4623,7 +4625,7 @@ jobs:
               elif [ "${merge_exit}" -eq 128 ]; then
                 if [ "${merge_promisor_retry_stderr_matches}" = "true" ] \
                    || { [ "${merge_promisor_fetch_failure_seen}" = "true" ] \
-                        && [ "${_merge_stderr_oneline}" = "<git merge produced no stderr>" ]; }; then
+                        && [ "${_merge_classifier_stderr_oneline}" = "<git merge produced no stderr>" ]; }; then
                   # A partial-clone promisor fetch failure that survived the
                   # blob-backfill retry above is an infrastructure error, not
                   # a merge outcome. Use the retry probe's own promisor

@@ -438,6 +438,11 @@ def test_retry_exit_128_classifier_requires_retry_evidence():
         ("late detect-conflicts step", detect_step),
     ):
         classifier = section.split('elif [ "${merge_exit}" -eq 128 ]; then', 1)[1]
+        classifier_copy = '_merge_classifier_stderr_oneline="${_merge_stderr_oneline}"'
+        append_line = (
+            '_merge_stderr_oneline="${_merge_stderr_oneline} | initial promisor '
+            'stderr: ${merge_promisor_initial_stderr}"'
+        )
         assert "merge_promisor_retry_stderr_matches=false" in section, (
             f"Expected the {label} to track whether the retry itself still "
             "matched the promisor signature"
@@ -446,13 +451,25 @@ def test_retry_exit_128_classifier_requires_retry_evidence():
             f"Expected the {label} to record a promisor-signature match from "
             "the retry stderr"
         )
+        assert classifier_copy in section, (
+            f"Expected the {label} to snapshot the retry stderr before "
+            "appending the initial promisor stderr"
+        )
+        assert section.find(classifier_copy) < section.find(append_line), (
+            f"Expected the {label} to preserve an unmutated retry-stderr copy "
+            "for the exit-128 classifier"
+        )
         assert '[ "${merge_promisor_retry_stderr_matches}" = "true" ]' in classifier, (
             f"Expected the {label} exit-128 classifier to key off the retry's "
             "own promisor signature"
         )
-        assert '[ "${_merge_stderr_oneline}" = "<git merge produced no stderr>" ]' in classifier, (
+        assert '[ "${_merge_classifier_stderr_oneline}" = "<git merge produced no stderr>" ]' in classifier, (
             f"Expected the {label} to fall back to the initial promisor signal "
             "only when the retry produced no stderr"
+        )
+        assert '[ "${_merge_stderr_oneline}" = "<git merge produced no stderr>" ]' not in classifier, (
+            f"Expected the {label} classifier to avoid comparing against the "
+            "mutated annotation string"
         )
         assert '|| grep -qiE \'promisor remote|not our ref|could not fetch|fetch-pack|remote error: upload-pack\'' not in classifier, (
             f"The {label} must not treat the initial promisor flag alone as "
