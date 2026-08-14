@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref:\n- HEAD: `a171d2cff76240de314cf95e8ce8abe0f44550bd`\n- Branch: `orchestrator/project-3749`\n- Integration branch metadata: `orchestrator/project-3749` (matches current checkout)\n\nClarification mapping:\n- No `Q<ID>` clarification questions were issued in clarify.\n- The `/answer [auto-answered-by-orchestrator]` comment is only a continuation signal, not new scope input.\n\nAutomation/wiring:\n- Change type: extend an existing workflow step and its existing contract test; no new script.\n- Scheduler / entry point: existing `.github/workflows/issue_pr_status.yml` PR-close path only; no trigger changes.\n- Supervisor: none.\n- DB gate: none.\n- `docs/scripts-pending-removal.md`: no entry needed.\n\nScope-mode: Hold Scope\nReuse-audit: extends `scripts/memory_helpers.sh::_memory_telemetry`\nScope-mode justification:\nHold Scope fits because the issue is explicitly log-only and forbids changes to linked-issue detection, label/close behavior, GitHub API reads, and ai-memory branch behavior. Under the repo priorities (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed), the minimum safe fix is to add additive telemetry inside the existing `Finalize linked issue lineage state` step and pin it in the existing `issue_pr_status` contract test. Broadening this into shared-helper refactors would touch central memory code used by many workflows without improving the requested behavior.\n\nFiles likely to change:\n1. `.github/workflows/issue_pr_status.yml`\n   - Update the `Finalize linked issue lineage state` run block only.\n2. `tests/test_issue_pr_status_payload_fallback_contract.py`\n   - Extend the existing workflow contract coverage for `issue_pr_status.yml` to pin the new no-op telemetry lines and their ordering.\n\nFunctions or modules to implement:\n- `.github/workflows/issue_pr_status.yml`\n  - In `Finalize linked issue lineage state`, add structured `AI_MEMORY_TELEMETRY: {...}` emission immediately before each current early `exit 0`:\n    - no linked issues\n    - AI memory disabled\n  - Normalize the enabled flag once in-shell using the same truthiness rules the step already uses, so telemetry can report `enabled` consistently without changing branch selection.\n  - Keep the existing human-readable `echo` lines and current early-exit ordering intact.\n  - Do **not** move helper bootstrap/branch setup earlier; the no-op paths should stay independent of `memory_helpers.sh` availability.\n- `tests/test_issue_pr_status_payload_fallback_contract.py`\n  - Add a targeted test (or extend the existing `_step_script`-based pattern) that asserts:\n    - both no-op messages remain present,\n    - both no-op paths emit `AI_MEMORY_TELEMETRY`,\n    - telemetry appears before the corresponding `exit 0`,\n    - the telemetry uses the `finalize-task` operation and distinct skip reasons.\n\nData structures affected:\n- Workflow log telemetry only; no persisted schema changes.\n- New/additive JSON payloads in the step logs should carry the existing telemetry shape plus a reason discriminator, e.g. fields along the lines of:\n  - `op: \"finalize-task\"`\n  - `ok: true`\n  - `enabled: true|false`\n  - `fail_open: true`\n  - `reason: \"no_linked_issues\"` / `\"ai_memory_disabled\"`\n  - `source: \"issue_pr_status.yml\"` (or one stable workflow identifier)\n- No changes to ai-memory documents, GitHub payload parsing, env-var names, or branch contracts.\n\nAPI/interface changes:\n- No external API change.\n- No workflow-call interface change.\n- Additive observability contract only: two new `AI_MEMORY_TELEMETRY` log lines on existing healthy no-op paths.\n\n## Decisions\n\n### D1 \u2014 Inline the no-op telemetry in the workflow step\n- Chosen:\n  - Add direct telemetry emission inside `.github/workflows/issue_pr_status.yml` before the two early `exit 0` branches.\n- Alternatives considered:\n  - Source `scripts/memory_helpers.sh` earlier and call `_memory_telemetry`.\n  - Refactor shared memory helpers to provide a new reusable no-op emitter path.\n- Why:\n  - The issue is scoped to a local observability gap, and early helper sourcing would change failure surface/ordering on paths that currently succeed without helper availability. Inline emission is the smallest additive fix.\n\n### D2 \u2014 Reuse the existing `issue_pr_status` contract test file\n- Chosen:\n  - Extend `tests/test_issue_pr_status_payload_fallback_contract.py`.\n- Alternatives considered:\n  - Create a new standalone test file for lineage-finalization telemetry.\n  - Broaden a generic workflow test.\n- Why:\n  - The existing file already has `_step_script()` and step-order assertions for this workflow, so keeping the new assertions there minimizes churn and keeps `issue_pr_status` contract coverage localized.\n\nRisks and edge cases:\n- Preserve branch order: the no-linked-issues path currently short-circuits before the AI-memory-enabled check; the fix must keep that behavior.\n- Avoid helper-coupling regression: sourcing `memory_helpers.sh` or checking `MEMORY_HELPERS_READY` before the no-op exits would change current semantics and violate scope.\n- Keep telemetry JSON valid shell output:\n  - ensure booleans are emitted as valid JSON booleans, not shell words accidentally quoted wrong,\n  - keep one stable `source` string so tests and log analysis can rely on it.\n- If `AI_MEMORY_ENABLED` is false *and* there are no linked issues, only the first branch runs; telemetry must still clearly reflect that branch\u2019s reason and enabled state without changing control flow.\n\nTesting considerations:\n- Primary targeted check:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_issue_pr_status_payload_fallback_contract.py`\n- Test assertions should verify step-text ordering, not just substring presence:\n  - human-readable message,\n  - telemetry line,\n  - `exit 0`.\n- No new docs or schema tests are needed unless implementation unexpectedly changes a documented contract beyond workflow log output.\n\nPre-execution self-check:\n- Issue scope is specific and implementation-ready.\n- Planning ref matches orchestrator integration metadata.\n- Reuse path is identified; no net-new helper/module is required.\n- No issue/codebase conflict found beyond the known observability gap itself.\n- Planned edits stay within the requested files and avoid prohibited behavior changes.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "032397bd4a044aa0ce7c958b89ba2fd97a1ac1096baa1b79cfa474423ccd46fa",
+  "lineage": {
+    "issue_number": 3754,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "31766051644",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31766051644",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3754"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260814031644_21ab35e0e4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3754,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "31766051644"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3754",
+  "timestamps": {
+    "created_at": "2026-08-14T03:16:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
