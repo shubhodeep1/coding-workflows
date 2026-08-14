@@ -15,14 +15,93 @@
 
 set -euo pipefail
 
-: "${RUNTIME_DIR:?RUNTIME_DIR is required}"
-: "${GH_TOKEN:?GH_TOKEN is required}"
-: "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"
-: "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
-[[ "${GITHUB_REPOSITORY}" =~ ^[^/]+/[^/]+$ ]] || { echo "GITHUB_REPOSITORY must be in owner/repo format" >&2; exit 1; }
-command -v jq >/dev/null 2>&1 || { echo "jq is required but not installed" >&2; exit 1; }
-command -v python3 >/dev/null 2>&1 || { echo "python3 is required but not installed" >&2; exit 1; }
-command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum is required but not installed" >&2; exit 1; }
+compact_validation_summary_value_bootstrap()
+{
+  local value="${1-}"
+
+  printf '%s' "${value}" | tr '\r\n' '  ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+}
+
+quote_validation_summary_json_value_bootstrap()
+{
+  local value="${1-}"
+
+  value="$(compact_validation_summary_value_bootstrap "${value}")"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '"%s"' "${value}"
+}
+
+emit_validation_failure_summary_bootstrap()
+{
+  local status="${1:-error}"
+  local summary="${2:-Validation bootstrap failure}"
+  local failure_summary="${3:-${summary}}"
+  local raw_status="${4:-${status}}"
+  local compact_summary=""
+  local compact_failure_summary=""
+  local repository_json='""'
+  local summary_json='""'
+  local failure_summary_json='""'
+
+  compact_summary="$(compact_validation_summary_value_bootstrap "${summary}")"
+  compact_failure_summary="$(compact_validation_summary_value_bootstrap "${failure_summary}")"
+  if [ -z "${compact_failure_summary}" ]; then
+    compact_failure_summary="${compact_summary}"
+  fi
+
+  repository_json="$(quote_validation_summary_json_value_bootstrap "${GITHUB_REPOSITORY:-}")"
+  summary_json="$(quote_validation_summary_json_value_bootstrap "${compact_summary}")"
+  failure_summary_json="$(quote_validation_summary_json_value_bootstrap "${compact_failure_summary}")"
+
+  printf '%s\n' \
+    "VALIDATION_FAILURE_SUMMARY repository=${repository_json} tracking_issue=${TRACKING_ISSUE_RAW:-${TRACKING_ISSUE:-0}} status=${status} raw_status=${raw_status} cycle=${VALIDATION_CYCLE:-1} run_id=${GITHUB_RUN_ID:-} run_attempt=${GITHUB_RUN_ATTEMPT:-} self_heal_attempt=${SELF_HEAL_ATTEMPT:-0}/${MAX_SELF_HEAL_ATTEMPTS:-2} fix_issues=0 summary=${summary_json} failure_summary=${failure_summary_json}"
+}
+
+require_validation_env_or_emit()
+{
+  local env_name="$1"
+  local env_value="${!env_name-}"
+  local local_failure_summary=""
+
+  if [ -n "${env_value}" ]; then
+    return 0
+  fi
+
+  local_failure_summary="${env_name} is required"
+  printf '%s\n' "${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation bootstrap failure" "${local_failure_summary}" "harness_error"
+  exit 1
+}
+
+require_validation_env_or_emit "RUNTIME_DIR"
+require_validation_env_or_emit "GH_TOKEN"
+require_validation_env_or_emit "OPENROUTER_API_KEY"
+require_validation_env_or_emit "GITHUB_REPOSITORY"
+if [[ ! "${GITHUB_REPOSITORY}" =~ ^[^/]+/[^/]+$ ]]; then
+  local_failure_summary="GITHUB_REPOSITORY must be in owner/repo format"
+  printf '%s\n' "${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation bootstrap failure" "${local_failure_summary}" "harness_error"
+  exit 1
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  local_failure_summary="jq is required but not installed"
+  printf '%s\n' "${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation bootstrap failure" "${local_failure_summary}" "harness_error"
+  exit 1
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+  local_failure_summary="python3 is required but not installed"
+  printf '%s\n' "${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation bootstrap failure" "${local_failure_summary}" "harness_error"
+  exit 1
+fi
+if ! command -v sha256sum >/dev/null 2>&1; then
+  local_failure_summary="sha256sum is required but not installed"
+  printf '%s\n' "${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation bootstrap failure" "${local_failure_summary}" "harness_error"
+  exit 1
+fi
 
 _validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
@@ -94,7 +173,9 @@ export MODEL_EDITOR
 export CODEX_THREAD_REUSE_ENABLED
 VALIDATION_TIMEOUT="${VALIDATION_TIMEOUT:-15}"
 if ! [[ "${VALIDATION_TIMEOUT}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_TIMEOUT}" -le 0 ]; then
-  echo "VALIDATION_TIMEOUT must be a positive integer (got: ${VALIDATION_TIMEOUT})" >&2
+  local_failure_summary="VALIDATION_TIMEOUT must be a positive integer (got: ${VALIDATION_TIMEOUT})"
+  printf '%s\n' "${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation configuration error" "${local_failure_summary}" "harness_error"
   exit 1
 fi
 TOOL_CALL_BUDGET_VALIDATE="${TOOL_CALL_BUDGET_VALIDATE:-60}"
@@ -240,13 +321,17 @@ if [ -f "scripts/tg_helpers.sh" ]; then
 fi
 # shellcheck source=/dev/null
 if [ ! -f "${_validate_script_dir}/codex_helpers.sh" ]; then
-  echo "::error::Missing required support script ${_validate_script_dir}/codex_helpers.sh" >&2
+  local_failure_summary="Missing required support script ${_validate_script_dir}/codex_helpers.sh"
+  printf '%s\n' "::error::${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation bootstrap failure" "${local_failure_summary}" "harness_error"
   exit 1
 fi
 source "${_validate_script_dir}/codex_helpers.sh"
 # shellcheck source=/dev/null
 if [ ! -f "${_validate_script_dir}/watchdog_helpers.sh" ]; then
-  echo "::error::Missing required support script ${_validate_script_dir}/watchdog_helpers.sh" >&2
+  local_failure_summary="Missing required support script ${_validate_script_dir}/watchdog_helpers.sh"
+  printf '%s\n' "::error::${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation bootstrap failure" "${local_failure_summary}" "harness_error"
   exit 1
 fi
 source "${_validate_script_dir}/watchdog_helpers.sh"
@@ -1173,11 +1258,42 @@ set_tracking_phase_label()
   return 0
 }
 
-if ! enforce_canonical_driver_path; then
+emit_validation_failure_summary_precheck()
+{
+  local summary="$1"
+  local failure_summary="$2"
+  local raw_status="${3:-error}"
+  local compact_summary=""
+  local compact_failure_summary=""
+  local repository_json='""'
+  local summary_json='""'
+  local failure_summary_json='""'
+  local created_fix_issues_count="0"
+
+  compact_summary="$(printf '%s' "${summary}" | tr '\r\n' '  ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+  compact_failure_summary="$(printf '%s' "${failure_summary}" | tr '\r\n' '  ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+  if [ -z "${compact_failure_summary}" ]; then
+    compact_failure_summary="${compact_summary}"
+  fi
+
+  repository_json="$(jq -cn --arg value "${GITHUB_REPOSITORY:-}" '$value')"
+  summary_json="$(jq -cn --arg value "${compact_summary}" '$value')"
+  failure_summary_json="$(jq -cn --arg value "${compact_failure_summary}" '$value')"
+  created_fix_issues_count="$(printf '%s' "${CREATED_FIX_ISSUES_JSON:-[]}" | jq -r 'if type == "array" then length else 0 end' 2>/dev/null || printf '%s' '0')"
+
+  printf '%s\n' \
+    "VALIDATION_FAILURE_SUMMARY repository=${repository_json} tracking_issue=${TRACKING_ISSUE_RAW} status=error raw_status=${raw_status} cycle=${VALIDATION_CYCLE} run_id=${GITHUB_RUN_ID:-} run_attempt=${GITHUB_RUN_ATTEMPT:-} self_heal_attempt=${SELF_HEAL_ATTEMPT}/${MAX_SELF_HEAL_ATTEMPTS} fix_issues=${created_fix_issues_count} summary=${summary_json} failure_summary=${failure_summary_json}"
+}
+
+if ! VALIDATION_PRECHECK_FAILURE_OUTPUT="$(enforce_canonical_driver_path 2>&1)"; then
+  printf '%s\n' "${VALIDATION_PRECHECK_FAILURE_OUTPUT}" >&2
+  emit_validation_failure_summary_precheck "Validation driver path violation" "${VALIDATION_PRECHECK_FAILURE_OUTPUT}" "harness_error"
   exit 1
 fi
 
-if ! enforce_no_renamed_driver_artifacts; then
+if ! VALIDATION_PRECHECK_FAILURE_OUTPUT="$(enforce_no_renamed_driver_artifacts 2>&1)"; then
+  printf '%s\n' "${VALIDATION_PRECHECK_FAILURE_OUTPUT}" >&2
+  emit_validation_failure_summary_precheck "Validation driver artifact violation" "${VALIDATION_PRECHECK_FAILURE_OUTPUT}" "harness_error"
   exit 1
 fi
 
@@ -1654,6 +1770,46 @@ write_metadata_file()
     }' > "${METADATA_FILE}"
 }
 
+compact_validation_summary_value()
+{
+  local value="$1"
+
+  printf '%s' "${value}" | tr '\r\n' '  ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+}
+
+emit_validation_failure_summary()
+{
+  local status="$1"
+  local summary="$2"
+  local failure_summary="$3"
+  local raw_status="${4:-${status}}"
+
+  if [ "${status}" = "pass" ]; then
+    return 0
+  fi
+
+  local compact_summary=""
+  local compact_failure_summary=""
+  local repository_json='""'
+  local summary_json='""'
+  local failure_summary_json='""'
+  local created_fix_issues_count="0"
+
+  compact_summary="$(compact_validation_summary_value "${summary}")"
+  compact_failure_summary="$(compact_validation_summary_value "${failure_summary}")"
+  if [ -z "${compact_failure_summary}" ]; then
+    compact_failure_summary="${compact_summary}"
+  fi
+
+  repository_json="$(jq -cn --arg value "${GITHUB_REPOSITORY:-}" '$value')"
+  summary_json="$(jq -cn --arg value "${compact_summary}" '$value')"
+  failure_summary_json="$(jq -cn --arg value "${compact_failure_summary}" '$value')"
+  created_fix_issues_count="$(printf '%s' "${CREATED_FIX_ISSUES_JSON:-[]}" | jq -r 'if type == "array" then length else 0 end' 2>/dev/null || printf '%s' '0')"
+
+  printf '%s\n' \
+    "VALIDATION_FAILURE_SUMMARY repository=${repository_json} tracking_issue=${TRACKING_ISSUE_RAW} status=${status} raw_status=${raw_status} cycle=${VALIDATION_CYCLE} run_id=${GITHUB_RUN_ID:-} run_attempt=${GITHUB_RUN_ATTEMPT:-} self_heal_attempt=${SELF_HEAL_ATTEMPT}/${MAX_SELF_HEAL_ATTEMPTS} fix_issues=${created_fix_issues_count} summary=${summary_json} failure_summary=${failure_summary_json}"
+}
+
 write_result_files()
 {
   local status="$1"
@@ -1663,6 +1819,7 @@ write_result_files()
 
   write_status_file "${status}" "${summary}" "${failure_summary}" "${raw_status}"
   write_metadata_file "${status}" "${summary}" "${failure_summary}" "${raw_status}"
+  emit_validation_failure_summary "${status}" "${summary}" "${failure_summary}" "${raw_status}"
 }
 
 emit_phase_failure_marker()
@@ -3163,12 +3320,17 @@ if ! ensure_validation_harness_not_tracked; then
   exit 1
 fi
 
-if ! enforce_managed_validation_artifact_contract; then
+VALIDATION_ARTIFACT_CONTRACT_FAILURE_OUTPUT=""
+if ! VALIDATION_ARTIFACT_CONTRACT_FAILURE_OUTPUT="$(enforce_managed_validation_artifact_contract 2>&1)"; then
+	printf '%s\n' "${VALIDATION_ARTIFACT_CONTRACT_FAILURE_OUTPUT}" >&2
+	emit_validation_failure_summary "error" "Validation harness artifact contract violation" "${VALIDATION_ARTIFACT_CONTRACT_FAILURE_OUTPUT}" "harness_error"
 	exit 1
 fi
 
 if [ -L validation ] || { [ -e validation ] && [ ! -d validation ]; }; then
-	echo "Refusing to use non-directory 'validation' path." >&2
+	local_failure_summary="Refusing to use non-directory 'validation' path."
+	printf '%s\n' "${local_failure_summary}" >&2
+	emit_validation_failure_summary "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
 	exit 1
 fi
 
@@ -3184,7 +3346,9 @@ fi
 HARNESS_MODE="template_generate"
 HARNESS_GENERATOR_MODE="templates"
 if [ -d validation ] && [ ! -f validation/.ai-validation-owned ]; then
-	echo "Refusing to delete existing 'validation' directory without ownership marker (validation/.ai-validation-owned)." >&2
+	local_failure_summary="Refusing to delete existing 'validation' directory without ownership marker (validation/.ai-validation-owned)."
+	printf '%s\n' "${local_failure_summary}" >&2
+	emit_validation_failure_summary "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
 	exit 1
 fi
 rm -rf validation
