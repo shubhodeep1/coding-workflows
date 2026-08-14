@@ -43,18 +43,6 @@
               "minimum": 1
             }
           },
-          "cancelled_jobs_seen_set": {
-            "type": "array",
-            "maxItems": 500,
-            "items": {
-              "type": "integer",
-              "minimum": 1
-            }
-          },
-          "cancelled_failure_point_version": {
-            "type": "integer",
-            "minimum": 1
-          },
           "logs_seen_set": {
             "type": "array",
             "maxItems": 500,
