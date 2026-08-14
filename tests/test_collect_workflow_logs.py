@@ -99,8 +99,27 @@ def test_extract_failure_point_step_precedence_then_job_fallback():
 	assert point_job == {"job_name": "build", "step_name": None}
 
 
-def test_extract_failure_point_cancelled_step_precedence_then_job_fallback():
+def test_compute_run_metrics_cancelled_step_precedence_then_job_fallback():
+	run = {
+		"id": 13,
+		"name": "AI Validate",
+		"path": ".github/workflows/validate.yml",
+		"_workflow_family": "validate",
+		"status": "completed",
+		"conclusion": "cancelled",
+		"run_attempt": 1,
+		"created_at": "2026-04-10T10:00:00Z",
+		"run_started_at": "2026-04-10T10:01:00Z",
+		"updated_at": "2026-04-10T10:03:30Z",
+	}
 	jobs = [
+		{
+			"name": "lint",
+			"conclusion": "failure",
+			"steps": [
+				{"name": "run lint", "conclusion": "failure"},
+			],
+		},
 		{
 			"name": "queue",
 			"conclusion": "cancelled",
@@ -115,13 +134,14 @@ def test_extract_failure_point_cancelled_step_precedence_then_job_fallback():
 			],
 		},
 	]
-	point = collector.extract_failure_point(jobs, run_conclusion="cancelled")
+	point = collector.compute_run_metrics("owner/repo", run, jobs=jobs)["failure_point"]
 	assert point == {"job_name": "validate", "step_name": "run validation"}
 
-	point_job = collector.extract_failure_point(
-		[{"name": "queue", "conclusion": "cancelled", "steps": []}],
-		run_conclusion="cancelled",
-	)
+	point_job = collector.compute_run_metrics(
+		"owner/repo",
+		run,
+		jobs=[{"name": "queue", "conclusion": "cancelled", "steps": []}],
+	)["failure_point"]
 	assert point_job == {"job_name": "queue", "step_name": "cancelled_before_first_step"}
 
 

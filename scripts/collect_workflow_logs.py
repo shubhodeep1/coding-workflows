@@ -836,13 +836,7 @@ def _fetch_run_log_archive(
         return payload
 
 
-def extract_failure_point(
-    jobs: list[dict[str, Any]],
-    *,
-    run_conclusion: str | None = None,
-) -> dict[str, str | None]:
-    normalized_run_conclusion = (run_conclusion or "").lower()
-
+def extract_failure_point(jobs: list[dict[str, Any]]) -> dict[str, str | None]:
     for job in jobs:
         for step in job.get("steps") or []:
             if (step.get("conclusion") or "").lower() == "failure":
@@ -858,12 +852,13 @@ def extract_failure_point(
                 "step_name": None,
             }
 
-    if normalized_run_conclusion != "cancelled":
-        return {
-            "job_name": None,
-            "step_name": None,
-        }
+    return {
+        "job_name": None,
+        "step_name": None,
+    }
 
+
+def _extract_cancelled_point(jobs: list[dict[str, Any]]) -> dict[str, str | None]:
     for job in jobs:
         for step in job.get("steps") or []:
             if (step.get("conclusion") or "").lower() == "cancelled":
@@ -918,9 +913,14 @@ def compute_run_metrics(
         duration_seconds = max(0, int((updated_at - started_at).total_seconds()))
 
     conclusion = run.get("conclusion")
+    normalized_conclusion = (conclusion or "").lower()
     failure_point = {"job_name": None, "step_name": None}
-    if (conclusion or "").lower() in {"failure", "cancelled"}:
-        failure_point = extract_failure_point(jobs, run_conclusion=conclusion)
+    if normalized_conclusion == "failure":
+        failure_point = extract_failure_point(jobs)
+    elif normalized_conclusion == "cancelled":
+        failure_point = _extract_cancelled_point(jobs)
+        if not (failure_point.get("job_name") or failure_point.get("step_name")):
+            failure_point = extract_failure_point(jobs)
 
     return {
         "repository": repository,

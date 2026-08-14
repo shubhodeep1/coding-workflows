@@ -197,6 +197,11 @@ def n(value):
 	return "0"
 
 
+if len(sys.argv) < 4 or sys.argv[1] != "-r" or "coverage_status" not in sys.argv[2] or "@tsv" not in sys.argv[2]:
+	print(f"unexpected jq args: {sys.argv[1:]}", file=sys.stderr)
+	sys.exit(1)
+
+
 summary_path = Path(sys.argv[-1])
 payload = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
 missing_run_ids = payload.get("missing_run_ids")
