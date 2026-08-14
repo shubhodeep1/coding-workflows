@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3750,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3750\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3757\",\"pr_number\":3757,\"branch\":\"ai/issue-3750\",\"run_id\":\"31766394280\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/31766394280\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/review_autofix.yml\",\"tests/test_review_autofix_phase_transition_contract.py\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "98dde4c0406c9c494872c4d5cc0e8585d9ab7919dc1dc10a3d86871e5871459f",
+  "lineage": {
+    "issue_number": 3750,
+    "parent_ids": [],
+    "pr_number": 3757,
+    "run_id": "31766394280",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31766394280",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3757"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260814032824_bd3edaa5b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3750,
+    "level": "run",
+    "pr_number": 3757,
+    "run_id": "31766394280"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3750: https://github.com/shubhodeep1/coding-workflows/pull/3757",
+  "timestamps": {
+    "created_at": "2026-08-14T03:28:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
