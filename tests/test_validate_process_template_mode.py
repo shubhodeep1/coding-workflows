@@ -384,6 +384,106 @@ write_result_files {shlex.quote(status)} {shlex.quote(summary)} {shlex.quote(fai
 	assert pass_metadata_payload["failure_summary"] is None
 
 
+def test_phase1_guard_paths_emit_failure_summary_before_exit() -> None:
+	text = _validate_process_text()
+	assert 'VALIDATION_ARTIFACT_CONTRACT_FAILURE_OUTPUT=""' in text
+	assert 'emit_validation_failure_summary "error" "Validation harness artifact contract violation" "${VALIDATION_ARTIFACT_CONTRACT_FAILURE_OUTPUT}" "harness_error"' in text
+	compact_helper = "compact_validation_summary_value()\n{" + text.split("compact_validation_summary_value()\n{", 1)[1].split("\n\nemit_validation_failure_summary()", 1)[0]
+	emit_helper = "emit_validation_failure_summary()\n{" + text.split("emit_validation_failure_summary()\n{", 1)[1].split("\n\nwrite_result_files()", 1)[0]
+	artifact_contract_helper = "enforce_managed_validation_artifact_contract()\n{" + text.split("enforce_managed_validation_artifact_contract()\n{", 1)[1].split("\n\ntrap cleanup_runtime_containers EXIT", 1)[0]
+	artifact_contract_block = "VALIDATION_ARTIFACT_CONTRACT_FAILURE_OUTPUT=\"\"\n" + text.split("VALIDATION_ARTIFACT_CONTRACT_FAILURE_OUTPUT=\"\"\n", 1)[1].split("\n\nif [ -L validation ] || { [ -e validation ] && [ ! -d validation ]; }; then", 1)[0]
+	non_directory_guard_block = "if [ -L validation ] || { [ -e validation ] && [ ! -d validation ]; }; then\n" + text.split("if [ -L validation ] || { [ -e validation ] && [ ! -d validation ]; }; then\n", 1)[1].split("\n\nif [ \"${VALIDATION_USE_TEMPLATES_ENABLED}\" != \"true\" ]; then", 1)[0]
+	ownership_guard_block = "if [ -d validation ] && [ ! -f validation/.ai-validation-owned ]; then\n" + text.split("if [ -d validation ] && [ ! -f validation/.ai-validation-owned ]; then\n", 1)[1].split("\nfi\nrm -rf validation", 1)[0] + "\nfi"
+
+	def _run_guard_case(script_body: str, *, setup=None, git_repo: bool = False) -> subprocess.CompletedProcess[str]:
+		with tempfile.TemporaryDirectory(prefix="validate-guard-summary-") as td:
+			tmp_path = Path(td)
+			if git_repo:
+				_bootstrap_git_repo(tmp_path)
+			if setup is not None:
+				setup(tmp_path)
+
+			script = f"""set -euo pipefail
+{compact_helper}
+{emit_helper}
+{artifact_contract_helper}
+
+TRACKING_ISSUE_RAW=1234
+VALIDATION_CYCLE=4
+SELF_HEAL_ATTEMPT=1
+MAX_SELF_HEAL_ATTEMPTS=2
+GITHUB_REPOSITORY=octo/demo-repo
+GITHUB_RUN_ID=77
+GITHUB_RUN_ATTEMPT=3
+CREATED_FIX_ISSUES_JSON='[]'
+
+{script_body}
+"""
+			proc = subprocess.run(
+				["bash", "-s"],
+				cwd=str(tmp_path),
+				env={
+					**{key: value for key, value in os.environ.items() if not key.startswith("GIT_")},
+					"BASH_ENV": "",
+					"ENV": "",
+				},
+				input=script,
+				text=True,
+				capture_output=True,
+				timeout=60,
+			)
+			return proc
+
+	def _summary_lines(proc: subprocess.CompletedProcess[str]) -> list[str]:
+		return [
+			line for line in proc.stdout.splitlines() if line.startswith("VALIDATION_FAILURE_SUMMARY ")
+		]
+
+	def _setup_artifact_contract_violation(tmp_path: Path) -> None:
+		validation_dir = tmp_path / "validation"
+		validation_dir.mkdir(parents=True, exist_ok=True)
+		(validation_dir / "validate.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+		_git(["git", "add", "validation/validate.sh"], cwd=tmp_path)
+
+	artifact_proc = _run_guard_case(
+		artifact_contract_block,
+		setup=_setup_artifact_contract_violation,
+		git_repo=True,
+	)
+	assert artifact_proc.returncode == 1, artifact_proc.stderr
+	artifact_summary_lines = _summary_lines(artifact_proc)
+	assert len(artifact_summary_lines) == 1
+	assert 'summary="Validation harness artifact contract violation"' in artifact_summary_lines[0]
+	assert 'raw_status=harness_error' in artifact_summary_lines[0]
+	assert 'fix_issues=0' in artifact_summary_lines[0]
+	assert 'failure_summary="Managed validation artifact contract violation detected: - validation/validate.sh is tracked. validation/ artifacts must remain transient and untracked."' in artifact_summary_lines[0]
+	assert "Managed validation artifact contract violation detected:" in artifact_proc.stderr
+
+	non_directory_proc = _run_guard_case(
+		non_directory_guard_block,
+		setup=lambda tmp_path: (tmp_path / "validation").write_text("repo-owned file\n", encoding="utf-8"),
+	)
+	assert non_directory_proc.returncode == 1, non_directory_proc.stderr
+	non_directory_summary_lines = _summary_lines(non_directory_proc)
+	assert len(non_directory_summary_lines) == 1
+	assert 'summary="Validation harness generation failed"' in non_directory_summary_lines[0]
+	assert 'failure_summary="Refusing to use non-directory \'validation\' path."' in non_directory_summary_lines[0]
+	assert 'raw_status=harness_error' in non_directory_summary_lines[0]
+	assert "Refusing to use non-directory 'validation' path." in non_directory_proc.stderr
+
+	ownership_proc = _run_guard_case(
+		ownership_guard_block,
+		setup=lambda tmp_path: (tmp_path / "validation").mkdir(parents=True, exist_ok=True),
+	)
+	assert ownership_proc.returncode == 1, ownership_proc.stderr
+	ownership_summary_lines = _summary_lines(ownership_proc)
+	assert len(ownership_summary_lines) == 1
+	assert 'summary="Validation harness generation failed"' in ownership_summary_lines[0]
+	assert 'failure_summary="Refusing to delete existing \'validation\' directory without ownership marker (validation/.ai-validation-owned)."' in ownership_summary_lines[0]
+	assert 'raw_status=harness_error' in ownership_summary_lines[0]
+	assert "Refusing to delete existing 'validation' directory without ownership marker (validation/.ai-validation-owned)." in ownership_proc.stderr
+
+
 def test_serena_runtime_filter_hides_only_unchanged_bootstrap_tree() -> None:
 	text = _validate_process_text()
 	filter_helper = "filter_runtime_status_noise()\n{" + text.split("filter_runtime_status_noise()\n{", 1)[1].split("\n\nbuild_validate_serena_tool_hints()", 1)[0]
@@ -511,6 +611,8 @@ def main() -> int:
 	test_template_mode_missing_manifest_returns_harness_error()
 	test_template_mode_harness_contract_accepts_missing_validate_env()
 	test_render_recovery_lint_gate_contract_present()
+	test_write_result_files_emits_failure_summary_only_for_non_pass()
+	test_phase1_guard_paths_emit_failure_summary_before_exit()
 	test_serena_runtime_filter_hides_only_unchanged_bootstrap_tree()
 	test_clear_stale_serena_codex_config_removes_only_serena_block()
 	return 0

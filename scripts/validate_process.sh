@@ -3204,12 +3204,17 @@ if ! ensure_validation_harness_not_tracked; then
   exit 1
 fi
 
-if ! enforce_managed_validation_artifact_contract; then
+VALIDATION_ARTIFACT_CONTRACT_FAILURE_OUTPUT=""
+if ! VALIDATION_ARTIFACT_CONTRACT_FAILURE_OUTPUT="$(enforce_managed_validation_artifact_contract 2>&1)"; then
+	printf '%s\n' "${VALIDATION_ARTIFACT_CONTRACT_FAILURE_OUTPUT}" >&2
+	emit_validation_failure_summary "error" "Validation harness artifact contract violation" "${VALIDATION_ARTIFACT_CONTRACT_FAILURE_OUTPUT}" "harness_error"
 	exit 1
 fi
 
 if [ -L validation ] || { [ -e validation ] && [ ! -d validation ]; }; then
-	echo "Refusing to use non-directory 'validation' path." >&2
+	local_failure_summary="Refusing to use non-directory 'validation' path."
+	printf '%s\n' "${local_failure_summary}" >&2
+	emit_validation_failure_summary "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
 	exit 1
 fi
 
@@ -3225,7 +3230,9 @@ fi
 HARNESS_MODE="template_generate"
 HARNESS_GENERATOR_MODE="templates"
 if [ -d validation ] && [ ! -f validation/.ai-validation-owned ]; then
-	echo "Refusing to delete existing 'validation' directory without ownership marker (validation/.ai-validation-owned)." >&2
+	local_failure_summary="Refusing to delete existing 'validation' directory without ownership marker (validation/.ai-validation-owned)."
+	printf '%s\n' "${local_failure_summary}" >&2
+	emit_validation_failure_summary "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
 	exit 1
 fi
 rm -rf validation
