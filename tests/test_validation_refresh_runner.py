@@ -924,6 +924,104 @@ def test_run_repositories_keeps_deadline_disarmed_for_non_positive_budget_env() 
 				os.environ["VALIDATION_DISCOVERY_BUDGET_SECS"] = previous_budget
 
 
+def test_stdout_contract_emits_repo_result_lines_and_final_summary() -> None:
+	results = [
+		refresh_runner.RefreshResult(
+			repository="octo/demo-green",
+			outcome="green",
+			branch="ai/validation-refresh",
+			diagnostics=["validation_assets_drifted_no_push"],
+			changed=True,
+			discovery_outcome="skipped_budget",
+		),
+		refresh_runner.RefreshResult(
+			repository="octo/demo-red",
+			outcome="red",
+			branch="ai/validation-refresh",
+			diagnostics=["self_test_failed(exit=1): boom", "pipeline_failed_without_changes"],
+			changed=False,
+			discovery_outcome="agree",
+		),
+		refresh_runner.RefreshResult(
+			repository="octo/demo-skipped",
+			outcome="skipped",
+			branch="ai/validation-refresh",
+			diagnostics=["no_changes_detected"],
+			changed=False,
+			discovery_outcome="disabled",
+		),
+	]
+
+	stdout = io.StringIO()
+	with contextlib.redirect_stdout(stdout):
+		for result in results:
+			refresh_runner._emit_repo_result(result)
+		summary = refresh_runner.summarize_results(results)
+		refresh_runner._emit_summary_line(summary, results)
+		print(json.dumps(summary, sort_keys=True))
+
+	lines = stdout.getvalue().splitlines()
+	assert lines[0] == (
+		'VALIDATION_REPO_RESULT repository=octo/demo-green outcome=green changed=1 '
+		'drifted=1 discovery_outcome=skipped_budget diagnostics=1 '
+		'detail="validation_assets_drifted_no_push"'
+	)
+	assert lines[1] == (
+		'VALIDATION_REPO_RESULT repository=octo/demo-red outcome=red changed=0 '
+		'drifted=0 discovery_outcome=agree diagnostics=2 '
+		'detail="pipeline_failed_without_changes"'
+	)
+	assert lines[2] == (
+		'VALIDATION_REPO_RESULT repository=octo/demo-skipped outcome=skipped changed=0 '
+		'drifted=0 discovery_outcome=disabled diagnostics=1 '
+		'detail="no_changes_detected"'
+	)
+	assert lines[3] == (
+		"VALIDATION_SUMMARY processed=3 green=1 red=1 skipped=1 error=0 budget_exhausted=1"
+	)
+	json_payload = json.loads(lines[4])
+	assert set(json_payload["totals"].keys()) == {"processed", "green", "red", "skipped", "error"}
+	assert json_payload["totals"] == {
+		"processed": 3,
+		"green": 1,
+		"red": 1,
+		"skipped": 1,
+		"error": 0,
+	}
+	assert "budget_exhausted" not in json_payload["totals"]
+
+
+def test_main_emits_summary_line_before_json_for_empty_repo_set() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-empty-main-") as td:
+		repos_path = Path(td) / "consumer_repos.json"
+		repos_path.write_text("[]\n", encoding="utf-8")
+		stdout = io.StringIO()
+		original_argv = sys.argv[:]
+		try:
+			sys.argv = [
+				str(MODULE_PATH),
+				"--repos-file",
+				str(repos_path),
+			]
+			with contextlib.redirect_stdout(stdout):
+				exit_code = refresh_runner.main()
+		finally:
+			sys.argv = original_argv
+
+		assert exit_code == 0
+		lines = stdout.getvalue().splitlines()
+		assert lines[0] == (
+			"VALIDATION_SUMMARY processed=0 green=0 red=0 skipped=0 error=0 budget_exhausted=0"
+		)
+		assert json.loads(lines[1])["totals"] == {
+			"processed": 0,
+			"green": 0,
+			"red": 0,
+			"skipped": 0,
+			"error": 0,
+		}
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------

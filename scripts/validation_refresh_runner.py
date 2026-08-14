@@ -744,6 +744,62 @@ def summarize_results(results: list[RefreshResult]) -> dict[str, Any]:
 	}
 
 
+def _compact_log_value(value: str | None) -> str:
+	if value is None:
+		return ""
+	return " ".join(str(value).split())
+
+
+def _emit_repo_result(result: RefreshResult) -> None:
+	diagnostics_count = len(result.diagnostics)
+	discovery = result.discovery_outcome or "none"
+	changed = "1" if result.changed else "0"
+	drifted = (
+		"1"
+		if any(item == "validation_assets_drifted_no_push" for item in result.diagnostics)
+		else "0"
+	)
+	parts = [
+		"VALIDATION_REPO_RESULT",
+		f"repository={result.repository}",
+		f"outcome={result.outcome}",
+		f"changed={changed}",
+		f"drifted={drifted}",
+		f"discovery_outcome={discovery}",
+		f"diagnostics={diagnostics_count}",
+	]
+	if result.discovery_pr_url:
+		parts.append(f"discovery_pr_url={json.dumps(result.discovery_pr_url)}")
+	if result.diagnostics:
+		parts.append(f"detail={json.dumps(_compact_log_value(result.diagnostics[-1]))}")
+	print(" ".join(parts))
+
+
+def _count_budget_exhausted(results: list[RefreshResult]) -> int:
+	return sum(1 for result in results if result.discovery_outcome == "skipped_budget")
+
+
+def _emit_summary_line(summary: dict[str, Any], results: list[RefreshResult]) -> None:
+	totals = summary.get("totals")
+	if not isinstance(totals, dict):
+		return
+	processed = totals.get("processed", 0)
+	green = totals.get("green", 0)
+	red = totals.get("red", 0)
+	skipped = totals.get("skipped", 0)
+	error = totals.get("error", 0)
+	budget_exhausted = _count_budget_exhausted(results)
+	print(
+		"VALIDATION_SUMMARY "
+		f"processed={processed} "
+		f"green={green} "
+		f"red={red} "
+		f"skipped={skipped} "
+		f"error={error} "
+		f"budget_exhausted={budget_exhausted}"
+	)
+
+
 def write_summary(summary: dict[str, Any], summary_path: Path | None) -> None:
 	if summary_path is None:
 		return
@@ -802,6 +858,7 @@ def main() -> int:
 	if not repositories:
 		summary = summarize_results([])
 		write_summary(summary, args.summary_json)
+		_emit_summary_line(summary, [])
 		print(json.dumps(summary, sort_keys=True))
 		return 0
 
@@ -821,8 +878,11 @@ def main() -> int:
 			pr_title=args.pr_title,
 		)
 		results = runner.run_repositories(repositories, workspace_path)
+		for result in results:
+			_emit_repo_result(result)
 		summary = summarize_results(results)
 		write_summary(summary, args.summary_json)
+		_emit_summary_line(summary, results)
 		print(json.dumps(summary, sort_keys=True))
 	finally:
 		if temporary_root is not None:

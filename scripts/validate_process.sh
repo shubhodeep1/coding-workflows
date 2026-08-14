@@ -1654,6 +1654,46 @@ write_metadata_file()
     }' > "${METADATA_FILE}"
 }
 
+compact_validation_summary_value()
+{
+  local value="$1"
+
+  printf '%s' "${value}" | tr '\r\n' '  ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+}
+
+emit_validation_failure_summary()
+{
+  local status="$1"
+  local summary="$2"
+  local failure_summary="$3"
+  local raw_status="${4:-${status}}"
+
+  if [ "${status}" = "pass" ]; then
+    return 0
+  fi
+
+  local compact_summary=""
+  local compact_failure_summary=""
+  local repository_json='""'
+  local summary_json='""'
+  local failure_summary_json='""'
+  local created_fix_issues_count="0"
+
+  compact_summary="$(compact_validation_summary_value "${summary}")"
+  compact_failure_summary="$(compact_validation_summary_value "${failure_summary}")"
+  if [ -z "${compact_failure_summary}" ]; then
+    compact_failure_summary="${compact_summary}"
+  fi
+
+  repository_json="$(jq -cn --arg value "${GITHUB_REPOSITORY:-}" '$value')"
+  summary_json="$(jq -cn --arg value "${compact_summary}" '$value')"
+  failure_summary_json="$(jq -cn --arg value "${compact_failure_summary}" '$value')"
+  created_fix_issues_count="$(printf '%s' "${CREATED_FIX_ISSUES_JSON:-[]}" | jq -r 'if type == "array" then length else 0 end' 2>/dev/null || printf '%s' '0')"
+
+  printf '%s\n' \
+    "VALIDATION_FAILURE_SUMMARY repository=${repository_json} tracking_issue=${TRACKING_ISSUE_RAW} status=${status} raw_status=${raw_status} cycle=${VALIDATION_CYCLE} run_id=${GITHUB_RUN_ID:-} run_attempt=${GITHUB_RUN_ATTEMPT:-} self_heal_attempt=${SELF_HEAL_ATTEMPT}/${MAX_SELF_HEAL_ATTEMPTS} fix_issues=${created_fix_issues_count} summary=${summary_json} failure_summary=${failure_summary_json}"
+}
+
 write_result_files()
 {
   local status="$1"
@@ -1663,6 +1703,7 @@ write_result_files()
 
   write_status_file "${status}" "${summary}" "${failure_summary}" "${raw_status}"
   write_metadata_file "${status}" "${summary}" "${failure_summary}" "${raw_status}"
+  emit_validation_failure_summary "${status}" "${summary}" "${failure_summary}" "${raw_status}"
 }
 
 emit_phase_failure_marker()
