@@ -197,7 +197,13 @@ def n(value):
 	return "0"
 
 
-if len(sys.argv) < 4 or sys.argv[1] != "-r" or "coverage_status" not in sys.argv[2] or "@tsv" not in sys.argv[2]:
+filter_arg = sys.argv[2] if len(sys.argv) >= 3 else ""
+required_filter_tokens = (
+	".status", ".coverage_status", ".processed_runs", ".marker_occurrences",
+	".persistent_clusters", ".skipped_absent_path", ".logs_fetched", ".logs_missing",
+	".missing_run_ids", ".created", ".edited", ".closed", ".suppressed", "@tsv",
+)
+if len(sys.argv) < 4 or sys.argv[1] != "-r" or any(token not in filter_arg for token in required_filter_tokens):
 	print(f"unexpected jq args: {sys.argv[1:]}", file=sys.stderr)
 	sys.exit(1)
 

@@ -96,6 +96,7 @@ RETRY_MARKERS = (
 )
 WORKFLOW_LOG_CACHE_SCHEMA_VERSION = "v1"
 WORKFLOW_LOG_CACHE_SEEN_SET_LIMIT = 500
+WORKFLOW_LOG_CACHE_CANCELLED_FAILURE_POINT_VERSION = 1
 STRUCTURED_COST_TELEMETRY_PATTERNS = (
     OPENROUTER_RE,
     SEMBLE_QUERY_RE,
@@ -884,18 +885,23 @@ def _cached_row_needs_cancelled_failure_point_backfill(
     run: dict[str, Any],
     cached_row: dict[str, Any] | None,
     cancelled_jobs_seen_lookup: set[int],
+    cancelled_failure_point_version: int,
 ) -> bool:
     run_id = _to_int(run.get("id"), 0)
-    if run_id <= 0 or run_id in cancelled_jobs_seen_lookup:
-        return False
-
-    if (run.get("conclusion") or "").lower() != "cancelled" or not isinstance(cached_row, dict):
+    if run_id <= 0 or (run.get("conclusion") or "").lower() != "cancelled" or not isinstance(cached_row, dict):
         return False
 
     failure_point = cached_row.get("failure_point")
+    has_failure_point = isinstance(failure_point, dict) and bool(
+        failure_point.get("job_name") or failure_point.get("step_name")
+    )
+    if cancelled_failure_point_version < WORKFLOW_LOG_CACHE_CANCELLED_FAILURE_POINT_VERSION:
+        return True
+    if run_id in cancelled_jobs_seen_lookup and has_failure_point:
+        return False
     if not isinstance(failure_point, dict):
         return True
-    return not (failure_point.get("job_name") or failure_point.get("step_name"))
+    return not has_failure_point
 
 
 def compute_run_metrics(
@@ -1504,6 +1510,7 @@ def main(argv: list[str] | None = None) -> int:
 
         jobs_seen_set = _normalize_seen_set(repo_cache.get("jobs_seen_set"))
         cancelled_jobs_seen_set = _normalize_seen_set(repo_cache.get("cancelled_jobs_seen_set"))
+        cancelled_failure_point_version = _to_int(repo_cache.get("cancelled_failure_point_version"), 0)
         logs_seen_set = _normalize_seen_set(repo_cache.get("logs_seen_set"))
         jobs_seen_lookup = set(jobs_seen_set)
         cancelled_jobs_seen_lookup = set(cancelled_jobs_seen_set)
@@ -1571,6 +1578,7 @@ def main(argv: list[str] | None = None) -> int:
                 run,
                 reused_row,
                 cancelled_jobs_seen_lookup,
+                cancelled_failure_point_version,
             )
             if run_id > 0 and run_id in jobs_seen_lookup and isinstance(reused_row, dict) and not needs_cancelled_backfill:
                 row_copy = dict(reused_row)
@@ -1618,6 +1626,10 @@ def main(argv: list[str] | None = None) -> int:
             "runs_window_start": _format_iso8601(effective_since),
             "jobs_seen_set": jobs_seen_set,
             "cancelled_jobs_seen_set": cancelled_jobs_seen_set,
+            "cancelled_failure_point_version": max(
+                cancelled_failure_point_version,
+                WORKFLOW_LOG_CACHE_CANCELLED_FAILURE_POINT_VERSION,
+            ),
             "logs_seen_set": logs_seen_set,
             "last_updated": _format_iso8601(datetime.now(timezone.utc)),
             "runs_snapshot": runs_snapshot_for_repo,
