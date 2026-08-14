@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (108)
+## Processed source docs (111)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -113,6 +113,9 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-06-28.md`
 - `analysis/plan-workflow-log-analysis.md`
 - `analysis/e2e-smoke-failure-25126757724.md`
+- `analysis/workflow-optimization-2026-07-19.md`
+- `analysis/workflow-optimization-2026-08-07.md`
+- `analysis/workflow-optimization-2026-08-14.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -751,6 +754,73 @@ This four-doc batch mixes one narrative workflow-cost memo with three appendix-b
 - Intentionally deferred:
   - `BUG-001`, `API-001`, `API-002`, `API-003`, `DUP-001`, `DUP-002`, `DUP-003`, `DUP-004`, `EXPR-001`, `EXPR-002`, `EXPR-003`, `CONSIST-001`, `MERGE-001`, `REUSE-001`, and `DEAD-API-001` remain follow-up work, but only for their still-live portions. Current HEAD still shows the still-retrying `gh_api_json_to_file` / `curl_gh_api` helpers in `scripts/gh_helpers.sh`, the double-fallback linked-issue path in `.github/workflows/issue_pr_status.yml`, and the per-SHA commit attribution loop in `scripts/check_external_branch_advance.sh`; the editor-changes-lost redispatch path in `.github/workflows/review_autofix.yml` now matches the post-commit fallback chain and is no longer part of the open set.
   - The narrative `REVIEW_LIVENESS` stall-detection work, PR-dedupe micro-API trimming, poll queue-vs-active timing split, OR/cache telemetry restoration, Semble before/after prompt-sizing, and Serena-disabled observability asks remain intentionally deferred broader instrumentation work.
+
+### `analysis/workflow-optimization-2026-07-19.md`
+- This source doc was narrative-only and repeated the same asks across Executive Summary / Speed / Cost / Reliability / AI Memory / GH API / Prompt Cache / Orchestrator sections, so the closeout below groups those asks under stable short labels instead of re-listing each section's prose.
+
+#### Repeated unnumbered recommendation groups (deduped)
+- `VALID&SAFE`
+  - `additive runtime observability` — repo-wide search still finds no live `MODEL_USAGE_SUMMARY`, `PROMPT_CACHE_SUMMARY`, `CONTEXT_PAYLOAD_SUMMARY`, `MCP_STATUS`, `GH_API_SUMMARY`, `WORKFLOW_TIMING`, `POLL_PREFLIGHT_SUMMARY`, `AUTOFIX_PHASE_TIMING`, `AUTOFIX_ITERATION_STATE`, `AUTOFIX_COST_SUMMARY`, or `AUTOFIX_SWEEP_SUMMARY` emitters under `.github/workflows/` and `scripts/`, so the doc's model/cache/MCP/GH-API/poll/review timing asks remain open and additive.
+  - `ai-memory rollup/latency fields` — `AI_MEMORY_TELEMETRY` is now emitted in `scripts/memory_helpers.sh`, review helpers, `.github/workflows/issue_pr_status.yml`, and `scripts/orchestrate_poll_process.sh`, but repo search still finds no `AI_MEMORY_SUMMARY`; the doc's “keep memory enabled, add per-run summary/latency/retry fields” recommendation remains valid and safe.
+  - `cleanup-warning guard` — repo search still finds no `WORKTREE_CLEANUP_SKIP` marker and no `git rev-parse --is-inside-work-tree` guard in the workflow/runtime scripts, so the “suppress non-actionable no-worktree cleanup warnings” ask remains a small safe hardening item.
+- `VALID-BUT-RISKY`
+  - `scheduler/cadence retuning` — `.github/workflows/orchestrate_poll.yml` and `.github/workflows/review_autofix_sweep.yml` still keep fixed wrapper concurrency with `cancel-in-progress: false`, and `.github/workflows/ci.yml` still has no `concurrency:` / `CI_CANCEL_REASON` instrumentation, so the doc's cancel-earlier / idle-cadence changes remain directionally valid but still alter responsiveness and control-plane behavior.
+  - `review-autofix bootstrap / fanout changes` — the repo still lacks the requested phase/iteration/cost summaries, but the doc's behavior-changing half (later setup, merged jobs, or reduced follow-up reviewer fan-out) still changes live review latency/quality tradeoffs and remains verification-gated.
+- `STALE-or-already-done`
+  - `early no-work gate groundwork` — `.github/workflows/orchestrate_poll.yml` now runs `Find active tracking issues` before checkout and language setup, and `.github/workflows/review_autofix_sweep.yml` already exits immediately when `candidates=0`.
+  - `validation failure summary` — `scripts/validate_process.sh` now emits `VALIDATION_FAILURE_SUMMARY`, with regression assertions in `tests/test_validate_process_template_mode.py`.
+  - `drift-audit coverage summary` — `scripts/drift_audit.sh` now emits `DRIFT_AUDIT_COVERAGE`, with regression assertions in `tests/test_drift_audit_job.py`.
+- `INVALID`
+  - None on current HEAD.
+
+### `analysis/workflow-optimization-2026-08-07.md`
+- This source doc paired window-level narrative recommendations with a 13-ID deep audit / API appendix. The closeout keeps the named IDs explicit and dedupes the repeated top-half recommendations separately.
+
+#### Named findings
+- `VALID&SAFE`
+  - None remained on this ref. The appendix itself recorded `SAFE_TO_MERGE | 0`, and the still-open named items continue to touch retry, pagination, or shared workflow contracts.
+- `VALID-BUT-RISKY`
+  - `BUG-002`, `API-001`, `BATCH-001`, `API-002`, `DUP-001`, `DUP-002`, `EXPR-001`, `EXPR-002`, `DEBT-001`, `MERGE-001`, `MERGE-002`, and `REUSE-001` — current HEAD still matches the cited structures: `scripts/comprehensive_test_and_release_gh_api.sh` still owns bespoke `gh_api_safe()`, `scripts/dispatch_and_watch_workflow_run.sh` still consumes it, `.github/workflows/issue_pr_status.yml` still performs the second linked-issue hydration pass after the first closing-issues GraphQL read, `.github/workflows/review_autofix.yml` still falls back to per-issue label reads in the merged-PR validate loop, `.github/workflows/check_failure_triage.yml` still keeps the inline three-attempt PR guard, `.github/workflows/plan.yml` / `.github/workflows/implement.yml` still keep the cited large inline `run:` blocks, and `scripts/orchestrate_poll_process.sh` / `scripts/review_enable_auto_merge.sh` still carry the cited hot-path multi-read patterns. Those recommendations remain real, but they still sit on live retry/race or shared-contract paths.
+- `STALE-or-already-done`
+  - `BUG-001` — `.github/workflows/review_autofix.yml` now resolves linked issues through retry-backed reads, warns when GitHub refreshes are exhausted, and leaves validation state unchanged instead of silently treating read failures as “no linked issues.”
+- `INVALID`
+  - None on current HEAD.
+
+#### Repeated unnumbered recommendation groups (deduped)
+- `VALID&SAFE`
+  - `collector / cost / API observability` — `scripts/collect_workflow_logs.py` now synthesizes `cancelled_before_first_step` and backfills cached cancelled rows, but repo search still finds no live `OR_USAGE`, `PROMPT_CACHE_TELEMETRY`, `AUTOFIX_PHASE_TIMING`, `AUTOFIX_COST_SUMMARY`, `WORKFLOW_TIMING`, `GH_API_AUDIT`, or `GH_API_SUMMARY` emitters, so the doc's additive telemetry/summary asks remain open and safe.
+  - `expected-test / maintenance log separation` — repo search still finds no `TEST_EXPECTED_ERROR`, `severity=test`, `WORKTREE_CLEANUP_SKIP`, or `MAINTENANCE_RESULT`, so the doc's log-noise cleanup asks remain open and additive.
+- `VALID-BUT-RISKY`
+  - `wrapper lease / quiet-period backoff / runner-skip behavior changes` — `.github/workflows/orchestrate_poll.yml` and `.github/workflows/review_autofix_sweep.yml` still keep wrapper-level `cancel-in-progress: false`, and the sweep still snapshots queued/in-progress review runs before deciding whether to dispatch. The doc's cadence/lease/backoff/runner-allocation changes remain directionally valid but still alter scheduler/control-plane semantics.
+- `STALE-or-already-done`
+  - `pre-step cancellation diagnosability` — `scripts/collect_workflow_logs.py` now records `cancelled_before_first_step` for cancelled jobs and backfills old cached rows that lacked that failure-point shape, closing the source doc's main collector blind spot.
+- `INVALID`
+  - None on current HEAD.
+
+### `analysis/workflow-optimization-2026-08-14.md`
+- This source doc paired a telemetry-heavy narrative top half with a 17-ID deep audit / API appendix. Current HEAD still matches most of the named hot-path findings, but some lower-level cache-reuse groundwork from the narrative section is already present.
+
+#### Named findings
+- `VALID&SAFE`
+  - None remained on this ref. The appendix itself recorded `SAFE_TO_MERGE | 0`, and the still-live named items all cross step boundaries, pagination, or shared helper contracts.
+- `VALID-BUT-RISKY`
+  - `BUG-001`, `API-001`, `BATCH-001`, `BATCH-002`, `DUP-001`, `DUP-002`, `EXPR-001`, `EXPR-002`, `EXPR-003`, `CONSIST-001`, `DEBT-001`, `MERGE-001`, `MERGE-002`, `REUSE-001`, `REUSE-002`, and `REUSE-003` — current HEAD still shows the cited structures: `scripts/tg_helpers.sh` still does shared marker-comment read/modify/write and raw `curl` GitHub comment writes/deletes; `.github/workflows/review_autofix.yml` still has the doc-only `/files` refetch fallback; `scripts/orchestrate_poll_process.sh` still keeps the per-PR feature-sweep and cross-reference hydration loops; `scripts/stage_workflow_support.sh` is still only partially adopted while `.github/workflows/implement.yml`, `.github/workflows/check_failure_triage.yml`, `.github/workflows/plan.yml`, `.github/workflows/clarify.yml`, `.github/workflows/orchestrate.yml`, `.github/workflows/orchestrate_poll.yml`, and `.github/workflows/orchestrate_clarify_respond.yml` keep bespoke staging loops; `.github/workflows/plan.yml` / `.github/workflows/implement.yml` still contain the cited large inline `run:` bodies; `.github/workflows/check_failure_triage.yml` still carries the hand-rolled PR guard; `.github/workflows/cancel_on_pr_close.yml` and `.github/workflows/review_autofix_sweep.yml` still perform the cited paginated dual-status reads; and `scripts/review_collect_pr_metadata.sh`, `scripts/review_rb_judge.sh`, `scripts/review_enable_auto_merge.sh`, and `scripts/review_conflict_resolve.sh` still keep the named linked-issue / PR-metadata cache and refresh boundaries. Those recommendations remain directionally valid but still change hot-path behavior or cache freshness semantics.
+- `STALE-or-already-done`
+  - None remained on this ref.
+- `INVALID`
+  - `SHELL-001` — `scripts/stage_workflow_support.sh` still has the two one-item loops the source doc named, but on current HEAD that is a style-only micro-cleanup with no measurable workflow, API, or correctness impact. This closeout therefore treats it as non-material rather than actionable optimization backlog.
+
+#### Repeated unnumbered recommendation groups (deduped)
+- `VALID&SAFE`
+  - `canonical runtime summaries` — repo search still finds no live `WORKFLOW_TIMING`, `NOOP_EXIT`, `MODEL_USAGE_SUMMARY`, `PROMPT_CACHE_SUMMARY`, `CONTEXT_PAYLOAD_SUMMARY`, `MCP_STATUS`, or `GH_API_SUMMARY` emitters under `.github/workflows/` and `scripts/`, so the top-half observability recommendations remain open and additive.
+  - `memory / context-pressure normalization` — current HEAD already emits no-op `AI_MEMORY_TELEMETRY` in places such as `.github/workflows/issue_pr_status.yml`, and `scripts/review_rb_judge.sh` already emits `BREAK_GLASS:` when the override is active, but repo search still finds no `AI_MEMORY_SUMMARY` and no live `CONTEXT_BUDGET_WARN:` emitters outside tests/support tooling. The remaining no-op and context-pressure normalization asks therefore stay valid and safe.
+- `VALID-BUT-RISKY`
+  - `idle cadence / docs-only / support-fetch short-circuiting` — `.github/workflows/review_autofix_sweep.yml` still runs on a fixed `*/30` cadence, `.github/workflows/orchestrate_poll.yml` still uses fixed wrapper cadence, and the proposed support-fetch / docs-only short-circuiting changes would still alter control-plane responsiveness or gate semantics.
+- `STALE-or-already-done`
+  - `validation-refresh summaries` — `scripts/validation_refresh_runner.py` now emits `VALIDATION_REPO_RESULT` and `VALIDATION_SUMMARY`, with regression coverage in `tests/test_validation_refresh_runner.py`.
+  - `local cache-reuse groundwork` — `.github/workflows/review_autofix.yml` already reuses `LINKED_ISSUES_JSON` in the late linked-issues step, and the gate path already reuses its first `/pulls/{n}/files` response when that cache is populated. The remaining duplication now sits in the fallback and cross-step refresh paths covered by the named `VALID-BUT-RISKY` IDs above.
+- `INVALID`
+  - None on current HEAD.
 
 ## Preserved machine-maintained artifacts
 - `analysis/validation-selftest-status.json` (kept unchanged)
