@@ -92,7 +92,7 @@ _RESULT: dict[str, Any] = {
 	"marker_occurrences": 0,
 	"persistent_clusters": 0,
 	"skipped_absent_path": 0,
-	"coverage_status": "full",
+	"coverage_status": "unknown",
 	"logs_fetched": 0,
 	"logs_missing": 0,
 	"missing_run_ids": [],
@@ -905,7 +905,7 @@ da_processed_runs=0
 da_marker_occurrences=0
 da_persistent_clusters=0
 da_skipped_absent_path=0
-da_coverage_status="full"
+da_coverage_status="unknown"
 da_logs_fetched=0
 da_logs_missing=0
 da_missing_run_ids="none"
@@ -919,7 +919,7 @@ if [ "${DRIFT_AUDIT_HAVE_JQ}" = "true" ] && [ -n "${DRIFT_AUDIT_SUMMARY_FILE:-}"
 		def n: if type == "number" and . >= 0 then tostring else "0" end;
 		[
 			(.status // "unknown" | tostring),
-			(.coverage_status // "full" | tostring),
+			(.coverage_status // "unknown" | tostring),
 			(.processed_runs // 0 | n),
 			(.marker_occurrences // 0 | n),
 			(.persistent_clusters // 0 | n),
@@ -999,7 +999,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 		echo "- **Marker occurrences:** ${da_marker_occurrences}"
 		echo "- **Persistent clusters:** ${da_persistent_clusters}"
 		echo "- **Clusters skipped (path absent from repo):** ${da_skipped_absent_path}"
-		if [ "${da_summary_loaded}" = "true" ]; then
+		if [ "${da_summary_loaded}" = "true" ] && [ "${da_status}" != "error" ] && [ "${da_coverage_status}" != "unknown" ]; then
 			echo "- **Log coverage:** ${da_coverage_status}"
 			echo "- **Log fetches:** fetched ${da_logs_fetched} / missing ${da_logs_missing}"
 			echo "- **Missing log run IDs:** ${da_missing_run_ids}"

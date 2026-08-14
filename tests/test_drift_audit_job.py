@@ -206,7 +206,7 @@ else:
 	missing_run_ids_text = "none"
 fields = [
 	str(payload.get("status", "unknown")),
-	str(payload.get("coverage_status", "full")),
+	str(payload.get("coverage_status", "unknown")),
 	n(payload.get("processed_runs", 0)),
 	n(payload.get("marker_occurrences", 0)),
 	n(payload.get("persistent_clusters", 0)),
@@ -896,6 +896,25 @@ def test_drift_audit_reports_partial_coverage_when_logs_are_missing() -> None:
 	assert "Missing log run IDs:** 802" in summary
 
 
+def test_drift_audit_error_run_omits_uncomputed_coverage_summary() -> None:
+	state = {
+		"run_list_responses": {
+			"review_autofix.yml": [
+				{"databaseId": 901, "createdAt": ["broken"], "status": "completed", "conclusion": "success", "url": "https://example.test/runs/901"},
+			],
+			"internal-review.yml": [],
+		},
+		"issue_list_response": [],
+	}
+	proc, final_state = _run_drift_audit(state)
+	assert proc.returncode != 0
+	summary = final_state.get("_drift_audit_step_summary", "")
+	assert "Status:** error" in summary
+	assert "Log coverage:" not in summary
+	assert "Log fetches:" not in summary
+	assert "Missing log run IDs:" not in summary
+
+
 def main() -> int:
 	test_drift_audit_gate_disabled_skips_without_gh_calls()
 	test_drift_audit_dedups_runs_into_one_tracker_issue()
@@ -913,6 +932,7 @@ def main() -> int:
 	test_drift_audit_skips_cluster_when_repo_path_is_absent()
 	test_drift_audit_writes_run_summary_to_step_summary()
 	test_drift_audit_reports_partial_coverage_when_logs_are_missing()
+	test_drift_audit_error_run_omits_uncomputed_coverage_summary()
 	return 0
 
 
