@@ -16,8 +16,10 @@
 .claude/commands/validate-consumer-issue.md
 .claude/commands/verify-activation.md
 .claude/commands/write-plan.md
+.claude/hooks/pr_merge_status_guard.py
 .claude/hooks/session-start.sh
 .claude/settings.json
+.gitattributes
 .github/ISSUE_TEMPLATE/structured-task.yml
 .github/actions/install-codex/action.yml
 .github/actions/run-soft-error-analyzer/action.yml
@@ -109,6 +111,13 @@ analysis/validation-selftest-status.json
 analysis/workflow-optimization-2026-07-11.md
 analysis/workflow-optimization-2026-07-12.md
 analysis/workflow-optimization-2026-07-19.md
+analysis/workflow-optimization-2026-08-07.md
+changelog.d/.gitkeep
+changelog.d/3738-merge-precheck-promisor-recovery.md
+changelog.d/changelog-fragment-workflow.md
+changelog.d/digitalocean-token-access.md
+changelog.d/investigate-issue-attached-upstream-autochain.md
+changelog.d/merged-pr-commit-guard.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
@@ -283,6 +292,7 @@ scripts/ai_memory_lib.py
 scripts/analyze_soft_errors.py
 scripts/analyze_workflow_logs.py
 scripts/apply_audit_gate_assets.py
+scripts/assemble_changelog.py
 scripts/assemble_prompt.sh
 scripts/audit_consumer_drift.py
 scripts/blocker_check.py
@@ -526,12 +536,14 @@ tests/test_ai_memory_push_retry_backoff.py
 tests/test_ai_memory_sync_reference_files.py
 tests/test_ai_memory_workflow_log_analysis_cache.py
 tests/test_analyze_workflow_logs.py
+tests/test_assemble_changelog.py
 tests/test_assemble_prompt.py
 tests/test_audit_consumer_drift.py
 tests/test_audit_gate_identity.py
 tests/test_audit_gate_template_atomicity.py
 tests/test_blocker_check.py
 tests/test_branch_rebuild.py
+tests/test_changelog_fragment_contract.py
 tests/test_check_integration_pr_readiness.py
 tests/test_ci_inventory_parity_order_contract.py
 tests/test_clarify_informal_detect.py
@@ -598,6 +610,7 @@ tests/test_plan_diagrams_contract.py
 tests/test_plan_reuse_audit_contract.py
 tests/test_plan_scope_mode_contract.py
 tests/test_pr_checks_lib_required_filter.py
+tests/test_pr_merge_status_guard.py
 tests/test_prompt_compaction.py
 tests/test_record_id_format_contract.py
 tests/test_render_prompt_core_modes.py
@@ -716,6 +729,7 @@ tests/test_write_codex_config.py
 tools/repo_tree/config.yaml
 tools/repo_tree/update_repo_tree.py
 unattended_system_instructions.md
+uv.lock
 workflow-templates/.claude/commands/analyze-log.md
 workflow-templates/.claude/commands/apply-analysis.md
 workflow-templates/.claude/commands/apply-url.md
@@ -727,6 +741,7 @@ workflow-templates/.claude/commands/investigate-issue.md
 workflow-templates/.claude/commands/validate-consumer-issue.md
 workflow-templates/.claude/commands/verify-activation.md
 workflow-templates/.claude/commands/write-plan.md
+workflow-templates/.claude/hooks/pr_merge_status_guard.py
 workflow-templates/.claude/hooks/session-start.sh
 workflow-templates/.claude/settings.json
 workflow-templates/CLAUDE.md
