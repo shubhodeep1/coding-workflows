@@ -912,7 +912,18 @@ jobs:
           if [ -f ".codex-workflow-src/scripts/gh_helpers.sh" ]; then
             source ".codex-workflow-src/scripts/gh_helpers.sh" 2>/dev/null || true
           fi
-          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          if ! type gh_retry >/dev/null 2>&1; then
+            gh_retry() {
+              local n=0 max=4 delay=2
+              while :; do
+                if "$@"; then return 0; fi
+                n=$((n+1))
+                if [ "${n}" -ge "${max}" ]; then return 1; fi
+                sleep "${delay}"
+                delay=$((delay*2))
+              done
+            }
+          fi
 
           if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             echo "::warning::Skipping post-merge validate dispatch: invalid PR number '${PR_NUMBER}'."
@@ -926,6 +937,7 @@ jobs:
           issue_nodes_json="$(normalize_post_merge_issue_nodes_json "${POST_MERGE_LINKED_ISSUES_JSON:-[]}")"
           post_merge_linked_issue_lookup_failed="false"
           post_merge_pr_text_lookup_failed="false"
+          post_merge_pr_text_fallback_helper_unavailable="false"
 
           if [ "${issue_nodes_json}" = "[]" ]; then
             if issue_nodes_json_live="$(gh_retry gh api graphql \
@@ -959,12 +971,15 @@ jobs:
               if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
                 issue_numbers="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${pr_data}" || true)"
               else
+                post_merge_pr_text_fallback_helper_unavailable="true"
                 echo "::warning::Shared linked-issue fallback helper unavailable; skipping PR body/title fallback for PR #${PR_NUMBER}."
               fi
             fi
             if [ -z "${issue_numbers}" ]; then
               if [ "${post_merge_linked_issue_lookup_failed}" = "true" ] || [ "${post_merge_pr_text_lookup_failed}" = "true" ]; then
                 echo "::warning::Standalone validate dispatch could not confirm linked issues for merged PR #${PR_NUMBER} because GitHub read retries were exhausted; leaving validation state unchanged."
+              elif [ "${post_merge_pr_text_fallback_helper_unavailable}" = "true" ]; then
+                echo "::warning::Standalone validate dispatch could not confirm linked issues for merged PR #${PR_NUMBER} because the PR body/title fallback helper was unavailable; leaving validation state unchanged."
               else
                 echo "No linked issues found for merged PR #${PR_NUMBER}."
               fi
@@ -1016,6 +1031,26 @@ jobs:
           if [ "${validation_dispatched}" = "false" ]; then
             echo "::warning::No standalone validation workflow could be dispatched for merged PR #${PR_NUMBER}."
           fi
+
+  post-merge-force-poll:
+    needs: gate
+    runs-on: ubuntu-latest
+    if: ${{ needs.gate.outputs.post_merge_dispatch == 'true' && needs.gate.outputs.claude_branch_review != 'true' }}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      REPOSITORY: ${{ github.repository }}
+      PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      WORKFLOW_SUPPORT_REF: ${{ github.repository == 'shubhodeep1/coding-workflows' && github.sha || 'stable' }}
+    steps:
+      - name: Checkout workflow support source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.WORKFLOW_SUPPORT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
 
       - name: Force orchestrate poll after merged PR handling
         env:

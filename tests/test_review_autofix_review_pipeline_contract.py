@@ -437,6 +437,24 @@ def _step_block(step_name: str) -> str:
 	raise AssertionError(f"Step not found in workflow: {step_name}")
 
 
+def _job_block(job_name: str) -> str:
+	lines = _workflow_text().splitlines()
+	needle = f"{job_name}:"
+	for idx, line in enumerate(lines):
+		if line.strip() != needle:
+			continue
+		if len(line) - len(line.lstrip(" ")) != 2:
+			continue
+		end = len(lines)
+		for j in range(idx + 1, len(lines)):
+			candidate = lines[j]
+			if candidate.strip().endswith(":") and len(candidate) - len(candidate.lstrip(" ")) == 2:
+				end = j
+				break
+		return "\n".join(lines[idx:end])
+	raise AssertionError(f"Job not found in workflow: {job_name}")
+
+
 def _step_run_script(step_name: str) -> str:
 	block_lines = _step_block(step_name).splitlines()
 	run_idx = -1
@@ -5485,8 +5503,34 @@ def test_post_merge_validate_dispatch_warns_on_degraded_github_reads() -> None:
 	assert "GitHub read retries were exhausted; leaving validation state unchanged." in block, (
 		"post-merge validate dispatch must not report an unknown linked-issue state as a clean no-op"
 	)
+	assert "PR body/title fallback helper was unavailable; leaving validation state unchanged." in block, (
+		"post-merge validate dispatch must not report an unavailable PR-text fallback helper as a clean no-op"
+	)
 	assert "Unable to read labels for issue #${issue_number} after retries" in block, (
 		"post-merge validate dispatch must warn when per-issue label hydration retries exhaust"
+	)
+
+
+def test_post_merge_validate_dispatch_inlines_retry_wrapper_when_helper_load_fails() -> None:
+	script = _step_run_script("Dispatch standalone validate for orchestrator short-circuit issues")
+	assert 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }' not in script, (
+		"post-merge validate dispatch must not fall back to a no-op gh_retry wrapper"
+	)
+	assert "if ! type gh_retry >/dev/null 2>&1; then" in script, (
+		"post-merge validate dispatch must define an inline retry wrapper when gh_helpers.sh is unavailable"
+	)
+	assert "local n=0 max=4 delay=2" in script, (
+		"post-merge validate dispatch inline retry wrapper must preserve the lightweight retry contract"
+	)
+
+
+def test_post_merge_force_poll_is_not_blocked_by_definitely_empty_validate_context() -> None:
+	job = _job_block("post-merge-force-poll")
+	assert "needs.gate.outputs.post_merge_dispatch == 'true' && needs.gate.outputs.claude_branch_review != 'true'" in job, (
+		"post-merge force poll must run whenever merged-PR handling is active for non-claude branches"
+	)
+	assert "post_merge_validate_context_definitely_empty" not in job, (
+		"post-merge force poll must stay independent of the definitely-empty validate-dispatch guard"
 	)
 
 
