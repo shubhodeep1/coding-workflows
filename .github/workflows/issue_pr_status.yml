@@ -475,15 +475,22 @@ jobs:
         run: |
           set -euo pipefail
 
+          AI_MEMORY_ENABLED_NORMALIZED=false
+          case "$(printf '%s' "${AI_MEMORY_ENABLED}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) AI_MEMORY_ENABLED_NORMALIZED=true ;;
+          esac
+
           if [ -z "${LINKED_ISSUE_NUMBERS:-}" ]; then
             echo "No linked issues found; skipping lineage finalization."
+            echo "AI_MEMORY_TELEMETRY: {\"op\":\"finalize-task\",\"ok\":true,\"enabled\":${AI_MEMORY_ENABLED_NORMALIZED},\"fail_open\":true,\"reason\":\"no_linked_issues\",\"source\":\"issue_pr_status.yml\"}"
             exit 0
           fi
 
-          case "$(printf '%s' "${AI_MEMORY_ENABLED}" | tr '[:upper:]' '[:lower:]')" in
-            1|true|yes|on) ;;
-            *) echo "AI memory disabled; skipping lineage finalization."; exit 0 ;;
-          esac
+          if [ "${AI_MEMORY_ENABLED_NORMALIZED}" != "true" ]; then
+            echo "AI memory disabled; skipping lineage finalization."
+            echo "AI_MEMORY_TELEMETRY: {\"op\":\"finalize-task\",\"ok\":true,\"enabled\":${AI_MEMORY_ENABLED_NORMALIZED},\"fail_open\":true,\"reason\":\"ai_memory_disabled\",\"source\":\"issue_pr_status.yml\"}"
+            exit 0
+          fi
 
           if [ "${MEMORY_HELPERS_READY:-0}" != "1" ]; then
             echo "Missing required memory helper scripts; cannot finalize lineage." >&2

@@ -92,6 +92,10 @@ _RESULT: dict[str, Any] = {
 	"marker_occurrences": 0,
 	"persistent_clusters": 0,
 	"skipped_absent_path": 0,
+	"coverage_status": "unknown",
+	"logs_fetched": 0,
+	"logs_missing": 0,
+	"missing_run_ids": [],
 	"created": 0,
 	"edited": 0,
 	"closed": 0,
@@ -108,6 +112,29 @@ def _write_summary() -> None:
 			json.dump(_RESULT, handle, separators=(",", ":"))
 	except OSError as exc:
 		_warn(f"could not write run summary to {path}: {exc}")
+
+
+def _sorted_unique_run_ids(run_ids: list[str]) -> list[str]:
+	return sorted(
+		{run_id for run_id in run_ids if run_id},
+		key=lambda value: (0, int(value)) if value.isdigit() else (1, value),
+	)
+
+
+def _emit_coverage_summary(scanned_runs: int, fetched_logs: int, missing_run_ids: list[str]) -> None:
+	unique_missing_run_ids = _sorted_unique_run_ids(missing_run_ids)
+	logs_missing = len(unique_missing_run_ids)
+	coverage_status = "partial" if logs_missing > 0 else "full"
+	_RESULT["coverage_status"] = coverage_status
+	_RESULT["logs_fetched"] = fetched_logs
+	_RESULT["logs_missing"] = logs_missing
+	_RESULT["missing_run_ids"] = unique_missing_run_ids
+	missing_run_ids_text = ",".join(unique_missing_run_ids) if unique_missing_run_ids else "none"
+	print(
+		f"DRIFT_AUDIT_COVERAGE scanned={scanned_runs} fetched={fetched_logs} "
+		f"missing={logs_missing} missing_run_ids={missing_run_ids_text}",
+		flush=True,
+	)
 
 
 def _run_gh(args: list[str]) -> tuple[int, str, str]:
@@ -754,16 +781,22 @@ def main() -> int:
 			runs.append(run)
 	_RESULT["processed_runs"] = len(runs)
 	if not runs:
+		_emit_coverage_summary(0, 0, [])
 		_RESULT["status"] = "no_runs"
 		_log("no recent review/autofix runs found; nothing to audit.")
 		return 0
 
 	occurrences: list[dict[str, Any]] = []
+	logs_fetched = 0
+	missing_run_ids: list[str] = []
 	for run in sorted(runs, key=lambda row: ((row.get("created_at") or ""), row["run_id"])):
 		log_text = _fetch_run_log(repo, run["run_id"])
 		if log_text is None:
+			missing_run_ids.append(run["run_id"])
 			continue
+		logs_fetched += 1
 		occurrences.extend(_parse_run_markers(run, log_text))
+	_emit_coverage_summary(len(runs), logs_fetched, missing_run_ids)
 	_RESULT["marker_occurrences"] = len(occurrences)
 	if not occurrences:
 		_RESULT["status"] = "no_markers"
@@ -872,6 +905,10 @@ da_processed_runs=0
 da_marker_occurrences=0
 da_persistent_clusters=0
 da_skipped_absent_path=0
+da_coverage_status="unknown"
+da_logs_fetched=0
+da_logs_missing=0
+da_missing_run_ids="none"
 da_created=0
 da_edited=0
 da_closed=0
@@ -882,17 +919,21 @@ if [ "${DRIFT_AUDIT_HAVE_JQ}" = "true" ] && [ -n "${DRIFT_AUDIT_SUMMARY_FILE:-}"
 		def n: if type == "number" and . >= 0 then tostring else "0" end;
 		[
 			(.status // "unknown" | tostring),
+			(.coverage_status // "unknown" | tostring),
 			(.processed_runs // 0 | n),
 			(.marker_occurrences // 0 | n),
 			(.persistent_clusters // 0 | n),
 			(.skipped_absent_path // 0 | n),
+			(.logs_fetched // 0 | n),
+			(.logs_missing // 0 | n),
+			((.missing_run_ids // []) | if type == "array" and length > 0 then map(tostring) | join(",") else "none" end),
 			(.created // 0 | n),
 			(.edited // 0 | n),
 			(.closed // 0 | n),
 			(.suppressed // 0 | n)
 		] | @tsv
 	' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null)"; then
-		IFS=$'\t' read -r da_status da_processed_runs da_marker_occurrences da_persistent_clusters da_skipped_absent_path da_created da_edited da_closed da_suppressed <<<"${da_summary_tsv}"
+		IFS=$'\t' read -r da_status da_coverage_status da_processed_runs da_marker_occurrences da_persistent_clusters da_skipped_absent_path da_logs_fetched da_logs_missing da_missing_run_ids da_created da_edited da_closed da_suppressed <<<"${da_summary_tsv}"
 		da_summary_loaded="true"
 	else
 		echo "::warning::drift-audit: could not parse run summary file; notifications will omit run counts." >&2
@@ -906,18 +947,28 @@ elif [ "${da_summary_loaded}" != "true" ]; then
 	da_status="summary_unavailable"
 fi
 
+da_status_display="${da_status}"
+if [ "${da_summary_loaded}" = "true" ] && [ "${da_coverage_status}" = "partial" ] && [ "${da_status}" != "error" ]; then
+	da_status_display="${da_status} (partial coverage)"
+fi
+
+da_partial_coverage_prefix=""
+if [ "${da_coverage_status}" = "partial" ] && [ "${da_logs_missing}" -gt 0 ] 2>/dev/null; then
+	da_partial_coverage_prefix="Partial log coverage: fetched ${da_logs_fetched}, missing ${da_logs_missing} (run IDs: ${da_missing_run_ids}). "
+fi
+
 case "${da_status}" in
 	completed)
-		da_detail="Scanned ${da_processed_runs} run(s); ${da_persistent_clusters} persistent cluster(s) -> created ${da_created}, updated ${da_edited}, closed ${da_closed}, suppressed ${da_suppressed} tracker issue(s)."
+		da_detail="${da_partial_coverage_prefix}Scanned ${da_processed_runs} run(s); ${da_persistent_clusters} persistent cluster(s) -> created ${da_created}, updated ${da_edited}, closed ${da_closed}, suppressed ${da_suppressed} tracker issue(s)."
 		;;
 	no_runs)
 		da_detail="No recent review/autofix runs to scan."
 		;;
 	no_markers)
-		da_detail="Scanned ${da_processed_runs} run(s); no fingerprint-drift markers found."
+		da_detail="${da_partial_coverage_prefix}Scanned ${da_processed_runs} run(s); no fingerprint-drift markers found."
 		;;
 	no_clusters)
-		da_detail="Scanned ${da_processed_runs} run(s), ${da_marker_occurrences} marker(s); no persistent drift clusters needed a tracker."
+		da_detail="${da_partial_coverage_prefix}Scanned ${da_processed_runs} run(s), ${da_marker_occurrences} marker(s); no persistent drift clusters needed a tracker."
 		;;
 	summary_unavailable)
 		da_detail="Audit completed, but run metrics were unavailable; see the run log."
@@ -943,11 +994,16 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 	{
 		echo "## Drift audit"
 		echo
-		echo "- **Status:** ${da_status}"
+		echo "- **Status:** ${da_status_display}"
 		echo "- **Runs scanned:** ${da_processed_runs}"
 		echo "- **Marker occurrences:** ${da_marker_occurrences}"
 		echo "- **Persistent clusters:** ${da_persistent_clusters}"
 		echo "- **Clusters skipped (path absent from repo):** ${da_skipped_absent_path}"
+		if [ "${da_summary_loaded}" = "true" ] && [ "${da_status}" != "error" ] && [ "${da_coverage_status}" != "unknown" ]; then
+			echo "- **Log coverage:** ${da_coverage_status}"
+			echo "- **Log fetches:** fetched ${da_logs_fetched} / missing ${da_logs_missing}"
+			echo "- **Missing log run IDs:** ${da_missing_run_ids}"
+		fi
 		echo "- **Tracker issues:** created ${da_created} / updated ${da_edited} / closed ${da_closed} / suppressed ${da_suppressed}"
 		if [ -n "${da_report_url}" ]; then
 			echo "- **Run:** [workflow run](${da_report_url})"
@@ -962,6 +1018,8 @@ fi
 da_level="DEBUG"
 if [ "${da_status}" = "error" ]; then
 	da_level="ERROR"
+elif [ "${da_coverage_status}" = "partial" ]; then
+	da_level="WARNING"
 elif [ "${da_status}" = "completed" ] && [ "$(( da_created + da_edited + da_closed ))" -gt 0 ]; then
 	da_level="WARNING"
 fi
