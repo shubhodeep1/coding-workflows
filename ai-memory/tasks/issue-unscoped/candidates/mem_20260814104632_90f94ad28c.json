@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_drift_audit_job.py:878-880 | severity=critical | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The new drift-audit test assertions expect substrings that do not match the markdown emitted by scripts/drift_audit.sh, so the test will fail.\n  WHY: The script emits `- **Log coverage:** ...`, `- **Log fetches:** fetched ...`, and `- **Missing log run IDs:** ...`, but the assertions look for mismatched substrings, so they will never match at runtime.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The merged-pr-commit-guard change (and its test) should have a changelog fragment per the repo contract (CHANGELOG.md is assembled from changelog.d/*.md).\n  expected_change_site: changelog.d/ (a new fragment for the guard + test)\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  EVIDENCE: No file under changelog.d/ mentions \"merged-pr-commit-guard\", \"pr_merge_status_guard.py\", or the new test; the recommendation-processing-report mentions the change but the assembly pipeline was not wired.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- TASK_GAP\n  Requirement: The merged-pr-commit-guard change (and its test) should have a changelog fragment per the repo contract (CHANGELOG.md is assembled from changelog.d/*.md).\n  Expected change site: changelog.d/ (a new fragment for the guard + test)\n  Evidence of absence: No file under changelog.d/ mentions \"merged-pr-commit-guard\", \"pr_merge_status_guard.py\", or the new test. The recommendation-processing-report mentions the change but the assembly pipeline was not wired.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_drift_audit_job.py:878-880 | severity=BLOCKER | confidence=5\n  PROBLEM: Test assertion expects \"fetched 0\" logs but test setup configures 1 run with logs present\n  WHY: The test configures state with 1 run (databaseId 700) and 1 corresponding log entry in run_logs, so the drift audit will report logs_fetched=1, but the assertion checks for substring \"Log fetches:** fetched 0 / missing 0\" which will not match the actual output \"Log fetches:** fetched 1 / missing 0\"\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_drift_audit_job.py:878-880 | severity=BLOCKER | confidence=5\n  PROBLEM: The new assertions check for substrings that do not match the markdown emitted by scripts/drift_audit.sh, causing these test assertions to fail at runtime.\n  WHY: The script emits `- **Log coverage:** ${da_coverage_status}`, `- **Log fetches:** fetched ${da_logs_fetched} / missing ${da_logs_missing}`, and `- **Missing log run IDs:** ${da_missing_run_ids}`. For a full-coverage case, the emitted text is `- **Log coverage:** full`, `- **Log fetches:** fetched 0 / missing 0`, `- **Missing log run IDs:** none`, but the test assertions look for mismatched substrings, so they will fail.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- TASK_GAP\n  Requirement: The merged-pr-commit-guard change (and its test) should have a changelog fragment per the repo contract (CHANGELOG.md is assembled from changelog.d/*.md).\n  Expected change site: changelog.d/ (a new fragment for the guard + test)\n  Evidence of absence: No file under changelog.d/ mentions \"merged-pr-commit-guard\", \"pr_merge_status_guard.py\", or the new test. The recommendation-processing-report mentions the change but the assembly pipeline was not wired.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "2e5686ff964040838852ce98ecaae07cfc21af4f0f7e41690e70d66ef3299630",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3761,
+    "run_id": "31789227966",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31789227966",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260814104632_90f94ad28c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3761,
+    "run_id": "31789227966"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-14T10:46:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
