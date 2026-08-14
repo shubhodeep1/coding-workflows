@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md: lines 925 and 927 (self-serve read list) vs lines 939-940 (Token hygiene) | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: \u00a722.A authorizes sessions to self-serve read deployed app-level env vars and build/deploy/runtime logs, but the token hygiene rule only covers DIGITALOCEAN_ACCESS_TOKEN.\n  WHY: An interactive session can read other secret-bearing values or log lines and has no rule requiring redaction beyond the DO token, which can leak consumer secrets.\n- CLAUDE.md: line 986 (\"\u00a72 Q/A format, free-text answer allowed for the ID itself\") vs line 67 (\"Use stable identifiers Q1, Q2, etc. with letter-only answers (A, B, C, or A+C)\") | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: \u00a722.C asks for a missing DigitalOcean resource ID using the \u00a72 Q/A format while also allowing a free-text answer, but \u00a72 only defines multiple-choice, letter-only answers.\n  WHY: The ask-for-ID flow has no valid format under the cited \u00a72 rules, so the workflow cannot both follow \u00a72 and capture an arbitrary resource ID.\n- changelog.d/digitalocean-token-access.md: filename (no issue-or-pr numeric prefix) | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: \u00a720.B requires changelog fragments to be named `changelog.d/<issue-or-pr>-<slug>.md`, but this fragment omits the issue-or-pr prefix.\n  WHY: The assembler globs every `*.md` and does not enforce the prefix, so there is no runtime failure; this is advisory non-compliance with the documented filename convention.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- CLAUDE.md: lines 925 and 927 (self-serve read list) vs lines 939-940 (Token hygiene) | severity=MAJOR | confidence=4\n  PROBLEM: \u00a722.A authorizes sessions to self-serve read deployed app-level env vars (\"verify that a name or value matches...\") and build/deploy/runtime logs, both of which routinely contain consumer secrets (DB connection URLs, API keys, app tokens). The only redaction rule in \u00a722.A (\"Token hygiene\") covers exclusively the DIGITALOCEAN_ACCESS_TOKEN value, not any other secret material the session reads through this new path.\n  WHY: An interactive session following the new policy can retrieve secret-bearing env var values or log lines and, with no rule requiring redaction beyond the DO token, may echo those secrets into its reply or the Claude session transcript, leaking a consumer's non-DO secrets.\n- CLAUDE.md: line 986 (\"\u00a72 Q/A format, free-text answer allowed for the ID itself\") vs line 67 (\"Use stable identifiers Q1, Q2, etc. with letter-only answers (A, B, C, or A+C)\") | severity=MAJOR | confidence=4\n  PROBLEM: \u00a722.C directs sessions to ask for a missing DigitalOcean resource ID using the \u00a72 Q/A format while explicitly allowing a free-text answer. \u00a72's Mandatory Question Format only defines multiple-choice, letter-only answers and one decision per Q-ID; it provides no mechanism for accepting an arbitrary free-form ID string.\n  WHY: A session attempting to follow both rules has no valid format for the ask-for-ID flow: it must either violate \u00a72's letter-only mandate or be unable to capture a free-form resource ID. The new policy's \"ask once, then record the ID\" workflow is inexpressible under the format it cites.\n- changelog.d/digitalocean-token-access.md: filename (no issue-or-pr numeric prefix) | severity=NIT | confidence=3\n  PROBLEM: \u00a720.B requires changelog fragments to be named `changelog.d/<issue-or-pr>-<slug>.md`. This fragment is named without the issue-or-pr prefix. The assembler (`scripts/assemble_changelog.py`) globs every `*.md` and does not enforce the prefix, so there is no runtime failure, and some pre-existing fragments are also unnumbered.\n  WHY: No runtime failure; this is non-compliance with the documented \u00a720.B filename convention and weakens traceability to the owning issue/PR. Advisory only.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "45df9c29dd2df39847ccc0bd0d5a1c50fdef515058d032b2de213172f8948736",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "31762632918",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31762632918",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260814022503_e71fd6749a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "31762632918"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-14T02:25:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
