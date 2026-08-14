@@ -58,6 +58,44 @@ def test_issue_pr_status_bootstraps_revalidate_lifecycle_ai_memory_schemas() -> 
 	assert "revalidate_events.v1.json" in text
 
 
+def test_lineage_finalization_noop_paths_emit_ai_memory_telemetry_before_exit() -> None:
+	finalize_step = _step_script("Finalize linked issue lineage state")
+
+	assert 'AI_MEMORY_ENABLED_NORMALIZED=false' in finalize_step
+	assert '1|true|yes|on) AI_MEMORY_ENABLED_NORMALIZED=true ;;' in finalize_step
+	assert 'if [ "${AI_MEMORY_ENABLED_NORMALIZED}" != "true" ]; then' in finalize_step
+
+	no_link_message = 'echo "No linked issues found; skipping lineage finalization."'
+	no_link_telemetry = (
+		'echo "AI_MEMORY_TELEMETRY: {\\"op\\":\\"finalize-task\\",\\"ok\\":true,\\"enabled\\":${AI_MEMORY_ENABLED_NORMALIZED},\\"fail_open\\":true,\\"reason\\":\\"no_linked_issues\\",\\"source\\":\\"issue_pr_status.yml\\"}"'
+	)
+	disabled_message = 'echo "AI memory disabled; skipping lineage finalization."'
+	disabled_telemetry = (
+		'echo "AI_MEMORY_TELEMETRY: {\\"op\\":\\"finalize-task\\",\\"ok\\":true,\\"enabled\\":${AI_MEMORY_ENABLED_NORMALIZED},\\"fail_open\\":true,\\"reason\\":\\"ai_memory_disabled\\",\\"source\\":\\"issue_pr_status.yml\\"}"'
+	)
+
+	assert no_link_message in finalize_step
+	assert no_link_telemetry in finalize_step
+	assert disabled_message in finalize_step
+	assert disabled_telemetry in finalize_step
+
+	no_link_message_pos = finalize_step.find(no_link_message)
+	no_link_telemetry_pos = finalize_step.find(no_link_telemetry)
+	no_link_exit_pos = finalize_step.find("exit 0", no_link_message_pos)
+	assert no_link_message_pos != -1
+	assert no_link_telemetry_pos != -1
+	assert no_link_exit_pos != -1
+	assert no_link_message_pos < no_link_telemetry_pos < no_link_exit_pos
+
+	disabled_message_pos = finalize_step.find(disabled_message)
+	disabled_telemetry_pos = finalize_step.find(disabled_telemetry)
+	disabled_exit_pos = finalize_step.find("exit 0", disabled_message_pos)
+	assert disabled_message_pos != -1
+	assert disabled_telemetry_pos != -1
+	assert disabled_exit_pos != -1
+	assert disabled_message_pos < disabled_telemetry_pos < disabled_exit_pos
+
+
 def test_orchestrator_classification_is_exported_for_downstream_reuse() -> None:
 	update_step = _step_script("Update linked issue labels when PR closes")
 
@@ -342,6 +380,7 @@ def test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge() ->
 if __name__ == "__main__":
 	test_payload_first_fallback_and_shared_helper_usage()
 	test_issue_pr_status_bootstraps_revalidate_lifecycle_ai_memory_schemas()
+	test_lineage_finalization_noop_paths_emit_ai_memory_telemetry_before_exit()
 	test_orchestrator_classification_is_exported_for_downstream_reuse()
 	test_fallback_regex_drops_bare_mentions_keeps_closing_keywords_and_urls()
 	test_merged_alert_reuses_exported_managed_classification_before_body_lookup_fallback()
