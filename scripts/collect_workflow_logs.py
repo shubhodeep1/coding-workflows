@@ -836,7 +836,13 @@ def _fetch_run_log_archive(
         return payload
 
 
-def extract_failure_point(jobs: list[dict[str, Any]]) -> dict[str, str | None]:
+def extract_failure_point(
+    jobs: list[dict[str, Any]],
+    *,
+    run_conclusion: str | None = None,
+) -> dict[str, str | None]:
+    normalized_run_conclusion = (run_conclusion or "").lower()
+
     for job in jobs:
         for step in job.get("steps") or []:
             if (step.get("conclusion") or "").lower() == "failure":
@@ -850,6 +856,27 @@ def extract_failure_point(jobs: list[dict[str, Any]]) -> dict[str, str | None]:
             return {
                 "job_name": job.get("name"),
                 "step_name": None,
+            }
+
+    if normalized_run_conclusion != "cancelled":
+        return {
+            "job_name": None,
+            "step_name": None,
+        }
+
+    for job in jobs:
+        for step in job.get("steps") or []:
+            if (step.get("conclusion") or "").lower() == "cancelled":
+                return {
+                    "job_name": job.get("name"),
+                    "step_name": step.get("name") or "cancelled_before_first_step",
+                }
+
+    for job in jobs:
+        if (job.get("conclusion") or "").lower() == "cancelled":
+            return {
+                "job_name": job.get("name"),
+                "step_name": "cancelled_before_first_step",
             }
 
     return {
@@ -874,8 +901,8 @@ def compute_run_metrics(
 
     conclusion = run.get("conclusion")
     failure_point = {"job_name": None, "step_name": None}
-    if (conclusion or "").lower() == "failure":
-        failure_point = extract_failure_point(jobs)
+    if (conclusion or "").lower() in {"failure", "cancelled"}:
+        failure_point = extract_failure_point(jobs, run_conclusion=conclusion)
 
     return {
         "repository": repository,
@@ -1528,7 +1555,7 @@ def main(argv: list[str] | None = None) -> int:
                 continue
 
             jobs: list[dict[str, Any]] = []
-            if run_id > 0 and (run.get("conclusion") or "").lower() == "failure":
+            if run_id > 0 and (run.get("conclusion") or "").lower() in {"failure", "cancelled"}:
                 try:
                     jobs = list_jobs_for_run(
                         repo,

@@ -99,6 +99,127 @@ def test_extract_failure_point_step_precedence_then_job_fallback():
 	assert point_job == {"job_name": "build", "step_name": None}
 
 
+def test_extract_failure_point_cancelled_step_precedence_then_job_fallback():
+	jobs = [
+		{
+			"name": "queue",
+			"conclusion": "cancelled",
+			"steps": [],
+		},
+		{
+			"name": "validate",
+			"conclusion": "cancelled",
+			"steps": [
+				{"name": "bootstrap", "conclusion": "success"},
+				{"name": "run validation", "conclusion": "cancelled"},
+			],
+		},
+	]
+	point = collector.extract_failure_point(jobs, run_conclusion="cancelled")
+	assert point == {"job_name": "validate", "step_name": "run validation"}
+
+	point_job = collector.extract_failure_point(
+		[{"name": "queue", "conclusion": "cancelled", "steps": []}],
+		run_conclusion="cancelled",
+	)
+	assert point_job == {"job_name": "queue", "step_name": "cancelled_before_first_step"}
+
+
+def test_compute_run_metrics_cancelled_run_uses_best_effort_failure_point():
+	run = {
+		"id": 13,
+		"name": "AI Validate",
+		"path": ".github/workflows/validate.yml",
+		"_workflow_family": "validate",
+		"status": "completed",
+		"conclusion": "cancelled",
+		"run_attempt": 1,
+		"created_at": "2026-04-10T10:00:00Z",
+		"run_started_at": "2026-04-10T10:01:00Z",
+		"updated_at": "2026-04-10T10:03:30Z",
+	}
+	jobs = [
+		{
+			"name": "validate",
+			"conclusion": "cancelled",
+			"steps": [],
+		},
+	]
+	row = collector.compute_run_metrics("owner/repo", run, jobs=jobs)
+	assert row["failure_point"] == {"job_name": "validate", "step_name": "cancelled_before_first_step"}
+
+	success_row = collector.compute_run_metrics("owner/repo", {**run, "conclusion": "success"}, jobs=jobs)
+	assert success_row["failure_point"] == {"job_name": None, "step_name": None}
+
+
+def test_main_fetches_cancelled_jobs_for_failure_point() -> None:
+	with tempfile.TemporaryDirectory(prefix="collector-cancelled-run-test-") as td:
+		report_file = Path(td) / "report.json"
+		cancelled_run = {
+			"id": 503,
+			"name": "AI Validate",
+			"path": ".github/workflows/validate.yml",
+			"status": "completed",
+			"conclusion": "cancelled",
+			"run_attempt": 1,
+			"created_at": "2026-04-10T12:00:00Z",
+			"run_started_at": "2026-04-10T12:00:30Z",
+			"updated_at": "2026-04-10T12:05:30Z",
+			"_workflow_family": "validate",
+		}
+
+		orig_cache_read = collector._cache_read_context
+		orig_cache_write = collector._cache_write_context
+		orig_list_runs = collector.list_runs_for_repo
+		orig_list_jobs = collector.list_jobs_for_run
+
+		calls = {"jobs": 0}
+
+		def fake_cache_read_context(**_: object):
+			return {"schema_version": "v1", "repositories": {}}, None, None
+
+		def fake_cache_write_context(**kwargs: object):
+			return True
+
+		def fake_list_runs_for_repo(*args: object, **kwargs: object):
+			return [cancelled_run], False, {"not_modified": False, "etag": None, "status_code": 200}
+
+		def fake_list_jobs_for_run(*args: object, **kwargs: object):
+			calls["jobs"] += 1
+			return [{"name": "validate", "conclusion": "cancelled", "steps": []}]
+
+		collector._cache_read_context = fake_cache_read_context
+		collector._cache_write_context = fake_cache_write_context
+		collector.list_runs_for_repo = fake_list_runs_for_repo
+		collector.list_jobs_for_run = fake_list_jobs_for_run
+		try:
+			rc = collector.main(
+				[
+					"--repo",
+					"owner/repo",
+					"--since",
+					"2026-04-01T00:00:00Z",
+					"--max-log-runs",
+					"0",
+					"--output",
+					str(report_file),
+				]
+			)
+		finally:
+			collector._cache_read_context = orig_cache_read
+			collector._cache_write_context = orig_cache_write
+			collector.list_runs_for_repo = orig_list_runs
+			collector.list_jobs_for_run = orig_list_jobs
+
+		assert rc == 0
+		assert calls == {"jobs": 1}
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+		assert report["runs"][0]["failure_point"] == {
+			"job_name": "validate",
+			"step_name": "cancelled_before_first_step",
+		}
+
+
 def test_list_runs_for_repo_paginates_and_includes_all_families():
 	orig = collector.gh_api_json
 	calls = []
