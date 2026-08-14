@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The new regression tests in `tests/test_workflow_gh_retry_fallback_contract.py` must be invoked by the test suite's main entrypoint so they execute during CI runs.\"\n  expected_change_site: `tests/test_workflow_gh_retry_fallback_contract.py` main() function\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  EVIDENCE: The new test functions exist but are not invoked by `main()`, so they won't run during CI.\n- requirement: \"The modified assertions in `test_dispatch_watcher_registration_poll_prefers_id_delta_and_uses_created_window_only_as_fallback()` must not break the existing test contract.\"\n  expected_change_site: `tests/test_workflow_gh_retry_fallback_contract.py` lines 231-384\n  confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The changed assertions in lines 231-384 can fail during test execution, causing the suite to report failures.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: The new regression tests in `tests/test_workflow_gh_retry_fallback_contract.py` must be invoked by the test suite's main entrypoint so they execute during CI runs.\n  Expected change site: `tests/test_workflow_gh_retry_fallback_contract.py` main() function\n  Evidence of absence: The new test functions (`test_comprehensive_release_helper_retries_rate_limit_once_and_returns_retry_output`, `test_comprehensive_release_helper_stops_after_max_attempts_on_rate_limit`, `test_comprehensive_release_helper_quiet_mode_retries_rate_limit_once_without_reporting`, `test_comprehensive_release_helper_non_rate_limit_failure_keeps_existing_reporting`, `test_comprehensive_release_helper_quiet_mode_suppresses_non_rate_limit_reporting`) exist but are not invoked by the file's main() function, so they won't run during CI.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: The modified assertions in `test_dispatch_watcher_registration_poll_prefers_id_delta_and_uses_created_window_only_as_fallback()` must not break the existing test contract.\n  Expected change site: `tests/test_workflow_gh_retry_fallback_contract.py` lines 231-384\n  Evidence of absence: The changed assertions in lines 231-384 can fail during test execution, causing the suite to report failures.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: \"Add regression coverage in the existing test file that stubs `gh`, triggers a first-call rate-limit failure, and proves the helper succeeds on the retry without workflow-file edits.\"\n  Expected change site: tests/test_workflow_gh_retry_fallback_contract.py (invocation inside main())\n  Evidence of absence: The five new comprehensive_release_helper_* test functions exist and are correct, but main() only collects tests whose names start with \"test_\" from the dispatch helper tests; the new comprehensive tests are never executed.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "3709f193118b20984fd2c2de60c0991e9f8873f11e852b46c51f5cb71600a7a5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3756,
+    "run_id": "31770169203",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31770169203",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260814052603_2cf364f200",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3756,
+    "run_id": "31770169203"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-14T05:26:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
