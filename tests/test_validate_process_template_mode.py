@@ -577,6 +577,137 @@ CANONICAL_VALIDATE_DRIVER_REL=scripts/validate_process.sh
 	assert "scripts/validate_copy.sh" in renamed_proc.stderr
 
 
+def test_bootstrap_guard_paths_emit_failure_summary_before_exit() -> None:
+	text = _validate_process_text()
+	assert 'require_validation_env_or_emit()' in text
+	assert 'emit_validation_failure_summary_bootstrap()' in text
+	compact_helper = "compact_validation_summary_value_bootstrap()\n{" + text.split("compact_validation_summary_value_bootstrap()\n{", 1)[1].split("\n\nquote_validation_summary_json_value_bootstrap()", 1)[0]
+	quote_helper = "quote_validation_summary_json_value_bootstrap()\n{" + text.split("quote_validation_summary_json_value_bootstrap()\n{", 1)[1].split("\n\nemit_validation_failure_summary_bootstrap()", 1)[0]
+	emit_helper = "emit_validation_failure_summary_bootstrap()\n{" + text.split("emit_validation_failure_summary_bootstrap()\n{", 1)[1].split("\n\nrequire_validation_env_or_emit()", 1)[0]
+	require_env_helper = "require_validation_env_or_emit()\n{" + text.split("require_validation_env_or_emit()\n{", 1)[1].split("\n\nrequire_validation_env_or_emit \"RUNTIME_DIR\"", 1)[0]
+	bootstrap_guard_block = "require_validation_env_or_emit \"RUNTIME_DIR\"\n" + text.split("require_validation_env_or_emit \"RUNTIME_DIR\"\n", 1)[1].split("\n\n_validate_script_dir=", 1)[0]
+	timeout_guard_block = "VALIDATION_TIMEOUT=\"${VALIDATION_TIMEOUT:-15}\"\n" + text.split("VALIDATION_TIMEOUT=\"${VALIDATION_TIMEOUT:-15}\"\n", 1)[1].split("\nTOOL_CALL_BUDGET_VALIDATE=", 1)[0]
+	codex_guard_block = "if [ ! -f \"${_validate_script_dir}/codex_helpers.sh\" ]; then\n" + text.split("if [ ! -f \"${_validate_script_dir}/codex_helpers.sh\" ]; then\n", 1)[1].split("\nfi\nsource \"${_validate_script_dir}/codex_helpers.sh\"", 1)[0] + "\nfi"
+	watchdog_guard_block = "if [ ! -f \"${_validate_script_dir}/watchdog_helpers.sh\" ]; then\n" + text.split("if [ ! -f \"${_validate_script_dir}/watchdog_helpers.sh\" ]; then\n", 1)[1].split("\nfi\nsource \"${_validate_script_dir}/watchdog_helpers.sh\"", 1)[0] + "\nfi"
+
+	def _run_bootstrap_case(script_body: str, *, extra_env: dict[str, str] | None = None, setup=None) -> subprocess.CompletedProcess[str]:
+		with tempfile.TemporaryDirectory(prefix="validate-bootstrap-guard-summary-") as td:
+			tmp_path = Path(td)
+			if setup is not None:
+				setup(tmp_path)
+
+			script = f"""set -euo pipefail
+{compact_helper}
+{quote_helper}
+{emit_helper}
+{require_env_helper}
+
+TRACKING_ISSUE=1234
+VALIDATION_CYCLE=4
+SELF_HEAL_ATTEMPT=1
+MAX_SELF_HEAL_ATTEMPTS=2
+GITHUB_RUN_ID=77
+GITHUB_RUN_ATTEMPT=3
+
+{script_body}
+"""
+			env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+			env.update({
+				"BASH_ENV": "",
+				"ENV": "",
+				"RUNTIME_DIR": str(tmp_path / "runtime"),
+				"GH_TOKEN": "token",
+				"OPENROUTER_API_KEY": "secret",
+				"GITHUB_REPOSITORY": "octo/demo-repo",
+				"_validate_script_dir": str(tmp_path / "scripts"),
+			})
+			if extra_env is not None:
+				env.update(extra_env)
+			proc = subprocess.run(
+				["bash", "-s"],
+				cwd=str(tmp_path),
+				env=env,
+				input=script,
+				text=True,
+				capture_output=True,
+				timeout=60,
+			)
+			return proc
+
+	def _summary_lines(proc: subprocess.CompletedProcess[str]) -> list[str]:
+		return [
+			line for line in proc.stdout.splitlines() if line.startswith("VALIDATION_FAILURE_SUMMARY ")
+		]
+
+	missing_token_proc = _run_bootstrap_case(
+		bootstrap_guard_block,
+		extra_env={"GH_TOKEN": ""},
+	)
+	assert missing_token_proc.returncode == 1, missing_token_proc.stderr
+	missing_token_summary_lines = _summary_lines(missing_token_proc)
+	assert len(missing_token_summary_lines) == 1
+	assert 'summary="Validation bootstrap failure"' in missing_token_summary_lines[0]
+	assert 'failure_summary="GH_TOKEN is required"' in missing_token_summary_lines[0]
+	assert 'repository="octo/demo-repo"' in missing_token_summary_lines[0]
+	assert 'tracking_issue=1234' in missing_token_summary_lines[0]
+	assert 'raw_status=harness_error' in missing_token_summary_lines[0]
+	assert 'self_heal_attempt=1/2' in missing_token_summary_lines[0]
+	assert 'fix_issues=0' in missing_token_summary_lines[0]
+	assert "GH_TOKEN is required" in missing_token_proc.stderr
+
+	invalid_repo_proc = _run_bootstrap_case(
+		bootstrap_guard_block,
+		extra_env={"GITHUB_REPOSITORY": "octo-demo-repo"},
+	)
+	assert invalid_repo_proc.returncode == 1, invalid_repo_proc.stderr
+	invalid_repo_summary_lines = _summary_lines(invalid_repo_proc)
+	assert len(invalid_repo_summary_lines) == 1
+	assert 'summary="Validation bootstrap failure"' in invalid_repo_summary_lines[0]
+	assert 'failure_summary="GITHUB_REPOSITORY must be in owner/repo format"' in invalid_repo_summary_lines[0]
+	assert 'repository="octo-demo-repo"' in invalid_repo_summary_lines[0]
+	assert 'raw_status=harness_error' in invalid_repo_summary_lines[0]
+	assert "GITHUB_REPOSITORY must be in owner/repo format" in invalid_repo_proc.stderr
+
+	timeout_proc = _run_bootstrap_case(
+		timeout_guard_block,
+		extra_env={"VALIDATION_TIMEOUT": "bogus"},
+	)
+	assert timeout_proc.returncode == 1, timeout_proc.stderr
+	timeout_summary_lines = _summary_lines(timeout_proc)
+	assert len(timeout_summary_lines) == 1
+	assert 'summary="Validation configuration error"' in timeout_summary_lines[0]
+	assert 'failure_summary="VALIDATION_TIMEOUT must be a positive integer (got: bogus)"' in timeout_summary_lines[0]
+	assert 'repository="octo/demo-repo"' in timeout_summary_lines[0]
+	assert 'raw_status=harness_error' in timeout_summary_lines[0]
+	assert "VALIDATION_TIMEOUT must be a positive integer (got: bogus)" in timeout_proc.stderr
+
+	codex_proc = _run_bootstrap_case(
+		codex_guard_block,
+	)
+	assert codex_proc.returncode == 1, codex_proc.stderr
+	codex_summary_lines = _summary_lines(codex_proc)
+	assert len(codex_summary_lines) == 1
+	assert 'summary="Validation bootstrap failure"' in codex_summary_lines[0]
+	assert 'failure_summary="Missing required support script ' in codex_summary_lines[0]
+	assert '/codex_helpers.sh"' in codex_summary_lines[0]
+	assert 'raw_status=harness_error' in codex_summary_lines[0]
+	assert "::error::Missing required support script" in codex_proc.stderr
+	assert "codex_helpers.sh" in codex_proc.stderr
+
+	watchdog_proc = _run_bootstrap_case(
+		watchdog_guard_block,
+	)
+	assert watchdog_proc.returncode == 1, watchdog_proc.stderr
+	watchdog_summary_lines = _summary_lines(watchdog_proc)
+	assert len(watchdog_summary_lines) == 1
+	assert 'summary="Validation bootstrap failure"' in watchdog_summary_lines[0]
+	assert 'failure_summary="Missing required support script ' in watchdog_summary_lines[0]
+	assert '/watchdog_helpers.sh"' in watchdog_summary_lines[0]
+	assert 'raw_status=harness_error' in watchdog_summary_lines[0]
+	assert "::error::Missing required support script" in watchdog_proc.stderr
+	assert "watchdog_helpers.sh" in watchdog_proc.stderr
+
+
 def test_serena_runtime_filter_hides_only_unchanged_bootstrap_tree() -> None:
 	text = _validate_process_text()
 	filter_helper = "filter_runtime_status_noise()\n{" + text.split("filter_runtime_status_noise()\n{", 1)[1].split("\n\nbuild_validate_serena_tool_hints()", 1)[0]
@@ -707,6 +838,7 @@ def main() -> int:
 	test_write_result_files_emits_failure_summary_only_for_non_pass()
 	test_phase1_guard_paths_emit_failure_summary_before_exit()
 	test_phase0_guard_paths_emit_failure_summary_before_exit()
+	test_bootstrap_guard_paths_emit_failure_summary_before_exit()
 	test_serena_runtime_filter_hides_only_unchanged_bootstrap_tree()
 	test_clear_stale_serena_codex_config_removes_only_serena_block()
 	return 0
