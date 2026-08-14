@@ -5457,11 +5457,49 @@ def test_gate_emits_force_full_review_tier_output_for_phase_i_resolver() -> None
 	assert "post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}" in wf, (
 		"Gate job must expose cached linked-issue labels for the post-merge validation dispatch"
 	)
+	assert "post_merge_validate_context_definitely_empty: ${{ steps.evaluate.outputs.post_merge_validate_context_definitely_empty }}" in wf, (
+		"Gate job must expose the definitely-empty post-merge validation guard output"
+	)
+	assert 'echo "post_merge_validate_context_definitely_empty=${POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY}"' in wf, (
+		"Gate evaluate step must emit the definitely-empty post-merge validation guard"
+	)
 	assert "POST_MERGE_PR_TEXT_JSON: ${{ needs.gate.outputs.post_merge_pr_text_json }}" in wf, (
 		"post-merge validate dispatch must consume cached PR text from gate outputs"
 	)
 	assert "POST_MERGE_LINKED_ISSUES_JSON: ${{ needs.gate.outputs.post_merge_linked_issues_json }}" in wf, (
 		"post-merge validate dispatch must consume cached linked-issue labels from gate outputs"
+	)
+	assert "needs.gate.outputs.post_merge_validate_context_definitely_empty != 'true'" in wf, (
+		"post-merge validate dispatch must skip only when the gate has already proven the context is definitely empty"
+	)
+
+
+def test_post_merge_validate_dispatch_warns_on_degraded_github_reads() -> None:
+	block = _step_block("Dispatch standalone validate for orchestrator short-circuit issues")
+	assert "Unable to refresh closingIssuesReferences for merged PR" in block, (
+		"post-merge validate dispatch must warn when linked-issue GraphQL retries exhaust"
+	)
+	assert "Unable to refresh PR title/body for merged PR" in block, (
+		"post-merge validate dispatch must warn when PR text retries exhaust"
+	)
+	assert "GitHub read retries were exhausted; leaving validation state unchanged." in block, (
+		"post-merge validate dispatch must not report an unknown linked-issue state as a clean no-op"
+	)
+	assert "Unable to read labels for issue #${issue_number} after retries" in block, (
+		"post-merge validate dispatch must warn when per-issue label hydration retries exhaust"
+	)
+
+
+def test_deterministic_skip_warns_when_closing_issue_resolution_is_unknown() -> None:
+	block = _step_block("Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge")
+	assert 'if issue_numbers="$(gh_retry gh api graphql \\' in block, (
+		"deterministic-skip-merge must retry closingIssuesReferences lookups"
+	)
+	assert "Unable to resolve closingIssuesReferences for PR #${PR_NUMBER} after retries" in block, (
+		"deterministic-skip-merge must warn when linked-issue resolution stays unknown"
+	)
+	assert "linked-issue state is unknown" in block, (
+		"deterministic-skip-merge must distinguish read failures from real empty linked-issue results"
 	)
 
 

@@ -247,6 +247,7 @@ jobs:
       head_ref: ${{ steps.evaluate.outputs.head_ref }}
       post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}
       post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}
+      post_merge_validate_context_definitely_empty: ${{ steps.evaluate.outputs.post_merge_validate_context_definitely_empty }}
     steps:
       - name: Evaluate review gate
         id: evaluate
@@ -302,6 +303,7 @@ jobs:
           SKIP_REASON=""
           POST_MERGE_PR_TEXT_JSON='{"title":"","body":""}'
           POST_MERGE_LINKED_ISSUES_JSON='[]'
+          POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY="false"
           FORCE_FULL_REVIEW_TIER="false"
 
           pr_state=""
@@ -383,6 +385,7 @@ jobs:
           # gate outputs so the merged-PR path can reuse the already fetched
           # PR text and linked-issue labels before any live fallback.
           if [ "${POST_MERGE_DISPATCH}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            post_merge_linked_issues_cache_known="false"
             POST_MERGE_PR_TEXT_JSON="$(jq -cn --arg title "${pr_title_cached}" --arg body "${pr_body_cached}" '{title: $title, body: $body}')"
             if _post_merge_linked="$(gh api graphql \
               -f owner="${REPOSITORY%/*}" \
@@ -392,8 +395,14 @@ jobs:
               --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' \
               2>/dev/null)"; then
               POST_MERGE_LINKED_ISSUES_JSON="$(printf '%s' "${_post_merge_linked}" | jq -c '.' 2>/dev/null || echo '[]')"
+              post_merge_linked_issues_cache_known="true"
             else
               echo "::warning::Failed to cache linked issue labels for merged PR #${PR_NUMBER}; post-merge validation will fall back to live lookups."
+            fi
+            if [ "${post_merge_linked_issues_cache_known}" = "true" ] \
+              && [ "${POST_MERGE_LINKED_ISSUES_JSON}" = "[]" ] \
+              && [ -z "$(printf '%s%s' "${pr_title_cached}" "${pr_body_cached}" | tr -d '[:space:]')" ]; then
+              POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY="true"
             fi
           fi
 
@@ -867,6 +876,7 @@ jobs:
           echo "head_ref=${pr_head_ref}" >> "${GITHUB_OUTPUT}"
           printf 'post_merge_pr_text_json=%s\n' "${POST_MERGE_PR_TEXT_JSON}" >> "${GITHUB_OUTPUT}"
           printf 'post_merge_linked_issues_json=%s\n' "${POST_MERGE_LINKED_ISSUES_JSON}" >> "${GITHUB_OUTPUT}"
+          echo "post_merge_validate_context_definitely_empty=${POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY}" >> "${GITHUB_OUTPUT}"
 
   post-merge-validate-dispatch:
     needs: gate
@@ -875,7 +885,7 @@ jobs:
     # and never carry orchestrator-managed sub-issues, so the validate
     # dispatch is unnecessary. Belt-and-braces — the label-scoped iteration
     # inside the job already no-ops on claude/* PRs.
-    if: ${{ needs.gate.outputs.post_merge_dispatch == 'true' && needs.gate.outputs.claude_branch_review != 'true' }}
+    if: ${{ needs.gate.outputs.post_merge_dispatch == 'true' && needs.gate.outputs.claude_branch_review != 'true' && needs.gate.outputs.post_merge_validate_context_definitely_empty != 'true' }}
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       REPOSITORY: ${{ github.repository }}
@@ -902,36 +912,62 @@ jobs:
           if [ -f ".codex-workflow-src/scripts/gh_helpers.sh" ]; then
             source ".codex-workflow-src/scripts/gh_helpers.sh" 2>/dev/null || true
           fi
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             echo "::warning::Skipping post-merge validate dispatch: invalid PR number '${PR_NUMBER}'."
             exit 0
           fi
 
-          issue_nodes_json="$(printf '%s' "${POST_MERGE_LINKED_ISSUES_JSON:-[]}" | jq -c 'if type == "array" then [.[] | select((.number | tonumber?) != null) | {number: (.number | tonumber), labels: (if (.labels | type) == "array" then .labels else null end)}] else [] end' 2>/dev/null || echo '[]')"
+          normalize_post_merge_issue_nodes_json() {
+            printf '%s' "${1:-[]}" | jq -c 'if type == "array" then [.[] | select((.number | tonumber?) != null) | {number: (.number | tonumber), labels: (if (.labels | type) == "array" then .labels else null end)}] else [] end' 2>/dev/null || echo '[]'
+          }
+
+          issue_nodes_json="$(normalize_post_merge_issue_nodes_json "${POST_MERGE_LINKED_ISSUES_JSON:-[]}")"
+          post_merge_linked_issue_lookup_failed="false"
+          post_merge_pr_text_lookup_failed="false"
 
           if [ "${issue_nodes_json}" = "[]" ]; then
-            issue_nodes_json="$(gh api graphql \
+            if issue_nodes_json_live="$(gh_retry gh api graphql \
               -f owner="${REPOSITORY%/*}" \
               -f name="${REPOSITORY#*/}" \
               -F number="${PR_NUMBER}" \
               -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number labels(first: 100) { nodes { name } } } } } } }' \
-              --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' || true)"
+              --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' \
+              2>/dev/null)"; then
+              issue_nodes_json="$(normalize_post_merge_issue_nodes_json "${issue_nodes_json_live}")"
+            else
+              post_merge_linked_issue_lookup_failed="true"
+              issue_nodes_json='[]'
+              echo "::warning::Unable to refresh closingIssuesReferences for merged PR #${PR_NUMBER} after retries; continuing with PR body/title fallback."
+            fi
           fi
 
           if [ -z "${issue_nodes_json}" ] || [ "${issue_nodes_json}" = "[]" ]; then
             pr_data="$(printf '%s' "${POST_MERGE_PR_TEXT_JSON:-{}}" | jq -r 'if type == "object" then [(.title // ""), (.body // "")] | join(" ") else "" end' 2>/dev/null || echo "")"
             if [ -z "$(printf '%s' "${pr_data}" | tr -d '[:space:]')" ]; then
-              pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+              if pr_data_live="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null)"; then
+                pr_data="${pr_data_live}"
+              else
+                post_merge_pr_text_lookup_failed="true"
+                pr_data=""
+                echo "::warning::Unable to refresh PR title/body for merged PR #${PR_NUMBER} after retries; skipping live PR text fallback."
+              fi
             fi
             issue_numbers=""
-            if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
-              issue_numbers="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${pr_data}" || true)"
-            else
-              echo "::warning::Shared linked-issue fallback helper unavailable; skipping PR body/title fallback for PR #${PR_NUMBER}."
+            if [ -n "$(printf '%s' "${pr_data}" | tr -d '[:space:]')" ]; then
+              if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
+                issue_numbers="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${pr_data}" || true)"
+              else
+                echo "::warning::Shared linked-issue fallback helper unavailable; skipping PR body/title fallback for PR #${PR_NUMBER}."
+              fi
             fi
             if [ -z "${issue_numbers}" ]; then
-              echo "No linked issues found for merged PR #${PR_NUMBER}."
+              if [ "${post_merge_linked_issue_lookup_failed}" = "true" ] || [ "${post_merge_pr_text_lookup_failed}" = "true" ]; then
+                echo "::warning::Standalone validate dispatch could not confirm linked issues for merged PR #${PR_NUMBER} because GitHub read retries were exhausted; leaving validation state unchanged."
+              else
+                echo "No linked issues found for merged PR #${PR_NUMBER}."
+              fi
               exit 0
             fi
             echo "Found linked issues via PR body/title fallback: ${issue_numbers}"
@@ -945,11 +981,15 @@ jobs:
             [ -n "${issue_number}" ] || continue
 
             if [ "${labels_known}" != "true" ]; then
-              issue_labels="$(gh issue view "${issue_number}" --repo "${REPOSITORY}" --json labels --jq '.labels[].name' 2>/dev/null || true)"
-              if echo "${issue_labels}" | grep -Fxq 'ai:orchestrator-validate-required'; then
-                has_validate_label="true"
+              if issue_labels="$(gh_retry gh issue view "${issue_number}" --repo "${REPOSITORY}" --json labels --jq '.labels[].name' 2>/dev/null)"; then
+                if echo "${issue_labels}" | grep -Fxq 'ai:orchestrator-validate-required'; then
+                  has_validate_label="true"
+                else
+                  has_validate_label="false"
+                fi
               else
-                has_validate_label="false"
+                echo "::warning::Unable to read labels for issue #${issue_number} after retries; skipping standalone validation because ai:orchestrator-validate-required state is unknown."
+                continue
               fi
             fi
 
@@ -1080,12 +1120,20 @@ jobs:
           # heuristic will simply not advance their issue label on this
           # path — they still pass through PR labeling + auto-merge,
           # and the orchestrator stall cron picks up any lag.
-          issue_numbers="$(gh api graphql \
+          linked_issue_query_failed="false"
+          if issue_numbers="$(gh_retry gh api graphql \
             -f owner="${REPOSITORY%/*}" \
             -f name="${REPOSITORY#*/}" \
             -F number="${PR_NUMBER}" \
             -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map(.number) | .[]' 2>/dev/null || true)"
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map(.number) | .[]' \
+            2>/dev/null)"; then
+            :
+          else
+            linked_issue_query_failed="true"
+            issue_numbers=""
+            echo "::warning::Unable to resolve closingIssuesReferences for PR #${PR_NUMBER} after retries; skipping linked-issue labeling because linked-issue state is unknown. PR will still be labeled ai:review-skipped and auto-merge will be enabled."
+          fi
 
           if [ -n "${issue_numbers}" ]; then
             ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}" "0e8a16" "PR review complete and ready to merge"
@@ -1097,7 +1145,7 @@ jobs:
                 echo "::warning::Failed to set ai:ready-to-merge on issue #${issue_number}."
               fi
             done <<< "${issue_numbers}"
-          else
+          elif [ "${linked_issue_query_failed}" != "true" ]; then
             echo "No linked issues found via closingIssuesReferences for PR #${PR_NUMBER} — skipping issue labeling. PR will still be labeled ai:review-skipped and auto-merge will be enabled."
           fi
 
