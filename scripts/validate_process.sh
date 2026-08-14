@@ -1173,11 +1173,42 @@ set_tracking_phase_label()
   return 0
 }
 
-if ! enforce_canonical_driver_path; then
+emit_validation_failure_summary_precheck()
+{
+  local summary="$1"
+  local failure_summary="$2"
+  local raw_status="${3:-error}"
+  local compact_summary=""
+  local compact_failure_summary=""
+  local repository_json='""'
+  local summary_json='""'
+  local failure_summary_json='""'
+  local created_fix_issues_count="0"
+
+  compact_summary="$(printf '%s' "${summary}" | tr '\r\n' '  ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+  compact_failure_summary="$(printf '%s' "${failure_summary}" | tr '\r\n' '  ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+  if [ -z "${compact_failure_summary}" ]; then
+    compact_failure_summary="${compact_summary}"
+  fi
+
+  repository_json="$(jq -cn --arg value "${GITHUB_REPOSITORY:-}" '$value')"
+  summary_json="$(jq -cn --arg value "${compact_summary}" '$value')"
+  failure_summary_json="$(jq -cn --arg value "${compact_failure_summary}" '$value')"
+  created_fix_issues_count="$(printf '%s' "${CREATED_FIX_ISSUES_JSON:-[]}" | jq -r 'if type == "array" then length else 0 end' 2>/dev/null || printf '%s' '0')"
+
+  printf '%s\n' \
+    "VALIDATION_FAILURE_SUMMARY repository=${repository_json} tracking_issue=${TRACKING_ISSUE_RAW} status=error raw_status=${raw_status} cycle=${VALIDATION_CYCLE} run_id=${GITHUB_RUN_ID:-} run_attempt=${GITHUB_RUN_ATTEMPT:-} self_heal_attempt=${SELF_HEAL_ATTEMPT}/${MAX_SELF_HEAL_ATTEMPTS} fix_issues=${created_fix_issues_count} summary=${summary_json} failure_summary=${failure_summary_json}"
+}
+
+if ! VALIDATION_PRECHECK_FAILURE_OUTPUT="$(enforce_canonical_driver_path 2>&1)"; then
+  printf '%s\n' "${VALIDATION_PRECHECK_FAILURE_OUTPUT}" >&2
+  emit_validation_failure_summary_precheck "Validation driver path violation" "${VALIDATION_PRECHECK_FAILURE_OUTPUT}" "harness_error"
   exit 1
 fi
 
-if ! enforce_no_renamed_driver_artifacts; then
+if ! VALIDATION_PRECHECK_FAILURE_OUTPUT="$(enforce_no_renamed_driver_artifacts 2>&1)"; then
+  printf '%s\n' "${VALIDATION_PRECHECK_FAILURE_OUTPUT}" >&2
+  emit_validation_failure_summary_precheck "Validation driver artifact violation" "${VALIDATION_PRECHECK_FAILURE_OUTPUT}" "harness_error"
   exit 1
 fi
 

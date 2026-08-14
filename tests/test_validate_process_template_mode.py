@@ -484,6 +484,99 @@ CREATED_FIX_ISSUES_JSON='[]'
 	assert "Refusing to delete existing 'validation' directory without ownership marker (validation/.ai-validation-owned)." in ownership_proc.stderr
 
 
+def test_phase0_guard_paths_emit_failure_summary_before_exit() -> None:
+	text = _validate_process_text()
+	assert 'emit_validation_failure_summary_precheck()' in text
+	precheck_emit_helper = "emit_validation_failure_summary_precheck()\n{" + text.split("emit_validation_failure_summary_precheck()\n{", 1)[1].split("\n\nif ! VALIDATION_PRECHECK_FAILURE_OUTPUT=\"$(enforce_canonical_driver_path 2>&1)\"; then", 1)[0]
+	canonical_helper = "enforce_canonical_driver_path()\n{" + text.split("enforce_canonical_driver_path()\n{", 1)[1].split("\n\nensure_validation_harness_not_tracked()", 1)[0]
+	renamed_helper = "enforce_no_renamed_driver_artifacts()\n{" + text.split("enforce_no_renamed_driver_artifacts()\n{", 1)[1].split("\n\npost_tracking_comment()", 1)[0]
+	canonical_guard_block = "if ! VALIDATION_PRECHECK_FAILURE_OUTPUT=\"$(enforce_canonical_driver_path 2>&1)\"; then\n" + text.split("if ! VALIDATION_PRECHECK_FAILURE_OUTPUT=\"$(enforce_canonical_driver_path 2>&1)\"; then\n", 1)[1].split("\n\nif ! VALIDATION_PRECHECK_FAILURE_OUTPUT=\"$(enforce_no_renamed_driver_artifacts 2>&1)\"; then", 1)[0]
+	renamed_guard_block = "if ! VALIDATION_PRECHECK_FAILURE_OUTPUT=\"$(enforce_no_renamed_driver_artifacts 2>&1)\"; then\n" + text.split("if ! VALIDATION_PRECHECK_FAILURE_OUTPUT=\"$(enforce_no_renamed_driver_artifacts 2>&1)\"; then\n", 1)[1].split("\n\nextract_last_json_with_key()", 1)[0]
+
+	def _run_precheck_guard_case(script_body: str, *, setup=None, git_repo: bool = False) -> subprocess.CompletedProcess[str]:
+		with tempfile.TemporaryDirectory(prefix="validate-precheck-guard-summary-") as td:
+			tmp_path = Path(td)
+			if git_repo:
+				_bootstrap_git_repo(tmp_path)
+			if setup is not None:
+				setup(tmp_path)
+
+			runner_path = tmp_path / "runner.sh"
+			runner_path.write_text(
+				f"""#!/usr/bin/env bash
+set -euo pipefail
+{precheck_emit_helper}
+{canonical_helper}
+{renamed_helper}
+
+TRACKING_ISSUE_RAW=1234
+VALIDATION_CYCLE=4
+SELF_HEAL_ATTEMPT=1
+MAX_SELF_HEAL_ATTEMPTS=2
+GITHUB_REPOSITORY=octo/demo-repo
+GITHUB_RUN_ID=77
+GITHUB_RUN_ATTEMPT=3
+CREATED_FIX_ISSUES_JSON='[]'
+CANONICAL_VALIDATE_DRIVER_REL=scripts/validate_process.sh
+
+{script_body}
+""",
+				encoding="utf-8",
+			)
+			runner_path.chmod(0o755)
+			proc = subprocess.run(
+				["bash", str(runner_path)],
+				cwd=str(tmp_path),
+				env={
+					**{key: value for key, value in os.environ.items() if not key.startswith("GIT_")},
+					"BASH_ENV": "",
+					"ENV": "",
+				},
+				text=True,
+				capture_output=True,
+				timeout=60,
+			)
+			return proc
+
+	def _summary_lines(proc: subprocess.CompletedProcess[str]) -> list[str]:
+		return [
+			line for line in proc.stdout.splitlines() if line.startswith("VALIDATION_FAILURE_SUMMARY ")
+		]
+
+	canonical_proc = _run_precheck_guard_case(canonical_guard_block)
+	assert canonical_proc.returncode == 1, canonical_proc.stderr
+	canonical_summary_lines = _summary_lines(canonical_proc)
+	assert len(canonical_summary_lines) == 1
+	assert 'summary="Validation driver path violation"' in canonical_summary_lines[0]
+	assert 'raw_status=harness_error' in canonical_summary_lines[0]
+	assert 'fix_issues=0' in canonical_summary_lines[0]
+	assert 'failure_summary="Refusing to run validate driver from non-canonical path ' in canonical_summary_lines[0]
+	assert 'Expected scripts/validate_process.sh."' in canonical_summary_lines[0]
+	assert "Refusing to run validate driver from non-canonical path" in canonical_proc.stderr
+
+	def _setup_renamed_artifact(tmp_path: Path) -> None:
+		scripts_dir = tmp_path / "scripts"
+		scripts_dir.mkdir(parents=True, exist_ok=True)
+		validate_driver_body = "#!/usr/bin/env bash\necho validate\n"
+		(scripts_dir / "validate_process.sh").write_text(validate_driver_body, encoding="utf-8")
+		(scripts_dir / "validate_copy.sh").write_text(validate_driver_body, encoding="utf-8")
+
+	renamed_proc = _run_precheck_guard_case(
+		renamed_guard_block,
+		setup=_setup_renamed_artifact,
+		git_repo=True,
+	)
+	assert renamed_proc.returncode == 1, renamed_proc.stderr
+	renamed_summary_lines = _summary_lines(renamed_proc)
+	assert len(renamed_summary_lines) == 1
+	assert 'summary="Validation driver artifact violation"' in renamed_summary_lines[0]
+	assert 'raw_status=harness_error' in renamed_summary_lines[0]
+	assert 'fix_issues=0' in renamed_summary_lines[0]
+	assert 'failure_summary="Found renamed managed validate driver artifacts in scripts/: scripts/validate_copy.sh"' in renamed_summary_lines[0]
+	assert "Found renamed managed validate driver artifacts in scripts/:" in renamed_proc.stderr
+	assert "scripts/validate_copy.sh" in renamed_proc.stderr
+
+
 def test_serena_runtime_filter_hides_only_unchanged_bootstrap_tree() -> None:
 	text = _validate_process_text()
 	filter_helper = "filter_runtime_status_noise()\n{" + text.split("filter_runtime_status_noise()\n{", 1)[1].split("\n\nbuild_validate_serena_tool_hints()", 1)[0]
@@ -613,6 +706,7 @@ def main() -> int:
 	test_render_recovery_lint_gate_contract_present()
 	test_write_result_files_emits_failure_summary_only_for_non_pass()
 	test_phase1_guard_paths_emit_failure_summary_before_exit()
+	test_phase0_guard_paths_emit_failure_summary_before_exit()
 	test_serena_runtime_filter_hides_only_unchanged_bootstrap_tree()
 	test_clear_stale_serena_codex_config_removes_only_serena_block()
 	return 0
