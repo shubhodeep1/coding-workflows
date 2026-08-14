@@ -418,3 +418,215 @@ No `TODO` / `FIXME` / `HACK` markers were found under `.github/workflows/` or `s
 | Code modularization | 9 | Large |
 | Expression size reduction | 4 | Medium |
 | Medium/Low fixes | 4 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-08-14)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation is provably same-scope/same-semantics from static reading alone; `NEEDS_VERIFICATION` means overlapping data is real but freshness, step-boundary, or failure-semantic checks are still required; `RISKY_SKIP` means the overlap sits in a paginated, retry/race-defense, or control-plane path that must not be auto-implemented without manual review.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `.github/workflows/cancel_on_pr_close.yml:111-120`, `.github/workflows/cancel_on_pr_close.yml:122-131`
+- **Current call count / proposed call count:** `2` list calls → `1` list call
+- **Endpoint(s):** `GET /repos/{owner}/{repo}/actions/runs`
+- **Evidence:**
+  ```sh
+  queued_runs_json="$(
+    gh_retry gh api \
+      --method GET \
+      "repos/${REPOSITORY}/actions/runs" \
+      --paginate \
+      -f status=queued \
+      -f event=pull_request \
+      -f "branch=${PR_HEAD_REF}" \
+      -f per_page=100 \
+    | jq -s "${RUNS_JQ}"
+  )"
+  in_progress_runs_json="$(
+    gh_retry gh api \
+      --method GET \
+      "repos/${REPOSITORY}/actions/runs" \
+      --paginate \
+      -f status=in_progress \
+      -f event=pull_request \
+      -f "branch=${PR_HEAD_REF}" \
+      -f per_page=100 \
+    | jq -s "${RUNS_JQ}"
+  )"
+  ```
+  The step already recombines both result sets locally at `.github/workflows/cancel_on_pr_close.yml:134-159`; the only API-level difference is the `status=` filter.
+- **Proposed fix:** If manually approved, replace the dual status-specific reads with one broader `actions/runs` read that keeps the existing `event=pull_request`, `branch=${PR_HEAD_REF}`, and `per_page=100` filters, then preserve the current local `jq`/`awk` filtering and dedupe.
+- **Safety rationale:** This is a `--paginate` call inside a PR-close cancellation path, which hits both the paginated-call and control-plane `RISKY_SKIP` triggers.
+- **Downstream signal:** Manual review only: prove a single broader `actions/runs` query preserves page-boundary coverage for both queued and in-progress runs and does not change cancellation/no-match behavior before implementing.
+
+#### MERGE-002
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `.github/workflows/review_autofix_sweep.yml:114-126`, `.github/workflows/review_autofix_sweep.yml:151-153`
+- **Current call count / proposed call count:** `4` snapshot calls per sweep (`2` statuses × `2` workflows) → `2` snapshot calls per sweep
+- **Endpoint(s):** `GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs`
+- **Evidence:**
+  ```sh
+  snapshot_active_review_runs() {
+    local workflow="$1"
+    local status snapshot_json='{}' cached_head_ref cached_count
+
+    if snapshot_json="$(
+      for status in queued in_progress; do
+        gh api --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
+          -f status="${status}" \
+          -f per_page=100 \
+          2>/dev/null || true
+      done | jq -c -s '
+  ```
+  and the function is invoked for two workflows:
+  ```sh
+  for wf in internal-review.yml review_autofix.yml; do
+    snapshot_active_review_runs "${wf}"
+  done
+  ```
+- **Proposed fix:** If manually approved, change `snapshot_active_review_runs()` to issue one paginated read per workflow and keep the existing local `unique_by(.id)` plus `head_branch` counting logic unchanged.
+- **Safety rationale:** This is a paginated active-run snapshot used as a concurrency gate, so it falls under the paginated-call and race-sensitive control-path `RISKY_SKIP` rules.
+- **Downstream signal:** Manual review only: capture a busy sweep sample where queued and in-progress runs span multiple pages, then verify that one per-workflow snapshot preserves the current `active_review_runs["${workflow}:${head_ref}"]` counts before changing the loop.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **File path and line ranges:** `.github/workflows/check_failure_triage.yml:117-137`, `scripts/check_failure_triage.sh:151-178`
+- **Current call count / proposed call count:** `2` successful PR-metadata reads on the same-repo path → `1` on that path, with cache-miss fallback retained
+- **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+- **Evidence:**
+  ```sh
+  # .github/workflows/check_failure_triage.yml:124-137
+  if gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ inputs.pr_number }}" > "${pr_payload}" 2>/dev/null; then
+    break
+  fi
+  ...
+  HEAD_REPO="$(jq -r '.head.repo.full_name // ""' "${pr_payload}" 2>/dev/null || echo '')"
+  ```
+  ```sh
+  # scripts/check_failure_triage.sh:151-178
+  PR_JSON_FILE="${RUNTIME_DIR}/pr_payload.json"
+  if gh_api_json_to_file "${PR_JSON_FILE}" gh api "repos/${REPO}/pulls/${PR_NUMBER}"; then
+    PR_JSON="$(cat "${PR_JSON_FILE}")"
+  fi
+  ...
+  PR_STATE="$(printf '%s' "${PR_JSON}" | jq -r '.state // ""')"
+  HEAD_REF="$(printf '%s' "${PR_JSON}" | jq -r '.head.ref // ""')"
+  PR_TITLE="$(printf '%s' "${PR_JSON}" | jq -r '.title // ""')"
+  PR_URL="$(printf '%s' "${PR_JSON}" | jq -r '.html_url // ""')"
+  HEAD_REPO_FULL_NAME="$(printf '%s' "${PR_JSON}" | jq -r '.head.repo.full_name // ""')"
+  ```
+  The guard already fetched the exact PR payload needed for `HEAD_REPO`; the script re-fetches the same endpoint later because the first payload is discarded. The runtime workspace is only created later at `.github/workflows/check_failure_triage.yml:267-273`, so there is no current cache handoff.
+- **Proposed fix:** Persist the successful guard payload to a stable temp path (for example under `$RUNNER_TEMP`) and export that path; then update the PR-resolution block in `scripts/check_failure_triage.sh` to seed `PR_JSON_FILE` from the pre-fetched payload when present and valid JSON, falling back to `gh_api_json_to_file` only on cache miss.
+- **Safety rationale:** This crosses workflow-step/script boundaries, and the later script also uses `.state` to short-circuit closed PRs, so the SAFE_TO_MERGE same-step/freshness preconditions are not proven statically.
+- **Downstream signal:** Verify three cases before removing the second GET: same-repo open PR, fork PR short-circuit, and PR closed between the guard step and script start; if the third case changes behavior, keep a narrow live `.state` refresh but reuse cached title/body/head-repo data.
+
+#### REUSE-002
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **File path and line ranges:** `scripts/review_collect_pr_metadata.sh:258-263`, `.github/workflows/review_autofix.yml:4872-4916`, `scripts/review_rb_judge.sh:834-842`
+- **Current call count / proposed call count:** `2` successful linked-issue reads on the common cache-populated path → `1` on that path
+- **Endpoint(s):** GitHub GraphQL `repository.pullRequest.closingIssuesReferences(first: 50)`
+- **Evidence:**
+  ```sh
+  # scripts/review_collect_pr_metadata.sh:258-263,277-278
+  if gh_retry "${_linked_tmp}" api graphql \
+    -f owner="${REPOSITORY_OWNER}" \
+    -f name="${REPOSITORY_NAME}" \
+    -F number="${PR_NUMBER}" \
+    -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
+    --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
+  ...
+    printf 'LINKED_ISSUES_JSON=%s\n' "${_linked_numbers}" >> "${GITHUB_ENV}"
+  ```
+  ```sh
+  # .github/workflows/review_autofix.yml:4883-4887
+  # Reuse LINKED_ISSUES_JSON from the early "Collect PR metadata" step
+  # which already fetched closingIssuesReferences via GraphQL ...
+  if [ -n "${LINKED_ISSUES_JSON+x}" ]; then
+  ```
+  ```sh
+  # scripts/review_rb_judge.sh:834-842
+  ISSUE_NUMBERS="$(gh_retry gh api graphql \
+    -f owner="${REPOSITORY%/*}" \
+    -f name="${REPOSITORY#*/}" \
+    -F number="${PR_NUMBER}" \
+    -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
+    --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+
+  if [ -z "${ISSUE_NUMBERS}" ]; then
+    ISSUE_NUMBERS="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
+  fi
+  ```
+  By judge time, the workflow has already materialized `LINKED_ISSUES_JSON`; the judge ignores that cache and re-queries GraphQL.
+- **Proposed fix:** Update `scripts/review_rb_judge.sh` to read `ISSUE_NUMBERS` from `LINKED_ISSUES_JSON` first, keep `LINKED_ISSUE_FALLBACK_NUMBERS_JSON` as the next fallback, and only call GraphQL when the cache is truly unset/invalid. If any pre-judge PR-body edit can change closing refs, refresh `LINKED_ISSUES_JSON` immediately after that edit instead of inside the judge.
+- **Safety rationale:** The reuse crosses workflow-step/script boundaries, and closing references are body-derived state, so freshness must be verified before eliminating the judge’s live GraphQL read.
+- **Downstream signal:** Verify that every path into `review_rb_judge.sh` first executes the cache-population step, and audit earlier PR-body mutations—at minimum `scripts/review_conflict_resolve.sh:1503-1508`—to prove they cannot change closing references without also refreshing `LINKED_ISSUES_JSON`.
+
+#### REUSE-003
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **File path and line ranges:** `.github/workflows/review_autofix.yml:1630-1631`, `.github/workflows/review_autofix.yml:5367-5368`, `scripts/review_collect_pr_metadata.sh:209-234`, `scripts/review_enable_auto_merge.sh:127-136`, `scripts/review_enable_auto_merge.sh:192-224`, `scripts/review_conflict_resolve.sh:1425-1438`, `scripts/review_conflict_resolve.sh:1503-1508`
+- **Current call count / proposed call count:** `2` successful PR-metadata reads on the normal review path → `1` on that path, with live GET retained as cache-miss fallback
+- **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+- **Evidence:**
+  ```sh
+  # scripts/review_collect_pr_metadata.sh:209-234
+  gh_retry "${PR_PAYLOAD_FILE}" api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
+  ...
+  jq '{
+    title: (.title // ""),
+    body: (.body // ""),
+    baseRefName: (.base.ref // ""),
+    headRefName: (.head.ref // ""),
+    headRepoFullName: (.head.repo.full_name // "")
+  }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+  ```
+  ```sh
+  # .github/workflows/review_autofix.yml:1630-1631,5367-5368
+  echo "PR_PAYLOAD_FILE=${RUNTIME_DIR}/pr_payload.json"
+  echo "PR_META_FILE=${RUNTIME_DIR}/pr_meta.json"
+  ...
+  bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"
+  ```
+  ```sh
+  # scripts/review_enable_auto_merge.sh:127-136,192-214
+  if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" 2>"${_orch_pr_meta_err_file}")"; then
+  ...
+  _orch_pr_head_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+  ...
+  _orch_pr_body="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+  ```
+  ```sh
+  # scripts/review_conflict_resolve.sh:1425-1438,1503-1508
+  jq --rawfile body "${_body_file}" '.body = $body' "${PR_META_FILE}" > "${_tmp}" \
+    && mv "${_tmp}" "${PR_META_FILE}" || true
+  ...
+  if ! gh_retry gh pr edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body-file "${_body_file}" >/dev/null; then
+  ...
+  _sync_local_pr_body_from_file "${_body_file}"
+  ```
+  The review job already maintains job-local PR metadata files, and the only observed PR-body edit path synchronizes them; the auto-merge helper still re-fetches the full PR.
+- **Proposed fix:** Teach `scripts/review_enable_auto_merge.sh` to prefer `PR_META_FILE` for `.head.ref` and `.body` (or `PR_PAYLOAD_FILE` as a secondary file fallback) when the cache files exist and contain valid JSON, and only fall back to the live `gh api` GET on cache miss/invalid cache.
+- **Safety rationale:** This crosses step/script boundaries, and static reading does not fully prove there are no other pre-auto-merge metadata mutations or deleted-head-branch cases that rely on the live fetch.
+- **Downstream signal:** Audit all pre-auto-merge PR metadata mutations—at minimum `scripts/review_conflict_resolve.sh:1503-1508`—and confirm the cache files remain authoritative for `.head.ref` and `.body`; if not, add a targeted refresh immediately after the mutating step before removing the live GET.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- API-001: `RISKY_SKIP` — same-endpoint duplication is real, but `/pulls/{pr}/files` is paginated, so consolidation is not auto-safe under this prompt’s rules.
+- BATCH-001: `RISKY_SKIP` — the proposed batching lives in `scripts/orchestrate_poll_process.sh`, which this prompt explicitly treats as a manual-review path.
+- BATCH-002: `RISKY_SKIP` — also inside `scripts/orchestrate_poll_process.sh`; changing the tiered lookup/batching path would alter orchestrator race/pagination behavior and must stay manual.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 3 | REUSE-001, REUSE-002, REUSE-003 |
+| RISKY_SKIP | 2 | MERGE-001, MERGE-002 |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
