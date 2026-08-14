@@ -1,13 +1,14 @@
 {
   "repositories": {
     "owner/repo": {
+      "cancelled_jobs_seen_set": [],
       "jobs_seen_set": [
         201,
         202,
         203,
         204
       ],
-      "last_updated": "2026-08-14T03:27:31Z",
+      "last_updated": "2026-08-14T04:37:37Z",
       "logs_seen_set": [
         201,
         202
@@ -207,7 +208,7 @@
           "updated_at": "2026-04-10T11:05:00Z"
         }
       ],
-      "runs_window_start": "2026-08-07T03:27:21Z"
+      "runs_window_start": "2026-08-07T04:37:27Z"
     },
     "shubhodeep1/atlas-bridge.gd": {
       "jobs_seen_set": [
