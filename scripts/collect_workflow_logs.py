@@ -897,7 +897,7 @@ def _cached_row_needs_cancelled_failure_point_backfill(
     )
     if cancelled_failure_point_version < WORKFLOW_LOG_CACHE_CANCELLED_FAILURE_POINT_VERSION:
         return True
-    if run_id in cancelled_jobs_seen_lookup and has_failure_point:
+    if run_id in cancelled_jobs_seen_lookup:
         return False
     if not isinstance(failure_point, dict):
         return True
