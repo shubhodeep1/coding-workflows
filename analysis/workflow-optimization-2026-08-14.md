@@ -288,3 +288,133 @@ Net: this window’s pipeline is **control-plane heavy, not model heavy**.
 | Other MCP servers observed | none | 0 | 0 | 0 | 0 | 0 | No unknown `<NAME>_*` telemetry found |
 
 **Data-quality note:** the secondary prompt context included at least one inconsistent run row—**31684044551** was labeled `review_autofix` while its summary text described a forward-merge step—so local deep-dive logs and the local folder `summary.json` should be treated as canonical for this window.
+
+## Deep Audit — Workflows & Scripts (2026-08-14)
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001
+- **File path & line range:** `scripts/tg_helpers.sh:155-206,227-277`
+- **Severity:** Medium
+- **Category tag:** `bug`
+- **Description:** Both `tg_store_msg_id` and `tg_store_phase_msg_id` do a read-modify-write against a shared GitHub issue comment: fetch recent comments, locate the first marker comment, append a new Telegram message ID with `sed`, then `PATCH` the full body. These helpers are called from multiple workflow paths (for example `.github/workflows/plan.yml:1548,1907`, `.github/workflows/review_autofix.yml:4941,6626`, and `scripts/orchestrate_poll_process.sh:101-122`). Two near-simultaneous sends can therefore read the same old body and race; the last `PATCH` wins and drops the other ID. `tg_cleanup_msgs` only deletes IDs that still exist in the stored markers (`scripts/tg_helpers.sh:383-440`), so dropped IDs become orphaned Telegram messages.
+- **Recommended fix:** Replace the shared-marker update with an append-only model: create one hidden tracking comment per Telegram message (or per phase message) and let `tg_cleanup_msgs` delete all matching marker comments. If comment reuse must stay, add a retry/merge loop that re-reads the current body and retries until the new ID is confirmed present.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001
+- **File path & line range:** `.github/workflows/review_autofix.yml:546-587,610-616`
+- **Severity:** Low
+- **Category tag:** `api-redundancy`
+- **Description:** The review gate fetches `repos/${REPOSITORY}/pulls/${PR_NUMBER}/files` at line 555 for doc-only detection, then can fetch the exact same paginated endpoint again at line 612 when `candidate_skip=true` and `pr_files_json` is still empty/`[]`. This is the same data, same fields, same execution path.
+- **Current call count:** `2` paginated REST reads on the affected path.
+- **Proposed call count:** `1`.
+- **Batching/helper pattern to extend:** Reuse the step-local cache (`pr_files_json` / `file_count`) the way `scripts/orchestrate_poll_process.sh` reuses cycle-local JSON blobs instead of refetching.
+- **Recommended fix:** Treat the first `/files` response as authoritative for both doc-only detection and materiality suppression. If the first fetch fails, carry a single fail-open flag forward instead of reissuing the endpoint.
+
+#### BATCH-001
+- **File path & line range:** `scripts/orchestrate_poll_process.sh:14889-14920`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** The feature sweep lists open PRs once, then for every behind `ai/issue-*` PR performs an extra `GET /pulls/{n}` solely to read `.head.sha` before `update-branch`. The per-PR read is inside the loop.
+- **Current call count:** `1 + N_behind` metadata reads (`gh pr list` once, then one `GET /pulls/{n}` per behind PR), plus unchanged `update-branch` writes.
+- **Proposed call count:** `1` metadata read query, plus unchanged `update-branch` writes.
+- **Batching/helper pattern to extend:** Add a GraphQL helper beside `_fetch_candidate_issue_details_graphql` / `_fetch_linked_pr_status_graphql` that returns `number`, `headRefName`, `baseRefName`, `mergeable`, `mergeStateStatus`, and `headRefOid` in one pass.
+- **Recommended fix:** Replace the `gh pr list` + per-PR `GET /pulls/{n}` pattern with a single GraphQL open-PR fetch that already includes `headRefOid`, then pass that SHA directly to `update-branch`.
+
+#### BATCH-002
+- **File path & line range:** `scripts/orchestrate_poll_process.sh:2811-2825,3019-3060`
+- **Severity:** Low
+- **Category tag:** `api-batching`
+- **Description:** `_subissue_closing_pr_number` does one `gh pr list --head` lookup, then on a tier-1 miss performs one timeline fetch via `_issue_cross_ref_pr_numbers_unique`, then one `GET /pulls/{n}` per cross-referenced PR to inspect `merged_at` and `body`. The file’s own comment already documents the per-PR REST fetch.
+- **Current call count:** `2 + N_xref` reads on the tier-1-miss path.
+- **Proposed call count:** `3` reads regardless of `N_xref` (`gh pr list --head`, timeline fetch, one batched GraphQL PR-hydration call).
+- **Batching/helper pattern to extend:** Reuse the alias-batching style from `_fetch_linked_pr_status_graphql` to hydrate candidate PR `body`/`mergedAt` fields in one GraphQL request.
+- **Recommended fix:** Keep the existing timeline narrowing, but batch-hydrate the resulting PR numbers in one GraphQL alias query and scan bodies in-memory instead of calling `GET /pulls/{n}` in the loop.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path & line range:** `scripts/stage_workflow_support.sh:1-972; .github/workflows/implement.yml:850-920; .github/workflows/check_failure_triage.yml:196-221; .github/workflows/plan.yml:278-315; .github/workflows/clarify.yml:278-315; .github/workflows/orchestrate.yml:340-357; .github/workflows/orchestrate_poll.yml:331-350; .github/workflows/orchestrate_clarify_respond.yml:277-316`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** `scripts/stage_workflow_support.sh` already centralizes workflow-support staging and is used by `validate.yml` and `review_autofix.yml`, but at least seven other workflows still carry bespoke `for f in ... install -m ...` staging loops plus their own fallback logic. The duplicated file lists and copy rules are materially similar across these workflows. This creates drift risk (inference): adding or changing a support asset requires synchronized edits in many places.
+- **Recommended fix:** Make `scripts/stage_workflow_support.sh` the single owner for support staging across these workflows. Extend its manifest mode so callers use a common entrypoint such as `scripts/stage_workflow_support.sh <target> --manifest <path>`. Update callers in `implement.yml`, `check_failure_triage.yml`, `plan.yml`, `clarify.yml`, `orchestrate.yml`, `orchestrate_poll.yml`, and `orchestrate_clarify_respond.yml` to emit a small manifest and invoke the helper instead of inlining install loops.
+
+#### DUP-002
+- **File path & line range:** `.github/workflows/issue_pr_status.yml:41-175,542-575,642-680`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** `issue_pr_status.yml` implements support-repo checkout/copy logic three different ways in one workflow: a generic `checkout_support_ref`/`fetch_from_ref_or_local` path for memory helpers, then two separate ad-hoc clone/copy paths just to stage `tg_helpers.sh` for the merged-alert and cleanup steps.
+- **Recommended fix:** Move this workflow onto one shared support-fetch path. The smallest reuse point is `scripts/stage_workflow_support.sh` with a helper such as `fetch-file <repo-path> <target-path> [--allow-main-fallback]`, or stage `scripts/tg_helpers.sh` during the first helper-fetch step and reuse the same staged file in both later steps. Callers to update: `Fetch memory helper scripts`, `Send PR merged Telegram alert`, and `Cleanup tracked Telegram messages`.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001
+- **File path & line range:** `.github/workflows/plan.yml:998-1286`
+- **Severity:** High
+- **Category tag:** `expression-limit`
+- **Description:** The `Run Codex planning` `run:` block is about **19,527** characters, leaving only **1,473** characters of headroom below GitHub Actions’ 21,000-character template-expression limit. The whole block is expression-compiled because it contains `${{ }}` interpolations at lines 1235 and 1276.
+- **Recommended fix:** Move the large inline planning prompt out of the workflow body and into a prompt asset already aligned with repo conventions (`prompts/mode-plan.txt` or `prompts/_templates/...`), then render it via `scripts/render_prompt.sh` / `scripts/assemble_prompt.sh`. Keep the workflow step limited to orchestration and retries.
+
+#### EXPR-002
+- **File path & line range:** `.github/workflows/implement.yml:3675-3919`
+- **Severity:** High
+- **Category tag:** `expression-limit`
+- **Description:** The `Destructive-commit guard — label + alert on rejection` `run:` block is about **18,329** characters, leaving **2,671** characters of headroom. It contains many `${{ github.repository }}` / `${{ github.run_id }}` interpolations, so the whole rejection handler sits close to the hard limit.
+- **Recommended fix:** Split the scope-block path and the destructive-delete path into separate steps or extract both branches to a dedicated shell helper under `scripts/`. That reduces both expression-size risk and the amount of duplicated label/comment/Telegram handling in the workflow YAML.
+
+#### EXPR-003
+- **File path & line range:** `.github/workflows/implement.yml:852-1146`
+- **Severity:** Medium
+- **Category tag:** `expression-limit`
+- **Description:** The `Stage workflow support files` block in `implement.yml` is about **15,950** characters, leaving **5,050** characters of headroom. Only a few `${{ }}` tokens (for example lines 861, 1036, and 1037) force the entire large support-staging script through the expression compiler.
+- **Recommended fix:** Replace the inline staging block with a call to `scripts/stage_workflow_support.sh` plus a manifest, or split the env writes into a tiny step and move the rest of the staging logic into a shell helper.
+  
+No workflow file exceeds the 800 KB audit threshold; the largest scanned workflow is `.github/workflows/review_autofix.yml` at **445,234** bytes.
+
+### Section 5: Cross-Cutting Concerns
+
+#### CONSIST-001
+- **File path & line range:** `scripts/tg_helpers.sh:175-205,246-276,364-439`
+- **Severity:** Low
+- **Category tag:** `consistency`
+- **Description:** `tg_helpers.sh` uses the repo’s rate-limit-aware `curl_gh_api` helper for GitHub reads (`scripts/tg_helpers.sh:169-172,241-244,332-335,401-404`), but switches to raw `curl` for GitHub comment `POST`/`PATCH`/`DELETE` operations and suppresses failures with `|| true`. That bypasses the retry/backoff behavior centralized in `scripts/gh_helpers.sh:646-695` and makes single-writer failures silent, even when BUG-001’s race does not occur.
+- **Recommended fix:** Route all GitHub comment writes/deletes through `curl_gh_api -X POST|PATCH|DELETE ...` (or a tiny wrapper built on it that accepts JSON payloads) and log the HTTP failure path before failing open.
+
+#### DEBT-001
+- **File path & line range:** `.github/workflows/check_failure_triage.yml:117-135`
+- **Severity:** Low
+- **Category tag:** `tech-debt`
+- **Description:** The fork-PR guard carries a hand-rolled three-attempt `gh api` retry loop even though the repo standard for GitHub reads is `gh_retry` / `gh_api_json_to_file` in `scripts/gh_helpers.sh:398-529,578-620`. Because this guard runs before support staging, its retry semantics can drift from the repo standard on backoff, rate-limit handling, and JSON validation.
+- **Recommended fix:** Replace the inline loop with a tiny pre-checkout helper that mirrors `gh_api_json_to_file` semantics, or embed a minimal local wrapper in the workflow so this step stays aligned with the repo’s standard GH API behavior without changing the fork-safety ordering.
+
+#### SHELL-001
+- **File path & line range:** `scripts/stage_workflow_support.sh:129-139,206-219`
+- **Severity:** Low
+- **Category tag:** `shellcheck`
+- **Description:** `stage_workflow_support.sh` uses one-item `for` loops (`for f in transcript_archive.sh; do`, `for f in unattended_system_instructions.md; do`) that ShellCheck flags as `SC2043`. They are harmless today, but they obscure that these are scalar operations, not real list-driven staging loops.
+- **Recommended fix:** Replace each one-item loop with a direct scalar block, or convert the surrounding code to array-driven helpers so loop structure only appears where a real list exists.
+
+No `TODO` / `FIXME` / `HACK` markers were found under `.github/workflows/` or `scripts/`. No material dead-code candidate was confirmed after targeted usage checks of suspected helpers.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | EXPR-001, EXPR-002 |
+| Medium | 4 | BUG-001, BATCH-001, DUP-001, EXPR-003 |
+| Low | 6 | API-001, BATCH-002, DUP-002, CONSIST-001, DEBT-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2 | Medium |
+| API call optimization | 2 | Medium |
+| Code modularization | 9 | Large |
+| Expression size reduction | 4 | Medium |
+| Medium/Low fixes | 4 | Small |
