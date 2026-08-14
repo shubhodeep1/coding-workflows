@@ -266,6 +266,73 @@ def test_comprehensive_release_helper_retries_rate_limit_once_and_returns_retry_
 	assert sleep_log == "30\n"
 
 
+def test_comprehensive_release_helper_stops_after_max_attempts_on_rate_limit() -> None:
+	gh_script = textwrap.dedent(
+		"""\
+		#!/usr/bin/env bash
+		count="$(cat \"${TEST_GH_COUNT_FILE}\" 2>/dev/null || echo 0)"
+		count=$((count + 1))
+		printf '%s' "${count}" > "${TEST_GH_COUNT_FILE}"
+		echo "secondary rate limit" >&2
+		exit 1
+		"""
+	)
+	result, gh_count, sleep_log = _run_comprehensive_release_helper(
+		gh_script=gh_script,
+		shell_body=textwrap.dedent(
+			"""\
+			gh_api_safe "repos/example/repo"
+			status=$?
+			printf 'status=%s\n' "${status}"
+			printf 'output=%s\n' "${GH_API_SAFE_OUTPUT}"
+			printf 'backoff=%s\n' "${RATE_LIMIT_BACKOFF}"
+			exit "${status}"
+			"""
+		),
+	)
+
+	assert result.returncode == 1
+	assert result.stdout == "status=1\noutput=\nbackoff=120\n"
+	assert result.stderr == ""
+	assert gh_count == "4"
+	assert sleep_log == "30\n60\n120\n"
+
+
+def test_comprehensive_release_helper_quiet_mode_retries_rate_limit_once_without_reporting() -> None:
+	gh_script = textwrap.dedent(
+		"""\
+		#!/usr/bin/env bash
+		count="$(cat \"${TEST_GH_COUNT_FILE}\" 2>/dev/null || echo 0)"
+		count=$((count + 1))
+		printf '%s' "${count}" > "${TEST_GH_COUNT_FILE}"
+		if [ "${count}" -eq 1 ]; then
+			echo "secondary rate limit" >&2
+			exit 1
+		fi
+		printf 'success payload'
+		"""
+	)
+	result, gh_count, sleep_log = _run_comprehensive_release_helper(
+		gh_script=gh_script,
+		shell_body=textwrap.dedent(
+			"""\
+			gh_api_safe_quiet "repos/example/repo"
+			status=$?
+			printf 'status=%s\n' "${status}"
+			printf 'output=%s\n' "${GH_API_SAFE_OUTPUT}"
+			printf 'backoff=%s\n' "${RATE_LIMIT_BACKOFF}"
+			exit "${status}"
+			"""
+		),
+	)
+
+	assert result.returncode == 0
+	assert result.stdout == "status=0\noutput=success payload\nbackoff=0\n"
+	assert result.stderr == ""
+	assert gh_count == "2"
+	assert sleep_log == "30\n"
+
+
 def test_comprehensive_release_helper_non_rate_limit_failure_keeps_existing_reporting() -> None:
 	gh_script = textwrap.dedent(
 		"""\
