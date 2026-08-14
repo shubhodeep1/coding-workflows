@@ -3,10 +3,15 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import subprocess
+import tempfile
+import textwrap
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+COMPREHENSIVE_RELEASE_GH_API_HELPER = REPO_ROOT / "scripts" / "comprehensive_test_and_release_gh_api.sh"
 DISPATCH_WATCH_HELPER = REPO_ROOT / "scripts" / "dispatch_and_watch_workflow_run.sh"
 SOURCE_LINE = 'source scripts/gh_helpers.sh 2>/dev/null || true'
 FALLBACK_LINE = 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }'
@@ -36,6 +41,57 @@ BOOTSTRAPPED_GH_HELPER_WORKFLOWS = (
 	".github/workflows/cancel_on_pr_close.yml",
 	".github/workflows/orchestrate_poll.yml",
 )
+
+
+def _write_executable(path: Path, content: str) -> None:
+	path.write_text(content, encoding="utf-8")
+	path.chmod(0o755)
+
+
+def _run_comprehensive_release_helper(
+	*,
+	gh_script: str,
+	shell_body: str,
+	sleep_script: str | None = None,
+) -> tuple[subprocess.CompletedProcess[str], str, str]:
+	with tempfile.TemporaryDirectory() as tempdir_name:
+		tempdir = Path(tempdir_name)
+		bin_dir = tempdir / "bin"
+		count_file = tempdir / "gh-count.txt"
+		sleep_log_file = tempdir / "sleep.log"
+		bin_dir.mkdir()
+		_write_executable(bin_dir / "gh", gh_script)
+		_write_executable(
+			bin_dir / "sleep",
+			sleep_script
+			or "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"${TEST_SLEEP_LOG_FILE}\"\n",
+		)
+		env = os.environ.copy()
+		env.update(
+			{
+				"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+				"TEST_RELEASE_HELPER_PATH": str(COMPREHENSIVE_RELEASE_GH_API_HELPER),
+				"TEST_GH_COUNT_FILE": str(count_file),
+				"TEST_SLEEP_LOG_FILE": str(sleep_log_file),
+			}
+		)
+		command = textwrap.dedent(
+			f"""\
+			source \"${{TEST_RELEASE_HELPER_PATH}}\"
+			{shell_body}
+			"""
+		)
+		result = subprocess.run(
+			["bash", "-lc", command],
+			capture_output=True,
+			check=False,
+			cwd=REPO_ROOT,
+			env=env,
+			text=True,
+		)
+		gh_count = count_file.read_text(encoding="utf-8") if count_file.exists() else ""
+		sleep_log = sleep_log_file.read_text(encoding="utf-8") if sleep_log_file.exists() else ""
+		return result, gh_count, sleep_log
 
 
 def _workflow_text(relative_path: str) -> str:
@@ -173,6 +229,87 @@ def test_dispatch_watcher_registration_poll_prefers_id_delta_and_uses_created_wi
 	assert text.index(fallback_epoch) < text.index(dispatch_call) < text.index(fallback_query), (
 		"scripts/dispatch_and_watch_workflow_run.sh must capture the fallback registration window before dispatching and only use it in the degraded path."
 	)
+
+
+def test_comprehensive_release_helper_retries_rate_limit_once_and_returns_retry_output() -> None:
+	gh_script = textwrap.dedent(
+		"""\
+		#!/usr/bin/env bash
+		count="$(cat \"${TEST_GH_COUNT_FILE}\" 2>/dev/null || echo 0)"
+		count=$((count + 1))
+		printf '%s' "${count}" > "${TEST_GH_COUNT_FILE}"
+		if [ "${count}" -eq 1 ]; then
+			echo "secondary rate limit" >&2
+			exit 1
+		fi
+		printf 'success payload'
+		"""
+	)
+	result, gh_count, sleep_log = _run_comprehensive_release_helper(
+		gh_script=gh_script,
+		shell_body=textwrap.dedent(
+			"""\
+			gh_api_safe "repos/example/repo"
+			status=$?
+			printf 'status=%s\n' "${status}"
+			printf 'output=%s\n' "${GH_API_SAFE_OUTPUT}"
+			printf 'backoff=%s\n' "${RATE_LIMIT_BACKOFF}"
+			exit "${status}"
+			"""
+		),
+	)
+
+	assert result.returncode == 0
+	assert result.stdout == "status=0\noutput=success payload\nbackoff=0\n"
+	assert result.stderr == ""
+	assert gh_count == "2"
+	assert sleep_log == "30\n"
+
+
+def test_comprehensive_release_helper_non_rate_limit_failure_keeps_existing_reporting() -> None:
+	gh_script = textwrap.dedent(
+		"""\
+		#!/usr/bin/env bash
+		count="$(cat \"${TEST_GH_COUNT_FILE}\" 2>/dev/null || echo 0)"
+		count=$((count + 1))
+		printf '%s' "${count}" > "${TEST_GH_COUNT_FILE}"
+		echo "boom failure" >&2
+		exit 1
+		"""
+	)
+	result, gh_count, sleep_log = _run_comprehensive_release_helper(
+		gh_script=gh_script,
+		shell_body='gh_api_safe "repos/example/repo"',
+	)
+
+	assert result.returncode == 1
+	assert result.stdout == "::error::gh api call failed: repos/example/repo\n"
+	assert result.stderr == "boom failure\n"
+	assert gh_count == "1"
+	assert sleep_log == ""
+
+
+def test_comprehensive_release_helper_quiet_mode_suppresses_non_rate_limit_reporting() -> None:
+	gh_script = textwrap.dedent(
+		"""\
+		#!/usr/bin/env bash
+		count="$(cat \"${TEST_GH_COUNT_FILE}\" 2>/dev/null || echo 0)"
+		count=$((count + 1))
+		printf '%s' "${count}" > "${TEST_GH_COUNT_FILE}"
+		echo "boom failure" >&2
+		exit 1
+		"""
+	)
+	result, gh_count, sleep_log = _run_comprehensive_release_helper(
+		gh_script=gh_script,
+		shell_body='gh_api_safe_quiet "repos/example/repo"',
+	)
+
+	assert result.returncode == 1
+	assert result.stdout == ""
+	assert result.stderr == ""
+	assert gh_count == "1"
+	assert sleep_log == ""
 
 
 def main() -> int:
