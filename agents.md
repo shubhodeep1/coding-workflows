@@ -618,6 +618,20 @@ into poller reconciliation.
 
 ---
 
+## DigitalOcean resources
+
+Registry of DigitalOcean resource IDs relevant to this repo, per CLAUDE.md
+§22.C. Interactive Claude Code sessions read IDs from this table instead of
+asking the user; when a needed ID is missing, the session asks once and then
+records it here in the same PR/commit. Consumer repos carry the same section
+in their root `AGENTS.md`.
+
+| Resource | Type | ID | Notes |
+|---|---|---|---|
+
+_None recorded yet — this repo is workflow tooling and currently has no
+DigitalOcean-hosted app or database of its own._
+
 ## Reference
 
 Operator runbooks (env var reference, autofix retrigger/dedup internals,
