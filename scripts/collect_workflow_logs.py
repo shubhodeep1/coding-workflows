@@ -96,6 +96,7 @@ RETRY_MARKERS = (
 )
 WORKFLOW_LOG_CACHE_SCHEMA_VERSION = "v1"
 WORKFLOW_LOG_CACHE_SEEN_SET_LIMIT = 500
+WORKFLOW_LOG_CACHE_CANCELLED_FAILURE_POINT_VERSION = 1
 STRUCTURED_COST_TELEMETRY_PATTERNS = (
     OPENROUTER_RE,
     SEMBLE_QUERY_RE,
@@ -858,6 +859,51 @@ def extract_failure_point(jobs: list[dict[str, Any]]) -> dict[str, str | None]:
     }
 
 
+def _extract_cancelled_point(jobs: list[dict[str, Any]]) -> dict[str, str | None]:
+    for job in jobs:
+        for step in job.get("steps") or []:
+            if (step.get("conclusion") or "").lower() == "cancelled":
+                return {
+                    "job_name": job.get("name"),
+                    "step_name": step.get("name") or "cancelled_before_first_step",
+                }
+
+    for job in jobs:
+        if (job.get("conclusion") or "").lower() == "cancelled":
+            return {
+                "job_name": job.get("name"),
+                "step_name": "cancelled_before_first_step",
+            }
+
+    return {
+        "job_name": None,
+        "step_name": None,
+    }
+
+
+def _cached_row_needs_cancelled_failure_point_backfill(
+    run: dict[str, Any],
+    cached_row: dict[str, Any] | None,
+    cancelled_jobs_seen_lookup: set[int],
+    cancelled_failure_point_version: int,
+) -> bool:
+    run_id = _to_int(run.get("id"), 0)
+    if run_id <= 0 or (run.get("conclusion") or "").lower() != "cancelled" or not isinstance(cached_row, dict):
+        return False
+
+    failure_point = cached_row.get("failure_point")
+    has_failure_point = isinstance(failure_point, dict) and bool(
+        failure_point.get("job_name") or failure_point.get("step_name")
+    )
+    if cancelled_failure_point_version < WORKFLOW_LOG_CACHE_CANCELLED_FAILURE_POINT_VERSION:
+        return True
+    if run_id in cancelled_jobs_seen_lookup:
+        return False
+    if not isinstance(failure_point, dict):
+        return True
+    return not has_failure_point
+
+
 def compute_run_metrics(
     repository: str,
     run: dict[str, Any],
@@ -873,9 +919,14 @@ def compute_run_metrics(
         duration_seconds = max(0, int((updated_at - started_at).total_seconds()))
 
     conclusion = run.get("conclusion")
+    normalized_conclusion = (conclusion or "").lower()
     failure_point = {"job_name": None, "step_name": None}
-    if (conclusion or "").lower() == "failure":
+    if normalized_conclusion == "failure":
         failure_point = extract_failure_point(jobs)
+    elif normalized_conclusion == "cancelled":
+        failure_point = _extract_cancelled_point(jobs)
+        if not (failure_point.get("job_name") or failure_point.get("step_name")):
+            failure_point = extract_failure_point(jobs)
 
     return {
         "repository": repository,
@@ -1458,8 +1509,11 @@ def main(argv: list[str] | None = None) -> int:
         effective_since = since_utc
 
         jobs_seen_set = _normalize_seen_set(repo_cache.get("jobs_seen_set"))
+        cancelled_jobs_seen_set = _normalize_seen_set(repo_cache.get("cancelled_jobs_seen_set"))
+        cancelled_failure_point_version = _to_int(repo_cache.get("cancelled_failure_point_version"), 0)
         logs_seen_set = _normalize_seen_set(repo_cache.get("logs_seen_set"))
         jobs_seen_lookup = set(jobs_seen_set)
+        cancelled_jobs_seen_lookup = set(cancelled_jobs_seen_set)
         cached_rows_by_run_id = _index_cached_rows(repo_cache.get("rows_snapshot"))
         cached_runs_snapshot = _normalize_runs_snapshot(repo_cache.get("runs_snapshot"))
         cached_etag = repo_cache.get("runs_etag")
@@ -1520,7 +1574,13 @@ def main(argv: list[str] | None = None) -> int:
                 runs_snapshot_for_repo.append(_run_snapshot_for_cache(run))
 
             reused_row = cached_rows_by_run_id.get(cache_key) if cache_key is not None else None
-            if run_id > 0 and run_id in jobs_seen_lookup and isinstance(reused_row, dict):
+            needs_cancelled_backfill = _cached_row_needs_cancelled_failure_point_backfill(
+                run,
+                reused_row,
+                cancelled_jobs_seen_lookup,
+                cancelled_failure_point_version,
+            )
+            if run_id > 0 and run_id in jobs_seen_lookup and isinstance(reused_row, dict) and not needs_cancelled_backfill:
                 row_copy = dict(reused_row)
                 row_copy.pop("_success_sampled", None)
                 run_rows.append(row_copy)
@@ -1528,7 +1588,7 @@ def main(argv: list[str] | None = None) -> int:
                 continue
 
             jobs: list[dict[str, Any]] = []
-            if run_id > 0 and (run.get("conclusion") or "").lower() == "failure":
+            if run_id > 0 and (run.get("conclusion") or "").lower() in {"failure", "cancelled"}:
                 try:
                     jobs = list_jobs_for_run(
                         repo,
@@ -1549,6 +1609,9 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     jobs_seen_set = _touch_seen_set(jobs_seen_set, run_id)
                     jobs_seen_lookup = set(jobs_seen_set)
+                    if (run.get("conclusion") or "").lower() == "cancelled":
+                        cancelled_jobs_seen_set = _touch_seen_set(cancelled_jobs_seen_set, run_id)
+                        cancelled_jobs_seen_lookup = set(cancelled_jobs_seen_set)
 
             elif run_id > 0:
                 jobs_seen_set = _touch_seen_set(jobs_seen_set, run_id)
@@ -1562,6 +1625,11 @@ def main(argv: list[str] | None = None) -> int:
             "runs_etag": run_meta.get("etag") if isinstance(run_meta.get("etag"), str) else cached_etag,
             "runs_window_start": _format_iso8601(effective_since),
             "jobs_seen_set": jobs_seen_set,
+            "cancelled_jobs_seen_set": cancelled_jobs_seen_set,
+            "cancelled_failure_point_version": max(
+                cancelled_failure_point_version,
+                WORKFLOW_LOG_CACHE_CANCELLED_FAILURE_POINT_VERSION,
+            ),
             "logs_seen_set": logs_seen_set,
             "last_updated": _format_iso8601(datetime.now(timezone.utc)),
             "runs_snapshot": runs_snapshot_for_repo,

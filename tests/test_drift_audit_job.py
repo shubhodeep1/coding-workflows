@@ -184,6 +184,57 @@ sys.exit(1)
 	state_file.write_text("{}", encoding="utf-8")
 
 
+def _install_mock_jq(bin_dir: Path) -> None:
+	jq_script = r'''#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+
+def n(value):
+	if isinstance(value, (int, float)) and value >= 0:
+		return str(int(value))
+	return "0"
+
+
+filter_arg = sys.argv[2] if len(sys.argv) >= 3 else ""
+required_filter_tokens = (
+	".status", ".coverage_status", ".processed_runs", ".marker_occurrences",
+	".persistent_clusters", ".skipped_absent_path", ".logs_fetched", ".logs_missing",
+	".missing_run_ids", ".created", ".edited", ".closed", ".suppressed", "@tsv",
+)
+if len(sys.argv) < 4 or sys.argv[1] != "-r" or any(token not in filter_arg for token in required_filter_tokens):
+	print(f"unexpected jq args: {sys.argv[1:]}", file=sys.stderr)
+	sys.exit(1)
+
+
+summary_path = Path(sys.argv[-1])
+payload = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
+missing_run_ids = payload.get("missing_run_ids")
+if isinstance(missing_run_ids, list) and missing_run_ids:
+	missing_run_ids_text = ",".join(str(item) for item in missing_run_ids)
+else:
+	missing_run_ids_text = "none"
+fields = [
+	str(payload.get("status", "unknown")),
+	str(payload.get("coverage_status", "unknown")),
+	n(payload.get("processed_runs", 0)),
+	n(payload.get("marker_occurrences", 0)),
+	n(payload.get("persistent_clusters", 0)),
+	n(payload.get("skipped_absent_path", 0)),
+	n(payload.get("logs_fetched", 0)),
+	n(payload.get("logs_missing", 0)),
+	missing_run_ids_text,
+	n(payload.get("created", 0)),
+	n(payload.get("edited", 0)),
+	n(payload.get("closed", 0)),
+	n(payload.get("suppressed", 0)),
+]
+print("\t".join(fields))
+'''
+	_write_exec(bin_dir / "jq", jq_script)
+
+
 def _run_drift_audit(
 	state: dict,
 	*,
@@ -196,6 +247,7 @@ def _run_drift_audit(
 		bin_dir.mkdir(parents=True, exist_ok=True)
 		state_file = tmp_path / "gh-state.json"
 		_install_mock_gh(bin_dir, state_file)
+		_install_mock_jq(bin_dir)
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 
 		# Synthetic checkout: the audit only opens a tracker when a
@@ -823,7 +875,55 @@ def test_drift_audit_writes_run_summary_to_step_summary() -> None:
 	assert "## Drift audit" in summary
 	assert "Status:" in summary
 	assert "Runs scanned:" in summary
+	assert "Log coverage:** full" in summary
+	assert "Log fetches:** fetched 0 / missing 0" in summary
+	assert "Missing log run IDs:** none" in summary
 	assert "[workflow run](https://github.com/owner/repo/actions/runs/123456789)" in summary
+
+
+def test_drift_audit_reports_partial_coverage_when_logs_are_missing() -> None:
+	state = {
+		"run_list_responses": {
+			"review_autofix.yml": [
+				{"databaseId": 801, "createdAt": _iso(1), "status": "completed", "conclusion": "success", "url": "https://example.test/runs/801"},
+			],
+			"internal-review.yml": [
+				{"databaseId": 802, "createdAt": _iso(2), "status": "completed", "conclusion": "success", "url": "https://example.test/runs/802"},
+			],
+		},
+		"run_logs": {
+			"801": "no fingerprint drift markers here\n",
+			"802": {"stderr": "log not found", "exit_code": 1},
+		},
+		"issue_list_response": [],
+	}
+	proc, final_state = _run_drift_audit(state)
+	assert proc.returncode == 0, proc.stderr
+	assert "DRIFT_AUDIT_COVERAGE scanned=2 fetched=1 missing=1 missing_run_ids=802" in proc.stdout
+	summary = final_state.get("_drift_audit_step_summary", "")
+	assert "Status:** no_markers (partial coverage)" in summary
+	assert "Log coverage:** partial" in summary
+	assert "Log fetches:** fetched 1 / missing 1" in summary
+	assert "Missing log run IDs:** 802" in summary
+
+
+def test_drift_audit_error_run_omits_uncomputed_coverage_summary() -> None:
+	state = {
+		"run_list_responses": {
+			"review_autofix.yml": [
+				{"databaseId": 901, "createdAt": ["broken"], "status": "completed", "conclusion": "success", "url": "https://example.test/runs/901"},
+			],
+			"internal-review.yml": [],
+		},
+		"issue_list_response": [],
+	}
+	proc, final_state = _run_drift_audit(state)
+	assert proc.returncode != 0
+	summary = final_state.get("_drift_audit_step_summary", "")
+	assert "Status:** error" in summary
+	assert "Log coverage:" not in summary
+	assert "Log fetches:" not in summary
+	assert "Missing log run IDs:" not in summary
 
 
 def main() -> int:
@@ -842,6 +942,8 @@ def main() -> int:
 	test_drift_audit_skips_incomplete_runs_when_fetching_logs()
 	test_drift_audit_skips_cluster_when_repo_path_is_absent()
 	test_drift_audit_writes_run_summary_to_step_summary()
+	test_drift_audit_reports_partial_coverage_when_logs_are_missing()
+	test_drift_audit_error_run_omits_uncomputed_coverage_summary()
 	return 0
 
 

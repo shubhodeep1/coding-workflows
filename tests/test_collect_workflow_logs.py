@@ -99,6 +99,433 @@ def test_extract_failure_point_step_precedence_then_job_fallback():
 	assert point_job == {"job_name": "build", "step_name": None}
 
 
+def test_compute_run_metrics_cancelled_step_precedence_then_job_fallback():
+	run = {
+		"id": 13,
+		"name": "AI Validate",
+		"path": ".github/workflows/validate.yml",
+		"_workflow_family": "validate",
+		"status": "completed",
+		"conclusion": "cancelled",
+		"run_attempt": 1,
+		"created_at": "2026-04-10T10:00:00Z",
+		"run_started_at": "2026-04-10T10:01:00Z",
+		"updated_at": "2026-04-10T10:03:30Z",
+	}
+	jobs = [
+		{
+			"name": "lint",
+			"conclusion": "failure",
+			"steps": [
+				{"name": "run lint", "conclusion": "failure"},
+			],
+		},
+		{
+			"name": "queue",
+			"conclusion": "cancelled",
+			"steps": [],
+		},
+		{
+			"name": "validate",
+			"conclusion": "cancelled",
+			"steps": [
+				{"name": "bootstrap", "conclusion": "success"},
+				{"name": "run validation", "conclusion": "cancelled"},
+			],
+		},
+	]
+	point = collector.compute_run_metrics("owner/repo", run, jobs=jobs)["failure_point"]
+	assert point == {"job_name": "validate", "step_name": "run validation"}
+
+	point_job = collector.compute_run_metrics(
+		"owner/repo",
+		run,
+		jobs=[{"name": "queue", "conclusion": "cancelled", "steps": []}],
+	)["failure_point"]
+	assert point_job == {"job_name": "queue", "step_name": "cancelled_before_first_step"}
+
+
+def test_compute_run_metrics_cancelled_run_uses_best_effort_failure_point():
+	run = {
+		"id": 13,
+		"name": "AI Validate",
+		"path": ".github/workflows/validate.yml",
+		"_workflow_family": "validate",
+		"status": "completed",
+		"conclusion": "cancelled",
+		"run_attempt": 1,
+		"created_at": "2026-04-10T10:00:00Z",
+		"run_started_at": "2026-04-10T10:01:00Z",
+		"updated_at": "2026-04-10T10:03:30Z",
+	}
+	jobs = [
+		{
+			"name": "validate",
+			"conclusion": "cancelled",
+			"steps": [],
+		},
+	]
+	row = collector.compute_run_metrics("owner/repo", run, jobs=jobs)
+	assert row["failure_point"] == {"job_name": "validate", "step_name": "cancelled_before_first_step"}
+
+	success_row = collector.compute_run_metrics("owner/repo", {**run, "conclusion": "success"}, jobs=jobs)
+	assert success_row["failure_point"] == {"job_name": None, "step_name": None}
+
+
+def test_main_fetches_cancelled_jobs_for_failure_point() -> None:
+	with tempfile.TemporaryDirectory(prefix="collector-cancelled-run-test-") as td:
+		report_file = Path(td) / "report.json"
+		cancelled_run = {
+			"id": 503,
+			"name": "AI Validate",
+			"path": ".github/workflows/validate.yml",
+			"status": "completed",
+			"conclusion": "cancelled",
+			"run_attempt": 1,
+			"created_at": "2026-04-10T12:00:00Z",
+			"run_started_at": "2026-04-10T12:00:30Z",
+			"updated_at": "2026-04-10T12:05:30Z",
+			"_workflow_family": "validate",
+		}
+
+		orig_cache_read = collector._cache_read_context
+		orig_cache_write = collector._cache_write_context
+		orig_list_runs = collector.list_runs_for_repo
+		orig_list_jobs = collector.list_jobs_for_run
+
+		calls = {"jobs": 0}
+
+		def fake_cache_read_context(**_: object):
+			return {"schema_version": "v1", "repositories": {}}, None, None
+
+		def fake_cache_write_context(**kwargs: object):
+			return True
+
+		def fake_list_runs_for_repo(*args: object, **kwargs: object):
+			return [cancelled_run], False, {"not_modified": False, "etag": None, "status_code": 200}
+
+		def fake_list_jobs_for_run(*args: object, **kwargs: object):
+			calls["jobs"] += 1
+			return [{"name": "validate", "conclusion": "cancelled", "steps": []}]
+
+		collector._cache_read_context = fake_cache_read_context
+		collector._cache_write_context = fake_cache_write_context
+		collector.list_runs_for_repo = fake_list_runs_for_repo
+		collector.list_jobs_for_run = fake_list_jobs_for_run
+		try:
+			rc = collector.main(
+				[
+					"--repo",
+					"owner/repo",
+					"--since",
+					"2026-04-01T00:00:00Z",
+					"--max-log-runs",
+					"0",
+					"--output",
+					str(report_file),
+				]
+			)
+		finally:
+			collector._cache_read_context = orig_cache_read
+			collector._cache_write_context = orig_cache_write
+			collector.list_runs_for_repo = orig_list_runs
+			collector.list_jobs_for_run = orig_list_jobs
+
+		assert rc == 0
+		assert calls == {"jobs": 1}
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+		assert report["runs"][0]["failure_point"] == {
+			"job_name": "validate",
+			"step_name": "cancelled_before_first_step",
+		}
+
+
+def test_main_refetches_cached_cancelled_run_without_failure_point() -> None:
+	with tempfile.TemporaryDirectory(prefix="collector-cancelled-cache-test-") as td:
+		report_file = Path(td) / "report.json"
+		cached_run = {
+			"id": 504,
+			"name": "AI Validate",
+			"path": ".github/workflows/validate.yml",
+			"status": "completed",
+			"conclusion": "cancelled",
+			"run_attempt": 1,
+			"created_at": "2026-04-10T13:00:00Z",
+			"run_started_at": "2026-04-10T13:00:30Z",
+			"updated_at": "2026-04-10T13:05:30Z",
+			"_workflow_family": "validate",
+		}
+		cached_row = collector.compute_run_metrics("owner/repo", cached_run, jobs=[])
+		cache_payload = {
+			"schema_version": "v1",
+			"repositories": {
+				"owner/repo": {
+					"runs_etag": 'W/"cached"',
+					"runs_window_start": "2026-04-01T00:00:00Z",
+					"jobs_seen_set": [504],
+					"logs_seen_set": [],
+					"last_updated": "2026-04-11T00:00:00Z",
+					"runs_snapshot": [cached_run],
+					"rows_snapshot": [cached_row],
+				}
+			},
+		}
+
+		orig_cache_read = collector._cache_read_context
+		orig_cache_write = collector._cache_write_context
+		orig_list_runs = collector.list_runs_for_repo
+		orig_list_jobs = collector.list_jobs_for_run
+
+		calls = {"jobs": 0}
+		persisted: dict[str, dict] = {}
+
+		def fake_cache_read_context(**_: object):
+			return cache_payload, None, None
+
+		def fake_cache_write_context(**kwargs: object):
+			payload = kwargs.get("payload")
+			if isinstance(payload, dict):
+				persisted["payload"] = payload
+			return True
+
+		def fake_list_runs_for_repo(*args: object, **kwargs: object):
+			assert kwargs.get("etag") == 'W/"cached"'
+			return [], False, {"not_modified": True, "etag": 'W/"cached"', "status_code": 304}
+
+		def fake_list_jobs_for_run(*args: object, **kwargs: object):
+			calls["jobs"] += 1
+			return [{"name": "validate", "conclusion": "cancelled", "steps": []}]
+
+		collector._cache_read_context = fake_cache_read_context
+		collector._cache_write_context = fake_cache_write_context
+		collector.list_runs_for_repo = fake_list_runs_for_repo
+		collector.list_jobs_for_run = fake_list_jobs_for_run
+		try:
+			rc = collector.main(
+				[
+					"--repo",
+					"owner/repo",
+					"--since",
+					"2026-04-01T00:00:00Z",
+					"--max-log-runs",
+					"0",
+					"--output",
+					str(report_file),
+				]
+			)
+		finally:
+			collector._cache_read_context = orig_cache_read
+			collector._cache_write_context = orig_cache_write
+			collector.list_runs_for_repo = orig_list_runs
+			collector.list_jobs_for_run = orig_list_jobs
+
+		assert rc == 0
+		assert calls == {"jobs": 1}
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+		assert report["runs"][0]["failure_point"] == {
+			"job_name": "validate",
+			"step_name": "cancelled_before_first_step",
+		}
+		persisted_repo = persisted["payload"]["repositories"]["owner/repo"]
+		assert persisted_repo["cancelled_jobs_seen_set"] == [504]
+		assert persisted_repo["rows_snapshot"][0]["failure_point"] == {
+			"job_name": "validate",
+			"step_name": "cancelled_before_first_step",
+		}
+
+
+def test_main_refetches_stale_cancelled_failure_point_from_prior_cache_version() -> None:
+	with tempfile.TemporaryDirectory(prefix="collector-cancelled-stale-cache-test-") as td:
+		report_file = Path(td) / "report.json"
+		cached_run = {
+			"id": 505,
+			"name": "AI Validate",
+			"path": ".github/workflows/validate.yml",
+			"status": "completed",
+			"conclusion": "cancelled",
+			"run_attempt": 1,
+			"created_at": "2026-04-10T13:00:00Z",
+			"run_started_at": "2026-04-10T13:00:30Z",
+			"updated_at": "2026-04-10T13:05:30Z",
+			"_workflow_family": "validate",
+		}
+		stale_cached_row = collector.compute_run_metrics("owner/repo", cached_run, jobs=[])
+		stale_cached_row["failure_point"] = {"job_name": "lint", "step_name": "run lint"}
+		cache_payload = {
+			"schema_version": "v1",
+			"repositories": {
+				"owner/repo": {
+					"runs_etag": 'W/"cached"',
+					"runs_window_start": "2026-04-01T00:00:00Z",
+					"jobs_seen_set": [505],
+					"cancelled_jobs_seen_set": [505],
+					"logs_seen_set": [],
+					"last_updated": "2026-04-11T00:00:00Z",
+					"runs_snapshot": [cached_run],
+					"rows_snapshot": [stale_cached_row],
+				}
+			},
+		}
+
+		orig_cache_read = collector._cache_read_context
+		orig_cache_write = collector._cache_write_context
+		orig_list_runs = collector.list_runs_for_repo
+		orig_list_jobs = collector.list_jobs_for_run
+
+		calls = {"jobs": 0}
+		persisted: dict[str, dict] = {}
+
+		def fake_cache_read_context(**_: object):
+			return cache_payload, None, None
+
+		def fake_cache_write_context(**kwargs: object):
+			payload = kwargs.get("payload")
+			if isinstance(payload, dict):
+				persisted["payload"] = payload
+			return True
+
+		def fake_list_runs_for_repo(*args: object, **kwargs: object):
+			assert kwargs.get("etag") == 'W/"cached"'
+			return [], False, {"not_modified": True, "etag": 'W/"cached"', "status_code": 304}
+
+		def fake_list_jobs_for_run(*args: object, **kwargs: object):
+			calls["jobs"] += 1
+			return [
+				{"name": "lint", "conclusion": "failure", "steps": [{"name": "run lint", "conclusion": "failure"}]},
+				{
+					"name": "validate",
+					"conclusion": "cancelled",
+					"steps": [
+						{"name": "bootstrap", "conclusion": "success"},
+						{"name": "run validation", "conclusion": "cancelled"},
+					],
+				},
+			]
+
+		collector._cache_read_context = fake_cache_read_context
+		collector._cache_write_context = fake_cache_write_context
+		collector.list_runs_for_repo = fake_list_runs_for_repo
+		collector.list_jobs_for_run = fake_list_jobs_for_run
+		try:
+			rc = collector.main(
+				[
+					"--repo",
+					"owner/repo",
+					"--since",
+					"2026-04-01T00:00:00Z",
+					"--max-log-runs",
+					"0",
+					"--output",
+					str(report_file),
+				]
+			)
+		finally:
+			collector._cache_read_context = orig_cache_read
+			collector._cache_write_context = orig_cache_write
+			collector.list_runs_for_repo = orig_list_runs
+			collector.list_jobs_for_run = orig_list_jobs
+
+		assert rc == 0
+		assert calls == {"jobs": 1}
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+		assert report["runs"][0]["failure_point"] == {
+			"job_name": "validate",
+			"step_name": "run validation",
+		}
+		persisted_repo = persisted["payload"]["repositories"]["owner/repo"]
+		assert persisted_repo["cancelled_failure_point_version"] == 1
+		assert persisted_repo["rows_snapshot"][0]["failure_point"] == {
+			"job_name": "validate",
+			"step_name": "run validation",
+		}
+
+
+def test_main_reuses_current_cancelled_cache_row_without_cancellation_clue() -> None:
+	with tempfile.TemporaryDirectory(prefix="collector-cancelled-current-cache-test-") as td:
+		report_file = Path(td) / "report.json"
+		cached_run = {
+			"id": 506,
+			"name": "AI Validate",
+			"path": ".github/workflows/validate.yml",
+			"status": "completed",
+			"conclusion": "cancelled",
+			"run_attempt": 1,
+			"created_at": "2026-04-10T13:00:00Z",
+			"run_started_at": "2026-04-10T13:00:30Z",
+			"updated_at": "2026-04-10T13:05:30Z",
+			"_workflow_family": "validate",
+		}
+		cached_row = collector.compute_run_metrics("owner/repo", cached_run, jobs=[])
+		cache_payload = {
+			"schema_version": "v1",
+			"repositories": {
+				"owner/repo": {
+					"runs_etag": 'W/"cached"',
+					"runs_window_start": "2026-04-01T00:00:00Z",
+					"jobs_seen_set": [506],
+					"cancelled_jobs_seen_set": [506],
+					"cancelled_failure_point_version": collector.WORKFLOW_LOG_CACHE_CANCELLED_FAILURE_POINT_VERSION,
+					"logs_seen_set": [],
+					"last_updated": "2026-04-11T00:00:00Z",
+					"runs_snapshot": [cached_run],
+					"rows_snapshot": [cached_row],
+				}
+			},
+		}
+
+		orig_cache_read = collector._cache_read_context
+		orig_cache_write = collector._cache_write_context
+		orig_list_runs = collector.list_runs_for_repo
+		orig_list_jobs = collector.list_jobs_for_run
+
+		calls = {"jobs": 0}
+
+		def fake_cache_read_context(**_: object):
+			return cache_payload, None, None
+
+		def fake_cache_write_context(**kwargs: object):
+			return True
+
+		def fake_list_runs_for_repo(*args: object, **kwargs: object):
+			assert kwargs.get("etag") == 'W/"cached"'
+			return [], False, {"not_modified": True, "etag": 'W/"cached"', "status_code": 304}
+
+		def fake_list_jobs_for_run(*args: object, **kwargs: object):
+			calls["jobs"] += 1
+			return []
+
+		collector._cache_read_context = fake_cache_read_context
+		collector._cache_write_context = fake_cache_write_context
+		collector.list_runs_for_repo = fake_list_runs_for_repo
+		collector.list_jobs_for_run = fake_list_jobs_for_run
+		try:
+			rc = collector.main(
+				[
+					"--repo",
+					"owner/repo",
+					"--since",
+					"2026-04-01T00:00:00Z",
+					"--max-log-runs",
+					"0",
+					"--output",
+					str(report_file),
+				]
+			)
+		finally:
+			collector._cache_read_context = orig_cache_read
+			collector._cache_write_context = orig_cache_write
+			collector.list_runs_for_repo = orig_list_runs
+			collector.list_jobs_for_run = orig_list_jobs
+
+		assert rc == 0
+		assert calls == {"jobs": 0}
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+		assert report["runs"][0]["failure_point"] == {
+			"job_name": None,
+			"step_name": None,
+		}
+
+
 def test_list_runs_for_repo_paginates_and_includes_all_families():
 	orig = collector.gh_api_json
 	calls = []
