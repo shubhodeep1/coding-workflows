@@ -995,6 +995,189 @@ Rules:
 
 ---
 
+## §23. GitHub Access (MANDATORY)
+
+The session environment provides a `GH_TOKEN` env var — a GitHub Personal
+Access Token whose reach is wider than the session's built-in GitHub tooling
+(other repositories, Actions logs, endpoints the MCP surface does not expose).
+This section applies in this repo and in every consumer repo that receives
+this file via the `@stable` sync. It splits GitHub work into three postures:
+**reads are self-serve** (act, do not ask), **routine repository writes are
+self-serve**, **destructive and administrative writes are ask-first**.
+
+`GH_TOKEN` is the interactive counterpart of `DIGITALOCEAN_ACCESS_TOKEN`
+(§22): a standing credential the session uses itself, rather than a reason to
+hand the user commands to run.
+
+### A) Read Operations — Act, Do Not Ask
+
+When a task needs data from GitHub that the session's default tooling cannot
+reach, pull it yourself with the token instead of asking the user to fetch it
+or to run `gh` on your behalf. This is an explicit carve-out from §2 for
+**read-only** GitHub calls — needing GitHub-hosted data is not, by itself, a
+reason to stop and ask. Self-serve reads include (non-exhaustively):
+
+- pull requests, issues, review threads, review comments, timeline events,
+  labels, and linked-issue relationships;
+- Actions workflow runs, jobs, check runs, annotations, and **run/job logs**
+  (`gh run view --log <run-id> -R <owner>/<repo>`,
+  `gh run view --log --job <job-id> -R <owner>/<repo>`,
+  `gh run view --log-failed <run-id> -R <owner>/<repo>`,
+  `gh api repos/<owner>/<repo>/actions/runs/<id>/logs`);
+- commits, diffs, blame, branches, tags, releases, and file contents at any
+  ref, including in a consumer repo whose wrapper or workflow is implicated;
+- repo and org metadata a task depends on: default branch, protection rules
+  as reported by the API, repo variables (`gh variable list`), workflow
+  definitions, and `gh api rate_limit`.
+
+**Repo scope is not widened by the token.** A PAT that *can* read a
+repository is not permission to browse one the task does not involve. Stay
+within the repos the work actually touches: this repo, the consumers listed
+in `.github/ai/consumer_repos.json`, and any repo the user names. When the
+host session exposes a repo-attachment mechanism, prefer attaching the repo
+over reaching around the session's declared scope.
+
+### B) Routine Repository Writes — Act, Do Not Ask
+
+These writes are ordinary session work, already implied by the task the user
+gave you. Perform them with the token (or the MCP equivalent, per §23.D)
+without a separate approval round:
+
+- pushing commits to the session's own designated working branch;
+- opening a pull request, updating its title/body, marking it ready for
+  review, and pushing follow-up commits to it;
+- pull request and issue comments, review-thread replies, and resolving
+  review threads you have addressed;
+- applying or removing `ai:*` and other workflow labels the pipelines expect,
+  and subscribing/unsubscribing to PR activity.
+
+Two constraints ride along and are **not** relaxed by this subsection:
+§19 (no auto-close keywords against `ai:orchestrator-tracking` issues) governs
+every body you post, and §21 (merged-PR commit guard) governs every commit
+and push.
+
+### C) Destructive & Administrative Writes — ALWAYS Ask First
+
+**Never perform these without asking first** in the §2 Q/A format — even when
+the need seems obvious, and even under §12's proactive PR-review scope (this
+subsection is NOT superseded by §12):
+
+- merging a pull request, enabling auto-merge, or overriding a failing
+  required check;
+- force-pushing or otherwise rewriting history on any branch other than the
+  session's own working branch, and any push to a default or protected
+  branch;
+- deleting or renaming branches, tags, releases, issues, or repositories, and
+  closing a PR or issue the session did not itself open;
+- repository or organization administration: settings, secrets, variables,
+  rulesets, webhooks, collaborators, visibility, transfer, archive;
+- dispatching workflow runs (`gh workflow run`, `repository_dispatch`,
+  re-running a workflow) that start a billed or unattended pipeline;
+- any write to a repository outside the scope the session was given.
+
+The question must name the exact repository, the exact object (PR number,
+branch, setting), and what the operation changes, so the user approves a
+concrete action rather than an intention. After approval, perform the
+operation yourself with the token — do not hand the user a command to run
+(§18).
+
+**Command-invoked dispatches are already approved.** When the user invokes a
+command whose documented job is to dispatch a workflow — `/implement-plan-ai`,
+`/apply-analysis`, and any successor that says so in its own file — that
+invocation *is* the approval for the dispatch the command describes. Do not
+re-ask; the ask-first rule above covers dispatches you would be initiating on
+your own judgement.
+
+### D) Transport & Tool Precedence
+
+1. **Prefer the `mcp__github__*` tools** for anything they cover. They are
+   scope-checked by the host session and keep the audit trail consistent.
+2. **Reach for `GH_TOKEN` when MCP is not enough** — the capability is not
+   exposed, the call is scope-gated (403), the response is truncated, or the
+   repository is not attached to the session.
+3. **Prefer REST over GraphQL** on the `gh` path. Claude Code Web's agent
+   proxy serves only a pinned set of GraphQL operations and rejects the rest
+   with HTTP 403, so GraphQL-backed commands (`gh pr list`, `gh issue list`,
+   `gh search`) can fail in exactly the environments this section is written
+   for. Use `gh api repos/<owner>/<repo>/...` as the primary transport and
+   treat the GraphQL-backed command as a fallback, never the reverse — the
+   same reasoning §21.D applies to the merged-PR guard.
+
+Transport, in order of preference:
+
+```
+gh api repos/<owner>/<repo>/<endpoint>          # gh reads GH_TOKEN natively
+curl -sS -H "Authorization: Bearer ${GH_TOKEN}" \
+  -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/<owner>/<repo>/<endpoint>"
+```
+
+Two environment facts that make `gh` calls fail in confusing ways:
+
+- **Pass `-R <owner>/<repo>` on every `gh` call that needs repo context.** In
+  Claude Code Web the only git remote points at a local proxy, so bare calls
+  fail with `failed to determine base repo` — which is not an auth problem.
+  The SessionStart hook prints the resolved slug.
+- **Check auth directly, nounset-safe**, rather than inferring it from the
+  SessionStart log:
+  `{ [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; } && gh auth status`.
+  The hook's secondary probe only tests `actions:read` for one repo and can
+  emit a `NOTE`/`WARNING` while `gh` works fine for everything else.
+
+Useful token scopes: classic PATs need `repo` plus `workflow` (and
+`read:org` for org metadata); fine-grained PATs need contents, pull requests,
+issues, and **actions: read** for run/job logs. A token without `actions:read`
+still serves every non-Actions read in §23.A.
+
+### E) Token Hygiene and Degradation (hard rules)
+
+- Never echo, log, or print the token value; reference it only via env
+  expansion (`$GH_TOKEN`).
+- Never write the token into committed files, PR bodies, issue comments, commit
+  messages, or diagnostic output. Redact it if a tool response contains it.
+- If the token is missing, `gh auth status` reports it invalid, or the API
+  returns 401/403, **say so once**, fall back to the `mcp__github__*` tools for
+  whatever they can still reach, and continue with the rest of the task — do
+  not retry-loop, and do not ask the user to run the calls manually (§18).
+  A failing `gh auth status` when `GH_TOKEN` is set means the PAT is invalid,
+  expired, or was saved incorrectly in the session environment; report that
+  diagnosis rather than "gh is broken".
+- Never commit a workflow, script, or hook that reads `GH_TOKEN` from the
+  session environment. This section governs interactive sessions only;
+  Actions-side code authenticates via `secrets.GH_PAT` (§23.G).
+
+### F) API-Call Budget
+
+§15 (GitHub API Call Hygiene) applies to interactive `gh` and `curl` calls,
+not just to workflow code. Before adding a call, check whether an existing one
+in the same task can be extended; batch per-item lookups; cache results you
+will need again in the same session instead of re-fetching per loop iteration.
+
+### G) Relationship to `GH_PAT` and `GITHUB_TOKEN` (§6)
+
+`GH_TOKEN` already exists as an identifier in this repo's Actions workflows
+and scripts, where it is exported from the `GH_PAT` secret. That name is
+unchanged and must not be repurposed — the two readings are the same variable
+name in two different environments:
+
+| Environment | Value | Governed by |
+|---|---|---|
+| Actions workflows / unattended pipelines | `${{ secrets.GH_PAT }}` exported as `GH_TOKEN` | workflow YAML, `unattended_system_instructions.md` |
+| Interactive Claude Code session | PAT set in the Claude Code cloud session environment | this section |
+
+Consequences:
+
+- Do not "unify" the two by rewriting workflow YAML to read a session env var,
+  and do not add `GH_PAT` handling to interactive tooling. Either direction is
+  a §6 breaking change and requires the §2 ask flow.
+- `GITHUB_TOKEN` remains the accepted fallback name in session tooling that
+  already checks both (`.claude/hooks/session-start.sh`, the `.claude/commands/*`
+  Tool Access blocks). Keep accepting both; prefer `GH_TOKEN` when both are set.
+- The unattended pipelines read `unattended_system_instructions.md` and never
+  see this file, so §23 grants no new access to any codex-driven phase.
+
+---
+
 ## FINAL REMINDER
 
 If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**
