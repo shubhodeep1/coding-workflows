@@ -48,7 +48,7 @@ No prose padding. A bare "done — see PR" is not acceptable: the user wants the
 ## Tool Access
 
 - **`mcp__github__*` MCP tools** — always available. Use `mcp__github__create_pull_request` to open the PR; `mcp__github__get_file_contents` / `pull_request_read` / `issue_read` / `list_branches` for research and branch-collision checks.
-- **`gh` CLI** — available when `GH_TOKEN` / `GITHUB_TOKEN` is set (verify nounset-safe: `{ [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; } && gh auth status`). Use for default-branch detection: `gh repo view --json defaultBranchRef -q .defaultBranchRef.name -R <owner>/<repo>`. **Pass `-R <owner>/<repo>` on every `gh` call that needs repo context** — in Claude Code Web the only git remote is a local proxy, so bare `gh` calls fail with `failed to determine base repo`. The SessionStart hook prints the resolved slug.
+- **`gh` CLI** — the `GH_TOKEN` transport. Shared rules live in **CLAUDE.md §23** and are not restated here: availability and the nounset-safe auth check, the mandatory `-R <owner>/<repo>` flag, REST-over-GraphQL preference, token hygiene, and the self-serve-read / ask-first-mutation split (§23.A–E). Use for default-branch detection: `gh repo view --json defaultBranchRef -q .defaultBranchRef.name -R <owner>/<repo>`. Pushing the working branch and opening the PR are §23.B routine writes — self-serve; §23.C operations still need the §2 Q/A ask.
 
 Local file reads use `Read`; code search uses `Grep` / `Glob`; git + test/lint runs use `Bash`.
 

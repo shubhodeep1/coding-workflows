@@ -63,7 +63,7 @@ Omit empty sections; keep every claim cited to a ref.
 Read-only surface:
 
 - **`mcp__github__*` MCP tools** — `issue_read`, `pull_request_read`, `list_commits`, `list_tags`, `get_tag`, `get_file_contents`, `search_issues`, `search_pull_requests`. For the upstream side, pass `ref=<UPSTREAM_SHA>` on every read; for the consumer side, read `THIS_REPO@main`.
-- **`gh` CLI** — when `gh` is installed and `GH_TOKEN` / `GITHUB_TOKEN` is set (verify nounset-safe: `{ [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; } && gh auth status`). **Pass `-R <owner>/<repo>`** on every call — Claude Code Web's remote is a local proxy; bare `gh` fails with `failed to determine base repo`. Use the SessionStart slug for `THIS_REPO` and `shubhodeep1/coding-workflows` for upstream reads.
+- **`gh` CLI** — the `GH_TOKEN` transport, when `gh` is installed; shared rules live in **CLAUDE.md §23** (auth check, the mandatory `-R <owner>/<repo>` flag, REST-over-GraphQL preference, token hygiene) — see **CLAUDE.md §23**. Use the SessionStart slug for `THIS_REPO` and `shubhodeep1/coding-workflows` for upstream reads. Verification is §23.A read-only work.
 - **`Read` / `Grep` / `Glob`** — verify the consumer wrapper, triggers, and flag defaults on the local checkout. **`Bash`** for read-only inspection only.
 
 ## Rules
