@@ -55,7 +55,7 @@ Read-only surface:
 
 - **`Read` / `Grep` / `Glob`** — primary tools for reading plans and verifying repo state.
 - **`Bash`** — for cheap verification only (running a targeted test, listing files). No mutating git operations.
-- **`mcp__github__*` / `gh` CLI** — only if a plan references an issue / PR whose merge state settles whether it shipped. Pass `-R <owner>/<repo>` on `gh` calls (Claude Code Web's remote is a local proxy; the SessionStart hook prints the resolved slug). Verify `gh` auth nounset-safe: `{ [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; } && gh auth status`.
+- **`mcp__github__*` / `gh` CLI** — only if a plan references an issue / PR whose merge state settles whether it shipped. Read-only work (§23.A); shared rules live in **CLAUDE.md §23** (auth check, the mandatory `-R <owner>/<repo>` flag, REST-over-GraphQL preference, token hygiene) — see **CLAUDE.md §23**.
 
 ## Rules
 

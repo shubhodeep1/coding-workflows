@@ -50,7 +50,7 @@ Omit empty sections; keep every claim cited.
 Read-only surface:
 
 - **`mcp__github__*` MCP tools** — `issue_read`, `pull_request_read`, `list_commits`, `get_file_contents`, `search_issues`, `search_pull_requests` for the project and its merge state. Read at `main`.
-- **`gh` CLI** — when `GH_TOKEN` / `GITHUB_TOKEN` is set (verify nounset-safe: `{ [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; } && gh auth status`). **Pass `-R <owner>/<repo>` on every call** — Claude Code Web's remote is a local proxy and bare `gh` calls fail with `failed to determine base repo`; the SessionStart hook prints the resolved slug (`shubhodeep1/coding-workflows`).
+- **`gh` CLI** — the `GH_TOKEN` transport; shared rules live in **CLAUDE.md §23** (auth check, the mandatory `-R <owner>/<repo>` flag, REST-over-GraphQL preference, token hygiene) — see **CLAUDE.md §23**. The SessionStart hook prints the resolved slug (`shubhodeep1/coding-workflows`). Verification is §23.A read-only work.
 - **`Read` / `Grep` / `Glob`** — verify the implementation, the workflow triggers, and the flag defaults on the local `main` checkout. **`Bash`** for read-only inspection only.
 
 ## Rules

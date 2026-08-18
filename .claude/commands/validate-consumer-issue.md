@@ -80,7 +80,7 @@ Omit empty sections; every verdict carries a citation. When the fix was applied 
 **Reads (at the [target ref](#target-ref), default `stable`):**
 
 - **`mcp__github__*` MCP tools** — `issue_read`, `pull_request_read`, `get_file_contents`, `list_commits`, `search_issues`, `search_pull_requests` for the report, the proposed-fix PR, and the implicated code.
-- **`gh` CLI** — when `GH_TOKEN` / `GITHUB_TOKEN` is set (verify nounset-safe: `{ [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; } && gh auth status`). **Pass `-R <owner>/<repo>`** — Claude Code Web's remote is a local proxy; bare `gh` fails with `failed to determine base repo`. Use `shubhodeep1/coding-workflows` for upstream reads and the consumer's slug when reading the consumer's wrapper to confirm a misconfig.
+- **`gh` CLI** — the `GH_TOKEN` transport; shared rules live in **CLAUDE.md §23** (auth check, the mandatory `-R <owner>/<repo>` flag, REST-over-GraphQL preference, token hygiene) — see **CLAUDE.md §23**. Use `shubhodeep1/coding-workflows` for upstream reads and the consumer's slug when reading the consumer's wrapper to confirm a misconfig — both are §23.A reads.
 - **`Read` / `Grep` / `Glob`** — trace and reproduce against the local **target-ref** checkout (default `stable`). **`Bash`** for read-only inspection / reproduction.
 
 **Writes (only when the [Decision Rule](#decision-rule) implement gate is met):**

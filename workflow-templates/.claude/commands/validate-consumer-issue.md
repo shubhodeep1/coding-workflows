@@ -103,7 +103,7 @@ Omit empty sections; every verdict carries a citation. When the fix was applied 
 **Reads:**
 
 - **`mcp__github__*` MCP tools** — `issue_read`, `pull_request_read`, `get_file_contents`, `list_commits`, `list_tags`, `get_tag`, `search_issues`, `search_pull_requests`. Consumer side: read `THIS_REPO@main`. Upstream side: pass `ref=<UPSTREAM_SHA>` on every read.
-- **`gh` CLI** — when `gh` is installed and `GH_TOKEN` / `GITHUB_TOKEN` is set (verify nounset-safe: `{ [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; } && gh auth status`). **Pass `-R <owner>/<repo>`** — Claude Code Web's remote is a local proxy; bare `gh` fails with `failed to determine base repo`. Use the SessionStart slug for `THIS_REPO`, `shubhodeep1/coding-workflows` for upstream.
+- **`gh` CLI** — the `GH_TOKEN` transport, when `gh` is installed; shared rules live in **CLAUDE.md §23** (auth check, the mandatory `-R <owner>/<repo>` flag, REST-over-GraphQL preference, token hygiene) — see **CLAUDE.md §23**. Use the SessionStart slug for `THIS_REPO`, `shubhodeep1/coding-workflows` for upstream — both are §23.A reads.
 - **`Read` / `Grep` / `Glob`** — trace and reproduce on the local checkout. **`Bash`** for read-only inspection / reproduction.
 
 **Writes (only on the read-write side per the [Decision Rule](#decision-rule)):**
