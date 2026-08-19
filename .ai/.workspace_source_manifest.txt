@@ -108,13 +108,14 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
+analysis/workflow-optimization-2026-07-19.md
+analysis/workflow-optimization-2026-08-07.md
+analysis/workflow-optimization-2026-08-14.md
 changelog.d/.gitkeep
 changelog.d/3738-merge-precheck-promisor-recovery.md
 changelog.d/changelog-fragment-workflow.md
-changelog.d/cloudflare-workers-credentials.md
 changelog.d/deploy-activate-digitalocean-steps.md
 changelog.d/digitalocean-token-access.md
-changelog.d/github-token-access.md
 changelog.d/investigate-issue-attached-upstream-autochain.md
 changelog.d/merged-pr-commit-guard.md
 codex.md
