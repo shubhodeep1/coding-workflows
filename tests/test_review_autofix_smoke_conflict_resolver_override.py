@@ -4,7 +4,7 @@
 The smoke fixture lands a conflicting one-line edit on `main` so a
 `git merge --no-ff origin/main` over the smoke PR's HEAD leaves Git
 merge conflict markers in tests/e2e_smoke_canary.txt. review_autofix.yml's
-conflict-resolver step (currently `openai/gpt-5.4`; observed below on
+conflict-resolver step (currently `openai/gpt-5.5`; observed below on
 the legacy editor default) is then expected to remove
 the markers and keep the HEAD-side `run_id:` value.
 
@@ -18,7 +18,7 @@ reasoning=none/low override from starving it, but at medium reasoning
 the legacy editor default still hit the failure mode on the
 trivial canary conflict — the pattern PR #2086 documented (and fixed
 for the editor) on the same model on the same fixture. The override
-is kept as defense-in-depth on the gpt-5.4 default.
+is kept as defense-in-depth on the default editor model.
 
 This test pins the conflict-resolver analog of #2086:
 

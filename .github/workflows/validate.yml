@@ -55,11 +55,11 @@ env:
   UNATTENDED_PHASE: validate
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
-  # Validate-generate / validate-diagnose / validate-discover are gpt-5.4
+  # Validate-generate / validate-diagnose / validate-discover are gpt-5.5
   # (research/synthesis); validate-fix-harness / validate-self-heal are
   # codex (file edits) — those phases override MODEL_EDITOR locally if
   # WORKFLOW_VALIDATE_FIX_MODEL is set.
-  MODEL_EDITOR: ${{ vars.WORKFLOW_VALIDATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
+  MODEL_EDITOR: ${{ vars.WORKFLOW_VALIDATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.5' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_VALIDATE || 'xhigh' }}
   MODEL_VERBOSITY: ${{ vars.VERBOSITY_VALIDATE || 'low' }}
   CODEX_THREAD_REUSE_ENABLED: ${{ vars.CODEX_THREAD_REUSE_ENABLED || 'false' }}

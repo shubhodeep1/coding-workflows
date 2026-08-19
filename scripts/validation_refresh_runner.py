@@ -906,7 +906,7 @@ def _build_default_discovery_ctx(source_root: Path) -> "discovery_module.Discove
 	- VALIDATION_DISCOVERY_ENABLED            (default: true)
 	- VALIDATION_DISCOVERY_DEDUP_DAYS         (default: 7)
 	- VALIDATION_DISCOVERY_MAX_ATTEMPTS       (default: 3)
-	- VALIDATION_DISCOVERY_MODEL              (default: openai/gpt-5.4)
+	- VALIDATION_DISCOVERY_MODEL              (default: openai/gpt-5.5)
 	- VALIDATION_DISCOVERY_REASONING_EFFORT   (default: xhigh)
 	- VALIDATION_DISCOVERY_PR_BRANCH_PREFIX   (default: automation/validate-discovery)
 	- VALIDATION_DISCOVERY_PR_LABEL           (default: automation:validate-bootstrap)
@@ -922,7 +922,7 @@ def _build_default_discovery_ctx(source_root: Path) -> "discovery_module.Discove
 		/ "examples"
 		/ "validation-fixtures"
 		/ "run_validation_repo_checks.sh",
-		codex_model=_env_str("VALIDATION_DISCOVERY_MODEL", "openai/gpt-5.4"),
+		codex_model=_env_str("VALIDATION_DISCOVERY_MODEL", "openai/gpt-5.5"),
 		codex_reasoning_effort=_env_str("VALIDATION_DISCOVERY_REASONING_EFFORT", "xhigh"),
 		codex_attempts=_env_int("VALIDATION_DISCOVERY_MAX_ATTEMPTS", 3),
 		pr_branch_prefix=_env_str(

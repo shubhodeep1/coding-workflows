@@ -16,14 +16,15 @@ env:
   UNATTENDED_PHASE: implement
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
-  MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
+  MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.5' }}
   # Capacity-fallback editor model. On the final implement attempt the retry
   # loop points CODEX_THREAD_REUSE_MODEL at this slug, which sits in a
   # different OpenRouter/OpenAI per-model TPM bucket than the primary, so a
-  # sustained gpt-5.4 saturation (issue #3515 / run 28640359211) can be ridden
-  # out without a model change on the earlier attempts. Set to the primary
-  # slug (or clear it) to disable the switch.
-  MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.5' }}
+  # sustained saturation of the primary editor model (the failure mode from
+  # issue #3515 / run 28640359211, observed when gpt-5.4 was the primary) can
+  # be ridden out without a model change on the earlier attempts. Set to the
+  # primary slug (or clear it) to disable the switch.
+  MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.4' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'xhigh' }}
   REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
@@ -33,12 +34,12 @@ env:
   # MODEL_DIAGNOSE drives the post-Codex diagnose step
   # (scripts/implement_diagnose_post_codex_failure.sh). Per the OpenAI
   # prompt guide that step is research/synthesis, not coding. The implement
-  # editor and the diagnose step now share the gpt-5.4 default; the separate
+  # editor and the diagnose step now share the gpt-5.5 default; the separate
   # env var is preserved so operators can route diagnose to a different model
   # (e.g. a cheaper mini variant) without affecting the editor.
-  MODEL_DIAGNOSE: ${{ vars.WORKFLOW_DIAGNOSE_MODEL || 'openai/gpt-5.4' }}
+  MODEL_DIAGNOSE: ${{ vars.WORKFLOW_DIAGNOSE_MODEL || 'openai/gpt-5.5' }}
   MODEL_DIAGNOSE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_DIAGNOSE || 'xhigh' }}
-  # Defaults to xhigh to match the repo-wide gpt-5.4 reasoning-level
+  # Defaults to xhigh to match the repo-wide gpt-5.5 reasoning-level
   # policy. Override per-repo via vars.THINKING_LEVEL_IMPLEMENT_REPAIR if
   # repair runs need a different effort than the main editor.
   MODEL_REPAIR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT_REPAIR || 'xhigh' }}
@@ -1447,7 +1448,7 @@ jobs:
             # manifestations of upstream Codex CLI / OpenRouter flakiness
             # (low → unprefixed MCP calls; xhigh → announce-without-invoke
             # patterns) on the legacy editor default. The current
-            # default (gpt-5.4) is steadier across reasoning levels but the
+            # default (gpt-5.5) is steadier across reasoning levels but the
             # rationale stands: keep smoke and production on the same knobs
             # so any breakage on the smoke fixture is also visible to real
             # implements rather than masked by a smoke-only override.
@@ -2327,9 +2328,10 @@ jobs:
             cmd_rc=0
             # Capacity-fallback: on the final attempt switch the editor model
             # to MODEL_EDITOR_FALLBACK (a different OpenRouter/OpenAI per-model
-            # TPM bucket) so a sustained gpt-5.4 saturation (issue #3515 / run
-            # 28640359211) can be ridden out. The fallback slug is declared in
-            # model_catalog_json (gpt-5.5), so apply_patch/verbosity resolution
+            # TPM bucket) so a sustained saturation of the primary editor model
+            # (issue #3515 / run 28640359211, observed when gpt-5.4 was the
+            # primary) can be ridden out. The fallback slug is declared in
+            # model_catalog_json (gpt-5.4), so apply_patch/verbosity resolution
             # inside codex_thread_reuse.sh stays intact.
             attempt_model="${MODEL_EDITOR}"
             if [ "${attempt}" -eq "${max_attempts}" ] && [ -n "${MODEL_EDITOR_FALLBACK:-}" ] && [ "${MODEL_EDITOR_FALLBACK}" != "${MODEL_EDITOR}" ]; then
@@ -4981,7 +4983,7 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           # Diagnose is research/synthesis (parse stderr+diff, emit JSON)
-          # rather than coding. Editor and diagnose now share the gpt-5.4
+          # rather than coding. Editor and diagnose now share the gpt-5.5
           # default; the separate MODEL_DIAGNOSE override is preserved so
           # operators can route diagnose to a different model (e.g. a
           # cheaper mini variant) without affecting the editor. The script

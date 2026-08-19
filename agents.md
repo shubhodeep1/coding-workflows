@@ -180,33 +180,33 @@ a new value, add it to the appropriate overrides file with a
 
 | Phase | Default model | Default reasoning | Verbosity |
 |---|---|---|---|
-| clarify, clarify-respond | `openai/gpt-5.4` | `xhigh` (smoke: `low` — `clarify.yml`'s "Detect smoke test" step sets `MODEL_REASONING_EFFORT=low`) | `low` |
-| plan | `openai/gpt-5.4` | `xhigh` (smoke: `low` — `plan.yml`'s "Detect smoke test" step sets `MODEL_REASONING_EFFORT=low`) | `low` |
-| orchestrate (decompose), judge | `openai/gpt-5.4` | `xhigh` | `low` |
-| implement (main editor) | `openai/gpt-5.4` | `xhigh` (smoke: no override — see `.github/workflows/implement.yml:597-606`) | `low` |
-| implement-repair, implement-repair-syntax | `openai/gpt-5.4` | `xhigh` | `low` |
-| implement-diagnose | `openai/gpt-5.4` | `xhigh` | `low` |
-| review autofix editor | `openai/gpt-5.4` | `xhigh` (smoke: `medium`) | `low` |
+| clarify, clarify-respond | `openai/gpt-5.5` | `xhigh` (smoke: `low` — `clarify.yml`'s "Detect smoke test" step sets `MODEL_REASONING_EFFORT=low`) | `low` |
+| plan | `openai/gpt-5.5` | `xhigh` (smoke: `low` — `plan.yml`'s "Detect smoke test" step sets `MODEL_REASONING_EFFORT=low`) | `low` |
+| orchestrate (decompose), judge | `openai/gpt-5.5` | `xhigh` | `low` |
+| implement (main editor) | `openai/gpt-5.5` | `xhigh` (smoke: no override — see `.github/workflows/implement.yml:597-606`) | `low` |
+| implement-repair, implement-repair-syntax | `openai/gpt-5.5` | `xhigh` | `low` |
+| implement-diagnose | `openai/gpt-5.5` | `xhigh` | `low` |
+| review autofix editor | `openai/gpt-5.5` | `xhigh` (smoke: `medium`) | `low` |
 | review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m2.5`, `moonshotai/kimi-k2.5`, `deepseek/deepseek-v4-pro`, `mistralai/mistral-small-2603`, `qwen/qwen3.6-plus`, `x-ai/grok-4.20`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:1709`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` |
 | review autofix reviewers (pass 2) | `REVIEWER_MODELS` (same roster, after pass-2 scope / tier filtering) | `high` on diffs below `REVIEWER_PASS2_DIFF_LARGE_LOC=200`, `xhigh` at or above that threshold; smoke: `low`; operator override wins | `low` |
-| review consolidator | `openai/gpt-5.4` | `xhigh` | `low` |
-| conflict resolver | `openai/gpt-5.4` | `high` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh`, `high`, `medium`, `none` only — `low` is rejected; default lowered from `xhigh` after runs `25627236793` / `25627316961` hit `timeout`-killed retries on degenerate orchestrator-stack integrations; override per-repo via `vars.THINKING_LEVEL_CONFLICT_RESOLVER`) | `low` |
-| validate generate, diagnose | `openai/gpt-5.4` | `xhigh` | `low` |
-| validate discover | `openai/gpt-5.4` | `xhigh` (per-phase override via `MODEL_REASONING_EFFORT_DISCOVER`) | `low` |
-| validate fix-harness, self-heal | `openai/gpt-5.4` | `xhigh` | `low` |
-| workflow log analyze | `openai/gpt-5.4` | `xhigh` | `low` |
-| workflow audit | `openai/gpt-5.4` | `xhigh` (hardcoded in `.github/workflows/workflow-log-analysis.yml:716-717`) | `low` |
-| workflow api-redundancy | `openai/gpt-5.4` | `xhigh` (default of `THINKING_LEVEL_ANALYSIS`) | `low` |
+| review consolidator | `openai/gpt-5.5` | `xhigh` | `low` |
+| conflict resolver | `openai/gpt-5.5` | `high` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh`, `high`, `medium`, `none` only — `low` is rejected; default lowered from `xhigh` after runs `25627236793` / `25627316961` hit `timeout`-killed retries on degenerate orchestrator-stack integrations; override per-repo via `vars.THINKING_LEVEL_CONFLICT_RESOLVER`) | `low` |
+| validate generate, diagnose | `openai/gpt-5.5` | `xhigh` | `low` |
+| validate discover | `openai/gpt-5.5` | `xhigh` (per-phase override via `MODEL_REASONING_EFFORT_DISCOVER`) | `low` |
+| validate fix-harness, self-heal | `openai/gpt-5.5` | `xhigh` | `low` |
+| workflow log analyze | `openai/gpt-5.5` | `xhigh` | `low` |
+| workflow audit | `openai/gpt-5.5` | `xhigh` (hardcoded in `.github/workflows/workflow-log-analysis.yml:716-717`) | `low` |
+| workflow api-redundancy | `openai/gpt-5.5` | `xhigh` (default of `THINKING_LEVEL_ANALYSIS`) | `low` |
 | workflow log summary | `openai/gpt-5.4-mini` | default | `low` |
 | reviewer consensus summariser | `openai/gpt-5.4-mini` | `medium` (`XPOLL_SUMMARISER_REASONING`) | `low` |
 
-All gpt-5.4 phases now resolve to `low` verbosity at every layer: the per-phase
+All gpt-5.5 phases now resolve to `low` verbosity at every layer: the per-phase
 `MODEL_VERBOSITY` env-var default in `.github/workflows/*.yml` (`VERBOSITY_*`
 repo-vars), the `-c model_verbosity=low` CLI flag on every `codex exec`
 callsite (≈20 sites across `scripts/*.sh` and `.github/workflows/*.yml`),
 the `model_verbosity = "low"` line that `scripts/write_codex_config.sh:242`
 writes into `config.toml`, and the `"default_verbosity": "low"` for
-`openai/gpt-5.4` in `scripts/codex_model_catalog.json:354`. Third-party
+`openai/gpt-5.5` in `scripts/codex_model_catalog.json:385`. Third-party
 reviewer models (`minimax/minimax-m2.5`, `moonshotai/kimi-k2.5`,
 `deepseek/deepseek-v4-pro`, `mistralai/mistral-small-2603`,
 `qwen/qwen3.6-plus`, `x-ai/grok-4.20`)
@@ -222,7 +222,7 @@ belt-and-suspenders. If the announce-without-emit pattern recurs at `low`,
 raise verbosity at the layer that needs it (start with the editor /
 implement callsites, since those are the original 11151 reproducers).
 
-Every editor / consolidator / resolver phase now defaults to `openai/gpt-5.4`.
+Every editor / consolidator / resolver phase now defaults to `openai/gpt-5.5`.
 Reviewer fan-out remains driven by the `REVIEWER_MODELS` roster in
 `.github/workflows/review_autofix.yml` (currently the third-party models
 listed in the table above). The previous legacy editor split (patch-heavy
@@ -709,7 +709,7 @@ depend on it.
 | `REVIEW_FLOOR_RULES_ENABLED` | `1` | Enable floor-rule tagging before the editor runs. |
 | `REVIEW_FLOOR_KEYWORDS_FILE` | `(empty)` | Optional keyword catalog override; empty / missing / unreadable falls back to the built-in catalog. |
 | `REVIEW_CONSOLIDATOR_ENABLED` | `1` | Enable the advisory consolidator stage. |
-| `REVIEW_CONSOLIDATOR_MODEL` | `openai/gpt-5.4` | Default consolidator model in `review_autofix.yml`. |
+| `REVIEW_CONSOLIDATOR_MODEL` | `openai/gpt-5.5` | Default consolidator model in `review_autofix.yml`. |
 | `REVIEW_CONSOLIDATOR_REASONING` | `xhigh` | Default consolidator reasoning effort. |
 | `REVIEW_CONSOLIDATOR_TIMEOUT_SECS` | `300` | Default consolidator timeout in seconds. |
 | `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` | `16000` | Default consolidator output-token budget. |
@@ -767,7 +767,7 @@ depend on it.
 
 **General / Tooling**
 - Treat the `openai/codex#11151` no-edit regression as closed only with function-style patch tooling; keep `apply_patch_tool_type = "function"` as the settled baseline. Pointers: `scripts/codex_model_catalog.json`, `scripts/write_codex_config.sh`.
-- Keep `low` as the default gpt-5.4 verbosity across workflow entrypoints unless a specific phase re-proves the old announce-without-emit failure. Pointers: `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`, `.github/workflows/orchestrate.yml`.
+- Keep `low` as the default gpt-5.5 verbosity across workflow entrypoints unless a specific phase re-proves the old announce-without-emit failure. Pointers: `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`, `.github/workflows/orchestrate.yml`.
 
 **codex-cli quirks**
 - Announce-without-emit is a known codex-cli failure mode on patch-heavy turns; the mitigation is to keep patch tooling explicitly enabled rather than raising verbosity by default. Pointers: `scripts/codex_model_catalog.json`, `.github/workflows/implement.yml`.

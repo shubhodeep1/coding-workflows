@@ -581,7 +581,7 @@ PROMPT_TPL="${PROMPT_TPL}" \
 # the file then exiting cleanly with 0 bytes on stdout, retry loop
 # bails out at MAX_ATTEMPTS, [ai-merge-resolve] commit aborted). Same
 # signature the editor step exhibits without #2086's override. The
-# override is kept as defense-in-depth on the gpt-5.4 default.
+# override is kept as defense-in-depth on the default editor model.
 #
 # Gate is conditional on (a) IS_SMOKE_TEST=true (set by the smoke
 # detect step in review_autofix.yml when the PR carries the

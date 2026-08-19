@@ -413,11 +413,11 @@ PY
 # task with a closed output contract. Model TIER is bumped from
 # gpt-5.4-mini to gpt-5.4 (full) to align with the guide's "synthesis
 # tasks benefit from the full model when prompts are well-engineered".
-# REASONING defaults to xhigh to match the repo-wide gpt-5.4 reasoning-
+# REASONING defaults to xhigh to match the repo-wide gpt-5.5 reasoning-
 # level policy; the consolidator is execution-heavy in practice (apply
 # the merge rule; emit blocks) so operators who want a cheaper run can
 # override REVIEW_CONSOLIDATOR_REASONING to a lower level via env.
-REVIEW_CONSOLIDATOR_MODEL="${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.4}"
+REVIEW_CONSOLIDATOR_MODEL="${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.5}"
 REVIEW_CONSOLIDATOR_REASONING="${REVIEW_CONSOLIDATOR_REASONING:-xhigh}"
 REVIEW_CONSOLIDATOR_TIMEOUT_SECS="${REVIEW_CONSOLIDATOR_TIMEOUT_SECS:-300}"
 REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT="${REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT:-16000}"

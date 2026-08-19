@@ -101,7 +101,7 @@ jobs:
         run: |
           set -euo pipefail
           bash "${SECURITY_AUDIT_SUPPORT_DIR:-.}/scripts/write_codex_config.sh" \
-            --model "openai/gpt-5.4" \
+            --model "openai/gpt-5.5" \
             --reasoning xhigh \
             --catalog-path "${SECURITY_AUDIT_SUPPORT_DIR:-.}/scripts/codex_model_catalog.json"
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
