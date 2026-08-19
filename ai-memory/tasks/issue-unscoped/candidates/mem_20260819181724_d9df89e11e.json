@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:3648-3649 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The `${safe_name:-reviewer}` fallback can alias multiple reviewer slots onto the same attempt file path.\n  WHY: If two slots resolve to the same fallback suffix, they can race on one file and reintroduce the shared-path failure; one reviewer disputed this as non-actionable, but others flagged the collision risk.\n- scripts/review_run_reviewers.sh:3757-3764 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The empty-prompt restoration warnings do not include the reviewer safe_name.\n  WHY: This makes it harder to correlate the warning with the exact reviewer slot during debugging; all reviewers that mentioned it treated it as a logging/debuggability gap.\n- scripts/review_run_reviewers.sh:3753-3764 | severity=high | confidence=4\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The empty-prompt guard only checks for zero-byte files, so a truncated but non-empty prompt can still be handed to codex.\n  WHY: A partial write that passes `[ -s ]` will bypass the guard and can surface later as a malformed prompt failure; one reviewer grouped this with the naming issue, another flagged it separately.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_run_reviewers.sh:3648-3649 | severity=MAJOR | confidence=4\n  PROBLEM: The per-slot attempt file name uses `${safe_name:-reviewer}` as a fallback, which can lead to collisions when multiple reviewers share the same safe_name (e.g., \"reviewer\").\n  WHY: If two reviewers resolve to the same suffix, they will write to the same attempt file, reintroducing the race condition the fix is meant to eliminate.\n- scripts/review_run_reviewers.sh:3757-3764 | severity=NIT | confidence=3\n  PROBLEM: The empty-prompt restoration warnings do not include the reviewer safe_name, making it harder to correlate which reviewer slot experienced the issue during debugging.\n  WHY: Operators must manually map slot identifiers to actual reviewer processes, slowing incident response and increasing misattribution risk.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_run_reviewers.sh:3760-3764 | severity=NIT | confidence=3\n  PROBLEM: Warning messages for empty prompt restoration do not include the safe_name/slot identifier, making it harder to correlate warnings with specific reviewer slots during incident debugging.\n  WHY: When multiple reviewer slots encounter empty prompt conditions, the warning messages only show slot_model and effective_model, but not the safe_name that uniquely identifies the slot's attempt file.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_run_reviewers.sh:3753-3764 | confidence=2\n  PROBLEM: The empty-prompt restoration guard runs after `sanitize_codex_prompt_file` has already been called, and it only checks for zero-byte files.\n  WHY: A partially corrupted prompt that is non-empty can still pass the `[ ! -s ]` check and be fed to codex, causing a hard failure that this guard does not catch.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_run_reviewers.sh:3648 and 3757-3764 | severity=MAJOR | confidence=4\n  PROBLEM: The per-slot namespacing fallback is too generic and the guard only restores on empty file, so shared fallback names or partial/truncated prompts can still slip through.\n  WHY: Under contention, multiple slots sharing a fallback name can collide on the same attempt file, and a partially-written prompt can still be treated as valid enough to reach codex.\n- scripts/review_run_reviewers.sh:3760-3763 | severity=NIT | confidence=3\n  PROBLEM: Both warning messages reference `${slot_model}` and `${effective_model}` but do not log the safe_name that caused or identified the slot.\n  WHY: When the guard fires, the operator cannot easily map the warning back to the exact reviewer slot that collided, making debugging harder.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "b942260cdaebed33ace13c5eff9eee7fd8397bca64fd269bda57d8014b20957c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3776,
+    "run_id": "32278886446",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32278886446",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260819181724_d9df89e11e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3776,
+    "run_id": "32278886446"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-19T18:17:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
