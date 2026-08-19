@@ -3779,6 +3779,14 @@ execute_reviewer_attempt() {
       fi
     fi
   fi
+  if [ ! -s "${reviewer_effective_prompt_file}" ]; then
+    echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file is still empty after fallback on ${attempt_label}; refusing to launch codex with empty stdin." | tee -a "${log_file}" >&2
+    kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
+    emit_reviewer_substate "Failed" "${attempt_number}"
+    rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}" "${wd_reason_file}" "${stall_status_file}" "${tmp_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
+    REVIEWER_ATTEMPT_OUTCOME="failed"
+    return 0
+  fi
   emit_reviewer_substate "LaunchingAgentProcess" "${attempt_number}"
   emit_reviewer_substate "InitializingSession" "${attempt_number}"
   emit_reviewer_substate "StreamingTurn" "${attempt_number}"

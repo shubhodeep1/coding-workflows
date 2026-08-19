@@ -103,6 +103,10 @@ def test_empty_effective_prompt_is_guarded_before_launch() -> None:
 		"an unrestorable empty attempt prompt should fall back to the base prompt "
 		"instead of launching codex with empty stdin"
 	)
+	assert "refusing to launch codex with empty stdin" in guard_block, (
+		"if every fallback still leaves an empty prompt, the slot should fail before "
+		"the codex stdin redirect"
+	)
 	assert '"${reviewer_effective_prompt_bytes}" -lt "${reviewer_base_prompt_bytes}"' in text, (
 		"the pre-launch guard should restore a non-empty but truncated attempt prompt"
 	)
