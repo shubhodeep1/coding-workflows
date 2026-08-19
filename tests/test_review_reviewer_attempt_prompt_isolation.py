@@ -9,7 +9,7 @@ concurrent background workers (``run_reviewer ... &`` in ``run_reviewer_pass``).
 Each attempt makes a private, mutable copy of the pass prompt so per-attempt
 additions (nag block) never contaminate the shared base prompt::
 
-    reviewer_attempt_prompt_file="${prompt_file}.<slot>.attempt_${attempt_number}"
+    reviewer_attempt_prompt_file="${prompt_file}.<slot>_<pid>.attempt_${attempt_number}"
 
 When no model-family overlay exists, ``prepare_reviewer_prompt_for_model``
 returns the SHARED pass prompt path for every slot. Before the slot suffix was
@@ -67,6 +67,11 @@ def test_attempt_prompt_path_is_namespaced_per_slot() -> None:
 			"a shared '<prompt>.attempt_N' path is cp-truncated / sanitized / "
 			f"read concurrently by every reviewer worker (got: {value!r})"
 		)
+		assert "${BASHPID" in value, (
+			"reviewer attempt prompt path must include a per-worker shell pid "
+			"so a fallback or future safe_name collision cannot alias slots "
+			f"onto one mutable prompt file (got: {value!r})"
+		)
 		assert "attempt_${attempt_number}" in value, (
 			f"attempt prompt path must stay per-attempt (got: {value!r})"
 		)
@@ -85,4 +90,10 @@ def test_empty_effective_prompt_is_guarded_before_launch() -> None:
 	assert launch != -1, "expected the codex launch redirect to be present"
 	assert guard.start() < launch, (
 		"the empty-prompt guard must run before the codex launch redirect"
+	)
+	assert "safe_name=${safe_name:-unset}" in text, (
+		"empty/truncated prompt warnings should include safe_name for slot-to-file correlation"
+	)
+	assert '"${reviewer_effective_prompt_bytes}" -lt "${reviewer_base_prompt_bytes}"' in text, (
+		"the pre-launch guard should restore a non-empty but truncated attempt prompt"
 	)
