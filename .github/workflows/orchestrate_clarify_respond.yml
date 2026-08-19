@@ -50,8 +50,8 @@ jobs:
       ISSUE_URL: ${{ github.event.issue.html_url }}
       ISSUE_TITLE: ${{ github.event.issue.title }}
       SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
-      MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
-      # Defaults to xhigh to match the repo-wide gpt-5.4 reasoning-level
+      MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.5' }}
+      # Defaults to xhigh to match the repo-wide gpt-5.5 reasoning-level
       # policy. Override per-repo via vars.THINKING_LEVEL_CLARIFY_RESPOND.
       MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CLARIFY_RESPOND || 'xhigh' }}
       MODEL_VERBOSITY: ${{ vars.VERBOSITY_CLARIFY_RESPOND || 'low' }}

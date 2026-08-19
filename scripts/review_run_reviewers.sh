@@ -4719,7 +4719,7 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   # "primary review target" — most recent AI-generated changes).
   #
   # Both PASS2_REASONING_SMALL and PASS2_REASONING_LARGE now default to
-  # xhigh (repo-wide gpt-5.4 reasoning-level policy), so the size gate
+  # xhigh (repo-wide gpt-5.5 reasoning-level policy), so the size gate
   # is a no-op at default settings. The gate structure is retained so
   # operators can override REVIEWER_PASS2_REASONING_SMALL and/or
   # REVIEWER_PASS2_REASONING_LARGE per-repo to differentiate small vs

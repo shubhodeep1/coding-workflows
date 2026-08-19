@@ -19,11 +19,11 @@
 #   ISSUE_NUMBER                      Source issue number (job-level env).
 #   RUNTIME_DIR                       Per-run scratch directory.
 #   MODEL_DIAGNOSE                    codex model used for diagnosis (preferred).
-#                                     Defaults to openai/gpt-5.4 via implement.yml
+#                                     Defaults to openai/gpt-5.5 via implement.yml
 #                                     env. Falls back to MODEL_EDITOR for backward
 #                                     compatibility with older callers.
 #   MODEL_DIAGNOSE_REASONING_EFFORT   reasoning effort for the diagnose model.
-#                                     Defaults to "xhigh" (repo-wide gpt-5.4
+#                                     Defaults to "xhigh" (repo-wide gpt-5.5
 #                                     policy). Patched into ~/.codex/config.toml
 #                                     before invocation (codex exec does not
 #                                     accept a CLI flag).
@@ -64,10 +64,10 @@ type _safe_gh_jq &>/dev/null || _safe_gh_jq() {
 IMPLEMENT_DIAGNOSE_TIMEOUT_SEC=300
 TOOL_CALL_BUDGET_IMPLEMENT_DIAGNOSE=20
 
-# Model selection: prefer MODEL_DIAGNOSE (gpt-5.4 by default — analysis,
+# Model selection: prefer MODEL_DIAGNOSE (gpt-5.5 by default — analysis,
 # not coding). Fall back to MODEL_EDITOR for legacy callers / consumer
 # repos that haven't bumped their workflow staging yet.
-DIAGNOSE_MODEL="${MODEL_DIAGNOSE:-${MODEL_EDITOR:-openai/gpt-5.4}}"
+DIAGNOSE_MODEL="${MODEL_DIAGNOSE:-${MODEL_EDITOR:-openai/gpt-5.5}}"
 DIAGNOSE_REASONING="${MODEL_DIAGNOSE_REASONING_EFFORT:-xhigh}"
 
 # Validate DIAGNOSE_REASONING against the known codex-CLI reasoning

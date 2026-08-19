@@ -4460,7 +4460,7 @@ jobs:
       # (anthropic/claude-sonnet-4-6 was never in the catalog, so even
       # a wired override would have failed apply_patch invocation).
       #
-      # Default is openai/gpt-5.4 — the same slug as the production
+      # Default is openai/gpt-5.5 — the same slug as the production
       # WORKFLOW_EDITOR_MODEL default. The previous canary
       # (openai/gpt-5.3-codex) was retired after the 2026-05-07
       # ablation suite identified `apply_patch_tool_type: "freeform"`
@@ -4478,7 +4478,7 @@ jobs:
       # slug is missing (codex falls back to bundled metadata, but
       # reliability degrades). Keep this default in sync with the
       # production default in implement.yml's MODEL_EDITOR.
-      ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'openai/gpt-5.4' }}
+      ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'openai/gpt-5.5' }}
     steps:
       # Required for the run-soft-error-analyzer composite action below.
       - name: Checkout repository (for soft-error analyser)

@@ -464,7 +464,7 @@ RESOLVER_RETRY_STATE_ARTIFACT_FILE="${RUNTIME_DIR}/resolver_retry_state_artifact
 # the legacy editor default still hit the documented empty-stdout
 # failure mode on this trivial fixture (3 attempts, all reading the file
 # then exiting with 0 bytes on stdout, no apply_patch invoked, retry
-# loop bails). Kept as defense-in-depth on the gpt-5.4 default.
+# loop bails). Kept as defense-in-depth on the default editor model.
 #
 # Apply the override's specified resolution deterministically before
 # entering the codex loop, gated on (a) IS_SMOKE_TEST=true, (b) the

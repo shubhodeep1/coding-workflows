@@ -282,7 +282,7 @@ codex --ask-for-approval never \
 	-c include_apply_patch_tool=true \
 	exec \
 	--skip-git-repo-check \
-	--model "openai/gpt-5.4" \
+	--model "openai/gpt-5.5" \
 	--sandbox read-only < "${RENDERED_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}"
 
 python3 - \

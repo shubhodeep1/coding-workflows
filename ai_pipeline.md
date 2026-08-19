@@ -36,7 +36,7 @@ Issue Created → Clarify → /answer → Plan → /approved → Implement → P
 2. **Prevent duplicates** — check for existing PR (`gh pr list --search "issue:<number>"`) before major steps; track processed commands via timestamps/markers
 3. **Checkout** — `actions/checkout@v4` (clarify uses `fetch-depth: 1` since history is not needed; plan/implement use `fetch-depth: 0`)
 4. **Workspace** — `/tmp/codex-issue-<run-id>` storing context files (`issue_context.txt`, `answers.txt`, `plan.txt`, `codex_output.txt`)
-5. **Codex settings** — model `openai/gpt-5.4`, no timeout, search off (match `review_autofix.yml` settings). `unattended_system_instructions.md` included in context for every phase.
+5. **Codex settings** — model `openai/gpt-5.5`, no timeout, search off (match `review_autofix.yml` settings). `unattended_system_instructions.md` included in context for every phase.
 6. **Telegram** — copy settings/API calls from `review_autofix.yml`. Alert on: clarification posted, plan awaiting approval, any failure. Skip alerts when auto-approval proceeds without human action.
 
 ---

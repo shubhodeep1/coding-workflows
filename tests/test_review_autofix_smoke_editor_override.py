@@ -2,14 +2,14 @@
 """Contract tests for the smoke-only editor prompt override.
 
 The smoke fixture appends a single bait line to tests/e2e_smoke_canary.txt
-and expects review_autofix.yml's editor (currently `openai/gpt-5.4`;
+and expects review_autofix.yml's editor (currently `openai/gpt-5.5`;
 historically observed below on the legacy editor default)
 to remove it via apply_patch. Across runs 25305535590 / 25308327160 /
 25310399716 the editor consistently completed with 0-byte stdout — no
 apply_patch invocation, no final assistant summary — because the
 production editor prompt does not force the model to commit to a tool
 call on a trivial single-line removal. The override is kept as
-defense-in-depth on the gpt-5.4 default.
+defense-in-depth on the default editor model.
 
 This test pins three pieces of the smoke-only directive added in the
 review_autofix branch:

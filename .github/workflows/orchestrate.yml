@@ -21,11 +21,11 @@ name: AI Orchestrate (Reusable)
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  MODEL_EDITOR: ${{ vars.WORKFLOW_ORCHESTRATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
-  # Defaults to xhigh to match the repo-wide gpt-5.4 reasoning-level
+  MODEL_EDITOR: ${{ vars.WORKFLOW_ORCHESTRATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.5' }}
+  # Defaults to xhigh to match the repo-wide gpt-5.5 reasoning-level
   # policy. Override per-repo via vars.THINKING_LEVEL_ORCHESTRATE.
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_ORCHESTRATE || 'xhigh' }}
-  # gpt-5.4 paths default to low verbosity per agents.md model table.
+  # gpt-5.5 paths default to low verbosity per agents.md model table.
   # Output is structured JSON (`orchestrate_decomposition.v1` schema), which
   # is not verbosity-sensitive — the schema controls shape regardless. Low
   # keeps free-form text in `project_summary` / issue bodies concise and

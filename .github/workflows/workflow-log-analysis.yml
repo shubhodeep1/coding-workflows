@@ -742,7 +742,7 @@ jobs:
 
       - name: Create Codex config
         env:
-          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.4' }}
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.5' }}
         run: |
           set -euo pipefail
           # Centralised in scripts/write_codex_config.sh — see that
@@ -866,7 +866,7 @@ jobs:
         id: analyze
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.4' }}
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.5' }}
           MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
@@ -1425,11 +1425,11 @@ jobs:
 
       - name: Create Codex config
         env:
-          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.4' }}
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.5' }}
         run: |
           set -euo pipefail
           # Reasoning effort is hardcoded at "xhigh" to match the
-          # repo-wide gpt-5.4 reasoning-level policy. Historical context:
+          # repo-wide gpt-5.5 reasoning-level policy. Historical context:
           # run #25088541089 cancelled this job at 30m 16s on its prior
           # 30m cap because xhigh over the audit's wide surface area
           # (~30 workflow files + scripts/, plus the full report file
@@ -1510,7 +1510,7 @@ jobs:
         id: audit
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.4' }}
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.5' }}
           MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
@@ -1932,7 +1932,7 @@ jobs:
 
       - name: Create Codex config
         env:
-          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.4' }}
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.5' }}
           THINKING_LEVEL_ANALYSIS: ${{ vars.THINKING_LEVEL_ANALYSIS || 'xhigh' }}
         run: |
           set -euo pipefail
@@ -2010,7 +2010,7 @@ jobs:
         id: api_redundancy
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.4' }}
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-5.5' }}
           MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
