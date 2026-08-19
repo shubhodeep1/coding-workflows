@@ -3636,7 +3636,17 @@ execute_reviewer_attempt() {
   fi
 
   emit_reviewer_substate "BuildingPrompt" "${attempt_number}"
-  reviewer_attempt_prompt_file="${prompt_file}.attempt_${attempt_number}"
+  # The attempt copy MUST be namespaced per reviewer slot. When no
+  # model-family overlay exists, prepare_reviewer_prompt_for_model returns
+  # the SHARED pass prompt file for every slot, and all reviewer workers run
+  # concurrently — a shared "<prompt>.attempt_N" path is then cp-truncated,
+  # nag-appended, and sanitize-rewritten by all of them at once while codex
+  # reads it as stdin. One bad interleaving leaves the file empty and every
+  # reviewer fails with "No prompt provided via stdin" (consumer run
+  # tele-funtoken-msg-scoring/actions/runs/32222803753, pass 2: 6/6 failed).
+  # ${safe_name} is run_reviewer's local, visible here via bash dynamic
+  # scoping (sole call site), same as the existing use at emit_reviewer_substate.
+  reviewer_attempt_prompt_file="${prompt_file}.${safe_name:-reviewer}.attempt_${attempt_number}"
   if cp "${prompt_file}" "${reviewer_attempt_prompt_file}" 2>/dev/null; then
     reviewer_effective_prompt_file="${reviewer_attempt_prompt_file}"
     # Prompt assembly happens before the current reviewer turn runs, so feed
@@ -3736,6 +3746,18 @@ execute_reviewer_attempt() {
 
   if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
     sanitize_codex_prompt_file "${reviewer_effective_prompt_file}"
+  fi
+  # Last-line-of-defence for the empty-stdin failure mode: codex exits
+  # non-retryably on empty stdin ("No prompt provided via stdin"), so an
+  # unexpectedly empty effective prompt must be restored (or at least
+  # surfaced loudly) before launch instead of silently failing the slot.
+  if [ ! -s "${reviewer_effective_prompt_file}" ]; then
+    if [ "${reviewer_effective_prompt_file}" != "${prompt_file}" ] && [ -s "${prompt_file}" ] \
+      && cp "${prompt_file}" "${reviewer_effective_prompt_file}" 2>/dev/null; then
+      echo "::warning::Reviewer slot ${slot_model} (${effective_model}) effective prompt file was empty before launch on ${attempt_label}; restored it from the base prompt." | tee -a "${log_file}" >&2
+    else
+      echo "::warning::Reviewer slot ${slot_model} (${effective_model}) effective prompt file is empty before launch on ${attempt_label} and could not be restored; codex will fail this slot with empty stdin." | tee -a "${log_file}" >&2
+    fi
   fi
   emit_reviewer_substate "LaunchingAgentProcess" "${attempt_number}"
   emit_reviewer_substate "InitializingSession" "${attempt_number}"
