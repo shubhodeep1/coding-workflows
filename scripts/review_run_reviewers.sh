@@ -3602,6 +3602,8 @@ execute_reviewer_attempt() {
   local reviewer_attempt_prompt_file=""
   local reviewer_effective_prompt_file="${prompt_file}"
   local reviewer_nag_block=""
+  local reviewer_base_prompt_bytes=0
+  local reviewer_effective_prompt_bytes=0
 
   REVIEWER_ATTEMPT_OUTCOME="failed"
   REVIEWER_ATTEMPT_RETRYABLE_CLASS=""
@@ -3636,7 +3638,19 @@ execute_reviewer_attempt() {
   fi
 
   emit_reviewer_substate "BuildingPrompt" "${attempt_number}"
-  reviewer_attempt_prompt_file="${prompt_file}.attempt_${attempt_number}"
+  # The attempt copy MUST be namespaced per reviewer slot. When no
+  # model-family overlay exists, prepare_reviewer_prompt_for_model returns
+  # the SHARED pass prompt file for every slot, and all reviewer workers run
+  # concurrently — a shared "<prompt>.attempt_N" path is then cp-truncated,
+  # nag-appended, and sanitize-rewritten by all of them at once while codex
+  # reads it as stdin. One bad interleaving leaves the file empty and every
+  # reviewer fails with "No prompt provided via stdin" (consumer run
+  # tele-funtoken-msg-scoring/actions/runs/32222803753, pass 2: 6/6 failed).
+  # ${safe_name} is run_reviewer's local, visible here via bash dynamic
+  # scoping (sole call site), same as the existing use at emit_reviewer_substate.
+  # BASHPID keeps the fallback path unique if a future caller ever leaves
+  # safe_name empty or maps two slots to the same filesystem-safe name.
+  reviewer_attempt_prompt_file="${prompt_file}.${safe_name:-reviewer}_${BASHPID:-$$}.attempt_${attempt_number}"
   if cp "${prompt_file}" "${reviewer_attempt_prompt_file}" 2>/dev/null; then
     reviewer_effective_prompt_file="${reviewer_attempt_prompt_file}"
     # Prompt assembly happens before the current reviewer turn runs, so feed
@@ -3734,8 +3748,44 @@ execute_reviewer_attempt() {
   ) &
   wd_pid=$!
 
+  reviewer_base_prompt_bytes="$(wc -c < "${prompt_file}" 2>/dev/null | tr -d '[:space:]')"
+  reviewer_base_prompt_bytes="${reviewer_base_prompt_bytes:-0}"
   if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
     sanitize_codex_prompt_file "${reviewer_effective_prompt_file}"
+  fi
+  # Last-line-of-defence for the empty-stdin failure mode: codex exits
+  # non-retryably on empty stdin ("No prompt provided via stdin"), so an
+  # unexpectedly empty effective prompt must be restored (or at least
+  # surfaced loudly) before launch instead of silently failing the slot.
+  if [ ! -s "${reviewer_effective_prompt_file}" ]; then
+    if [ "${reviewer_effective_prompt_file}" != "${prompt_file}" ] && [ -s "${prompt_file}" ] \
+      && cp "${prompt_file}" "${reviewer_effective_prompt_file}" 2>/dev/null; then
+      echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file was empty before launch on ${attempt_label}; restored it from the base prompt." | tee -a "${log_file}" >&2
+    elif [ "${reviewer_effective_prompt_file}" != "${prompt_file}" ] && [ -s "${prompt_file}" ]; then
+      reviewer_effective_prompt_file="${prompt_file}"
+      echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file was empty before launch on ${attempt_label} and the attempt copy could not be restored; continuing with the base prompt to avoid empty stdin." | tee -a "${log_file}" >&2
+    else
+      echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file is empty before launch on ${attempt_label} and no non-empty base prompt is available; codex will fail this slot with empty stdin." | tee -a "${log_file}" >&2
+    fi
+  elif [ "${reviewer_effective_prompt_file}" != "${prompt_file}" ] && [ "${reviewer_base_prompt_bytes}" -gt 0 ] 2>/dev/null; then
+    reviewer_effective_prompt_bytes="$(wc -c < "${reviewer_effective_prompt_file}" 2>/dev/null | tr -d '[:space:]')"
+    reviewer_effective_prompt_bytes="${reviewer_effective_prompt_bytes:-0}"
+    if [ "${reviewer_effective_prompt_bytes}" -lt "${reviewer_base_prompt_bytes}" ] 2>/dev/null; then
+      if cp "${prompt_file}" "${reviewer_effective_prompt_file}" 2>/dev/null; then
+        echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file shrank from ${reviewer_base_prompt_bytes} to ${reviewer_effective_prompt_bytes} bytes before launch on ${attempt_label}; restored it from the base prompt." | tee -a "${log_file}" >&2
+      else
+        reviewer_effective_prompt_file="${prompt_file}"
+        echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file shrank from ${reviewer_base_prompt_bytes} to ${reviewer_effective_prompt_bytes} bytes before launch on ${attempt_label} and the attempt copy could not be restored; continuing with the base prompt instead of the truncated attempt prompt." | tee -a "${log_file}" >&2
+      fi
+    fi
+  fi
+  if [ ! -s "${reviewer_effective_prompt_file}" ]; then
+    echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file is still empty after fallback on ${attempt_label}; refusing to launch codex with empty stdin." | tee -a "${log_file}" >&2
+    kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
+    emit_reviewer_substate "Failed" "${attempt_number}"
+    rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}" "${wd_reason_file}" "${stall_status_file}" "${tmp_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
+    REVIEWER_ATTEMPT_OUTCOME="failed"
+    return 0
   fi
   emit_reviewer_substate "LaunchingAgentProcess" "${attempt_number}"
   emit_reviewer_substate "InitializingSession" "${attempt_number}"
