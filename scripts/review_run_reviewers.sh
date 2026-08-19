@@ -3761,8 +3761,11 @@ execute_reviewer_attempt() {
     if [ "${reviewer_effective_prompt_file}" != "${prompt_file}" ] && [ -s "${prompt_file}" ] \
       && cp "${prompt_file}" "${reviewer_effective_prompt_file}" 2>/dev/null; then
       echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file was empty before launch on ${attempt_label}; restored it from the base prompt." | tee -a "${log_file}" >&2
+    elif [ "${reviewer_effective_prompt_file}" != "${prompt_file}" ] && [ -s "${prompt_file}" ]; then
+      reviewer_effective_prompt_file="${prompt_file}"
+      echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file was empty before launch on ${attempt_label} and the attempt copy could not be restored; continuing with the base prompt to avoid empty stdin." | tee -a "${log_file}" >&2
     else
-      echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file is empty before launch on ${attempt_label} and could not be restored; codex will fail this slot with empty stdin." | tee -a "${log_file}" >&2
+      echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file is empty before launch on ${attempt_label} and no non-empty base prompt is available; codex will fail this slot with empty stdin." | tee -a "${log_file}" >&2
     fi
   elif [ "${reviewer_effective_prompt_file}" != "${prompt_file}" ] && [ "${reviewer_base_prompt_bytes}" -gt 0 ] 2>/dev/null; then
     reviewer_effective_prompt_bytes="$(wc -c < "${reviewer_effective_prompt_file}" 2>/dev/null | tr -d '[:space:]')"
@@ -3771,7 +3774,8 @@ execute_reviewer_attempt() {
       if cp "${prompt_file}" "${reviewer_effective_prompt_file}" 2>/dev/null; then
         echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file shrank from ${reviewer_base_prompt_bytes} to ${reviewer_effective_prompt_bytes} bytes before launch on ${attempt_label}; restored it from the base prompt." | tee -a "${log_file}" >&2
       else
-        echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file shrank from ${reviewer_base_prompt_bytes} to ${reviewer_effective_prompt_bytes} bytes before launch on ${attempt_label} and could not be restored; codex may receive a truncated prompt." | tee -a "${log_file}" >&2
+        reviewer_effective_prompt_file="${prompt_file}"
+        echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file shrank from ${reviewer_base_prompt_bytes} to ${reviewer_effective_prompt_bytes} bytes before launch on ${attempt_label} and the attempt copy could not be restored; continuing with the base prompt instead of the truncated attempt prompt." | tee -a "${log_file}" >&2
       fi
     fi
   fi

@@ -91,8 +91,17 @@ def test_empty_effective_prompt_is_guarded_before_launch() -> None:
 	assert guard.start() < launch, (
 		"the empty-prompt guard must run before the codex launch redirect"
 	)
+	guard_block = text[guard.start():launch]
+	assert 'reviewer_effective_prompt_file="${prompt_file}"' in guard_block, (
+		"the pre-launch guard should fall back to the base prompt when a damaged "
+		"attempt copy cannot be restored"
+	)
 	assert "safe_name=${safe_name:-unset}" in text, (
 		"empty/truncated prompt warnings should include safe_name for slot-to-file correlation"
+	)
+	assert "continuing with the base prompt to avoid empty stdin" in text, (
+		"an unrestorable empty attempt prompt should fall back to the base prompt "
+		"instead of launching codex with empty stdin"
 	)
 	assert '"${reviewer_effective_prompt_bytes}" -lt "${reviewer_base_prompt_bytes}"' in text, (
 		"the pre-launch guard should restore a non-empty but truncated attempt prompt"
