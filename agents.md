@@ -632,6 +632,23 @@ in their root `AGENTS.md`.
 _None recorded yet — this repo is workflow tooling and currently has no
 DigitalOcean-hosted app or database of its own._
 
+## Cloudflare resources
+
+Registry of Cloudflare identifiers (Worker names, zone IDs, routes, KV/R2/D1
+namespace IDs) relevant to this repo, per CLAUDE.md §24.F. Interactive Claude
+Code sessions read identifiers from this table instead of asking the user;
+when a needed identifier is missing, the session looks it up via a §24.B read
+or asks once, then records it here in the same PR/commit. The `Credential`
+column names which session env var (`FUNTOKEN_IO_CF` for funtoken.io;
+`FT_GAMES_CF` for ft.games and 5m.fun) the resource belongs to. Consumer
+repos carry the same section in their root `AGENTS.md`.
+
+| Resource | Type | ID / name | Credential | Notes |
+|---|---|---|---|---|
+
+_None recorded yet — this repo is workflow tooling and serves none of the
+covered sites (funtoken.io, ft.games, 5m.fun) itself._
+
 ## Reference
 
 Operator runbooks (env var reference, autofix retrigger/dedup internals,
