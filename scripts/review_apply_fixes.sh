@@ -954,8 +954,8 @@ __SMOKE_OVERRIDE__
   # under _PROMPT_BUDGET_TOTAL_BYTES (default 800KB ≈ 200k tokens at
   # ~4 bytes/token) so a single oversized input artifact can't blow
   # past the editor model's context window. The current default
-  # gpt-5.5 has a 272k standard context (lower than the legacy
-  # the legacy editor default 400k); 200k of inputs leaves room for the static
+  # gpt-5.5 has a 272k standard context (lower than the
+  # legacy editor default 400k); 200k of inputs leaves room for the static
   # prefix (~10k tokens) and the response budget (~30k tokens) within
   # the 272k window. Cleaned up after the heredoc completes.
   _init_prompt_budget

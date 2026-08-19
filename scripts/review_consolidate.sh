@@ -411,7 +411,7 @@ PY
 
 # Per the OpenAI prompt guide, consolidation/aggregation is a synthesis
 # task with a closed output contract. Model TIER is bumped from
-# gpt-5.4-mini to gpt-5.4 (full) to align with the guide's "synthesis
+# gpt-5.4-mini to gpt-5.5 (full) to align with the guide's "synthesis
 # tasks benefit from the full model when prompts are well-engineered".
 # REASONING defaults to xhigh to match the repo-wide gpt-5.5 reasoning-
 # level policy; the consolidator is execution-heavy in practice (apply
