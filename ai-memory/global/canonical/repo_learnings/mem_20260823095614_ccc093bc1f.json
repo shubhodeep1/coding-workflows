@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow retry and fallback behavior is part of the public contract, not an implementation detail.",
   "timestamps": {
     "created_at": "2026-08-23T09:56:14Z",
