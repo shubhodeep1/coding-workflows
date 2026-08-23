@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.9,
+  "details": "Merged work frequently modified codex stall guards, watchdog helpers, and the review execution scripts in the same PR. This suggests the repo\u2019s automation depends on coordinated timeout/health-check behavior, so partial fixes can leave the pipeline inconsistent or brittle.",
+  "fingerprint": "8f3211637cdf7b4938088ae9ae241c532bc74e9c9c7de5be960431de076ec3d2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32632208777",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32632208777",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3751",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3752",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3753",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3754",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3762",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3755",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3756",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3758",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3759",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3763"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260823095506_c38b09aecf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Stall-guard and watchdog logic is a recurring cross-cutting concern and should be updated consistently across helper scripts.",
+  "timestamps": {
+    "created_at": "2026-08-23T09:55:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
