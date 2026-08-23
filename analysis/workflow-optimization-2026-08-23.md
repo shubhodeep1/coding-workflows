@@ -379,3 +379,129 @@ Cross-cutting scan notes:
 | Code modularization | 4 scripts/workflows | Large |
 | Expression size reduction | 3 workflows + 2 scripts/prompts | Medium |
 | Medium/Low fixes | 5 scripts/workflows | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-08-23)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` means downstream may implement directly; `NEEDS_VERIFICATION` means the overlap is plausible but requires the listed human/static check first; `RISKY_SKIP` means the apparent redundancy sits in a paginated, retry/backoff, race-sensitive, orchestrator, or observable-log-sensitive path and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — `MERGE-001`
+  - **Safety tag** — `RISKY_SKIP`
+  - **File path and line ranges** — `.github/workflows/clarify.yml:455-471`
+  - **Current call count** — 2 when `SEMANTIC_CACHE_BACKEND != none`; 1 otherwise.
+  - **Proposed call count** — 1 in the semantic-cache-enabled path after manual review; no auto-authorized change.
+  - **Endpoint(s)** — `GET /repos/{repo}/issues/{issue_number}/comments?sort=created&direction=asc&per_page=50`; paginated `GET /repos/{repo}/issues/{issue_number}/comments?sort=created&direction=asc&per_page=100`
+  - **Evidence** —
+    ```sh
+    gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+
+    if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ]; then
+      if ! gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
+    ```
+  - **Proposed fix** — In the `Fetch issue comments` step, only when semantic cache is enabled, fetch the paginated/slurped comments once, derive `THREAD_HISTORY_FILE` from `add // []`, and derive historical bounded `ISSUE_COMMENTS_FILE` from the same normalized array with `.[0:50]`.
+  - **Safety rationale** — `RISKY_SKIP` because one involved call uses `--paginate --slurp` and the two calls intentionally have different page sizes and failure behavior.
+  - **Downstream signal** — Do not auto-implement; manually verify page-boundary equivalence, JSON shape of `ISSUE_COMMENTS_FILE`, and fail-open/fail-closed behavior when the full-history fetch fails.
+
+- **ID** — `MERGE-002`
+  - **Safety tag** — `RISKY_SKIP`
+  - **File path and line ranges** — `scripts/orchestrate_poll_process.sh:7220-7300`
+  - **Current call count** — 2 PR metadata calls.
+  - **Proposed call count** — 1 PR metadata call after manual review; no auto-authorized change.
+  - **Endpoint(s)** — `GET /repos/{repo}/pulls/{final_pr}`
+  - **Evidence** —
+    ```sh
+    existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+    existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+    ```
+  - **Proposed fix** — In `finalize_integration_merge_if_needed`, replace the two `_safe_gh_jq` calls with one PR JSON fetch and parse `.state` plus `.merged_at != null` locally.
+  - **Safety rationale** — `RISKY_SKIP` because the calls are inside `scripts/orchestrate_poll_process.sh` and the final-merge path explicitly defends against upstream races.
+  - **Downstream signal** — Do not auto-implement; manually confirm the combined fetch preserves the two independent fallback defaults and final-merge race checks.
+
+- **ID** — `MERGE-003`
+  - **Safety tag** — `RISKY_SKIP`
+  - **File path and line ranges** — `scripts/orchestrate_poll_process.sh:9586-10028`, `scripts/orchestrate_poll_process.sh:11379-12178`, `scripts/orchestrate_poll_process.sh:16203-16478`
+  - **Current call count** — 2 issue metadata calls per reissue branch; 6 across the three static sites.
+  - **Proposed call count** — 1 issue metadata call per branch; 3 across the three static sites after manual review.
+  - **Endpoint(s)** — `GET /repos/{repo}/issues/{issue_num}` / `GET /repos/{repo}/issues/{if_issue}`
+  - **Evidence** —
+    ```sh
+    orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title // ""' || echo "")"
+    orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
+    ```
+    ```sh
+    IF_TITLE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' || echo "")"
+    IF_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' || echo "")"
+    ```
+  - **Proposed fix** — Add a small local helper or inline one-shot JSON fetch in `execute_stall_recovery_action`, `run_standalone_stall_recovery`, and the top-level implementation-failed sweep; parse `.title` and `.body` locally.
+  - **Safety rationale** — `RISKY_SKIP` because these are orchestrator stall-recovery / reissue paths and the prompt explicitly marks such upstream-race defenses as non-auto-mergeable.
+  - **Downstream signal** — Do not auto-implement; manually verify there is no intervening issue mutation between title/body reads and preserve per-field empty-string fallbacks.
+
+- **ID** — `MERGE-004`
+  - **Safety tag** — `NEEDS_VERIFICATION`
+  - **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:1053-1094`
+  - **Current call count** — 3 PR metadata calls on the first stable attempt: `HEAD_A`, `HEAD_B`, then `PR_META`.
+  - **Proposed call count** — 2 PR metadata calls by making the `HEAD_B` read fetch full PR JSON and reusing it for the closed/merged guard.
+  - **Endpoint(s)** — `GET /repos/{TEST_REPO}/pulls/{PR_NUMBER}`
+  - **Evidence** —
+    ```sh
+    HEAD_A=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+    sleep 3
+    HEAD_B=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+    ...
+    PR_META=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" 2>/dev/null || echo "")
+    ```
+  - **Proposed fix** — In the bait-injection step, replace the second stability read with `HEAD_B_META=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" ...)`, parse `HEAD_B`, `state`, `merged`, `merged_at`, and `closed_at` from that payload, and remove the later `PR_META` fetch.
+  - **Safety rationale** — `NEEDS_VERIFICATION` because the step is explicitly race-protecting PR-head stability, and a failed `HEAD_B` read currently gets a separate later chance through `PR_META`.
+  - **Downstream signal** — Verify behavior when the stability loop exhausts all attempts or `HEAD_B` fetch fails; only then collapse the later `PR_META` read into the second stability snapshot.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`
+  - **Safety tag** — `RISKY_SKIP`
+  - **File path and line ranges** — `scripts/orchestrate_poll_process.sh:1238-1253`, `scripts/orchestrate_poll_process.sh:7362-7372`, `scripts/orchestrate_poll_process.sh:7427-7431`, `scripts/orchestrate_poll_process.sh:7453-7455`, `scripts/pr_checks_lib.sh:156-163`
+  - **Current call count** — 2 `GET /pulls/{final_pr}` calls plus 1 check-runs call on the normal final-merge path; draft-promotion path can add another PR refresh before the duplicate check-gate fetch.
+  - **Proposed call count** — 1 latest PR metadata call plus 1 check-runs call after manual review.
+  - **Endpoint(s)** — `GET /repos/{repo}/pulls/{final_pr}`; retained endpoint `GET /repos/{repo}/commits/{head_sha}/check-runs?per_page=100`
+  - **Evidence** —
+    ```sh
+    pr_json="$(_fetch_pr_json "${final_pr}")"
+    pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed|merged')"
+    pr_mergeable="$(_jq_field "${pr_json}" '.mergeable' 'true|false')"
+    ```
+    ```sh
+    if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "true" ] && ! _pr_checks_completed "${final_pr}" "" "${default_branch}"; then
+    ```
+    ```sh
+    if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
+      pr_json="$(gh_retry _safe_gh_jq "repos/${repo}/pulls/${pr_number}" || echo "")"
+      head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
+    ```
+  - **Proposed fix** — In `finalize_integration_merge_if_needed`, parse `pr_head_sha="$(_jq_field "${pr_json}" '.head.sha')"` from the latest PR JSON, including the refreshed payload after `gh pr ready`, then call `_pr_checks_completed "${final_pr}" "${pr_head_sha}" "${default_branch}"`.
+  - **Safety rationale** — `RISKY_SKIP` because this is inside `scripts/orchestrate_poll_process.sh` final-merge gating and `_pr_checks_completed` is a merge safety gate with fail-closed semantics.
+  - **Downstream signal** — Do not auto-implement; manually confirm no intervening mutation can change the PR head SHA after the chosen payload, especially the `gh pr ready` refresh path.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- `API-001`: `RISKY_SKIP` — agreed, but it spans workflow/script boundaries and includes paginated label fetches plus fail-closed auto-merge safety.
+- `BATCH-001`: `RISKY_SKIP` — agreed, but it is inside `scripts/orchestrate_poll_process.sh` and includes PR-file pagination semantics.
+- `BATCH-002`: `RISKY_SKIP` — agreed, but it is inside `scripts/orchestrate_poll_process.sh` and touches paginated comments/commits in a sweep path.
+- `API-002`: `RISKY_SKIP` — agreed, but Telegram cleanup uses manual pagination plus GitHub/Telegram mutation ordering.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| `SAFE_TO_MERGE` | 0 | — |
+| `NEEDS_VERIFICATION` | 1 | `MERGE-004` |
+| `RISKY_SKIP` | 8 | `MERGE-001`, `MERGE-002`, `MERGE-003`, `REUSE-001`, `API-001`, `BATCH-001`, `BATCH-002`, `API-002` |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
