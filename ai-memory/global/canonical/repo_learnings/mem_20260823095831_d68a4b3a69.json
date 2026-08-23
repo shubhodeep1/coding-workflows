@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workspace/source-manifest files are intentionally part of some automation changes and should not be ignored when reasoning about repo state.",
   "timestamps": {
     "created_at": "2026-08-23T09:58:31Z",
