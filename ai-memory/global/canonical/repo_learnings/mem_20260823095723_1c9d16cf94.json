@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Validation and refresh tooling in this repository is designed around template mode and explicit regeneration flows.",
   "timestamps": {
     "created_at": "2026-08-23T09:57:23Z",
