@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Review/autofix workflow changes in this repo almost always need contract tests alongside script or YAML edits.",
   "timestamps": {
     "created_at": "2026-08-23T09:53:57Z",
