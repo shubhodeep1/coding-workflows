@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.94,
+  "details": "Several merged runs touched workflow scripts and GitHub Actions files together with tests that lock the expected payload, phase-transition, or pipeline behavior. When changing automation flow, update the corresponding contract test so the intended interface stays stable and regressions are caught early.",
+  "fingerprint": "45a1f489b569a7f778399a41d6d203449791a3960c0ffa3af4a5c30e429e436f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32632208777",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32632208777",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3751",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3752",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3753",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3754",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3762",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3755",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3756",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3758",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3759",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3763"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260823095357_44615961ff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Review/autofix workflow changes in this repo almost always need contract tests alongside script or YAML edits.",
+  "timestamps": {
+    "created_at": "2026-08-23T09:53:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
