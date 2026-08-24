@@ -73,17 +73,17 @@ def test_redispatch_step_is_reachable_from_workflow_dispatch_runs() -> None:
 def test_redispatch_step_bounds_the_retry_per_head_sha() -> None:
 	step = _redispatch_step(_workflow_text())
 	assert "autofix_changes_lost_head_retry_consumed" in step
-	assert "CHANGES_LOST_REDISPATCHED=skipped_budget_exhausted" in step
+	assert "CHANGES_LOST_REDISPATCHED=skipped_budget_unavailable_or_exhausted" in step
 	# The budget skip must run the step to completion (exit 0), not fail it.
-	assert "reason=changes_lost_budget_exhausted" in step
+	assert "reason=changes_lost_budget_unavailable_or_exhausted" in step
 
 
-def test_telegram_step_treats_budget_exhausted_as_terminal_comment_path() -> None:
+def test_telegram_step_treats_budget_unavailable_or_exhausted_as_terminal_comment_path() -> None:
 	# The warning step posts the blocked-PR comment in its fallback
 	# branch (CHANGES_LOST_REDISPATCHED neither "true" nor
-	# "skipped_peer_inflight"), which "skipped_budget_exhausted" lands
-	# in — so the "retries exhausted" comment is only posted when the
-	# budget really was consumed or the step could not run at all.
+	# "skipped_peer_inflight"), which the budget unavailable/exhausted
+	# value lands in — so the terminal comment is posted only when the
+	# retry could not safely continue.
 	text = _workflow_text()
 	m = re.search(
 		r"- name: Telegram editor-changes-lost warning\n(.*?)\n      - name: ",
@@ -94,6 +94,7 @@ def test_telegram_step_treats_budget_exhausted_as_terminal_comment_path() -> Non
 	step = m.group(0)
 	assert 'CHANGES_LOST_REDISPATCHED:-false}" = "true"' in step
 	assert '"skipped_peer_inflight"' in step
+	assert "retry budget is unavailable or exhausted" in step
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ The `review_autofix.yml` editor-changes-lost recovery was unreachable on `workfl
 | Automated editor-changes-lost retries per head SHA | 1 |
 | Extra API calls per changes-lost re-dispatch decision | 1 |
 
-What this means for operators: the two Telegram warnings that motivated this change ("Stall recovery: auto-responded to clarification", "Stall recovery: re-triggered review") should become rare; when a clarification does auto-answer it now carries the model's own recommended `Q1: A` selections instead of "deemed sufficient", and an "Editor changes lost … exhausted" PR comment now means a retry really ran.
+What this means for operators: the two Telegram warnings that motivated this change ("Stall recovery: auto-responded to clarification", "Stall recovery: re-triggered review") should become rare; when a clarification does auto-answer it now carries the model's own recommended `Q1: A` selections instead of "deemed sufficient", and an "Editor changes lost … retry unavailable" PR comment now means the retry budget was unavailable or exhausted instead of silently unreachable.
 
 ### For contributors
 

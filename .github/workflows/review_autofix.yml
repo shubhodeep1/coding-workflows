@@ -6296,9 +6296,9 @@ jobs:
           if [ -z "${REVIEWED_HEAD_SHA}" ] \
             || ! type autofix_changes_lost_head_retry_consumed >/dev/null 2>&1 \
             || autofix_changes_lost_head_retry_consumed "${PR_NUMBER}" "${TARGET_BRANCH}" "${CURRENT_RUN_ID}" "${REVIEWED_HEAD_SHA}"; then
-            echo "AUTOFIX_DISPATCH_SKIPPED reason=changes_lost_budget_exhausted pr=${PR_NUMBER} head_sha=${REVIEWED_HEAD_SHA:-unknown} current_run=${CURRENT_RUN_ID} source=editor_changes_lost_retrigger"
-            emit_event "AUTOFIX_DISPATCH_SKIPPED" "reason=changes_lost_budget_exhausted" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=editor_changes_lost_retrigger"
-            echo "CHANGES_LOST_REDISPATCHED=skipped_budget_exhausted" >> "$GITHUB_ENV"
+            echo "AUTOFIX_DISPATCH_SKIPPED reason=changes_lost_budget_unavailable_or_exhausted pr=${PR_NUMBER} head_sha=${REVIEWED_HEAD_SHA:-unknown} current_run=${CURRENT_RUN_ID} source=editor_changes_lost_retrigger"
+            emit_event "AUTOFIX_DISPATCH_SKIPPED" "reason=changes_lost_budget_unavailable_or_exhausted" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=editor_changes_lost_retrigger"
+            echo "CHANGES_LOST_REDISPATCHED=skipped_budget_unavailable_or_exhausted" >> "$GITHUB_ENV"
             exit 0
           fi
 
@@ -6380,9 +6380,9 @@ jobs:
             echo "Editor changes lost re-dispatch skipped; peer run already in flight."
           else
             if [ "${CAN_PUSH:-}" = "true" ]; then
-              MSG="⚠️ Editor changes lost (exhausted): #${PR_NUMBER}"
+              MSG="⚠️ Editor changes lost (retry unavailable): #${PR_NUMBER}"
               MSG+=$'\n'
-              MSG+="All retries exhausted. Auto-merge blocked."
+              MSG+="Automated retry could not continue safely. Auto-merge blocked."
               MSG+=$'\n'
               MSG+="PR: ${PR_URL}"
               MSG+=$'\n'
@@ -6392,7 +6392,7 @@ jobs:
               # Post a PR comment only when re-dispatch failed (human attention needed)
               BODY="⚠️ **Editor changes lost** — the editor reported making changes but no commit was produced."
               BODY+=$'\n\n'
-              BODY+="Auto-merge has been **blocked**. All automated retry attempts have been exhausted."
+              BODY+="Auto-merge has been **blocked**. Automated retry could not continue safely because the retry budget is unavailable or exhausted."
               BODY+=$'\n'
               BODY+="**Next steps:** re-run the review workflow manually or apply the changes from the editor summary above."
               BODY+=$'\n\n'
