@@ -381,6 +381,16 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_retrigger_inflight_direct_fallback.py
 
+      - name: Editor-changes-lost re-dispatch budget tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_editor_changes_lost_redispatch_budget.py
+
+      - name: Orchestrate-poll staged-script parity tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_stages_readiness_script.py
+
       - name: Actions-runs fetch-unconfirmed diagnostic unit tests
         run: |
           set -euo pipefail

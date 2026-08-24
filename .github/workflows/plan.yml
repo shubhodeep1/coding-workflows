@@ -699,11 +699,22 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          # Find clarification comments by HTML marker or legacy "Clarification required" prefix
+          # Find clarification comments by HTML marker or legacy "Clarification required" prefix.
+          # Trusted authors are "...[bot]" logins (GitHub Apps — installable only
+          # by repo admins) OR OWNER/MEMBER/COLLABORATOR author_association (the
+          # same trust list clarify.yml applies to /reclarify). Pipeline comments
+          # are posted with the GH_PAT, so their author is the PAT owner's human
+          # login with OWNER association — a bot-login-only filter excluded every
+          # pipeline-posted clarification comment and left stale ones behind
+          # forever, while a body-marker-only match would let any commenter
+          # spoof the marker and have this step delete their comment.
           CLARIFY_IDS="$(jq -r '
             .[]
             | select(
-                (.user.login // "" | test("\\[bot\\]$")) and
+                (
+                  (.user.login // "" | test("\\[bot\\]$")) or
+                  ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+                ) and
                 ((.body // "") | test("<!-- ai:clarification-questions -->|^Clarification required"))
               )
             | .id
@@ -1486,7 +1497,7 @@ jobs:
           if perl -ne '
             if (/^\s*(?:\*\*)?Q[0-9]+(?:\*\*)?:(?:\*\*)?\s+/i) { $q_line = $.; next; }
             if (defined $q_line && $. - $q_line <= 20 && /^\s*Choices:\s*$/i) { $has_block = 1; }
-            if (defined $q_line && $. - $q_line <= 20 && /^\s*-\s*(?:\*\*)?[A-Za-z](?:\+[A-Za-z])*(?:\*\*)?\s*(?:—|–|[-)\.:]).*\(RECOMMENDED\)/i) { $has_block = 1; }
+            if (defined $q_line && $. - $q_line <= 20 && /^\s*(?:[-*]\s*)?(?:\*\*)?[A-Za-z](?:\+[A-Za-z])*(?:\*\*)?\s*(?:—|–|[-)\.:]).*\(RECOMMENDED\)/i) { $has_block = 1; }
             END { exit($has_block ? 0 : 1); }
           ' "${CODEX_OUTPUT_PARSE_FILE}"; then
             HAS_STRUCTURED_CLARIFICATION_BLOCK="true"
@@ -1636,7 +1647,7 @@ jobs:
             }
 
             next if !$current_qid;
-            if ($line =~ /^\s*-\s*(?:\*\*)?([A-Za-z](?:\+[A-Za-z])*)(?:\*\*)?\s*(?:—|–|[-)\.:]).*\(RECOMMENDED\)/i) {
+            if ($line =~ /^\s*(?:[-*]\s*)?(?:\*\*)?([A-Za-z](?:\+[A-Za-z])*)(?:\*\*)?\s*(?:—|–|[-)\.:]).*\(RECOMMENDED\)/i) {
               push @{ $recommended_tokens{$current_qid} }, uc($1);
             }
           }
