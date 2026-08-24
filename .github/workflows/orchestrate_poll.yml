@@ -336,7 +336,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh worktree_registry.sh worktree_gc.sh; do
+          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh worktree_registry.sh worktree_gc.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
