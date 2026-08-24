@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Review-autofix behavior is built around watchdog/stall-guard helpers, so changes should preserve non-blocking recovery paths.",
   "timestamps": {
     "created_at": "2026-08-24T10:47:57Z",
