@@ -12382,12 +12382,16 @@ extract_recommended_answers() {
 
   # Find the latest clarification comment (HTML marker or legacy prefix).
   # Search from newest to oldest (direction=desc).
+  # Match on the body marker alone: pipeline comments are posted with the
+  # GH_PAT, so their author is the PAT owner's human login, not a
+  # "...[bot]" account — a login filter would (and, before the
+  # tele-funtoken-msg-scoring#3754 stall, did) exclude every
+  # clarification comment and force the "no recommended answers" path.
   local clarify_body
   clarify_body="$(printf '%s' "${comments_json}" | jq -r '
     [ .[]
       | select(
-          (.user.login // "" | test("\\[bot\\]$")) and
-          ((.body // "") | test("<!-- ai:clarification-questions -->|^Clarification required"))
+          (.body // "") | test("<!-- ai:clarification-questions -->|^Clarification required")
         )
     ]
     | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)])
@@ -12406,10 +12410,12 @@ extract_recommended_answers() {
   #   Choices:
   #   - **A** — <desc> (RECOMMENDED)
   #   - **B** — <desc>
-  # The bullet regex also tolerates LLM drift: optional bold around the
-  # letter, and any of "—", "–", "-", ")", ".", ":" as the separator
-  # between the letter and the description (so "- A) text (Recommended)"
-  # is accepted as well as "- **A** — text (RECOMMENDED)").
+  # The bullet regex also tolerates LLM drift: an optional "-"/"*" bullet,
+  # optional bold around the letter, and any of "—", "–", "-", ")", ".",
+  # ":" as the separator between the letter and the description (so
+  # "A. text (Recommended)" — the bullet-less drift from
+  # tele-funtoken-msg-scoring#3754 — and "- A) text (Recommended)" are
+  # accepted as well as "- **A** — text (RECOMMENDED)").
   printf '%s' "${clarify_body}" | perl -ne '
     BEGIN { @order = (); %rec = (); $qid = undef; }
     if (/^\s*\*?\*?Q(\d+)/i) {
@@ -12419,7 +12425,7 @@ extract_recommended_answers() {
       }
       $qid = $1;
     }
-    if (defined $qid && /^\s*-\s*(?:\*\*)?([A-Za-z](?:\+[A-Za-z])*)(?:\*\*)?\s*(?:—|–|[-)\.:]).*\(RECOMMENDED\)/i) {
+    if (defined $qid && /^\s*(?:[-*]\s*)?(?:\*\*)?([A-Za-z](?:\+[A-Za-z])*)(?:\*\*)?\s*(?:—|–|[-)\.:]).*\(RECOMMENDED\)/i) {
       push @{$rec{$qid}}, uc($1);
     }
     END {
