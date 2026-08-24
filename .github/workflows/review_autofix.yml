@@ -6242,11 +6242,19 @@ jobs:
         # all retry attempts, automatically re-dispatch the review workflow
         # so the next iteration gets a fresh codex instance.
         # Guard against an endless re-dispatch loop when no commit is
-        # produced by allowing this auto-redispatch only on runs that still
-        # carry the original pull_request event payload.
-        # Re-dispatched workflow_dispatch runs do not include
-        # github.event.pull_request and therefore cannot re-enter this path.
-        if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.CAN_PUSH == 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && github.event.pull_request.number"
+        # produced by bounding the retry per head SHA (see the in-step
+        # autofix_changes_lost_head_retry_consumed probe): a changes-lost
+        # iteration pushes nothing, so the head SHA never advances, and a
+        # completed non-cancelled review run already recorded on this head
+        # means this run IS the automated retry — no further dispatch.
+        # The former `github.event.pull_request.number` event-payload guard
+        # made this step unreachable from workflow_dispatch runs — which is
+        # every autofix iteration after the first, since the pull_request
+        # twins are concurrency-cancelled — so editor-changes-lost always
+        # dead-ended with a misleading "retries exhausted" comment until
+        # the orchestrator's generic stall recovery kicked in ~2h later
+        # (tele-funtoken-msg-scoring#3757, run 32659591000).
+        if: "success() && env.EDITOR_CHANGES_LOST == 'true' && env.PR_CLOSED != 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.CAN_PUSH == 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.PR_NUMBER != ''"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CURRENT_RUN_ID: ${{ github.run_id }}
@@ -6273,6 +6281,24 @@ jobs:
             echo "AUTOFIX_DISPATCH_SKIPPED reason=peer_inflight pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=editor_changes_lost_retrigger"
             emit_event "AUTOFIX_DISPATCH_SKIPPED" "reason=peer_inflight" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=editor_changes_lost_retrigger"
             echo "CHANGES_LOST_REDISPATCHED=skipped_peer_inflight" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # Loop bound: one automated changes-lost retry per head SHA.  A
+          # changes-lost run pushes no commit, so the head cannot advance
+          # between the original run and its retry; if a completed
+          # non-cancelled review run already exists on this head, this run
+          # is that retry and must not dispatch again.  Fail closed (skip)
+          # when the head SHA or the probe is unavailable — that preserves
+          # the terminal blocked-comment behaviour instead of risking an
+          # unbounded dispatch loop.
+          REVIEWED_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
+          if [ -z "${REVIEWED_HEAD_SHA}" ] \
+            || ! type autofix_changes_lost_head_retry_consumed >/dev/null 2>&1 \
+            || autofix_changes_lost_head_retry_consumed "${PR_NUMBER}" "${TARGET_BRANCH}" "${CURRENT_RUN_ID}" "${REVIEWED_HEAD_SHA}"; then
+            echo "AUTOFIX_DISPATCH_SKIPPED reason=changes_lost_budget_exhausted pr=${PR_NUMBER} head_sha=${REVIEWED_HEAD_SHA:-unknown} current_run=${CURRENT_RUN_ID} source=editor_changes_lost_retrigger"
+            emit_event "AUTOFIX_DISPATCH_SKIPPED" "reason=changes_lost_budget_exhausted" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=editor_changes_lost_retrigger"
+            echo "CHANGES_LOST_REDISPATCHED=skipped_budget_exhausted" >> "$GITHUB_ENV"
             exit 0
           fi
 

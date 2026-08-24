@@ -1251,6 +1251,109 @@ autofix_retrigger_has_inflight_peer()
 }
 
 # ---------------------------------------------------------------
+# autofix_changes_lost_head_retry_consumed — decide whether the current
+# PR head SHA has already consumed its one automated editor-changes-lost
+# re-dispatch.
+#
+# Motivation:
+#   The "Re-dispatch review on editor-changes-lost" step in
+#   review_autofix.yml must be reachable from workflow_dispatch runs
+#   (every autofix iteration after the first is one — the pull_request
+#   twins are concurrency-cancelled), yet must not loop: a changes-lost
+#   iteration produces NO commit, so the head SHA never advances and an
+#   unbounded re-dispatch would spin forever on the same head.  The
+#   bound that replaces the old `github.event.pull_request.number`
+#   event-payload guard (unreachable on dispatch runs — see the
+#   tele-funtoken-msg-scoring#3757 stall, run 32659591000) is the head
+#   SHA itself: a completed, non-cancelled review run already recorded
+#   on this exact head means this run IS the automated retry, so no
+#   further dispatch is allowed.
+#
+# Input:
+#   $1 pr_number      — PR number (informational, used in log lines)
+#   $2 head_branch    — PR head branch name (required for filtering)
+#   $3 current_run_id — github.run_id of the CURRENT run (excluded)
+#   $4 head_sha       — the PR head commit this run reviewed (required)
+#
+# Output (stdout):
+#   AUTOFIX_CHANGES_LOST_BUDGET pr=<n> branch=<b> head_sha=<sha> \
+#     current_run=<r> prior_completed=<n>
+#   An AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED line is emitted on
+#   probe failure (stderr).
+#
+# Return:
+#   0 — budget consumed (a prior completed non-cancelled review run
+#       exists on this head, or the probe failed); caller MUST skip
+#       the dispatch.  Fail-CLOSED, unlike the peer helper above: this
+#       helper guards an otherwise-unbounded dispatch loop, so an
+#       unanswerable probe keeps the pre-fix no-dispatch behaviour.
+#   1 — budget available; caller may dispatch one automated retry.
+#
+# API calls:
+#   Exactly 1 `gh api GET /repos/{repo}/actions/runs` call per
+#   invocation, wrapped in gh_retry (§15: same single branch-scoped
+#   list the peer helper issues; the two probes run back-to-back in
+#   one step at most once per review run).
+# ---------------------------------------------------------------
+autofix_changes_lost_head_retry_consumed()
+{
+	local pr_number="${1:-}"
+	local head_branch="${2:-}"
+	local current_run_id="${3:-}"
+	local head_sha="${4:-}"
+
+	if [ -z "${head_branch}" ] || [ -z "${current_run_id}" ] || [ -z "${head_sha}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
+		echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch:-?} reason=missing_inputs" >&2
+		return 0
+	fi
+
+	local response
+	if ! response=$(gh_retry gh api \
+		-H "Accept: application/vnd.github+json" \
+		"/repos/${GITHUB_REPOSITORY}/actions/runs" \
+		-f "branch=${head_branch}" \
+		-f "per_page=30" \
+		2>/dev/null); then
+		echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=api_error" >&2
+		return 0
+	fi
+
+	if [ -z "${response}" ]; then
+		echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=empty_response" >&2
+		return 0
+	fi
+
+	# Completed, non-cancelled review-family runs on this exact head,
+	# excluding the current run.  A cancelled run is the concurrency-
+	# cancelled pull_request twin of a dispatch run and never executed
+	# the editor, so it does not consume the budget.
+	local prior_completed
+	if ! prior_completed=$(printf '%s' "${response}" | jq -r \
+		--arg current "${current_run_id}" \
+		--arg head "${head_sha}" '
+		[
+			.workflow_runs[]?
+			| select(.status == "completed")
+			| select((.conclusion // "") != "cancelled")
+			| select((.id | tostring) != $current)
+			| select((.head_sha // "") == $head)
+			| select(.path | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$"))
+		]
+		| length
+	' 2>/dev/null); then
+		echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=jq_error" >&2
+		return 0
+	fi
+
+	echo "AUTOFIX_CHANGES_LOST_BUDGET pr=${pr_number:-?} branch=${head_branch} head_sha=${head_sha} current_run=${current_run_id} prior_completed=${prior_completed:-0}"
+
+	if [ "${prior_completed:-0}" -gt 0 ] 2>/dev/null; then
+		return 0
+	fi
+	return 1
+}
+
+# ---------------------------------------------------------------
 # Prompt-input embedding helpers.
 #
 # Editor / reviewer / judge prompts that used to tell the model
