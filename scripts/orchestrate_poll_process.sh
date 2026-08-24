@@ -12382,16 +12382,24 @@ extract_recommended_answers() {
 
   # Find the latest clarification comment (HTML marker or legacy prefix).
   # Search from newest to oldest (direction=desc).
-  # Match on the body marker alone: pipeline comments are posted with the
-  # GH_PAT, so their author is the PAT owner's human login, not a
-  # "...[bot]" account — a login filter would (and, before the
-  # tele-funtoken-msg-scoring#3754 stall, did) exclude every
-  # clarification comment and force the "no recommended answers" path.
+  # Trusted authors are "...[bot]" logins (GitHub Apps — installable only
+  # by repo admins) OR OWNER/MEMBER/COLLABORATOR author_association (the
+  # same trust list clarify.yml applies to /reclarify). Pipeline comments
+  # are posted with the GH_PAT, so their author is the PAT owner's human
+  # login with OWNER association — a bot-login-only filter excluded every
+  # clarification comment and forced the "no recommended answers" path
+  # (tele-funtoken-msg-scoring#3754 stall), while a body-marker-only
+  # match would let any commenter spoof the marker and steer the
+  # stall-recovery auto-answer.
   local clarify_body
   clarify_body="$(printf '%s' "${comments_json}" | jq -r '
     [ .[]
       | select(
-          (.body // "") | test("<!-- ai:clarification-questions -->|^Clarification required")
+          (
+            (.user.login // "" | test("\\[bot\\]$")) or
+            ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+          ) and
+          ((.body // "") | test("<!-- ai:clarification-questions -->|^Clarification required"))
         )
     ]
     | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)])

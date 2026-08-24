@@ -700,14 +700,22 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           # Find clarification comments by HTML marker or legacy "Clarification required" prefix.
-          # Match on the body alone: pipeline comments are posted with the GH_PAT,
-          # so their author is the PAT owner's human login, not a "...[bot]"
-          # account — a login filter would exclude every pipeline-posted
-          # clarification comment and leave stale ones behind forever.
+          # Trusted authors are "...[bot]" logins (GitHub Apps — installable only
+          # by repo admins) OR OWNER/MEMBER/COLLABORATOR author_association (the
+          # same trust list clarify.yml applies to /reclarify). Pipeline comments
+          # are posted with the GH_PAT, so their author is the PAT owner's human
+          # login with OWNER association — a bot-login-only filter excluded every
+          # pipeline-posted clarification comment and left stale ones behind
+          # forever, while a body-marker-only match would let any commenter
+          # spoof the marker and have this step delete their comment.
           CLARIFY_IDS="$(jq -r '
             .[]
             | select(
-                (.body // "") | test("<!-- ai:clarification-questions -->|^Clarification required")
+                (
+                  (.user.login // "" | test("\\[bot\\]$")) or
+                  ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+                ) and
+                ((.body // "") | test("<!-- ai:clarification-questions -->|^Clarification required"))
               )
             | .id
           ' "${ISSUE_COMMENTS_FILE}")"
