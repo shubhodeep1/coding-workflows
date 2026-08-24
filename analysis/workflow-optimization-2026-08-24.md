@@ -388,3 +388,122 @@
 | Code modularization | 8+ | Large |
 | Expression size reduction | 3 | Medium |
 | Medium/Low fixes | 6+ | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-08-24)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` means the implement stage may consolidate directly; `NEEDS_VERIFICATION` means the overlap is real but a human/subsequent audit must prove freshness, schema, and error semantics; `RISKY_SKIP` means the consolidation is visible but must not be auto-implemented because it touches pagination, retry/security gates, stall-recovery, or race-defense paths.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID:** `MERGE-001`  
+  **Safety tag:** `RISKY_SKIP`  
+  **File path and line ranges:** `scripts/review_collect_pr_metadata.sh:209-226`; existing consolidation helper at `scripts/gh_helpers.sh:751-916` with REST fallback calls at `scripts/gh_helpers.sh:732-740`.  
+  **Current call count:** 3 mandatory REST reads plus 1 optional review read.  
+  **Proposed call count:** 1 GraphQL PR-context read for non-paginated cases, plus the optional top-level reviews read unless the helper schema is extended; legacy REST fallback unchanged.  
+  **Endpoint(s):** `GET /repos/{repo}/pulls/{pr}`, `GET /repos/{repo}/issues/{pr}/comments`, `GET /repos/{repo}/pulls/{pr}/comments`, optional `GET /repos/{repo}/pulls/{pr}/reviews`; GraphQL `repository.pullRequest`.  
+  **Evidence:**
+  ```sh
+  gh_retry "${PR_PAYLOAD_FILE}" api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
+  gh_retry "${issue_comments_raw}" api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments"
+  gh_retry "${review_comments_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments"
+  ```
+  `gh_pr_with_all_comments` already documents a GraphQL-first shape for PR metadata, issue comments, and review comments, with fail-open REST fallback on `hasNextPage=true`.  
+  **Proposed fix:** Extend or wrap `gh_pr_with_all_comments` so `review_collect_pr_metadata.sh` can populate `PR_PAYLOAD_FILE`, `PR_ISSUE_COMMENTS_FILE`, and `PR_REVIEW_COMMENTS_FILE` from one GraphQL snapshot when pagination is absent; keep fallback semantics modeled on `_fetch_candidate_issue_details_graphql` / `_fetch_linked_pr_status_graphql` batching contracts in `scripts/orchestrate_poll_process.sh:10731-10735`.  
+  **Safety rationale:** `RISKY_SKIP` because the current calls use `--paginate`, and the helper output does not exactly preserve the raw `PR_PAYLOAD_FILE` / optional top-level `PR_REVIEWS_FILE` schema.  
+  **Downstream signal:** Do not auto-implement; manually prove raw payload parity, top-level review needs, and pagination fallback before replacing these REST calls.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID:** `REUSE-001`  
+  **Safety tag:** `NEEDS_VERIFICATION`  
+  **File path and line ranges:** `scripts/review_collect_pr_metadata.sh:251-263,273-280,309-342`; `.github/workflows/review_autofix.yml:2303-2318`.  
+  **Current call count:** 2 reads on affected PRs: one linked-issue GraphQL read plus one issue-title REST read.  
+  **Proposed call count:** 1 read on cache hit; retain the issue-title REST fallback on cache miss.  
+  **Endpoint(s):** GraphQL `repository.pullRequest.closingIssuesReferences(first:50){nodes{number,title,body}}`; `GET /repos/{repo}/issues/{issue}`.  
+  **Evidence:**
+  ```sh
+  -f query='... closingIssuesReferences(first:50){nodes{number title body}} ...'
+  ```
+  ```sh
+  ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
+  ```
+  The early script fetches titles/bodies and writes prompt context, but exports only numbers in `LINKED_ISSUES_JSON`.  
+  **Proposed fix:** Extend `review_collect_pr_metadata.sh` to export a compact `LINKED_ISSUE_TITLES_JSON` or file containing `{number,title}` from `_linked_context_raw`, then update the smoke-detection step to look up `ISSUE_NUM` there before `_safe_gh_jq`.  
+  **Safety rationale:** `NEEDS_VERIFICATION` because the REST refetch may cover strict PR-body fallback issue refs that are absent from `closingIssuesReferences` on non-default-base PRs.  
+  **Downstream signal:** Verify with default-base and non-default-base smoke PR samples that the cached `{number,title}` set covers the same issue numbers before removing the live title lookup.
+
+- **ID:** `REUSE-002`  
+  **Safety tag:** `NEEDS_VERIFICATION`  
+  **File path and line ranges:** `scripts/review_collect_pr_metadata.sh:209,228-234`; `.github/workflows/review_autofix.yml:1713-1714,5450-5451`; `scripts/review_enable_auto_merge.sh:127-136,192-214`.  
+  **Current call count:** 2 PR metadata reads on the auto-merge path.  
+  **Proposed call count:** 1 PR metadata read on cache hit; keep live fallback.  
+  **Endpoint(s):** `GET /repos/{repo}/pulls/{pr}`.  
+  **Evidence:**
+  ```sh
+  gh_retry "${PR_PAYLOAD_FILE}" api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
+  ```
+  ```sh
+  if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" ...)"
+  ```
+  The workflow already exports `PR_PAYLOAD_FILE=${RUNTIME_DIR}/pr_payload.json` before invoking `review_enable_auto_merge.sh`.  
+  **Proposed fix:** Teach `review_enable_auto_merge.sh` to load `_ORCH_PR_META_JSON` from `PR_PAYLOAD_FILE` when the file is present, valid JSON, and matches `PR_NUMBER`; fall back to the existing live `gh_retry gh api` call when missing/stale. Do not collapse the separate paginated label guard at `scripts/review_enable_auto_merge.sh:65` into this cache.  
+  **Safety rationale:** `NEEDS_VERIFICATION` because auto-merge suppression is fail-closed and runs after intervening workflow work, so stale PR body/head-ref semantics must be proven safe.  
+  **Downstream signal:** Verify PR body/head-ref freshness requirements for orchestrator integration and forward-merge fallback PRs before reusing `PR_PAYLOAD_FILE`.
+
+- **ID:** `REUSE-003`  
+  **Safety tag:** `RISKY_SKIP`  
+  **File path and line ranges:** `.github/workflows/check_failure_triage.yml:124-147,267-286`; `scripts/check_failure_triage.sh:151-178`.  
+  **Current call count:** 2 PR metadata reads.  
+  **Proposed call count:** 1 PR metadata read with a handoff file; fallback keeps 2.  
+  **Endpoint(s):** `GET /repos/{repo}/pulls/{pr}`.  
+  **Evidence:**
+  ```sh
+  if gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ inputs.pr_number }}" > "${pr_payload}"
+  ```
+  ```sh
+  if gh_api_json_to_file "${PR_JSON_FILE}" gh api "repos/${REPO}/pulls/${PR_NUMBER}"; then
+  ```
+  **Proposed fix:** Persist the fork-guard payload under `$RUNNER_TEMP`, export `CHECK_TRIAGE_PR_PAYLOAD_FILE`, and have `check_failure_triage.sh` consume it only if `.number` and `.head.repo.full_name` match expectations.  
+  **Safety rationale:** `RISKY_SKIP` because the first call sits inside an explicit retry/security fork guard and currently hard-fails, while the script’s later fetch fails open to minimal context.  
+  **Downstream signal:** Do not auto-implement; manually preserve the hard-fail fork guard and only allow script-level fail-open after same-repo validation succeeds.
+
+- **ID:** `REUSE-004`  
+  **Safety tag:** `RISKY_SKIP`  
+  **File path and line ranges:** `scripts/orchestrate_poll_process.sh:2250-2256,3678-3687,8199-8201,13316-13317,13334-13337,13744-13747,17067-17068,17961-17963`.  
+  **Current call count:** Up to 8 static default-branch reads in one poller process, path-dependent at runtime.  
+  **Proposed call count:** 1 cycle-local default-branch cache read plus legacy live fallback on cache miss.  
+  **Endpoint(s):** `GET /repos/{repo}` for `.default_branch`.  
+  **Evidence:**
+  ```sh
+  default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  ```
+  Similar default-branch lookups recur across integration-ahead, final-merge, validation re-dispatch, CI-status, and standalone conflict-sweep paths.  
+  **Proposed fix:** Add a poller-local `get_default_branch_cached` helper that preserves each caller’s existing fallback value (`""` vs `main`) and log behavior, then replace only same-tick duplicate default-branch reads.  
+  **Safety rationale:** `RISKY_SKIP` because every call is inside `orchestrate_poll_process.sh`, and several callers are race-defense/fail-closed paths.  
+  **Downstream signal:** Do not auto-implement; manually audit each caller’s fallback semantics and observable warning/log output before introducing a shared cache.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- `API-001`: `NEEDS_VERIFICATION` — Same GraphQL linked-issue data is re-fetched, but the cache-known flag must be propagated and empty-vs-unknown semantics verified.
+- `API-002`: `NEEDS_VERIFICATION` — PR metadata overlap is real, but later checks occur after intervening workflow work and may intentionally revalidate state.
+- `BATCH-001`: `RISKY_SKIP` — Active workflow-run enumeration uses `--paginate` and dispatch-sensitive in-flight detection, so it must not be auto-consolidated.
+- `BATCH-002`: `NEEDS_VERIFICATION` — Per-issue label batching is plausible, but fallback issue-set and label-known semantics need proof before replacing `gh issue view`.
+- `BATCH-003`: `RISKY_SKIP` — The call group is inside `orchestrate_poll_process.sh` stall recovery, which the prompt explicitly treats as risky.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| `SAFE_TO_MERGE` | 0 | — |
+| `NEEDS_VERIFICATION` | 5 | `REUSE-001`, `REUSE-002`, `API-001`, `API-002`, `BATCH-002` |
+| `RISKY_SKIP` | 5 | `MERGE-001`, `REUSE-003`, `REUSE-004`, `BATCH-001`, `BATCH-003` |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
