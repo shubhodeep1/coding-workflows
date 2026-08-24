@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Work on workflow log collection and drift auditing was accompanied by tests that assert their contracts. When extending observability or audit tooling, prefer deterministic parsing and explicit contract tests, because these jobs likely feed later analysis or gating logic and failures can be subtle.",
+  "fingerprint": "c716c06a33108d6ec50021e8d77884cb96e9ac4e198bf2209f6b620a220ae935",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32718308557",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32718308557",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3751",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3752",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3753",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3754",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3762",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3755",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3756",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3758",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3759",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3763"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260824104900_cdc35ef9bf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Log collection and drift auditing are treated as first-class automation features, not ad hoc scripts.",
+  "timestamps": {
+    "created_at": "2026-08-24T10:49:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
