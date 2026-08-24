@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:702-720 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: The jq filter uses `IN(\"OWNER\", \"MEMBER\", \"COLLABORATOR\")`, which requires jq 1.6+.\n  WHY: Reviewers noted current GitHub-hosted runners ship jq 1.6/1.7, but the code now depends on that version feature.\n- scripts/orchestrate_poll_process.sh:12395-12408 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: The jq filter uses `IN(\"OWNER\", \"MEMBER\", \"COLLABORATOR\")`, which requires jq 1.6+.\n  WHY: Reviewers noted current GitHub-hosted runners ship jq 1.6/1.7, but the code now depends on that version feature.\n- scripts/gh_helpers.sh:~1331-1336 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The workflow path regex is case-sensitive, so a mixed-case workflow path would not match.\n  WHY: In current repos the workflow filenames are lowercase, but the filter is brittle if GitHub ever returns a different case.\n- scripts/gh_helpers.sh:1306-1308 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: API/missing-input failures are reported as `skipped_budget_exhausted`, which makes a probe failure look like budget exhaustion.\n  WHY: The dispatch stays fail-closed, but operators cannot distinguish a transient probe failure from a truly exhausted retry budget.\n- .github/workflows/plan.yml:702-704 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The comment still describes only the HTML marker or legacy `Clarification required` prefix, but the filter also requires trusted author authentication.\n  WHY: The code is correct, but the comment is stale and misstates the matching criteria.\n- scripts/orchestrate_poll_process.sh:~12408-12422 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: The comment omits the new bullet-less acceptance (`A. text (Recommended)`), which is the primary change.\n  WHY: The code behavior is correct, but the comment is incomplete and does not describe the new accepted form.\n- .github/workflows/plan.yml:~1486-1510 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The comment omits the new bullet-less acceptance (`A. text (Recommended)`), which is the primary change.\n  WHY: The code behavior is correct, but the comment is incomplete and does not describe the new accepted form.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/plan.yml:~702-720 | severity=low | confidence=2\n  PROBLEM: The jq `IN()` operator added to the author_association filter requires jq 1.6+.\n  WHY: On current GitHub Actions runners this is available, so the issue is theoretical there, but older jq versions would fail the filter.\n- scripts/orchestrate_poll_process.sh:~12395-12408 | severity=low | confidence=2\n  PROBLEM: The jq `IN()` operator added to the author_association filter requires jq 1.6+.\n  WHY: On current GitHub Actions runners this is available, so the issue is theoretical there, but older jq versions would fail the filter.\n- scripts/gh_helpers.sh:~1331-1336 | severity=low | confidence=2\n  PROBLEM: The jq regex `select(.path | test(\"(^|/)(review_autofix|internal-review|ai-review)\\\\.ya?ml$\"))` is case-sensitive.\n  WHY: If GitHub ever returns a mixed-case workflow path, the budget probe would miss the completed run.\n- .github/workflows/plan.yml:~1486-1510 | severity=low | confidence=4\n  PROBLEM: The comment does not describe the bullet-less option-line acceptance.\n  WHY: The runtime behavior is correct, but the comment omits the primary drift handled by the regex.\n- scripts/orchestrate_poll_process.sh:~12408-12422 | severity=low | confidence=4\n  PROBLEM: The comment does not describe the bullet-less option-line acceptance.\n  WHY: The runtime behavior is correct, but the comment omits the primary drift handled by the regex.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/plan.yml:702-720 | severity=low | confidence=4\n  PROBLEM: The jq filter uses `IN(\"OWNER\", \"MEMBER\", \"COLLABORATOR\")`, which requires jq 1.6+.\n  WHY: On older jq versions, the filter fails; the current runner environment has jq 1.7, so this is a compatibility risk rather than an immediate failure.\n- scripts/orchestrate_poll_process.sh:12395-12408 | severity=low | confidence=4\n  PROBLEM: The jq filter uses `IN(\"OWNER\", \"MEMBER\", \"COLLABORATOR\")`, which requires jq 1.6+.\n  WHY: On older jq versions, the filter fails; the current runner environment has jq 1.7, so this is a compatibility risk rather than an immediate failure.\n- scripts/gh_helpers.sh:1306-1308 | severity=low | confidence=4\n  PROBLEM: The helper collapses API errors and missing inputs into the same `skipped_budget_exhausted` outcome.\n  WHY: This keeps dispatch fail-closed, but it makes probe failures look like budget exhaustion in logs and comments.\n- .github/workflows/plan.yml:702-704 | severity=low | confidence=4\n  PROBLEM: The comment still describes only the HTML marker or legacy `Clarification required` prefix, but the filter also requires trusted author authentication.\n  WHY: The code is correct, but the comment is stale and can mislead maintainers about the cleanup criteria.\n- scripts/orchestrate_poll_process.sh:12408-12413 | severity=low | confidence=4\n  PROBLEM: The comment omits the new bullet-less acceptance (`A. text (Recommended)`), which is the primary change.\n  WHY: The runtime behavior is correct, but the comment does not document the newly accepted form.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "1f6d9c819f99a4998f6e31229be2451fb9da2eb14e83d0338c5065247b380e6a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3786,
+    "run_id": "32682360295",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32682360295",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260824041211_f4dee14a3a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3786,
+    "run_id": "32682360295"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 7 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-24T04:12:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
