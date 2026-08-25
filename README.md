@@ -41,6 +41,13 @@ The memory schema set also includes the cross-run cache document used by workflo
 
 Get AI-powered issue-to-PR automation running in your repository in a few minutes.
 
+> **Interactive shortcut:** from a Claude Code session, `/seed-repo <owner>/<repo> [core|standard|full]`
+> (default profile: `standard`) performs the onboarding below for you — it copies the profile's
+> wrapper workflows plus `ai-update-workflows.yml`, the `.claude/` command/hook assets, and the root
+> `CLAUDE.md` from `@stable` into the target repo via a seed PR, sets the `WORKFLOW_PROFILE` repo
+> variable (after asking), and registers the repo in `.github/ai/consumer_repos.json` (CLAUDE.md §14).
+> Secrets (step 1 below) still have to be added by you.
+
 ### 1. Add secrets and variables
 
 In your consumer repository, go to **Settings → Secrets and variables → Actions** and configure:
