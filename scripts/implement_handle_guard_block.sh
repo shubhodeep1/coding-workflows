@@ -3,7 +3,7 @@
 # shellcheck disable=SC2153 # DCB_* and SVB_* values are workflow environment inputs.
 set -euo pipefail
 
-RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
 # Scope-block branch. When either scope guard (files_touched preflight /
 # commit-time, or the post-commit ai:scope label verifier) latched
