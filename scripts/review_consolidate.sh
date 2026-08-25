@@ -132,7 +132,7 @@ issue_number = safe_int(sys.argv[3])
 pr_number = safe_int(os.environ.get("PR_NUMBER"))
 memory_branch = str(os.environ.get("AI_MEMORY_BRANCH", "ai-memory") or "ai-memory").strip() or "ai-memory"
 memory_root_relative = str(os.environ.get("AI_MEMORY_ROOT", "ai-memory") or "ai-memory").strip() or "ai-memory"
-push_retries = safe_int(os.environ.get("AI_MEMORY_PUSH_RETRIES")) or 8
+push_retries = safe_int(os.environ.get("AI_MEMORY_PUSH_RETRIES")) or 16
 
 lines = raw_path.read_text(encoding="utf-8", errors="replace").splitlines()
 block_start = re.compile(r"^=== ISSUE (.+) ===$")
