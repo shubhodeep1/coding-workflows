@@ -64,15 +64,21 @@ name: Promote main to stable
       review_timeout:
         description: >
           Forwarded to test-and-mark-stable.yml. Default mirrors that
-          workflow's own `review_timeout` default (40), which was raised
-          30→40 in #3290 to absorb slow multi-pass reviewer LLM steps.
+          workflow's own `review_timeout` default (60), which was raised
+          30→40 in #3290 and 40→60 after run 28282500673 (v1.20.1) to
+          absorb slow multi-pass reviewer LLM steps.
           Because this dispatcher forwards the value explicitly
-          (`-f review_timeout=...`), a 30 here would override the
-          downstream 40 default and re-introduce the v1.17.0 wait-review
-          false-timeout (run 27456112610), so it must track 40.
+          (`-f review_timeout=...`), a stale lower value here silently
+          overrides the downstream default and re-introduces the
+          wait-review false-timeout: the v1.27.0 release failure
+          (run 32824674139) happened exactly this way — this default
+          still said 40 after the downstream 40→60 bump, so a healthy
+          51m "Run reviewer models" step aged out the 40m inactivity
+          timer. When test-and-mark-stable.yml's `review_timeout`
+          default changes, this default MUST change with it.
         required: false
         type: number
-        default: 40
+        default: 60
 
 permissions:
   contents: write
