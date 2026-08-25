@@ -1776,8 +1776,8 @@ run_cache_probe || true
 
 # ── Cross-reviewer consensus summariser ──────────────────────────────────
 # After each review pass (pass-1 and pass-2) completes, all reviewer outputs
-# are fed as a single prompt to codex-cli (openai/gpt-5.6-luna, none
-# reasoning) which emits ONE consolidated findings ledger (CONSENSUS block +
+# are fed as a single prompt to codex-cli (openai/gpt-5.6-luna, medium
+# reasoning by default) which emits ONE consolidated findings ledger (CONSENSUS block +
 # per-reviewer sections). The pass-1 ledger feeds pass-2 reviewers; the
 # pass-2 ledger (written to REVIEWER_CONSENSUS_FILE) feeds the editor and
 # the memory-record step. Summariser failure hard-fails the workflow — the
