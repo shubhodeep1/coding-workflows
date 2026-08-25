@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.83,
+  "details": "The merged validation-related changes show a pattern of adding refresh runners and template-mode tests to keep process checks current. When the repository\u2019s process definitions evolve, automation that regenerates or refreshes validation state is safer than ad hoc edits because it keeps templates and checks aligned.",
+  "fingerprint": "de25b24805d97edf7ce1f9910b4a7b3b752a462d7921b2405de134455f3e9233",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32826437361",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32826437361",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3751",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3752",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3753",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3754",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3762",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3755",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3756",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3758",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3759",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3763"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260825082901_47d6d729c0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Process-validation refresh flows should be automated through dedicated runners rather than manual refresh steps.",
+  "timestamps": {
+    "created_at": "2026-08-25T08:29:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
