@@ -22,6 +22,7 @@ import textwrap
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
+IMPLEMENT_GUARD_HANDLER = REPO_ROOT / "scripts" / "implement_handle_guard_block.sh"
 FILES_TOUCHED_SCOPE_GUARD = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
 
 
@@ -31,6 +32,10 @@ def _workflow_text() -> str:
 
 def _implement_commit_script_text() -> str:
 	return IMPLEMENT_COMMIT_SCRIPT.read_text(encoding="utf-8")
+
+
+def _implement_guard_handler_text() -> str:
+	return IMPLEMENT_GUARD_HANDLER.read_text(encoding="utf-8")
 
 
 def _step_block(step_name: str) -> list[str]:
@@ -219,8 +224,8 @@ if not args:
 	save()
 	sys.exit(0)
 
-if args[0] == "label" and len(args) >= 3 and args[1] == "create":
-	state.setdefault("label_creates", []).append({
+if args[0] == "label" and len(args) >= 3 and args[1] in ("create", "edit"):
+	state.setdefault(f"label_{args[1]}s", []).append({
 		"name": args[2],
 		"repo": first_value("--repo"),
 	})
@@ -265,11 +270,18 @@ if args[0] == "issue" and len(args) >= 3 and args[1] == "create":
 	sys.exit(0)
 
 if args[0] == "issue" and len(args) >= 3 and args[1] == "comment":
+	body_file = first_value("--body-file")
 	state.setdefault("issue_comments", []).append({
 		"issue": args[2],
 		"repo": first_value("--repo"),
-		"body": first_value("--body"),
+		"body": Path(body_file).read_text(encoding="utf-8") if body_file else first_value("--body"),
 	})
+	save()
+	sys.exit(0)
+
+if args[0] == "issue" and len(args) >= 3 and args[1] == "view":
+	for label in state.get("issue_labels", []):
+		print(label)
 	save()
 	sys.exit(0)
 
@@ -377,6 +389,23 @@ sys.exit(1)
 	mock_path.chmod(0o755)
 	(bin_dir / "sleep").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
 	(bin_dir / "sleep").chmod(0o755)
+
+
+def _install_guard_mock_curl(bin_dir: Path) -> None:
+	curl_script = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+calls_path = Path(os.environ["MOCK_CURL_CALLS_FILE"])
+calls = json.loads(calls_path.read_text(encoding="utf-8"))
+calls.append(sys.argv[1:])
+calls_path.write_text(json.dumps(calls), encoding="utf-8")
+'''
+	mock_path = bin_dir / "curl"
+	mock_path.write_text(curl_script, encoding="utf-8")
+	mock_path.chmod(0o755)
 
 
 def _install_mock_codex(bin_dir: Path) -> None:
@@ -1500,19 +1529,146 @@ def test_telegram_failure_step_skips_destructive_blocked_runs() -> None:
 	)
 
 
+def _run_guard_handler_case(
+	tmp_path: Path,
+	*,
+	repository: str,
+	destructive_reason: str = "",
+	scope_reason: str = "",
+) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]]]:
+	repo_dir = tmp_path / "repo"
+	runtime_dir = tmp_path / "runtime"
+	bin_dir = tmp_path / "bin"
+	(repo_dir / "scripts").mkdir(parents=True)
+	runtime_dir.mkdir()
+	bin_dir.mkdir()
+
+	repository_helper = repo_dir / "scripts" / "implement_handle_guard_block.sh"
+	runtime_helper = runtime_dir / "implement_handle_guard_block.sh"
+	shutil.copy2(IMPLEMENT_GUARD_HANDLER, repository_helper)
+	shutil.copy2(repository_helper, runtime_helper)
+	repository_helper.unlink()
+	assert not repository_helper.exists(), "test setup must simulate fetched-support cleanup"
+
+	_install_mock_gh(bin_dir)
+	_install_guard_mock_curl(bin_dir)
+	gh_state_file = runtime_dir / "gh_state.json"
+	gh_state_file.write_text(
+		json.dumps({"issue_number": 948, "issue_labels": ["ai:implementing"]}),
+		encoding="utf-8",
+	)
+	curl_calls_file = runtime_dir / "curl_calls.json"
+	curl_calls_file.write_text("[]", encoding="utf-8")
+
+	env = _isolated_test_env(
+		{
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"MOCK_CURL_CALLS_FILE": str(curl_calls_file),
+			"GITHUB_REPOSITORY": repository,
+			"GITHUB_RUN_ID": "777",
+			"ISSUE_NUMBER": "948",
+			"GH_TOKEN": "test-token",
+			"TG_BOT_SECRET": "test-bot-token",
+			"TG_ADMIN_CHAT_ID": "12345",
+			"DCB_REASON": destructive_reason,
+			"DCB_COUNT": "1",
+			"DCB_THRESHOLD_LABEL": "BULK_DELETE_THRESHOLD",
+			"DCB_EFFECTIVE_THRESHOLD": "3",
+			"DCB_DELETIONS": "agents.md",
+			"SVB_REASON": scope_reason,
+			"SVB_COUNT": "1",
+			"SVB_FILES": "README.md",
+			"SVB_ALLOWLIST": "scripts/**/*.sh",
+		},
+		cwd=repo_dir,
+	)
+	proc = subprocess.run(
+		["bash", str(runtime_helper)],
+		cwd=str(repo_dir),
+		env=env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+	return (
+		proc,
+		json.loads(gh_state_file.read_text(encoding="utf-8")),
+		json.loads(curl_calls_file.read_text(encoding="utf-8")),
+	)
+
+
+def test_guard_handler_executes_all_rejection_modes_after_support_cleanup() -> None:
+	cases = (
+		("canonical", "shubhodeep1/coding-workflows", "canonical-source", "", "ai:destructive-blocked", "canonical workflow-source file deletion"),
+		("unsafe-manifest", "owner/consumer", "unsafe-fetched-manifest", "", "ai:destructive-blocked", "artifact-cleanup manifest contained unsafe path(s)"),
+		("files-touched", "shubhodeep1/coding-workflows", "", "files-touched", "ai:scope-blocked", "files_touched scope guard rejected"),
+		("scope-lock", "owner/consumer", "", "scope-lock-label", "ai:scope-blocked", "Issue scope-lock rejected"),
+	)
+	for case_name, repository, destructive_reason, scope_reason, expected_label, expected_comment in cases:
+		case_dir = Path(tempfile.mkdtemp(prefix=f"test_guard_handler_{case_name}_"))
+		try:
+			proc, gh_state, curl_calls = _run_guard_handler_case(
+				case_dir,
+				repository=repository,
+				destructive_reason=destructive_reason,
+				scope_reason=scope_reason,
+			)
+			assert proc.returncode != 0, f"case={case_name}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert gh_state["label_creates"] == [{"name": expected_label, "repo": repository}], f"case={case_name}"
+			assert gh_state["issue_labels"] == [expected_label], f"case={case_name}"
+			assert gh_state["issue_edits"][0]["remove"] == ["ai:implementing"], f"case={case_name}"
+			assert gh_state["issue_comments"][0]["repo"] == repository, f"case={case_name}"
+			assert expected_comment in gh_state["issue_comments"][0]["body"], f"case={case_name}"
+			assert len(curl_calls) == 1, f"case={case_name}"
+			curl_text = " ".join(curl_calls[0])
+			assert "CRITICAL:" in curl_text, f"case={case_name}"
+			assert f"repo: {repository}" in curl_text, f"case={case_name}"
+			assert "run: https://github.com/" in curl_text and "/actions/runs/777" in curl_text, f"case={case_name}"
+		finally:
+			shutil.rmtree(case_dir)
+
+
+def test_guard_handler_runtime_wiring_and_expression_size_contract() -> None:
+	workflow = _workflow_text()
+	stage_block = _step_block_text("Stage workflow support files")
+	guard_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	assert "implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh" in stage_block
+	assert 'install -m 0755 scripts/implement_handle_guard_block.sh "${RUNTIME_DIR}/implement_handle_guard_block.sh"' in stage_block
+	assert workflow.find("- name: Stage workflow support files") < workflow.find("- name: Commit changes") < workflow.find("- name: Destructive-commit guard — label + alert on rejection")
+	assert _extract_run_script("Destructive-commit guard — label + alert on rejection") == (
+		'set -euo pipefail\nbash "${RUNTIME_DIR}/implement_handle_guard_block.sh"\n'
+	)
+	assert len(guard_block.encode("utf-8")) < 21_000
+	for env_name in (
+		"DCB_REASON",
+		"DCB_COUNT",
+		"DCB_THRESHOLD_LABEL",
+		"DCB_EFFECTIVE_THRESHOLD",
+		"DCB_DELETIONS",
+		"SVB_REASON",
+		"SVB_COUNT",
+		"SVB_FILES",
+		"SVB_ALLOWLIST",
+	):
+		assert f"{env_name}:" in guard_block
+
+
 def test_destructive_guard_path_does_not_set_implementation_failed_or_fixup_flow() -> None:
 	destructive_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
-	lowered = destructive_block.lower()
+	guard_handler = _implement_guard_handler_text()
+	lowered = (destructive_block + guard_handler).lower()
 	assert "steps.preflight_destructive_guard.outputs.destructive_commit_blocked != '' || steps.commit_changes.outputs.destructive_commit_blocked != ''" in destructive_block, (
 		"Dedicated destructive guard handler must trigger for both early preflight and late commit rejections"
 	)
 	assert "steps.preflight_destructive_guard.outputs.destructive_commit_blocked || steps.commit_changes.outputs.destructive_commit_blocked" in destructive_block, (
 		"Dedicated destructive guard handler must source its reason from either the preflight or commit guard output"
 	)
-	assert "--add-label 'ai:destructive-blocked'" in destructive_block, (
+	assert 'bash "${RUNTIME_DIR}/implement_handle_guard_block.sh"' in destructive_block
+	assert "--add-label 'ai:destructive-blocked'" in guard_handler, (
 		"Destructive guard must preserve ai:destructive-blocked human-halt signaling"
 	)
-	assert "ai:implementation-failed" not in destructive_block, (
+	assert "ai:implementation-failed" not in destructive_block + guard_handler, (
 		"Destructive guard block must not apply ai:implementation-failed"
 	)
 	assert "fix-up" not in lowered and "fixup" not in lowered, (
@@ -1550,9 +1706,9 @@ def test_destructive_guard_latch_verifies_label_applied() -> None:
 	# actually applied, distinguish a failed verification read from a
 	# genuinely missing label, and avoid the old fire-and-forget
 	# `gh issue view ... || true` false-negative path.
-	destructive_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
-	assert "if latched_labels=\"$(gh issue view \"${ISSUE_NUMBER}\" --repo \"${{ github.repository }}\" --json labels -q '.labels[].name' 2>/dev/null)\"; then" in destructive_block
-	assert "gh issue view \"${ISSUE_NUMBER}\" --repo \"${{ github.repository }}\" --json labels -q '.labels[].name' 2>/dev/null || true" not in destructive_block
+	destructive_block = _implement_guard_handler_text()
+	assert "if latched_labels=\"$(gh issue view \"${ISSUE_NUMBER}\" --repo \"${GITHUB_REPOSITORY}\" --json labels -q '.labels[].name' 2>/dev/null)\"; then" in destructive_block
+	assert "gh issue view \"${ISSUE_NUMBER}\" --repo \"${GITHUB_REPOSITORY}\" --json labels -q '.labels[].name' 2>/dev/null || true" not in destructive_block
 	assert "::warning::Could not verify ai:destructive-blocked" in destructive_block
 	assert "::error::FAILED to latch ai:destructive-blocked" in destructive_block
 	assert "The workflow attempted to apply \\`ai:destructive-blocked\\`; verify that the label is present before relying on the \\`Validate approval phase\\` redispatch block." in destructive_block
@@ -1561,22 +1717,22 @@ def test_destructive_guard_latch_verifies_label_applied() -> None:
 		"--description 'Implementation blocked for mass/destructive deletions; this issue ID now waits for human review'"
 	) == 4
 	assert "gh label create 'ai:destructive-blocked' \\" in destructive_block
-	assert "--repo \"${{ github.repository }}\" \\" in destructive_block
+	assert "--repo \"${GITHUB_REPOSITORY}\" \\" in destructive_block
 	assert "--color 'b60205' \\" in destructive_block
-	assert "(gh label edit ai:destructive-blocked --repo ${{ github.repository }} --color b60205" in destructive_block
-	assert "|| gh label create ai:destructive-blocked --repo ${{ github.repository }} --color b60205" in destructive_block
-	assert ") && gh issue edit ${ISSUE_NUMBER} --repo ${{ github.repository }} --add-label ai:destructive-blocked" in destructive_block
+	assert "(gh label edit ai:destructive-blocked --repo ${GITHUB_REPOSITORY} --color b60205" in destructive_block
+	assert "|| gh label create ai:destructive-blocked --repo ${GITHUB_REPOSITORY} --color b60205" in destructive_block
+	assert ") && gh issue edit ${ISSUE_NUMBER} --repo ${GITHUB_REPOSITORY} --add-label ai:destructive-blocked" in destructive_block
 
 
 def test_scope_guard_latch_verifies_label_applied() -> None:
 	# RC-2 sibling regression guard: the scope-block latch must mirror the
 	# destructive-block verification contract instead of claiming success
 	# before GitHub confirms the issue label set.
-	destructive_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
-	assert "if scope_latched_labels=\"$(gh issue view \"${ISSUE_NUMBER}\" --repo \"${{ github.repository }}\" --json labels -q '.labels[].name' 2>/dev/null)\"; then" in destructive_block
+	destructive_block = _implement_guard_handler_text()
+	assert "if scope_latched_labels=\"$(gh issue view \"${ISSUE_NUMBER}\" --repo \"${GITHUB_REPOSITORY}\" --json labels -q '.labels[].name' 2>/dev/null)\"; then" in destructive_block
 	assert "Confirmed ai:scope-blocked is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it." in destructive_block
-	assert "::error::FAILED to latch ai:scope-blocked on #${ISSUE_NUMBER}; the redispatch block is NOT in effect. Apply it manually: (gh label edit ai:scope-blocked --repo ${{ github.repository }} --color b60205 --description 'Implementation blocked: staged files fell outside files_touched scope; human review required' || gh label create ai:scope-blocked --repo ${{ github.repository }} --color b60205 --description 'Implementation blocked: staged files fell outside files_touched scope; human review required') && gh issue edit ${ISSUE_NUMBER} --repo ${{ github.repository }} --add-label ai:scope-blocked" in destructive_block
-	assert "::warning::Could not verify ai:scope-blocked on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown. Re-check manually: gh issue view ${ISSUE_NUMBER} --repo ${{ github.repository }} --json labels -q '.labels[].name'" in destructive_block
+	assert "::error::FAILED to latch ai:scope-blocked on #${ISSUE_NUMBER}; the redispatch block is NOT in effect. Apply it manually: (gh label edit ai:scope-blocked --repo ${GITHUB_REPOSITORY} --color b60205 --description 'Implementation blocked: staged files fell outside files_touched scope; human review required' || gh label create ai:scope-blocked --repo ${GITHUB_REPOSITORY} --color b60205 --description 'Implementation blocked: staged files fell outside files_touched scope; human review required') && gh issue edit ${ISSUE_NUMBER} --repo ${GITHUB_REPOSITORY} --add-label ai:scope-blocked" in destructive_block
+	assert "::warning::Could not verify ai:scope-blocked on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown. Re-check manually: gh issue view ${ISSUE_NUMBER} --repo ${GITHUB_REPOSITORY} --json labels -q '.labels[].name'" in destructive_block
 	assert r"The workflow attempted to label this issue \`ai:scope-blocked\`, but verification failed, so the latch state is unknown. Re-check the issue labels manually before assuming the \`Validate approval phase\` redispatch block is active." in destructive_block
 	assert r"This issue is now labeled \`ai:scope-blocked\`" not in destructive_block
 	assert "Issue is now ai:scope-blocked." not in destructive_block
@@ -1584,12 +1740,12 @@ def test_scope_guard_latch_verifies_label_applied() -> None:
 	assert destructive_block.count("--description \"${SCOPE_BLOCK_LABEL_DESCRIPTION}\"") == 2
 	assert "gh label create 'ai:scope-blocked' \\" in destructive_block
 	assert "gh label edit 'ai:scope-blocked' \\" in destructive_block
-	assert "|| gh label create ai:scope-blocked --repo ${{ github.repository }} --color b60205" in destructive_block
-	assert ") && gh issue edit ${ISSUE_NUMBER} --repo ${{ github.repository }} --add-label ai:scope-blocked" in destructive_block
+	assert "|| gh label create ai:scope-blocked --repo ${GITHUB_REPOSITORY} --color b60205" in destructive_block
+	assert ") && gh issue edit ${ISSUE_NUMBER} --repo ${GITHUB_REPOSITORY} --add-label ai:scope-blocked" in destructive_block
 
 
 def test_destructive_guard_handler_covers_unsafe_fetched_manifest_rejections() -> None:
-	destructive_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	destructive_block = _implement_guard_handler_text()
 	assert "unsafe-fetched-manifest" in destructive_block
 	assert "artifact-cleanup manifest contained unsafe path(s)" in destructive_block
 	assert "Unsafe manifest paths" in destructive_block
@@ -1624,7 +1780,7 @@ def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None
 def test_scope_lock_workflow_wiring_contracts_present() -> None:
 	wf = _workflow_text()
 	build_context_block = _step_block_text("Build implementation context")
-	scope_alert_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	scope_alert_block = _implement_guard_handler_text()
 	assert "SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}" in wf
 	assert 'select(startswith("ai:scope:"))' in wf
 	assert "ISSUE_SCOPE_LOCK_GLOB<<EOF" in wf
