@@ -1578,10 +1578,11 @@ jobs:
                   # (97733868951) while `review / codex-agent`
                   # (97733894241) did the actual work, so both shortcuts
                   # were permanently inert. Prefer the codex-agent job by
-                  # name (a rename is a breaking change per CLAUDE.md §6,
-                  # so the literal is safe), then any in-progress job,
-                  # then jobs[0] as the legacy single-job fallback.
-                  JOB_ID=$(echo "$JOBS_JSON" | jq -r '([.jobs[] | select(.name | test("codex-agent"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' 2>/dev/null || echo "")
+                  # exact name/suffix (a rename is a breaking change per
+                  # CLAUDE.md §6, so the literal is safe), then any
+                  # in-progress job, then jobs[0] as the legacy single-job
+                  # fallback.
+                  JOB_ID=$(echo "$JOBS_JSON" | jq -r '([.jobs[] | select(.name | test("(^| / )codex-agent( \\(claude-branch-review\\))?$"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' 2>/dev/null || echo "")
                   if [ -n "$JOB_ID" ]; then
                     # Stream the job log to a tempfile rather than capturing
                     # into a shell variable. `gh_api_safe .../actions/jobs/
@@ -1772,10 +1773,10 @@ jobs:
             if [ "$RUN_ID" != "unknown" ]; then
               JOB_ID_FOR_SIZE=""
               if [ -n "${JOBS_JSON:-}" ]; then
-                JOB_ID_FOR_SIZE=$(echo "$JOBS_JSON" | jq -r '([.jobs[] | select(.name | test("codex-agent"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' 2>/dev/null || echo "")
+                JOB_ID_FOR_SIZE=$(echo "$JOBS_JSON" | jq -r '([.jobs[] | select(.name | test("(^| / )codex-agent( \\(claude-branch-review\\))?$"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' 2>/dev/null || echo "")
               else
                 JOB_ID_FOR_SIZE=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" \
-                  --jq '([.jobs[] | select(.name | test("codex-agent"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' || echo "")
+                  --jq '([.jobs[] | select(.name | test("(^| / )codex-agent( \\(claude-branch-review\\))?$"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' || echo "")
               fi
               if [ -n "$JOB_ID_FOR_SIZE" ]; then
                 LOG_SIZE=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/jobs/${JOB_ID_FOR_SIZE}/logs" \
