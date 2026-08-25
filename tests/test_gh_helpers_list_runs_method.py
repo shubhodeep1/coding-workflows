@@ -61,14 +61,25 @@ def _probe_body(text: str, fn: str) -> str:
 	return m.group(0)
 
 
+def _list_runs_call(body: str, fn: str) -> str:
+	uncommented_body = "\n".join(
+		line for line in body.splitlines()
+		if not line.lstrip().startswith("#")
+	)
+	m = re.search(r"gh_retry gh api \\\n(?P<call>.*?\n\s+2>/dev/null)", uncommented_body, re.DOTALL)
+	assert m, "Failed to locate %s list-runs gh api call" % fn
+	return m.group("call")
+
+
 def test_list_runs_probes_pin_the_get_method() -> None:
 	text = _helpers_text()
 	for fn in PROBES:
 		body = _probe_body(text, fn)
-		assert "/actions/runs" in body, fn
+		list_runs_call = _list_runs_call(body, fn)
+		assert "/actions/runs" in list_runs_call, fn
 		# gh api infers POST from the -f parameters unless the method is
-		# pinned; POST /actions/runs is not a route and 404s.
-		assert re.search(r"-X GET|--method GET", body), (
+		# pinned on the actual command; POST /actions/runs is not a route and 404s.
+		assert re.search(r"^\s+(?:-X GET|--method GET)\s*\\$", list_runs_call, re.MULTILINE), (
 			"%s must pin GET on the list-runs call — without it `gh api` "
 			"POSTs and the probe 404s" % fn
 		)
@@ -100,14 +111,18 @@ gh() {
 	method=""
 	has_field=0
 	for arg in "$@"; do
+		if [ "$method" = "PENDING" ]; then method="$arg"; continue; fi
 		case "$arg" in
 			-X|--method) method="PENDING" ;;
+			-X*) method="${arg#-X}" ;;
+			--method=*) method="${arg#--method=}" ;;
 			-f|-F|--field|--raw-field) has_field=1 ;;
-			*)
-				if [ "$method" = "PENDING" ]; then method="$arg"; fi
-				;;
 		esac
 	done
+	if [ "$method" = "PENDING" ]; then
+		echo "gh: flag needs an argument: -X" >&2
+		return 1
+	fi
 	if [ -z "$method" ]; then
 		if [ "$has_field" = "1" ]; then method="POST"; else method="GET"; fi
 	fi
