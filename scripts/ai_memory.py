@@ -109,15 +109,18 @@ def _read_env_defaults(args: argparse.Namespace) -> argparse.Namespace:
         # The single shared `ai-memory` branch is a hot contention point under
         # orchestrator bursts: every concurrent clarify/plan/implement/review run
         # pushes to it. A non-fast-forward rejection is transient — the retry
-        # loop fetches+rebases+re-pushes — but 5 attempts only sleeps for the
-        # first 4 (backoff ceilings 0.5/1/2/4s, never reaching the 8s cap the
-        # jitter was designed around), so heavy bursts exhaust the budget and the
-        # fail-closed claim aborts the whole phase before it can post. 8
-        # attempts activates the 8s-cap sleeps and widens the decorrelation
-        # window to ~30s without weakening the mutex semantics.
+        # loop fetches+rebases+re-pushes — but the budget must let the loop
+        # OUTLAST a dispatch burst, not just decorrelate within it. An 8-attempt
+        # loop (~80s wall clock including jittered sleeps and git round-trips)
+        # was observed losing all 8 races during a ~2-minute burst that landed a
+        # foreign commit on the ref every 3-5s (run 32849764877: the fail-closed
+        # /answer claim aborted the plan phase with "cannot lock ref"). 16
+        # attempts stretches the loop past a burst of that shape (~3 minutes
+        # mean) without weakening the mutex semantics; the 8s jitter cap is
+        # unchanged because attempt frequency, not sleep length, wins races.
         push_retries_env = os.getenv("AI_MEMORY_PUSH_RETRIES")
         args.push_retries = _require_positive_int(
-            "8" if push_retries_env is None else push_retries_env,
+            "16" if push_retries_env is None else push_retries_env,
             "AI_MEMORY_PUSH_RETRIES",
         )
     if not getattr(args, "enabled", None):

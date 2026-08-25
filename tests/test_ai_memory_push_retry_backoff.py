@@ -276,6 +276,24 @@ def test_persist_memory_operation_survives_seven_rejections_with_eight_retry_bud
 	assert backoff_attempts == [1, 2, 3, 4, 5, 6, 7], backoff_attempts
 
 
+def test_persist_memory_operation_survives_fifteen_rejections_with_sixteen_retry_budget() -> None:
+	# Regression coverage for run 32849764877: an orchestrator dispatch burst
+	# pushed a foreign commit to the shared ai-memory ref every 3-5s for ~2
+	# minutes, and the previous 8-attempt budget (~80s of loop) exhausted
+	# mid-burst, hard-failing the fail-closed /answer claim and the whole plan
+	# phase.  Under the raised default budget (16), a burst of 15 consecutive
+	# rejections must still land on the 16th attempt instead of aborting.
+	result, backoff_attempts, _call_log, exc = _run_persist(
+		[1] * 15 + [0], push_retries=16
+	)
+	assert exc is None, exc
+	assert result is not None
+	assert result["did_push"] is True, result
+	assert result["push_attempts"] == 16, result
+	# Backoff fires after each of the 15 failed attempts, not after the success.
+	assert backoff_attempts == list(range(1, 16)), backoff_attempts
+
+
 def test_persist_memory_operation_raises_on_fetch_failure_before_rebase() -> None:
 	result, backoff_attempts, call_log, exc = _run_persist([1], push_retries=2, fetch_codes=[1])
 	assert result is None

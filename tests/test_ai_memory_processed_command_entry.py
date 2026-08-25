@@ -1680,7 +1680,7 @@ def test_push_retries_env_default_override_and_validation() -> None:
 	original = os.environ.pop("AI_MEMORY_PUSH_RETRIES", None)
 	try:
 		args = ai_memory._read_env_defaults(_argparse.Namespace())
-		assert args.push_retries >= 8, args.push_retries
+		assert args.push_retries >= 16, args.push_retries
 		# An explicit override is still honoured.
 		os.environ["AI_MEMORY_PUSH_RETRIES"] = "3"
 		overridden = ai_memory._read_env_defaults(_argparse.Namespace())
