@@ -13,10 +13,11 @@ commit time, and the run fired a false ``EDITOR_CHANGES_LOST`` dead end
 that blocked auto-merge.  Any review round whose entire fix is creating
 a fragment reproduced this deterministically.
 
-The fix exempts ``changelog.d/*.md`` from the cleanup, alongside the
-existing ``.serena`` / ``scripts/`` / ``prompts/`` exemptions.  The
-consumer staging pass (``git ls-files --others ... | xargs git add``)
-then stages the surviving fragment, so the round commits normally.
+The fix exempts top-level ``changelog.d/*.md`` fragments from the
+cleanup, alongside the existing ``.serena`` / ``scripts/`` / ``prompts/``
+exemptions.  The consumer staging pass (``git ls-files --others ... |
+xargs git add``) then stages the surviving fragment, so the round commits
+normally.
 
 These tests extract the cleanup block from the script and run it in a
 throwaway git repo, mirroring the extraction style of the other
@@ -33,6 +34,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "review_commit_changes.sh"
+
+
+def _git_test_env(home: Path | str) -> dict[str, str]:
+	return {"PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(home)}
 
 
 def _script_text() -> str:
@@ -62,18 +67,41 @@ def test_cleanup_block_exempts_changelog_fragments() -> None:
 
 def test_consumer_staging_does_not_exclude_changelog_fragments() -> None:
 	# The exemption only helps if the untracked-files staging pass picks
-	# the fragment up afterwards; assert no pathspec exclusion covers it.
+	# the fragment up afterwards; exercise the real pathspec so a generic
+	# exclusion such as :!*.md would fail this contract.
 	text = _script_text()
-	m = re.search(r"git ls-files --others --exclude-standard -z -- (.*)\| xargs -0 -r git add --", text)
+	m = re.search(
+		r"^  (git ls-files --others --exclude-standard -z -- .*\| xargs -0 -r git add --)$",
+		text,
+		re.MULTILINE,
+	)
 	assert m, "Failed to locate the consumer untracked-files staging pass"
-	assert "changelog.d" not in m.group(1)
+	with tempfile.TemporaryDirectory() as tmpdir:
+		repo = Path(tmpdir) / "repo"
+		repo.mkdir()
+		test_env = _git_test_env(tmpdir)
+		subprocess.run(["git", "init", "-q"], cwd=repo, check=True, env=test_env)
+		(repo / "changelog.d").mkdir()
+		fragment_path = repo / "changelog.d" / "3763-example-fragment.md"
+		fragment_path.write_text("<!-- changelog: added -->\n- Example.\n", encoding="utf-8")
+		proc = subprocess.run(
+			["bash", "-c", "set -euo pipefail\n_ra_script_excludes=()\n" + m.group(1)],
+			cwd=repo,
+			capture_output=True,
+			text=True,
+			env=test_env,
+		)
+		assert proc.returncode == 0, (proc.stdout, proc.stderr)
+		staged = subprocess.check_output(["git", "diff", "--cached", "--name-only"], cwd=repo, text=True, env=test_env)
+		assert "changelog.d/3763-example-fragment.md" in staged.splitlines()
 
 
 def _run_cleanup(tmp: Path, *, source_repo: bool) -> subprocess.CompletedProcess:
 	block = _cleanup_block(_script_text())
 	repo = tmp / "repo"
 	repo.mkdir()
-	subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+	test_env = _git_test_env(tmp)
+	subprocess.run(["git", "init", "-q"], cwd=repo, check=True, env=test_env)
 	(repo / "changelog.d").mkdir()
 	(repo / "changelog.d" / "3763-example-fragment.md").write_text(
 		"<!-- changelog: added -->\n- Example.\n", encoding="utf-8"
@@ -88,9 +116,8 @@ def _run_cleanup(tmp: Path, *, source_repo: bool) -> subprocess.CompletedProcess
 		capture_output=True,
 		text=True,
 		env={
-			"PATH": "/usr/bin:/bin:/usr/local/bin",
+			**test_env,
 			"IS_WORKFLOW_SOURCE_REPO": "true" if source_repo else "false",
-			"HOME": str(tmp),
 		},
 	)
 
@@ -113,9 +140,12 @@ def test_consumer_cleanup_still_removes_non_fragment_files_in_changelog_dir() ->
 		tmp = Path(tmpdir)
 		repo = tmp / "repo"
 		repo.mkdir()
-		subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+		test_env = _git_test_env(tmp)
+		subprocess.run(["git", "init", "-q"], cwd=repo, check=True, env=test_env)
 		(repo / "changelog.d").mkdir()
 		(repo / "changelog.d" / "notes.txt").write_text("not a fragment\n", encoding="utf-8")
+		(repo / "changelog.d" / "nested").mkdir()
+		(repo / "changelog.d" / "nested" / "notes.md").write_text("not a top-level fragment\n", encoding="utf-8")
 		block = _cleanup_block(_script_text())
 		proc = subprocess.run(
 			["bash", "-c", "set -euo pipefail\n" + block],
@@ -123,13 +153,13 @@ def test_consumer_cleanup_still_removes_non_fragment_files_in_changelog_dir() ->
 			capture_output=True,
 			text=True,
 			env={
-				"PATH": "/usr/bin:/bin:/usr/local/bin",
+				**test_env,
 				"IS_WORKFLOW_SOURCE_REPO": "false",
-				"HOME": str(tmp),
 			},
 		)
 		assert proc.returncode == 0, (proc.stdout, proc.stderr)
 		assert not (repo / "changelog.d" / "notes.txt").exists(), proc.stdout
+		assert not (repo / "changelog.d" / "nested" / "notes.md").exists(), proc.stdout
 
 
 def test_source_repo_cleanup_still_preserves_everything() -> None:
