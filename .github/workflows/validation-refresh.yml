@@ -108,7 +108,7 @@ jobs:
           # 2100s (35m) leaves >=20m for clone + render/lint/self-test across all
           # repos. See scripts/validation_refresh_runner.py.
           VALIDATION_DISCOVERY_BUDGET_SECS: ${{ vars.VALIDATION_DISCOVERY_BUDGET_SECS || '2100' }}
-          VALIDATION_DISCOVERY_MODEL: ${{ vars.VALIDATION_DISCOVERY_MODEL || 'openai/gpt-5.5' }}
+          VALIDATION_DISCOVERY_MODEL: ${{ vars.VALIDATION_DISCOVERY_MODEL || 'openai/gpt-5.6-sol' }}
           VALIDATION_DISCOVERY_REASONING_EFFORT: ${{ vars.VALIDATION_DISCOVERY_REASONING_EFFORT || 'xhigh' }}
           VALIDATION_DISCOVERY_PR_BRANCH_PREFIX: ${{ vars.VALIDATION_DISCOVERY_PR_BRANCH_PREFIX || 'automation/validate-discovery' }}
           VALIDATION_DISCOVERY_PR_LABEL: ${{ vars.VALIDATION_DISCOVERY_PR_LABEL || 'automation:validate-bootstrap' }}

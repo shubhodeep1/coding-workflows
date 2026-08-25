@@ -133,8 +133,8 @@ if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]]; then
   TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"
 fi
 
-MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-5.5}"
-# Defaults to xhigh to match the repo-wide gpt-5.5 reasoning-level
+MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-5.6-sol}"
+# Defaults to xhigh to match the repo-wide gpt-5.6-sol reasoning-level
 # policy and `validate.yml`'s workflow-level `THINKING_LEVEL_VALIDATE ||
 # 'xhigh'`. Earlier revisions defaulted to `medium`/`none`; `none` is
 # not in `scripts/codex_model_catalog.json`'s `supported_reasoning_levels`
@@ -143,7 +143,7 @@ MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-5.5}"
 MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-xhigh}"
 # Discover is a low-volume execution-heavy task (read repo metadata,
 # emit `.ai/validate.yml` hints). It now defaults to `xhigh` to match
-# the repo-wide gpt-5.5 reasoning-level policy; the per-phase override
+# the repo-wide gpt-5.6-sol reasoning-level policy; the per-phase override
 # knob is retained so operators can drop discover's level independently
 # of the parent MODEL_REASONING_EFFORT (mirrors the per-phase pattern
 # used in implement.yml — MODEL_REPAIR_REASONING_EFFORT,

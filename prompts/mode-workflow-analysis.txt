@@ -27,7 +27,7 @@ You will receive telemetry assembled from workflow-log folders, including:
 
 If analysis input is a workflow-log folder, read `summary.json` first, then inspect `errors/`, `slow/`, and `recent/` for targeted evidence.
 
-For runs outside the collector's deep-dive set (no `log_excerpts`, no folder under `errors|slow|recent/`), check the `log_summary` field on the run row in `analysis_context.json`. These are gpt-5.4-mini summaries of unselected runs, added to widen coverage; treat them as evidence-grade for outcome, warnings, retries, and any quoted token/API/AI_MEMORY_TELEMETRY/`BREAK_GLASS`/`CONTEXT_BUDGET_WARN` signals, but verify high-stakes claims against the deep-dive logs when possible.
+For runs outside the collector's deep-dive set (no `log_excerpts`, no folder under `errors|slow|recent/`), check the `log_summary` field on the run row in `analysis_context.json`. These are gpt-5.6-luna summaries of unselected runs, added to widen coverage; treat them as evidence-grade for outcome, warnings, retries, and any quoted token/API/AI_MEMORY_TELEMETRY/`BREAK_GLASS`/`CONTEXT_BUDGET_WARN` signals, but verify high-stakes claims against the deep-dive logs when possible.
 
 Your task is to produce a concrete, evidence-first optimization report covering:
 - Speed Optimizations

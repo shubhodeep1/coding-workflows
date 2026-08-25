@@ -4,7 +4,7 @@
 The smoke fixture lands a conflicting one-line edit on `main` so a
 `git merge --no-ff origin/main` over the smoke PR's HEAD leaves Git
 merge conflict markers in tests/e2e_smoke_canary.txt. review_autofix.yml's
-conflict-resolver step (currently `openai/gpt-5.5`; observed below on
+conflict-resolver step (currently `openai/gpt-5.6-sol`; observed below on
 the legacy editor default) is then expected to remove
 the markers and keep the HEAD-side `run_id:` value.
 

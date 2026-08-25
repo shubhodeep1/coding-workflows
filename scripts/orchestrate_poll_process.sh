@@ -5307,7 +5307,7 @@ invoke_judge_for_integration_conflict() {
   # Centralised in scripts/write_codex_config.sh — see that script's
   # header for the apply_patch / trust / elevation rationale.
   bash scripts/write_codex_config.sh \
-    --model "${MODEL_EDITOR:-openai/gpt-5.5}" \
+    --model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" \
     --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"
 
   local prompt_file
@@ -5434,7 +5434,7 @@ invoke_judge_for_integration_conflict() {
   } > "${prompt_file}"
 
   sanitize_codex_prompt_file "${prompt_file}"
-  if cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-5.5}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
+  if cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
     echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
     return 0

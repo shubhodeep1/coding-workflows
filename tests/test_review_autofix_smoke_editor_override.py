@@ -2,7 +2,7 @@
 """Contract tests for the smoke-only editor prompt override.
 
 The smoke fixture appends a single bait line to tests/e2e_smoke_canary.txt
-and expects review_autofix.yml's editor (currently `openai/gpt-5.5`;
+and expects review_autofix.yml's editor (currently `openai/gpt-5.6-sol`;
 historically observed below on the legacy editor default)
 to remove it via apply_patch. Across runs 25305535590 / 25308327160 /
 25310399716 the editor consistently completed with 0-byte stdout — no

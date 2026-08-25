@@ -626,7 +626,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-clarify
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       # ── Phase 2: Wait for Plan to complete ──────────────────────
@@ -821,7 +821,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-plan
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       # ── Phase 3: Approve and wait for implementation ────────────
@@ -1015,7 +1015,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-implement
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: "Phase 3b1: Apply force-review label to smoke PR"
@@ -1847,7 +1847,7 @@ jobs:
           wait_for_completion_secs: "300"
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       # ── Phase 4b: Verify editor restored the canary file ──
@@ -2982,7 +2982,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-orchestrate_poll
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       # ── Phase 7: Verify cancel_on_pr_close fires on PR close ───
@@ -3147,7 +3147,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-cancel_on_pr_close
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       # The previous Phase 8 in this job re-ran the LLM analyser across
@@ -3706,7 +3706,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-workflow_log_analysis
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: Capture workflow-log-analysis actual result
@@ -3830,7 +3830,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-validation_refresh
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: Dispatch & watch — update_workflows (allow_workflow_edits=false)
@@ -3873,7 +3873,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-update_workflows
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: Dispatch & watch — internal-memory-maintenance
@@ -3913,7 +3913,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-memory_maintenance
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
   # ──────────────────────────────────────────────────────────────────
@@ -4098,7 +4098,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-orchestrate_decompose
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: Cleanup orchestrate test issues
@@ -4217,7 +4217,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-validate_standalone
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
   # ──────────────────────────────────────────────────────────────────
@@ -4397,7 +4397,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-clarify_negative
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: Cleanup negative-test issue
@@ -4460,7 +4460,7 @@ jobs:
       # (anthropic/claude-sonnet-4-6 was never in the catalog, so even
       # a wired override would have failed apply_patch invocation).
       #
-      # Default is openai/gpt-5.5 — the same slug as the production
+      # Default is openai/gpt-5.6-sol — the same slug as the production
       # WORKFLOW_EDITOR_MODEL default. The previous canary
       # (openai/gpt-5.3-codex) was retired after the 2026-05-07
       # ablation suite identified `apply_patch_tool_type: "freeform"`
@@ -4478,7 +4478,7 @@ jobs:
       # slug is missing (codex falls back to bundled metadata, but
       # reliability degrades). Keep this default in sync with the
       # production default in implement.yml's MODEL_EDITOR.
-      ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'openai/gpt-5.5' }}
+      ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
     steps:
       # Required for the run-soft-error-analyzer composite action below.
       - name: Checkout repository (for soft-error analyser)
@@ -4627,7 +4627,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-alt_clarify
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: "Soft-error analyser (alt-model plan)"
@@ -4640,7 +4640,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-alt_plan
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: "Soft-error analyser (alt-model implement)"
@@ -4653,7 +4653,7 @@ jobs:
           artifact_name: soft-error-report-${{ github.run_id }}-alt_implement
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: "Soft-error analyser (alt-model review_autofix)"
@@ -4667,7 +4667,7 @@ jobs:
           wait_for_completion_secs: "300"
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           gh_token: ${{ secrets.GH_PAT }}
-          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.4-mini' }}
+          model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-5.6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
 
       - name: Cleanup alt-model artifacts

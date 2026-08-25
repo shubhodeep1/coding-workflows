@@ -11,7 +11,7 @@ removed the offline fallback) and whether the v0.113+ trust prompt fires
 (codex#14345). Pin the contract here so a future edit to the helper that
 drops one of those keys fails CI loudly.
 
-All tests use the `openai/gpt-5.4` slug (now the capacity-fallback; the primary default is gpt-5.5). The legacy
+All tests use the `openai/gpt-5.4` slug (the former capacity-fallback; the fallback is now gpt-5.5 and the primary default is gpt-5.6-sol). The legacy
 `openai/gpt-5.3-codex` slug was retired from the catalog after the
 2026-05-07 12:41 / 12:42 E2E smoke runs confirmed it shared the same
 announce-without-emit failure mode as gpt-5.4 (so the alt-model canary

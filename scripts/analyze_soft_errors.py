@@ -4,7 +4,7 @@
 Fetches logs from one or more workflow runs, filters them to high-signal lines
 (warnings, retries, rate-limit recoveries, codex fallbacks, summariser hard
 fails, etc.), truncates each run's log to fit the analyser model's context
-window, then asks an OpenRouter chat model (default openai/gpt-5.4-mini at
+window, then asks an OpenRouter chat model (default openai/gpt-5.6-luna at
 medium reasoning per the OpenAI gpt-5.4 prompt guide for cross-run log
 triage) to produce a short markdown report enumerating soft errors.
 
@@ -32,7 +32,7 @@ from pathlib import Path
 # release-gate operator chose this so per-phase analyser invocations
 # get the complete soft-error signal even when reviewer/codex log
 # volume is high. The downstream OpenRouter call still has its own
-# context-window limit (gpt-5.4-mini = 200K tokens); on overflow the
+# context-window limit (gpt-5.6-luna = 1M tokens); on overflow the
 # existing `call_failed` fallback path in `main()` writes a stub
 # report rather than crashing the workflow, so the operator can
 # safely opt for "no truncation" without breaking the release gate.
@@ -345,7 +345,7 @@ def main() -> int:
 	)
 	parser.add_argument(
 		"--model",
-		default=os.environ.get("LOG_ANALYZER_MODEL", "openai/gpt-5.4-mini"),
+		default=os.environ.get("LOG_ANALYZER_MODEL", "openai/gpt-5.6-luna"),
 	)
 	parser.add_argument(
 		"--reasoning",

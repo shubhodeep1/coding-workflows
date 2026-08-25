@@ -954,7 +954,7 @@ __SMOKE_OVERRIDE__
   # under _PROMPT_BUDGET_TOTAL_BYTES (default 800KB ≈ 200k tokens at
   # ~4 bytes/token) so a single oversized input artifact can't blow
   # past the editor model's context window. The current default
-  # gpt-5.5 has a 272k standard context (lower than the
+  # gpt-5.6-sol has a 1.05M context, but the capacity-fallback gpt-5.5 keeps a 272k standard context (lower than the
   # legacy editor default 400k); 200k of inputs leaves room for the static
   # prefix (~10k tokens) and the response budget (~30k tokens) within
   # the 272k window. Cleaned up after the heredoc completes.
@@ -977,7 +977,7 @@ __SMOKE_OVERRIDE__
   #     the legacy editor default, hoisting either copy to win cache hits
   #     produced the 6/6 empty-output autofix failure on
   #     fun-token-multi-chain run 25437168681 (PR #2176 root cause).
-  #     Even on the current gpt-5.5 default the tail position keeps
+  #     Even on the current gpt-5.6-sol default the tail position keeps
   #     the cue tight, so the placement remains load-bearing.
   #   - The non-cached overhead is ~420 tokens/run × $2/Mtok ≈ $0.001
   #     per autofix run. The failure mode being prevented burns
@@ -1200,7 +1200,7 @@ PRE-FIX PLANNING
 Fix every valid reviewer finding in one pass. Read all reviewer outputs, the consensus file, and PR comments; classify each finding as WILL_FIX, ALREADY_FIXED, or REJECT; then execute WILL_FIX items in priority order (CI failures → functional bugs → correctness → hardening). The goal is comprehensive coverage in a single pass so subsequent iterations find minimal remaining issues.
 
 REVIEWER CONSENSUS SIGNAL
-The reviewer consensus content (already inlined above as ${REVIEWER_CONSENSUS_FILE}) consolidates all pass-2 reviewer findings into one ledger via a cheap summariser model (gpt-5.4-mini, medium reasoning). It has:
+The reviewer consensus content (already inlined above as ${REVIEWER_CONSENSUS_FILE}) consolidates all pass-2 reviewer findings into one ledger via a cheap summariser model (gpt-5.6-luna, medium reasoning). It has:
 - a "=== CONSENSUS FINDINGS ===" block with cross-reviewer-deduplicated findings
   (each entry lists "flagged_by: [reviewer_slug, ...]" — >=2 slugs ⇒ higher
   confidence; a single slug ⇒ one reviewer only, potentially speculative),
@@ -1633,7 +1633,7 @@ rm -f "${EDITOR_SUMMARY_FILE}"
 # override rendered correctly (see openai/codex#11151 — the 5.3-codex
 # slug doesn't get matched into the apply_patch-providing branch in
 # codex's offline model_info fallback). Kept as defense-in-depth on
-# the gpt-5.5 default so smoke runs stay deterministic regardless of
+# the gpt-5.6-sol default so smoke runs stay deterministic regardless of
 # editor model.
 #
 # Apply the override's specified resolution deterministically before
@@ -1792,7 +1792,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     break
   fi
   # Capacity-fallback: on the final editor attempt switch the editor model to
-  # MODEL_EDITOR_FALLBACK so a sustained gpt-5.5 saturation can be ridden out.
+  # MODEL_EDITOR_FALLBACK so a sustained gpt-5.6-sol saturation can be ridden out.
   EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR}"
   if [ "${attempt}" -eq "${editor_max_attempts}" ] && [ -n "${MODEL_EDITOR_FALLBACK:-}" ] && [ "${MODEL_EDITOR_FALLBACK}" != "${MODEL_EDITOR}" ]; then
     EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR_FALLBACK}"

@@ -424,7 +424,7 @@
     {
       "slug": "openai/gpt-5.4",
       "display_name": "GPT-5.4",
-      "description": "OpenAI GPT-5.4 - 272K standard context (1M long-context tier), unified reasoning + coding + computer use. Capacity-fallback editor model for the gpt-5.5 pipeline: sits in a different OpenRouter/OpenAI per-model TPM bucket, so the retry loops fall back to it on their final attempt to ride out sustained gpt-5.5 saturation.",
+      "description": "OpenAI GPT-5.4 - 272K standard context (1M long-context tier), unified reasoning + coding + computer use. Former capacity-fallback for the gpt-5.5 pipeline; retained for operator overrides after the fallback role moved to gpt-5.5 (primary: gpt-5.6-sol).",
       "supported_reasoning_levels": [
         {"effort": "low", "description": "Fast with minimal reasoning"},
         {"effort": "medium", "description": "Balanced reasoning"},
@@ -455,7 +455,7 @@
     {
       "slug": "openai/gpt-5.5",
       "display_name": "GPT-5.5",
-      "description": "OpenAI GPT-5.5 - default editor model across the pipeline (promoted from capacity-fallback; the fallback role moved to gpt-5.4). Catalog fields mirror gpt-5.4 (same OpenAI generation); verify against the live model before relying on non-editor behavior.",
+      "description": "OpenAI GPT-5.5 - capacity-fallback editor model for the gpt-5.6-sol pipeline (formerly the default editor; the default moved to gpt-5.6-sol). Sits in a different OpenRouter/OpenAI per-model TPM bucket than the primary, so retry loops fall back to it on their final attempt to ride out sustained gpt-5.6-sol saturation.",
       "supported_reasoning_levels": [
         {"effort": "low", "description": "Fast with minimal reasoning"},
         {"effort": "medium", "description": "Balanced reasoning"},
@@ -479,6 +479,37 @@
       "supports_image_detail_original": false,
       "context_window": 272000,
       "auto_compact_token_limit": 206000,
+      "effective_context_window_percent": 95,
+      "experimental_supported_tools": [],
+      "input_modalities": ["text", "image"]
+    },
+    {
+      "slug": "openai/gpt-5.6-sol",
+      "display_name": "GPT-5.6 Sol",
+      "description": "OpenAI GPT-5.6 Sol - 1.05M context, coding/reasoning flagship of the gpt-5.6 family and the default editor model across the pipeline (took over from gpt-5.5; the fallback role moved from gpt-5.4 to gpt-5.5). $2.00/$10.00 per M promo through 2026-11-21 ($4/$20 list), $0.20/M cached input read. apply_patch_tool_type stays 'function' per the 2026-05-07 codex#11151 ablation finding for OpenAI slugs on the OpenRouter Responses path.",
+      "supported_reasoning_levels": [
+        {"effort": "low", "description": "Fast with minimal reasoning"},
+        {"effort": "medium", "description": "Balanced reasoning"},
+        {"effort": "high", "description": "Thorough reasoning"},
+        {"effort": "xhigh", "description": "Maximum reasoning depth"}
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 2,
+      "upgrade": null,
+      "base_instructions": "You are a senior software engineer acting as an AI code reviewer and editor. You have access to shell commands for reading files and exploring the repository. Use them to understand the codebase before making changes. Be precise, minimal, and correct.",
+      "model_messages": null,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "auto",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "function",
+      "truncation_policy": {"mode": "tokens", "limit": 1050000},
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": false,
+      "context_window": 1050000,
+      "auto_compact_token_limit": 798000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
       "input_modalities": ["text", "image"]
@@ -541,6 +572,37 @@
       "supports_image_detail_original": false,
       "context_window": 400000,
       "auto_compact_token_limit": 304000,
+      "effective_context_window_percent": 95,
+      "experimental_supported_tools": [],
+      "input_modalities": ["text", "image"]
+    },
+    {
+      "slug": "openai/gpt-5.6-luna",
+      "display_name": "GPT-5.6 Luna",
+      "description": "OpenAI GPT-5.6 Luna - 1.05M context, fastest/cheapest gpt-5.6 tier ($0.20/$1.20 per M, $0.02/M cached input read). Default for the lightweight utility roles (log analyser, retro/summary, consensus summariser, materiality fallback, behavioural smoke) previously on gpt-5.4-mini. Fields mirror gpt-5.6-sol (same family); verify before relying on editor behavior.",
+      "supported_reasoning_levels": [
+        {"effort": "low", "description": "Fast with minimal reasoning"},
+        {"effort": "medium", "description": "Balanced reasoning"},
+        {"effort": "high", "description": "Thorough reasoning"},
+        {"effort": "xhigh", "description": "Maximum reasoning depth"}
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 4,
+      "upgrade": null,
+      "base_instructions": "You are a senior software engineer acting as an AI code reviewer and editor. You have access to shell commands for reading files and exploring the repository. Use them to understand the codebase before making changes. Be precise, minimal, and correct.",
+      "model_messages": null,
+      "supports_reasoning_summaries": true,
+      "default_reasoning_summary": "auto",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "function",
+      "truncation_policy": {"mode": "tokens", "limit": 1050000},
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": false,
+      "context_window": 1050000,
+      "auto_compact_token_limit": 798000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
       "input_modalities": ["text", "image"]
