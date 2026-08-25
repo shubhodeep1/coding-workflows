@@ -241,7 +241,7 @@ issue_number = first_linked_issue_number()
 pr_number = safe_int(os.environ.get("PR_NUMBER"))
 memory_branch = str(os.environ.get("AI_MEMORY_BRANCH", "ai-memory") or "ai-memory").strip() or "ai-memory"
 memory_root_relative = str(os.environ.get("AI_MEMORY_ROOT", "ai-memory") or "ai-memory").strip() or "ai-memory"
-push_retries = safe_int(os.environ.get("AI_MEMORY_PUSH_RETRIES")) or 8
+push_retries = safe_int(os.environ.get("AI_MEMORY_PUSH_RETRIES")) or 16
 
 telemetry = {
     "op": "write_lessons_learned",
