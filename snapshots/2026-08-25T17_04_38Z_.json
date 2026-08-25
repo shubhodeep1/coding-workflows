@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-08-24T11:46:15Z",
+  "tick_at": "2026-08-25T17:04:38Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -16,23 +16,23 @@
   "tracking_issues": [
     {
       "current_wave": 1,
-      "integration_ahead_by": "0",
+      "integration_ahead_by": "4",
       "issue_counts": {
         "closed": 0,
-        "done": 0,
+        "done": 4,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 0,
+        "merged": 4,
         "not_created": 0,
         "ready_to_merge": 0,
-        "review_blocked": 1,
+        "review_blocked": 0,
         "skipped": 0
       },
-      "number": 3795,
+      "number": 3810,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[E2E Smoke Test] Review-Blocked Simulation (run 32716299147)",
-      "total_waves": 1,
+      "title": "[Orchestrator] Triage and apply safe workflow optimizations from August 19-25",
+      "total_waves": 3,
       "wave_complete": false
     }
   ]
