@@ -121,7 +121,9 @@ changelog.d/3775-default-editor-model-gpt-5-5.md
 changelog.d/3806-wait-review-false-stall.md
 changelog.d/3809-register-drhyg-ecommerce-automation.md
 changelog.d/3814-extract-implement-guard-handler.md
+changelog.d/3815-direct-openrouter-usage.md
 changelog.d/3816-ignore-unstructured-mcp-counter-echoes.md
+changelog.d/3817-ai-memory-push-retry-budget.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/deploy-activate-digitalocean-steps.md
