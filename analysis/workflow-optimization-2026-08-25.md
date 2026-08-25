@@ -256,3 +256,140 @@
 | E2E workflow polling | `32716299147` `e2e-smoke-test` `5189.2s` | call volume, long waits | poll count, interval, status histogram, rate-limit remaining |
 | Review peer query | `AUTOFIX_PEER_QUERY_FAILED ... reason=api_error` | missed peer PR context | method/path/status/duration/retry |
 | No-op poll | `0 active tracking issue(s)` but ~107–131s runs | wasted writes/API work | active-count, skipped-heavy-steps, memory-write duration |
+
+## Deep Audit — Workflows & Scripts (2026-08-25)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID:** BUG-001  
+  **File path and line range:** `scripts/orchestrate_poll_process.sh:10716-10721`, `scripts/orchestrate_poll_process.sh:13118-13121`, `scripts/orchestrate_poll_process.sh:14178-14189`  
+  **Severity:** High  
+  **Category tag:** `bug`  
+  **Description:** Three `gh api "search/issues"` call sites pass `-f q=...` / `-f per_page=...` without an explicit GET method. This conflicts with the repo’s documented pattern in `scripts/gh_helpers.sh:1198-1205`, which states that `gh api` infers POST whenever `-f/-F` is present unless `-X GET` is supplied. Evidence: marker fallback calls at `10719-10720`, state reconstruction at `13119-13121`, and deferred duplicate backstop at `14187-14189`. Inference: these paths can silently return empty/fallback results or skip duplicate detection when the search endpoint rejects inferred POSTs.  
+  **Recommended fix:** Add `-X GET` / `--method GET` to all three `search/issues` call sites. Keep the existing GraphQL alias fast path at `10704-10708`; this fix preserves current call count but makes fallback calls valid. Current call count: up to 4 REST search calls across these paths. Proposed call count: same 4, but explicit GET. Existing pattern to copy: `autofix_retrigger_has_inflight_peer` in `scripts/gh_helpers.sh:1198-1212`.
+
+- **ID:** SHELL-001  
+  **File path and line range:** `scripts/orchestrate_poll_process.sh:17026-17030`  
+  **Severity:** Low  
+  **Category tag:** `shellcheck`  
+  **Description:** `_sorted_issue_nums="$(printf '%s\n' ${ISSUE_NUMS} | sort -un)"` expands `${ISSUE_NUMS}` unquoted. If the variable ever contains glob characters or unexpected whitespace, shell word-splitting/glob expansion occurs before `printf`. The following loop also iterates unquoted words from `_sorted_issue_nums`.  
+  **Recommended fix:** Normalize explicitly without glob exposure, e.g. print the variable quoted, split on whitespace/newlines deliberately, then sort: `printf '%s\n' "${ISSUE_NUMS}" | tr '[:space:]' '\n' | sed '/^$/d' | sort -un`. Keep numeric validation before using each issue number.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Prior report sections already cover the long release-validation polling loop and no-op `orchestrate_poll` overhead; those are not duplicated here. API method-correctness finding `BUG-001` is counted in Section 1.
+
+- **ID:** BATCH-001  
+  **File path and line range:** `.github/workflows/review_autofix.yml:936-963`, `.github/workflows/review_autofix.yml:990-1029`  
+  **Severity:** Medium  
+  **Category tag:** `api-batching`  
+  **Description:** The standalone validation dispatch path correctly includes labels in the GraphQL `closingIssuesReferences` query at `943-948`, but when it falls back to parsing issue numbers from PR text it builds `labels: null` at `990`, then reads labels once per linked issue with `gh issue view` at `999`.  
+  **Recommended fix:** For the body/title fallback path, batch label retrieval before the loop. Current fallback call count: `N` label reads + up to 1 workflow dispatch + up to `N` label edits. Proposed call count: `ceil(N/25)` GraphQL label reads + up to 1 dispatch + up to `N` edits. Extend the existing batching pattern `_fetch_issue_labels_batch_graphql` from `scripts/orchestrate_poll_process.sh:2700-2777`, or move an equivalent helper into `scripts/gh_helpers.sh`.
+
+- **ID:** BATCH-002  
+  **File path and line range:** `.github/workflows/review_autofix.yml:5087-5116`, `.github/workflows/review_autofix.yml:5277-5306`, `scripts/label_helpers.sh:166-217`  
+  **Severity:** Medium  
+  **Category tag:** `api-batching`  
+  **Description:** Both “mark linked issues ready-to-merge” and “mark linked issues review-blocked” loop over linked issues and call `set_issue_phase_label_resilient` for each issue. The canonical helper performs `ensure_label_exists`, a labels GET at `183-184`, and a labels PUT at `205-207` on the normal path.  
+  **Recommended fix:** Add a cached/batched helper such as `set_issue_phase_labels_resilient_cached <repo> <target_label> <issue_numbers_json>`, using `_fetch_issue_labels_batch_graphql` for the read side and one PUT per changed issue. Current normal-path call count: roughly `1 + 3N` API attempts per step (`ensure_label_exists` before the loop, per-issue ensure, per-issue labels GET, per-issue labels PUT). Proposed call count: `1 + ceil(N/25) + N` for one label ensure, batched reads, and necessary writes.
+
+- **ID:** API-001  
+  **File path and line range:** `.github/workflows/review_autofix.yml:6279-6298`, `scripts/gh_helpers.sh:1187-1215`, `scripts/gh_helpers.sh:1300-1334`  
+  **Severity:** Low  
+  **Category tag:** `api-redundancy`  
+  **Description:** The editor-changes-lost redispatch step can call `autofix_retrigger_has_inflight_peer` and then `autofix_changes_lost_head_retry_consumed` back-to-back. Both helpers issue the same branch-scoped `GET /repos/{repo}/actions/runs` query with `branch=<head_branch>&per_page=30`; comments at `1300-1304` acknowledge the overlap.  
+  **Recommended fix:** Add `autofix_fetch_branch_runs_once <head_branch> <current_run_id>` returning the fetched run list, then pass that JSON to both predicates. Current call count: 2 REST calls on this path. Proposed call count: 1 REST call. Existing pattern to extend: `gh_api_json_to_file` / JSON-transform helpers in `scripts/gh_helpers.sh`.
+
+- **ID:** BATCH-003  
+  **File path and line range:** `scripts/orchestrate_poll_process.sh:8480-8616`  
+  **Severity:** Low  
+  **Category tag:** `api-batching`  
+  **Description:** `_load_actions_runs_cached` uses one cached in-progress `actions/runs` request at `8555`, then two additional status-specific requests for queued and completed runs at `8609` and `8614` on a cache miss. A one-call replacement may not preserve status coverage when completed runs dominate the first page [NEEDS VERIFICATION].  
+  **Recommended fix:** Evaluate replacing the three status-specific REST calls with one wider `actions/runs?per_page=100` client-filtered fetch, or retain the three calls only when the one-call result cannot prove coverage. Current call count: 3 REST calls per cache miss. Proposed call count: 1 REST call when coverage is safe, fallback to 3 otherwise. Existing pattern to extend: `_ACTIONS_RUNS_BLOB_CACHE` at `8471-8484`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID:** DUP-001  
+  **File path and line range:** `.github/workflows/clarify.yml:215-351`, `.github/workflows/plan.yml:278-413`, `.github/workflows/implement.yml:851-1148`, `.github/workflows/orchestrate.yml:340-469`, `.github/workflows/orchestrate_clarify_respond.yml:277-412`, `.github/workflows/orchestrate_poll.yml:331-523`, `.github/workflows/review_autofix.yml:1502-1587`, `.github/workflows/validate.yml:202-424`, `scripts/stage_workflow_support.sh:16-31`  
+  **Severity:** Medium  
+  **Category tag:** `duplication`  
+  **Description:** Six workflows still inline large “Stage workflow support files” loops with similar `wf_source`, fallback source selection, `install`, optional support assets, prompt staging, schema staging, and `.gitignore` handling. `review_autofix.yml` and `validate.yml` already demonstrate the shared-helper pattern by invoking `scripts/stage_workflow_support.sh`.  
+  **Recommended fix:** Make `scripts/stage_workflow_support.sh` the single owner. Add a manifest/profile interface such as `stage_workflow_support.sh <phase> --manifest <json>` and migrate `clarify`, `plan`, `implement`, `orchestrate`, `orchestrate_clarify_respond`, and `orchestrate_poll` to call it with phase-specific required/optional assets.
+
+- **ID:** DUP-002  
+  **File path and line range:** `.github/workflows/orchestrate.yml:1010-1029`, `.github/workflows/plan.yml:2009-2029`, `scripts/check_failure_triage.sh:56-79`, `scripts/implement_diagnose_post_codex_failure.sh:49-62`, `.github/workflows/review_autofix.yml:908-926`, `.github/workflows/review_autofix.yml:1112-1124`  
+  **Severity:** Low  
+  **Category tag:** `duplication`  
+  **Description:** Multiple workflows/scripts duplicate fallback definitions for `_safe_gh_jq` and simplified `gh_retry`. The canonical implementations already exist in `scripts/gh_helpers.sh:407-462` and `scripts/gh_helpers.sh:548-562`, but call sites reimplement temp-file handling and retry behavior inconsistently.  
+  **Recommended fix:** Add a tiny bootstrap helper, e.g. `scripts/bootstrap_gh_helpers.sh`, with `load_gh_helpers <support_dir>`, and make inline callers source it. Function contract: define `gh_retry`, `_safe_gh_jq`, and `gh_api_json_to_file` or fail open with one audited fallback body.
+
+- **ID:** DUP-003  
+  **File path and line range:** `.github/workflows/review_autofix.yml:5045-5084`, `.github/workflows/review_autofix.yml:5228-5274`, `scripts/label_helpers.sh:130-217`  
+  **Severity:** Low  
+  **Category tag:** `duplication`  
+  **Description:** Late review/autofix steps duplicate reduced `ensure_label_exists` / `set_issue_phase_label_resilient` fallback bodies instead of reusing the canonical label helper. This is understandable because helper artifacts may be removed by cleanup, but it creates two divergent label-update implementations.  
+  **Recommended fix:** Preserve `label_helpers.sh` through the fetched-manifest cleanup or stage a minimal fallback file owned by `scripts/label_helpers.sh`. Keep the public signatures `ensure_label_exists <label_name> [repo]` and `set_issue_phase_label_resilient <issue_number> <target_label> [repo]`, then remove inline fallback bodies.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+No workflow file exceeds the 800 KB early-warning threshold. Largest observed workflow sizes: `review_autofix.yml` ≈451,578 chars, `test-and-mark-stable.yml` ≈291,779 chars, `implement.yml` ≈282,386 chars.
+
+- **ID:** EXPR-001  
+  **File path and line range:** `.github/workflows/plan.yml:1009-1299`  
+  **Severity:** High  
+  **Category tag:** `expression-limit`  
+  **Description:** The interpolated `run:` block for “Run Codex planning” is estimated at 19,616 characters, leaving only ~1,384 characters before GitHub’s 21,000-character expression limit. It embeds a large prompt heredoc at `1015-1221` and contains `${{ github.repository }}` interpolations at `1246` and `1288`, making the whole block expression-sensitive.  
+  **Recommended fix:** Move the prompt body to `prompts/mode-plan.txt` or a dedicated external script, and keep the workflow step as a small `bash scripts/run_plan_codex.sh` invocation. Prefer reading/rendering prompt files at runtime with `scripts/render_prompt.sh`.
+
+- **ID:** EXPR-002  
+  **File path and line range:** `.github/workflows/implement.yml:3677-3922`  
+  **Severity:** High  
+  **Category tag:** `expression-limit`  
+  **Description:** The destructive/scope block handler’s interpolated `run:` block is estimated at 18,345 characters, leaving ~2,655 characters of headroom. The block contains multiple `${{ github.repository }}` / `${{ github.run_id }}` interpolations and large inline comment/Telegram templates.  
+  **Recommended fix:** Extract to `scripts/implement_handle_guard_block.sh` with explicit env inputs for repository, run URL, issue number, destructive fields, and scope fields. If helper cleanup is the reason for inlining, preserve the small handler script separately from cleanup rather than growing the workflow expression.
+
+- **ID:** EXPR-003  
+  **File path and line range:** `.github/workflows/implement.yml:853-1148`  
+  **Severity:** Medium  
+  **Category tag:** `expression-limit`  
+  **Description:** The “Stage workflow support files” interpolated `run:` block is estimated at 15,966 characters, leaving ~5,034 characters of headroom. This is also part of the duplicated support-staging pattern covered by `DUP-001`.  
+  **Recommended fix:** Replace the inline staging block with `scripts/stage_workflow_support.sh implement --manifest <manifest.json>`, following `validate.yml:202-424` and `review_autofix.yml:1502-1517`.
+
+- **ID:** EXPR-004  
+  **File path and line range:** `.github/workflows/memory_maintenance.yml:45-391`  
+  **Severity:** Medium  
+  **Category tag:** `expression-limit`  
+  **Description:** The repository learnings extraction step is estimated at 15,168 characters, leaving ~5,832 characters of headroom. It embeds two large Python heredocs plus `${{ github.run_id }}`, `${{ github.run_attempt }}`, and `${{ github.actor }}` interpolations near `362-378`.  
+  **Recommended fix:** Move the Python logic into `scripts/memory_maintenance_extract_learnings.py` and keep the workflow step to environment setup plus `python3 -B scripts/memory_maintenance_extract_learnings.py`.
+
+### Section 5: Cross-Cutting Concerns
+
+No `TODO`, `FIXME`, or `HACK` markers were found under `.github/workflows` or top-level `scripts/*.sh` / `scripts/*.py`. No high-confidence dead-code finding is reported in this pass.
+
+- **ID:** CONSIST-001  
+  **File path and line range:** `scripts/tg_helpers.sh:103-145`, `.github/workflows/validation-refresh.yml:262-267`, `.github/workflows/test-and-mark-stable.yml:5436-5440`, `.github/workflows/implement.yml:3774-3778`, `.github/workflows/implement.yml:3908-3912`, `.github/workflows/implement.yml:4036-4040`, `.github/workflows/issue_pr_status.yml:625-631`, `.github/workflows/update_workflows.yml:642-648`  
+  **Severity:** Low  
+  **Category tag:** `consistency`  
+  **Description:** Telegram sends are centralized in `tg_helpers.sh`, including alert-level filtering and consistent `disable_web_page_preview`, but several workflows still call `curl` directly. Some direct calls are intentional fallback paths when helpers are unavailable; others bypass the helper unconditionally [NEEDS VERIFICATION].  
+  **Recommended fix:** Route direct sends through `tg_send_msg` / `tg_send_tracked` where helpers are available. For bootstrap or cleanup-sensitive paths, add a minimal `tg_send_msg_fallback <text> <level>` shim in `tg_helpers.sh` and source/copy only that shim.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 |  |
+| High | 3 | BUG-001, EXPR-001, EXPR-002 |
+| Medium | 5 | BATCH-001, BATCH-002, DUP-001, EXPR-003, EXPR-004 |
+| Low | 6 | API-001, BATCH-003, DUP-002, DUP-003, SHELL-001, CONSIST-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 3 | Medium |
+| API call optimization | 3 | Medium |
+| Code modularization | 8 | Large |
+| Expression size reduction | 4 | Medium |
+| Medium/Low fixes | 7 | Medium |
