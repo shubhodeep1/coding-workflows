@@ -1388,7 +1388,7 @@ autofix_changes_lost_head_retry_consumed()
 #      invocations in the current shell process the cumulative bytes
 #      stay under `_PROMPT_BUDGET_TOTAL_BYTES` (default 800000 ≈
 #      200k tokens at ~4 bytes/token).  Sized to fit comfortably
-#      within the gpt-5.5 standard context window (272k tokens) once
+#      within the gpt-5.5 (capacity-fallback floor) context window (272k tokens) once
 #      the static prefix (system instructions / agents / pipeline
 #      doc, ~10k tokens) and the response budget (~30k tokens) are
 #      subtracted.  After the budget is exhausted later files are
@@ -1403,7 +1403,7 @@ autofix_changes_lost_head_retry_consumed()
 
 # Default total prompt budget (bytes).  Set the env var BEFORE sourcing
 # gh_helpers.sh to override.  See header comment above for the sizing
-# rationale (200k tokens within gpt-5.5's 272k context window after
+# rationale (200k tokens within the gpt-5.5 fallback's 272k context window after
 # static prefix + response budget).
 : "${_PROMPT_BUDGET_TOTAL_BYTES:=800000}"
 

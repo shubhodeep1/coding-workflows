@@ -2,14 +2,14 @@
 
 Issue #3515 / run 28640359211: a sustained OpenRouter/OpenAI per-model TPM
 saturation on the primary editor model (gpt-5.4 at the time; the primary
-default is now gpt-5.5) burned every retry attempt because all attempts used
+default is now gpt-5.6-sol) burned every retry attempt because all attempts used
 the same model. The fix lets the codex retry loops switch to a fallback
-editor model (MODEL_EDITOR_FALLBACK, default openai/gpt-5.4 — a different
+editor model (MODEL_EDITOR_FALLBACK, default openai/gpt-5.5 — a different
 capacity bucket) on their FINAL attempt.
 
 This test pins the three moving parts so a future edit cannot silently drop
 the fallback:
-  1. openai/gpt-5.4 is declared in the model catalog (so codex can resolve
+  1. openai/gpt-5.5 is declared in the model catalog (so codex can resolve
      apply_patch / verbosity for it when the loop switches --model).
   2. Each codex-driven workflow exposes MODEL_EDITOR_FALLBACK.
   3. Each retry loop actually switches to the fallback on the final attempt.
@@ -26,10 +26,10 @@ IMPLEMENT = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 REVIEW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 REVIEW_APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 
-FALLBACK_SLUG = "openai/gpt-5.4"
+FALLBACK_SLUG = "openai/gpt-5.5"
 FALLBACK_ENV_DEFAULT = (
 	"MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL "
-	"|| 'openai/gpt-5.4' }}"
+	"|| 'openai/gpt-5.5' }}"
 )
 
 
@@ -46,7 +46,7 @@ def test_fallback_model_declared_in_catalog() -> None:
 	# The loops switch --model to this slug while the config still points
 	# model_catalog_json at the catalog file. If apply_patch resolution or
 	# xhigh support is missing, the switched attempt regresses relative to
-	# the primary. These mirror gpt-5.5 (same OpenAI generation).
+	# the primary. These mirror the primary (same OpenAI family).
 	assert entry.get("apply_patch_tool_type") == "function"
 	assert entry.get("support_verbosity") is True
 	assert entry.get("supported_in_api") is True

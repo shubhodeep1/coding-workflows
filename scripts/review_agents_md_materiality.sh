@@ -328,7 +328,7 @@ def main() -> int:
 		"reason": "disabled",
 		"llm_fallback_requested": llm_fallback_requested,
 		"llm_fallback_used": False,
-		"llm_fallback_model": str(os.environ.get("AGENTS_MD_MATERIALITY_MODEL") or "openai/gpt-5.4-mini"),
+		"llm_fallback_model": str(os.environ.get("AGENTS_MD_MATERIALITY_MODEL") or "openai/gpt-5.6-luna"),
 		"llm_fallback_reasoning": str(os.environ.get("AGENTS_MD_MATERIALITY_REASONING") or "medium"),
 	}
 	comment_body = ""
@@ -435,7 +435,7 @@ except Exception as exc:  # pragma: no cover - fail-open guard
 		"reason": f"internal_error:{exc.__class__.__name__}",
 		"llm_fallback_requested": normalize_bool(os.environ.get("AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED")),
 		"llm_fallback_used": False,
-		"llm_fallback_model": str(os.environ.get("AGENTS_MD_MATERIALITY_MODEL") or "openai/gpt-5.4-mini"),
+		"llm_fallback_model": str(os.environ.get("AGENTS_MD_MATERIALITY_MODEL") or "openai/gpt-5.6-luna"),
 		"llm_fallback_reasoning": str(os.environ.get("AGENTS_MD_MATERIALITY_REASONING") or "medium"),
 	}
 	write_outputs(result_path=result_path, comment_path=comment_path, result=fallback_result, comment_body="")

@@ -1188,7 +1188,7 @@ rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
 # level is resolved from JUDGE_REASONING_EFFORT (default `xhigh`,
 # override via the THINKING_LEVEL_REVIEW_BLOCKED_JUDGE repo var).
 # Keep the ladder inside the reasoning levels advertised for the
-# default gpt-5.5 judge path; `low` is the floor in this script.
+# default gpt-5.6-sol judge path; `low` is the floor in this script.
 case "${JUDGE_REASONING_EFFORT}" in
   xhigh)   JUDGE_ATTEMPT_LEVELS=("xhigh" "high" "medium") ;;
   high)    JUDGE_ATTEMPT_LEVELS=("high" "medium" "low") ;;

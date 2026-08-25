@@ -1230,9 +1230,9 @@ def _run_review_tier_harness(
 			"HAS_PR_DIFF": "true",
 			"REVIEW_TIER_RESOLVER_ENABLED": "true",
 			"REVIEW_TIER_LITE_MAX_LOC": "50",
-			"REVIEW_TIER_LITE_REVIEWER_SLUG": "qwen/qwen3.6-plus",
+			"REVIEW_TIER_LITE_REVIEWER_SLUG": "qwen/qwen3.7-plus",
 			"REVIEW_TIER_STANDARD_MAX_LOC": "200",
-			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m2.5,deepseek/deepseek-v4-pro,x-ai/grok-4.20",
+			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.6",
 			"REVIEWER_MODELS": "\n".join(_workflow_reviewer_models()) + "\n",
 			"PR_DIFF_FILE": str(files["pr_diff"]),
 			"ORIGINAL_PR_DIFF_FILE": str(files["pr_diff"]),
@@ -1317,7 +1317,7 @@ def _run_agents_md_materiality_harness(
 				**os.environ,
 				"AGENTS_MD_MATERIALITY_ENABLED": enabled,
 				"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED": "0",
-				"AGENTS_MD_MATERIALITY_MODEL": "openai/gpt-5.4-mini",
+				"AGENTS_MD_MATERIALITY_MODEL": "openai/gpt-5.6-luna",
 				"AGENTS_MD_MATERIALITY_REASONING": "medium",
 				"AGENTS_MD_MATERIALITY_RESULT_FILE": str(files["result"]),
 				"AGENTS_MD_MATERIALITY_COMMENT_FILE": str(files["comment"]),
@@ -2659,7 +2659,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_FLOOR_RULES_ENABLED: ${{ vars.REVIEW_FLOOR_RULES_ENABLED || '1' }}",
 		"REVIEW_FLOOR_KEYWORDS_FILE: ${{ vars.REVIEW_FLOOR_KEYWORDS_FILE || '' }}",
 		"REVIEW_CONSOLIDATOR_ENABLED: ${{ vars.REVIEW_CONSOLIDATOR_ENABLED || '1' }}",
-		"REVIEW_CONSOLIDATOR_MODEL: ${{ vars.REVIEW_CONSOLIDATOR_MODEL || 'openai/gpt-5.5' }}",
+		"REVIEW_CONSOLIDATOR_MODEL: ${{ vars.REVIEW_CONSOLIDATOR_MODEL || 'openai/gpt-5.6-sol' }}",
 		"REVIEW_CONSOLIDATOR_REASONING: ${{ vars.REVIEW_CONSOLIDATOR_REASONING || 'xhigh' }}",
 		"REVIEW_CONSOLIDATOR_TIMEOUT_SECS: ${{ vars.REVIEW_CONSOLIDATOR_TIMEOUT_SECS || '300' }}",
 		"REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT: ${{ vars.REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT || '16000' }}",
@@ -2673,9 +2673,9 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"FORCE_FULL_REVIEW_TIER: ${{ needs.gate.outputs.force_full_review_tier || 'false' }}",
 		"REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'false' }}",
 		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
-		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.6-plus' }}",
+		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.7-plus' }}",
 		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
-		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m2.5,deepseek/deepseek-v4-pro,x-ai/grok-4.20' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.6' }}",
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
@@ -2707,7 +2707,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_MAX_RESUME_ROUNDS: ${{ vars.REVIEW_MAX_RESUME_ROUNDS || '3' }}",
 		"AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}",
 		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
-		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}",
+		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.6-luna' }}",
 		"AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}",
 		"REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}",
 	):
@@ -2734,9 +2734,9 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 	for expected in (
 		"REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'false' }}",
 		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
-		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.6-plus' }}",
+		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.7-plus' }}",
 		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
-		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m2.5,deepseek/deepseek-v4-pro,x-ai/grok-4.20' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.6' }}",
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
@@ -2756,7 +2756,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_SOFT_DEADLINE_MINUTES: ${{ vars.REVIEW_SOFT_DEADLINE_MINUTES || '210' }}",
 		"AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}",
 		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
-		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}",
+		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.6-luna' }}",
 		"AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}",
 		"REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}",
 	):
@@ -3810,7 +3810,7 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	assert lite_result["REVIEW_TIER"] == "lite"
 	assert lite_result["REVIEW_TIER_REASON"] == "doc_only_<=50_loc"
 	assert lite_result["review_tier_file"] == "lite"
-	assert lite_result["active_models"] == ["qwen/qwen3.6-plus"]
+	assert lite_result["active_models"] == ["qwen/qwen3.7-plus"]
 	assert lite_result["REVIEW_TIER_FORCED_FULL"] == "false"
 	assert "REVIEW_CONSOLIDATOR_ENABLED=0\n" in lite_result["github_env"]
 	assert "REVIEW_TIER: tier=lite" in lite_result["stdout"]
@@ -3821,9 +3821,9 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	assert standard_result["REVIEW_TIER_SCOPE"] == "scripts/"
 	assert standard_result["review_tier_file"] == "standard"
 	assert standard_result["active_models"] == [
-		"minimax/minimax-m2.5",
+		"minimax/minimax-m3",
 		"deepseek/deepseek-v4-pro",
-		"x-ai/grok-4.20",
+		"x-ai/grok-4.6",
 	]
 	assert "REVIEW_CONSOLIDATOR_ENABLED=0\n" not in standard_result["github_env"]
 
@@ -4018,17 +4018,19 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 
 	assert sorted(mapped) == [
 		"deepseek/deepseek-v4-pro",
-		"qwen/qwen3.6-plus",
-		"x-ai/grok-4.20",
+		"minimax/minimax-m3",
+		"moonshotai/kimi-k3",
+		"qwen/qwen3.7-plus",
+		"x-ai/grok-4.6",
 	]
 	assert sorted(unmapped) == [
-		"minimax/minimax-m2.5",
 		"mistralai/mistral-small-2603",
-		"moonshotai/kimi-k2.5",
 	]
 	assert chains["deepseek/deepseek-v4-pro"] == ["deepseek/deepseek-v3.2"]
-	assert chains["qwen/qwen3.6-plus"] == ["qwen/qwen3-coder-plus"]
-	assert chains["x-ai/grok-4.20"] == ["x-ai/grok-4.1-fast"]
+	assert chains["minimax/minimax-m3"] == ["minimax/minimax-m2.5"]
+	assert chains["moonshotai/kimi-k3"] == ["moonshotai/kimi-k2.7-code"]
+	assert chains["qwen/qwen3.7-plus"] == ["qwen/qwen3.6-plus"]
+	assert chains["x-ai/grok-4.6"] == ["x-ai/grok-4.20"]
 
 
 def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models() -> None:
@@ -4673,7 +4675,7 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		"| Reviewer scope | ${reviewer_scope_label} |",
 		"| Raw bundle size (bytes) | ${bundle_bytes} |",
 		"| Floor tags | ${floor_tag_count} |",
-		"| Consolidator model | ${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.5} |",
+		"| Consolidator model | ${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.6-sol} |",
 		"| Consolidator invoked | ${consolidator_invoked} |",
 		"| Consolidator output bytes | ${consolidator_output_bytes} |",
 		"| Parsed issue blocks | ${parsed_blocks} |",

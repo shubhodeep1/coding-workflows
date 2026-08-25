@@ -54,7 +54,7 @@ def test_weekly_retro_path_is_schedule_gated_and_default_on() -> None:
 	assert "schedule:" in wf
 	assert 'cron: "0 9 * * 1"' in wf
 	assert "WORKFLOW_RETRO_ENABLED: ${{ vars.WORKFLOW_RETRO_ENABLED || 'true' }}" in wf
-	assert "WORKFLOW_RETRO_MODEL: ${{ vars.WORKFLOW_RETRO_MODEL || 'openai/gpt-5.4-mini' }}" in wf
+	assert "WORKFLOW_RETRO_MODEL: ${{ vars.WORKFLOW_RETRO_MODEL || 'openai/gpt-5.6-luna' }}" in wf
 	assert "WORKFLOW_RETRO_REASONING: ${{ vars.WORKFLOW_RETRO_REASONING || 'medium' }}" in wf
 	assert "WORKFLOW_RETRO_CRON: ${{ vars.WORKFLOW_RETRO_CRON || '0 9 * * 1' }}" in wf
 	assert "WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY: ${{ vars.WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY || 'true' }}" in wf

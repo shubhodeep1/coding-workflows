@@ -38,7 +38,7 @@ inputs:
   model:
     description: OpenRouter model id (LOG_ANALYZER_MODEL).
     required: false
-    default: openai/gpt-5.4-mini
+    default: openai/gpt-5.6-luna
   reasoning:
     description: OpenRouter reasoning effort (LOG_ANALYZER_REASONING).
     required: false
