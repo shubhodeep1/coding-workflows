@@ -336,22 +336,21 @@ def call_openrouter(
 	if not choices:
 		raise RuntimeError(f"OpenRouter returned no choices: {payload!r}")
 	content = choices[0].get("message", {}).get("content") or ""
-	if isinstance(content, str) and content.strip():
-		response_model = payload.get("model")
-		if not isinstance(response_model, str) or not response_model.strip():
-			response_model = model
-		print(
-			format_openrouter_usage_line(
-				payload.get("usage"),
-				model=response_model,
-				phase="release-gate",
-				call_label="soft-error-analyzer",
-				cache_enabled=not is_cache_disabled(),
-				cache_breakpoint_enabled=None,
-				cache_breakpoint_fallback_retry=None,
-			),
-			file=sys.stderr,
-		)
+	response_model = payload.get("model")
+	if not isinstance(response_model, str) or not response_model.strip():
+		response_model = model
+	print(
+		format_openrouter_usage_line(
+			payload.get("usage"),
+			model=response_model,
+			phase="release-gate",
+			call_label="soft-error-analyzer",
+			cache_enabled=not is_cache_disabled(),
+			cache_breakpoint_enabled=None,
+			cache_breakpoint_fallback_retry=None,
+		),
+		file=sys.stderr,
+	)
 	return content
 
 

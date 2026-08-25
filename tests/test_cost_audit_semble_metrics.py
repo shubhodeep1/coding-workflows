@@ -180,7 +180,7 @@ def test_direct_openrouter_callers_preserve_output_and_emit_safe_usage() -> None
 	assert "analyzer response" not in analyzer_line
 
 
-def test_direct_openrouter_callers_do_not_emit_success_usage_for_empty_content() -> None:
+def test_direct_openrouter_callers_emit_usage_for_empty_content() -> None:
 	empty_payload = {
 		"choices": [{"message": {"content": ""}}],
 		"usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
@@ -204,7 +204,11 @@ def test_direct_openrouter_callers_do_not_emit_success_usage_for_empty_content()
 			assert str(exc) == "chat/completions empty content"
 		else:
 			raise AssertionError("empty summary content must retain its existing error")
-	assert summary_stderr.getvalue() == ""
+	assert summary_stderr.getvalue().count("INFO: openrouter usage ") == 1
+	summary_usage = parse_log(summary_stderr.getvalue())
+	assert summary_usage["or_calls"] == 1
+	assert summary_usage["or_prompt_tokens"] == 1
+	assert summary_usage["or_total_tokens"] == 1
 
 	analyzer_stderr = io.StringIO()
 	with patch.object(
@@ -219,7 +223,11 @@ def test_direct_openrouter_callers_do_not_emit_success_usage_for_empty_content()
 			api_key="unused-key",
 		)
 	assert result == ""
-	assert analyzer_stderr.getvalue() == ""
+	assert analyzer_stderr.getvalue().count("INFO: openrouter usage ") == 1
+	analyzer_usage = parse_log(analyzer_stderr.getvalue())
+	assert analyzer_usage["or_calls"] == 1
+	assert analyzer_usage["or_prompt_tokens"] == 1
+	assert analyzer_usage["or_total_tokens"] == 1
 
 
 def test_parse_log_counts_semble_query_bytes_and_fallbacks_by_target() -> None:

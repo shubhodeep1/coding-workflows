@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Direct OpenRouter callers now report usage for every parsed response with choices.** The workflow-log summarizer and release-gate soft-error analyzer emit normalized prompt, completion, total, and cache token telemetry even when response content is empty, while preserving their existing return and exception behavior and avoiding prompt, response, or credential content in logs.

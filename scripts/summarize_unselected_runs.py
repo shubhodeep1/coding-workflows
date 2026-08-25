@@ -411,15 +411,6 @@ class OpenRouterSummarizer:
 		choices = payload.get("choices") or []
 		if not choices:
 			raise RuntimeError("chat/completions empty choices")
-		content = ((choices[0] or {}).get("message") or {}).get("content") or ""
-		content = content.strip()
-		if not content:
-			raise RuntimeError("chat/completions empty content")
-		tokens_used = _extract_tokens_used(
-			payload.get("usage"),
-			input_chars=len(logs_text),
-			max_output_tokens=self.max_output_tokens,
-		)
 		response_model = payload.get("model")
 		if not isinstance(response_model, str) or not response_model.strip():
 			response_model = self.model
@@ -434,6 +425,15 @@ class OpenRouterSummarizer:
 				cache_breakpoint_fallback_retry=None,
 			),
 			file=sys.stderr,
+		)
+		content = ((choices[0] or {}).get("message") or {}).get("content") or ""
+		content = content.strip()
+		if not content:
+			raise RuntimeError("chat/completions empty content")
+		tokens_used = _extract_tokens_used(
+			payload.get("usage"),
+			input_chars=len(logs_text),
+			max_output_tokens=self.max_output_tokens,
 		)
 		return content, tokens_used
 
