@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Log collection and drift-audit tooling should be designed around reproducible manifests and fallback paths.",
   "timestamps": {
     "created_at": "2026-08-25T08:27:53Z",
