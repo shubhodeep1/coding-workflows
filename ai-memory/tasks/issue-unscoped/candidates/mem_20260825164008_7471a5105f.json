@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/cost_audit.py:_validated_mcp_telemetry_event (lines 174-242) and parse_log (lines 656-676) | severity=low | confidence=3\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: Generic MCP probes could emit arbitrary `probe_<result>` keys if future validator changes allow non-canonical results.\n  WHY: Current validation prevents this, but downstream consumers expect exactly `probe_ok`, `probe_failed`, and `probe_skipped`.\n- scripts/cost_audit.py:parse_log (lines 648-659), SERENA probe handling | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The behavioral change from coalescing unknown probe results into `skipped` to silently dropping them is undocumented.\n  WHY: Future maintainers may alter validator behavior without realizing malformed probes are intentionally dropped.\n- tests/test_cost_audit_serena_metrics.py:test_parse_log_preserves_other_signal_types_when_serena_is_present (line 83-84, test body lines ~114-125) | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The test may omit assertions for the `serena_targets[\"implement\"]` metrics implied by its input.\n  WHY: The test could remain green while incompletely verifying SERENA fallback and probe handling.\n- scripts/cost_audit.py:_validated_mcp_telemetry_event (lines 174-242), generic MCP query branch | severity=low | confidence=3\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: Generic MCP query validation accepts either a valid `bytes` or a valid `response_bytes` field, unlike the stricter known-server validators.\n  WHY: Partial telemetry lines may be counted as generic queries, though this is consistent with accepting heterogeneous unknown-server telemetry.\n- scripts/cost_audit.py:parse_log (lines 648-659) \u2014 SERENA probe result handling | severity=high | confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: Unknown SERENA probe results are now dropped instead of being coalesced into `serena_probe_skipped`.\n  WHY: This changes the public counter contract and lowers totals for consumers that previously treated `skipped` as the catch-all.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .ai/.workspace_source_manifest.txt: diff\n  PROBLEM: The diff contains workspace-manifest churn unrelated to the MCP telemetry fix.\n  WHY: The manifest entries appear outside the declared telemetry-only scope and may belong as a workspace artifact.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/cost_audit.py:_validated_mcp_telemetry_event (lines 174-242) and parse_log (lines 656-676) | severity=low | confidence=3\n  PROBLEM: The SERENA_PROBE validator rejects non-canonical results, while the generic probe handler directly constructs `probe_<result>` keys without fallback normalization.\n  WHY: A future validator change could produce arbitrary output keys instead of the expected probe buckets.\n- scripts/cost_audit.py:parse_log (lines 648-659), SERENA probe handling | severity=low | confidence=4\n  PROBLEM: The removal of unknown-result normalization is not documented.\n  WHY: Future changes may regress the intended silent-drop behavior for malformed probes.\n- tests/test_cost_audit_serena_metrics.py:test_parse_log_preserves_other_signal_types_when_serena_is_present (line 83-84, test body lines ~114-125) | severity=low | confidence=2\n  PROBLEM: The test may not assert the `serena_targets[\"implement\"]` metrics represented by its input.\n  WHY: Production behavior could be under-tested even if the test passes.\n- scripts/cost_audit.py:_validated_mcp_telemetry_event (lines 174-242), generic MCP query branch | severity=low | confidence=3\n  PROBLEM: Generic MCP queries require only one valid numeric field, `bytes` or `response_bytes`, unlike known-server queries.\n  WHY: Partial unknown-server telemetry may be counted, although the looser rule supports heterogeneous valid formats.\n- scripts/cost_audit.py:parse_log (lines 648-659) \u2014 SERENA probe result handling | severity=high | confidence=4\n  PROBLEM: Unknown probe results are dropped rather than mapped to the existing `skipped` bucket.\n  WHY: Consumers relying on `serena_probe_skipped` as a catch-all will observe lower counts and a changed public contract.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "14f2f4517238bbf1aeadead85b6c9e7869a6ec800c13110aa66bb660df9d01c1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3823,
+    "run_id": "32851496137",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32851496137",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260825164008_7471a5105f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3823,
+    "run_id": "32851496137"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-25T16:40:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
