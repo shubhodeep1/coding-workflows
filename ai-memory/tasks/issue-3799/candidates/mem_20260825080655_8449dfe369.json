@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should be improved?\nChoices:\nA. A specific workflow or pipeline phase \u2014 include the workflow/phase name and current problem (RECOMMENDED)\nB. Documentation or README content \u2014 include the page/topic to improve\nC. Tests, validation, or CI reliability \u2014 include the failing check/log or flaky behavior\nQ2: What outcome should define success?\nChoices:\nA. Fix a specific bug/regression \u2014 provide observed vs expected behavior (RECOMMENDED)\nB. Reduce operational noise, cost, or flakiness \u2014 provide the signal/metric to improve\nC. Add or change a capability \u2014 describe the expected new behavior",
+  "fingerprint": "d3125cd472dd7ec855b0aee1aea2cc63e0559a7cd99a800e64ac088f815fc597",
+  "lineage": {
+    "issue_number": 3799,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32824737978",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32824737978",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260825080655_8449dfe369",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3799,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "32824737978"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #3799 needs clarification",
+  "timestamps": {
+    "created_at": "2026-08-25T08:06:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
