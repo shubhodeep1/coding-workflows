@@ -10716,8 +10716,8 @@ _fetch_standalone_marker_issues_graphql() {
   if [ "${state_has_next}" = "true" ] || [ "${clarify_has_next}" = "true" ]; then
     local marker_state
     local marker_clarify
-    marker_state="$(gh_retry gh api --paginate "search/issues" -f per_page=100 -f q="${q_state}" 2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
-    marker_clarify="$(gh_retry gh api --paginate "search/issues" -f per_page=100 -f q="${q_clarify}" 2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
+    marker_state="$(gh_retry gh api --method GET --paginate "search/issues" -f per_page=100 -f q="${q_state}" 2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
+    marker_clarify="$(gh_retry gh api --method GET --paginate "search/issues" -f per_page=100 -f q="${q_clarify}" 2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
     jq -cn --argjson state "${marker_state}" --argjson clarify "${marker_clarify}" '{state:$state,clarify:$clarify}'
     return
   fi
@@ -13116,7 +13116,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     fi
 
     # Search for child issues whose body contains the tracking reference
-    CHILD_ISSUES="$(gh_retry gh api "search/issues" \
+    CHILD_ISSUES="$(gh_retry gh api --method GET "search/issues" \
       -f q="repo:${GITHUB_REPOSITORY} \"Tracking issue: #${TRACKING_NUM}\" in:body" \
       --jq '.items // []' 2>/dev/null || echo '[]')"
 
@@ -14184,7 +14184,7 @@ The poller will resume processing on the next cycle."
       # instead of creating a duplicate.
       if [ "${DEFERRED_EXISTING_LOOKUP_DONE}" != "true" ]; then
         DEFERRED_EXISTING_LOOKUP_DONE=true
-        if _deferred_child_items="$(gh_retry gh api "search/issues" \
+        if _deferred_child_items="$(gh_retry gh api --method GET "search/issues" \
           -f q="repo:${GITHUB_REPOSITORY} is:issue \"Tracking issue: #${TRACKING_NUM}\" in:body" \
           --jq '.items // []' 2>/dev/null)"; then
           if DEFERRED_EXISTING_MAP_JSON="$(printf '%s' "${_deferred_child_items}" | jq '
