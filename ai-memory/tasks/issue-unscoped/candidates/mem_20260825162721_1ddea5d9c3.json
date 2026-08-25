@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/run_plan_codex.sh:lines 6-7 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The script silently falls back to a bare `gh_retry` shim when sourcing `scripts/gh_helpers.sh` fails.\n  WHY: This bypasses rate-limit handling and retry logic during progress-comment API calls.\n- scripts/run_plan_codex.sh:lines 187-188, 240-241, 267-268 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: GitHub API comment URLs use `${GITHUB_REPOSITORY}` in the extracted runner and fail to update progress comments at runtime.\n  WHY: The cited paths are reported as remaining unexpanded literals, breaking initial, retry, and final progress-comment updates.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Preserve prompt bytes, ordering, outputs, retries, comments, exit codes, and fallback behavior exactly.\"\n  expected_change_site: scripts/run_plan_codex.sh\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The script uses `${GITHUB_REPOSITORY}` instead of `${{ github.repository }}` in GitHub API calls, causing runtime failures.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/run_plan_codex.sh:lines 6-7 | severity=high | confidence=4\n  PROBLEM: The script sources `scripts/gh_helpers.sh` with error suppression and provides an inline fallback `gh_retry` shim if sourcing fails.\n  WHY: This silently bypasses the helper's rate-limit handling and retry logic.\n- scripts/run_plan_codex.sh:lines 187-188 | severity=critical | confidence=5\n  PROBLEM: The script uses `repos/${GITHUB_REPOSITORY}/issues/comments/` with the literal variable name `${GITHUB_REPOSITORY}`.\n  WHY: The GitHub API call will fail because `${GITHUB_REPOSITORY}` is not expanded by GitHub Actions.\n- scripts/run_plan_codex.sh:lines 240-241 | severity=critical | confidence=5\n  PROBLEM: The retry path uses `repos/${GITHUB_REPOSITORY}/issues/comments/` with the same unexpanded variable.\n  WHY: The retry progress-comment update will fail, preventing proper status communication during retries.\n- scripts/run_plan_codex.sh:lines 267-268 | severity=critical | confidence=5\n  PROBLEM: The final retry path uses `repos/${GITHUB_REPOSITORY}/issues/comments/` with the same unexpanded variable.\n  WHY: The final retry progress-comment update will fail, leaving the plan permanently \"in progress\".\n- TASK_GAP\n  Requirement: \"Preserve prompt bytes, ordering, outputs, retries, comments, exit codes, and fallback behavior exactly.\"\n  Expected change site: scripts/run_plan_codex.sh should maintain the same prompt structure, retry logic, progress-comment updates, and exit codes as the original inline workflow step.\n  Evidence of absence: The script uses `${GITHUB_REPOSITORY}` instead of `${{ github.repository }}` in GitHub API calls, causing runtime failures. The prompt template is preserved, but runtime execution paths are broken.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "7be23a6f8c0e5d08b73d483e5f6e69ae77715afc71c0f331c9c5dc231f4a869d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3822,
+    "run_id": "32864513671",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32864513671",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260825162721_1ddea5d9c3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3822,
+    "run_id": "32864513671"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-25T16:27:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
