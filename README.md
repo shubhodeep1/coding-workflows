@@ -1162,9 +1162,9 @@ the way to a fix PR without human action.
 | `REVIEW_BREAK_GLASS_ENABLED` | `false` | Enable the anchored `@codex break-glass` override scan; it downgrades only the outbound `REQUEST_CHANGES` review event to a comment-only review. |
 | `REVIEW_TIER_RESOLVER_ENABLED` | `false` | Enable the additive Phase I `lite \| standard \| full` review-tier resolver. While `false`, existing reviewer routing is unchanged. `AUTOFIX_SKIP_*` fast paths remain authoritative, and `[force-review]` / `force-review` still force `full`. |
 | `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for the `lite` review tier. `lite` also requires the existing doc-only path set (`*.md`, `*.txt`, `*.rst`, `LICENSE*`, `CHANGELOG*`, `docs/**`) and reuses `REVIEW_CONSOLIDATOR_ENABLED=0` to skip the consolidator. |
-| `REVIEW_TIER_LITE_REVIEWER_SLUG` | `qwen/qwen3.6-plus` | Reviewer slug used for the `lite` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to the full live reviewer roster. |
+| `REVIEW_TIER_LITE_REVIEWER_SLUG` | `qwen/qwen3.7-plus` | Reviewer slug used for the `lite` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to the full live reviewer roster. |
 | `REVIEW_TIER_STANDARD_MAX_LOC` | `200` | Maximum total diff LOC for the `standard` review tier. `standard` also requires all changes to stay within one allowed top-level directory: `scripts/`, `prompts/`, `.github/workflows/`, or `tests/`. |
-| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m2.5,deepseek/deepseek-v4-pro,x-ai/grok-4.20` | Comma-separated reviewer subset for the `standard` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to the full live reviewer roster. |
+| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.6` | Comma-separated reviewer subset for the `standard` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to the full live reviewer roster. |
 | `REVIEWER_RISK_TIER_ENABLED` | `0` | Enable deterministic `trivial | lite | full` reviewer fan-out by reviewer-visible diff LOC/file count. |
 | `REVIEWER_RISK_TIER_TRIVIAL_LOC` | `10` | Trivial-tier LOC threshold. |
 | `REVIEWER_RISK_TIER_TRIVIAL_FILES` | `20` | Trivial-tier changed-file threshold. |

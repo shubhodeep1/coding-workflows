@@ -187,7 +187,7 @@ a new value, add it to the appropriate overrides file with a
 | implement-repair, implement-repair-syntax | `openai/gpt-5.5` | `xhigh` | `low` |
 | implement-diagnose | `openai/gpt-5.5` | `xhigh` | `low` |
 | review autofix editor | `openai/gpt-5.5` | `xhigh` (smoke: `medium`) | `low` |
-| review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m2.5`, `moonshotai/kimi-k2.5`, `deepseek/deepseek-v4-pro`, `mistralai/mistral-small-2603`, `qwen/qwen3.6-plus`, `x-ai/grok-4.20`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:1709`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` |
+| review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `moonshotai/kimi-k3`, `deepseek/deepseek-v4-pro`, `mistralai/mistral-small-2603`, `qwen/qwen3.7-plus`, `x-ai/grok-4.6`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:1709`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` |
 | review autofix reviewers (pass 2) | `REVIEWER_MODELS` (same roster, after pass-2 scope / tier filtering) | `high` on diffs below `REVIEWER_PASS2_DIFF_LARGE_LOC=200`, `xhigh` at or above that threshold; smoke: `low`; operator override wins | `low` |
 | review consolidator | `openai/gpt-5.5` | `xhigh` | `low` |
 | conflict resolver | `openai/gpt-5.5` | `high` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh`, `high`, `medium`, `none` only — `low` is rejected; default lowered from `xhigh` after runs `25627236793` / `25627316961` hit `timeout`-killed retries on degenerate orchestrator-stack integrations; override per-repo via `vars.THINKING_LEVEL_CONFLICT_RESOLVER`) | `low` |
@@ -207,9 +207,9 @@ callsite (≈20 sites across `scripts/*.sh` and `.github/workflows/*.yml`),
 the `model_verbosity = "low"` line that `scripts/write_codex_config.sh:242`
 writes into `config.toml`, and the `"default_verbosity": "low"` for
 `openai/gpt-5.5` in `scripts/codex_model_catalog.json:385`. Third-party
-reviewer models (`minimax/minimax-m2.5`, `moonshotai/kimi-k2.5`,
+reviewer models (`minimax/minimax-m3`, `moonshotai/kimi-k3`,
 `deepseek/deepseek-v4-pro`, `mistralai/mistral-small-2603`,
-`qwen/qwen3.6-plus`, `x-ai/grok-4.20`)
+`qwen/qwen3.7-plus`, `x-ai/grok-4.6`)
 carry `support_verbosity = false` in the catalog — codex CLI logs
 `model_verbosity is set but ignored as the model does not support verbosity`
 and continues; the value is operationally moot for those rows. The
@@ -234,9 +234,9 @@ the `openai/gpt-5.4` catalog entry — `apply_patch_tool_type` is now
 `function`).
 
 The reviewer-only multi-model run (claude-branch-review) uses third-party
-models (`minimax/minimax-m2.5`, `moonshotai/kimi-k2.5`,
+models (`minimax/minimax-m3`, `moonshotai/kimi-k3`,
 `deepseek/deepseek-v4-pro`, `mistralai/mistral-small-2603`,
-`qwen/qwen3.6-plus`, `x-ai/grok-4.20`) plus
+`qwen/qwen3.7-plus`, `x-ai/grok-4.6`) plus
 `unattended_system_instructions.md` as system context.
 
 ---
@@ -690,7 +690,7 @@ depend on it.
 - `scripts/review_agents_md_materiality.sh` is deterministic-path-glob v1: it writes a JSON result payload plus a non-blocking PR comment headed `## AI Materiality Advisory` when materiality is `high` or `medium` and root `agents.md` is unchanged. `AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED` is reserved only; enabling it still does not trigger a model call in the current shipped script.
 - When `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED=true`, `scripts/review_consolidate.sh` feeds that helper JSON into the consolidator prompt as advisory untrusted context. This is the Lens 7 companion to the separate advisory comment path controlled by `AGENTS_MD_MATERIALITY_ENABLED`. Lens 7 (`NAMING / BACKWARD COMPATIBILITY`) may then emit a default-`high` `AGENTS.md materiality` finding when operator-visible structural changes leave root `agents.md` unchanged, but downgrades or omits it when equivalent touched docs already cover the behavior.
 - `REVIEW_LEDGER_REREVIEW_ENABLED` gates consolidator-side suppression of repeated `accepted-residual` / `won't-fix` findings from the existing review ledger and the review-blocked judge's ledger-fed prior-round decision input. `scripts/review_rb_judge.sh` renders that `=== BEGIN PRIOR ROUND DECISIONS ===` block via `render_review_rb_prior_round_decisions_file`, and `prompts/mode-judge-review-blocked.txt` treats it as advisory history rather than fresh reviewer evidence.
-- `REVIEWER_CIRCUIT_BREAKER_ENABLED` persists reviewer health under `.ai/review_runtime/pr-<PR>/reviewer_health_state.json`. Retryable reviewer failures first retry with cheaper reasoning, then consult `scripts/reviewer_failback_chains.json`; unmapped reviewers fail open via `REVIEWER_FAILBACK_UNMAPPED`. The current mapping file covers `deepseek/deepseek-v4-pro -> deepseek/deepseek-v3.2`, `qwen/qwen3.6-plus -> qwen/qwen3-coder-plus`, and `x-ai/grok-4.20 -> x-ai/grok-4.1-fast`; `minimax/minimax-m2.5`, `moonshotai/kimi-k2.5`, and `mistralai/mistral-small-2603` remain intentionally unmapped until the catalog ships same-family alternates.
+- `REVIEWER_CIRCUIT_BREAKER_ENABLED` persists reviewer health under `.ai/review_runtime/pr-<PR>/reviewer_health_state.json`. Retryable reviewer failures first retry with cheaper reasoning, then consult `scripts/reviewer_failback_chains.json`; unmapped reviewers fail open via `REVIEWER_FAILBACK_UNMAPPED`. The current mapping file covers `deepseek/deepseek-v4-pro -> deepseek/deepseek-v3.2`, `minimax/minimax-m3 -> minimax/minimax-m2.5`, `moonshotai/kimi-k3 -> moonshotai/kimi-k2.7-code`, `qwen/qwen3.7-plus -> qwen/qwen3.6-plus`, and `x-ai/grok-4.6 -> x-ai/grok-4.20` (plus retained non-roster entries `qwen/qwen3.6-plus -> qwen/qwen3-coder-plus` and `x-ai/grok-4.20 -> x-ai/grok-4.1-fast` for operator roster overrides); `mistralai/mistral-small-2603` remains intentionally unmapped until the catalog ships a same-family alternate.
 - `scripts/cost_audit.py` now parses additive review telemetry fields `cache_hit_rate`, `wall_clock_p50_ms`, `wall_clock_p99_ms`, `break_glass_count`, and `context_budget_warn_count`. `CONTEXT_BUDGET_WARN` is emitted pre-flight from review / consolidator / judge paths when a prompt exceeds the configured per-model context threshold.
 - `scripts/codex_heartbeat.sh` wraps long-running `codex exec` calls in reviewer, consolidator, review-blocked judge, conflict-resolver, and validate/self-heal paths, emitting `CODEX_HEARTBEAT: phase=<phase> elapsed_secs=<n>` during silent periods.
 - `REVIEW_APPROVAL_RUBRIC_ENABLED` lets the review-blocked judge emit logical `review_state` values (`APPROVE`, `APPROVE_WITH_COMMENTS`, `COMMENT`, `REQUEST_CHANGES`) that `scripts/post_review_comment.sh --review-state` maps to outbound PR reviews. With `REVIEW_BREAK_GLASS_ENABLED`, a human comment anchored as `@codex break-glass` downgrades only the outbound `REQUEST_CHANGES` event to comment-only and logs `BREAK_GLASS`, while preserving the judge's written review body.
@@ -724,9 +724,9 @@ depend on it.
 | `REVIEW_BREAK_GLASS_ENABLED` | `false` | Enable the anchored `@codex break-glass` override scan; when active it downgrades only the outbound `REQUEST_CHANGES` event to comment-only. |
 | `REVIEW_TIER_RESOLVER_ENABLED` | `false` | Enable the additive Phase I `lite \| standard \| full` review-tier resolver. While `false`, existing reviewer routing is unchanged. |
 | `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for `lite` review-tier resolution. `lite` also requires the existing doc-only path set. |
-| `REVIEW_TIER_LITE_REVIEWER_SLUG` | `qwen/qwen3.6-plus` | Reviewer slug used for the `lite` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to `full`. |
+| `REVIEW_TIER_LITE_REVIEWER_SLUG` | `qwen/qwen3.7-plus` | Reviewer slug used for the `lite` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to `full`. |
 | `REVIEW_TIER_STANDARD_MAX_LOC` | `200` | Maximum total diff LOC for `standard` review-tier resolution. `standard` also requires changes confined to one allowed top-level directory. |
-| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m2.5,deepseek/deepseek-v4-pro,x-ai/grok-4.20` | Comma-separated reviewer subset for the `standard` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to `full`. |
+| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.6` | Comma-separated reviewer subset for the `standard` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to `full`. |
 | `REVIEWER_RISK_TIER_ENABLED` | `0` | Enable deterministic `trivial | lite | full` reviewer fan-out by reviewer-visible diff LOC/file count. |
 | `REVIEWER_RISK_TIER_TRIVIAL_LOC` | `10` | Trivial-tier LOC threshold. |
 | `REVIEWER_RISK_TIER_TRIVIAL_FILES` | `20` | Trivial-tier changed-file threshold. |
