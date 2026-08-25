@@ -14,6 +14,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_PROMPT = REPO_ROOT / "prompts" / "mode-plan.txt"
 PLAN_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "plan.yml"
+PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 REUSE_AUDIT_CONTRACT_TEST = REPO_ROOT / "tests" / "test_plan_reuse_audit_contract.py"
 RENDER_PROMPT = REPO_ROOT / "scripts" / "render_prompt.py"
@@ -93,18 +94,19 @@ def test_mode_plan_scope_mode_contract_relaxes_when_flag_disabled() -> None:
 
 def test_plan_workflow_exports_flag_and_keeps_live_prompt_parity() -> None:
 	workflow = PLAN_WORKFLOW.read_text(encoding="utf-8")
+	plan_runner = PLAN_RUNNER.read_text(encoding="utf-8")
 
-	_assert_decisions_contract(workflow)
+	_assert_decisions_contract(plan_runner)
 	assert "PLAN_SCOPE_MODE_REQUIRED: ${{ vars.PLAN_SCOPE_MODE_REQUIRED || 'true' }}" in workflow
-	assert "PLAN_SCOPE_MODE_REQUIRED={{PLAN_SCOPE_MODE_REQUIRED}}" in workflow
-	assert "`Scope-mode: <Expansion | Selective Expansion | Hold Scope | Reduction>`" in workflow
-	assert "`Scope-mode justification:`" in workflow
-	assert "Boil the Lake forcing question" in workflow
-	assert "Security > Correctness & safety > Backward compatibility" in workflow
-	assert "Operational clarity > Performance > Speed; completeness moves correctness." in workflow
-	assert "Reduction safety net" in workflow
-	assert "MUST emit a clarification Q-ID" in workflow
-	assert "existing scope-too-large gate" in workflow
+	assert "PLAN_SCOPE_MODE_REQUIRED={{PLAN_SCOPE_MODE_REQUIRED}}" in plan_runner
+	assert "`Scope-mode: <Expansion | Selective Expansion | Hold Scope | Reduction>`" in plan_runner
+	assert "`Scope-mode justification:`" in plan_runner
+	assert "Boil the Lake forcing question" in plan_runner
+	assert "Security > Correctness & safety > Backward compatibility" in plan_runner
+	assert "Operational clarity > Performance > Speed; completeness moves correctness." in plan_runner
+	assert "Reduction safety net" in plan_runner
+	assert "MUST emit a clarification Q-ID" in plan_runner
+	assert "existing scope-too-large gate" in plan_runner
 
 
 def test_ci_workflow_keeps_plan_decisions_lint_contract() -> None:
