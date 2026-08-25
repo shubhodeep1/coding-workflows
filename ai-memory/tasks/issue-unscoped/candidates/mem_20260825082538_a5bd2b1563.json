@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.94,
+  "details": "Many merged changes touched automation scripts or GitHub Actions workflows together with tests that lock in payload, fallback, or phase-transition behavior. This suggests the repo values preserving machine-readable contracts; when modifying CI or helper scripts, add or update focused tests to prevent regressions in workflow orchestration.",
+  "fingerprint": "ebf523c9d1595ba12de39901b484e93e676d887da79a6ee4a560f1b3183e08a7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32826437361",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32826437361",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3751",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3752",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3753",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3754",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3762",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3755",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3756",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3758",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3759",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3763"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260825082538_a5bd2b1563",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow changes in this repo should usually be paired with contract tests, not just script edits.",
+  "timestamps": {
+    "created_at": "2026-08-25T08:25:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
