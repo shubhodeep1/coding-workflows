@@ -60,8 +60,9 @@ CODEX_TOKENS_RE = re.compile(
     r"tokens\s+used[^0-9\n]*\n?\s*([0-9][0-9,]*)", re.IGNORECASE
 )
 
-# OpenRouter structured usage line — strict field order matches the producer
-# in scripts/review_run_reviewers.sh. Numeric fields tolerate the producer's
+# OpenRouter structured usage line — strict field order matches the producers
+# in scripts/review_run_reviewers.sh and direct HTTP callers using
+# scripts/openrouter_prompt_cache.py. Numeric fields tolerate the producers'
 # fail-open placeholders when a value is unavailable.
 _NUM = r"(?:[0-9][0-9,]*|na|null|none|-|\?)"
 OPENROUTER_RE = re.compile(
