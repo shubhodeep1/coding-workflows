@@ -217,6 +217,9 @@ def test_parse_log_ignores_partial_malformed_and_echoed_generic_mcp_lines() -> N
 	log = """
 FOO_QUERY target=alpha
 FOO_QUERY target=alpha bytes=many
+FOO_QUERY target=alpha response_bytes=many
+FOO_QUERY target=alpha bytes=many response_bytes=10
+FOO_QUERY target=alpha bytes=10 response_bytes=many
 FOO_QUERY 0
 report says FOO_QUERY traffic increased
 FOO_FALLBACK reason=timeout

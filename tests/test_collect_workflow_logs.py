@@ -1212,6 +1212,9 @@ def test_structured_cost_telemetry_line_key_ignores_malformed_mcp_text():
 		"SEMBLE_QUERY target=overflow chunks=2 bytes=many ms=3",
 		"report mentions SEMBLE_FALLBACK without event fields",
 		"FOO_QUERY target=alpha bytes=many",
+		"FOO_QUERY target=alpha response_bytes=many",
+		"FOO_QUERY target=alpha bytes=many response_bytes=10",
+		"FOO_QUERY target=alpha bytes=10 response_bytes=many",
 		"FOO_FALLBACK 0",
 		"FOO_PROBE target=alpha result=unknown",
 	)

@@ -222,9 +222,16 @@ def _validated_mcp_telemetry_event(line: str) -> Optional[tuple[str, str]]:
         if not _extract_log_field(line, "target"):
             return None
         if kind == "query":
-            if not (
-                _is_valid_mcp_numeric_field(line, "bytes")
-                or _is_valid_mcp_numeric_field(line, "response_bytes")
+            generic_bytes_value = _extract_log_field(line, "bytes")
+            generic_response_bytes_value = _extract_log_field(line, "response_bytes")
+            if generic_bytes_value is None and generic_response_bytes_value is None:
+                return None
+            if generic_bytes_value is not None and not _is_valid_mcp_numeric_field(
+                line, "bytes"
+            ):
+                return None
+            if generic_response_bytes_value is not None and not _is_valid_mcp_numeric_field(
+                line, "response_bytes"
             ):
                 return None
         elif kind == "fallback":
