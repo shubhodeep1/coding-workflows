@@ -14399,7 +14399,7 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 
 	def synthetic_slow():
 		print("synthetic partial", end="")
-		time.sleep(0.03)
+		time.sleep(0.2)
 
 	def synthetic_failure():
 		raise RuntimeError("synthetic failure")
