@@ -1204,6 +1204,59 @@ def test_structured_cost_telemetry_line_key_strips_trailing_whitespace():
 	)
 
 
+def test_structured_cost_telemetry_line_key_ignores_malformed_mcp_text():
+	invalid_lines = (
+		"SERENA_QUERY 0",
+		"SERENA_FALLBACK target=validate",
+		"SERENA_PROBE target=validate result=garbage",
+		"SEMBLE_QUERY target=overflow chunks=2 bytes=many ms=3",
+		"report mentions SEMBLE_FALLBACK without event fields",
+		"FOO_QUERY target=alpha bytes=many",
+		"FOO_FALLBACK 0",
+		"FOO_PROBE target=alpha result=unknown",
+	)
+
+	for invalid_line in invalid_lines:
+		assert collector._structured_cost_telemetry_line_key(invalid_line) is None
+
+
+def test_apply_cost_telemetry_from_full_logs_ignores_invalid_mcp_echoes_in_mixed_logs():
+	run = {
+		"repository": "owner/repo",
+		"run_id": 413,
+		"conclusion": "success",
+		"duration_seconds": 4,
+		"workflow_family": "workflow_log_analysis",
+	}
+	full_logs = [
+		{
+			"step_name": "analysis",
+			"content": "\n".join(
+				[
+					"SERENA_QUERY 0",
+					"SERENA_FALLBACK 0",
+					"SERENA_PROBE 0",
+					"report says SEMBLE_QUERY traffic increased",
+					"SEMBLE_QUERY target=overflow chunks=2 bytes=40 ms=3",
+					"SERENA_QUERY target=analysis tool=find_symbol calls=1 response_bytes=20 ms=2",
+					"FOO_QUERY target=analysis response_bytes=10",
+				]
+			) + "\n",
+		},
+	]
+
+	collector._apply_cost_telemetry_from_full_logs(run, full_logs)
+	telemetry = run["cost_telemetry"]
+	assert telemetry["semble_query_calls"] == 1
+	assert telemetry["semble_query_bytes"] == 40
+	assert telemetry["serena_query_calls"] == 1
+	assert telemetry["serena_query_response_bytes"] == 20
+	assert telemetry["serena_fallbacks"] == 0
+	assert telemetry["serena_probe_ok"] == 0
+	assert telemetry["serena_probe_failed"] == 0
+	assert telemetry["serena_probe_skipped"] == 0
+
+
 def test_apply_cost_telemetry_from_full_logs_dedupes_wrapper_child_structured_lines_only():
 	duplicate_openrouter_line = (
 		"INFO: openrouter usage phase=review call=pass1 model=openai/gpt-5.4 "

@@ -167,6 +167,76 @@ def _extract_log_field(line: str, field: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _is_valid_mcp_numeric_field(line: str, field: str) -> bool:
+    value = _extract_log_field(line, field)
+    return value is not None and re.fullmatch(r"[0-9]+", value) is not None
+
+
+def _validated_mcp_telemetry_event(line: str) -> Optional[tuple[str, str]]:
+    """Return the canonical MCP server/event pair, or None for malformed text."""
+    if SEMBLE_QUERY_RE.search(line):
+        if (
+            _extract_log_field(line, "target")
+            and _is_valid_mcp_numeric_field(line, "chunks")
+            and _is_valid_mcp_numeric_field(line, "bytes")
+            and _is_valid_mcp_numeric_field(line, "ms")
+        ):
+            return ("SEMBLE", "query")
+        return None
+    if SEMBLE_FALLBACK_RE.search(line):
+        if _extract_log_field(line, "target") and _extract_log_field(line, "reason"):
+            return ("SEMBLE", "fallback")
+        return None
+    if SERENA_QUERY_RE.search(line):
+        if (
+            _extract_log_field(line, "target")
+            and _extract_log_field(line, "tool")
+            and _is_valid_mcp_numeric_field(line, "calls")
+            and _is_valid_mcp_numeric_field(line, "response_bytes")
+            and _is_valid_mcp_numeric_field(line, "ms")
+        ):
+            return ("SERENA", "query")
+        return None
+    if SERENA_FALLBACK_RE.search(line):
+        if _extract_log_field(line, "target") and _extract_log_field(line, "reason"):
+            return ("SERENA", "fallback")
+        return None
+    if SERENA_PROBE_RE.search(line):
+        result = (_extract_log_field(line, "result") or "").lower()
+        if _extract_log_field(line, "target") and result in ("ok", "failed", "skipped"):
+            return ("SERENA", "probe")
+        return None
+
+    for regex, kind in (
+        (MCP_QUERY_GENERIC_RE, "query"),
+        (MCP_FALLBACK_GENERIC_RE, "fallback"),
+        (MCP_PROBE_GENERIC_RE, "probe"),
+    ):
+        match = regex.search(line)
+        if not match:
+            continue
+        server = match.group("server")
+        if server in KNOWN_MCP_SERVERS:
+            return None
+        if not _extract_log_field(line, "target"):
+            return None
+        if kind == "query":
+            if not (
+                _is_valid_mcp_numeric_field(line, "bytes")
+                or _is_valid_mcp_numeric_field(line, "response_bytes")
+            ):
+                return None
+        elif kind == "fallback":
+            if not _extract_log_field(line, "reason"):
+                return None
+        else:
+            result = (_extract_log_field(line, "result") or "").lower()
+            if result not in ("ok", "failed", "skipped"):
+                return None
+        return (server, kind)
+    return None
+
+
 def _normalize_log_label(value: str | None) -> str:
     if value is None:
         return ""
@@ -543,14 +613,15 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
         if CONTEXT_BUDGET_WARN_RE.search(line):
             out["context_budget_warn_count"] += 1
 
-        if SEMBLE_QUERY_RE.search(line):
+        validated_mcp_event = _validated_mcp_telemetry_event(line)
+        if validated_mcp_event == ("SEMBLE", "query"):
             target = _extract_log_field(line, "target") or "unknown"
             logged_bytes = _to_int(_extract_log_field(line, "bytes") or "0")
             out["semble_query_calls"] += 1
             out["semble_query_bytes"] += logged_bytes
             out["semble_targets"][target]["query_calls"] += 1
             out["semble_targets"][target]["bytes"] += logged_bytes
-        elif SEMBLE_FALLBACK_RE.search(line):
+        elif validated_mcp_event == ("SEMBLE", "fallback"):
             target = _extract_log_field(line, "target") or "unknown"
             out["semble_fallbacks"] += 1
             out["semble_targets"][target]["fallbacks"] += 1
@@ -560,7 +631,7 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
             else:
                 out["semble_runtime_fallbacks"] += 1
                 out["semble_targets"][target]["runtime_fallbacks"] += 1
-        elif SERENA_QUERY_RE.search(line):
+        elif validated_mcp_event == ("SERENA", "query"):
             target = _extract_log_field(line, "target") or "unknown"
             tool = _extract_log_field(line, "tool") or "unknown"
             response_bytes = _to_int(_extract_log_field(line, "response_bytes") or "0")
@@ -577,49 +648,32 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
             out["serena_tools"][tool]["calls"] += tool_calls
             out["serena_tools"][tool]["response_bytes"] += response_bytes
             out["serena_tools"][tool]["ms"] += ms
-        elif SERENA_FALLBACK_RE.search(line):
+        elif validated_mcp_event == ("SERENA", "fallback"):
             target = _extract_log_field(line, "target") or "unknown"
             out["serena_fallbacks"] += 1
             out["serena_targets"][target]["fallbacks"] += 1
-        elif SERENA_PROBE_RE.search(line):
+        elif validated_mcp_event == ("SERENA", "probe"):
             target = _extract_log_field(line, "target") or "unknown"
             result = (_extract_log_field(line, "result") or "unknown").lower()
-            # Keep malformed probe results in the existing skipped bucket so
-            # the public JSON/markdown contract stays at three probe states.
-            bucket = result if result in ("ok", "failed", "skipped") else "skipped"
-            out[f"serena_probe_{bucket}"] += 1
-            out["serena_targets"][target][f"probe_{bucket}"] += 1
-        else:
-            for regex, kind in (
-                (MCP_QUERY_GENERIC_RE, "query"),
-                (MCP_FALLBACK_GENERIC_RE, "fallback"),
-                (MCP_PROBE_GENERIC_RE, "probe"),
-            ):
-                m = regex.search(line)
-                if not m:
-                    continue
-                server = m.group("server")
-                if server in KNOWN_MCP_SERVERS:
-                    continue
-                if kind == "query":
-                    out["other_mcp"][server]["query_calls"] += 1
-                    bytes_value = _extract_log_field(line, "bytes")
-                    if bytes_value is not None:
-                        out["other_mcp"][server]["query_bytes"] += _to_int(bytes_value)
-                    response_bytes = _extract_log_field(line, "response_bytes")
-                    if response_bytes is not None:
-                        out["other_mcp"][server]["query_response_bytes"] += _to_int(
-                            response_bytes
-                        )
-                elif kind == "fallback":
-                    out["other_mcp"][server]["fallbacks"] += 1
-                elif kind == "probe":
-                    result = (_extract_log_field(line, "result") or "unknown").lower()
-                    bucket = result if result in ("ok", "failed", "skipped") else "skipped"
-                    out["other_mcp"][server][f"probe_{bucket}"] += 1
-                # Keep the generic catch-all bounded to one match per line;
-                # known SEMBLE/SERENA prefixes are handled above.
-                break
+            out[f"serena_probe_{result}"] += 1
+            out["serena_targets"][target][f"probe_{result}"] += 1
+        elif validated_mcp_event is not None:
+            server, kind = validated_mcp_event
+            if kind == "query":
+                out["other_mcp"][server]["query_calls"] += 1
+                bytes_value = _extract_log_field(line, "bytes")
+                if bytes_value is not None:
+                    out["other_mcp"][server]["query_bytes"] += _to_int(bytes_value)
+                response_bytes = _extract_log_field(line, "response_bytes")
+                if response_bytes is not None:
+                    out["other_mcp"][server]["query_response_bytes"] += _to_int(
+                        response_bytes
+                    )
+            elif kind == "fallback":
+                out["other_mcp"][server]["fallbacks"] += 1
+            else:
+                result = (_extract_log_field(line, "result") or "").lower()
+                out["other_mcp"][server][f"probe_{result}"] += 1
 
     if fallback_wall_clock_ms and fallback_wall_clock_ms > 0:
         wall_clock_samples_ms.append(fallback_wall_clock_ms)
