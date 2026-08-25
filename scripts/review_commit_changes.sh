@@ -172,6 +172,19 @@ if [ -s "${NEW_FILES_BEFORE_COMMIT_FILE}" ]; then
       case "${created_file}" in
         .serena|.serena/*) continue ;;
         scripts/*|prompts/*) continue ;;
+        changelog.d/*.md)
+          # Editor-created changelog fragments are a legitimate review
+          # fix, not a stray artifact: CLAUDE.md §20 requires one
+          # fragment per behaviour-changing PR, reviewers flag its
+          # absence, and nothing in the pipeline machinery writes into
+          # changelog.d/.  Deleting the fragment here left the tree
+          # clean at commit time and fired a false EDITOR_CHANGES_LOST
+          # dead end on every fragment-only review round
+          # (tele-funtoken-msg-scoring#3763, review run 32732281452).
+          # The consumer-repo staging below picks the file up via its
+          # untracked-files `git add` pass.
+          echo "Preserving editor-created changelog fragment: ${created_file}"
+          continue ;;
       esac
       echo "- ${created_file}"
       if ! rm -rf -- "${created_file}"; then
