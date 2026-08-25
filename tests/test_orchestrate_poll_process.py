@@ -14289,6 +14289,8 @@ def _test_heartbeat_worker(
 	heartbeat_interval_sec: float,
 	output_stream,
 ) -> None:
+	if heartbeat_interval_sec <= 0:
+		return
 	while not stop_event.wait(heartbeat_interval_sec):
 		_emit_test_runner_event(
 			"heartbeat",
@@ -14373,7 +14375,7 @@ def _run_selected_tests(
 			failed += 1
 
 	for rank, (name, elapsed_ms, status) in enumerate(
-		sorted(results, key=lambda result: (-result[1], result[0]))[:slowest_limit],
+		sorted(results, key=lambda result: (-result[1], result[0]))[:max(0, slowest_limit)],
 		start=1,
 	):
 		_emit_test_runner_event(
@@ -14418,9 +14420,9 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 	assert lines[-1] == "2 passed, 1 failed, 3 total"
 
 	events = [
-		json.loads(line.removeprefix("TEST_CASE_EVENT: "))
+		json.loads(line.removeprefix(_TEST_RUNNER_EVENT_PREFIX))
 		for line in lines
-		if line.startswith("TEST_CASE_EVENT: ")
+		if line.startswith(_TEST_RUNNER_EVENT_PREFIX)
 	]
 	for test_name, expected_status in (
 		("synthetic_fast", "pass"),
@@ -14477,6 +14479,15 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 		thread.name in synthetic_thread_names
 		for thread in threading.enumerate()
 	)
+
+	pass_output.seek(0)
+	pass_output.truncate(0)
+	with contextlib.redirect_stdout(pass_output):
+		assert _run_selected_tests(
+			[synthetic_fast], heartbeat_interval_sec=0, slowest_limit=-1
+		) == 0
+	assert '"event":"heartbeat"' not in pass_output.getvalue()
+	assert '"event":"slowest"' not in pass_output.getvalue()
 
 
 def main() -> int:
