@@ -8838,7 +8838,11 @@ prime_phase_concurrency_snapshot() {
 # block recovery forever.  Limitation: `gh run list
 # --json` exposes workflowName/name but not the workflow file path, so a
 # consumer that renamed the review workflow's display name away from the
-# canonical names ("AI Review" / "Internal Review" / "Review Autofix") is matched
+# canonical names ("AI Review" / "Internal Review" / "Review Autofix" /
+# "Internal: AI Review & Autofix" / "Codex PR Self-Healing Semantic Agent" —
+# the last two are this repo's actual internal-review.yml / review_autofix.yml
+# display names; without them the guard could never match an upstream review
+# run, the PR #3823 / issue #3816 false stall-recovery) is matched
 # only if workflowName still resolves; on a miss the guard fails open (push
 # proceeds) — no worse than the pre-fix behaviour, and the cached scan's own
 # path-based match still covers that case whenever the cache itself hits (in
@@ -8852,7 +8856,8 @@ _direct_inflight_review_run_on_branch()
 	_di_now_epoch="$(date +%s 2>/dev/null || echo "")"
 	[[ "${_di_now_epoch}" =~ ^[0-9]+$ ]] || return 0
 	# This helper only ever matches review-family runs (AI Review /
-	# Internal Review / Review Autofix; name filter below),
+	# Internal Review / Review Autofix / Internal: AI Review & Autofix /
+	# Codex PR Self-Healing Semantic Agent; name filter below),
 	# so its freshness window is the review-run budget, not the generic stall
 	# threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
 	_di_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
@@ -8869,8 +8874,10 @@ _direct_inflight_review_run_on_branch()
 		| [ .[]?
 			| select((.status // "") == "in_progress" or (.status // "") == "queued")
 			| select(
-				((.name // "") == "AI Review" or (.name // "") == "Internal Review" or (.name // "") == "Review Autofix")
-				or ((.workflowName // "") == "AI Review" or (.workflowName // "") == "Internal Review" or (.workflowName // "") == "Review Autofix")
+				((.name // "") == "AI Review" or (.name // "") == "Internal Review" or (.name // "") == "Review Autofix"
+				 or (.name // "") == "Internal: AI Review & Autofix" or (.name // "") == "Codex PR Self-Healing Semantic Agent")
+				or ((.workflowName // "") == "AI Review" or (.workflowName // "") == "Internal Review" or (.workflowName // "") == "Review Autofix"
+				    or (.workflowName // "") == "Internal: AI Review & Autofix" or (.workflowName // "") == "Codex PR Self-Healing Semantic Agent")
 			  )
 			| ([.startedAt, .createdAt] | map(select(type == "string" and . != ""))[0] // "") as $ts
 			| (if $ts != ""
@@ -8974,7 +8981,7 @@ workflow_run_is_review_family() {
   esac
 
   case "${workflow_name}" in
-    AI\ Review|Internal\ Review|Review\ Autofix)
+    AI\ Review|Internal\ Review|Review\ Autofix|Internal:\ AI\ Review\ \&\ Autofix|Codex\ PR\ Self-Healing\ Semantic\ Agent)
       return 0
       ;;
   esac
@@ -9911,6 +9918,8 @@ STALL_EOF
                    (.name // "") == "AI Review"
                    or (.name // "") == "Internal Review"
                    or (.name // "") == "Review Autofix"
+                   or (.name // "") == "Internal: AI Review & Autofix"
+                   or (.name // "") == "Codex PR Self-Healing Semantic Agent"
                    or ((.path // "") | endswith("ai-review.yml"))
                    or ((.path // "") | endswith("internal-review.yml"))
                    or ((.path // "") | endswith("review_autofix.yml"))
@@ -10338,6 +10347,8 @@ invoke_stall_judge() {
       | select((.name // "") == "AI Review"
                or (.name // "") == "Internal Review"
                or (.name // "") == "Review Autofix"
+               or (.name // "") == "Internal: AI Review & Autofix"
+               or (.name // "") == "Codex PR Self-Healing Semantic Agent"
                or (.path // "" | endswith("ai-review.yml"))
                or (.path // "" | endswith("internal-review.yml"))
                or (.path // "" | endswith("review_autofix.yml")))
@@ -12028,6 +12039,8 @@ STALL_EOF
                      (.name // "") == "AI Review"
                      or (.name // "") == "Internal Review"
                      or (.name // "") == "Review Autofix"
+                     or (.name // "") == "Internal: AI Review & Autofix"
+                     or (.name // "") == "Codex PR Self-Healing Semantic Agent"
                      or ((.path // "") | endswith("ai-review.yml"))
                      or ((.path // "") | endswith("internal-review.yml"))
                      or ((.path // "") | endswith("review_autofix.yml"))

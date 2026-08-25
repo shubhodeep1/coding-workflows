@@ -216,6 +216,35 @@ def test_workflow_name_field_matches_when_display_name_differs():
 	assert _run_id(payload) == "42"
 
 
+def test_upstream_internal_review_autofix_workflow_name_is_detected():
+	"""Regression for the PR #3823 / issue #3816 false stall-recovery: this
+	repo's internal-review.yml is named "Internal: AI Review & Autofix" and
+	`gh run list` surfaces the run's display title (e.g. the PR title) in
+	`name`, so the guard matched neither field and let the destructive
+	empty-commit push clobber a healthy 137-minute review pass."""
+	payload = json.dumps([
+		_run(
+			"AI implementation for issue #3816",
+			databaseId=32851496137,
+			workflowName="Internal: AI Review & Autofix",
+		)
+	])
+	assert _run_id(payload) == "32851496137"
+
+
+def test_upstream_review_autofix_workflow_name_is_detected():
+	"""review_autofix.yml's display name ("Codex PR Self-Healing Semantic
+	Agent") must also be recognised as review-family."""
+	payload = json.dumps([
+		_run(
+			"some PR title",
+			databaseId=77,
+			workflowName="Codex PR Self-Healing Semantic Agent",
+		)
+	])
+	assert _run_id(payload) == "77"
+
+
 def test_first_fresh_matching_run_is_returned_among_many():
 	"""With a mix of runs, a fresh matching in_progress run is surfaced."""
 	payload = json.dumps([
