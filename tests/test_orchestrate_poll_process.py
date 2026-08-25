@@ -7934,6 +7934,111 @@ def test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr
 	)
 
 
+def _sweep_complete_project_state() -> dict:
+	"""Minimal complete-project state so the wave loop is benign and the only
+	side-effect on issue #10 is close_merged_issues_sweep (same shape as
+	test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr)."""
+	return {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 1,
+		"total_waves": 1,
+		"current_wave": 1,
+		"judge_cycle": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "complete",
+		"integration_branch": "orchestrator/project-192",
+		"final_merge_pr": 0,
+		"final_merge_status": "merged",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+				],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 10},
+		"pending_issue_defs": {},
+	}
+
+
+def test_close_merged_issues_sweep_rejects_mention_only_merged_pr():
+	"""Issue #3817 / PR #3825 regression: a merged PR that merely MENTIONS the
+	issue ("Refs #<n>" from an unrelated branch) is a cross-reference on the
+	issue timeline, but it is not the issue's implementation PR. The sweep
+	must reject it, leave the issue open, and fall through to the
+	merged_label stale-label alert instead of closing an unimplemented issue.
+	"""
+	mention_only_pr = {
+		"number": 950,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-08-25T15:18:27Z",
+		"baseRefName": "main",
+		"headRefName": "claude/unrelated-memory-fix",
+		"headRefFromApi": "claude/unrelated-memory-fix",
+		"body": "Raise retry budget to outlast dispatch bursts.\n\nRefs #10\n",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 950},
+		prs=[mention_only_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", []), (
+		f"Mention-only merged PR must not close the issue; closed_issues={result.get('closed_issues')}"
+	)
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=950 rejected=not_implementation_pr" in result["stdout"], (
+		"Missing candidate rejection log line in poller stdout"
+	)
+	assert "no_merged_pr_found" in (result["stdout"] + result["stderr"]), (
+		"Rejected candidate must fall through to the no_merged_pr_found policy"
+	)
+
+
+def test_close_merged_issues_sweep_accepts_closing_body_reference_pr():
+	"""A merged PR on a non-conventional branch whose body carries a
+	closing-keyword reference ("Closes #<n>") IS the issue's implementation
+	PR (standalone / claude-branch flows) and must still close the issue.
+	Guards the implementation-PR gate against over-tightening."""
+	closing_pr = {
+		"number": 951,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-08-25T15:18:27Z",
+		"baseRefName": "main",
+		"headRefName": "claude/standalone-fix",
+		"headRefFromApi": "claude/standalone-fix",
+		"body": "Standalone fix.\n\nCloses #10\n",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 951},
+		prs=[closing_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", []), (
+		f"Closing-body-reference PR must still close the issue; closed_issues={result.get('closed_issues')}"
+	)
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=951 origin=merged_label status=closed" in result["stdout"], (
+		"Missing CLOSE_MERGED_SWEEP closure log line in poller stdout"
+	)
+
+
 def test_close_merged_issues_sweep_pending_ready_to_merge_does_not_alert():
 	"""When an ai:ready-to-merge issue has NO merged PR yet (the normal
 	pending state for an in-flight auto-merge), the sweep must NOT close

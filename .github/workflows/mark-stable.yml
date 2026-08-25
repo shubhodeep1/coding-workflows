@@ -258,6 +258,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_loop_and_churn_fixes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_freshness_branch_fallback.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_retrigger_inflight_direct_fallback.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_linked_pr_implementation_guard.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_actions_runs_fetch_unconfirmed_warning.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_smoke_deterministic.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_prelude_render.py

@@ -3309,7 +3309,11 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 #
 # Verification policy (strict for both classes): walks timeline
 # cross-references and only closes if at least one linked PR is verified
-# merged (merged == true or merged_at != null).
+# merged (merged == true or merged_at != null) AND is verifiably the
+# issue's own implementation PR (`ai/issue-<n>` head branch or a
+# closing-keyword body reference — _pr_json_is_issue_implementation_pr).
+# A merged PR that merely mentions the issue (e.g. "Refs #<n>") does not
+# qualify and falls through to the no_merged_pr_found policy per origin.
 #
 # Gated by ENABLE_CLOSE_MERGED_ISSUES (default true).
 #
@@ -3372,6 +3376,7 @@ close_merged_issues_sweep() {
   fi
 
   local idx issue_num origin has_tracking_label timeline_json merged_pr_num
+  local merged_pr_candidates _sweep_candidate_pr _sweep_candidate_pr_json
   local closed_count=0
   local skipped_count=0
   local alert_count=0
@@ -3404,14 +3409,35 @@ close_merged_issues_sweep() {
       continue
     fi
 
-    merged_pr_num="$(printf '%s' "${timeline_json}" | jq -r '
+    merged_pr_candidates="$(printf '%s' "${timeline_json}" | jq -r '
       [.[]
         | select(.event == "cross-referenced")
         | select((.source.issue.pull_request.url? | type == "string") and ((.source.issue.merged // false) == true))
         | .source.issue.number
       ]
-      | first // empty
+      | unique | .[]
     ' 2>/dev/null || echo "")"
+
+    # Verify each merged cross-referenced candidate is the issue's own
+    # implementation PR before closing on it.  The timeline event carries no
+    # head branch or body, and a cross-reference is created by ANY mention —
+    # an unrelated merged PR saying "Refs #<n>" must not close the issue
+    # (issue #3817 / PR #3825 incident).  §15 audit: the timeline payload
+    # (the only existing call here) structurally cannot answer the
+    # implementation-PR question, so one `_fetch_pr_json` per candidate is
+    # the smallest sufficient call; candidates are the rare merged cross-refs
+    # of an already-labeled issue (almost always exactly one, which the
+    # conventional `ai/issue-<n>` head check accepts on the first fetch).
+    merged_pr_num=""
+    for _sweep_candidate_pr in ${merged_pr_candidates}; do
+      [[ "${_sweep_candidate_pr}" =~ ^[0-9]+$ ]] || continue
+      _sweep_candidate_pr_json="$(_fetch_pr_json "${_sweep_candidate_pr}")"
+      if _pr_json_is_issue_implementation_pr "${issue_num}" "${_sweep_candidate_pr_json}"; then
+        merged_pr_num="${_sweep_candidate_pr}"
+        break
+      fi
+      echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=not_implementation_pr"
+    done
 
     if [ -z "${merged_pr_num}" ]; then
       if [ "${origin}" = "ready_label" ]; then
@@ -11092,6 +11118,45 @@ _pr_json_closes_issue() {
   return 2
 }
 
+# _pr_json_is_issue_implementation_pr — decide whether a PR (full REST
+# `pulls/N` JSON from _fetch_pr_json) is the issue's OWN implementation PR,
+# rather than a PR that merely mentions the issue.  The issue #3817 /
+# PR #3825 incident: _issue_cross_ref_pr_number_last returns the LAST
+# cross-referencing PR of ANY kind, so an unrelated merged PR whose body
+# said "Refs #3817" (the §19-correct non-closing reference) was adopted as
+# the issue's linked PR, forced ai:merged via reconcile_managed_issue_labels,
+# and close_merged_issues_sweep then closed the issue with its scope never
+# implemented.
+#
+# A PR counts as the issue's implementation PR when either:
+#   - its head branch is the orchestrator implement convention
+#     `ai/issue-<n>`, or
+#   - its body carries a GitHub closing-keyword reference to the issue
+#     (_pr_json_closes_issue rc=0; covers claude-branch and validation-fix
+#     PRs that close the issue without the conventional branch name).
+#
+# Return codes: 0=yes, 1=no.  Unknown/parse errors map to 1: unlike the
+# skip-recovery guards, the caller's follow-up act (adopting merged state /
+# closing the issue) is the destructive one, so unverifiable candidates are
+# rejected and the caller proceeds as if no linked PR were known.
+_pr_json_is_issue_implementation_pr() {
+  local issue_num="$1"
+  local pr_json="$2"
+  [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+  if [ -z "${pr_json}" ] || [ "${pr_json}" = "{}" ]; then
+    return 1
+  fi
+  local _impl_head_ref
+  _impl_head_ref="$(printf '%s' "${pr_json}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+  if [ "${_impl_head_ref}" = "ai/issue-${issue_num}" ]; then
+    return 0
+  fi
+  if _pr_json_closes_issue "${issue_num}" "${pr_json}"; then
+    return 0
+  fi
+  return 1
+}
+
 # _check_merged_pr_guard — Shared guard used by both the standalone and
 # orchestrator-managed stall recovery paths.  Given an issue number and
 # a pre-fetched linked-PR JSON object (from either
@@ -14463,9 +14528,21 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     PR_MERGED="false"
     if [[ "${LINKED_PR_NUM}" =~ ^[0-9]+$ ]]; then
       _linked_pr_json="$(_fetch_pr_json "${LINKED_PR_NUM}")"
-      PR_STATE="$(_jq_field "${_linked_pr_json}" '.state' 'open|closed|merged')"
-      PR_MERGED="$(_jq_field "${_linked_pr_json}" '.merged_at != null' 'true|false')"
-      [ -n "${PR_MERGED}" ] || PR_MERGED="false"
+      # Adopt the cross-referenced PR's state only when it is verifiably the
+      # issue's own implementation PR (head `ai/issue-<n>` or a closing-keyword
+      # body reference).  _issue_cross_ref_pr_number_last returns the LAST PR
+      # that merely mentions the issue, so without this gate an unrelated
+      # merged PR saying "Refs #<n>" forces ai:merged downstream and
+      # close_merged_issues_sweep closes the issue with its work never done
+      # (issue #3817 / PR #3825 incident).  Rejected candidates leave the
+      # issue in the unlinked state (PR_STATE=unknown, PR_MERGED=false).
+      if _pr_json_is_issue_implementation_pr "${inum}" "${_linked_pr_json}"; then
+        PR_STATE="$(_jq_field "${_linked_pr_json}" '.state' 'open|closed|merged')"
+        PR_MERGED="$(_jq_field "${_linked_pr_json}" '.merged_at != null' 'true|false')"
+        [ -n "${PR_MERGED}" ] || PR_MERGED="false"
+      else
+        echo "LINKED_PR_CROSS_REF_REJECTED issue=${inum} pr=${LINKED_PR_NUM} head=$(_jq_field "${_linked_pr_json}" '.head.ref') reason=not_implementation_pr" >&2
+      fi
     fi
     PR_STATES_JSON="$(echo "${PR_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${PR_STATE}" --arg merged "${PR_MERGED}" '. + {($key): {state: $state, merged: ($merged == "true")}}' 2>/dev/null || echo "${PR_STATES_JSON}")"
 
