@@ -96,7 +96,9 @@ name: Test & Mark Stable Release
           step completed successfully. Set it explicitly if you want a
           different per-step cap (for example, above `review_timeout`
           when a long single step should extend the wait past the
-          inactivity window).
+          inactivity window). The wait loop clamps overrides above
+          90 minutes so a typo cannot mask a genuine hang until the
+          120-minute smoke-test job timeout kills the run.
         required: false
         type: number
         default: 75
@@ -373,7 +375,9 @@ jobs:
       # cap is exceeded, so stuck-run detection is preserved. The default
       # was raised 50→75 after run 32824674139 (v1.27.0): the reviewer
       # step ran a healthy 51m and the 50m cap killed the wait 58s before
-      # the step completed.
+      # the step completed. The shell validation below clamps overrides
+      # above 90m so a typo cannot suppress stall detection until the
+      # 120m e2e-smoke-test job timeout kills the run.
       REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || inputs.review_timeout || inputs.phase_timeout || 75 }}
       POLL_INTERVAL: 10
       # Wrapper-workflow filename used by the smoke gate to dispatch
@@ -1329,6 +1333,11 @@ jobs:
           # env is unset/non-numeric so the arithmetic below never errors.
           REVIEW_STEP_TIMEOUT="${REVIEW_STEP_TIMEOUT:-75}"
           [[ "$REVIEW_STEP_TIMEOUT" =~ ^[0-9]+$ ]] && [ "$REVIEW_STEP_TIMEOUT" -gt 0 ] || REVIEW_STEP_TIMEOUT=75
+          REVIEW_STEP_TIMEOUT_MAX=90
+          if [ "$REVIEW_STEP_TIMEOUT" -gt "$REVIEW_STEP_TIMEOUT_MAX" ]; then
+            echo "::warning::REVIEW_STEP_TIMEOUT=${REVIEW_STEP_TIMEOUT} exceeds ${REVIEW_STEP_TIMEOUT_MAX}m cap; clamping so wait-review still reports genuine stalls before the 120m job timeout"
+            REVIEW_STEP_TIMEOUT="$REVIEW_STEP_TIMEOUT_MAX"
+          fi
           STEP_INACTIVITY_LIMIT=$((REVIEW_STEP_TIMEOUT * 60))
           echo "Per-step stall cap: ${REVIEW_STEP_TIMEOUT} minutes"
           LAST_ACTIVITY=$(date +%s)
@@ -1578,11 +1587,11 @@ jobs:
                   # (97733868951) while `review / codex-agent`
                   # (97733894241) did the actual work, so both shortcuts
                   # were permanently inert. Prefer the codex-agent job by
-                  # exact name/suffix (a rename is a breaking change per
-                  # CLAUDE.md §6, so the literal is safe), then any
-                  # in-progress job, then jobs[0] as the legacy single-job
-                  # fallback.
-                  JOB_ID=$(echo "$JOBS_JSON" | jq -r '([.jobs[] | select(.name | test("(^| / )codex-agent( \\(claude-branch-review\\))?$"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' 2>/dev/null || echo "")
+                  # exact name/path component plus any parenthesized suffix
+                  # (a job rename is a breaking change per CLAUDE.md §6,
+                  # so the literal is safe), then any in-progress job, then
+                  # jobs[0] as the legacy single-job fallback.
+                  JOB_ID=$(echo "$JOBS_JSON" | jq -r '([.jobs[] | select(.name | test("(^| / )codex-agent( \\([^)]*\\))?$"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' 2>/dev/null || echo "")
                   if [ -n "$JOB_ID" ]; then
                     # Stream the job log to a tempfile rather than capturing
                     # into a shell variable. `gh_api_safe .../actions/jobs/
@@ -1773,10 +1782,10 @@ jobs:
             if [ "$RUN_ID" != "unknown" ]; then
               JOB_ID_FOR_SIZE=""
               if [ -n "${JOBS_JSON:-}" ]; then
-                JOB_ID_FOR_SIZE=$(echo "$JOBS_JSON" | jq -r '([.jobs[] | select(.name | test("(^| / )codex-agent( \\(claude-branch-review\\))?$"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' 2>/dev/null || echo "")
+                JOB_ID_FOR_SIZE=$(echo "$JOBS_JSON" | jq -r '([.jobs[] | select(.name | test("(^| / )codex-agent( \\([^)]*\\))?$"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' 2>/dev/null || echo "")
               else
                 JOB_ID_FOR_SIZE=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" \
-                  --jq '([.jobs[] | select(.name | test("(^| / )codex-agent( \\(claude-branch-review\\))?$"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' || echo "")
+                  --jq '([.jobs[] | select(.name | test("(^| / )codex-agent( \\([^)]*\\))?$"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' || echo "")
               fi
               if [ -n "$JOB_ID_FOR_SIZE" ]; then
                 LOG_SIZE=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/jobs/${JOB_ID_FOR_SIZE}/logs" \
