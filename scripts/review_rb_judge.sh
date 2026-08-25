@@ -389,7 +389,7 @@ issue_number = safe_int(sys.argv[2])
 pr_number = safe_int(sys.argv[3])
 memory_branch = str(os.environ.get("AI_MEMORY_BRANCH", "ai-memory") or "ai-memory").strip() or "ai-memory"
 memory_root_relative = str(os.environ.get("AI_MEMORY_ROOT", "ai-memory") or "ai-memory").strip() or "ai-memory"
-push_retries = safe_int(os.environ.get("AI_MEMORY_PUSH_RETRIES")) or 8
+push_retries = safe_int(os.environ.get("AI_MEMORY_PUSH_RETRIES")) or 16
 
 payload = json.loads(sys.stdin.read())
 lessons_raw = payload.get("lessons_learned") if isinstance(payload, dict) else None

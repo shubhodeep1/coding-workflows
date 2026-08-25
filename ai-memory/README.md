@@ -82,7 +82,7 @@ Processed command CLI:
 - `AI_MEMORY_BRANCH` (default `ai-memory`)
 - `AI_MEMORY_ROOT` (default `ai-memory`)
 - `AI_MEMORY_RETRIEVAL_PROFILES` (default `ai-memory/config/retrieval_profiles.v1.json`)
-- `AI_MEMORY_PUSH_RETRIES` (default `8`)
+- `AI_MEMORY_PUSH_RETRIES` (default `16`)
 - `AI_MEMORY_KEYWORD_MODEL` (default `openai/gpt-5.4-nano`) — model for semantic keyword extraction
 - `AI_MEMORY_KEYWORD_BASE_URL` (default `https://openrouter.ai/api/v1`) — API base URL for keyword model
 - `AI_MEMORY_TOKEN_BUDGET_<ROLE>` — per-role token budget override (e.g. `AI_MEMORY_TOKEN_BUDGET_IMPLEMENTATION=3200`)

@@ -12,6 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_PROMPT = REPO_ROOT / "prompts" / "mode-plan.txt"
 PLAN_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "plan.yml"
+PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
 PLAN_CONTRACT = REPO_ROOT / "prompts" / "contracts" / "mode-plan.yml"
 AGENTS_MD = REPO_ROOT / "agents.md"
 RENDER_PROMPT = REPO_ROOT / "scripts" / "render_prompt.py"
@@ -66,18 +67,19 @@ def test_mode_plan_diagram_contract_forbids_sections_when_flag_disabled() -> Non
 
 def test_plan_workflow_and_contract_export_diagram_flag_with_live_prompt_parity() -> None:
 	workflow = PLAN_WORKFLOW.read_text(encoding="utf-8")
+	plan_runner = PLAN_RUNNER.read_text(encoding="utf-8")
 	contract = PLAN_CONTRACT.read_text(encoding="utf-8")
 	agents_md = AGENTS_MD.read_text(encoding="utf-8")
 
 	assert "PLAN_DIAGRAMS_OPTIONAL: ${{ vars.PLAN_DIAGRAMS_OPTIONAL || 'true' }}" in workflow
-	assert "11. Diagrams/failure-modes requirement gate (current render: `PLAN_DIAGRAMS_OPTIONAL={{PLAN_DIAGRAMS_OPTIONAL}}`):" in workflow
-	assert "between `API/interface changes.` and `Risks and edge cases.`" in workflow
-	assert "`Data flow:` — include when the change introduces or modifies a multi-step" in workflow
-	assert "`State machines:` — include when the change touches a state machine." in workflow
-	assert "`Failure modes:` — include for any change with non-trivial error paths." in workflow
-	assert "These fields are optional. Do not pad a trivial PR with diagrams or extra" in workflow
-	assert "prose; simple plans should stay terse." in workflow
-	assert "`State machines:` field is required, not optional." in workflow
+	assert "11. Diagrams/failure-modes requirement gate (current render: `PLAN_DIAGRAMS_OPTIONAL={{PLAN_DIAGRAMS_OPTIONAL}}`):" in plan_runner
+	assert "between `API/interface changes.` and `Risks and edge cases.`" in plan_runner
+	assert "`Data flow:` — include when the change introduces or modifies a multi-step" in plan_runner
+	assert "`State machines:` — include when the change touches a state machine." in plan_runner
+	assert "`Failure modes:` — include for any change with non-trivial error paths." in plan_runner
+	assert "These fields are optional. Do not pad a trivial PR with diagrams or extra" in plan_runner
+	assert "prose; simple plans should stay terse." in plan_runner
+	assert "`State machines:` field is required, not optional." in plan_runner
 	assert "PLAN_DIAGRAMS_OPTIONAL: true" in contract
 	assert "Plan prompt note: `PLAN_DIAGRAMS_OPTIONAL` defaults to `true`, so plan outputs" in agents_md
 	assert "Trivial plans should omit them, and `State machines:` is" in agents_md

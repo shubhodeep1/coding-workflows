@@ -408,6 +408,7 @@ scripts/review_run_judge_interim.sh
 scripts/review_run_reviewers.sh
 scripts/review_synthesise_smoke.sh
 scripts/reviewer_failback_chains.json
+scripts/run_plan_codex.sh
 scripts/run_validation_repo_checks.sh
 scripts/run_workspace_hook.sh
 scripts/security_audit.sh
@@ -624,6 +625,7 @@ tests/test_plan_auto_answer_recommended_parser.py
 tests/test_plan_auto_approve_safe_state_fetch.py
 tests/test_plan_clarify_blocked_output.py
 tests/test_plan_clarify_header_prompt_staging.py
+tests/test_plan_codex_step_extraction.py
 tests/test_plan_diagrams_contract.py
 tests/test_plan_reuse_audit_contract.py
 tests/test_plan_scope_mode_contract.py
