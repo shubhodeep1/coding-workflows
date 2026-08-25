@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validate_process_template_mode.py: Line 311, `captured_arguments = capture_path.read_bytes().decode(\"utf-8\").split(\"\\0\")` inside `_run_case` | severity=NIT | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603, moonshotai_kimi-k3]\n  PROBLEM: The helper reads the capture file unconditionally before checking whether the subprocess succeeded.\n  WHY: If the generated bash script fails before the stub senders write the file, FileNotFoundError hides the bash stdout/stderr that later assertions would show.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_validate_process_template_mode.py: Line 311, `captured_arguments = capture_path.read_bytes().decode(\"utf-8\").split(\"\\0\")` inside `_run_case` | severity=NIT | confidence=4\n  PROBLEM: The capture file is read unconditionally before checking whether the subprocess succeeded.\n  WHY: A bash-level error would produce an unhelpful FileNotFoundError traceback rather than exposing the actual bash diagnostic output.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_validate_process_template_mode.py: _run_case helper, line ~59 (capture_path.read_bytes() call, immediately after `capture_output=True`) | severity=NIT | confidence=4\n  PROBLEM: The helper reads the capture file unconditionally before any returncode assertion.\n  WHY: The test would fail with a misleading Python exception, not the bash diagnostic the assertion is designed to surface.\n- tests/test_validate_process_template_mode.py: _run_case helper, line ~59 | severity=NIT | confidence=4\n  PROBLEM: No existence guard on the capture file before the read.\n  WHY: Any bash-level error that prevents the stub senders from writing the capture file produces an unhelpful Python exception instead of informative bash diagnostics.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_validate_process_template_mode.py: lines 311-312 | severity=MAJOR | confidence=5\n  PROBLEM: The test reads CAPTURE_FILE unconditionally without checking if the file exists first.\n  WHY: If tg_notify exits early or does not write the file, this raises FileNotFoundError and hides the real bash stdout/stderr.\n- scripts/validate_process.sh: tg_notify() function, lines 355-370 | severity=BLOCKER | confidence=5\n  PROBLEM: The variable link_suffix is declared but not initialized before the if statement.\n  WHY: In shell scripts with set -euo pipefail, referencing an uninitialized variable causes the script to exit immediately, preventing the warning message from being emitted.\n- scripts/validate_process.sh: tg_notify() function, lines 355-370 | severity=BLOCKER | confidence=5\n  PROBLEM: The msg variable is declared but not assigned in the success path.\n  WHY: With set -euo pipefail, referencing an uninitialized msg variable would cause the script to exit immediately.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- tests/test_validate_process_template_mode.py: line 311, `captured_arguments = capture_path.read_bytes().decode(\"utf-8\").split(\"\\0\")` inside `_run_case` (defined at line 262), reached from all three call sites including the newly added tracked-failure case at lines 333-343 | severity=NIT | confidence=4\n  PROBLEM: The capture file is read unconditionally before any `proc.returncode` assertion.\n  WHY: `read_bytes()` raises FileNotFoundError and hides the bash stdout/stderr captured in `proc` on early bash failure.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- tests/test_validate_process_template_mode.py: test_tg_notify_preserves_suffixes_and_fails_open._run_case, capture_path.read_bytes()\n  PROBLEM: The helper reads CAPTURE_FILE with no existence check.\n  WHY: If the generated bash harness exits before the stub senders write the file, Python raises FileNotFoundError and hides bash stdout/stderr that later returncode assertions would have shown.\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "b96a3598f70f6d796dfcd0f1726c2821e6285488cd80f1c0e497d6655ed85f9c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3819,
+    "run_id": "32860314812",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32860314812",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260825161432_b646fa38d0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3819,
+    "run_id": "32860314812"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-25T16:14:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
