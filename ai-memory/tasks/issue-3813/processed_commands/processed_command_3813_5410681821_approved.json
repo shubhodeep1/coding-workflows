@@ -5,13 +5,32 @@
   "entry_id": "processed_command_3813_5410681821_approved",
   "issue_number": 3813,
   "metadata": {
+    "branch": "ai/issue-3813",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/ci.yml",
+      ".github/workflows/plan.yml",
+      "scripts/run_plan_codex.sh",
+      "tests/test_phase_prompt_untrusted_context_contract.py",
+      "tests/test_plan_clarify_blocked_output.py",
+      "tests/test_plan_clarify_header_prompt_staging.py",
+      "tests/test_plan_codex_step_extraction.py",
+      "tests/test_plan_diagrams_contract.py",
+      "tests/test_plan_reuse_audit_contract.py",
+      "tests/test_plan_scope_mode_contract.py"
+    ],
+    "issue_number": 3813,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3813",
+    "pr_number": 3822,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3822",
+    "run_attempt": "1",
+    "run_id": "32850318633",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/32850318633"
   },
   "run_attempt": 1,
   "run_id": "32850318633",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-08-25T12:57:09Z",
+  "status": "completed",
+  "timestamp": "2026-08-25T13:08:24Z",
   "workflow": "implement"
 }
