@@ -196,6 +196,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_run_reviewers.sh` — Shell helper for review run reviewers.
 - `scripts/review_synthesise_smoke.sh` — Shell helper for review synthesise smoke.
 - `scripts/reviewer_failback_chains.json` — JSON asset for reviewer_failback_chains.json.
+- `scripts/run_plan_codex.sh` — Plan-phase Codex runner extracted from workflow YAML.
 - `scripts/run_validation_repo_checks.sh` — Shell helper for run validation repo checks.
 - `scripts/run_workspace_hook.sh` — Shell helper for run workspace hook.
 - `scripts/self_heal_validation.sh` — failure context, then signalling validate_process.sh to re-run.
