@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Review/autofix and watchdog logic is fragile around stall detection, drain ordering, and retry state.",
   "timestamps": {
     "created_at": "2026-08-25T08:26:45Z",
