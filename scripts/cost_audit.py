@@ -237,6 +237,10 @@ def _validated_mcp_telemetry_event(line: str) -> Optional[tuple[str, str]]:
     return None
 
 
+# Public alias for cross-module collectors; keep the underscored name for compatibility.
+validated_mcp_telemetry_event = _validated_mcp_telemetry_event
+
+
 def _normalize_log_label(value: str | None) -> str:
     if value is None:
         return ""
@@ -613,7 +617,7 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
         if CONTEXT_BUDGET_WARN_RE.search(line):
             out["context_budget_warn_count"] += 1
 
-        validated_mcp_event = _validated_mcp_telemetry_event(line)
+        validated_mcp_event = validated_mcp_telemetry_event(line)
         if validated_mcp_event == ("SEMBLE", "query"):
             target = _extract_log_field(line, "target") or "unknown"
             logged_bytes = _to_int(_extract_log_field(line, "bytes") or "0")
@@ -654,7 +658,9 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
             out["serena_targets"][target]["fallbacks"] += 1
         elif validated_mcp_event == ("SERENA", "probe"):
             target = _extract_log_field(line, "target") or "unknown"
-            result = (_extract_log_field(line, "result") or "unknown").lower()
+            result = (_extract_log_field(line, "result") or "").lower()
+            if result not in ("ok", "failed", "skipped"):
+                continue
             out[f"serena_probe_{result}"] += 1
             out["serena_targets"][target][f"probe_{result}"] += 1
         elif validated_mcp_event is not None:
@@ -673,6 +679,8 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
                 out["other_mcp"][server]["fallbacks"] += 1
             else:
                 result = (_extract_log_field(line, "result") or "").lower()
+                if result not in ("ok", "failed", "skipped"):
+                    continue
                 out["other_mcp"][server][f"probe_{result}"] += 1
 
     if fallback_wall_clock_ms and fallback_wall_clock_ms > 0:

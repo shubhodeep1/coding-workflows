@@ -47,18 +47,18 @@ try:
         BREAK_GLASS_RE,
         CONTEXT_BUDGET_WARN_RE,
         OPENROUTER_RE,
-        _validated_mcp_telemetry_event,
         aggregate_run_cost_telemetry,
         build_run_cost_telemetry,
+        validated_mcp_telemetry_event,
     )
 except ModuleNotFoundError:
     from scripts.cost_audit import (
         BREAK_GLASS_RE,
         CONTEXT_BUDGET_WARN_RE,
         OPENROUTER_RE,
-        _validated_mcp_telemetry_event,
         aggregate_run_cost_telemetry,
         build_run_cost_telemetry,
+        validated_mcp_telemetry_event,
     )
 
 SCHEMA_VERSION = "workflow_log_collector.v2"
@@ -1220,7 +1220,7 @@ def _structured_cost_telemetry_line_key(line: str) -> str | None:
     if not line_text:
         return None
     if (
-        _validated_mcp_telemetry_event(line_text) is not None
+        validated_mcp_telemetry_event(line_text) is not None
         or any(pattern.search(line_text) for pattern in STRUCTURED_COST_TELEMETRY_PATTERNS)
     ):
         return line_text
