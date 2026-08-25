@@ -1196,7 +1196,15 @@ autofix_retrigger_has_inflight_peer()
 	fi
 
 	local response
+	# -X GET is REQUIRED, not decorative: `gh api` infers POST whenever
+	# any -f/-F parameter is supplied and no method is given, and
+	# POST /repos/{repo}/actions/runs is not a route — it 404s, which
+	# _is_gh_permanent_failure classifies as non-retryable, so the
+	# probe dies instantly with reason=api_error.  Dropping this flag
+	# silently breaks the probe (tele-funtoken-msg-scoring#3763,
+	# review run 32732281452).
 	if ! response=$(gh_retry gh api \
+		-X GET \
 		-H "Accept: application/vnd.github+json" \
 		"/repos/${GITHUB_REPOSITORY}/actions/runs" \
 		-f "branch=${head_branch}" \
@@ -1308,7 +1316,15 @@ autofix_changes_lost_head_retry_consumed()
 	fi
 
 	local response
+	# -X GET is REQUIRED, not decorative: `gh api` infers POST whenever
+	# any -f/-F parameter is supplied and no method is given, and
+	# POST /repos/{repo}/actions/runs is not a route — it 404s, which
+	# _is_gh_permanent_failure classifies as non-retryable, so the
+	# probe dies instantly with reason=api_error.  Dropping this flag
+	# silently breaks the probe (tele-funtoken-msg-scoring#3763,
+	# review run 32732281452).
 	if ! response=$(gh_retry gh api \
+		-X GET \
 		-H "Accept: application/vnd.github+json" \
 		"/repos/${GITHUB_REPOSITORY}/actions/runs" \
 		-f "branch=${head_branch}" \
