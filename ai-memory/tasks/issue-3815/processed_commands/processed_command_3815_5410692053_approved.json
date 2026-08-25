@@ -5,13 +5,27 @@
   "entry_id": "processed_command_3815_5410692053_approved",
   "issue_number": 3815,
   "metadata": {
+    "branch": "ai/issue-3815",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      "scripts/analyze_soft_errors.py",
+      "scripts/cost_audit.py",
+      "scripts/openrouter_prompt_cache.py",
+      "scripts/summarize_unselected_runs.py",
+      "tests/test_cost_audit_semble_metrics.py"
+    ],
+    "issue_number": 3815,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3815",
+    "pr_number": 3820,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3820",
+    "run_attempt": "1",
+    "run_id": "32850404351",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/32850404351"
   },
   "run_attempt": 1,
   "run_id": "32850404351",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-08-25T12:58:21Z",
+  "status": "completed",
+  "timestamp": "2026-08-25T13:07:17Z",
   "workflow": "implement"
 }
