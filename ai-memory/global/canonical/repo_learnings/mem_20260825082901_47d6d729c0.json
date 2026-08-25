@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Process-validation refresh flows should be automated through dedicated runners rather than manual refresh steps.",
   "timestamps": {
     "created_at": "2026-08-25T08:29:01Z",
