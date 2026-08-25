@@ -90,13 +90,16 @@ name: Test & Mark Stable Release
           review run is in_progress and its current step has been running
           for less than this cap, the loop defers the inactivity-stall
           decision; once the step reaches this cap, the normal stall path
-          continues. Defaults to 50 minutes; set it explicitly if you want
-          a different per-step cap (for example, above `review_timeout`
+          continues. Defaults to 75 minutes — raised 50→75 after run
+          32824674139 (v1.27.0), where a healthy "Run reviewer models"
+          step ran 51m and the 50m cap declared a stall 58s before the
+          step completed successfully. Set it explicitly if you want a
+          different per-step cap (for example, above `review_timeout`
           when a long single step should extend the wait past the
           inactivity window).
         required: false
         type: number
-        default: 50
+        default: 75
       review_workflow_file:
         description: >
           Filename (under .github/workflows/ in TEST_REPO) of the
@@ -352,7 +355,7 @@ jobs:
       REVIEW_TIMEOUT: ${{ inputs.review_timeout || inputs.phase_timeout || 60 }}
       # Per-step wall-clock cap (minutes) for the review run's currently
       # in-progress step. For normal workflow_dispatch runs this comes from
-      # the dedicated review_step_timeout input (default 50); it does not
+      # the dedicated review_step_timeout input (default 75); it does not
       # auto-track review_timeout. The review_timeout/phase_timeout fallbacks
       # below are only a defensive backstop for unexpected falsey/missing values.
       # GitHub's /actions/jobs/{id}/logs endpoint does NOT
@@ -367,8 +370,11 @@ jobs:
       # its current step has been running for less than this cap, the loop
       # treats the silence as a healthy long step and defers that inactivity
       # stall decision; a genuinely hung step still falls through once the
-      # cap is exceeded, so stuck-run detection is preserved.
-      REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || inputs.review_timeout || inputs.phase_timeout || 50 }}
+      # cap is exceeded, so stuck-run detection is preserved. The default
+      # was raised 50→75 after run 32824674139 (v1.27.0): the reviewer
+      # step ran a healthy 51m and the 50m cap killed the wait 58s before
+      # the step completed.
+      REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || inputs.review_timeout || inputs.phase_timeout || 75 }}
       POLL_INTERVAL: 10
       # Wrapper-workflow filename used by the smoke gate to dispatch
       # / poll review_autofix runs. Defaults to the source repo's
@@ -1319,10 +1325,10 @@ jobs:
           # a single in-progress review step may run this long before the
           # inactivity check treats it as a stall, since GitHub does not
           # stream in-progress step logs and the cached activity signals
-          # freeze for the step's whole duration. Fall back to 50m when the
+          # freeze for the step's whole duration. Fall back to 75m when the
           # env is unset/non-numeric so the arithmetic below never errors.
-          REVIEW_STEP_TIMEOUT="${REVIEW_STEP_TIMEOUT:-50}"
-          [[ "$REVIEW_STEP_TIMEOUT" =~ ^[0-9]+$ ]] && [ "$REVIEW_STEP_TIMEOUT" -gt 0 ] || REVIEW_STEP_TIMEOUT=50
+          REVIEW_STEP_TIMEOUT="${REVIEW_STEP_TIMEOUT:-75}"
+          [[ "$REVIEW_STEP_TIMEOUT" =~ ^[0-9]+$ ]] && [ "$REVIEW_STEP_TIMEOUT" -gt 0 ] || REVIEW_STEP_TIMEOUT=75
           STEP_INACTIVITY_LIMIT=$((REVIEW_STEP_TIMEOUT * 60))
           echo "Per-step stall cap: ${REVIEW_STEP_TIMEOUT} minutes"
           LAST_ACTIVITY=$(date +%s)
@@ -1560,7 +1566,22 @@ jobs:
                 # reviewers + editor together take well over 10 minutes in
                 # every observed run, so anything earlier is wasted I/O.
                 if [ "$ELAPSED" -ge 600 ]; then
-                  JOB_ID=$(echo "$JOBS_JSON" | jq -r '.jobs[0].id // empty' 2>/dev/null || echo "")
+                  # Select the job that actually runs the reviewer/editor
+                  # LLM steps, NOT `.jobs[0]`. When the review run comes
+                  # from the wrapper workflow (internal-review.yml calling
+                  # review_autofix.yml — the default REVIEW_WORKFLOW_FILE),
+                  # the run carries several jobs and jobs[0] by creation
+                  # order is `review / gate`, a ~4s gate job whose log can
+                  # never contain the editor-noop annotation or the
+                  # "Reviewer … succeeded" counter lines — on v1.27.0 run
+                  # 32824674139 every live-log probe hit the gate job
+                  # (97733868951) while `review / codex-agent`
+                  # (97733894241) did the actual work, so both shortcuts
+                  # were permanently inert. Prefer the codex-agent job by
+                  # name (a rename is a breaking change per CLAUDE.md §6,
+                  # so the literal is safe), then any in-progress job,
+                  # then jobs[0] as the legacy single-job fallback.
+                  JOB_ID=$(echo "$JOBS_JSON" | jq -r '([.jobs[] | select(.name | test("codex-agent"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' 2>/dev/null || echo "")
                   if [ -n "$JOB_ID" ]; then
                     # Stream the job log to a tempfile rather than capturing
                     # into a shell variable. `gh_api_safe .../actions/jobs/
@@ -1741,14 +1762,20 @@ jobs:
               --jq 'length' || echo "0")
 
             # 4) Job log byte size — grows while reviewers/editor produce output
+            # Same job selection as the live-log shortcut block above:
+            # prefer the codex-agent job (the one producing log output),
+            # then any in-progress job, then jobs[0] — in wrapper runs
+            # jobs[0] is the completed `review / gate` job whose log size
+            # never changes, which starved this activity signal on run
+            # 32824674139 (log_sz pinned at 0b for the whole phase).
             LOG_SIZE="0"
             if [ "$RUN_ID" != "unknown" ]; then
               JOB_ID_FOR_SIZE=""
               if [ -n "${JOBS_JSON:-}" ]; then
-                JOB_ID_FOR_SIZE=$(echo "$JOBS_JSON" | jq -r '.jobs[0].id // empty' 2>/dev/null || echo "")
+                JOB_ID_FOR_SIZE=$(echo "$JOBS_JSON" | jq -r '([.jobs[] | select(.name | test("codex-agent"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' 2>/dev/null || echo "")
               else
                 JOB_ID_FOR_SIZE=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" \
-                  --jq '.jobs[0].id // empty' || echo "")
+                  --jq '([.jobs[] | select(.name | test("codex-agent"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' || echo "")
               fi
               if [ -n "$JOB_ID_FOR_SIZE" ]; then
                 LOG_SIZE=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/jobs/${JOB_ID_FOR_SIZE}/logs" \
