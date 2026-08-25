@@ -35,6 +35,7 @@ import files_touched_scope_guard as guard  # noqa: E402
 
 IMPLEMENT = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
+IMPLEMENT_GUARD_HANDLER = REPO_ROOT / "scripts" / "implement_handle_guard_block.sh"
 GUARD_SCRIPT = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
 LABEL_CONTRACT = REPO_ROOT / ".github" / "ai" / "label_contract.v1.json"
 LABEL_HELPERS = REPO_ROOT / "scripts" / "label_helpers.sh"
@@ -363,10 +364,14 @@ def _implement_commit_text() -> str:
 	return IMPLEMENT_COMMIT_SCRIPT.read_text(encoding="utf-8")
 
 
+def _implement_guard_handler_text() -> str:
+	return IMPLEMENT_GUARD_HANDLER.read_text(encoding="utf-8")
+
+
 def _scope_alert_block_text() -> str:
-	text = _implement_text()
+	text = _implement_guard_handler_text()
 	start = text.index('if [ -n "${SVB_REASON:-}" ]; then')
-	end = text.index("- name: Handle no-op implementation", start)
+	end = text.index("\nREASON_HUMAN=", start)
 	return text[start:end]
 
 
@@ -388,24 +393,25 @@ def test_both_guard_sites_invoke_script_and_emit_outputs() -> None:
 
 
 def test_alert_step_handles_scope() -> None:
-	text = _implement_text()
-	assert "scope_violation_blocked != ''" in text
-	assert "gh label create 'ai:scope-blocked'" in text
-	assert "gh label edit 'ai:scope-blocked'" in text
-	assert "SCOPE_BLOCK_LABEL_DESCRIPTION='Implementation blocked: staged files fell outside files_touched scope; human review required'" in text
-	assert "if scope_latched_labels=\"$(gh issue view \"${ISSUE_NUMBER}\" --repo \"${{ github.repository }}\" --json labels -q '.labels[].name' 2>/dev/null)\"; then" in text
-	assert "Confirmed ai:scope-blocked is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it." in text
-	assert "::error::FAILED to latch ai:scope-blocked on #${ISSUE_NUMBER}; the redispatch block is NOT in effect. Apply it manually:" in text
-	assert "::warning::Could not verify ai:scope-blocked on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown." in text
-	assert r"The workflow attempted to label this issue \`ai:scope-blocked\`, but the follow-up label read failed. Future redispatch is **not confirmed blocked**; re-check the label manually before redispatch." in text
-	assert r"This issue is now labeled \`ai:scope-blocked\`" not in text
-	assert "Issue is now ai:scope-blocked." not in text
-	assert "SVB_REASON: ${{ steps.preflight_destructive_guard.outputs.scope_violation_blocked" in text
+	workflow_text = _implement_text()
+	handler_text = _implement_guard_handler_text()
+	assert "scope_violation_blocked != ''" in workflow_text
+	assert "gh label create 'ai:scope-blocked'" in handler_text
+	assert "gh label edit 'ai:scope-blocked'" in handler_text
+	assert "SCOPE_BLOCK_LABEL_DESCRIPTION='Implementation blocked: staged files fell outside files_touched scope; human review required'" in handler_text
+	assert "if scope_latched_labels=\"$(gh issue view \"${ISSUE_NUMBER}\" --repo \"${GITHUB_REPOSITORY}\" --json labels -q '.labels[].name' 2>/dev/null)\"; then" in handler_text
+	assert "Confirmed ai:scope-blocked is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it." in handler_text
+	assert "::error::FAILED to latch ai:scope-blocked on #${ISSUE_NUMBER}; the redispatch block is NOT in effect. Apply it manually:" in handler_text
+	assert "::warning::Could not verify ai:scope-blocked on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown." in handler_text
+	assert r"The workflow attempted to label this issue \`ai:scope-blocked\`, but the follow-up label read failed. Future redispatch is **not confirmed blocked**; re-check the label manually before redispatch." in handler_text
+	assert r"This issue is now labeled \`ai:scope-blocked\`" not in handler_text
+	assert "Issue is now ai:scope-blocked." not in handler_text
+	assert "SVB_REASON: ${{ steps.preflight_destructive_guard.outputs.scope_violation_blocked" in workflow_text
 
 
 def test_scope_alert_step_verifies_latch_after_write() -> None:
 	scope_text = _scope_alert_block_text()
-	assert "if scope_latched_labels=\"$(gh issue view \"${ISSUE_NUMBER}\" --repo \"${{ github.repository }}\" --json labels -q '.labels[].name' 2>/dev/null)\"; then" in scope_text
+	assert "if scope_latched_labels=\"$(gh issue view \"${ISSUE_NUMBER}\" --repo \"${GITHUB_REPOSITORY}\" --json labels -q '.labels[].name' 2>/dev/null)\"; then" in scope_text
 	assert "grep -qxF 'ai:scope-blocked' <<< \"${scope_latched_labels}\"" in scope_text
 	assert "::error::FAILED to latch ai:scope-blocked" in scope_text
 	assert "::warning::Could not verify ai:scope-blocked" in scope_text
@@ -448,7 +454,7 @@ def test_label_contract_and_helper_have_scope_blocked() -> None:
 	helper = LABEL_HELPERS.read_text(encoding="utf-8")
 	assert '["ai:scope-blocked"]="b60205"' in helper
 	assert f'["ai:scope-blocked"]="{desc}"' in helper
-	assert f"--description '{desc}'" in _implement_text()
+	assert f"--description '{desc}'" in _implement_guard_handler_text()
 	# It is a latch label, not a phase label.
 	for group in contract.get("phase_groups", []):
 		assert "ai:scope-blocked" not in group.get("members", [])

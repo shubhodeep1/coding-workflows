@@ -1617,7 +1617,12 @@ def test_guard_handler_executes_all_rejection_modes_after_support_cleanup() -> N
 			assert proc.returncode != 0, f"case={case_name}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
 			assert gh_state["label_creates"] == [{"name": expected_label, "repo": repository}], f"case={case_name}"
 			assert gh_state["issue_labels"] == [expected_label], f"case={case_name}"
-			assert gh_state["issue_edits"][0]["remove"] == ["ai:implementing"], f"case={case_name}"
+			assert gh_state["issue_edits"] == [{
+				"issue": "948",
+				"add": [expected_label],
+				"remove": ["ai:implementing"],
+				"repo": repository,
+			}], f"case={case_name}"
 			assert gh_state["issue_comments"][0]["repo"] == repository, f"case={case_name}"
 			assert expected_comment in gh_state["issue_comments"][0]["body"], f"case={case_name}"
 			assert len(curl_calls) == 1, f"case={case_name}"
