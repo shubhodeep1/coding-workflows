@@ -34,6 +34,7 @@ _TEST_RUNNER_EVENT_PREFIX = "TEST_CASE_EVENT: "
 _TEST_RUNNER_HEARTBEAT_INTERVAL_SEC = 60.0
 _TEST_RUNNER_HEARTBEAT_THREAD_PREFIX = "orchestrate-test-heartbeat:"
 _TEST_RUNNER_SLOWEST_LIMIT = 10
+_TEST_RUNNER_OUTPUT_LOCK = threading.Lock()
 
 
 # Directories and top-level files that the poller script under test needs
@@ -14274,11 +14275,11 @@ def _emit_test_runner_event(
 	}
 	if rank is not None:
 		payload["rank"] = rank
-	print(
-		f"{_TEST_RUNNER_EVENT_PREFIX}{json.dumps(payload, sort_keys=True, separators=(',', ':'))}",
-		file=output_stream,
-		flush=True,
-	)
+	serialized_payload = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+	# Keep event JSON parseable when a running test leaves stdout mid-line.
+	with _TEST_RUNNER_OUTPUT_LOCK:
+		output_stream.write(f"\n{_TEST_RUNNER_EVENT_PREFIX}{serialized_payload}\n")
+		output_stream.flush()
 
 
 def _test_heartbeat_worker(
@@ -14395,6 +14396,7 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 		pass
 
 	def synthetic_slow():
+		print("synthetic partial", end="")
 		time.sleep(0.03)
 
 	def synthetic_failure():
@@ -14408,6 +14410,7 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 			slowest_limit=2,
 		)
 	assert exit_code == 1
+	assert "synthetic partial\nTEST_CASE_EVENT: " in output.getvalue()
 	lines = output.getvalue().splitlines()
 	assert "  PASS  synthetic_fast" in lines
 	assert "  PASS  synthetic_slow" in lines
