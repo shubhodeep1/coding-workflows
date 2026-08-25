@@ -308,6 +308,10 @@ tg_notify 'Original alert'{level_argument}
 				capture_output=True,
 				timeout=60,
 			)
+			assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert capture_path.exists(), (
+				f"tg_notify harness did not write capture file.\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			)
 			captured_arguments = capture_path.read_bytes().decode("utf-8").split("\0")
 			return proc, captured_arguments
 
