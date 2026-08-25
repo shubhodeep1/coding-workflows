@@ -330,6 +330,16 @@ tg_notify 'Original alert'{level_argument}
 	assert "::warning::Validation Telegram link suffix generation failed; sending alert without links." in failure_proc.stderr
 	assert "partial suffix" not in failure_arguments[0]
 
+	tracked_failure_proc, tracked_failure_arguments = _run_case(
+		tracking_issue=42,
+		level="WARNING",
+		failing_suffix=True,
+	)
+	assert tracked_failure_proc.returncode == 0, tracked_failure_proc.stderr
+	assert tracked_failure_arguments == ["42", "Original alert", "WARNING"]
+	assert "::warning::Validation Telegram link suffix generation failed; sending alert without links." in tracked_failure_proc.stderr
+	assert "partial suffix" not in tracked_failure_arguments[1]
+
 
 def test_write_result_files_emits_failure_summary_only_for_non_pass() -> None:
 	text = _validate_process_text()
