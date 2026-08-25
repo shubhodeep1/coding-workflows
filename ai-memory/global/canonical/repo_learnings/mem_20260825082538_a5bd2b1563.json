@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow changes in this repo should usually be paired with contract tests, not just script edits.",
   "timestamps": {
     "created_at": "2026-08-25T08:25:38Z",
