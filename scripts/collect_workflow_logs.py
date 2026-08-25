@@ -1462,8 +1462,8 @@ def main(argv: list[str] | None = None) -> int:
     memory_branch = str(os.getenv("AI_MEMORY_BRANCH", "ai-memory")).strip() or "ai-memory"
     memory_root_relative = str(os.getenv("AI_MEMORY_ROOT", "ai-memory")).strip() or "ai-memory"
     # Keep the AI_MEMORY_PUSH_RETRIES default in sync with scripts/ai_memory.py
-    # (raised 5 -> 8 to survive shared ai-memory branch contention).
-    push_retries = _to_int(os.getenv("AI_MEMORY_PUSH_RETRIES", "8"), 8)
+    # (raised 8 -> 16 to outlast orchestrator bursts on the shared ai-memory branch).
+    push_retries = _to_int(os.getenv("AI_MEMORY_PUSH_RETRIES", "16"), 16)
 
     cache_payload, _cache_load_error, cache_branch_dir = _cache_read_context(
         repo_root=repo_root,

@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -28,6 +29,12 @@ POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 # captured output in a few minutes, instead of silently stalling the CI job
 # until the workflow-level `timeout-minutes` kills it.
 POLLER_SUBPROCESS_TIMEOUT_SEC = 180.0
+
+_TEST_RUNNER_EVENT_PREFIX = "TEST_CASE_EVENT: "
+_TEST_RUNNER_HEARTBEAT_INTERVAL_SEC = 60.0
+_TEST_RUNNER_HEARTBEAT_THREAD_PREFIX = "orchestrate-test-heartbeat:"
+_TEST_RUNNER_SLOWEST_LIMIT = 10
+_TEST_RUNNER_OUTPUT_LOCK = threading.Lock()
 
 
 # Directories and top-level files that the poller script under test needs
@@ -315,6 +322,37 @@ def test_judge_reasoning_effort_uses_configured_value_without_downgrade():
 	# `${MODEL_REASONING_EFFORT_JUDGE:-xhigh}` substitution and silently
 	# swaps in another env var is caught here.
 	assert '--reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"' in script
+
+
+def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths():
+	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	parameterized_search_calls = [
+		line.strip()
+		for line in poller_source_text.splitlines()
+		if "gh_retry gh api" in line and '"search/issues"' in line
+	]
+	explicit_get_api_lines = [
+		line.strip()
+		for line in poller_source_text.splitlines()
+		if "gh_retry gh api --method GET" in line
+	]
+
+	assert len(parameterized_search_calls) == 4
+	assert all("--method GET" in call for call in parameterized_search_calls)
+	assert sum("--paginate" in call for call in parameterized_search_calls) == 2
+	assert explicit_get_api_lines == parameterized_search_calls
+
+	# Preserve the two marker-search fallbacks and their paginated aggregation.
+	assert '-f per_page=100 -f q="${q_state}"' in poller_source_text
+	assert '-f per_page=100 -f q="${q_clarify}"' in poller_source_text
+	assert "jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]'" in poller_source_text
+
+	# Preserve reconstruction's fail-open default and deferred creation's
+	# fail-closed conditional while pinning only their HTTP method.
+	assert '-f q="repo:${GITHUB_REPOSITORY} \\"Tracking issue: #${TRACKING_NUM}\\" in:body"' in poller_source_text
+	assert "--jq '.items // []' 2>/dev/null || echo '[]')\"" in poller_source_text
+	assert '-f q="repo:${GITHUB_REPOSITORY} is:issue \\"Tracking issue: #${TRACKING_NUM}\\" in:body"' in poller_source_text
+	assert "--jq '.items // []' 2>/dev/null)\"; then" in poller_source_text
 
 
 def _base_state(status: str = "in_progress") -> dict:
@@ -14247,6 +14285,242 @@ def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration
 		shutil.rmtree(tmp_root, ignore_errors=True)
 
 
+def _test_elapsed_ms(started_at: float) -> int:
+	return max(0, int((time.monotonic() - started_at) * 1000))
+
+
+def _emit_test_runner_event(
+	event: str,
+	test_name: str,
+	elapsed_ms: int,
+	status: str,
+	output_stream,
+	*,
+	rank: int | None = None,
+) -> None:
+	payload = {
+		"elapsed_ms": elapsed_ms,
+		"event": event,
+		"status": status,
+		"test_name": test_name,
+	}
+	if rank is not None:
+		payload["rank"] = rank
+	serialized_payload = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+	# Keep event JSON parseable when a running test leaves stdout mid-line.
+	with _TEST_RUNNER_OUTPUT_LOCK:
+		output_stream.write(f"\n{_TEST_RUNNER_EVENT_PREFIX}{serialized_payload}\n")
+		output_stream.flush()
+
+
+def _test_heartbeat_worker(
+	stop_event: threading.Event,
+	test_name: str,
+	started_at: float,
+	heartbeat_interval_sec: float,
+	output_stream,
+) -> None:
+	if heartbeat_interval_sec <= 0:
+		return
+	while not stop_event.wait(heartbeat_interval_sec):
+		_emit_test_runner_event(
+			"heartbeat",
+			test_name,
+			_test_elapsed_ms(started_at),
+			"running",
+			output_stream,
+		)
+
+
+def _run_selected_tests(
+	test_funcs: list,
+	*,
+	heartbeat_interval_sec: float = _TEST_RUNNER_HEARTBEAT_INTERVAL_SEC,
+	slowest_limit: int = _TEST_RUNNER_SLOWEST_LIMIT,
+) -> int:
+	passed = 0
+	failed = 0
+	results: list[tuple[str, int, str]] = []
+	runner_output = sys.stdout
+	for func in test_funcs:
+		name = func.__name__
+		started_at = time.monotonic()
+		_emit_test_runner_event("start", name, 0, "running", runner_output)
+		heartbeat_stop = None
+		heartbeat_thread = None
+		try:
+			heartbeat_stop = threading.Event()
+			heartbeat_thread = threading.Thread(
+				target=_test_heartbeat_worker,
+				args=(
+					heartbeat_stop,
+					name,
+					started_at,
+					heartbeat_interval_sec,
+					runner_output,
+				),
+				daemon=True,
+				name=f"{_TEST_RUNNER_HEARTBEAT_THREAD_PREFIX}{name}",
+			)
+			heartbeat_thread.start()
+		except Exception:
+			if heartbeat_stop is not None:
+				try:
+					heartbeat_stop.set()
+				except Exception:
+					pass
+			if heartbeat_thread is not None:
+				try:
+					heartbeat_thread.join()
+				except Exception:
+					pass
+			heartbeat_thread = None
+
+		failure = None
+		status = "pass"
+		try:
+			func()
+		except Exception as exc:
+			failure = exc
+			status = "fail"
+		finally:
+			if heartbeat_stop is not None:
+				try:
+					heartbeat_stop.set()
+				except Exception:
+					pass
+			if heartbeat_thread is not None:
+				try:
+					heartbeat_thread.join()
+				except Exception:
+					pass
+
+		elapsed_ms = _test_elapsed_ms(started_at)
+		results.append((name, elapsed_ms, status))
+		_emit_test_runner_event("complete", name, elapsed_ms, status, runner_output)
+		if failure is None:
+			print(f"  PASS  {name}", file=runner_output, flush=True)
+			passed += 1
+		else:
+			print(f"  FAIL  {name}: {failure}", file=runner_output, flush=True)
+			failed += 1
+
+	for rank, (name, elapsed_ms, status) in enumerate(
+		sorted(results, key=lambda result: (-result[1], result[0]))[:max(0, slowest_limit)],
+		start=1,
+	):
+		_emit_test_runner_event(
+			"slowest", name, elapsed_ms, status, runner_output, rank=rank
+		)
+
+	print(
+		f"\n{passed} passed, {failed} failed, {passed + failed} total",
+		file=runner_output,
+		flush=True,
+	)
+	return 1 if failed > 0 else 0
+
+
+def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
+	import contextlib
+	import io
+
+	def synthetic_fast():
+		pass
+
+	def synthetic_slow():
+		print("synthetic partial", end="")
+		time.sleep(0.2)
+
+	def synthetic_failure():
+		raise RuntimeError("synthetic failure")
+
+	output = io.StringIO()
+	with contextlib.redirect_stdout(output):
+		exit_code = _run_selected_tests(
+			[synthetic_fast, synthetic_slow, synthetic_failure],
+			heartbeat_interval_sec=0.005,
+			slowest_limit=2,
+		)
+	assert exit_code == 1
+	assert "synthetic partial\nTEST_CASE_EVENT: " in output.getvalue()
+	lines = output.getvalue().splitlines()
+	assert "  PASS  synthetic_fast" in lines
+	assert "  PASS  synthetic_slow" in lines
+	assert "  FAIL  synthetic_failure: synthetic failure" in lines
+	assert lines[-1] == "2 passed, 1 failed, 3 total"
+
+	events = [
+		json.loads(line.removeprefix(_TEST_RUNNER_EVENT_PREFIX))
+		for line in lines
+		if line.startswith(_TEST_RUNNER_EVENT_PREFIX)
+	]
+	for test_name, expected_status in (
+		("synthetic_fast", "pass"),
+		("synthetic_slow", "pass"),
+		("synthetic_failure", "fail"),
+	):
+		test_events = [
+			event
+			for event in events
+			if event["test_name"] == test_name and event["event"] != "slowest"
+		]
+		assert test_events[0] == {
+			"elapsed_ms": 0,
+			"event": "start",
+			"status": "running",
+			"test_name": test_name,
+		}
+		complete_indexes = [
+			index for index, event in enumerate(test_events) if event["event"] == "complete"
+		]
+		assert complete_indexes == [len(test_events) - 1]
+		assert test_events[-1]["status"] == expected_status
+		assert test_events[-1]["elapsed_ms"] >= 0
+	assert any(
+		event["event"] == "heartbeat" and event["test_name"] == "synthetic_slow"
+		for event in events
+	)
+
+	slowest_events = [event for event in events if event["event"] == "slowest"]
+	assert [event["rank"] for event in slowest_events] == [1, 2]
+	assert [
+		(-event["elapsed_ms"], event["test_name"])
+		for event in slowest_events
+	] == sorted(
+		(-event["elapsed_ms"], event["test_name"])
+		for event in slowest_events
+	)
+	synthetic_thread_names = {
+		f"{_TEST_RUNNER_HEARTBEAT_THREAD_PREFIX}{test_name}"
+		for test_name in ("synthetic_fast", "synthetic_slow", "synthetic_failure")
+	}
+	assert not any(
+		thread.name in synthetic_thread_names
+		for thread in threading.enumerate()
+	)
+
+	pass_output = io.StringIO()
+	with contextlib.redirect_stdout(pass_output):
+		assert _run_selected_tests(
+			[synthetic_fast], heartbeat_interval_sec=0.005, slowest_limit=1
+		) == 0
+	assert pass_output.getvalue().splitlines()[-1] == "1 passed, 0 failed, 1 total"
+	assert not any(
+		thread.name in synthetic_thread_names
+		for thread in threading.enumerate()
+	)
+
+	pass_output.seek(0)
+	pass_output.truncate(0)
+	with contextlib.redirect_stdout(pass_output):
+		assert _run_selected_tests(
+			[synthetic_fast], heartbeat_interval_sec=0, slowest_limit=-1
+		) == 0
+	assert '"event":"heartbeat"' not in pass_output.getvalue()
+	assert '"event":"slowest"' not in pass_output.getvalue()
+
+
 def main() -> int:
 	# Force line-buffered stdout so PASS/FAIL messages surface to CI logs as
 	# each test completes, instead of sitting in Python's default block buffer
@@ -14272,20 +14546,7 @@ def main() -> int:
 		test_funcs = [tests_by_name[name] for name in selected_names]
 	else:
 		test_funcs = list(tests_by_name.values())
-	passed = 0
-	failed = 0
-	for func in test_funcs:
-		name = func.__name__
-		try:
-			func()
-			print(f"  PASS  {name}", flush=True)
-			passed += 1
-		except Exception as e:
-			print(f"  FAIL  {name}: {e}", flush=True)
-			failed += 1
-
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
-	return 1 if failed > 0 else 0
+	return _run_selected_tests(test_funcs)
 
 
 if __name__ == "__main__":

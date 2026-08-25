@@ -3108,7 +3108,12 @@ def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
 # delay between attempts the contenders retry in lockstep and keep losing
 # the same server-side ref-lock race ("cannot lock ref ... is at X but
 # expected Y"), exhausting the retry budget.  Full-jitter exponential
-# backoff decorrelates them so a push lands within the budget.
+# backoff decorrelates them so a push lands within the budget.  The budget
+# itself (push_retries, default 16 via AI_MEMORY_PUSH_RETRIES) must be
+# large enough for the loop to OUTLAST an orchestrator dispatch burst —
+# a burst can land a foreign commit on the ref every 3-5 seconds for
+# ~2 minutes, and every fetch+rebase+push cycle that overlaps an arrival
+# loses the race regardless of how well the sleeps are decorrelated.
 _PUSH_RETRY_BACKOFF_BASE_SECONDS = 0.5
 _PUSH_RETRY_BACKOFF_CAP_SECONDS = 8.0
 
