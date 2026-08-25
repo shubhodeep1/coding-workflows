@@ -341,24 +341,27 @@ SEMBLE_FALLBACK target=overflow reason=exit=7 raw failure from semble ms=11
 	}
 
 
-def test_parse_log_fails_open_on_partial_or_malformed_semble_lines() -> None:
+def test_parse_log_ignores_partial_or_malformed_semble_lines() -> None:
 	log = """
 SEMBLE_QUERY target=overflow chunks=6 ms=7
 SEMBLE_QUERY bytes=17 ms=1
+SEMBLE_QUERY target=overflow chunks=six bytes=17 ms=1
+SEMBLE_QUERY 0
+report says SEMBLE_QUERY traffic increased
 SEMBLE_FALLBACK reason=timeout ms=5000
 SEMBLE_FALLBACK target=conflict-resolver reason=exit=9 stderr tail with spaces ms=19
+SEMBLE_FALLBACK 0
+report says SEMBLE_FALLBACK traffic increased
 """
 
 	parsed = parse_log(log)
 
-	assert parsed["semble_query_calls"] == 2
-	assert parsed["semble_query_bytes"] == 17
-	assert parsed["semble_fallbacks"] == 2
+	assert parsed["semble_query_calls"] == 0
+	assert parsed["semble_query_bytes"] == 0
+	assert parsed["semble_fallbacks"] == 1
 	assert parsed["semble_contract_test_fallbacks"] == 0
-	assert parsed["semble_runtime_fallbacks"] == 2
+	assert parsed["semble_runtime_fallbacks"] == 1
 	assert parsed["semble_targets"] == {
-		"overflow": {"query_calls": 1, "bytes": 0},
-		"unknown": {"query_calls": 1, "bytes": 17, "fallbacks": 1, "runtime_fallbacks": 1},
 		"conflict-resolver": {"fallbacks": 1, "runtime_fallbacks": 1},
 	}
 
