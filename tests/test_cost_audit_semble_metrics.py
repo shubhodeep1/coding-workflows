@@ -2,8 +2,12 @@
 """Focused parser coverage for Semble telemetry in scripts/cost_audit.py."""
 from __future__ import annotations
 
+import contextlib
+import io
+import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -19,6 +23,203 @@ from cost_audit import (  # noqa: E402
 	build_run_cost_telemetry,
 	parse_log,
 )
+from openrouter_prompt_cache import format_openrouter_usage_line  # noqa: E402
+import analyze_soft_errors  # noqa: E402
+import summarize_unselected_runs  # noqa: E402
+
+
+class _TelemetryFakeOpenRouterResponse:
+	def __init__(self, payload: dict) -> None:
+		self.payload = payload
+
+	def __enter__(self):
+		return self
+
+	def __exit__(self, _exc_type, _exc, _traceback) -> bool:
+		return False
+
+	def read(self) -> bytes:
+		return json.dumps(self.payload).encode("utf-8")
+
+
+def test_format_openrouter_usage_line_preserves_complete_usage_contract() -> None:
+	line = format_openrouter_usage_line(
+		{
+			"prompt_tokens": 100,
+			"completion_tokens": 25,
+			"total_tokens": 125,
+			"cache_creation_input_tokens": 30,
+			"cache_read_input_tokens": 40,
+		},
+		model="openai/gpt-5.6-luna",
+		phase="workflow-log-analysis",
+		call_label="summarize-unselected-run",
+		cache_enabled=True,
+		cache_breakpoint_enabled=None,
+		cache_breakpoint_fallback_retry=None,
+	)
+
+	assert line == (
+		"INFO: openrouter usage phase=workflow-log-analysis "
+		"call=summarize-unselected-run model=openai/gpt-5.6-luna "
+		"cache_enabled=true cache_breakpoint_enabled=na "
+		"cache_breakpoint_fallback_retry=na prompt_tokens=100 "
+		"completion_tokens=25 total_tokens=125 "
+		"cache_creation_input_tokens=30 cache_read_input_tokens=40"
+	)
+	parsed = parse_log(line)
+	assert parsed["or_calls"] == 1
+	assert parsed["or_prompt_tokens"] == 100
+	assert parsed["or_completion_tokens"] == 25
+	assert parsed["or_total_tokens"] == 125
+	assert parsed["or_cache_write_tokens"] == 30
+	assert parsed["or_cache_read_tokens"] == 40
+
+
+def test_format_openrouter_usage_line_normalizes_nested_cache_usage() -> None:
+	line = format_openrouter_usage_line(
+		{
+			"prompt_tokens": 80,
+			"completion_tokens": 20,
+			"total_tokens": 100,
+			"prompt_tokens_details": {"cache_write_tokens": 31},
+			"input_token_details": {"cache_read": 41},
+		},
+		model="openai/gpt-5.6-luna",
+		phase="release-gate",
+		call_label="soft-error-analyzer",
+		cache_enabled=False,
+		cache_breakpoint_enabled=None,
+		cache_breakpoint_fallback_retry=None,
+	)
+
+	parsed = parse_log(line)
+	assert parsed["or_calls"] == 1
+	assert parsed["or_cache_write_tokens"] == 31
+	assert parsed["or_cache_read_tokens"] == 41
+
+
+def test_format_openrouter_usage_line_uses_na_for_missing_usage() -> None:
+	line = format_openrouter_usage_line(
+		None,
+		model="openai/gpt-5.6-luna",
+		phase="release-gate",
+		call_label="soft-error-analyzer",
+		cache_enabled=True,
+		cache_breakpoint_enabled=None,
+		cache_breakpoint_fallback_retry=None,
+	)
+
+	assert line.endswith(
+		"prompt_tokens=na completion_tokens=na total_tokens=na "
+		"cache_creation_input_tokens=na cache_read_input_tokens=na"
+	)
+	assert parse_log(line)["or_calls"] == 1
+
+
+def test_direct_openrouter_callers_preserve_output_and_emit_safe_usage() -> None:
+	summary_payload = {
+		"model": "provider/summary-model",
+		"choices": [{"message": {"content": "  summary response  "}}],
+		"usage": {"prompt_tokens": 11, "completion_tokens": 3, "total_tokens": 14},
+	}
+	summary_stderr = io.StringIO()
+	summary_client = summarize_unselected_runs.OpenRouterSummarizer(
+		"secret-summary-key",
+		model="requested/summary-model",
+		base_url="https://example.invalid",
+		timeout_seconds=1,
+		max_output_tokens=50,
+	)
+	with patch.object(
+		summarize_unselected_runs.urllib.request,
+		"urlopen",
+		return_value=_TelemetryFakeOpenRouterResponse(summary_payload),
+	), contextlib.redirect_stderr(summary_stderr):
+		summary_result = summary_client.summarize(
+			{"repository": "owner/repo", "run_id": 7}, "sensitive prompt text"
+		)
+
+	assert summary_result == ("summary response", 14)
+	summary_line = summary_stderr.getvalue().strip()
+	assert summary_line.count("INFO: openrouter usage ") == 1
+	assert "model=provider/summary-model" in summary_line
+	assert "secret-summary-key" not in summary_line
+	assert "sensitive prompt text" not in summary_line
+	assert "summary response" not in summary_line
+
+	analyzer_payload = {
+		"choices": [{"message": {"content": "analyzer response"}}],
+		"usage": {
+			"prompt_tokens": 21,
+			"completion_tokens": 4,
+			"total_tokens": 25,
+			"prompt_tokens_details": {"cached_tokens": 8},
+		},
+	}
+	analyzer_stderr = io.StringIO()
+	with patch.object(
+		analyze_soft_errors.urllib.request,
+		"urlopen",
+		return_value=_TelemetryFakeOpenRouterResponse(analyzer_payload),
+	), contextlib.redirect_stderr(analyzer_stderr):
+		analyzer_result = analyze_soft_errors.call_openrouter(
+			[{"role": "user", "content": "private analyzer prompt"}],
+			model="requested/analyzer-model",
+			reasoning="medium",
+			api_key="secret-analyzer-key",
+		)
+
+	assert analyzer_result == "analyzer response"
+	analyzer_line = analyzer_stderr.getvalue().strip()
+	assert analyzer_line.count("INFO: openrouter usage ") == 1
+	assert "model=requested/analyzer-model" in analyzer_line
+	assert "cache_read_input_tokens=8" in analyzer_line
+	assert "secret-analyzer-key" not in analyzer_line
+	assert "private analyzer prompt" not in analyzer_line
+	assert "analyzer response" not in analyzer_line
+
+
+def test_direct_openrouter_callers_do_not_emit_success_usage_for_empty_content() -> None:
+	empty_payload = {
+		"choices": [{"message": {"content": ""}}],
+		"usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+	}
+	summary_stderr = io.StringIO()
+	summary_client = summarize_unselected_runs.OpenRouterSummarizer(
+		"unused-key",
+		model="requested/summary-model",
+		base_url="https://example.invalid",
+		timeout_seconds=1,
+		max_output_tokens=50,
+	)
+	with patch.object(
+		summarize_unselected_runs.urllib.request,
+		"urlopen",
+		return_value=_TelemetryFakeOpenRouterResponse(empty_payload),
+	), contextlib.redirect_stderr(summary_stderr):
+		try:
+			summary_client.summarize({}, "logs")
+		except RuntimeError as exc:
+			assert str(exc) == "chat/completions empty content"
+		else:
+			raise AssertionError("empty summary content must retain its existing error")
+	assert summary_stderr.getvalue() == ""
+
+	analyzer_stderr = io.StringIO()
+	with patch.object(
+		analyze_soft_errors.urllib.request,
+		"urlopen",
+		return_value=_TelemetryFakeOpenRouterResponse(empty_payload),
+	), contextlib.redirect_stderr(analyzer_stderr):
+		result = analyze_soft_errors.call_openrouter(
+			[],
+			model="requested/analyzer-model",
+			reasoning="medium",
+			api_key="unused-key",
+		)
+	assert result == ""
+	assert analyzer_stderr.getvalue() == ""
 
 
 def test_parse_log_counts_semble_query_bytes_and_fallbacks_by_target() -> None:
