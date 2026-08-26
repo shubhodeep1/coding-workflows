@@ -29,10 +29,10 @@ security_audit_sanitize_log_value() {
 			| tr '\n\r\t' '   ' \
 			| LC_ALL=C tr -cd '[:print:]' \
 			| tr -s ' ' \
-			| sed -E 's#([[:alpha:]][[:alnum:]+.-]*://)[^/@[:space:]]+@#\1[redacted]@#g; s/^ //;s/ $//'
+			| sed -E 's#([[:alpha:]][[:alnum:]+.-]*://)[^/@[:space:]]+@#\1[redacted]@#g; s#([Aa]uthorization:[[:space:]]*)(([Bb]earer|[Bb]asic|[Tt]oken)[[:space:]]+)?[^[:space:]]+#\1[redacted]#g; s#([Bb]earer[[:space:]]+)[^[:space:]]+#\1[redacted]#g; s#(github_pat_|gh[pousr]_)[[:alnum:]_]+#\1[redacted]#g; s#(sk-or-)[[:alnum:]_-]+#\1[redacted]#g; s/^ //;s/ $//'
 	)"
 	if [ -z "${sanitized_value}" ]; then
-		return 0
+		sanitized_value="(empty)"
 	fi
 	printf '%q' "${sanitized_value}"
 }
@@ -77,22 +77,23 @@ security_audit_require_writable_destination() {
 		security_audit_emit_failure "${required_phase}" "${required_path}" "destination parent directory is unavailable"
 		return 1
 	fi
-	if ! : 2>/dev/null > "${required_path}"; then
+	if { [ -e "${required_path}" ] && { [ ! -f "${required_path}" ] || [ ! -w "${required_path}" ]; }; } \
+			|| { [ ! -e "${required_path}" ] && [ ! -w "${required_parent}" ]; }; then
 		security_audit_emit_failure "${required_phase}" "${required_path}" "destination is not writable"
 		return 1
 	fi
 }
 
 security_audit_append_prompt_context() {
-	echo || return $?
-	echo "Current UTC date: $(date -u +%F)" || return $?
+	echo || return 1
+	echo "Current UTC date: $(date -u +%F)" || return 1
 	if [ "${AUDIT_SCOPE_MODE}" = "incremental" ]; then
-		echo "Audit scope: INCREMENTAL — commits ${LAST_AUDITED_SHA}..${HEAD_SHA} on the default branch." || return $?
-		echo "Files changed since the last audited commit (every finding MUST cite one of these files):" || return $?
-		sed 's/^/- /' "${CHANGED_FILES_FILE}" || return $?
-		echo "You may read any file in the repository to trace cross-file impact (callers, configuration, trust boundaries), but only emit findings whose cited file appears in the changed list above; findings citing unchanged files are dropped by the post-filter." || return $?
+		echo "Audit scope: INCREMENTAL — commits ${LAST_AUDITED_SHA}..${HEAD_SHA} on the default branch." || return 1
+		echo "Files changed since the last audited commit (every finding MUST cite one of these files):" || return 1
+		sed 's/^/- /' "${CHANGED_FILES_FILE}" || return 1
+		echo "You may read any file in the repository to trace cross-file impact (callers, configuration, trust boundaries), but only emit findings whose cited file appears in the changed list above; findings citing unchanged files are dropped by the post-filter." || return 1
 	else
-		echo "Audit scope: repository checkout at default-branch HEAD." || return $?
+		echo "Audit scope: repository checkout at default-branch HEAD." || return 1
 	fi
 }
 

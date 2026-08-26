@@ -155,6 +155,7 @@ def _run_security_audit(
 	*,
 	enabled: bool = True,
 	codex_output: str = "[]",
+	codex_available: bool = True,
 	extra_env: dict | None = None,
 	cwd: Path | None = None,
 	support_failure_mode: str | None = None,
@@ -165,7 +166,8 @@ def _run_security_audit(
 		bin_dir.mkdir(parents=True, exist_ok=True)
 		state_file = tmp_path / "gh-state.json"
 		_install_mock_gh(bin_dir, state_file)
-		_install_mock_codex(bin_dir, state_file)
+		if codex_available:
+			_install_mock_codex(bin_dir, state_file)
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 		codex_home = tmp_path / "codex-home"
 		codex_home.mkdir(parents=True, exist_ok=True)
@@ -175,6 +177,13 @@ def _run_security_audit(
 		env = os.environ.copy()
 		if Path(run_cwd) != REPO_ROOT:
 			env = {key: value for key, value in env.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+		existing_path_entries = env.get("PATH", "").split(os.pathsep)
+		if not codex_available:
+			existing_path_entries = [
+				path_entry
+				for path_entry in existing_path_entries
+				if not os.access(Path(path_entry) / "codex", os.X_OK)
+			]
 		env.update(
 			{
 				"GH_TOKEN": "test-token",
@@ -183,7 +192,7 @@ def _run_security_audit(
 				"CODEX_HOME": str(codex_home),
 				"MOCK_CODEX_OUTPUT": codex_output,
 				"MOCK_GH_STATE_FILE": str(state_file),
-				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+				"PATH": os.pathsep.join((str(bin_dir), *existing_path_entries)),
 				"PYTHONDONTWRITEBYTECODE": "1",
 				"SECURITY_AUDIT_ENABLED": "true" if enabled else "false",
 			}
@@ -269,11 +278,15 @@ def _security_audit_tracker_state() -> dict:
 
 
 def _assert_security_audit_failure_context(
-	proc: subprocess.CompletedProcess[str], *, phase: str, path_suffix: str
+	proc: subprocess.CompletedProcess[str],
+	*,
+	phase: str,
+	path_suffix: str,
+	expected_cwd: Path = REPO_ROOT,
 ) -> None:
 	assert proc.returncode != 0
 	assert f"phase={phase}" in proc.stderr
-	assert f"cwd={REPO_ROOT}" in proc.stderr
+	assert f"cwd={expected_cwd}" in proc.stderr
 	assert "path=" in proc.stderr
 	assert path_suffix in proc.stderr
 	assert "test-token" not in proc.stderr
@@ -515,6 +528,42 @@ def test_security_audit_codex_failure_preserves_status_and_reports_context() -> 
 	assert proc.returncode == 29
 	assert len(final_state.get("codex_calls", [])) == 1
 	assert final_state.get("issue_comment_args", []) == []
+
+
+def test_security_audit_missing_codex_reports_sanitized_context() -> None:
+	proc, final_state = _run_security_audit(
+		_security_audit_tracker_state(),
+		codex_available=False,
+	)
+	_assert_security_audit_failure_context(
+		proc,
+		phase="codex-preflight",
+		path_suffix="path=codex",
+	)
+	assert proc.returncode == 1
+	assert final_state.get("codex_calls", []) == []
+
+
+def test_security_audit_redacts_credential_shaped_path_context() -> None:
+	credential_values = ("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890", "opaque-auth-value")
+	credential_context = f"{credential_values[0]}-Authorization: {credential_values[1]}"
+	with tempfile.TemporaryDirectory(prefix=f"security-audit-{credential_context}-") as td:
+		credential_cwd = Path(td)
+		proc, _ = _run_security_audit(
+			_security_audit_tracker_state(),
+			cwd=credential_cwd,
+			extra_env={
+				"SECURITY_AUDIT_FP_EXCLUSIONS": str(
+					REPO_ROOT / "scripts" / "security_audit_fp_exclusions.json"
+				)
+			},
+			support_failure_mode="missing_render_helper",
+		)
+
+	assert proc.returncode == 1
+	for credential_value in credential_values:
+		assert credential_value not in proc.stderr
+	assert "redacted" in proc.stderr
 
 
 def test_security_audit_success_path_retains_codex_and_tracker_behavior() -> None:
