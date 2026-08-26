@@ -22,6 +22,80 @@ security_audit_flag_enabled() {
 	esac
 }
 
+security_audit_sanitize_log_value() {
+	local sanitized_value
+	sanitized_value="$(
+		printf '%s' "${1:-}" \
+			| tr '\n\r\t' '   ' \
+			| LC_ALL=C tr -cd '[:print:]' \
+			| tr -s ' ' \
+			| sed -E 's#([[:alpha:]][[:alnum:]+.-]*://)[^/@[:space:]]+@#\1[redacted]@#g; s/^ //;s/ $//'
+	)"
+	if [ -z "${sanitized_value}" ]; then
+		return 0
+	fi
+	printf '%q' "${sanitized_value}"
+}
+
+security_audit_emit_failure() {
+	local failure_phase="${1:?failure phase required}"
+	local failure_path="${2:?failure path required}"
+	local failure_reason="${3:?failure reason required}"
+	local failure_cwd
+	failure_cwd="$(pwd -P 2>/dev/null || printf '%s' '.')"
+	printf 'security-audit: phase=%s cwd=%s path=%s error=%s\n' \
+		"$(security_audit_sanitize_log_value "${failure_phase}")" \
+		"$(security_audit_sanitize_log_value "${failure_cwd}")" \
+		"$(security_audit_sanitize_log_value "${failure_path}")" \
+		"$(security_audit_sanitize_log_value "${failure_reason}")" >&2
+}
+
+security_audit_require_file() {
+	local required_phase="${1:?required phase required}"
+	local required_path="${2:?required path required}"
+	if [ ! -f "${required_path}" ] || [ ! -r "${required_path}" ]; then
+		security_audit_emit_failure "${required_phase}" "${required_path}" "required readable file is unavailable"
+		return 1
+	fi
+}
+
+security_audit_require_directory() {
+	local required_phase="${1:?required phase required}"
+	local required_path="${2:?required path required}"
+	if [ ! -d "${required_path}" ]; then
+		security_audit_emit_failure "${required_phase}" "${required_path}" "required directory is unavailable"
+		return 1
+	fi
+}
+
+security_audit_require_writable_destination() {
+	local required_phase="${1:?required phase required}"
+	local required_path="${2:?required path required}"
+	local required_parent
+	required_parent="$(dirname -- "${required_path}")"
+	if [ ! -d "${required_parent}" ]; then
+		security_audit_emit_failure "${required_phase}" "${required_path}" "destination parent directory is unavailable"
+		return 1
+	fi
+	if ! : 2>/dev/null > "${required_path}"; then
+		security_audit_emit_failure "${required_phase}" "${required_path}" "destination is not writable"
+		return 1
+	fi
+}
+
+security_audit_append_prompt_context() {
+	echo || return $?
+	echo "Current UTC date: $(date -u +%F)" || return $?
+	if [ "${AUDIT_SCOPE_MODE}" = "incremental" ]; then
+		echo "Audit scope: INCREMENTAL — commits ${LAST_AUDITED_SHA}..${HEAD_SHA} on the default branch." || return $?
+		echo "Files changed since the last audited commit (every finding MUST cite one of these files):" || return $?
+		sed 's/^/- /' "${CHANGED_FILES_FILE}" || return $?
+		echo "You may read any file in the repository to trace cross-file impact (callers, configuration, trust boundaries), but only emit findings whose cited file appears in the changed list above; findings citing unchanged files are dropped by the post-filter." || return $?
+	else
+		echo "Audit scope: repository checkout at default-branch HEAD." || return $?
+	fi
+}
+
 SECURITY_AUDIT_ENABLED="${SECURITY_AUDIT_ENABLED:-true}"
 if ! security_audit_flag_enabled "${SECURITY_AUDIT_ENABLED}"; then
 	echo "security-audit: SECURITY_AUDIT_ENABLED=${SECURITY_AUDIT_ENABLED}; skipping."
@@ -81,7 +155,6 @@ fi
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
 
 security_audit_require_cmd bash
-security_audit_require_cmd codex
 security_audit_require_cmd gh
 security_audit_require_cmd python3
 
@@ -121,7 +194,9 @@ TRACKER_BODY_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-issue-body.md"
 TRACKER_CANDIDATES_JSON="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-candidates.json"
 TRACKER_SELECTION_ENV="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-selection.env"
 RENDERED_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prompt.txt"
+RENDER_PROMPT_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prompt-render-error.txt"
 CODEX_OUTPUT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-output.json"
+CODEX_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-error.txt"
 FILTERED_FINDINGS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/filtered-findings.json"
 FILTER_SUMMARY_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/filter-summary.json"
 EXISTING_FOLLOWUPS_JSON="${SECURITY_AUDIT_RUNTIME_DIR}/existing-followups.json"
@@ -263,27 +338,56 @@ elif [ -n "${LAST_AUDITED_SHA}" ]; then
 fi
 echo "security-audit: scope=${AUDIT_SCOPE_MODE} (${AUDIT_SCOPE_REASON})"
 
-{
-	bash "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/render_prompt.sh" "${SECURITY_AUDIT_SUPPORT_DIR}/prompts/mode-security-audit.txt"
-	echo
-	echo "Current UTC date: $(date -u +%F)"
-	if [ "${AUDIT_SCOPE_MODE}" = "incremental" ]; then
-		echo "Audit scope: INCREMENTAL — commits ${LAST_AUDITED_SHA}..${HEAD_SHA} on the default branch."
-		echo "Files changed since the last audited commit (every finding MUST cite one of these files):"
-		sed 's/^/- /' "${CHANGED_FILES_FILE}"
-		echo "You may read any file in the repository to trace cross-file impact (callers, configuration, trust boundaries), but only emit findings whose cited file appears in the changed list above; findings citing unchanged files are dropped by the post-filter."
-	else
-		echo "Audit scope: repository checkout at default-branch HEAD."
-	fi
-} > "${RENDERED_PROMPT_FILE}"
+SECURITY_AUDIT_RENDER_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/render_prompt.sh"
+SECURITY_AUDIT_PROMPT_PATH="${SECURITY_AUDIT_SUPPORT_DIR}/prompts/mode-security-audit.txt"
+security_audit_require_file "prompt-preflight" "${SECURITY_AUDIT_RENDER_HELPER}"
+security_audit_require_file "prompt-preflight" "${SECURITY_AUDIT_PROMPT_PATH}"
+security_audit_require_directory "prompt-preflight" "${SECURITY_AUDIT_RUNTIME_DIR}"
+security_audit_require_writable_destination "prompt-preflight" "${RENDERED_PROMPT_FILE}"
+security_audit_require_writable_destination "prompt-preflight" "${RENDER_PROMPT_ERROR_FILE}"
 
-codex --ask-for-approval never \
-	-c model_verbosity=low \
-	-c include_apply_patch_tool=true \
-	exec \
-	--skip-git-repo-check \
-	--model "openai/gpt-5.6-sol" \
-	--sandbox read-only < "${RENDERED_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}"
+if bash "${SECURITY_AUDIT_RENDER_HELPER}" "${SECURITY_AUDIT_PROMPT_PATH}" \
+		> "${RENDERED_PROMPT_FILE}" 2> "${RENDER_PROMPT_ERROR_FILE}"; then
+	:
+else
+	RENDER_PROMPT_STATUS=$?
+	security_audit_emit_failure "prompt-render" "${SECURITY_AUDIT_PROMPT_PATH}" "prompt renderer exited nonzero"
+	exit "${RENDER_PROMPT_STATUS}"
+fi
+
+if security_audit_append_prompt_context >> "${RENDERED_PROMPT_FILE}"; then
+	:
+else
+	PROMPT_CONTEXT_STATUS=$?
+	security_audit_emit_failure "prompt-render" "${RENDERED_PROMPT_FILE}" "prompt context assembly exited nonzero"
+	exit "${PROMPT_CONTEXT_STATUS}"
+fi
+
+security_audit_require_file "codex-preflight" "${RENDERED_PROMPT_FILE}"
+SECURITY_AUDIT_CODEX_HOME="${CODEX_HOME:-${HOME:-}/.codex}"
+security_audit_require_directory "codex-preflight" "${SECURITY_AUDIT_CODEX_HOME}"
+security_audit_require_file "codex-preflight" "${SECURITY_AUDIT_CODEX_HOME}/config.toml"
+if ! command -v codex >/dev/null 2>&1; then
+	security_audit_emit_failure "codex-preflight" "codex" "required command is unavailable"
+	exit 1
+fi
+security_audit_require_writable_destination "codex-preflight" "${CODEX_OUTPUT_FILE}"
+security_audit_require_writable_destination "codex-preflight" "${CODEX_ERROR_FILE}"
+
+if codex --ask-for-approval never \
+		-c model_verbosity=low \
+		-c include_apply_patch_tool=true \
+		exec \
+		--skip-git-repo-check \
+		--model "openai/gpt-5.6-sol" \
+		--sandbox read-only < "${RENDERED_PROMPT_FILE}" \
+		> "${CODEX_OUTPUT_FILE}" 2> "${CODEX_ERROR_FILE}"; then
+	:
+else
+	CODEX_EXECUTION_STATUS=$?
+	security_audit_emit_failure "codex-execution" "${CODEX_OUTPUT_FILE}" "Codex exited nonzero"
+	exit "${CODEX_EXECUTION_STATUS}"
+fi
 
 python3 - \
 	"${REPO_ROOT}" \
