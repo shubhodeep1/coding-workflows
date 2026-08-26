@@ -301,10 +301,17 @@ def test_resolver_logs_conventional_branch_rejections_distinctly():
 	assert "reason=pr_fetch_failed" not in err
 
 
-def test_resolver_branch_lookup_is_pipefail_safe():
-	"""Multiple conventional-branch matches must not abort the poller."""
-	poller_source = POLLER_SCRIPT.read_text(encoding="utf-8")
-	assert '_linked_prs_by_branch_name "${issue_num}" 2>/dev/null | head -n1 || true' in poller_source
+def test_resolver_branch_lookup_is_deterministic_and_pipefail_safe():
+	"""Multiple conventional-branch matches choose the newest PR and stay fail-open."""
+	rc, resolved, _ = _resolver_result(
+		branch_pr="3997\n3998",
+		cross_refs="",
+		pr_payloads={
+			"3997": _impl_payload(3997, "ai/issue-3816", "Automated implementation."),
+			"3998": _impl_payload(3998, "ai/issue-3816", "Automated implementation."),
+		},
+	)
+	assert rc == 0 and resolved == "3998", f"rc={rc} resolved={resolved}"
 
 
 # ---------------------------------------------------------------------------

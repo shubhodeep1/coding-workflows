@@ -571,6 +571,7 @@ def _run_poller(
 	fail_search_issues: bool = False,
 	search_issue_items: list[dict] | None = None,
 	prs: list[dict] | None = None,
+	pr_commits: dict[int, list[dict]] | None = None,
 	pr_api_sequence: dict[int, list[dict]] | None = None,
 	existing_branches: list[str] | None = None,
 	merge_conflict_on_sync: bool = False,
@@ -643,6 +644,7 @@ def _run_poller(
 	issue_events = issue_events or {}
 	gql_labels = gql_labels or {}
 	prs = prs or []
+	pr_commits = pr_commits or {}
 	pr_api_sequence = pr_api_sequence or {}
 	existing_branches = existing_branches or ["main"]
 	blocked_check_shas = blocked_check_shas or []
@@ -780,6 +782,7 @@ def _run_poller(
 			"search_issue_items": list(search_issue_items or []),
 			"default_branch": "main",
 			"prs": prs,
+			"pr_commits": {str(k): list(v) for k, v in pr_commits.items()},
 			"pr_api_sequence": {str(k): list(v) for k, v in pr_api_sequence.items()},
 			"existing_branches": existing_branches,
 			"update_branch_calls": [],
@@ -1683,7 +1686,11 @@ if args[0] == 'api':
 
 	m = re.search(r'/pulls/(\d+)$', path)
 	m_files = re.search(r'/pulls/(\d+)/files(\?.*)?$', path)
+	m_commits = re.search(r'/pulls/(\d+)/commits(\?.*)?$', path)
 	m_update = re.search(r'/pulls/(\d+)/update-branch$', path)
+	if m_commits:
+		print(json.dumps(store.get('pr_commits', {}).get(m_commits.group(1), [])))
+		sys.exit(0)
 	if m_files:
 		pr_num = int(m_files.group(1))
 		pr = None
@@ -6685,6 +6692,42 @@ def test_standalone_attempt_merge_retries_inconclusive_pr_lookup_without_increme
 	assert "retrying merge next poll without consuming recovery budget" in result["stdout"]
 
 
+def test_standalone_attempt_merge_counts_conclusive_missing_implementation_pr_accurately():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:ready-to-merge",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:ready-to-merge"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[{
+			"number": 416,
+			"body": "Refs #501",
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "claude/unrelated-fix",
+		}],
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert result.get("merged_prs", []) == []
+	assert "no implementation PR could be resolved; counting the skipped merge as an attempt" in result["stdout"]
+	assert "attempted merge retry for ready-to-merge issue" not in result["stdout"]
+
+
 def test_standalone_dispatch_rb_judge_retargets_verified_implementation_pr():
 	state = _base_state(status="complete")
 	standalone_state_comment = (
@@ -6761,6 +6804,69 @@ def test_managed_dispatch_rb_judge_retargets_verified_implementation_pr():
 	issue_state = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_state["stall_recovery_count"] == 1
 	assert [dispatch["pr_number"] for dispatch in result["review_dispatches"]] == [77]
+
+
+def test_managed_skip_healthy_pr_redirect_targets_verified_implementation_pr():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: [77, 78]},
+		prs=[
+			{
+				"number": 77,
+				"body": "Automated implementation.",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-10",
+			},
+			{
+				"number": 78,
+				"body": "Refs #10",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+			},
+		],
+		pr_commits={
+			77: [{"commit": {"message": "[ai-autofix] productive fix", "committer": {"date": "2099-01-01T00:00:00Z"}}}],
+			78: [{"commit": {"message": "[ai-autofix] unrelated fix", "committer": {"date": "2099-01-01T00:00:00Z"}}}],
+		},
+		env_overrides={"MAX_STALL_RECOVERIES_DONE": "1"},
+	)
+	assert [dispatch["pr_number"] for dispatch in result["review_dispatches"]] == [77]
+	assert result["issues"]["10"].get("closed", False) is False
+	assert "skip→dispatch_rb_judge: PR #77" in result["stdout"]
+	assert "skip→dispatch_rb_judge: PR #78" not in result["stdout"]
+
+
+def test_managed_skip_retries_inconclusive_pr_lookup_without_closing_issue():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 86},
+		env_overrides={"MAX_STALL_RECOVERIES_DONE": "1"},
+	)
+	issue_state = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_state["stall_recovery_count"] == 1
+	assert result["issues"]["10"].get("closed", False) is False
+	assert result["review_dispatches"] == []
+	assert "skip healthy-PR guard: implementation PR lookup was inconclusive" in result["stdout"]
 
 
 def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():

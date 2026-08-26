@@ -10182,12 +10182,14 @@ REISSUE_EOF
       # SKIP_HEALTHY_PR_LOOKBACK_HOURS (default 24h).  Disable by
       # setting SKIP_HEALTHY_PR_GUARD_ENABLED=false.
       local _skip_pr_num=""
-      if [ -n "${STALL_MANAGED_LINKED_PR_CACHE:-}" ]; then
-        _skip_pr_num="$(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" \
-          | jq -r --arg n "${issue_num}" '.[$n].number // empty' 2>/dev/null || echo "")"
-      fi
-      if ! [[ "${_skip_pr_num}" =~ ^[0-9]+$ ]]; then
-        _skip_pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+      if [ "${SKIP_HEALTHY_PR_GUARD_ENABLED:-true}" = "true" ]; then
+        if _resolve_issue_implementation_pr "${issue_num}"; then
+          _skip_pr_num="${STALL_IMPL_PR_NUM}"
+        elif [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
+          echo "::warning::skip healthy-PR guard: implementation PR lookup was inconclusive for issue #${issue_num}; retrying next poll instead of closing or dispatching against an unverified PR."
+          STALL_RECOVERY_EFFECTIVE_ACTION="skip_skipped_pr_lookup_failed"
+          return 1
+        fi
       fi
       if [ "${SKIP_HEALTHY_PR_GUARD_ENABLED:-true}" = "true" ] \
           && [[ "${_skip_pr_num}" =~ ^[0-9]+$ ]]; then
@@ -10306,6 +10308,7 @@ The judge will evaluate this gap when the wave completes and decide whether to r
         rb_pr_num="${STALL_IMPL_PR_NUM}"
       elif [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
         echo "::warning::dispatch_rb_judge: implementation PR lookup was inconclusive for issue #${issue_num}; retrying next poll without consuming recovery budget."
+        STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_rb_judge_skipped_pr_lookup_failed"
         return 1
       fi
       if ! [[ "${rb_pr_num}" =~ ^[0-9]+$ ]]; then
@@ -11225,8 +11228,8 @@ _pr_json_is_issue_implementation_pr() {
 #
 # Resolution order:
 #   1. Open PR on the conventional implement branch `ai/issue-<n>`
-#      (_linked_prs_by_branch_name) — deterministic and unmaskable by
-#      mention-only cross-references.
+#      (_linked_prs_by_branch_name), newest PR number first — deterministic
+#      and unmaskable by mention-only cross-references.
 #   2. Cross-referenced PRs, newest first, accepting the first that
 #      passes _pr_json_is_issue_implementation_pr; mention-only PRs are
 #      logged and skipped.
@@ -11252,7 +11255,7 @@ _resolve_issue_implementation_pr() {
   STALL_IMPL_PR_FAILURE_REASON=""
   [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
   local _ripr_candidate _ripr_json _ripr_list
-  _ripr_candidate="$(_linked_prs_by_branch_name "${issue_num}" 2>/dev/null | head -n1 || true)"
+  _ripr_candidate="$(_linked_prs_by_branch_name "${issue_num}" 2>/dev/null | grep -E '^[0-9]+$' | sort -rn | head -n1 || true)"
   if [[ "${_ripr_candidate}" =~ ^[0-9]+$ ]]; then
     _ripr_json="$(_fetch_pr_json "${_ripr_candidate}")"
     if [ -z "${_ripr_json}" ] || [ "${_ripr_json}" = "{}" ]; then
@@ -12358,9 +12361,17 @@ STALL_EOF
               || true
           fi
         fi
-        if ! [[ "${merge_pr}" =~ ^[0-9]+$ ]] && [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
-          echo "  [standalone-stall] Issue #${issue_num}: implementation PR lookup was inconclusive; retrying merge next poll without consuming recovery budget."
-          STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_pr_lookup_failed"
+        if ! [[ "${merge_pr}" =~ ^[0-9]+$ ]]; then
+          if [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
+            echo "  [standalone-stall] Issue #${issue_num}: implementation PR lookup was inconclusive; retrying merge next poll without consuming recovery budget."
+            STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_pr_lookup_failed"
+          else
+            echo "  [standalone-stall] Issue #${issue_num}: no implementation PR could be resolved; counting the skipped merge as an attempt so the recovery ladder can escalate."
+            STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_no_implementation_pr"
+            tg_notify_issue "${issue_num}" "Standalone stall recovery: no implementation PR could be resolved for merge retry (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1))). Counting as an attempt so the recovery ladder can escalate." "WARNING"
+            STALL_RECOVERY_SHOULD_INCREMENT="true"
+            took_action="true"
+          fi
         else
           tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted merge retry for ready-to-merge issue (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
           STALL_RECOVERY_SHOULD_INCREMENT="true"
