@@ -116,6 +116,8 @@ def test_canonical_api_writes_do_not_request_extra_confirmation(command: str) ->
 		"curl -sS -X PUT https://api.digitalocean.com/v2/{apps,droplets}/id",
 		"curl -sS -X POST https://api.cloudflare.com/client/v4/workers; curl -X DELETE https://api.cloudflare.com/client/v4/workers/id",
 		"curl -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d \"$(cat /tmp/body)\"",
+		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d 'unterminated",
+		"  curl -sS -X POST https://api.cloudflare.com/client/v4/workers -H 'unterminated",
 		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id>/tmp/response",
 	],
 )
@@ -123,8 +125,14 @@ def test_noncanonical_api_writes_request_confirmation(command: str) -> None:
 	assert guard._api_write_requires_confirmation(command)
 
 
-def test_noncanonical_api_write_emits_ask_decision(capsys) -> None:
-	command = "curl -sS -X PUT https://api.digitalocean.com/v2/droplets/id -X DELETE"
+@pytest.mark.parametrize(
+	"command",
+	[
+		"curl -sS -X PUT https://api.digitalocean.com/v2/droplets/id -X DELETE",
+		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d 'unterminated",
+	],
+)
+def test_noncanonical_api_write_emits_ask_decision(command: str, capsys) -> None:
 	assert guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}}) == (0, "")
 	output = json.loads(capsys.readouterr().out)
 	assert output["hookSpecificOutput"]["permissionDecision"] == "ask"

@@ -39,7 +39,8 @@ Exit codes (Claude Code hook protocol):
   0 — allow the command. A warning may be emitted via `systemMessage`.
   2 — block the command; stderr is fed back to Claude as the reason.
 
-Escape hatch: set CLAUDE_PR_MERGE_GUARD=off to disable the check entirely.
+Escape hatch: set CLAUDE_PR_MERGE_GUARD=off to disable only the merged-PR check.
+The API-write confirmation safeguard remains active.
 """
 
 from __future__ import annotations
@@ -74,6 +75,11 @@ _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
 _API_WRITE_URL_PREFIXES = (
 	"https://api.digitalocean.com/",
 	"https://api.cloudflare.com/",
+)
+_API_WRITE_COMMAND_PREFIXES = tuple(
+	f"curl -sS -X {method} {url_prefix}"
+	for method in _API_WRITE_METHODS
+	for url_prefix in _API_WRITE_URL_PREFIXES
 )
 _API_WRITE_VALUE_OPTIONS = frozenset(
 	{
@@ -170,7 +176,7 @@ def _api_write_requires_confirmation(command: str) -> bool:
 	try:
 		segments = _shell_segments(command)
 	except ValueError:
-		return False
+		return command.lstrip().startswith(_API_WRITE_COMMAND_PREFIXES)
 
 	if not segments:
 		return False
