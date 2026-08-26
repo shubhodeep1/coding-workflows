@@ -339,6 +339,22 @@ def test_malformed_model_output_is_classified_without_leaking_content(
 	assert "sensitive-key" not in stderr
 
 
+@pytest.mark.parametrize(
+	"malformed_choice",
+	[None, "unexpected", {"message": None}],
+)
+def test_malformed_choice_shape_has_specific_error(
+	malformed_choice: Any,
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	_configure_nonempty_extraction(
+		monkeypatch,
+		{"choices": [malformed_choice]},
+	)
+	with pytest.raises(ValueError, match="must be an object"):
+		extractor.request_extracted_learnings("sensitive prompt")
+
+
 def test_request_failure_is_classified_without_promotion_ready_output(
 	tmp_path: Path,
 	monkeypatch: pytest.MonkeyPatch,

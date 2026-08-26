@@ -50,6 +50,16 @@ security_audit_emit_failure() {
 		"$(security_audit_sanitize_log_value "${failure_reason}")" >&2
 }
 
+security_audit_emit_path_diagnostic() {
+	local diagnostic_file="${1:?diagnostic file required}"
+	local path_diagnostic
+	path_diagnostic="$(LC_ALL=C grep -E '(No such file or directory|os error 2|ENOENT)' "${diagnostic_file}" 2>/dev/null | tail -n 20 || true)"
+	if [ -n "${path_diagnostic}" ]; then
+		printf 'security-audit: captured_path_error=%s\n' \
+			"$(security_audit_sanitize_log_value "${path_diagnostic}")" >&2
+	fi
+}
+
 security_audit_require_file() {
 	local required_phase="${1:?required phase required}"
 	local required_path="${2:?required path required}"
@@ -352,6 +362,7 @@ if bash "${SECURITY_AUDIT_RENDER_HELPER}" "${SECURITY_AUDIT_PROMPT_PATH}" \
 	:
 else
 	RENDER_PROMPT_STATUS=$?
+	security_audit_emit_path_diagnostic "${RENDER_PROMPT_ERROR_FILE}"
 	security_audit_emit_failure "prompt-render" "${SECURITY_AUDIT_PROMPT_PATH}" "prompt renderer exited nonzero"
 	exit "${RENDER_PROMPT_STATUS}"
 fi
@@ -386,7 +397,8 @@ if codex --ask-for-approval never \
 	:
 else
 	CODEX_EXECUTION_STATUS=$?
-	security_audit_emit_failure "codex-execution" "${CODEX_OUTPUT_FILE}" "Codex exited nonzero"
+	security_audit_emit_path_diagnostic "${CODEX_ERROR_FILE}"
+	security_audit_emit_failure "codex-execution" "codex" "Codex exited nonzero"
 	exit "${CODEX_EXECUTION_STATUS}"
 fi
 

@@ -4,6 +4,8 @@
 set -euo pipefail
 
 RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+GUARD_COMMENT_FILE="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/implement-guard-comment.XXXXXX")"
+trap 'rm -f "${GUARD_COMMENT_FILE}"' EXIT
 
 # Scope-block branch. When either scope guard (files_touched preflight /
 # commit-time, or the post-commit ai:scope label verifier) latched
@@ -84,9 +86,9 @@ if [ -n "${SVB_REASON:-}" ]; then
     echo '```'
     echo
     echo "${SCOPE_REDISPATCH_HINT}"
-  } > /tmp/scope_comment.md
+  } > "${GUARD_COMMENT_FILE}"
   gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
-    --body-file /tmp/scope_comment.md 2>/dev/null || true
+    --body-file "${GUARD_COMMENT_FILE}" 2>/dev/null || true
   if [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-}" ]; then
     TG_MSG="$(printf '%s\n' \
       "${SCOPE_TG_TITLE}" \
@@ -212,9 +214,9 @@ fi
   echo '```'
   echo
   echo "${DCB_REDISPATCH_HINT}"
-} > /tmp/destructive_comment.md
+} > "${GUARD_COMMENT_FILE}"
 gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
-  --body-file /tmp/destructive_comment.md 2>/dev/null || true
+  --body-file "${GUARD_COMMENT_FILE}" 2>/dev/null || true
 
 # 4. Fire a CRITICAL Telegram alert (inline — tg_helpers.sh may
 #    have been removed by consumer-repo cleanup). Build the

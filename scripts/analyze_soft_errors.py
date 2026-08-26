@@ -335,7 +335,13 @@ def call_openrouter(
 	choices = payload.get("choices") or []
 	if not choices:
 		raise RuntimeError(f"OpenRouter returned no choices: {payload!r}")
-	content = choices[0].get("message", {}).get("content") or ""
+	first_choice = choices[0]
+	if not isinstance(first_choice, dict):
+		raise RuntimeError("OpenRouter returned a malformed first choice")
+	message = first_choice.get("message")
+	if not isinstance(message, dict):
+		raise RuntimeError("OpenRouter returned a malformed choice message")
+	content = message.get("content") or ""
 	response_model = payload.get("model")
 	if not isinstance(response_model, str) or not response_model.strip():
 		response_model = model

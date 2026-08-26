@@ -2,6 +2,7 @@
 set -euo pipefail
 source scripts/gh_helpers.sh 2>/dev/null || true
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+TOOL_CALL_BUDGET="${TOOL_CALL_BUDGET:-40}"
 
 PROMPT_TEMPLATE_FILE="${RUNTIME_DIR}/mode-plan-inline.txt"
 cat > "${PROMPT_TEMPLATE_FILE}" <<'EOF'

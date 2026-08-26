@@ -230,6 +230,24 @@ def test_direct_openrouter_callers_emit_usage_for_empty_content() -> None:
 	assert analyzer_usage["or_total_tokens"] == 1
 
 
+def test_soft_error_analyzer_rejects_malformed_choice_shapes() -> None:
+	for malformed_choice in (None, "unexpected", {"message": None}):
+		payload = {"choices": [malformed_choice]}
+		with patch.object(
+			analyze_soft_errors.urllib.request,
+			"urlopen",
+			return_value=_TelemetryFakeOpenRouterResponse(payload),
+		):
+			try:
+				analyze_soft_errors.call_openrouter(
+					[], model="test/model", reasoning="medium", api_key="unused-key"
+				)
+			except RuntimeError as exc:
+				assert "malformed" in str(exc)
+			else:
+				raise AssertionError("malformed choices must produce a clear error")
+
+
 def test_parse_log_counts_semble_query_bytes_and_fallbacks_by_target() -> None:
 	log = """
 SEMBLE_QUERY target=overflow file=src/big.py chunks=20 bytes=1200 ms=5

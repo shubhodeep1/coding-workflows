@@ -285,7 +285,13 @@ def request_extracted_learnings(prompt: str) -> list[dict[str, object]]:
 		file=sys.stderr,
 	)
 
-	content = str((raw_response.get("choices") or [{}])[0].get("message", {}).get("content") or "")
+	choices = raw_response.get("choices")
+	if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+		raise ValueError("repository learnings extractor choices[0] must be an object")
+	message = choices[0].get("message")
+	if not isinstance(message, dict):
+		raise ValueError("repository learnings extractor choice message must be an object")
+	content = str(message.get("content") or "")
 	return normalize_model_output(content)
 
 

@@ -501,7 +501,12 @@ def test_security_audit_render_failure_preserves_status_and_reports_context() ->
 	proc, final_state = _run_security_audit(
 		_security_audit_tracker_state(),
 		support_failure_mode="render_failure",
-		extra_env={"MOCK_RENDER_STDERR": "test-token Chief Security Officer"},
+		extra_env={
+			"MOCK_RENDER_STDERR": (
+				"test-token Chief Security Officer\n"
+				"bash: /safe/missing-template: No such file or directory\n"
+			)
+		},
 	)
 	_assert_security_audit_failure_context(
 		proc,
@@ -509,6 +514,8 @@ def test_security_audit_render_failure_preserves_status_and_reports_context() ->
 		path_suffix="prompts/mode-security-audit.txt",
 	)
 	assert proc.returncode == 23
+	assert "captured_path_error=" in proc.stderr
+	assert "missing-template" in proc.stderr
 	assert final_state.get("codex_calls", []) == []
 
 
@@ -517,15 +524,20 @@ def test_security_audit_codex_failure_preserves_status_and_reports_context() -> 
 		_security_audit_tracker_state(),
 		extra_env={
 			"MOCK_CODEX_EXIT_CODE": "29",
-			"MOCK_CODEX_STDERR": "test-openrouter-key Chief Security Officer",
+			"MOCK_CODEX_STDERR": (
+				"test-openrouter-key Chief Security Officer\n"
+				"Error: No such file or directory (os error 2)\n"
+			),
 		},
 	)
 	_assert_security_audit_failure_context(
 		proc,
 		phase="codex-execution",
-		path_suffix="codex-output.json",
+		path_suffix="codex",
 	)
 	assert proc.returncode == 29
+	assert "captured_path_error=" in proc.stderr
+	assert "os\\ error\\ 2" in proc.stderr
 	assert len(final_state.get("codex_calls", [])) == 1
 	assert final_state.get("issue_comment_args", []) == []
 

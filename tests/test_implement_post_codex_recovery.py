@@ -1640,6 +1640,9 @@ def test_guard_handler_runtime_wiring_and_expression_size_contract() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
 	guard_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
 	assert 'RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"' in _implement_guard_handler_text()
+	assert 'GUARD_COMMENT_FILE="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/implement-guard-comment.XXXXXX")"' in _implement_guard_handler_text()
+	assert "/tmp/scope_comment.md" not in _implement_guard_handler_text()
+	assert "/tmp/destructive_comment.md" not in _implement_guard_handler_text()
 	assert "implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh" in stage_block
 	assert 'install -m 0755 scripts/implement_handle_guard_block.sh "${RUNTIME_DIR}/implement_handle_guard_block.sh"' in stage_block
 	assert workflow.find("- name: Stage workflow support files") < workflow.find("- name: Commit changes") < workflow.find("- name: Destructive-commit guard — label + alert on rejection")

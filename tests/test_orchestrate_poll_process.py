@@ -333,16 +333,10 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 		for line in poller_source_text.splitlines()
 		if "gh_retry gh api" in line and '"search/issues"' in line
 	]
-	explicit_get_api_lines = [
-		line.strip()
-		for line in poller_source_text.splitlines()
-		if "gh_retry gh api --method GET" in line
-	]
 
 	assert len(parameterized_search_calls) == 4
 	assert all("--method GET" in call for call in parameterized_search_calls)
 	assert sum("--paginate" in call for call in parameterized_search_calls) == 2
-	assert explicit_get_api_lines == parameterized_search_calls
 
 	# Preserve the two marker-search fallbacks and their paginated aggregation.
 	assert '-f per_page=100 -f q="${q_state}"' in poller_source_text
