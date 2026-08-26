@@ -3173,6 +3173,8 @@ has_label() {
 validation_fix_issue_has_merged_pr_evidence() {
   local issue_num="$1"
   local timeline_json
+  local validation_merged_pr_candidates validation_candidate_pr validation_candidate_pr_json
+  local validation_pr_lookup_failed=false
 
   if ! timeline_json="$(_issue_timeline_with_cross_refs_json "${issue_num}")"; then
     return 2
@@ -3182,14 +3184,36 @@ validation_fix_issue_has_merged_pr_evidence() {
     return 2
   fi
 
-  if printf '%s' "${timeline_json}" | jq -e '
+  if ! validation_merged_pr_candidates="$(printf '%s' "${timeline_json}" | jq -r '
     [.[]
       | select(.event == "cross-referenced")
       | select((.source.issue.pull_request.url? | type == "string") and ((.source.issue.merged // false) == true))
+      | .source.issue.number
     ]
-    | length > 0
-  ' >/dev/null 2>&1; then
-    return 0
+    | unique | .[]
+  ' 2>/dev/null)"; then
+    return 2
+  fi
+
+  for validation_candidate_pr in ${validation_merged_pr_candidates}; do
+    [[ "${validation_candidate_pr}" =~ ^[0-9]+$ ]] || continue
+    # §14 audit: the existing timeline response has merge state and number,
+    # but not the PR body/head needed by the implementation-PR predicate.
+    # Fetch only merged candidates and fail open to a retry on lookup failure.
+    validation_candidate_pr_json="$(_fetch_pr_json "${validation_candidate_pr}")"
+    if [ -z "${validation_candidate_pr_json}" ] || [ "${validation_candidate_pr_json}" = "{}" ]; then
+      validation_pr_lookup_failed=true
+      echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=pr_fetch_failed" >&2
+      continue
+    fi
+    if _pr_json_is_issue_implementation_pr "${issue_num}" "${validation_candidate_pr_json}"; then
+      return 0
+    fi
+    echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=not_implementation_pr" >&2
+  done
+
+  if [ "${validation_pr_lookup_failed}" = "true" ]; then
+    return 2
   fi
 
   if printf '%s' "${timeline_json}" | jq -e '
@@ -3377,6 +3401,7 @@ close_merged_issues_sweep() {
 
   local idx issue_num origin has_tracking_label timeline_json merged_pr_num
   local merged_pr_candidates _sweep_candidate_pr _sweep_candidate_pr_json
+  local sweep_pr_fetch_failed
   local closed_count=0
   local skipped_count=0
   local alert_count=0
@@ -3429,9 +3454,15 @@ close_merged_issues_sweep() {
     # of an already-labeled issue (almost always exactly one, which the
     # conventional `ai/issue-<n>` head check accepts on the first fetch).
     merged_pr_num=""
+    sweep_pr_fetch_failed=false
     for _sweep_candidate_pr in ${merged_pr_candidates}; do
       [[ "${_sweep_candidate_pr}" =~ ^[0-9]+$ ]] || continue
       _sweep_candidate_pr_json="$(_fetch_pr_json "${_sweep_candidate_pr}")"
+      if [ -z "${_sweep_candidate_pr_json}" ] || [ "${_sweep_candidate_pr_json}" = "{}" ]; then
+        sweep_pr_fetch_failed=true
+        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=pr_fetch_failed"
+        continue
+      fi
       if _pr_json_is_issue_implementation_pr "${issue_num}" "${_sweep_candidate_pr_json}"; then
         merged_pr_num="${_sweep_candidate_pr}"
         break
@@ -3440,6 +3471,11 @@ close_merged_issues_sweep() {
     done
 
     if [ -z "${merged_pr_num}" ]; then
+      if [ "${sweep_pr_fetch_failed}" = "true" ]; then
+        echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} pr_fetch_failed — skipping this cycle."
+        skipped_count=$((skipped_count + 1))
+        continue
+      fi
       if [ "${origin}" = "ready_label" ]; then
         # Normal pending state for ai:ready-to-merge. No alert — the
         # label is not a contract that a merged PR exists yet.
@@ -14523,27 +14559,35 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     [ -n "${ISSUE_STATE}" ] || ISSUE_STATE="open"
     ISSUE_STATES_JSON="$(echo "${ISSUE_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${ISSUE_STATE}" '. + {($key): $state}' 2>/dev/null || echo "${ISSUE_STATES_JSON}")"
 
-    LINKED_PR_NUM="$(_issue_cross_ref_pr_number_last "${inum}" 2>/dev/null || echo "")"
+    LINKED_PR_CANDIDATES="$(_issue_cross_ref_pr_numbers_unique "${inum}" 2>/dev/null || echo "")"
+    LINKED_PR_NUM=""
     PR_STATE="unknown"
     PR_MERGED="false"
-    if [[ "${LINKED_PR_NUM}" =~ ^[0-9]+$ ]]; then
-      _linked_pr_json="$(_fetch_pr_json "${LINKED_PR_NUM}")"
-      # Adopt the cross-referenced PR's state only when it is verifiably the
-      # issue's own implementation PR (head `ai/issue-<n>` or a closing-keyword
-      # body reference).  _issue_cross_ref_pr_number_last returns the LAST PR
-      # that merely mentions the issue, so without this gate an unrelated
-      # merged PR saying "Refs #<n>" forces ai:merged downstream and
-      # close_merged_issues_sweep closes the issue with its work never done
-      # (issue #3817 / PR #3825 incident).  Rejected candidates leave the
-      # issue in the unlinked state (PR_STATE=unknown, PR_MERGED=false).
-      if _pr_json_is_issue_implementation_pr "${inum}" "${_linked_pr_json}"; then
-        PR_STATE="$(_jq_field "${_linked_pr_json}" '.state' 'open|closed|merged')"
-        PR_MERGED="$(_jq_field "${_linked_pr_json}" '.merged_at != null' 'true|false')"
-        [ -n "${PR_MERGED}" ] || PR_MERGED="false"
-      else
-        echo "LINKED_PR_CROSS_REF_REJECTED issue=${inum} pr=${LINKED_PR_NUM} head=$(_jq_field "${_linked_pr_json}" '.head.ref') reason=not_implementation_pr" >&2
+    # Inspect every cross-reference so a later mention-only PR cannot mask an
+    # earlier implementation PR. Prefer merged evidence, while retaining the
+    # last verified unmerged implementation PR as a fallback truth signal.
+    # §14 audit: the existing timeline call omits PR body/head, so each
+    # candidate needs the existing `_fetch_pr_json` lookup for verification.
+    for _linked_pr_candidate in ${LINKED_PR_CANDIDATES}; do
+      [[ "${_linked_pr_candidate}" =~ ^[0-9]+$ ]] || continue
+      _linked_pr_candidate_json="$(_fetch_pr_json "${_linked_pr_candidate}")"
+      if [ -z "${_linked_pr_candidate_json}" ] || [ "${_linked_pr_candidate_json}" = "{}" ]; then
+        echo "LINKED_PR_CROSS_REF_REJECTED issue=${inum} pr=${_linked_pr_candidate} reason=pr_fetch_failed" >&2
+        continue
       fi
-    fi
+      if ! _pr_json_is_issue_implementation_pr "${inum}" "${_linked_pr_candidate_json}"; then
+        echo "LINKED_PR_CROSS_REF_REJECTED issue=${inum} pr=${_linked_pr_candidate} head=$(_jq_field "${_linked_pr_candidate_json}" '.head.ref') reason=not_implementation_pr" >&2
+        continue
+      fi
+      LINKED_PR_NUM="${_linked_pr_candidate}"
+      _linked_pr_candidate_state="$(_jq_field "${_linked_pr_candidate_json}" '.state' 'open|closed|merged')"
+      _linked_pr_candidate_merged="$(_jq_field "${_linked_pr_candidate_json}" '.merged_at != null' 'true|false')"
+      PR_STATE="${_linked_pr_candidate_state:-unknown}"
+      PR_MERGED="${_linked_pr_candidate_merged:-false}"
+      if [ "${PR_MERGED}" = "true" ]; then
+        break
+      fi
+    done
     PR_STATES_JSON="$(echo "${PR_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${PR_STATE}" --arg merged "${PR_MERGED}" '. + {($key): {state: $state, merged: ($merged == "true")}}' 2>/dev/null || echo "${PR_STATES_JSON}")"
 
     BEFORE_LABELS="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" '.[$key] // []')"

@@ -37,6 +37,8 @@ POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 
 def _run_bash(script: str, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
 	full_env = os.environ.copy()
+	full_env.pop("BASH_ENV", None)
+	full_env.pop("ENV", None)
 	full_env["PYTHONDONTWRITEBYTECODE"] = "1"
 	if env:
 		full_env.update(env)

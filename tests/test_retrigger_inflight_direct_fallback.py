@@ -42,6 +42,8 @@ def _iso_utc_minutes_ago(minutes: int) -> str:
 
 def _run_bash(script: str, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
 	full_env = os.environ.copy()
+	full_env.pop("BASH_ENV", None)
+	full_env.pop("ENV", None)
 	full_env["PYTHONDONTWRITEBYTECODE"] = "1"
 	full_env["GITHUB_REPOSITORY"] = "owner/repo"
 	if env:
