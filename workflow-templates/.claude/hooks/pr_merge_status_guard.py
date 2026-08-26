@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""PreToolUse guard — refuse commits/pushes that stack on an already-merged PR.
+"""PreToolUse guard for merged-PR writes and allowlisted API mutations.
 
-Implements CLAUDE.md §21.
+Implements CLAUDE.md §21 and protects the §22/§24 API permission allowlist.
 
 Long-lived Claude Code sessions (days to weeks) outlive the PRs they open. When
 the PR for the working branch merges mid-session, further commits to that same
@@ -68,7 +68,29 @@ GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
 )
 
 # Shell punctuation we treat as command separators when tokenizing a Bash line.
-_SHELL_PUNCTUATION_CHARS = ";&|\n"
+_SHELL_PUNCTUATION_CHARS = ";&|\n<>"
+
+_API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
+_API_WRITE_URL_PREFIXES = (
+	"https://api.digitalocean.com/",
+	"https://api.cloudflare.com/",
+)
+_API_WRITE_VALUE_OPTIONS = frozenset(
+	{
+		"-H",
+		"--header",
+		"-d",
+		"--data",
+		"--data-ascii",
+		"--data-binary",
+		"--data-raw",
+		"--data-urlencode",
+		"-F",
+		"--form",
+		"--form-string",
+	}
+)
+_API_WRITE_INLINE_OPTION_PREFIXES = ("-H", "-d", "-F")
 
 _SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+/[A-Za-z0-9._-]+$")
 _REMOTE_HEAD_BRANCH_RE = re.compile(r"^ref:\s+refs/heads/([^\s]+)\s+HEAD$", re.MULTILINE)
@@ -135,6 +157,58 @@ def _shell_segments(command: str) -> list[list[str]]:
 	if current_segment:
 		segments.append(current_segment)
 	return segments
+
+
+def _api_write_requires_confirmation(command: str) -> bool:
+	"""Return whether an allowlisted API write uses non-canonical curl options.
+
+	The settings rules are necessarily prefix matches. Keep their silent path
+	limited to one explicit method and destination followed only by headers and
+	request-body options; anything capable of changing curl's method, URL, or
+	transfer list must go through the normal harness prompt.
+	"""
+	try:
+		segments = _shell_segments(command)
+	except ValueError:
+		return False
+
+	if not segments:
+		return False
+	tokens = segments[0]
+	if len(tokens) < 5 or tokens[:3] != ["curl", "-sS", "-X"]:
+		return False
+	if tokens[3] not in _API_WRITE_METHODS:
+		return False
+	if not any(tokens[4].startswith(prefix) for prefix in _API_WRITE_URL_PREFIXES):
+		return False
+	if "{" in tokens[4] or "[" in tokens[4]:
+		return True
+	if len(segments) != 1 or "$(" in command or "`" in command:
+		return True
+
+	index = 5
+	while index < len(tokens):
+		token = tokens[index]
+		if token in _API_WRITE_VALUE_OPTIONS:
+			if index + 1 >= len(tokens):
+				return True
+			index += 2
+			continue
+		if any(
+			token.startswith(prefix) and len(token) > len(prefix)
+			for prefix in _API_WRITE_INLINE_OPTION_PREFIXES
+		):
+			index += 1
+			continue
+		if any(
+			token.startswith(f"{option}=")
+			for option in _API_WRITE_VALUE_OPTIONS
+			if option.startswith("--")
+		):
+			index += 1
+			continue
+		return True
+	return False
 
 
 def git_subcommands(command: str) -> set[str]:
@@ -478,11 +552,26 @@ def _warn(reason: str) -> None:
 	print(json.dumps({"systemMessage": f"merged-PR guard skipped: {reason}"}))
 
 
+def _request_api_write_confirmation() -> None:
+	"""Restore the harness prompt for a non-canonical allowlisted API write."""
+	print(
+		json.dumps(
+			{
+				"hookSpecificOutput": {
+					"hookEventName": "PreToolUse",
+					"permissionDecision": "ask",
+					"permissionDecisionReason": (
+						"Non-canonical API curl options can override the allowlisted "
+						"HTTP method or destination."
+					),
+				}
+			}
+		)
+	)
+
+
 def evaluate(payload: dict) -> tuple[int, str]:
 	"""Core decision. Returns (exit_code, message_for_stderr)."""
-	if os.environ.get("CLAUDE_PR_MERGE_GUARD", "").strip().lower() == "off":
-		return 0, ""
-
 	if payload.get("tool_name") != "Bash":
 		return 0, ""
 
@@ -490,7 +579,19 @@ def evaluate(payload: dict) -> tuple[int, str]:
 	command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
 	if not isinstance(command, str) or not command.strip():
 		return 0, ""
-	if not (git_subcommands(command) & GUARDED_SUBCOMMANDS):
+	guarded_git_subcommands = git_subcommands(command) & GUARDED_SUBCOMMANDS
+	if _api_write_requires_confirmation(command):
+		if guarded_git_subcommands:
+			return 2, (
+				"BLOCKED: run the non-canonical API write and git commit/push as "
+				"separate Bash calls so both permission guards can evaluate them."
+			)
+		_request_api_write_confirmation()
+		return 0, ""
+
+	if os.environ.get("CLAUDE_PR_MERGE_GUARD", "").strip().lower() == "off":
+		return 0, ""
+	if not guarded_git_subcommands:
 		return 0, ""
 
 	cwd = payload.get("cwd") or os.getcwd()
