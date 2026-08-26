@@ -115,49 +115,6 @@ def format_usage_value(value: int | None) -> str:
 	return str(value)
 
 
-def _format_openrouter_metadata_value(value: Any) -> str:
-	if value is None:
-		return "na"
-	if isinstance(value, bool):
-		return str(value).lower()
-	text = str(value).strip()
-	if not text:
-		return "na"
-	return "_".join(text.split())
-
-
-def format_openrouter_usage_line(
-	usage: dict[str, Any] | None,
-	*,
-	model: str,
-	phase: str,
-	call_label: str,
-	cache_enabled: bool | str | None,
-	cache_breakpoint_enabled: bool | str | None,
-	cache_breakpoint_fallback_retry: bool | str | None,
-) -> str:
-	"""Format normalized OpenRouter usage without logging request content."""
-	normalized_usage = normalize_usage(usage)
-	return (
-		"INFO: openrouter usage "
-		f"phase={_format_openrouter_metadata_value(phase)} "
-		f"call={_format_openrouter_metadata_value(call_label)} "
-		f"model={_format_openrouter_metadata_value(model)} "
-		f"cache_enabled={_format_openrouter_metadata_value(cache_enabled)} "
-		"cache_breakpoint_enabled="
-		f"{_format_openrouter_metadata_value(cache_breakpoint_enabled)} "
-		"cache_breakpoint_fallback_retry="
-		f"{_format_openrouter_metadata_value(cache_breakpoint_fallback_retry)} "
-		f"prompt_tokens={format_usage_value(normalized_usage['prompt_tokens'])} "
-		f"completion_tokens={format_usage_value(normalized_usage['completion_tokens'])} "
-		f"total_tokens={format_usage_value(normalized_usage['total_tokens'])} "
-		"cache_creation_input_tokens="
-		f"{format_usage_value(normalized_usage['cache_creation_input_tokens'])} "
-		"cache_read_input_tokens="
-		f"{format_usage_value(normalized_usage['cache_read_input_tokens'])}"
-	)
-
-
 def _resolve_budget_tokens(budget_tokens: int | None) -> int:
 	resolved_budget_tokens = _to_int_or_none(budget_tokens)
 	if resolved_budget_tokens is None:
