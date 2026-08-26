@@ -3173,6 +3173,8 @@ has_label() {
 validation_fix_issue_has_merged_pr_evidence() {
   local issue_num="$1"
   local timeline_json
+  local validation_merged_pr_candidates validation_candidate_pr validation_candidate_pr_json
+  local validation_pr_lookup_failed=false
 
   if ! timeline_json="$(_issue_timeline_with_cross_refs_json "${issue_num}")"; then
     return 2
@@ -3182,14 +3184,36 @@ validation_fix_issue_has_merged_pr_evidence() {
     return 2
   fi
 
-  if printf '%s' "${timeline_json}" | jq -e '
+  if ! validation_merged_pr_candidates="$(printf '%s' "${timeline_json}" | jq -r '
     [.[]
       | select(.event == "cross-referenced")
       | select((.source.issue.pull_request.url? | type == "string") and ((.source.issue.merged // false) == true))
+      | .source.issue.number
     ]
-    | length > 0
-  ' >/dev/null 2>&1; then
-    return 0
+    | unique | .[]
+  ' 2>/dev/null)"; then
+    return 2
+  fi
+
+  for validation_candidate_pr in ${validation_merged_pr_candidates}; do
+    [[ "${validation_candidate_pr}" =~ ^[0-9]+$ ]] || continue
+    # §14 audit: the existing timeline response has merge state and number,
+    # but not the PR body/head needed by the implementation-PR predicate.
+    # Fetch only merged candidates and fail open to a retry on lookup failure.
+    validation_candidate_pr_json="$(_fetch_pr_json "${validation_candidate_pr}")"
+    if [ -z "${validation_candidate_pr_json}" ] || [ "${validation_candidate_pr_json}" = "{}" ]; then
+      validation_pr_lookup_failed=true
+      echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=pr_fetch_failed" >&2
+      continue
+    fi
+    if _pr_json_is_issue_implementation_pr "${issue_num}" "${validation_candidate_pr_json}"; then
+      return 0
+    fi
+    echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=not_implementation_pr" >&2
+  done
+
+  if [ "${validation_pr_lookup_failed}" = "true" ]; then
+    return 2
   fi
 
   if printf '%s' "${timeline_json}" | jq -e '
@@ -3309,7 +3333,11 @@ $(printf '%s\n' "${unique_notes}" | sed 's/^/- /')"
 #
 # Verification policy (strict for both classes): walks timeline
 # cross-references and only closes if at least one linked PR is verified
-# merged (merged == true or merged_at != null).
+# merged (merged == true or merged_at != null) AND is verifiably the
+# issue's own implementation PR (`ai/issue-<n>` head branch or a
+# closing-keyword body reference — _pr_json_is_issue_implementation_pr).
+# A merged PR that merely mentions the issue (e.g. "Refs #<n>") does not
+# qualify and falls through to the no_merged_pr_found policy per origin.
 #
 # Gated by ENABLE_CLOSE_MERGED_ISSUES (default true).
 #
@@ -3372,6 +3400,8 @@ close_merged_issues_sweep() {
   fi
 
   local idx issue_num origin has_tracking_label timeline_json merged_pr_num
+  local merged_pr_candidates _sweep_candidate_pr _sweep_candidate_pr_json
+  local sweep_pr_fetch_failed
   local closed_count=0
   local skipped_count=0
   local alert_count=0
@@ -3404,16 +3434,48 @@ close_merged_issues_sweep() {
       continue
     fi
 
-    merged_pr_num="$(printf '%s' "${timeline_json}" | jq -r '
+    merged_pr_candidates="$(printf '%s' "${timeline_json}" | jq -r '
       [.[]
         | select(.event == "cross-referenced")
         | select((.source.issue.pull_request.url? | type == "string") and ((.source.issue.merged // false) == true))
         | .source.issue.number
       ]
-      | first // empty
+      | unique | .[]
     ' 2>/dev/null || echo "")"
 
+    # Verify each merged cross-referenced candidate is the issue's own
+    # implementation PR before closing on it.  The timeline event carries no
+    # head branch or body, and a cross-reference is created by ANY mention —
+    # an unrelated merged PR saying "Refs #<n>" must not close the issue
+    # (issue #3817 / PR #3825 incident).  §15 audit: the timeline payload
+    # (the only existing call here) structurally cannot answer the
+    # implementation-PR question, so one `_fetch_pr_json` per candidate is
+    # the smallest sufficient call; candidates are the rare merged cross-refs
+    # of an already-labeled issue (almost always exactly one, which the
+    # conventional `ai/issue-<n>` head check accepts on the first fetch).
+    merged_pr_num=""
+    sweep_pr_fetch_failed=false
+    for _sweep_candidate_pr in ${merged_pr_candidates}; do
+      [[ "${_sweep_candidate_pr}" =~ ^[0-9]+$ ]] || continue
+      _sweep_candidate_pr_json="$(_fetch_pr_json "${_sweep_candidate_pr}")"
+      if [ -z "${_sweep_candidate_pr_json}" ] || [ "${_sweep_candidate_pr_json}" = "{}" ]; then
+        sweep_pr_fetch_failed=true
+        echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=pr_fetch_failed"
+        continue
+      fi
+      if _pr_json_is_issue_implementation_pr "${issue_num}" "${_sweep_candidate_pr_json}"; then
+        merged_pr_num="${_sweep_candidate_pr}"
+        break
+      fi
+      echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=not_implementation_pr"
+    done
+
     if [ -z "${merged_pr_num}" ]; then
+      if [ "${sweep_pr_fetch_failed}" = "true" ]; then
+        echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} pr_fetch_failed — skipping this cycle."
+        skipped_count=$((skipped_count + 1))
+        continue
+      fi
       if [ "${origin}" = "ready_label" ]; then
         # Normal pending state for ai:ready-to-merge. No alert — the
         # label is not a contract that a merged PR exists yet.
@@ -8838,7 +8900,11 @@ prime_phase_concurrency_snapshot() {
 # block recovery forever.  Limitation: `gh run list
 # --json` exposes workflowName/name but not the workflow file path, so a
 # consumer that renamed the review workflow's display name away from the
-# canonical names ("AI Review" / "Internal Review" / "Review Autofix") is matched
+# canonical names ("AI Review" / "Internal Review" / "Review Autofix" /
+# "Internal: AI Review & Autofix" / "Codex PR Self-Healing Semantic Agent" —
+# the last two are this repo's actual internal-review.yml / review_autofix.yml
+# display names; without them the guard could never match an upstream review
+# run, the PR #3823 / issue #3816 false stall-recovery) is matched
 # only if workflowName still resolves; on a miss the guard fails open (push
 # proceeds) — no worse than the pre-fix behaviour, and the cached scan's own
 # path-based match still covers that case whenever the cache itself hits (in
@@ -8852,7 +8918,8 @@ _direct_inflight_review_run_on_branch()
 	_di_now_epoch="$(date +%s 2>/dev/null || echo "")"
 	[[ "${_di_now_epoch}" =~ ^[0-9]+$ ]] || return 0
 	# This helper only ever matches review-family runs (AI Review /
-	# Internal Review / Review Autofix; name filter below),
+	# Internal Review / Review Autofix / Internal: AI Review & Autofix /
+	# Codex PR Self-Healing Semantic Agent; name filter below),
 	# so its freshness window is the review-run budget, not the generic stall
 	# threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
 	_di_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
@@ -8869,8 +8936,10 @@ _direct_inflight_review_run_on_branch()
 		| [ .[]?
 			| select((.status // "") == "in_progress" or (.status // "") == "queued")
 			| select(
-				((.name // "") == "AI Review" or (.name // "") == "Internal Review" or (.name // "") == "Review Autofix")
-				or ((.workflowName // "") == "AI Review" or (.workflowName // "") == "Internal Review" or (.workflowName // "") == "Review Autofix")
+				((.name // "") == "AI Review" or (.name // "") == "Internal Review" or (.name // "") == "Review Autofix"
+				 or (.name // "") == "Internal: AI Review & Autofix" or (.name // "") == "Codex PR Self-Healing Semantic Agent")
+				or ((.workflowName // "") == "AI Review" or (.workflowName // "") == "Internal Review" or (.workflowName // "") == "Review Autofix"
+				    or (.workflowName // "") == "Internal: AI Review & Autofix" or (.workflowName // "") == "Codex PR Self-Healing Semantic Agent")
 			  )
 			| ([.startedAt, .createdAt] | map(select(type == "string" and . != ""))[0] // "") as $ts
 			| (if $ts != ""
@@ -8974,7 +9043,7 @@ workflow_run_is_review_family() {
   esac
 
   case "${workflow_name}" in
-    AI\ Review|Internal\ Review|Review\ Autofix)
+    AI\ Review|Internal\ Review|Review\ Autofix|Internal:\ AI\ Review\ \&\ Autofix|Codex\ PR\ Self-Healing\ Semantic\ Agent)
       return 0
       ;;
   esac
@@ -9911,6 +9980,8 @@ STALL_EOF
                    (.name // "") == "AI Review"
                    or (.name // "") == "Internal Review"
                    or (.name // "") == "Review Autofix"
+                   or (.name // "") == "Internal: AI Review & Autofix"
+                   or (.name // "") == "Codex PR Self-Healing Semantic Agent"
                    or ((.path // "") | endswith("ai-review.yml"))
                    or ((.path // "") | endswith("internal-review.yml"))
                    or ((.path // "") | endswith("review_autofix.yml"))
@@ -10338,6 +10409,8 @@ invoke_stall_judge() {
       | select((.name // "") == "AI Review"
                or (.name // "") == "Internal Review"
                or (.name // "") == "Review Autofix"
+               or (.name // "") == "Internal: AI Review & Autofix"
+               or (.name // "") == "Codex PR Self-Healing Semantic Agent"
                or (.path // "" | endswith("ai-review.yml"))
                or (.path // "" | endswith("internal-review.yml"))
                or (.path // "" | endswith("review_autofix.yml")))
@@ -11079,6 +11152,45 @@ _pr_json_closes_issue() {
     return 1
   fi
   return 2
+}
+
+# _pr_json_is_issue_implementation_pr — decide whether a PR (full REST
+# `pulls/N` JSON from _fetch_pr_json) is the issue's OWN implementation PR,
+# rather than a PR that merely mentions the issue.  The issue #3817 /
+# PR #3825 incident: _issue_cross_ref_pr_number_last returns the LAST
+# cross-referencing PR of ANY kind, so an unrelated merged PR whose body
+# said "Refs #3817" (the §19-correct non-closing reference) was adopted as
+# the issue's linked PR, forced ai:merged via reconcile_managed_issue_labels,
+# and close_merged_issues_sweep then closed the issue with its scope never
+# implemented.
+#
+# A PR counts as the issue's implementation PR when either:
+#   - its head branch is the orchestrator implement convention
+#     `ai/issue-<n>`, or
+#   - its body carries a GitHub closing-keyword reference to the issue
+#     (_pr_json_closes_issue rc=0; covers claude-branch and validation-fix
+#     PRs that close the issue without the conventional branch name).
+#
+# Return codes: 0=yes, 1=no.  Unknown/parse errors map to 1: unlike the
+# skip-recovery guards, the caller's follow-up act (adopting merged state /
+# closing the issue) is the destructive one, so unverifiable candidates are
+# rejected and the caller proceeds as if no linked PR were known.
+_pr_json_is_issue_implementation_pr() {
+  local issue_num="$1"
+  local pr_json="$2"
+  [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+  if [ -z "${pr_json}" ] || [ "${pr_json}" = "{}" ]; then
+    return 1
+  fi
+  local _impl_head_ref
+  _impl_head_ref="$(printf '%s' "${pr_json}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+  if [ "${_impl_head_ref}" = "ai/issue-${issue_num}" ]; then
+    return 0
+  fi
+  if _pr_json_closes_issue "${issue_num}" "${pr_json}"; then
+    return 0
+  fi
+  return 1
 }
 
 # _check_merged_pr_guard — Shared guard used by both the standalone and
@@ -12028,6 +12140,8 @@ STALL_EOF
                      (.name // "") == "AI Review"
                      or (.name // "") == "Internal Review"
                      or (.name // "") == "Review Autofix"
+                     or (.name // "") == "Internal: AI Review & Autofix"
+                     or (.name // "") == "Codex PR Self-Healing Semantic Agent"
                      or ((.path // "") | endswith("ai-review.yml"))
                      or ((.path // "") | endswith("internal-review.yml"))
                      or ((.path // "") | endswith("review_autofix.yml"))
@@ -14445,15 +14559,35 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     [ -n "${ISSUE_STATE}" ] || ISSUE_STATE="open"
     ISSUE_STATES_JSON="$(echo "${ISSUE_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${ISSUE_STATE}" '. + {($key): $state}' 2>/dev/null || echo "${ISSUE_STATES_JSON}")"
 
-    LINKED_PR_NUM="$(_issue_cross_ref_pr_number_last "${inum}" 2>/dev/null || echo "")"
+    LINKED_PR_CANDIDATES="$(_issue_cross_ref_pr_numbers_unique "${inum}" 2>/dev/null || echo "")"
+    LINKED_PR_NUM=""
     PR_STATE="unknown"
     PR_MERGED="false"
-    if [[ "${LINKED_PR_NUM}" =~ ^[0-9]+$ ]]; then
-      _linked_pr_json="$(_fetch_pr_json "${LINKED_PR_NUM}")"
-      PR_STATE="$(_jq_field "${_linked_pr_json}" '.state' 'open|closed|merged')"
-      PR_MERGED="$(_jq_field "${_linked_pr_json}" '.merged_at != null' 'true|false')"
-      [ -n "${PR_MERGED}" ] || PR_MERGED="false"
-    fi
+    # Inspect every cross-reference so a later mention-only PR cannot mask an
+    # earlier implementation PR. Prefer merged evidence, while retaining the
+    # last verified unmerged implementation PR as a fallback truth signal.
+    # §14 audit: the existing timeline call omits PR body/head, so each
+    # candidate needs the existing `_fetch_pr_json` lookup for verification.
+    for _linked_pr_candidate in ${LINKED_PR_CANDIDATES}; do
+      [[ "${_linked_pr_candidate}" =~ ^[0-9]+$ ]] || continue
+      _linked_pr_candidate_json="$(_fetch_pr_json "${_linked_pr_candidate}")"
+      if [ -z "${_linked_pr_candidate_json}" ] || [ "${_linked_pr_candidate_json}" = "{}" ]; then
+        echo "LINKED_PR_CROSS_REF_REJECTED issue=${inum} pr=${_linked_pr_candidate} reason=pr_fetch_failed" >&2
+        continue
+      fi
+      if ! _pr_json_is_issue_implementation_pr "${inum}" "${_linked_pr_candidate_json}"; then
+        echo "LINKED_PR_CROSS_REF_REJECTED issue=${inum} pr=${_linked_pr_candidate} head=$(_jq_field "${_linked_pr_candidate_json}" '.head.ref') reason=not_implementation_pr" >&2
+        continue
+      fi
+      LINKED_PR_NUM="${_linked_pr_candidate}"
+      _linked_pr_candidate_state="$(_jq_field "${_linked_pr_candidate_json}" '.state' 'open|closed|merged')"
+      _linked_pr_candidate_merged="$(_jq_field "${_linked_pr_candidate_json}" '.merged_at != null' 'true|false')"
+      PR_STATE="${_linked_pr_candidate_state:-unknown}"
+      PR_MERGED="${_linked_pr_candidate_merged:-false}"
+      if [ "${PR_MERGED}" = "true" ]; then
+        break
+      fi
+    done
     PR_STATES_JSON="$(echo "${PR_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${PR_STATE}" --arg merged "${PR_MERGED}" '. + {($key): {state: $state, merged: ($merged == "true")}}' 2>/dev/null || echo "${PR_STATES_JSON}")"
 
     BEFORE_LABELS="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" '.[$key] // []')"

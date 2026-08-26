@@ -380,6 +380,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_retrigger_inflight_direct_fallback.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_linked_pr_implementation_guard.py
 
       - name: Editor-changes-lost re-dispatch budget tests
         run: |

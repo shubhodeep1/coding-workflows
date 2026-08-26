@@ -271,6 +271,8 @@ def _run_poller_subprocess(
 		env.pop("BASH_ENV", None)
 		env.pop("ENV", None)
 		env.pop("WORKSPACE_PATH", None)
+		for git_env_key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+			env.pop(git_env_key, None)
 		env["PWD"] = str(sandbox)
 		env.pop("OLDPWD", None)
 		cmd = _rewrite_cmd_for_sandbox(cmd, sandbox)
@@ -613,7 +615,7 @@ def _run_poller(
 	blocked_check_shas: list[str] | None = None,
 	validation_workflow_runs: list[dict] | None = None,
 	issue_closed: dict[int, bool] | None = None,
-	issue_linked_prs: dict[int, int] | None = None,
+	issue_linked_prs: dict[int, int | list[int]] | None = None,
 	merge_tree_conflict_paths: list[str] | None = None,
 	timeline_fail_for_issues: list[int] | None = None,
 	update_branch_fail_for_prs: list[int] | None = None,
@@ -826,7 +828,10 @@ def _run_poller(
 			"merge_calls": [],
 			"blocked_check_shas": blocked_check_shas,
 			"validation_workflow_runs": validation_workflow_runs,
-			"issue_linked_prs": {str(k): int(v) for k, v in issue_linked_prs.items()},
+			"issue_linked_prs": {
+				str(k): ([int(pr_num) for pr_num in v] if isinstance(v, list) else int(v))
+				for k, v in issue_linked_prs.items()
+			},
 			"merge_tree_conflict_paths": list(merge_tree_conflict_paths),
 			"timeline_fail_for_issues": [int(x) for x in timeline_fail_for_issues],
 			"fail_issue_comment_get_after": {str(k): int(v) for k, v in fail_issue_comment_get_after.items()},
@@ -1473,55 +1478,58 @@ if args[0] == 'api':
 					})
 				issue_payload['comments'] = {'nodes': comment_nodes}
 			if 'timelineItems(' in query:
-				linked_pr_num = store.get('issue_linked_prs', {}).get(str(issue_num))
+				linked_pr_nums = store.get('issue_linked_prs', {}).get(str(issue_num))
 				timeline_nodes = []
-				if linked_pr_num is not None:
-					pr = None
-					for entry in store.get('prs', []):
-						if int(entry.get('number', 0) or 0) == int(linked_pr_num):
-							pr = entry
-							break
-					if pr is None:
-						pr = {
-							'number': int(linked_pr_num),
-							'state': 'open',
-							'merged': False,
-							'headRefName': f'ai/issue-{linked_pr_num}',
-							'mergeable': True,
-							'mergeable_state': 'clean',
-						}
-					pr_repository = pr.get('repository', {'nameWithOwner': 'owner/repo'})
-					if isinstance(pr_repository, dict):
-						pr_repository = dict(pr_repository)
-						pr_repository['nameWithOwner'] = str(pr_repository.get('nameWithOwner', 'owner/repo'))
-					else:
-						pr_repository = {'nameWithOwner': str(pr_repository)}
-					pr_state = str(pr.get('state', 'open')).upper()
-					if pr_state == 'MERGED':
-						pr_state = 'CLOSED'
-					timeline_nodes.append({
-						'willCloseTarget': bool(pr.get('willCloseTarget', True)),
-						'source': {
-							'__typename': 'PullRequest',
-							'number': int(pr.get('number', linked_pr_num)),
-							'repository': pr_repository,
-							'state': pr_state,
-							'merged': bool(pr.get('merged', False)),
-							'mergedAt': pr.get('merged_at', None),
-							'headRefName': pr.get('headRefName', ''),
-							'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),
-							'mergeable': pr.get('mergeable', None),
-							'mergeStateStatus': str(pr.get('mergeStateStatus', pr.get('mergeable_state', ''))).upper(),
-							'mergeCommit': {
-								'oid': pr.get('merge_commit_sha', None),
+				if linked_pr_nums is not None:
+					if not isinstance(linked_pr_nums, list):
+						linked_pr_nums = [linked_pr_nums]
+					for linked_pr_num in linked_pr_nums:
+						pr = None
+						for entry in store.get('prs', []):
+							if int(entry.get('number', 0) or 0) == int(linked_pr_num):
+								pr = entry
+								break
+						if pr is None:
+							pr = {
+								'number': int(linked_pr_num),
+								'state': 'open',
+								'merged': False,
+								'headRefName': f'ai/issue-{linked_pr_num}',
+								'mergeable': True,
+								'mergeable_state': 'clean',
+							}
+						pr_repository = pr.get('repository', {'nameWithOwner': 'owner/repo'})
+						if isinstance(pr_repository, dict):
+							pr_repository = dict(pr_repository)
+							pr_repository['nameWithOwner'] = str(pr_repository.get('nameWithOwner', 'owner/repo'))
+						else:
+							pr_repository = {'nameWithOwner': str(pr_repository)}
+						pr_state = str(pr.get('state', 'open')).upper()
+						if pr_state == 'MERGED':
+							pr_state = 'CLOSED'
+						timeline_nodes.append({
+							'willCloseTarget': bool(pr.get('willCloseTarget', True)),
+							'source': {
+								'__typename': 'PullRequest',
+								'number': int(pr.get('number', linked_pr_num)),
+								'repository': pr_repository,
+								'state': pr_state,
+								'merged': bool(pr.get('merged', False)),
+								'mergedAt': pr.get('merged_at', None),
+								'headRefName': pr.get('headRefName', ''),
+								'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),
+								'mergeable': pr.get('mergeable', None),
+								'mergeStateStatus': str(pr.get('mergeStateStatus', pr.get('mergeable_state', ''))).upper(),
+								'mergeCommit': {
+									'oid': pr.get('merge_commit_sha', None),
+								},
+								'commits': {
+									'nodes': [
+										{'commit': {'pushedDate': pr.get('headPushedAt', '2026-01-01T00:00:00Z'), 'committedDate': pr.get('headPushedAt', '2026-01-01T00:00:00Z')}}
+									],
+								},
 							},
-							'commits': {
-								'nodes': [
-									{'commit': {'pushedDate': pr.get('headPushedAt', '2026-01-01T00:00:00Z'), 'committedDate': pr.get('headPushedAt', '2026-01-01T00:00:00Z')}}
-								],
-							},
-						},
-					})
+						})
 				issue_payload['timelineItems'] = {'nodes': timeline_nodes}
 			repo[f'i{alias_num}'] = issue_payload
 		print(json.dumps({'data': {'repository': repo}}))
@@ -1970,17 +1978,20 @@ if args[0] == 'api':
 			if int(issue_num) in set(store.get('timeline_fail_for_issues', [])):
 				print('timeline lookup failed', file=sys.stderr)
 				sys.exit(1)
-			linked_pr = store.get('issue_linked_prs', {}).get(str(issue_num))
-			if linked_pr is not None:
-				events.append({
-					'event': 'cross-referenced',
-					'source': {
-						'issue': {
-							'number': int(linked_pr),
-							'pull_request': {'url': f'https://api.github.com/repos/owner/repo/pulls/{int(linked_pr)}'},
-						}
-					},
-				})
+			linked_prs = store.get('issue_linked_prs', {}).get(str(issue_num))
+			if linked_prs is not None:
+				if not isinstance(linked_prs, list):
+					linked_prs = [linked_prs]
+				for linked_pr in linked_prs:
+					events.append({
+						'event': 'cross-referenced',
+						'source': {
+							'issue': {
+								'number': int(linked_pr),
+								'pull_request': {'url': f'https://api.github.com/repos/owner/repo/pulls/{int(linked_pr)}'},
+							}
+						},
+					})
 		if jq:
 			import subprocess
 			jq_result = subprocess.run(['jq', '-r', jq], input=json.dumps(events), capture_output=True, text=True)
@@ -6868,6 +6879,32 @@ def test_validation_fixing_backfills_ai_merged_from_linked_merged_pr_evidence():
 	assert "ai:closed" not in result["issues"]["501"]["labels"]
 
 
+def test_validation_fixing_rejects_mention_only_merged_pr_evidence():
+	state = _base_state(status="validation-fixing")
+	state["validation_cycle"] = 1
+	state["validation_last_dispatch_cycle"] = 1
+	state["validation_active_fix_issues"] = [501]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:closed"]},
+		issue_linked_prs={501: 901},
+		prs=[{
+			"number": 901,
+			"state": "closed",
+			"merged": True,
+			"merged_at": "2026-08-25T15:18:27Z",
+			"headRefName": "claude/unrelated-memory-fix",
+			"headRefFromApi": "claude/unrelated-memory-fix",
+			"body": "Refs #501",
+		}],
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert "ai:merged" not in result["issues"]["501"]["labels"]
+	assert "VALIDATION_FIX_MERGED_EVIDENCE issue=501 candidate_pr=901 rejected=not_implementation_pr" in result["stderr"]
+
+
 def test_validation_fixing_closed_without_merged_evidence_still_fails():
 	state = _base_state(status="validation-fixing")
 	state["validation_cycle"] = 1
@@ -7970,6 +8007,147 @@ def test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr
 	assert "CLOSE_MERGED_SWEEP issue=10 pr=901 origin=ready_label status=closed" in result["stdout"], (
 		"Missing CLOSE_MERGED_SWEEP ready_label closure log line in poller stdout"
 	)
+
+
+def _sweep_complete_project_state() -> dict:
+	"""Minimal complete-project state so the wave loop is benign and the only
+	side-effect on issue #10 is close_merged_issues_sweep (same shape as
+	test_close_merged_issues_sweep_closes_ready_to_merge_with_verified_merged_pr)."""
+	return {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 1,
+		"total_waves": 1,
+		"current_wave": 1,
+		"judge_cycle": 0,
+		"recovery_count": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "complete",
+		"integration_branch": "orchestrator/project-192",
+		"final_merge_pr": 0,
+		"final_merge_status": "merged",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+				],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 10},
+		"pending_issue_defs": {},
+	}
+
+
+def test_close_merged_issues_sweep_rejects_mention_only_merged_pr():
+	"""Issue #3817 / PR #3825 regression: a merged PR that merely MENTIONS the
+	issue ("Refs #<n>" from an unrelated branch) is a cross-reference on the
+	issue timeline, but it is not the issue's implementation PR. The sweep
+	must reject it, leave the issue open, and fall through to the
+	merged_label stale-label alert instead of closing an unimplemented issue.
+	"""
+	mention_only_pr = {
+		"number": 950,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-08-25T15:18:27Z",
+		"baseRefName": "main",
+		"headRefName": "claude/unrelated-memory-fix",
+		"headRefFromApi": "claude/unrelated-memory-fix",
+		"body": "Raise retry budget to outlast dispatch bursts.\n\nRefs #10\n",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 950},
+		prs=[mention_only_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 not in result.get("closed_issues", []), (
+		f"Mention-only merged PR must not close the issue; closed_issues={result.get('closed_issues')}"
+	)
+	assert "CLOSE_MERGED_SWEEP issue=10 origin=merged_label candidate_pr=950 rejected=not_implementation_pr" in result["stdout"], (
+		"Missing candidate rejection log line in poller stdout"
+	)
+	assert "no_merged_pr_found" in (result["stdout"] + result["stderr"]), (
+		"Rejected candidate must fall through to the no_merged_pr_found policy"
+	)
+
+
+def test_close_merged_issues_sweep_accepts_closing_body_reference_pr():
+	"""A merged PR on a non-conventional branch whose body carries a
+	closing-keyword reference ("Closes #<n>") IS the issue's implementation
+	PR (standalone / claude-branch flows) and must still close the issue.
+	Guards the implementation-PR gate against over-tightening."""
+	closing_pr = {
+		"number": 951,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-08-25T15:18:27Z",
+		"baseRefName": "main",
+		"headRefName": "claude/standalone-fix",
+		"headRefFromApi": "claude/standalone-fix",
+		"body": "Standalone fix.\n\nCloses #10\n",
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+	result = _run_poller(
+		state=_sweep_complete_project_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 951},
+		prs=[closing_pr],
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert 10 in result.get("closed_issues", []), (
+		f"Closing-body-reference PR must still close the issue; closed_issues={result.get('closed_issues')}"
+	)
+	assert "CLOSE_MERGED_SWEEP issue=10 pr=951 origin=merged_label status=closed" in result["stdout"], (
+		"Missing CLOSE_MERGED_SWEEP closure log line in poller stdout"
+	)
+
+
+def test_reconciliation_uses_implementation_pr_masked_by_later_mention():
+	genuine_pr = {
+		"number": 951,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-08-25T15:00:00Z",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+	}
+	mention_only_pr = {
+		"number": 952,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-08-25T16:00:00Z",
+		"headRefName": "claude/unrelated-fix",
+		"headRefFromApi": "claude/unrelated-fix",
+		"body": "Refs #10",
+	}
+	result = _run_poller(
+		state=_base_state(status="in_progress"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:planning"]},
+		issue_linked_prs={10: [951, 952]},
+		prs=[genuine_pr, mention_only_pr],
+	)
+	assert "ai:merged" in result["issues"]["10"]["labels"]
+
+
+def test_linkage_paths_distinguish_pr_fetch_failure_from_rejection():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=pr_fetch_failed" in script
+	assert "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=pr_fetch_failed" in script
+	assert "LINKED_PR_CROSS_REF_REJECTED issue=${inum} pr=${_linked_pr_candidate} reason=pr_fetch_failed" in script
 
 
 def test_close_merged_issues_sweep_pending_ready_to_merge_does_not_alert():
