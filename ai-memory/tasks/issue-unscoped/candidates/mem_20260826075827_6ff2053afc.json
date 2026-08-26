@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:12213-12222 | severity=MAJOR | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: The wrong-PR skip branch treats both `pr_fetch_failed` transient API failures and `not_implementation_pr` rejections as recovery progress.\n  WHY: This can consume recovery budget and emit a false no-implementation-PR warning; severity differs (MAJOR vs NIT), so the highest severity is used.\n- scripts/orchestrate_poll_process.sh:11249\u201311258 | severity=MAJOR | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The conventional branch can log `pr_fetch_failed` without logging `not_implementation_pr` when valid PR JSON fails the implementation predicate.\n  WHY: This conflates fetch failures with genuine predicate rejections and prevents operators or callers from distinguishing the failure modes.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: No poller-level test exercises the retarget-to-verified-PR success branch.\n  expected_change_site: tests/test_orchestrate_poll_process.py\n  confidence=3\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  EVIDENCE: The LAST RUN DIFF adds only `test_standalone_retrigger_review_counts_unresolvable_wrong_pr_as_attempt` and fixture/assertion changes; scripts/orchestrate_poll_process.sh lines 12206-12212 (the `if _resolve_issue_implementation_pr` success arm) have no poller-level test; only helper-level contract tests cover resolution.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: scripts/orchestrate_poll_process.sh\n  Line or code reference: lines 12213-12222 (the wrong-PR skip `else` branch added in the last run)\n  Problem: The skip branch sets `STALL_RECOVERY_SHOULD_INCREMENT=\"true\"` and `took_action=\"true\"` for every non-zero return from `_resolve_issue_implementation_pr`, without distinguishing `reason=not_implementation_pr` from `reason=pr_fetch_failed`.\n  Why it fails at runtime: During API failures, repeated transient failures burn `MAX_STALL_RECOVERIES_PER_ISSUE` and can escalate recovery for a healthy issue while emitting an incorrect notification.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/orchestrate_poll_process.sh\n  Line or code reference: lines 12300\u201312303 (post-action block) and lines 12208\u201312222 (wrong-PR block)\n  Problem: The claimed duplicate notification paths are invalid because the wrong-PR skip clears `head_ref`, leaving `_std_rtr_push_succeeded` false and suppressing the post-action notification.\n- File: scripts/orchestrate_poll_process.sh\n  Line or code reference: lines 11249\u201311258 (conventional branch path of `_resolve_issue_implementation_pr`)\n  Problem: The conventional branch can log `pr_fetch_failed` rather than `not_implementation_pr` when non-empty JSON fails the predicate.\n  Why it fails at runtime: The log conflates transient fetch failures with genuine wrong-PR rejection and may cause incorrect recovery-budget handling.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: PR description states \"No poller-level test covers the standalone retrigger retarget-to-verified-PR success branch\"\n  Expected change site: tests/test_orchestrate_poll_process.py\n  Evidence of absence: The LAST RUN DIFF adds only `test_standalone_retrigger_review_counts_unresolvable_wrong_pr_as_attempt` and related fixture/assertion changes; no test exercises successful retarget, push, and review dispatch.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- file: scripts/orchestrate_poll_process.sh\n  location: run_standalone_stall_recovery, retrigger_review wrong-PR skip else-branch (lines 12213-12222)\n  issue: The increment-on-skip conflates `_resolve_issue_implementation_pr` failure reasons, counting transient `pr_fetch_failed` like `not_implementation_pr`.\n  suggested minimal fix: Export a failure-reason global and leave `pr_fetch_failed` uncounted so the next poll cycle retries.\n  HARDENING_RISK_SCORE: 1\n- Requirement: PR Description, Fix 1 \u2014 \"`run_standalone_stall_recovery` `retrigger_review`: verifies the cached/cross-ref candidate before the empty-commit push, retargets, or skips with `STALL_RECOVERY_EFFECTIVE_ACTION=retrigger_review_skipped_wrong_pr`.\"\n  Expected change site: tests/test_orchestrate_poll_process.py, alongside test_standalone_retrigger_review_counts_unresolvable_wrong_pr_as_attempt added by the last run.\n  Evidence of absence: The LAST RUN DIFF adds only the skip-when-unresolvable test; scripts/orchestrate_poll_process.sh lines 12206-12212 have no poller-level test for retarget success.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: scripts/orchestrate_poll_process.sh\n  Line or code reference: 12213-12222 (wrong-PR skip branch) interacting with _resolve_issue_implementation_pr at lines 11244-11278\n  Problem: The caller treats transient `pr_fetch_failed` like permanent `not_implementation_pr` failure.\n  Why it fails at runtime: Transient API outages advance the recovery counter and send a warning before a later retry can resolve normally.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- Requirement: The PR description states \"24 retrigger/attempt_merge/standalone-stall tests, 80 stall/merged/sweep/reconcile/fetch tests\" passed, and the kimi-k3 reviewer noted \"No poller-level test exercises the retarget-to-verified-PR success branch.\"\n  Expected change site: tests/test_orchestrate_poll_process.py \u2014 a new test for standalone retargeting and pushing against the verified implementation PR.\n  Evidence of absence: The LAST RUN DIFF adds only `test_standalone_retrigger_review_counts_unresolvable_wrong_pr_as_attempt` and fixture changes; no test exercises the retarget-to-verified-PR success branch.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- file: scripts/orchestrate_poll_process.sh\n  location: standalone retrigger_review wrong-PR skip, lines 12213-12222\n  issue: The last-run increment treats every `_resolve_issue_implementation_pr` failure as recovery progress, including transient `pr_fetch_failed`.\n  suggested minimal fix: Increment and notify only after a non-retryable `not_implementation_pr` rejection; leave fetch-only misses uncounted.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "35155dc8fd8400916bd911344096e63f5c605e82c964eec344d73875be614734",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3834,
+    "run_id": "32938728815",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32938728815",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260826075827_6ff2053afc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3834,
+    "run_id": "32938728815"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-26T07:58:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
