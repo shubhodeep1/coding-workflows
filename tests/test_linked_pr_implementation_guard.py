@@ -292,7 +292,7 @@ def test_resolver_logs_fetch_failures_distinctly():
 
 def test_resolver_logs_conventional_branch_fetch_failures_distinctly():
 	"""The preferred conventional-branch lookup reports the same diagnostic
-	as a failed cross-reference lookup before falling through safely."""
+	as a failed cross-reference lookup and stops resolution safely."""
 	rc, resolved, failure_reason, err = _resolver_result(
 		branch_pr="3998",
 		cross_refs="",
@@ -301,6 +301,22 @@ def test_resolver_logs_conventional_branch_fetch_failures_distinctly():
 	assert rc == 1 and resolved == "", f"rc={rc} resolved={resolved}"
 	assert failure_reason == "pr_fetch_failed"
 	assert "STALL_LINKED_PR_REJECTED issue=3816 pr=3998 reason=pr_fetch_failed" in err
+
+
+def test_resolver_preferred_fetch_failure_outweighs_mention_rejection():
+	"""A failed payload fetch for the preferred conventional-branch PR stays
+	inconclusive even when a newer mention-only cross-reference is rejectable."""
+	rc, resolved, failure_reason, err = _resolver_result(
+		branch_pr="3998",
+		cross_refs="4000",
+		pr_payloads={
+			"4000": _impl_payload(4000, "claude/unrelated", "Refs #3816"),
+		},
+	)
+	assert rc == 1 and resolved == "", f"rc={rc} resolved={resolved}"
+	assert failure_reason == "pr_fetch_failed"
+	assert "STALL_LINKED_PR_REJECTED issue=3816 pr=3998 reason=pr_fetch_failed" in err
+	assert "pr=4000" not in err
 
 
 def test_resolver_logs_conventional_branch_rejections_distinctly():

@@ -11267,8 +11267,11 @@ _resolve_issue_implementation_pr() {
   if [[ "${_ripr_candidate}" =~ ^[0-9]+$ ]]; then
     _ripr_json="$(_fetch_pr_json "${_ripr_candidate}")"
     if [ -z "${_ripr_json}" ] || [ "${_ripr_json}" = "{}" ]; then
-      _ripr_saw_fetch_failure="true"
       echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=pr_fetch_failed" >&2
+      # The branch lookup already found the preferred PR; mention-only
+      # rejections cannot turn its unavailable payload into a verified miss.
+      STALL_IMPL_PR_FAILURE_REASON="pr_fetch_failed"
+      return 1
     elif _pr_json_is_issue_implementation_pr "${issue_num}" "${_ripr_json}"; then
       STALL_IMPL_PR_NUM="${_ripr_candidate}"
       STALL_IMPL_PR_JSON="${_ripr_json}"
