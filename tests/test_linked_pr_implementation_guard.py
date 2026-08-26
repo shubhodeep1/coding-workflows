@@ -157,13 +157,21 @@ def test_empty_or_invalid_pr_json_is_rejected():
 # ---------------------------------------------------------------------------
 
 
-def _resolver_result(branch_pr: str, cross_refs: str, pr_payloads: dict[str, dict]) -> tuple[int, str, str, str]:
+def _resolver_result(
+	branch_pr: str,
+	cross_refs: str,
+	pr_payloads: dict[str, dict],
+	*,
+	branch_discovery_rc: int = 0,
+	cross_ref_discovery_rc: int = 0,
+) -> tuple[int, str, str, str]:
 	"""Run the extracted resolver with stubbed lookups.
 
 	branch_pr: newline list emitted by the _linked_prs_by_branch_name stub.
 	cross_refs: newline list emitted by the _issue_cross_ref_pr_numbers_unique stub.
 	pr_payloads: PR number -> payload dict served by the _fetch_pr_json stub
 	  (missing numbers yield "{}", the helper's fetch-failure shape).
+	branch_discovery_rc / cross_ref_discovery_rc: injected helper return codes.
 	Returns (rc, resolved_pr_num, failure_reason, stderr).
 	"""
 	with tempfile.TemporaryDirectory() as td:
@@ -184,8 +192,8 @@ def _resolver_result(branch_pr: str, cross_refs: str, pr_payloads: dict[str, dic
 		(tmp / "payloads.json").write_text(json.dumps(pr_payloads), encoding="utf-8")
 		script = textwrap.dedent("""
 		set -uo pipefail
-		_linked_prs_by_branch_name() { printf '%s\\n' "${STUB_BRANCH_PRS}"; }
-		_issue_cross_ref_pr_numbers_unique() { printf '%s\\n' "${STUB_CROSS_REF_PRS}"; }
+		_linked_prs_by_branch_name() { printf '%s\\n' "${STUB_BRANCH_PRS}"; return "${STUB_BRANCH_DISCOVERY_RC}"; }
+		_issue_cross_ref_pr_numbers_unique() { printf '%s\\n' "${STUB_CROSS_REF_PRS}"; return "${STUB_CROSS_REF_DISCOVERY_RC}"; }
 		_fetch_pr_json() { jq -c --arg n "$1" '.[$n] // {}' payloads.json; }
 		source helpers.sh
 		_resolver_rc=0
@@ -197,6 +205,8 @@ def _resolver_result(branch_pr: str, cross_refs: str, pr_payloads: dict[str, dic
 		r = _run_bash(script, cwd=tmp, env={
 			"STUB_BRANCH_PRS": branch_pr,
 			"STUB_CROSS_REF_PRS": cross_refs,
+			"STUB_BRANCH_DISCOVERY_RC": str(branch_discovery_rc),
+			"STUB_CROSS_REF_DISCOVERY_RC": str(cross_ref_discovery_rc),
 		})
 		assert r.returncode == 0, f"resolver harness exited {r.returncode}: {r.stderr}"
 		resolved = ""
@@ -320,6 +330,33 @@ def test_resolver_branch_lookup_is_deterministic_and_pipefail_safe():
 		},
 	)
 	assert rc == 0 and resolved == "3998", f"rc={rc} resolved={resolved}"
+
+
+def test_resolver_successful_empty_discovery_is_conclusive():
+	"""Successful discovery with no candidates is a verified absence."""
+	rc, resolved, failure_reason, _ = _resolver_result("", "", {})
+	assert rc == 1 and resolved == "", f"rc={rc} resolved={resolved}"
+	assert failure_reason == "not_implementation_pr"
+
+
+def test_resolver_discovery_failures_are_inconclusive():
+	"""Either failed source can hide the real PR, even when the other source
+	conclusively rejects a candidate."""
+	cases = (
+		("", "", {}, 1, 0),
+		("", "3828", {"3828": _impl_payload(3828, "claude/unrelated", "Refs #3816")}, 1, 0),
+		("3997", "", {"3997": _impl_payload(3997, "claude/unrelated", "Refs #3816")}, 0, 1),
+	)
+	for branch_pr, cross_refs, payloads, branch_rc, cross_ref_rc in cases:
+		rc, resolved, failure_reason, _ = _resolver_result(
+			branch_pr,
+			cross_refs,
+			payloads,
+			branch_discovery_rc=branch_rc,
+			cross_ref_discovery_rc=cross_ref_rc,
+		)
+		assert rc == 1 and resolved == "", f"rc={rc} resolved={resolved}"
+		assert failure_reason == "pr_fetch_failed"
 
 
 def test_resolver_rejection_outweighs_mixed_fetch_failures_in_either_order():

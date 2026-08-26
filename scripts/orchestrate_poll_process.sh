@@ -2848,14 +2848,15 @@ _issue_cross_ref_pr_number_last() {
 # event was never recorded (observed in prod for issue #2552 / PR #2568,
 # where the timeline API did not expose the reference even though the PR
 # body said "Closes #<n>").
-# Output: newline-separated PR numbers, empty if none.  Fail-open.
+# Output: newline-separated PR numbers, empty if none. Callers that need
+# fail-open behavior append `|| true`; other callers can inspect failures.
 _linked_prs_by_branch_name()
 {
 	local issue_num="$1"
 	[[ "${issue_num}" =~ ^[0-9]+$ ]] || return 0
 	gh_retry gh pr list --repo "${GITHUB_REPOSITORY}" \
 		--head "ai/issue-${issue_num}" --state open \
-		--json number --jq '.[].number' 2>/dev/null || true
+		--json number --jq '.[].number' 2>/dev/null
 }
 
 # _linked_prs_by_body_reference — Return open PR numbers whose body
@@ -11243,7 +11244,8 @@ _pr_json_is_issue_implementation_pr() {
 #
 # On success returns 0 and sets STALL_IMPL_PR_NUM / STALL_IMPL_PR_JSON
 # (full pulls/<n> payload). On failure returns 1 with both cleared and sets
-# STALL_IMPL_PR_FAILURE_REASON when the result is conclusive — callers must
+# STALL_IMPL_PR_FAILURE_REASON to `not_implementation_pr` for a complete miss
+# or `pr_fetch_failed` when discovery/fetching was inconclusive. Callers must
 # skip destructive pushes rather than falling back to a mention-based target.
 declare -g STALL_IMPL_PR_NUM=''
 declare -g STALL_IMPL_PR_JSON=''
@@ -11255,9 +11257,13 @@ _resolve_issue_implementation_pr() {
   STALL_IMPL_PR_FAILURE_REASON=""
   [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
   local _ripr_candidate _ripr_json _ripr_list
+  local _ripr_branch_candidates _ripr_cross_ref_candidates
+  local _ripr_branch_discovery_rc=0
+  local _ripr_cross_ref_discovery_rc=0
   local _ripr_saw_fetch_failure="false"
   local _ripr_saw_rejection="false"
-  _ripr_candidate="$(_linked_prs_by_branch_name "${issue_num}" 2>/dev/null | grep -E '^[0-9]+$' | sort -rn | head -n1 || true)"
+  _ripr_branch_candidates="$(_linked_prs_by_branch_name "${issue_num}" 2>/dev/null)" || _ripr_branch_discovery_rc=$?
+  _ripr_candidate="$(printf '%s\n' "${_ripr_branch_candidates}" | grep -E '^[0-9]+$' | sort -rn | head -n1 || true)"
   if [[ "${_ripr_candidate}" =~ ^[0-9]+$ ]]; then
     _ripr_json="$(_fetch_pr_json "${_ripr_candidate}")"
     if [ -z "${_ripr_json}" ] || [ "${_ripr_json}" = "{}" ]; then
@@ -11272,7 +11278,8 @@ _resolve_issue_implementation_pr() {
       echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=not_implementation_pr" >&2
     fi
   fi
-  _ripr_list="$(_issue_cross_ref_pr_numbers_unique "${issue_num}" 2>/dev/null | grep -E '^[0-9]+$' | sort -rn || true)"
+  _ripr_cross_ref_candidates="$(_issue_cross_ref_pr_numbers_unique "${issue_num}" 2>/dev/null)" || _ripr_cross_ref_discovery_rc=$?
+  _ripr_list="$(printf '%s\n' "${_ripr_cross_ref_candidates}" | grep -E '^[0-9]+$' | sort -rn || true)"
   for _ripr_candidate in ${_ripr_list}; do
     _ripr_json="$(_fetch_pr_json "${_ripr_candidate}")"
     if [ -z "${_ripr_json}" ] || [ "${_ripr_json}" = "{}" ]; then
@@ -11288,15 +11295,18 @@ _resolve_issue_implementation_pr() {
     _ripr_saw_rejection="true"
     echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=not_implementation_pr" >&2
   done
-  # A successfully fetched candidate proves that the lookup itself is usable.
-  # Prefer its conclusive rejection over unrelated candidate fetch failures so
-  # one stale cross-reference cannot trap stall recovery in an unbounded retry.
-  # Pure fetch-failure results remain inconclusive and retry without consuming
-  # recovery budget.
-  if [ "${_ripr_saw_rejection}" = "true" ]; then
+  # A discovery failure can hide the preferred implementation PR, so it stays
+  # inconclusive even if another source returned only rejected candidates.
+  # Otherwise, prefer a conclusive rejection over unrelated candidate fetch
+  # failures so one stale cross-reference cannot trap recovery indefinitely.
+  if [ "${_ripr_branch_discovery_rc}" -ne 0 ] || [ "${_ripr_cross_ref_discovery_rc}" -ne 0 ]; then
+    STALL_IMPL_PR_FAILURE_REASON="pr_fetch_failed"
+  elif [ "${_ripr_saw_rejection}" = "true" ]; then
     STALL_IMPL_PR_FAILURE_REASON="not_implementation_pr"
   elif [ "${_ripr_saw_fetch_failure}" = "true" ]; then
     STALL_IMPL_PR_FAILURE_REASON="pr_fetch_failed"
+  else
+    STALL_IMPL_PR_FAILURE_REASON="not_implementation_pr"
   fi
   return 1
 }

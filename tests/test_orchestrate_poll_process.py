@@ -6851,7 +6851,7 @@ def test_managed_skip_healthy_pr_redirect_targets_verified_implementation_pr():
 	assert "skip→dispatch_rb_judge: PR #78" not in result["stdout"]
 
 
-def test_managed_skip_retries_inconclusive_pr_lookup_without_closing_issue():
+def test_managed_skip_retries_timeline_discovery_failure_without_closing_issue():
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
 	issue["status"] = "in_progress"
@@ -6863,14 +6863,19 @@ def test_managed_skip_retries_inconclusive_pr_lookup_without_closing_issue():
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:done"]},
-		issue_linked_prs={10: 86},
+		timeline_fail_for_issues=[10],
 		env_overrides={"MAX_STALL_RECOVERIES_DONE": "1"},
 	)
 	issue_state = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_state["stall_recovery_count"] == 1
+	assert issue_state["status_since_ts"] == 1
 	assert result["issues"]["10"].get("closed", False) is False
 	assert result["review_dispatches"] == []
 	assert "skip healthy-PR guard: implementation PR lookup was inconclusive" in result["stdout"]
+	assert not any(
+		"/approved" in str(comment.get("body", ""))
+		for comment in result["issues"]["10"]["comments"]
+	)
 
 
 def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():
