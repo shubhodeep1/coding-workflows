@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `fc3784b5fcd33c38abdbdb912792652ee90dedf0` on `orchestrator/project-3810`. Integration metadata matches.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `.github/workflows/ci.yml`\u2019s existing Python dependency installation and explicit contract-test step pattern  \nScope-mode justification: Use the complete, minimal solution: install pytest and execute the entire module through pytest discovery. This adds only a few YAML lines, avoids rewriting fixture-based tests, and satisfies the \u00a76 priority order by favoring correctness over marginal speed.\n\n## Automation wiring\n\n- Modify existing workflow only; no new script.\n- Entry point: `.github/workflows/ci.yml`, on pull requests and pushes targeting `main` or `stable`.\n- No supervisor or database work.\n- No removal-registry entry required.\n\n## Clarification interpretation\n\nThe orchestrator auto-answer confirms continuation with the issue\u2019s stated scope. No unanswered or contradictory clarification remains.\n\n## Files likely to change\n\n- `.github/workflows/ci.yml`\n  - Add `pytest` to the existing Python CI dependencies.\n  - Add a dedicated step invoking the complete memory-maintenance contract module.\n- `tests/test_memory_maintenance_contract_noop.py`\n  - No edit expected; pytest discovery already finds all six test functions.\n\n## Functions or modules to implement\n\nNo production functions or modules.\n\nAdd a CI command equivalent to:\n\n`PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_memory_maintenance_contract_noop.py`\n\nKeep normal shell failure propagation and do not use `continue-on-error`.\n\n## Data structures affected\n\nNone.\n\n## API/interface changes\n\n- CI\u2019s installed Python tooling gains pytest.\n- The normal `CI` check gains explicit execution of the six-case memory-maintenance contract suite.\n- No production, workflow-runtime, environment-variable, or external API contract changes.\n\n## Decisions\n\n### D1 \u2014 Use pytest discovery in CI\n\n- **Chosen:** Install pytest and run the existing module with `python3 -m pytest`.\n- **Alternatives considered:** Rewrite fixture-based cases for direct execution; expand the current `__main__` block manually.\n- **Why:** The tests already rely on `tmp_path`, `monkeypatch`, and `capsys`; pytest execution is the smallest and least risky change.\n\n### D2 \u2014 Run only the targeted module\n\n- **Chosen:** Add a dedicated CI step for `tests/test_memory_maintenance_contract_noop.py`.\n- **Alternatives considered:** Run unrestricted `pytest tests/`; append selective function calls to another test step.\n- **Why:** Targeted discovery guarantees all six cases while avoiding unrelated pytest-only smoke fixtures and broader CI behavior changes.\n\n## Risks and edge cases\n\n- Ensure pytest is added to the same interpreter environment established by `actions/setup-python`.\n- Do not invoke the file directly; its current entry point executes only one test.\n- Keep the test step fail-closed so collection errors, fixture errors, and assertion failures fail CI.\n- Do not broaden CI branch triggers; orchestrator sub-issue PRs may require direct verification before the final integration PR targets `main`.\n- Preserve the unrelated existing worktree modification to `scripts/openrouter_prompt_cache.py`.\n\n## Testing considerations\n\n1. Run YAML lint against `.github/workflows/ci.yml`.\n2. Run the targeted pytest command and confirm exactly six tests are collected and pass.\n3. Confirm a deliberately failing assertion produces a non-zero pytest/step status, then discard that temporary change.\n4. Confirm no production or extraction files appear in the implementation diff.\n5. Verify the final integration PR\u2019s normal `CI` check executes the new step.\n\n## Pre-execution self-check\n\n- Ref and integration metadata agree.\n- Every acceptance criterion maps to a concrete CI change.\n- No production behavior changes are planned.\n- No new identifiers, scripts, dependencies beyond pytest, supervisors, or database operations are introduced.\n- Missing context: none.\n\nPLAN_SELF_CHECK: WARNING: The planning environment lacks pytest, so the six-case run could not be reproduced locally; implementation must verify it after installing the declared CI dependency.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "28ada9d57a8c7d01fc34a24f6b1c523b2ac454f2975c21f70d91687643b346c6",
+  "lineage": {
+    "issue_number": 3838,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32932130285",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32932130285",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3838"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260826050139_0c723542f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3838,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "32932130285"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3838",
+  "timestamps": {
+    "created_at": "2026-08-26T05:01:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
