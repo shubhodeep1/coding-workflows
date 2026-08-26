@@ -4211,7 +4211,7 @@ jobs:
           for attempt in 1 2 3; do
             # Fetch latest remote state before pushing so local tracking refs
             # are up to date.
-            if ! git fetch --no-tags --prune origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"; then
+            if ! git fetch --no-tags --prune origin "+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"; then
               echo "Fetch attempt ${attempt} failed; using local refs."
             fi
 
@@ -4268,7 +4268,7 @@ jobs:
                       # Ensure the remote-tracking ref is fresh for an accurate
                       # force-with-lease pin; best-effort - if fetch fails we
                       # fall back to the previously cached remote SHA.
-                      if ! git fetch --no-tags --prune origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"; then
+                      if ! git fetch --no-tags --prune origin "+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"; then
                         echo "Fetch before force-with-lease failed; using last-known remote SHA. Push may still fail due to stale lease."
                       fi
                       if ! REMOTE_SHA="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"; then

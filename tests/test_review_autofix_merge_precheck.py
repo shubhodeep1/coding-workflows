@@ -355,7 +355,7 @@ def test_detect_step_backfill_refspecs_defined_outside_shallow_branch():
     reused from the shallow-clone deepen path — `_merge_base_refspecs` is only
     defined when .git/shallow exists and would be unset under `set -u`."""
     step = _detect_step()
-    array_init = '_merge_backfill_refspecs=("refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")'
+    array_init = '_merge_backfill_refspecs=("+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")'
     assert array_init in step, (
         "Expected the recovery block to build its own _merge_backfill_refspecs array"
     )

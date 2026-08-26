@@ -4075,7 +4075,7 @@ resolve_branch_analysis_ref() {
     return 0
   fi
 
-  if git fetch --no-tags origin "refs/heads/${branch_name}:refs/remotes/origin/${branch_name}" >/dev/null 2>&1 \
+  if git fetch --no-tags origin "+refs/heads/${branch_name}:refs/remotes/origin/${branch_name}" >/dev/null 2>&1 \
     && git rev-parse --verify -q "refs/remotes/origin/${branch_name}" >/dev/null 2>&1; then
     printf 'refs/remotes/origin/%s' "${branch_name}"
     return 0
@@ -6561,8 +6561,8 @@ _attempt_branch_rebuild_after_escalation() {
     return 0
   fi
 
-  if ! git fetch --no-tags origin "refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1 \
-    || ! git fetch --no-tags origin "refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+  if ! git fetch --no-tags origin "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1 \
+    || ! git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
     BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild for '${integration_branch}' was skipped because the local pre-rebuild fetch failed."
     final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "skipped_preflight" "false" "Unable to fetch ${default_branch} and ${integration_branch} refs locally before rebuild." "${rebuild_started_at}")"
     _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
@@ -6620,7 +6620,7 @@ _attempt_branch_rebuild_after_escalation() {
     return 0
   fi
 
-  if ! git fetch --no-tags origin "refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+  if ! git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
     completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild for '${integration_branch}' recreated the remote ref but could not fetch it locally; leaving the project escalated for retry."
     final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "skipped_preflight" "false" "Recreated '${integration_branch}' but could not fetch the new remote branch ref locally; leaving the project escalated for retry." "${completed_at}")"
@@ -10015,7 +10015,7 @@ STALL_EOF
             STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
             return 1
           fi
-          if git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
+          if git fetch origin "+${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
             _rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
             if [[ "${_rtr_head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
                [ "${_rtr_origin_head_sha}" != "${_rtr_head_sha}" ]; then
@@ -15428,7 +15428,7 @@ ${FOLLOWUP_BLOCK_REASON}"
             #      A warning is emitted so operators can intervene.
             _rb_co_src=""
             _rb_co_src_desc=""
-            if git fetch --no-tags origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" 2>/dev/null \
+            if git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" 2>/dev/null \
               && git rev-parse --verify "refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1; then
               _rb_co_src="refs/remotes/origin/${BASE_REF}"
               _rb_co_src_desc="${BASE_REF} (fetched from origin)"
@@ -15463,7 +15463,7 @@ ${FOLLOWUP_BLOCK_REASON}"
             unset _rb_co_src _rb_co_src_desc
           fi
         elif [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; then
-          if git fetch --no-tags origin "refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null \
+          if git fetch --no-tags origin "+refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null \
             && git checkout -B "${HEAD_REF}" "refs/remotes/origin/${HEAD_REF}" 2>/dev/null; then
             RB_COMBINED_MODE="true"
             RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF})."

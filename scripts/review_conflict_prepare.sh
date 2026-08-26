@@ -150,9 +150,9 @@ if [ "${_merge_exit}" -ne 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" 
   echo "::warning::Merge replay hit a partial-clone promisor fetch failure; backfilling blobs and retrying the merge once."
   git reset --hard HEAD >/dev/null 2>&1 || true
   git config --unset-all remote.origin.partialclonefilter 2>/dev/null || true
-  _backfill_refspecs=("refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")
+  _backfill_refspecs=("+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")
   if [ -n "${TARGET_BRANCH:-}" ]; then
-    _backfill_refspecs+=("refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
+    _backfill_refspecs+=("+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
   fi
   _refetch_rc=0
   _refetch_stderr="$(git fetch --no-tags --prune --refetch origin "${_backfill_refspecs[@]}" 2>&1 >/dev/null)" || _refetch_rc=$?

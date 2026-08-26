@@ -98,8 +98,8 @@ fi
 # Fetch the current remote tip.  A fetch failure is a detection failure,
 # not a branch-advance signal — fail open.
 if ! git fetch --quiet --no-tags --prune origin \
-	"refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null; then
-	log "::warning::check_external_branch_advance: git fetch origin refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH} failed; fail-open."
+	"+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null; then
+	log "::warning::check_external_branch_advance: git fetch origin +refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH} failed; fail-open."
 	printf 'ADVANCE=unknown\n'
 	exit 0
 fi

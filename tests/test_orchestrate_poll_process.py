@@ -2147,6 +2147,12 @@ if args and args[0] == 'fetch':
 		refspec = args[3]
 	elif len(args) == 3 and args[1] == 'origin':
 		refspec = args[2]
+	# Production refspecs updating remote-tracking refs carry the force
+	# prefix (`+refs/heads/X:refs/remotes/origin/X`). Normalize it away so
+	# call bookkeeping, fail-injection keys, and the src/dst parse below
+	# keep working with the unforced form tests have always used.
+	if refspec and refspec.startswith('+'):
+		refspec = refspec[1:]
 	if refspec:
 		calls = store.setdefault('git_fetch_calls', {})
 		calls[refspec] = int(calls.get(refspec, 0)) + 1
