@@ -6408,6 +6408,7 @@ def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blan
 		prs=[
 			{
 				"number": 416,
+				"body": "Closes #501",
 				"state": "open",
 				"baseRefName": "main",
 				"headRefName": head_ref,
@@ -6466,6 +6467,7 @@ def test_standalone_retrigger_review_skips_empty_commit_for_review_run_past_stal
 		prs=[
 			{
 				"number": 416,
+				"body": "Closes #501",
 				"state": "open",
 				"baseRefName": "main",
 				"headRefName": head_ref,
@@ -6501,6 +6503,55 @@ def test_standalone_retrigger_review_skips_empty_commit_for_review_run_past_stal
 	assert result.get("git_push_calls", []) == [], (
 		f"expected no standalone empty-commit push when an in-budget review run blocks recovery; "
 		f"got push calls {result.get('git_push_calls', [])}"
+	)
+
+
+def test_standalone_retrigger_review_counts_unresolvable_wrong_pr_as_attempt():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"body": "Refs #501",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+				"headRefFromApi": "claude/unrelated-fix",
+				"headSha": "sha416",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert standalone_state["phase_attempts"]["ai:done"] == 1
+	assert standalone_state["status_since_ts"] != 1
+	assert result.get("git_push_calls", []) == []
+	assert result["review_dispatches"] == []
+	assert "none could be resolved; skipping empty-commit retrigger" in result["stdout"]
+	assert not any(
+		"/approved" in str(comment.get("body", ""))
+		for comment in result["issues"]["501"]["comments"]
 	)
 
 
@@ -6622,6 +6673,7 @@ def test_standalone_retrigger_review_does_not_increment_when_empty_commit_checko
 		prs=[
 			{
 				"number": 417,
+				"body": "Closes #502",
 				"state": "open",
 				"baseRefName": "main",
 				"headRefName": head_ref,

@@ -12213,6 +12213,11 @@ STALL_EOF
             else
               echo "  [standalone-stall] Issue #${issue_num}: linked PR #${pr_num} is not the issue's implementation PR and none could be resolved; skipping empty-commit retrigger."
               STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_wrong_pr"
+              # Count this skip as recovery progress; otherwise standalone
+              # issues with only mention-only PRs reselect retrigger_review forever.
+              tg_notify_issue "${issue_num}" "Standalone stall recovery: no implementation PR could be resolved for review retrigger (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1))). Counting as an attempt so the recovery ladder can escalate." "WARNING"
+              STALL_RECOVERY_SHOULD_INCREMENT="true"
+              took_action="true"
               head_ref=""
             fi
           fi
