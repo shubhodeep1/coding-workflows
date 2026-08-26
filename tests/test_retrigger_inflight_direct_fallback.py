@@ -42,6 +42,8 @@ def _iso_utc_minutes_ago(minutes: int) -> str:
 
 def _run_bash(script: str, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
 	full_env = os.environ.copy()
+	full_env.pop("BASH_ENV", None)
+	full_env.pop("ENV", None)
 	full_env["PYTHONDONTWRITEBYTECODE"] = "1"
 	full_env["GITHUB_REPOSITORY"] = "owner/repo"
 	if env:
@@ -214,6 +216,35 @@ def test_workflow_name_field_matches_when_display_name_differs():
 	run is still matched (defence-in-depth across the two gh fields)."""
 	payload = json.dumps([_run("custom-display", databaseId=42, workflowName="Internal Review")])
 	assert _run_id(payload) == "42"
+
+
+def test_upstream_internal_review_autofix_workflow_name_is_detected():
+	"""Regression for the PR #3823 / issue #3816 false stall-recovery: this
+	repo's internal-review.yml is named "Internal: AI Review & Autofix" and
+	`gh run list` surfaces the run's display title (e.g. the PR title) in
+	`name`, so the guard matched neither field and let the destructive
+	empty-commit push clobber a healthy 137-minute review pass."""
+	payload = json.dumps([
+		_run(
+			"AI implementation for issue #3816",
+			databaseId=32851496137,
+			workflowName="Internal: AI Review & Autofix",
+		)
+	])
+	assert _run_id(payload) == "32851496137"
+
+
+def test_upstream_review_autofix_workflow_name_is_detected():
+	"""review_autofix.yml's display name ("Codex PR Self-Healing Semantic
+	Agent") must also be recognised as review-family."""
+	payload = json.dumps([
+		_run(
+			"some PR title",
+			databaseId=77,
+			workflowName="Codex PR Self-Healing Semantic Agent",
+		)
+	])
+	assert _run_id(payload) == "77"
 
 
 def test_first_fresh_matching_run_is_returned_among_many():
