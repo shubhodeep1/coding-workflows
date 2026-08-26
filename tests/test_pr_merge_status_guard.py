@@ -94,14 +94,14 @@ def test_unbalanced_quotes_do_not_raise() -> None:
 @pytest.mark.parametrize(
 	"command",
 	[
-		'curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" -d @spec.json',
-		'curl -sS -X POST https://api.cloudflare.com/client/v4/accounts/id/workers/scripts/name --header="Authorization: Bearer ${CF_TOKEN}" --data-binary=@worker.js',
-		'curl -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d \'{"method":"-X DELETE"}\'',
-		"curl -sS -X POST https://api.cloudflare.com/client/v4/workers -d 'prices $(USD) use `literal` markers'",
-		"curl -sS -X PUT https://api.digitalocean.com/v2/apps?id=1 -d @spec.json",
-		"curl -sS -X PATCH https://api.digitalocean.com/v2/apps/id?fields[]=spec -d @spec.json",
-		"curl -sS -X PUT https://api.cloudflare.com/client/v4/zones/example/* -d @zone.json",
-		"curl -sS -X POST https://api.cloudflare.com/client/v4/~health -H 'Authorization: Bearer token'",
+		'curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" -d @spec.json',
+		'curl -q -sS -X POST https://api.cloudflare.com/client/v4/accounts/id/workers/scripts/name --header="Authorization: Bearer ${CF_TOKEN}" --data-binary=@worker.js',
+		'curl -q -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d \'{"method":"-X DELETE"}\'',
+		"curl -q -sS -X POST https://api.cloudflare.com/client/v4/workers -d 'prices $(USD) use `literal` markers'",
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps?id=1 -d @spec.json",
+		"curl -q -sS -X PATCH https://api.digitalocean.com/v2/apps/id?fields[]=spec -d @spec.json",
+		"curl -q -sS -X PUT https://api.cloudflare.com/client/v4/zones/example/* -d @zone.json",
+		"curl -q -sS -X POST https://api.cloudflare.com/client/v4/~health -H 'Authorization: Bearer token'",
 	],
 )
 def test_canonical_api_writes_do_not_request_extra_confirmation(command: str) -> None:
@@ -111,28 +111,33 @@ def test_canonical_api_writes_do_not_request_extra_confirmation(command: str) ->
 @pytest.mark.parametrize(
 	"command",
 	[
-		"curl -sS -X PUT https://api.digitalocean.com/v2/droplets/id -X DELETE",
-		"curl -sS -X PUT https://api.digitalocean.com/v2/droplets/id -XDELETE",
-		"curl -sS -X POST https://api.cloudflare.com/client/v4/workers --request DELETE",
-		"curl -sS -X POST https://api.cloudflare.com/client/v4/workers --request=DELETE",
-		"curl -sS -X PATCH https://api.digitalocean.com/v2/apps/id --url https://example.com/",
-		"curl -sS -X PATCH https://api.digitalocean.com/v2/apps/id --url=https://example.com/",
-		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id https://example.com/",
-		"curl -sS -X PUT https://api.digitalocean.com/v2/{apps,droplets}/id",
-		"curl -sS -X POST https://api.cloudflare.com/client/v4/workers; curl -X DELETE https://api.cloudflare.com/client/v4/workers/id",
-		"curl -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d \"$(cat /tmp/body)\"",
-		'curl -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d "it\'s $(cat /tmp/body)"',
-		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d $BODY",
-		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d ${BODY}",
-		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d {x,-X,DELETE}",
-		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d /tmp/*",
-		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d ~/spec.json",
-		"curl -sS -X POST https://api.cloudflare.com/client/v4/workers -H $AUTHORIZATION",
-		'curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d "$@"',
-		'curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d "${BODY_PARTS[@]}"',
-		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d 'unterminated",
-		"  curl -sS -X POST https://api.cloudflare.com/client/v4/workers -H 'unterminated",
-		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id>/tmp/response",
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/droplets/id -X DELETE",
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/droplets/id -XDELETE",
+		"curl -q -sS -X POST https://api.cloudflare.com/client/v4/workers --request DELETE",
+		"curl -q -sS -X POST https://api.cloudflare.com/client/v4/workers --request=DELETE",
+		"curl -q -sS -X PATCH https://api.digitalocean.com/v2/apps/id --url https://example.com/",
+		"curl -q -sS -X PATCH https://api.digitalocean.com/v2/apps/id --url=https://example.com/",
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id https://example.com/",
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/{apps,droplets}/id",
+		"curl -q -sS -X POST https://api.cloudflare.com/client/v4/workers; curl -X DELETE https://api.cloudflare.com/client/v4/workers/id",
+		"curl -q -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d \"$(cat /tmp/body)\"",
+		'curl -q -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d "it\'s $(cat /tmp/body)"',
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d $BODY",
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d ${BODY}",
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d {x,-X,DELETE}",
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d /tmp/*",
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d ~/spec.json",
+		"curl -q -sS -X POST https://api.cloudflare.com/client/v4/workers -H $AUTHORIZATION",
+		'curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d "$@"',
+		'curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d "${BODY_PARTS[@]}"',
+		'curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d "${BODY_PARTS[@]:1}"',
+		'curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d "${@:1}"',
+		'curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d "${!BODY_REF}"',
+		'curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d "${!CURL_ARG_@}"',
+		'curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d "${BODY@P}"',
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d 'unterminated",
+		"  curl -q -sS -X POST https://api.cloudflare.com/client/v4/workers -H 'unterminated",
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id>/tmp/response",
 	],
 )
 def test_noncanonical_api_writes_request_confirmation(command: str) -> None:
@@ -142,9 +147,9 @@ def test_noncanonical_api_writes_request_confirmation(command: str) -> None:
 @pytest.mark.parametrize(
 	"command",
 	[
-		"curl -sS -X PUT https://api.digitalocean.com/v2/droplets/id -X DELETE",
-		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d ${BODY}",
-		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d 'unterminated",
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/droplets/id -X DELETE",
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d ${BODY}",
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d 'unterminated",
 	],
 )
 def test_noncanonical_api_write_emits_ask_decision(command: str, capsys) -> None:
@@ -704,6 +709,19 @@ def test_e2e_guards_push_as_well_as_commit(merged_branch_repo) -> None:
 # ──────────────────────────────────────────────────────────────────
 # Wiring — the parts that only exist as config / instruction text
 # ──────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+def test_api_write_allowlist_disables_implicit_curl_config(path: Path) -> None:
+	settings = json.loads(path.read_text(encoding="utf-8"))
+	assert settings["permissions"]["allow"] == [
+		"Bash(curl -q -sS -X PUT https://api.digitalocean.com/*)",
+		"Bash(curl -q -sS -X POST https://api.digitalocean.com/*)",
+		"Bash(curl -q -sS -X PATCH https://api.digitalocean.com/*)",
+		"Bash(curl -q -sS -X PUT https://api.cloudflare.com/*)",
+		"Bash(curl -q -sS -X POST https://api.cloudflare.com/*)",
+		"Bash(curl -q -sS -X PATCH https://api.cloudflare.com/*)",
+	]
 
 
 @pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])

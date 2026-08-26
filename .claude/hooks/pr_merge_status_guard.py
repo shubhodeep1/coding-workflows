@@ -76,8 +76,9 @@ _API_WRITE_URL_PREFIXES = (
 	"https://api.digitalocean.com/",
 	"https://api.cloudflare.com/",
 )
+# `-q` must remain curl's first option so ~/.curlrc cannot add hidden transfers.
 _API_WRITE_COMMAND_PREFIXES = tuple(
-	f"curl -sS -X {method} {url_prefix}"
+	f"curl -q -sS -X {method} {url_prefix}"
 	for method in _API_WRITE_METHODS
 	for url_prefix in _API_WRITE_URL_PREFIXES
 )
@@ -189,7 +190,7 @@ def _contains_shell_substitution(command: str) -> bool:
 
 
 def _contains_unquoted_shell_expansion(command: str) -> bool:
-	"""Return whether Bash expansion can change argv before curl runs."""
+	"""Return whether Bash expansion can change argv or execute a command."""
 	single_quoted = False
 	double_quoted = False
 	escaped = False
@@ -206,11 +207,18 @@ def _contains_unquoted_shell_expansion(command: str) -> bool:
 		if character == '"' and not single_quoted:
 			double_quoted = not double_quoted
 			continue
-		if double_quoted and (
-			command.startswith("$@", index)
-			or re.match(r"\$\{[^}]+\[@\]\}", command[index:])
-		):
-			return True
+		if double_quoted:
+			parameter_expansion = re.match(r"\$\{([^}]*)\}", command[index:])
+			if command.startswith("$@", index) or (
+				parameter_expansion
+				and (
+					parameter_expansion.group(1).startswith("@")
+					or "[@]" in parameter_expansion.group(1)
+					or parameter_expansion.group(1).startswith("!")
+					or parameter_expansion.group(1).endswith("@P")
+				)
+			):
+				return True
 		if not single_quoted and not double_quoted and character in "${*?[~":
 			return True
 	return False
@@ -232,30 +240,30 @@ def _api_write_requires_confirmation(command: str) -> bool:
 	if not segments:
 		return False
 	tokens = segments[0]
-	if len(tokens) < 5 or tokens[:3] != ["curl", "-sS", "-X"]:
+	if len(tokens) < 6 or tokens[:4] != ["curl", "-q", "-sS", "-X"]:
 		return False
-	if tokens[3] not in _API_WRITE_METHODS:
+	if tokens[4] not in _API_WRITE_METHODS:
 		return False
-	if not any(tokens[4].startswith(prefix) for prefix in _API_WRITE_URL_PREFIXES):
+	if not any(tokens[5].startswith(prefix) for prefix in _API_WRITE_URL_PREFIXES):
 		return False
 	# The URL token is already host-gated above. Prompt only for expansions that
 	# can synthesize shell words before curl sees the approved API URL shape.
-	if any(marker in tokens[4] for marker in ("$", "{")):
+	if any(marker in tokens[5] for marker in ("$", "{")):
 		return True
 	# Scan only following option text so literal query/path URL characters are
 	# not mistaken for value expansions.
-	api_write_raw_parts = command.lstrip().split(None, 5)
+	api_write_raw_parts = command.lstrip().split(None, 6)
 	if (
 		len(segments) != 1
 		or _contains_shell_substitution(command)
 		or (
-			len(api_write_raw_parts) > 5
-			and _contains_unquoted_shell_expansion(api_write_raw_parts[5])
+			len(api_write_raw_parts) > 6
+			and _contains_unquoted_shell_expansion(api_write_raw_parts[6])
 		)
 	):
 		return True
 
-	index = 5
+	index = 6
 	while index < len(tokens):
 		token = tokens[index]
 		if token in _API_WRITE_VALUE_OPTIONS:
