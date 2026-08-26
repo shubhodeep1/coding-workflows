@@ -9824,6 +9824,11 @@ STALL_EOF
       if _resolve_issue_implementation_pr "${issue_num}"; then
         pr_num="${STALL_IMPL_PR_NUM}"
       else
+        if [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
+          echo "  Issue #${issue_num} implementation PR lookup was inconclusive; retrying next poll without re-triggering implementation."
+          STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_pr_lookup_failed"
+          return 1
+        fi
         pr_num=""
       fi
       if [[ "${pr_num}" =~ ^[0-9]+$ ]]; then
@@ -11235,33 +11240,39 @@ _pr_json_is_issue_implementation_pr() {
 # body/head are exactly what the mention-based caches lack.
 #
 # On success returns 0 and sets STALL_IMPL_PR_NUM / STALL_IMPL_PR_JSON
-# (full pulls/<n> payload). On failure returns 1 with both cleared —
-# callers must treat that as "no implementation PR" and skip destructive
-# pushes rather than falling back to a mention-based target.
+# (full pulls/<n> payload). On failure returns 1 with both cleared and sets
+# STALL_IMPL_PR_FAILURE_REASON when the result is conclusive — callers must
+# skip destructive pushes rather than falling back to a mention-based target.
 declare -g STALL_IMPL_PR_NUM=''
 declare -g STALL_IMPL_PR_JSON=''
+declare -g STALL_IMPL_PR_FAILURE_REASON=''
 _resolve_issue_implementation_pr() {
   local issue_num="$1"
   STALL_IMPL_PR_NUM=""
   STALL_IMPL_PR_JSON=""
+  STALL_IMPL_PR_FAILURE_REASON=""
   [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
   local _ripr_candidate _ripr_json _ripr_list
   _ripr_candidate="$(_linked_prs_by_branch_name "${issue_num}" 2>/dev/null | head -n1)"
   if [[ "${_ripr_candidate}" =~ ^[0-9]+$ ]]; then
     _ripr_json="$(_fetch_pr_json "${_ripr_candidate}")"
     if [ -z "${_ripr_json}" ] || [ "${_ripr_json}" = "{}" ]; then
+      STALL_IMPL_PR_FAILURE_REASON="pr_fetch_failed"
       echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=pr_fetch_failed" >&2
-    fi
-    if _pr_json_is_issue_implementation_pr "${issue_num}" "${_ripr_json}"; then
+    elif _pr_json_is_issue_implementation_pr "${issue_num}" "${_ripr_json}"; then
       STALL_IMPL_PR_NUM="${_ripr_candidate}"
       STALL_IMPL_PR_JSON="${_ripr_json}"
       return 0
+    else
+      STALL_IMPL_PR_FAILURE_REASON="not_implementation_pr"
+      echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=not_implementation_pr" >&2
     fi
   fi
   _ripr_list="$(_issue_cross_ref_pr_numbers_unique "${issue_num}" 2>/dev/null | grep -E '^[0-9]+$' | sort -rn || true)"
   for _ripr_candidate in ${_ripr_list}; do
     _ripr_json="$(_fetch_pr_json "${_ripr_candidate}")"
     if [ -z "${_ripr_json}" ] || [ "${_ripr_json}" = "{}" ]; then
+      STALL_IMPL_PR_FAILURE_REASON="pr_fetch_failed"
       echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=pr_fetch_failed" >&2
       continue
     fi
@@ -11270,6 +11281,7 @@ _resolve_issue_implementation_pr() {
       STALL_IMPL_PR_JSON="${_ripr_json}"
       return 0
     fi
+    [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ] || STALL_IMPL_PR_FAILURE_REASON="not_implementation_pr"
     echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=not_implementation_pr" >&2
   done
   return 1
@@ -12211,14 +12223,19 @@ STALL_EOF
               head_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.ref?) then .head.ref else empty end' 2>/dev/null | tail -n1)"
               head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
             else
-              echo "  [standalone-stall] Issue #${issue_num}: linked PR #${pr_num} is not the issue's implementation PR and none could be resolved; skipping empty-commit retrigger."
-              STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_wrong_pr"
-              # Count this skip as recovery progress; otherwise standalone
-              # issues with only mention-only PRs reselect retrigger_review forever.
-              tg_notify_issue "${issue_num}" "Standalone stall recovery: no implementation PR could be resolved for review retrigger (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1))). Counting as an attempt so the recovery ladder can escalate." "WARNING"
-              STALL_RECOVERY_SHOULD_INCREMENT="true"
-              took_action="true"
               head_ref=""
+              if [ "${STALL_IMPL_PR_FAILURE_REASON}" = "not_implementation_pr" ]; then
+                echo "  [standalone-stall] Issue #${issue_num}: linked PR #${pr_num} is not the issue's implementation PR and none could be resolved; skipping empty-commit retrigger."
+                STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_wrong_pr"
+                # Count this skip as recovery progress; otherwise standalone
+                # issues with only mention-only PRs reselect retrigger_review forever.
+                tg_notify_issue "${issue_num}" "Standalone stall recovery: no implementation PR could be resolved for review retrigger (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1))). Counting as an attempt so the recovery ladder can escalate." "WARNING"
+                STALL_RECOVERY_SHOULD_INCREMENT="true"
+                took_action="true"
+              else
+                echo "  [standalone-stall] Issue #${issue_num}: implementation PR lookup was inconclusive (${STALL_IMPL_PR_FAILURE_REASON:-unknown}); retrying next poll without consuming recovery budget."
+                STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_pr_lookup_failed"
+              fi
             fi
           fi
           if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
@@ -12301,7 +12318,8 @@ STALL_EOF
             STALL_RECOVERY_SHOULD_INCREMENT="true"
             took_action="true"
           elif [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_inflight" ] \
-            && [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_wrong_pr" ]; then
+            && [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_wrong_pr" ] \
+            && [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_pr_lookup_failed" ]; then
             echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} empty-commit retrigger did not reach a successful push; skipping recovery increment."
           fi
         elif [ "${pr_lookup_ok}" = "true" ]; then

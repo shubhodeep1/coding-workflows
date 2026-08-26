@@ -286,6 +286,21 @@ def test_resolver_logs_conventional_branch_fetch_failures_distinctly():
 	assert "STALL_LINKED_PR_REJECTED issue=3816 pr=3998 reason=pr_fetch_failed" in err
 
 
+def test_resolver_logs_conventional_branch_rejections_distinctly():
+	"""A fetched conventional-branch candidate that fails the predicate is a
+	genuine rejection, not a fetch failure."""
+	rc, resolved, err = _resolver_result(
+		branch_pr="3997",
+		cross_refs="",
+		pr_payloads={
+			"3997": _impl_payload(3997, "claude/unrelated", "Refs #3816"),
+		},
+	)
+	assert rc == 1 and resolved == "", f"rc={rc} resolved={resolved}"
+	assert err.count("STALL_LINKED_PR_REJECTED issue=3816 pr=3997 reason=not_implementation_pr") == 1
+	assert "reason=pr_fetch_failed" not in err
+
+
 # ---------------------------------------------------------------------------
 # Direct-invocation entrypoint
 #

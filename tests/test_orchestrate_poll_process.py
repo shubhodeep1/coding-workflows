@@ -6555,6 +6555,107 @@ def test_standalone_retrigger_review_counts_unresolvable_wrong_pr_as_attempt():
 	)
 
 
+def test_standalone_retrigger_review_retargets_verified_implementation_pr():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: [416, 417]},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"body": "Automated implementation.",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-501",
+				"headRefFromApi": "ai/issue-501",
+				"headSha": "sha416",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+			{
+				"number": 417,
+				"body": "Refs #501",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+				"headRefFromApi": "claude/unrelated-fix",
+				"headSha": "sha417",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert ["origin", "HEAD:ai/issue-501"] in result.get("git_push_calls", [])
+	assert "retargeting to PR #416" in result["stdout"]
+	assert "HEAD:claude/unrelated-fix" not in str(result.get("git_push_calls", []))
+	assert not any(
+		"/approved" in str(comment.get("body", ""))
+		for comment in result["issues"]["501"]["comments"]
+	)
+
+
+def test_standalone_retrigger_review_retries_inconclusive_pr_lookup_without_increment():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: [416, 417]},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 417,
+				"body": "Refs #501",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+				"headRefFromApi": "claude/unrelated-fix",
+				"headSha": "sha417",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 0
+	assert standalone_state["status_since_ts"] == 1
+	assert result.get("git_push_calls", []) == []
+	assert "implementation PR lookup was inconclusive (pr_fetch_failed)" in result["stdout"]
+
+
 def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():
 	state = _base_state(status="complete")
 	standalone_state_comment = (
@@ -9691,6 +9792,30 @@ def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure(
 	assert issue_entry["stall_recovery_count"] == 1
 	assert result.get("git_push_calls", []), (
 		"expected the no-prior-failure case to exercise the empty-commit push path"
+	)
+
+
+def test_retrigger_review_retries_inconclusive_pr_lookup_without_reimplementing():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 86},
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0
+	assert result.get("git_push_calls", []) == []
+	assert "implementation PR lookup was inconclusive" in result["stdout"]
+	assert not any(
+		"/approved" in str(comment.get("body", ""))
+		for comment in result["issues"]["10"]["comments"]
 	)
 
 
