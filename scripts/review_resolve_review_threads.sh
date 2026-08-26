@@ -203,6 +203,16 @@ then
 	exit 0
 fi
 
+if ! jq -s -e 'length > 0 and all(.[];
+	((.errors // []) | length == 0) and
+	(.data.repository.pullRequest.reviewThreads.nodes | type == "array"))' \
+	"${THREADS_RAW}" >/dev/null 2>&1
+then
+	echo "::warning::review_resolve_review_threads: review-thread query returned GraphQL errors or incomplete data; leaving all threads untouched."
+	emit_resolve_counts 0 0 0
+	exit 0
+fi
+
 if ! jq -s '[.[].data.repository.pullRequest.reviewThreads.nodes[]?] | map(. as $thread | {
 		thread_id: .id,
 		is_resolved: .isResolved,
