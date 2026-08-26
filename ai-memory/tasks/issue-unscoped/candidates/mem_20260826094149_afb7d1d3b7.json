@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:192-200 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: Captured renderer and Codex stderr files are unconditionally destroyed by the EXIT trap before operators can inspect them.\n  WHY: On prompt-render or Codex-execution failure, the underlying stderr is deleted and only a sanitized generic diagnostic remains; severity disagreement exists (MAJOR versus NIT), so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The changelog fragment should follow the repo's fragment format using `<!-- changelog: fixed -->` marker\n  expected_change_site: changelog.d/3837-security-audit-path-diagnostics.md\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The file initially contained:\n```\n### Fixed\n- Security-audit prompt and Codex failures now report sanitized phase, working-directory, and required-path context while preserving nonzero exit statuses and keeping credentials and prompt content out of diagnostics.\n```\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/security_audit.sh:lines 192, 198, 200 (EXIT trap and RENDER_PROMPT_ERROR_FILE/CODEX_ERROR_FILE declarations) | severity=MAJOR | confidence=4\n  PROBLEM: RENDER_PROMPT_ERROR_FILE and CODEX_ERROR_FILE are both created inside SECURITY_AUDIT_RUNTIME_DIR, but the EXIT trap `trap 'rm -rf \"${SECURITY_AUDIT_RUNTIME_DIR}\"' EXIT` unconditionally removes that directory as the script exits.\n  WHY: Any prompt-render or codex-execution failure triggers the trap, wiping the captured stderr before operators can inspect it.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- changelog.d/3837-security-audit-path-diagnostics.md | severity=BLOCKER | confidence=4\n  Requirement: The changelog fragment should follow the repo's fragment format using `<!-- changelog: fixed -->` marker\n  Expected change site: changelog.d/3837-security-audit-path-diagnostics.md\n  Evidence of absence: The file initially contained:\n```\n### Fixed\n- Security-audit prompt and Codex failures now report sanitized phase, working-directory, and required-path context while preserving nonzero exit statuses and keeping credentials and prompt content out of diagnostics.\n```\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/security_audit.sh:lines 198-200 (RENDER_PROMPT_ERROR_FILE, CODEX_ERROR_FILE declarations) and line 192 (EXIT trap `rm -rf \"${SECURITY_AUDIT_RUNTIME_DIR}\"`) | severity=NIT | confidence=3\n  PROBLEM: Captured renderer and Codex stderr files are unconditionally destroyed by the EXIT trap before an operator can inspect them.\n  WHY: When investigating a render or Codex failure in CI logs, the raw stderr captured at lines 352 and 385 is deleted at script exit, leaving only the generic sanitized diagnostic.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "14c62414a1d32ec18e8336fc796d2b768784630cdfc4403a4859efc3632f6534",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3840,
+    "run_id": "32948067065",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32948067065",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260826094149_afb7d1d3b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3840,
+    "run_id": "32948067065"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-26T09:41:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
