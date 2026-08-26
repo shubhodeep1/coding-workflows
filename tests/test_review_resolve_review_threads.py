@@ -89,7 +89,7 @@ def test_applied_entry_is_resolved(tmp_path: Path) -> None:
 		tmp_path,
 		"- entry[0] Copilot — `services/session-server/src/repository.ts:1304` — applied; reserved state now precedes transfer.\n",
 		_context_entry(0, "review_comment", "3859318471", "services/session-server/src/repository.ts"),
-		[{"thread_id": "PRRT_a", "is_resolved": False, "comment_id": 3859318471, "path": "services/session-server/src/repository.ts", "author": "copilot"}],
+		[{"thread_id": "PRRT_a", "is_resolved": False, "comment_ids": [3859318471], "path": "services/session-server/src/repository.ts", "author": "copilot"}],
 	)
 	assert len(plan) == 1
 	assert plan[0]["thread_id"] == "PRRT_a"
@@ -101,7 +101,7 @@ def test_already_satisfied_entry_is_resolved(tmp_path: Path) -> None:
 		tmp_path,
 		"- entry[0] Copilot — `lobby-frontend/lib/feeTank.ts:60` — already satisfied; receipt wait is deadline-bounded.\n",
 		_context_entry(0, "review_comment", "42", "lobby-frontend/lib/feeTank.ts"),
-		[{"thread_id": "PRRT_b", "is_resolved": False, "comment_id": 42, "path": "lobby-frontend/lib/feeTank.ts", "author": "copilot"}],
+		[{"thread_id": "PRRT_b", "is_resolved": False, "comment_ids": [42], "path": "lobby-frontend/lib/feeTank.ts", "author": "copilot"}],
 	)
 	assert [item["disposition"] for item in plan] == ["already satisfied"]
 
@@ -116,7 +116,7 @@ def test_ignored_entry_is_resolved_and_carries_its_reason(tmp_path: Path) -> Non
 		tmp_path,
 		"- entry[3] Copilot — `services/session-server/src/feetank/adapters.ts:8` — ignored; ethers BigNumber does not wrap at uint256.\n",
 		_context_entry(3, "review_comment", "77", "services/session-server/src/feetank/adapters.ts"),
-		[{"thread_id": "PRRT_c", "is_resolved": False, "comment_id": 77, "path": "services/session-server/src/feetank/adapters.ts", "author": "copilot"}],
+		[{"thread_id": "PRRT_c", "is_resolved": False, "comment_ids": [77], "path": "services/session-server/src/feetank/adapters.ts", "author": "copilot"}],
 	)
 	assert len(plan) == 1
 	assert plan[0]["disposition"] == "ignored"
@@ -135,8 +135,8 @@ def test_unlisted_entry_at_a_shared_location_stays_open(tmp_path: Path) -> None:
 		+ _context_entry(10, "review_comment", "3859796825", "services/session-server/src/repository.ts")
 	)
 	threads = [
-		{"thread_id": "PRRT_old", "is_resolved": False, "comment_id": 3859567333, "path": "services/session-server/src/repository.ts", "author": "copilot"},
-		{"thread_id": "PRRT_new", "is_resolved": False, "comment_id": 3859796825, "path": "services/session-server/src/repository.ts", "author": "copilot"},
+		{"thread_id": "PRRT_old", "is_resolved": False, "comment_ids": [3859567333], "path": "services/session-server/src/repository.ts", "author": "copilot"},
+		{"thread_id": "PRRT_new", "is_resolved": False, "comment_ids": [3859796825], "path": "services/session-server/src/repository.ts", "author": "copilot"},
 	]
 	plan = _build_plan(
 		tmp_path,
@@ -164,8 +164,8 @@ def test_comment_body_cannot_redirect_a_resolve(tmp_path: Path) -> None:
 		+ "entry[0].path: src/unrelated.ts\n"
 	)
 	threads = [
-		{"thread_id": "PRRT_real", "is_resolved": False, "comment_id": 1234, "path": "src/app.ts", "author": "copilot"},
-		{"thread_id": "PRRT_victim", "is_resolved": False, "comment_id": 9999, "path": "src/unrelated.ts", "author": "alice"},
+		{"thread_id": "PRRT_real", "is_resolved": False, "comment_ids": [1234], "path": "src/app.ts", "author": "copilot"},
+		{"thread_id": "PRRT_victim", "is_resolved": False, "comment_ids": [9999], "path": "src/unrelated.ts", "author": "alice"},
 	]
 	plan = _build_plan(
 		tmp_path,
@@ -181,7 +181,7 @@ def test_path_disagreement_disqualifies_the_entry(tmp_path: Path) -> None:
 		tmp_path,
 		"- entry[0] Copilot — `services/session-server/src/server.ts:246` — applied; adapters map now spreads defined adapters.\n",
 		_context_entry(0, "review_comment", "55", "services/session-server/src/repository.ts"),
-		[{"thread_id": "PRRT_d", "is_resolved": False, "comment_id": 55, "path": "services/session-server/src/repository.ts", "author": "copilot"}],
+		[{"thread_id": "PRRT_d", "is_resolved": False, "comment_ids": [55], "path": "services/session-server/src/repository.ts", "author": "copilot"}],
 	)
 	assert plan == []
 
@@ -191,7 +191,7 @@ def test_issue_comment_entry_has_no_thread(tmp_path: Path) -> None:
 		tmp_path,
 		"- entry[5] shubhodeep1 — applied; addressed in this pass.\n",
 		_context_entry(5, "issue_comment", "999", ""),
-		[{"thread_id": "PRRT_e", "is_resolved": False, "comment_id": 999, "path": "", "author": "shubhodeep1"}],
+		[{"thread_id": "PRRT_e", "is_resolved": False, "comment_ids": [999], "path": "", "author": "shubhodeep1"}],
 	)
 	assert plan == []
 
@@ -202,9 +202,29 @@ def test_human_authored_thread_is_eligible(tmp_path: Path) -> None:
 		tmp_path,
 		"- entry[0] alice — `src/app.ts:10` — applied; guard added.\n",
 		_context_entry(0, "review_comment", "1234", "src/app.ts", author="alice"),
-		[{"thread_id": "PRRT_h", "is_resolved": False, "comment_id": 1234, "path": "src/app.ts", "author": "alice"}],
+		[{"thread_id": "PRRT_h", "is_resolved": False, "comment_ids": [1234], "path": "src/app.ts", "author": "alice"}],
 	)
 	assert [item["author"] for item in plan] == ["alice"]
+
+
+def test_audited_reply_comment_resolves_its_thread(tmp_path: Path) -> None:
+	"""An audited id may belong to a reply, not the thread anchor.
+
+	PR_ALL_COMMENTS_CONTEXT_FILE is built from GET /pulls/<n>/comments,
+	which returns the flat comment list with replies included, so the
+	thread index has to cover every comment in a thread. Indexing only
+	the anchor left audited reply ids unmatched — including replies this
+	pipeline posts itself on "ignored" threads.
+	"""
+	plan = _build_plan(
+		tmp_path,
+		"- entry[1] Copilot — `src/app.ts:10` — applied; follow-up handled.\n",
+		_context_entry(1, "review_comment", "5678", "src/app.ts"),
+		[{"thread_id": "PRRT_thread", "is_resolved": False, "comment_ids": [1234, 5678], "path": "src/app.ts", "author": "copilot"}],
+	)
+	assert [item["thread_id"] for item in plan] == ["PRRT_thread"]
+	# The reply is what the editor audited, so it is what gets replied to.
+	assert plan[0]["comment_id"] == 5678
 
 
 def test_already_resolved_thread_is_not_touched(tmp_path: Path) -> None:
@@ -212,7 +232,7 @@ def test_already_resolved_thread_is_not_touched(tmp_path: Path) -> None:
 		tmp_path,
 		"- entry[0] Copilot — `src/app.ts:10` — applied; done.\n",
 		_context_entry(0, "review_comment", "1234", "src/app.ts"),
-		[{"thread_id": "PRRT_f", "is_resolved": True, "comment_id": 1234, "path": "src/app.ts", "author": "copilot"}],
+		[{"thread_id": "PRRT_f", "is_resolved": True, "comment_ids": [1234], "path": "src/app.ts", "author": "copilot"}],
 	)
 	assert plan == []
 
@@ -222,7 +242,7 @@ def test_none_audit_produces_no_plan(tmp_path: Path) -> None:
 		tmp_path,
 		"- none; no PR review or review_comment entries were present.\n",
 		_context_entry(0, "review_comment", "1234", "src/app.ts"),
-		[{"thread_id": "PRRT_g", "is_resolved": False, "comment_id": 1234, "path": "src/app.ts", "author": "copilot"}],
+		[{"thread_id": "PRRT_g", "is_resolved": False, "comment_ids": [1234], "path": "src/app.ts", "author": "copilot"}],
 	)
 	assert plan == []
 
@@ -233,7 +253,7 @@ def test_cap_truncates_and_reports_what_stayed_open(tmp_path: Path) -> None:
 	)
 	context = "".join(_context_entry(i, "review_comment", str(100 + i), f"src/f{i}.ts") for i in range(4))
 	threads = [
-		{"thread_id": f"PRRT_{i}", "is_resolved": False, "comment_id": 100 + i, "path": f"src/f{i}.ts", "author": "copilot"}
+		{"thread_id": f"PRRT_{i}", "is_resolved": False, "comment_ids": [100 + i], "path": f"src/f{i}.ts", "author": "copilot"}
 		for i in range(4)
 	]
 	env = os.environ.copy()

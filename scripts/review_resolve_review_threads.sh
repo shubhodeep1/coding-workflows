@@ -161,9 +161,17 @@ PLAN_FILE="${RESOLVE_TMP_DIR}/plan.jsonl"
 
 # Single paginated GraphQL query for every review thread on the PR. One
 # call per 100 threads rather than one REST lookup per audited comment
-# (§15). Only the first comment of each thread is requested: that is the
-# comment the audit entry's id refers to, and it is what anchors the
-# thread.
+# (§15).
+#
+# Every comment in a thread is indexed, not just the anchor.
+# PR_ALL_COMMENTS_CONTEXT_FILE is built from GET /pulls/<n>/comments,
+# which returns the flat comment list including replies (they carry
+# in_reply_to_id), so an audited entry's id can be a reply's id rather
+# than the thread anchor's. Indexing only the anchor would leave those
+# threads unresolved even though the editor audited them — including
+# threads carrying this script's own "ignored" rationale replies from
+# an earlier iteration. A thread with more than 50 comments keeps its
+# tail unindexed and simply stays open, which is the safe direction.
 read -r -d '' THREADS_QUERY <<'GRAPHQL'
 query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
@@ -173,7 +181,7 @@ query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
         nodes {
           id
           isResolved
-          comments(first: 1) {
+          comments(first: 50) {
             nodes { databaseId path author { login } }
           }
         }
@@ -197,7 +205,7 @@ fi
 if ! jq -s '[.[].data.repository.pullRequest.reviewThreads.nodes[]?] | map({
 		thread_id: .id,
 		is_resolved: .isResolved,
-		comment_id: (.comments.nodes[0].databaseId // null),
+		comment_ids: [.comments.nodes[]?.databaseId | select(. != null)],
 		path: (.comments.nodes[0].path // ""),
 		author: (.comments.nodes[0].author.login // "")
 	})' "${THREADS_RAW}" > "${THREADS_JSON}" 2>/dev/null

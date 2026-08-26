@@ -9,8 +9,10 @@ Inputs (environment):
   EDITOR_SUMMARY_FILE           editor summary carrying "PR comment audit:"
   PR_ALL_COMMENTS_CONTEXT_FILE  entry[N].<field> dump written by
                                 scripts/review_collect_pr_metadata.sh
-  THREADS_JSON                  [{thread_id, is_resolved, comment_id, path,
-                                author}] distilled from the GraphQL query
+  THREADS_JSON                  [{thread_id, is_resolved, comment_ids, path,
+                                author}] distilled from the GraphQL query;
+                                comment_ids covers every comment in the
+                                thread, replies included
   PLAN_FILE                     JSONL output path
   MAX_THREADS                   cap on plan length (default 50)
 
@@ -210,13 +212,16 @@ def build_plan() -> int:
 	if max_threads <= 0:
 		max_threads = 50
 
+	# Key every comment in a thread, not just its anchor: an audited id
+	# may belong to a reply, because GET /pulls/<n>/comments returns
+	# replies in the same flat list the context file is built from.
 	threads_by_comment: dict[int, dict] = {}
 	for thread in threads:
 		if not isinstance(thread, dict):
 			continue
-		comment_id = thread.get("comment_id")
-		if isinstance(comment_id, int):
-			threads_by_comment[comment_id] = thread
+		for comment_id in thread.get("comment_ids") or []:
+			if isinstance(comment_id, int):
+				threads_by_comment.setdefault(comment_id, thread)
 
 	audit_entries = parse_audit_entries(summary_text)
 	context_entries = parse_context_entries(context_text)
