@@ -301,6 +301,12 @@ def test_resolver_logs_conventional_branch_rejections_distinctly():
 	assert "reason=pr_fetch_failed" not in err
 
 
+def test_resolver_branch_lookup_is_pipefail_safe():
+	"""Multiple conventional-branch matches must not abort the poller."""
+	poller_source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert '_linked_prs_by_branch_name "${issue_num}" 2>/dev/null | head -n1 || true' in poller_source
+
+
 # ---------------------------------------------------------------------------
 # Direct-invocation entrypoint
 #

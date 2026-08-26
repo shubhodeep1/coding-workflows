@@ -10296,18 +10296,17 @@ The judge will evaluate this gap when the wave completes and decide whether to r
 
     dispatch_rb_judge)
       # Autonomous escape from ai:review-blocked: dispatch the
-      # standalone review-blocked judge workflow for the linked PR.
+      # standalone review-blocked judge workflow for the issue's own
+      # implementation PR.
       # The judge (scripts/review_rb_judge.sh) then decides merge,
-      # fix, or close_and_reissue.  Linked PR lookup prefers the
-      # shared stall cache (STALL_MANAGED_LINKED_PR_CACHE) and falls
-      # back to the legacy per-issue REST cross-ref helper.
+      # fix, or close_and_reissue. Mention-only cross-references must
+      # never become judge targets.
       local rb_pr_num=""
-      if [ -n "${STALL_MANAGED_LINKED_PR_CACHE:-}" ]; then
-        rb_pr_num="$(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" \
-          | jq -r --arg n "${issue_num}" '.[$n].number // empty' 2>/dev/null || echo "")"
-      fi
-      if ! [[ "${rb_pr_num}" =~ ^[0-9]+$ ]]; then
-        rb_pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+      if _resolve_issue_implementation_pr "${issue_num}"; then
+        rb_pr_num="${STALL_IMPL_PR_NUM}"
+      elif [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
+        echo "::warning::dispatch_rb_judge: implementation PR lookup was inconclusive for issue #${issue_num}; retrying next poll without consuming recovery budget."
+        return 1
       fi
       if ! [[ "${rb_pr_num}" =~ ^[0-9]+$ ]]; then
         # No linked PR — the judge has nothing to act on.  Increment
@@ -11253,7 +11252,7 @@ _resolve_issue_implementation_pr() {
   STALL_IMPL_PR_FAILURE_REASON=""
   [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
   local _ripr_candidate _ripr_json _ripr_list
-  _ripr_candidate="$(_linked_prs_by_branch_name "${issue_num}" 2>/dev/null | head -n1)"
+  _ripr_candidate="$(_linked_prs_by_branch_name "${issue_num}" 2>/dev/null | head -n1 || true)"
   if [[ "${_ripr_candidate}" =~ ^[0-9]+$ ]]; then
     _ripr_json="$(_fetch_pr_json "${_ripr_candidate}")"
     if [ -z "${_ripr_json}" ] || [ "${_ripr_json}" = "{}" ]; then
@@ -12359,9 +12358,14 @@ STALL_EOF
               || true
           fi
         fi
-        tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted merge retry for ready-to-merge issue (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
-        STALL_RECOVERY_SHOULD_INCREMENT="true"
-        took_action="true"
+        if ! [[ "${merge_pr}" =~ ^[0-9]+$ ]] && [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
+          echo "  [standalone-stall] Issue #${issue_num}: implementation PR lookup was inconclusive; retrying merge next poll without consuming recovery budget."
+          STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_pr_lookup_failed"
+        else
+          tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted merge retry for ready-to-merge issue (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          took_action="true"
+        fi
         ;;
       escalate_human)
         set_issue_phase_label "${issue_num}" "ai:needs-human" || true
@@ -12485,28 +12489,23 @@ REISSUE_EOF
         ;;
       dispatch_rb_judge)
         # Autonomous escape from ai:review-blocked: dispatch the
-        # standalone review-blocked judge workflow for the linked PR.
+        # standalone review-blocked judge workflow for the issue's own
+        # implementation PR.
         # See execute_stall_recovery_action's dispatch_rb_judge case
         # for the authoritative implementation pattern; this mirrors
         # it within the standalone loop's switch.
         #
-        # Linked-PR lookup uses the per-iteration _std_linked_json cache
-        # (populated at the top of this loop iteration from the
-        # batched GraphQL _candidate_details_json — same shape:
-        # {number, state, merged, head_ref, ...}), NOT
-        # _STD_ITER_PR_NUM_CACHED.  The latter is only declared inside
-        # the `if action == retrigger_review` block above; because
-        # bash `local` is function-scoped (not block-scoped), a prior
-        # iteration's retrigger_review value would otherwise leak into
-        # this iteration's dispatch_rb_judge and dispatch against the
-        # wrong PR.  Using _std_linked_json avoids both the leak and
-        # the redundant REST fallback.
+        # Resolve the issue's own implementation PR rather than trusting
+        # the mention-based linked-PR cache. The judge may merge, fix, or
+        # close/reissue its target, so a mention-only PR is unsafe here.
         local _std_rb_pr_num=""
-        _std_rb_pr_num="$(printf '%s' "${_std_linked_json:-null}" | jq -r '.number // empty' 2>/dev/null || echo "")"
-        if ! [[ "${_std_rb_pr_num}" =~ ^[0-9]+$ ]]; then
-          _std_rb_pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+        if _resolve_issue_implementation_pr "${issue_num}"; then
+          _std_rb_pr_num="${STALL_IMPL_PR_NUM}"
         fi
-        if ! [[ "${_std_rb_pr_num}" =~ ^[0-9]+$ ]]; then
+        if ! [[ "${_std_rb_pr_num}" =~ ^[0-9]+$ ]] && [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
+          echo "::warning::[standalone-stall] dispatch_rb_judge: implementation PR lookup was inconclusive for issue #${issue_num}; retrying next poll without consuming recovery budget."
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+        elif ! [[ "${_std_rb_pr_num}" =~ ^[0-9]+$ ]]; then
           # No linked PR — see execute_stall_recovery_action's
           # dispatch_rb_judge case for the same rationale: count this
           # as an attempt so the ladder can escalate to escalate_human
@@ -12533,7 +12532,9 @@ REISSUE_EOF
 	            STALL_RECOVERY_SHOULD_INCREMENT="false"
           fi
         fi
-        took_action="true"
+        if [[ "${_std_rb_pr_num}" =~ ^[0-9]+$ ]] || [ "${STALL_IMPL_PR_FAILURE_REASON}" != "pr_fetch_failed" ]; then
+          took_action="true"
+        fi
         ;;
       *)
         echo "::warning::Unknown standalone stall action ${action} for issue #${issue_num}"

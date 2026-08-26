@@ -1065,7 +1065,7 @@ if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
 		store['validation_dispatches'].append({'workflow': wf, 'tracking_issue': tracking, 'ref': ref})
 		save()
 		sys.exit(0)
-	if wf in ('ai-review.yml', 'internal-review.yml', 'review_autofix.yml'):
+	if wf in ('ai-review.yml', 'internal-review.yml', 'review_autofix.yml', 'review_rb_judge_dispatch.yml'):
 		pr_number = None
 		ref = None
 		for i, arg in enumerate(args):
@@ -6654,6 +6654,113 @@ def test_standalone_retrigger_review_retries_inconclusive_pr_lookup_without_incr
 	assert standalone_state["status_since_ts"] == 1
 	assert result.get("git_push_calls", []) == []
 	assert "implementation PR lookup was inconclusive (pr_fetch_failed)" in result["stdout"]
+
+
+def test_standalone_attempt_merge_retries_inconclusive_pr_lookup_without_increment():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:ready-to-merge",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:ready-to-merge"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 0
+	assert standalone_state["status_since_ts"] == 1
+	assert result.get("merged_prs", []) == []
+	assert "retrying merge next poll without consuming recovery budget" in result["stdout"]
+
+
+def test_standalone_dispatch_rb_judge_retargets_verified_implementation_pr():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:review-blocked",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:review-blocked"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: [416, 417]},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"body": "Automated implementation.",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-501",
+			},
+			{
+				"number": 417,
+				"body": "Refs #501",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+			},
+		],
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert [dispatch["pr_number"] for dispatch in result["review_dispatches"]] == [416]
+
+
+def test_managed_dispatch_rb_judge_retargets_verified_implementation_pr():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:review-blocked"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: [77, 78]},
+		prs=[
+			{
+				"number": 77,
+				"body": "Automated implementation.",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-10",
+			},
+			{
+				"number": 78,
+				"body": "Refs #10",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+			},
+		],
+	)
+	issue_state = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_state["stall_recovery_count"] == 1
+	assert [dispatch["pr_number"] for dispatch in result["review_dispatches"]] == [77]
 
 
 def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():
