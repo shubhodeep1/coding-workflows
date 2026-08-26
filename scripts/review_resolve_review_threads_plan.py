@@ -131,7 +131,9 @@ def extract_reason(line: str, disposition: str) -> str:
 	if matched_disposition == disposition and match_end >= 0:
 		tail = line[match_end:].strip().lstrip(";:,-—– ").strip()
 		if tail:
-			return tail[:REASON_MAX_CHARS]
+			if len(tail) > REASON_MAX_CHARS:
+				return tail[: REASON_MAX_CHARS - 3].rstrip() + "..."
+			return tail
 	return ""
 
 
