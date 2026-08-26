@@ -13,6 +13,8 @@ Inputs (environment):
                                 author}] distilled from the GraphQL query;
                                 comment_ids covers every comment in the
                                 thread, replies included
+  REVIEW_APPLIED_CHANGES_PERSISTED
+                                false skips "applied" dispositions
   PLAN_FILE                     JSONL output path
   MAX_THREADS                   cap on plan length (default 50)
 
@@ -38,14 +40,16 @@ ENTRY_INDEX = re.compile(r"entry\s*\[\s*(\d+)\s*\]")
 CONTEXT_FIELD = re.compile(r"^entry\[(\d+)\]\.([A-Za-z_]+):[ \t]?(.*)$")
 BACKTICKED = re.compile(r"`([^`]+)`")
 BARE_PATH = re.compile(r"(?<![`\w/.-])((?:[\w.-]+/)+[\w.-]+\.[A-Za-z0-9]+)(?::\d+)?")
+DISPOSITION_SEPARATOR = re.compile(r"\s+[—–]\s+")
+DISPOSITION_LABEL = re.compile(r"\bdisposition\s*:\s*", re.I)
 REASON_MAX_CHARS = 500
 
 # Checked in order: "already applied" must not be read as "applied", and
 # "not applied" must not be read as "applied" either.
 DISPOSITION_PATTERNS = (
-	("already satisfied", re.compile(r"already[\s-]+(?:satisfied|applied|present|fixed|addressed)", re.I)),
-	("ignored", re.compile(r"\b(?:ignored|rejected|not[\s-]+applied|no[\s-]+action|skipped)\b", re.I)),
-	("applied", re.compile(r"\bapplied\b|\bfixed\b|\baddressed\b", re.I)),
+	("already satisfied", re.compile(r"already[\s-]+(?:satisfied|applied|present|fixed|addressed)\b", re.I)),
+	("ignored", re.compile(r"(?:ignored|rejected|not[\s-]+(?:applied|fixed|addressed)|no[\s-]+action|skipped)\b", re.I)),
+	("applied", re.compile(r"(?:applied|fixed|addressed)\b", re.I)),
 )
 
 
@@ -95,23 +99,37 @@ def extract_path(line: str) -> str:
 	return ""
 
 
+def find_disposition(line: str) -> tuple[str, int]:
+	"""Return the first explicit disposition field and its end offset."""
+	candidate_starts = [0]
+	candidate_starts.extend(match.end() for match in DISPOSITION_SEPARATOR.finditer(line))
+	candidate_starts.extend(match.start() for match in DISPOSITION_LABEL.finditer(line))
+	for candidate_start in sorted(set(candidate_starts)):
+		candidate_text = line[candidate_start:]
+		leading_length = len(candidate_text) - len(candidate_text.lstrip())
+		candidate_text = candidate_text.lstrip()
+		if candidate_text.lower().startswith("disposition"):
+			label_match = DISPOSITION_LABEL.match(candidate_text)
+			if label_match is not None:
+				leading_length += label_match.end()
+				candidate_text = candidate_text[label_match.end():]
+		for name, pattern in DISPOSITION_PATTERNS:
+			match = pattern.match(candidate_text)
+			if match is not None:
+				return name, candidate_start + leading_length + match.end()
+	return "", -1
+
+
 def extract_disposition(line: str) -> str:
-	for name, pattern in DISPOSITION_PATTERNS:
-		if pattern.search(line):
-			return name
-	return ""
+	disposition, _ = find_disposition(line)
+	return disposition
 
 
 def extract_reason(line: str, disposition: str) -> str:
 	"""Text following the disposition token, trimmed for use as a reply."""
-	for name, pattern in DISPOSITION_PATTERNS:
-		if name != disposition:
-			continue
-		match = pattern.search(line)
-		if not match:
-			break
-		tail = line[match.end():]
-		tail = tail.strip().lstrip(";:,-—– ").strip()
+	matched_disposition, match_end = find_disposition(line)
+	if matched_disposition == disposition and match_end >= 0:
+		tail = line[match_end:].strip().lstrip(";:,-—– ").strip()
 		if tail:
 			return tail[:REASON_MAX_CHARS]
 	return ""
@@ -211,6 +229,7 @@ def build_plan() -> int:
 		max_threads = 50
 	if max_threads <= 0:
 		max_threads = 50
+	applied_changes_persisted = os.environ.get("REVIEW_APPLIED_CHANGES_PERSISTED", "false").lower() == "true"
 
 	# Key every comment in a thread, not just its anchor: an audited id
 	# may belong to a reply, because GET /pulls/<n>/comments returns
@@ -230,6 +249,9 @@ def build_plan() -> int:
 	plan: list[dict] = []
 	for entry in sorted(audit_entries, key=lambda item: item["index"]):
 		index = entry["index"]
+		if entry["disposition"] == "applied" and not applied_changes_persisted:
+			note(f"entry[{index}] claims an applied change without a productive commit; leaving the thread open")
+			continue
 		context = context_entries.get(index)
 		if context is None:
 			warn(f"entry[{index}] has no matching PR comment context entry; leaving any thread open")
@@ -262,6 +284,7 @@ def build_plan() -> int:
 				"reason": entry["reason"],
 				"path": context.get("path", "") or entry["audit_path"],
 				"author": thread.get("author", ""),
+				"resolution_reply_posted": bool(thread.get("resolution_reply_posted")),
 			}
 		)
 

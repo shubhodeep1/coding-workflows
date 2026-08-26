@@ -56,6 +56,7 @@
 #   GH_TOKEN                     token with pull-request write scope
 #   EDITOR_SUMMARY_FILE          editor summary containing "PR comment audit:"
 #   PR_ALL_COMMENTS_CONTEXT_FILE entry[N].{kind,id,path,author} context dump
+#   REVIEW_APPLIED_CHANGES_PERSISTED  "true" only after a productive commit
 #   REVIEW_RESOLVE_THREADS_ENABLED  "false" disables the whole step
 #   REVIEW_RESOLVE_THREADS_MAX      cap on threads touched per run (default 50)
 #   CLAUDE_BRANCH_REVIEW_MODE       "true" (no PR) short-circuits
@@ -180,11 +181,11 @@ query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
         pageInfo { hasNextPage endCursor }
         nodes {
           id
-          isResolved
-          comments(first: 50) {
-            nodes { databaseId path author { login } }
-          }
-        }
+		  isResolved
+		  comments(first: 50) {
+		    nodes { databaseId path body viewerDidAuthor author { login } }
+		  }
+		}
       }
     }
   }
@@ -202,12 +203,14 @@ then
 	exit 0
 fi
 
-if ! jq -s '[.[].data.repository.pullRequest.reviewThreads.nodes[]?] | map({
+if ! jq -s '[.[].data.repository.pullRequest.reviewThreads.nodes[]?] | map(. as $thread | {
 		thread_id: .id,
 		is_resolved: .isResolved,
 		comment_ids: [.comments.nodes[]?.databaseId | select(. != null)],
 		path: (.comments.nodes[0].path // ""),
-		author: (.comments.nodes[0].author.login // "")
+		author: (.comments.nodes[0].author.login // ""),
+		resolution_reply_posted: any(.comments.nodes[]?;
+			.viewerDidAuthor == true and ((.body // "") | contains("<!-- ai-autofix-review-resolution:" + $thread.id + " -->")))
 	})' "${THREADS_RAW}" > "${THREADS_JSON}" 2>/dev/null
 then
 	echo "::warning::review_resolve_review_threads: could not parse review-thread payload; leaving all threads untouched."
@@ -255,6 +258,7 @@ do
 	disposition="$(printf '%s' "${plan_line}" | jq -r '.disposition // ""' 2>/dev/null || echo "")"
 	reason="$(printf '%s' "${plan_line}" | jq -r '.reason // ""' 2>/dev/null || echo "")"
 	comment_path="$(printf '%s' "${plan_line}" | jq -r '.path // ""' 2>/dev/null || echo "")"
+	resolution_reply_posted="$(printf '%s' "${plan_line}" | jq -r '.resolution_reply_posted // false' 2>/dev/null || echo "false")"
 
 	if [ -z "${thread_id}" ]; then
 		skipped_count=$(( skipped_count + 1 ))
@@ -264,8 +268,9 @@ do
 	# An "ignored" disposition means the editor deliberately rejected the
 	# suggestion. Resolving that silently would hide a disagreement, so
 	# the reason goes into the thread first; the reviewer can reopen.
-	if [ "${disposition}" = "ignored" ]; then
-		reply_body="$(printf '%s' "AI autofix did not apply this suggestion: ${reason:-no reason recorded}
+	if [ "${disposition}" = "ignored" ] && [ "${resolution_reply_posted}" != "true" ]; then
+		reply_body="$(printf '%s' "<!-- ai-autofix-review-resolution:${thread_id} -->
+AI autofix did not apply this suggestion: ${reason:-no reason recorded}
 
 Resolving the thread to record that it was reviewed rather than missed. Reopen it if you disagree — the AI autofix pipeline will pick it up again on the next iteration.")"
 		if gh_retry gh api \
@@ -276,6 +281,8 @@ Resolving the thread to record that it was reviewed rather than missed. Reopen i
 		else
 			echo "::warning::review_resolve_review_threads: reply to comment ${comment_id} failed; resolving without it."
 		fi
+	elif [ "${disposition}" = "ignored" ]; then
+		echo "  rationale already posted for thread ${thread_id}; skipping duplicate reply"
 	fi
 
 	if gh_retry gh api graphql \

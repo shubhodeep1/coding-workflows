@@ -70,6 +70,7 @@ def _build_plan(tmp_path: Path, audit_lines: str, context: str, threads: list[di
 	env = os.environ.copy()
 	env.update(_write_inputs(tmp_path, audit_lines, context, threads))
 	env.update(extra)
+	env.setdefault("REVIEW_APPLIED_CHANGES_PERSISTED", "true")
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	result = subprocess.run(
 		["python3", str(PLAN_BUILDER)],
@@ -121,6 +122,51 @@ def test_ignored_entry_is_resolved_and_carries_its_reason(tmp_path: Path) -> Non
 	assert len(plan) == 1
 	assert plan[0]["disposition"] == "ignored"
 	assert "BigNumber does not wrap" in plan[0]["reason"]
+
+
+def test_reason_keywords_do_not_override_the_disposition(tmp_path: Path) -> None:
+	context = _context_entry(0, "review_comment", "77", "src/app.ts")
+	threads = [{"thread_id": "PRRT_c", "is_resolved": False, "comment_ids": [77], "path": "src/app.ts", "author": "copilot"}]
+	ignored_plan = _build_plan(
+		tmp_path,
+		"- entry[0] Copilot — `src/app.ts:8` — ignored; the change was already applied elsewhere.\n",
+		context,
+		threads,
+	)
+	assert ignored_plan[0]["disposition"] == "ignored"
+	assert "already applied elsewhere" in ignored_plan[0]["reason"]
+
+	applied_plan = _build_plan(
+		tmp_path,
+		"- entry[0] Copilot — `src/app.ts:8` — applied; skipped the unrelated rename.\n",
+		context,
+		threads,
+	)
+	assert applied_plan[0]["disposition"] == "applied"
+
+
+def test_negated_fixed_and_addressed_dispositions_are_ignored(tmp_path: Path) -> None:
+	context = _context_entry(0, "review_comment", "77", "src/app.ts")
+	threads = [{"thread_id": "PRRT_c", "is_resolved": False, "comment_ids": [77], "path": "src/app.ts", "author": "copilot"}]
+	for disposition_text in ("not fixed", "not addressed"):
+		plan = _build_plan(
+			tmp_path,
+			f"- entry[0] Copilot — `src/app.ts:8` — {disposition_text}; the code is intentional.\n",
+			context,
+			threads,
+		)
+		assert plan[0]["disposition"] == "ignored"
+
+
+def test_applied_entry_requires_a_productive_commit(tmp_path: Path) -> None:
+	plan = _build_plan(
+		tmp_path,
+		"- entry[0] Copilot — `src/app.ts:8` — applied; guard added.\n",
+		_context_entry(0, "review_comment", "77", "src/app.ts"),
+		[{"thread_id": "PRRT_c", "is_resolved": False, "comment_ids": [77], "path": "src/app.ts", "author": "copilot"}],
+		REVIEW_APPLIED_CHANGES_PERSISTED="false",
+	)
+	assert plan == []
 
 
 def test_unlisted_entry_at_a_shared_location_stays_open(tmp_path: Path) -> None:
@@ -259,6 +305,7 @@ def test_cap_truncates_and_reports_what_stayed_open(tmp_path: Path) -> None:
 	env = os.environ.copy()
 	env.update(_write_inputs(tmp_path, audit, context, threads))
 	env["MAX_THREADS"] = "2"
+	env["REVIEW_APPLIED_CHANGES_PERSISTED"] = "true"
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	result = subprocess.run(["python3", str(PLAN_BUILDER)], env=env, capture_output=True, text=True)
 	assert result.returncode == 0, result.stderr
@@ -283,6 +330,7 @@ def _run_driver(tmp_path: Path, gh_script: str, **extra: str) -> subprocess.Comp
 	env["PR_NUMBER"] = "404"
 	env["GH_TOKEN"] = "stub"
 	env["CALL_LOG"] = str(tmp_path / "calls.log")
+	env["REVIEW_APPLIED_CHANGES_PERSISTED"] = "true"
 	env.pop("GITHUB_ENV", None)
 	env.update(extra)
 	return subprocess.run(["bash", str(DRIVER)], env=env, capture_output=True, text=True)
@@ -400,6 +448,62 @@ def test_driver_replies_before_resolving_an_ignored_thread(tmp_path: Path) -> No
 	assert "comments/1234/replies" in calls
 
 
+def test_driver_does_not_repeat_an_existing_rationale_reply(tmp_path: Path) -> None:
+	files = _write_inputs(
+		tmp_path,
+		"- entry[0] Copilot — `src/app.ts:10` — ignored; the reviewer misread the guard.\n",
+		_context_entry(0, "review_comment", "1234", "src/app.ts"),
+		[],
+	)
+	fixture = tmp_path / "graphql_page.json"
+	fixture.write_text(
+		json.dumps(
+			{
+				"data": {
+					"repository": {
+						"pullRequest": {
+							"reviewThreads": {
+								"pageInfo": {"hasNextPage": False, "endCursor": None},
+								"nodes": [
+									{
+										"id": "PRRT_a",
+										"isResolved": False,
+									"comments": {
+										"nodes": [
+											{"databaseId": 1234, "path": "src/app.ts", "author": {"login": "copilot"}},
+											{
+												"databaseId": 5678,
+												"path": "src/app.ts",
+												"body": "<!-- ai-autofix-review-resolution:PRRT_a -->\nprior rationale",
+												"viewerDidAuthor": True,
+												"author": {"login": "codex"},
+											},
+										]
+									},
+								}
+								],
+							}
+						}
+					}
+				}
+			}
+		),
+		encoding="utf-8",
+	)
+	result = _run_driver(
+		tmp_path,
+		GH_STUB,
+		THREADS_FIXTURE=str(fixture),
+		EDITOR_SUMMARY_FILE=files["EDITOR_SUMMARY_FILE"],
+		PR_ALL_COMMENTS_CONTEXT_FILE=files["PR_ALL_COMMENTS_CONTEXT_FILE"],
+	)
+	assert result.returncode == 0, result.stderr
+	assert "resolved=1" in result.stdout
+	assert "replied=0" in result.stdout
+	calls = Path(str(tmp_path / "calls.log")).read_text(encoding="utf-8")
+	assert "comments/1234/replies" not in calls
+
+
 def test_driver_is_disabled_by_the_kill_switch(tmp_path: Path) -> None:
 	files = _write_inputs(
 		tmp_path,
@@ -446,10 +550,17 @@ def test_scripts_are_staged_for_consumer_repos() -> None:
 	assert "review_resolve_review_threads_plan.py" in staging
 
 
-def test_workflow_invokes_the_resolver_after_the_editor_summary() -> None:
+def test_workflow_invokes_the_resolver_after_editor_safety_checks() -> None:
 	workflow = REVIEW_AUTOFIX_WF.read_text(encoding="utf-8")
 	assert "review_resolve_review_threads.sh" in workflow
 	assert "REVIEW_RESOLVE_THREADS_ENABLED" in workflow
 	summary_step = workflow.index("- name: Post editor summary comment")
+	changes_lost_step = workflow.index("- name: Detect editor-claimed-but-uncommitted changes")
+	noop_step = workflow.index("- name: Validate editor no-op disposition")
 	resolve_step = workflow.index("- name: Resolve addressed PR review threads")
-	assert summary_step < resolve_step, "resolver must run after the audit is posted"
+	assert summary_step < changes_lost_step < noop_step < resolve_step
+	resolve_block = workflow[resolve_step:workflow.index("\n      - name:", resolve_step + 1)]
+	assert 'if: "success() &&' in resolve_block
+	assert "env.EDITOR_CHANGES_LOST != 'true'" in resolve_block
+	assert "env.EDITOR_NOOP_SUSPICIOUS != 'true'" in resolve_block
+	assert "REVIEW_APPLIED_CHANGES_PERSISTED: ${{ steps.commit_changes.outputs.did_commit == 'true' && steps.commit_changes.outputs.ledger_only_commit_strict != 'true' }}" in resolve_block
