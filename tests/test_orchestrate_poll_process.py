@@ -662,6 +662,7 @@ def _run_poller(
 	fail_search_issues: bool = False,
 	search_issue_items: list[dict] | None = None,
 	prs: list[dict] | None = None,
+	pr_commits: dict[int, list[dict]] | None = None,
 	pr_api_sequence: dict[int, list[dict]] | None = None,
 	existing_branches: list[str] | None = None,
 	merge_conflict_on_sync: bool = False,
@@ -734,6 +735,7 @@ def _run_poller(
 	issue_events = issue_events or {}
 	gql_labels = gql_labels or {}
 	prs = prs or []
+	pr_commits = pr_commits or {}
 	pr_api_sequence = pr_api_sequence or {}
 	existing_branches = existing_branches or ["main"]
 	blocked_check_shas = blocked_check_shas or []
@@ -871,6 +873,7 @@ def _run_poller(
 			"search_issue_items": list(search_issue_items or []),
 			"default_branch": "main",
 			"prs": prs,
+			"pr_commits": {str(k): list(v) for k, v in pr_commits.items()},
 			"pr_api_sequence": {str(k): list(v) for k, v in pr_api_sequence.items()},
 			"existing_branches": existing_branches,
 			"update_branch_calls": [],
@@ -1156,7 +1159,7 @@ if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
 		store['validation_dispatches'].append({'workflow': wf, 'tracking_issue': tracking, 'ref': ref})
 		save()
 		sys.exit(0)
-	if wf in ('ai-review.yml', 'internal-review.yml', 'review_autofix.yml'):
+	if wf in ('ai-review.yml', 'internal-review.yml', 'review_autofix.yml', 'review_rb_judge_dispatch.yml'):
 		pr_number = None
 		ref = None
 		for i, arg in enumerate(args):
@@ -1774,7 +1777,11 @@ if args[0] == 'api':
 
 	m = re.search(r'/pulls/(\d+)$', path)
 	m_files = re.search(r'/pulls/(\d+)/files(\?.*)?$', path)
+	m_commits = re.search(r'/pulls/(\d+)/commits(\?.*)?$', path)
 	m_update = re.search(r'/pulls/(\d+)/update-branch$', path)
+	if m_commits:
+		print(json.dumps(store.get('pr_commits', {}).get(m_commits.group(1), [])))
+		sys.exit(0)
 	if m_files:
 		pr_num = int(m_files.group(1))
 		pr = None
@@ -2238,6 +2245,12 @@ if args and args[0] == 'fetch':
 		refspec = args[3]
 	elif len(args) == 3 and args[1] == 'origin':
 		refspec = args[2]
+	# Production refspecs updating remote-tracking refs carry the force
+	# prefix (`+refs/heads/X:refs/remotes/origin/X`). Normalize it away so
+	# call bookkeeping, fail-injection keys, and the src/dst parse below
+	# keep working with the unforced form tests have always used.
+	if refspec and refspec.startswith('+'):
+		refspec = refspec[1:]
 	if refspec:
 		calls = store.setdefault('git_fetch_calls', {})
 		calls[refspec] = int(calls.get(refspec, 0)) + 1
@@ -6493,6 +6506,7 @@ def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blan
 		prs=[
 			{
 				"number": 416,
+				"body": "Closes #501",
 				"state": "open",
 				"baseRefName": "main",
 				"headRefName": head_ref,
@@ -6551,6 +6565,7 @@ def test_standalone_retrigger_review_skips_empty_commit_for_review_run_past_stal
 		prs=[
 			{
 				"number": 416,
+				"body": "Closes #501",
 				"state": "open",
 				"baseRefName": "main",
 				"headRefName": head_ref,
@@ -6586,6 +6601,371 @@ def test_standalone_retrigger_review_skips_empty_commit_for_review_run_past_stal
 	assert result.get("git_push_calls", []) == [], (
 		f"expected no standalone empty-commit push when an in-budget review run blocks recovery; "
 		f"got push calls {result.get('git_push_calls', [])}"
+	)
+
+
+def test_standalone_retrigger_review_counts_unresolvable_wrong_pr_as_attempt():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"body": "Refs #501",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+				"headRefFromApi": "claude/unrelated-fix",
+				"headSha": "sha416",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert standalone_state["phase_attempts"]["ai:done"] == 1
+	assert standalone_state["status_since_ts"] != 1
+	assert result.get("git_push_calls", []) == []
+	assert result["review_dispatches"] == []
+	assert "none could be resolved; skipping empty-commit retrigger" in result["stdout"]
+	assert not any(
+		"/approved" in str(comment.get("body", ""))
+		for comment in result["issues"]["501"]["comments"]
+	)
+
+
+def test_standalone_retrigger_review_retargets_verified_implementation_pr():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: [416, 417]},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"body": "Automated implementation.",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-501",
+				"headRefFromApi": "ai/issue-501",
+				"headSha": "sha416",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+			{
+				"number": 417,
+				"body": "Refs #501",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+				"headRefFromApi": "claude/unrelated-fix",
+				"headSha": "sha417",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert ["origin", "HEAD:ai/issue-501"] in result.get("git_push_calls", [])
+	assert "retargeting to PR #416" in result["stdout"]
+	assert "HEAD:claude/unrelated-fix" not in str(result.get("git_push_calls", []))
+	assert not any(
+		"/approved" in str(comment.get("body", ""))
+		for comment in result["issues"]["501"]["comments"]
+	)
+
+
+def test_standalone_retrigger_review_mixed_fetch_failure_counts_conclusive_rejection():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: [416, 417]},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 417,
+				"body": "Refs #501",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+				"headRefFromApi": "claude/unrelated-fix",
+				"headSha": "sha417",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert standalone_state["status_since_ts"] != 1
+	assert result.get("git_push_calls", []) == []
+	assert "none could be resolved; skipping empty-commit retrigger" in result["stdout"]
+	assert not any(
+		"/approved" in str(comment.get("body", ""))
+		for comment in result["issues"]["501"]["comments"]
+	)
+
+
+def test_standalone_attempt_merge_retries_inconclusive_pr_lookup_without_increment():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:ready-to-merge",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:ready-to-merge"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 0
+	assert standalone_state["status_since_ts"] == 1
+	assert result.get("merged_prs", []) == []
+	assert "retrying merge next poll without consuming recovery budget" in result["stdout"]
+
+
+def test_standalone_attempt_merge_counts_conclusive_missing_implementation_pr_accurately():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:ready-to-merge",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:ready-to-merge"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[{
+			"number": 416,
+			"body": "Refs #501",
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "claude/unrelated-fix",
+		}],
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert result.get("merged_prs", []) == []
+	assert "no implementation PR could be resolved; counting the skipped merge as an attempt" in result["stdout"]
+	assert "attempted merge retry for ready-to-merge issue" not in result["stdout"]
+
+
+def test_standalone_dispatch_rb_judge_retargets_verified_implementation_pr():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:review-blocked",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:review-blocked"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: [416, 417]},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"body": "Automated implementation.",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-501",
+			},
+			{
+				"number": 417,
+				"body": "Refs #501",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+			},
+		],
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert [dispatch["pr_number"] for dispatch in result["review_dispatches"]] == [416]
+
+
+def test_managed_dispatch_rb_judge_retargets_verified_implementation_pr():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:review-blocked"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: [77, 78]},
+		prs=[
+			{
+				"number": 77,
+				"body": "Automated implementation.",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-10",
+			},
+			{
+				"number": 78,
+				"body": "Refs #10",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+			},
+		],
+	)
+	issue_state = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_state["stall_recovery_count"] == 1
+	assert [dispatch["pr_number"] for dispatch in result["review_dispatches"]] == [77]
+
+
+def test_managed_skip_healthy_pr_redirect_targets_verified_implementation_pr():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: [77, 78]},
+		prs=[
+			{
+				"number": 77,
+				"body": "Automated implementation.",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-10",
+			},
+			{
+				"number": 78,
+				"body": "Refs #10",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+			},
+		],
+		pr_commits={
+			77: [{"commit": {"message": "[ai-autofix] productive fix", "committer": {"date": "2099-01-01T00:00:00Z"}}}],
+			78: [{"commit": {"message": "[ai-autofix] unrelated fix", "committer": {"date": "2099-01-01T00:00:00Z"}}}],
+		},
+		env_overrides={"MAX_STALL_RECOVERIES_DONE": "1"},
+	)
+	assert [dispatch["pr_number"] for dispatch in result["review_dispatches"]] == [77]
+	assert result["issues"]["10"].get("closed", False) is False
+	assert "skip→dispatch_rb_judge: PR #77" in result["stdout"]
+	assert "skip→dispatch_rb_judge: PR #78" not in result["stdout"]
+
+
+def test_managed_skip_retries_timeline_discovery_failure_without_closing_issue():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		timeline_fail_for_issues=[10],
+		env_overrides={"MAX_STALL_RECOVERIES_DONE": "1"},
+	)
+	issue_state = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_state["stall_recovery_count"] == 1
+	assert issue_state["status_since_ts"] == 1
+	assert result["issues"]["10"].get("closed", False) is False
+	assert result["review_dispatches"] == []
+	assert "skip healthy-PR guard: implementation PR lookup was inconclusive" in result["stdout"]
+	assert not any(
+		"/approved" in str(comment.get("body", ""))
+		for comment in result["issues"]["10"]["comments"]
 	)
 
 
@@ -6707,6 +7087,7 @@ def test_standalone_retrigger_review_does_not_increment_when_empty_commit_checko
 		prs=[
 			{
 				"number": 417,
+				"body": "Closes #502",
 				"state": "open",
 				"baseRefName": "main",
 				"headRefName": head_ref,
@@ -9660,6 +10041,7 @@ def test_retrigger_review_redispatches_when_last_autofix_concluded_failure():
 		prs=[
 			{
 				"number": 77,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9702,6 +10084,7 @@ def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure(
 		prs=[
 			{
 				"number": 78,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9720,6 +10103,33 @@ def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure(
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1
+	assert result.get("git_push_calls", []), (
+		"expected the no-prior-failure case to exercise the empty-commit push path"
+	)
+
+
+def test_retrigger_review_retries_inconclusive_pr_lookup_without_reimplementing():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 86},
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0
+	assert result.get("git_push_calls", []) == []
+	assert "implementation PR lookup was inconclusive" in result["stdout"]
+	assert not any(
+		"/approved" in str(comment.get("body", ""))
+		for comment in result["issues"]["10"]["comments"]
+	)
 
 
 def test_retrigger_review_does_not_increment_when_redispatch_skipped():
@@ -9738,6 +10148,7 @@ def test_retrigger_review_does_not_increment_when_redispatch_skipped():
 		prs=[
 			{
 				"number": 79,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9799,6 +10210,7 @@ def test_retrigger_review_skips_empty_commit_when_review_run_inflight():
 		prs=[
 			{
 				"number": 80,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9855,6 +10267,7 @@ def test_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_bran
 		prs=[
 			{
 				"number": 84,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9910,6 +10323,7 @@ def test_retrigger_review_ignores_inflight_run_on_unrelated_branch():
 		prs=[
 			{
 				"number": 81,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9946,6 +10360,9 @@ def test_retrigger_review_ignores_inflight_run_on_unrelated_branch():
 		f"different branch; got stall_recovery_count="
 		f"{issue_entry['stall_recovery_count']}"
 	)
+	assert result.get("git_push_calls", []), (
+		"expected an unrelated in-flight run to leave the empty-commit push path active"
+	)
 
 
 def test_retrigger_review_inflight_guard_treats_zombie_run_as_eligible():
@@ -9969,6 +10386,7 @@ def test_retrigger_review_inflight_guard_treats_zombie_run_as_eligible():
 		prs=[
 			{
 				"number": 82,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9995,6 +10413,9 @@ def test_retrigger_review_inflight_guard_treats_zombie_run_as_eligible():
 	assert issue_entry["stall_recovery_count"] == 1, (
 		f"expected empty-commit push to proceed past zombie in-flight run; "
 		f"got stall_recovery_count={issue_entry['stall_recovery_count']}"
+	)
+	assert result.get("git_push_calls", []), (
+		"expected a zombie review run to leave the empty-commit push path active"
 	)
 
 
@@ -10028,6 +10449,7 @@ def test_retrigger_review_skips_empty_commit_for_review_run_past_stall_threshold
 		prs=[
 			{
 				"number": 3082,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -10082,6 +10504,7 @@ def test_retrigger_review_skips_empty_commit_when_pr_head_advanced_after_snapsho
 		prs=[
 			{
 				"number": 83,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -10121,6 +10544,7 @@ def test_retrigger_review_does_not_increment_when_empty_commit_checkout_fails():
 		prs=[
 			{
 				"number": 85,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",

@@ -902,7 +902,7 @@ jobs:
           : > "${TELEMETRY_JSONL}"
           AI_MEMORY_BRANCH_NAME="${AI_MEMORY_BRANCH:-ai-memory}"
           AI_MEMORY_ROOT_NAME="${AI_MEMORY_ROOT:-ai-memory}"
-          if git fetch --quiet --depth=50 origin "${AI_MEMORY_BRANCH_NAME}:refs/remotes/origin/${AI_MEMORY_BRANCH_NAME}" 2>/dev/null; then
+          if git fetch --quiet --depth=50 origin "+refs/heads/${AI_MEMORY_BRANCH_NAME}:refs/remotes/origin/${AI_MEMORY_BRANCH_NAME}" 2>/dev/null; then
             if git show "refs/remotes/origin/${AI_MEMORY_BRANCH_NAME}:${AI_MEMORY_ROOT_NAME}/orchestrator/merge_conflicts.jsonl" > "${TELEMETRY_JSONL}" 2>/dev/null; then
               _tel_lines="$(wc -l < "${TELEMETRY_JSONL}" 2>/dev/null || echo 0)"
               echo "Loaded ${_tel_lines} line(s) of merge-conflict telemetry from ${AI_MEMORY_BRANCH_NAME}."
