@@ -188,6 +188,29 @@ def _contains_shell_substitution(command: str) -> bool:
 	return False
 
 
+def _contains_unquoted_shell_expansion(command: str) -> bool:
+	"""Return whether unquoted Bash expansion can change argv before curl runs."""
+	single_quoted = False
+	double_quoted = False
+	escaped = False
+	for character in command:
+		if escaped:
+			escaped = False
+			continue
+		if character == "\\" and not single_quoted:
+			escaped = True
+			continue
+		if character == "'" and not double_quoted:
+			single_quoted = not single_quoted
+			continue
+		if character == '"' and not single_quoted:
+			double_quoted = not double_quoted
+			continue
+		if not single_quoted and not double_quoted and character in "${*?[~":
+			return True
+	return False
+
+
 def _api_write_requires_confirmation(command: str) -> bool:
 	"""Return whether an allowlisted API write uses non-canonical curl options.
 
@@ -212,7 +235,11 @@ def _api_write_requires_confirmation(command: str) -> bool:
 		return False
 	if "{" in tokens[4] or "[" in tokens[4]:
 		return True
-	if len(segments) != 1 or _contains_shell_substitution(command):
+	if (
+		len(segments) != 1
+		or _contains_shell_substitution(command)
+		or _contains_unquoted_shell_expansion(command)
+	):
 		return True
 
 	index = 5

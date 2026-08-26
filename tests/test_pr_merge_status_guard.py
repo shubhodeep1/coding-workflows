@@ -118,6 +118,12 @@ def test_canonical_api_writes_do_not_request_extra_confirmation(command: str) ->
 		"curl -sS -X POST https://api.cloudflare.com/client/v4/workers; curl -X DELETE https://api.cloudflare.com/client/v4/workers/id",
 		"curl -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d \"$(cat /tmp/body)\"",
 		'curl -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d "it\'s $(cat /tmp/body)"',
+		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d $BODY",
+		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d ${BODY}",
+		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d {x,-X,DELETE}",
+		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d /tmp/*",
+		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d ~/spec.json",
+		"curl -sS -X POST https://api.cloudflare.com/client/v4/workers -H $AUTHORIZATION",
 		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d 'unterminated",
 		"  curl -sS -X POST https://api.cloudflare.com/client/v4/workers -H 'unterminated",
 		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id>/tmp/response",
@@ -131,6 +137,7 @@ def test_noncanonical_api_writes_request_confirmation(command: str) -> None:
 	"command",
 	[
 		"curl -sS -X PUT https://api.digitalocean.com/v2/droplets/id -X DELETE",
+		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d ${BODY}",
 		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d 'unterminated",
 	],
 )
