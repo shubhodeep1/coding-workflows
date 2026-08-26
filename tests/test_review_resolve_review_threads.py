@@ -341,7 +341,11 @@ echo "$@" >> "${CALL_LOG}"
 if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
 	case "$*" in
 		*resolveReviewThread*)
-			echo '{"data":{"resolveReviewThread":{"thread":{"id":"PRRT_a","isResolved":true}}}}'
+			if [ -n "${RESOLVE_RESPONSE:-}" ]; then
+				printf '%s\n' "${RESOLVE_RESPONSE}"
+			else
+				echo '{"data":{"resolveReviewThread":{"thread":{"id":"PRRT_a","isResolved":true}}}}'
+			fi
 			;;
 		*)
 			cat "${THREADS_FIXTURE}"
@@ -401,6 +405,50 @@ def test_driver_resolves_an_applied_thread(tmp_path: Path) -> None:
 	assert "resolveReviewThread" in calls
 	# An applied disposition must not post a reply.
 	assert "replies" not in calls
+
+
+def test_driver_does_not_count_graphql_payload_errors(tmp_path: Path) -> None:
+	files = _write_inputs(
+		tmp_path,
+		"- entry[0] Copilot — `src/app.ts:10` — applied; guard added.\n",
+		_context_entry(0, "review_comment", "1234", "src/app.ts"),
+		[],
+	)
+	fixture = tmp_path / "graphql_page.json"
+	fixture.write_text(
+		json.dumps(
+			{
+				"data": {
+					"repository": {
+						"pullRequest": {
+							"reviewThreads": {
+								"nodes": [
+									{
+										"id": "PRRT_a",
+										"isResolved": False,
+										"comments": {"nodes": [{"databaseId": 1234, "path": "src/app.ts"}]},
+									}
+								]
+							}
+						}
+					}
+				}
+			}
+		),
+		encoding="utf-8",
+	)
+	result = _run_driver(
+		tmp_path,
+		GH_STUB,
+		THREADS_FIXTURE=str(fixture),
+		RESOLVE_RESPONSE='{"data":{"resolveReviewThread":null},"errors":[{"message":"denied"}]}',
+		EDITOR_SUMMARY_FILE=files["EDITOR_SUMMARY_FILE"],
+		PR_ALL_COMMENTS_CONTEXT_FILE=files["PR_ALL_COMMENTS_CONTEXT_FILE"],
+	)
+	assert result.returncode == 0, result.stderr
+	assert "resolved=0" in result.stdout
+	assert "skipped=1" in result.stdout
+	assert "resolve mutation failed" in result.stdout
 
 
 def test_driver_replies_before_resolving_an_ignored_thread(tmp_path: Path) -> None:

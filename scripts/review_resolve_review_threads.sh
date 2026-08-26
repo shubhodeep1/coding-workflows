@@ -285,9 +285,15 @@ Resolving the thread to record that it was reviewed rather than missed. Reopen i
 		echo "  rationale already posted for thread ${thread_id}; skipping duplicate reply"
 	fi
 
+	resolve_response="${RESOLVE_TMP_DIR}/resolve_response.json"
 	if gh_retry gh api graphql \
 		-F threadId="${thread_id}" \
-		-f query="${RESOLVE_MUTATION}" >/dev/null 2>&1
+		-f query="${RESOLVE_MUTATION}" > "${resolve_response}" 2>/dev/null \
+		&& jq -e --arg thread_id "${thread_id}" '
+			((.errors // []) | length == 0) and
+			(.data.resolveReviewThread.thread.id == $thread_id) and
+			(.data.resolveReviewThread.thread.isResolved == true)
+		' "${resolve_response}" >/dev/null 2>&1
 	then
 		resolved_count=$(( resolved_count + 1 ))
 		echo "  resolved thread ${thread_id} (comment ${comment_id}, ${comment_path:-unknown path}, ${disposition})"
