@@ -124,6 +124,19 @@ def test_ignored_entry_is_resolved_and_carries_its_reason(tmp_path: Path) -> Non
 	assert "BigNumber does not wrap" in plan[0]["reason"]
 
 
+def test_long_ignored_reason_is_truncated_with_ellipsis(tmp_path: Path) -> None:
+	long_reason = "x" * 600
+	plan = _build_plan(
+		tmp_path,
+		f"- entry[0] Copilot — `src/app.ts:8` — ignored; {long_reason}\n",
+		_context_entry(0, "review_comment", "77", "src/app.ts"),
+		[{"thread_id": "PRRT_c", "is_resolved": False, "comment_ids": [77], "path": "src/app.ts", "author": "copilot"}],
+	)
+	assert len(plan[0]["reason"]) == 500
+	assert plan[0]["reason"].endswith("...")
+	assert plan[0]["reason"] == ("x" * 497) + "..."
+
+
 def test_reason_keywords_do_not_override_the_disposition(tmp_path: Path) -> None:
 	context = _context_entry(0, "review_comment", "77", "src/app.ts")
 	threads = [{"thread_id": "PRRT_c", "is_resolved": False, "comment_ids": [77], "path": "src/app.ts", "author": "copilot"}]
