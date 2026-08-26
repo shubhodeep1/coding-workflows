@@ -98,7 +98,6 @@ def test_unbalanced_quotes_do_not_raise() -> None:
 		'curl -q -sS -X POST https://api.cloudflare.com/client/v4/accounts/id/workers/scripts/name --header="Authorization: Bearer ${CF_TOKEN}" --data-binary=@worker.js',
 		'curl -q -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d \'{"method":"-X DELETE"}\'',
 		"curl -q -sS -X POST https://api.cloudflare.com/client/v4/workers -d 'prices $(USD) use `literal` markers'",
-		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps?id=1 -d @spec.json",
 		"curl -q -sS -X POST https://api.cloudflare.com/client/v4/~health -H 'Authorization: Bearer token'",
 	],
 )
@@ -118,6 +117,7 @@ def test_canonical_api_writes_do_not_request_extra_confirmation(command: str) ->
 		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id https://example.com/",
 		"curl -q -sS -X PUT https://api.digitalocean.com/v2/{apps,droplets}/id",
 		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/[1-2] -d @spec.json",
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps?id=1 -d @spec.json",
 		"curl -q -sS -X PATCH https://api.digitalocean.com/v2/apps/id?fields[]=spec -d @spec.json",
 		"curl -q -sS -X PUT https://api.cloudflare.com/client/v4/zones/example/* -d @zone.json",
 		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id#frag -X DELETE",
@@ -151,6 +151,7 @@ def test_noncanonical_api_writes_request_confirmation(command: str) -> None:
 	"command",
 	[
 		"curl -q -sS -X PUT https://api.digitalocean.com/v2/droplets/id -X DELETE",
+		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps?id=1 -d @spec.json",
 		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/[1-2] -d @spec.json",
 		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id#frag -X DELETE",
 		"curl -q -sS -X PATCH https://api.digitalocean.com/v2/apps/id#frag --url https://example.com/",

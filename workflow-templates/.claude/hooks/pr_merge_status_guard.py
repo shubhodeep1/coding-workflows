@@ -249,7 +249,7 @@ def _api_write_requires_confirmation(command: str) -> bool:
 		return False
 	# The URL token is already host-gated above. Prompt only for expansions that
 	# can synthesize shell words before curl sees the approved API URL shape.
-	if any(marker in tokens[5] for marker in ("$", "{", "[", "*")):
+	if any(marker in tokens[5] for marker in ("$", "{", "[", "*", "?")):
 		return True
 	# Scan only following option text so literal query/path URL characters are
 	# not mistaken for value expansions.
