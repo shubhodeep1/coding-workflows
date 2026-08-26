@@ -196,6 +196,9 @@ def render_extraction_prompt(repository_root: Path, source_items: list[dict[str,
 		check=False,
 	)
 	if result.returncode != 0:
+		render_error_tail = " ".join((result.stderr or "").split())[-2000:]
+		if render_error_tail:
+			raise PromptRenderFailure(f"prompt render failed: {render_error_tail}")
 		raise PromptRenderFailure("prompt render failed")
 	return result.stdout
 
@@ -341,8 +344,15 @@ def main() -> int:
 	except DiscoveryFailure:
 		print("memory_maintenance_extract_learnings: source_discovery_failed", file=sys.stderr)
 		return DISCOVERY_FAILURE_EXIT
-	except PromptRenderFailure:
-		print("memory_maintenance_extract_learnings: prompt_render_failed", file=sys.stderr)
+	except PromptRenderFailure as exc:
+		prompt_render_detail = str(exc)
+		if prompt_render_detail and prompt_render_detail != "prompt render failed":
+			print(
+				f"memory_maintenance_extract_learnings: prompt_render_failed: {prompt_render_detail}",
+				file=sys.stderr,
+			)
+		else:
+			print("memory_maintenance_extract_learnings: prompt_render_failed", file=sys.stderr)
 		return PROMPT_RENDER_FAILURE_EXIT
 	except ModelExtractionFailure:
 		print("memory_maintenance_extract_learnings: model_extraction_failed", file=sys.stderr)
