@@ -109,10 +109,6 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
-analysis/workflow-optimization-2026-08-19.md
-analysis/workflow-optimization-2026-08-23.md
-analysis/workflow-optimization-2026-08-24.md
-analysis/workflow-optimization-2026-08-25.md
 changelog.d/.gitkeep
 changelog.d/3738-merge-precheck-promisor-recovery.md
 changelog.d/3763-changes-lost-redispatch-get-method.md
@@ -168,6 +164,7 @@ docs/plans/gstack-learnings-plan.md
 docs/plans/integration-sync-resolver-self-heal-plan.md
 docs/plans/learn-claude-code-learnings-plan.md
 docs/plans/open-agents-learnings-plan.md
+docs/plans/opencode-review-autofix-cutover-plan.md
 docs/plans/orchestrator-validation-resilience-plan.md
 docs/plans/symphony-inspired-improvements-plan.md
 docs/postmortems/2026-05-18-project-2734-stall.md
