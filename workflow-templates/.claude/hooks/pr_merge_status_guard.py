@@ -189,11 +189,11 @@ def _contains_shell_substitution(command: str) -> bool:
 
 
 def _contains_unquoted_shell_expansion(command: str) -> bool:
-	"""Return whether unquoted Bash expansion can change argv before curl runs."""
+	"""Return whether Bash expansion can change argv before curl runs."""
 	single_quoted = False
 	double_quoted = False
 	escaped = False
-	for character in command:
+	for index, character in enumerate(command):
 		if escaped:
 			escaped = False
 			continue
@@ -206,6 +206,11 @@ def _contains_unquoted_shell_expansion(command: str) -> bool:
 		if character == '"' and not single_quoted:
 			double_quoted = not double_quoted
 			continue
+		if double_quoted and (
+			command.startswith("$@", index)
+			or re.match(r"\$\{[^}]+\[@\]\}", command[index:])
+		):
+			return True
 		if not single_quoted and not double_quoted and character in "${*?[~":
 			return True
 	return False
@@ -233,12 +238,20 @@ def _api_write_requires_confirmation(command: str) -> bool:
 		return False
 	if not any(tokens[4].startswith(prefix) for prefix in _API_WRITE_URL_PREFIXES):
 		return False
-	if "{" in tokens[4] or "[" in tokens[4]:
+	# The URL token is already host-gated above. Prompt only for expansions that
+	# can synthesize shell words before curl sees the approved API URL shape.
+	if any(marker in tokens[4] for marker in ("$", "{")):
 		return True
+	# Scan only following option text so literal query/path URL characters are
+	# not mistaken for value expansions.
+	api_write_raw_parts = command.lstrip().split(None, 5)
 	if (
 		len(segments) != 1
 		or _contains_shell_substitution(command)
-		or _contains_unquoted_shell_expansion(command)
+		or (
+			len(api_write_raw_parts) > 5
+			and _contains_unquoted_shell_expansion(api_write_raw_parts[5])
+		)
 	):
 		return True
 

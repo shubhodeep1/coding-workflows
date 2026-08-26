@@ -98,6 +98,10 @@ def test_unbalanced_quotes_do_not_raise() -> None:
 		'curl -sS -X POST https://api.cloudflare.com/client/v4/accounts/id/workers/scripts/name --header="Authorization: Bearer ${CF_TOKEN}" --data-binary=@worker.js',
 		'curl -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d \'{"method":"-X DELETE"}\'',
 		"curl -sS -X POST https://api.cloudflare.com/client/v4/workers -d 'prices $(USD) use `literal` markers'",
+		"curl -sS -X PUT https://api.digitalocean.com/v2/apps?id=1 -d @spec.json",
+		"curl -sS -X PATCH https://api.digitalocean.com/v2/apps/id?fields[]=spec -d @spec.json",
+		"curl -sS -X PUT https://api.cloudflare.com/client/v4/zones/example/* -d @zone.json",
+		"curl -sS -X POST https://api.cloudflare.com/client/v4/~health -H 'Authorization: Bearer token'",
 	],
 )
 def test_canonical_api_writes_do_not_request_extra_confirmation(command: str) -> None:
@@ -124,6 +128,8 @@ def test_canonical_api_writes_do_not_request_extra_confirmation(command: str) ->
 		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d /tmp/*",
 		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d ~/spec.json",
 		"curl -sS -X POST https://api.cloudflare.com/client/v4/workers -H $AUTHORIZATION",
+		'curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d "$@"',
+		'curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d "${BODY_PARTS[@]}"',
 		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d 'unterminated",
 		"  curl -sS -X POST https://api.cloudflare.com/client/v4/workers -H 'unterminated",
 		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id>/tmp/response",
