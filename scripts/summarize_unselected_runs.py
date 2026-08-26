@@ -42,6 +42,11 @@ try:
 except ModuleNotFoundError:
 	from scripts.cost_audit import build_run_cost_telemetry
 
+try:
+	from openrouter_prompt_cache import format_openrouter_usage_line, is_cache_disabled
+except ModuleNotFoundError:
+	from scripts.openrouter_prompt_cache import format_openrouter_usage_line, is_cache_disabled
+
 
 DEFAULT_MODEL = "openai/gpt-5.6-luna"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
@@ -406,6 +411,21 @@ class OpenRouterSummarizer:
 		choices = payload.get("choices") or []
 		if not choices:
 			raise RuntimeError("chat/completions empty choices")
+		response_model = payload.get("model")
+		if not isinstance(response_model, str) or not response_model.strip():
+			response_model = self.model
+		print(
+			format_openrouter_usage_line(
+				payload.get("usage"),
+				model=response_model,
+				phase="workflow-log-analysis",
+				call_label="summarize-unselected-run",
+				cache_enabled=not is_cache_disabled(),
+				cache_breakpoint_enabled=None,
+				cache_breakpoint_fallback_retry=None,
+			),
+			file=sys.stderr,
+		)
 		content = ((choices[0] or {}).get("message") or {}).get("content") or ""
 		content = content.strip()
 		if not content:

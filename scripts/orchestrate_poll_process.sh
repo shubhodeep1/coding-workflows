@@ -10789,8 +10789,8 @@ _fetch_standalone_marker_issues_graphql() {
   if [ "${state_has_next}" = "true" ] || [ "${clarify_has_next}" = "true" ]; then
     local marker_state
     local marker_clarify
-    marker_state="$(gh_retry gh api --paginate "search/issues" -f per_page=100 -f q="${q_state}" 2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
-    marker_clarify="$(gh_retry gh api --paginate "search/issues" -f per_page=100 -f q="${q_clarify}" 2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
+    marker_state="$(gh_retry gh api --method GET --paginate "search/issues" -f per_page=100 -f q="${q_state}" 2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
+    marker_clarify="$(gh_retry gh api --method GET --paginate "search/issues" -f per_page=100 -f q="${q_clarify}" 2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
     jq -cn --argjson state "${marker_state}" --argjson clarify "${marker_clarify}" '{state:$state,clarify:$clarify}'
     return
   fi
@@ -13230,7 +13230,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     fi
 
     # Search for child issues whose body contains the tracking reference
-    CHILD_ISSUES="$(gh_retry gh api "search/issues" \
+    CHILD_ISSUES="$(gh_retry gh api --method GET "search/issues" \
       -f q="repo:${GITHUB_REPOSITORY} \"Tracking issue: #${TRACKING_NUM}\" in:body" \
       --jq '.items // []' 2>/dev/null || echo '[]')"
 
@@ -14298,7 +14298,7 @@ The poller will resume processing on the next cycle."
       # instead of creating a duplicate.
       if [ "${DEFERRED_EXISTING_LOOKUP_DONE}" != "true" ]; then
         DEFERRED_EXISTING_LOOKUP_DONE=true
-        if _deferred_child_items="$(gh_retry gh api "search/issues" \
+        if _deferred_child_items="$(gh_retry gh api --method GET "search/issues" \
           -f q="repo:${GITHUB_REPOSITORY} is:issue \"Tracking issue: #${TRACKING_NUM}\" in:body" \
           --jq '.items // []' 2>/dev/null)"; then
           if DEFERRED_EXISTING_MAP_JSON="$(printf '%s' "${_deferred_child_items}" | jq '
@@ -17159,8 +17159,13 @@ Manual intervention required." >/dev/null
   #     tokens for mature projects).
   MERGED_PR_SUMMARIES=""
   OPEN_PR_SUMMARIES=""
-  _sorted_issue_nums="$(printf '%s\n' ${ISSUE_NUMS} | sort -un)"
-  for inum in ${_sorted_issue_nums}; do
+  _sorted_issue_nums="$(
+    printf '%s\n' "${ISSUE_NUMS}" |
+      tr '[:space:]' '\n' |
+      { grep -E '^[0-9]+$' || true; } |
+      sort -un
+  )"
+  while IFS= read -r inum; do
     [ -n "${inum}" ] || continue
     PR_NUM="$(_issue_cross_ref_pr_number_last "${inum}" 2>/dev/null || echo "")"
     if [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
@@ -17195,7 +17200,7 @@ ${PR_DIFF}
 "
       fi
     fi
-  done
+  done <<< "${_sorted_issue_nums}"
   unset _sorted_issue_nums _issue_status
 
   # Fetch CI status on default branch

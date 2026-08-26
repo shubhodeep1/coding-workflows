@@ -8,7 +8,7 @@ with
   Prompt file not found: prompts/header.txt
   ##[error]Process completed with exit code 1.
 
-plan.yml and clarify.yml assemble the Codex prompt with
+plan.yml's staged runner and clarify.yml assemble the Codex prompt with
 
   REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" \
     bash scripts/render_prompt.sh prompts/header.txt
@@ -26,9 +26,9 @@ file is sufficient.
 
 Two kinds of tests pin the fix:
 
-1. A static contract: every reusable workflow that renders
-   ``render_prompt.sh prompts/header.txt`` must also stage prompts/header.txt
-   into the working tree with the standard .codex-workflow-src ->
+1. A static contract: every reusable workflow or staged runner that renders
+   ``render_prompt.sh prompts/header.txt`` has workflow staging for
+   prompts/header.txt with the standard .codex-workflow-src ->
    .codex-workflow-src-main fallback and a hard error when it is unavailable.
 
 2. A behavioural test that reproduces the runtime layout (scripts/ staged,
@@ -50,6 +50,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 RENDER_PROMPT_PY = REPO_ROOT / "scripts" / "render_prompt.py"
 RENDER_PROMPT_SH = REPO_ROOT / "scripts" / "render_prompt.sh"
+PLAN_WORKFLOW = WORKFLOW_DIR / "plan.yml"
+PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
 HEADER_PROMPT = REPO_ROOT / "prompts" / "header.txt"
 
 # The bare-path render invocation that requires prompts/header.txt on disk.
@@ -90,14 +92,14 @@ def test_header_prompt_exists() -> None:
 def test_render_callers_stage_header_prompt() -> None:
 	"""Every workflow rendering prompts/header.txt must stage it first."""
 	callers = _workflows_rendering_header()
-	# plan.yml and clarify.yml are the known callers; the discovery must not be
-	# empty (an empty match would silently pass and rot).
+	# clarify.yml remains an inline caller; plan.yml delegates to its staged
+	# runner, which is checked separately below.
 	assert callers, (
 		"no workflow renders prompts/header.txt -- discovery regex is stale"
 	)
 	caller_names = {p.name for p in callers}
-	assert {"plan.yml", "clarify.yml"} <= caller_names, (
-		f"expected plan.yml and clarify.yml to render prompts/header.txt, "
+	assert "clarify.yml" in caller_names, (
+		f"expected clarify.yml to render prompts/header.txt, "
 		f"found {sorted(caller_names)}"
 	)
 	for yml in callers:
@@ -128,6 +130,15 @@ def test_render_callers_stage_header_prompt() -> None:
 			f"{yml.name}: header staging must exit immediately when neither "
 			f"support checkout carries the fragment"
 		)
+
+	plan_workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
+	plan_runner_text = PLAN_RUNNER.read_text(encoding="utf-8")
+	assert "for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh" in plan_workflow_text
+	assert 'install -m 0644 "${src}" prompts/header.txt' in plan_workflow_text
+	assert 'src=".codex-workflow-src/prompts/header.txt"' in plan_workflow_text
+	assert '.codex-workflow-src-main/prompts/header.txt' in plan_workflow_text
+	assert "::error::Failed to stage required file prompts/header.txt" in plan_workflow_text
+	assert HEADER_RENDER_RE.search(plan_runner_text)
 
 
 def _render_header(

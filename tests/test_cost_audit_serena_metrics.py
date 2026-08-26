@@ -73,11 +73,10 @@ SERENA_PROBE target=review result=garbage reason=unexpected
 
 	assert parsed["serena_probe_ok"] == 1
 	assert parsed["serena_probe_failed"] == 1
-	assert parsed["serena_probe_skipped"] == 2
+	assert parsed["serena_probe_skipped"] == 1
 	assert parsed["serena_targets"] == {
 		"setup": {"probe_ok": 1, "probe_failed": 1},
 		"validate": {"probe_skipped": 1},
-		"review": {"probe_skipped": 1},
 	}
 
 
@@ -115,7 +114,12 @@ SERENA_PROBE target=implement result=failed reason=spawn-failed
 	assert parsed["semble_query_bytes"] == 88
 	assert parsed["semble_fallbacks"] == 1
 	assert parsed["semble_targets"] == {
-		"judge": {"query_calls": 1, "bytes": 88, "fallbacks": 1}
+		"judge": {
+			"query_calls": 1,
+			"bytes": 88,
+			"fallbacks": 1,
+			"runtime_fallbacks": 1,
+		}
 	}
 	assert parsed["serena_query_calls"] == 1
 	assert parsed["serena_query_response_bytes"] == 210
@@ -169,7 +173,7 @@ BAR_PROBE target=beta result=ok
 
 def test_parse_log_does_not_route_known_servers_to_other_mcp() -> None:
 	log = """
-SEMBLE_QUERY target=overflow bytes=12
+SEMBLE_QUERY target=overflow chunks=2 bytes=12 ms=1
 SERENA_QUERY target=implement tool=find_symbol calls=1 response_bytes=34 ms=5
 """
 
@@ -180,43 +184,55 @@ SERENA_QUERY target=implement tool=find_symbol calls=1 response_bytes=34 ms=5
 	assert parsed["other_mcp"] == {}
 
 
-def test_parse_log_fails_open_on_partial_serena_lines() -> None:
+def test_parse_log_ignores_partial_malformed_and_echoed_serena_lines() -> None:
 	log = """
 SERENA_QUERY tool=find_symbol
 SERENA_QUERY target=validate response_bytes=17
 SERENA_QUERY calls=5 ms=11
+SERENA_QUERY target=validate tool=find_symbol calls=five response_bytes=17 ms=11
+SERENA_QUERY 0
+report says SERENA_QUERY traffic increased
 SERENA_FALLBACK reason=timeout
+SERENA_FALLBACK target=validate
+SERENA_FALLBACK 0
 SERENA_PROBE result=failed
+SERENA_PROBE target=validate result=garbage
+SERENA_PROBE 0
 """
 
 	parsed = parse_log(log)
 
-	assert parsed["serena_query_calls"] == 3
-	assert parsed["serena_query_response_bytes"] == 17
-	assert parsed["serena_query_tool_calls"] == 5
-	assert parsed["serena_query_ms"] == 11
-	assert parsed["serena_fallbacks"] == 1
-	assert parsed["serena_probe_failed"] == 1
-	assert parsed["serena_targets"] == {
-		"unknown": {
-			"query_calls": 2,
-			"response_bytes": 0,
-			"tool_calls": 5,
-			"ms": 11,
-			"fallbacks": 1,
-			"probe_failed": 1,
-		},
-		"validate": {
-			"query_calls": 1,
-			"response_bytes": 17,
-			"tool_calls": 0,
-			"ms": 0,
-		},
-	}
-	assert parsed["serena_tools"] == {
-		"find_symbol": {"calls": 0, "response_bytes": 0, "ms": 0},
-		"unknown": {"calls": 5, "response_bytes": 17, "ms": 11},
-	}
+	assert parsed["serena_query_calls"] == 0
+	assert parsed["serena_query_response_bytes"] == 0
+	assert parsed["serena_query_tool_calls"] == 0
+	assert parsed["serena_query_ms"] == 0
+	assert parsed["serena_fallbacks"] == 0
+	assert parsed["serena_probe_failed"] == 0
+	assert parsed["serena_probe_skipped"] == 0
+	assert parsed["serena_targets"] == {}
+	assert parsed["serena_tools"] == {}
+
+
+def test_parse_log_ignores_partial_malformed_and_echoed_generic_mcp_lines() -> None:
+	log = """
+FOO_QUERY target=alpha
+FOO_QUERY target=alpha bytes=many
+FOO_QUERY target=alpha response_bytes=many
+FOO_QUERY target=alpha bytes=many response_bytes=10
+FOO_QUERY target=alpha bytes=10 response_bytes=many
+FOO_QUERY 0
+report says FOO_QUERY traffic increased
+FOO_FALLBACK reason=timeout
+FOO_FALLBACK target=alpha
+FOO_FALLBACK 0
+FOO_PROBE result=failed
+FOO_PROBE target=alpha result=garbage
+FOO_PROBE 0
+"""
+
+	parsed = parse_log(log)
+
+	assert parsed["other_mcp"] == {}
 
 
 def test_parse_log_bounds_single_line_with_multiple_query_prefixes() -> None:

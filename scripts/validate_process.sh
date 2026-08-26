@@ -355,8 +355,16 @@ _tg_link_suffix()
 
 tg_notify()
 {
-  local msg="$1$(_tg_link_suffix)"
+  local msg
+  local link_suffix=""
   local level="${2:-CRITICAL}"
+  if link_suffix="$(_tg_link_suffix)"; then
+    :
+  else
+    printf '%s\n' "::warning::Validation Telegram link suffix generation failed; sending alert without links." >&2
+    link_suffix=""
+  fi
+  msg="$1${link_suffix}"
   if [ "${TRACKING_ISSUE_NUM}" -gt 0 ]; then
     tg_send_tracked "${TRACKING_ISSUE_NUM}" "${msg}" "${level}"
   else

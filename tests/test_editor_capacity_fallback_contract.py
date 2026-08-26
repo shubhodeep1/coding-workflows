@@ -22,6 +22,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CATALOG = REPO_ROOT / "scripts" / "codex_model_catalog.json"
 PLAN = REPO_ROOT / ".github" / "workflows" / "plan.yml"
+PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
 IMPLEMENT = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 REVIEW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 REVIEW_APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
@@ -70,7 +71,7 @@ def test_workflows_declare_fallback_env() -> None:
 
 
 def test_plan_loop_switches_model_on_final_attempt() -> None:
-	text = PLAN.read_text(encoding="utf-8")
+	text = PLAN_RUNNER.read_text(encoding="utf-8")
 	assert 'attempt_model="${MODEL_EDITOR}"' in text
 	assert (
 		'[ "${attempt}" -eq "${max_attempts}" ] '
