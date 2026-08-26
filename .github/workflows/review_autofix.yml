@@ -4077,6 +4077,35 @@ jobs:
             echo "::warning::Unable to post editor summary comment after retries."
           fi
 
+      - name: Resolve addressed PR review threads
+        # The editor stage audits every PR review comment it saw (the
+        # "PR comment audit:" section posted in the step above), but
+        # nothing ever marked the underlying thread resolved — so a
+        # comment the editor fixed on an earlier iteration stayed
+        # visually identical to one it never read, and PRs with a dozen
+        # addressed findings still looked like review feedback had been
+        # ignored. This step closes that loop. Resolution is keyed on
+        # the comment id carried by each audited entry, never on a
+        # path/line pair, so two comments at one location cannot resolve
+        # each other; see scripts/review_resolve_review_threads.sh for
+        # the full safety model. Fail-open and continue-on-error: an
+        # unresolved thread costs a reader one glance, a failed run
+        # costs a retry cycle.
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REVIEW_RESOLVE_THREADS_ENABLED: ${{ vars.REVIEW_RESOLVE_THREADS_ENABLED || 'true' }}
+          REVIEW_RESOLVE_THREADS_MAX: ${{ vars.REVIEW_RESOLVE_THREADS_MAX || '50' }}
+        run: |
+          set -uo pipefail
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_resolve_review_threads.sh" ]; then
+            echo "::notice::review_resolve_review_threads.sh is unavailable in this script_ref; leaving review threads as-is."
+            exit 0
+          fi
+          bash "${SUPPORT_SCRIPTS_DIR}/review_resolve_review_threads.sh" \
+            || echo "::warning::Review-thread resolution failed; review threads left as-is."
+
       - name: Clear Serena after editor
         if: always() && env.SERENA_ENABLED == 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         continue-on-error: true
