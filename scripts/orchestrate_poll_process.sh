@@ -1002,7 +1002,7 @@ _record_merge_conflict_telemetry()
 	local attempt
 	for attempt in 1 2 3; do
 		rm -rf "${wt}" 2>/dev/null || true
-		if ! git fetch --quiet origin "${branch}:refs/remotes/origin/${branch}" 2>/dev/null; then
+		if ! git fetch --quiet origin "+refs/heads/${branch}:refs/remotes/origin/${branch}" 2>/dev/null; then
 			# Branch may not exist yet despite memory_ensure_branch; fall
 			# through and try to create the worktree from an orphan.
 			:
@@ -10030,7 +10030,7 @@ STALL_EOF
             STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
             return 1
           fi
-          if git fetch origin "+${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
+          if git fetch origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
             _rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
             if [[ "${_rtr_head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
                [ "${_rtr_origin_head_sha}" != "${_rtr_head_sha}" ]; then
@@ -11249,6 +11249,9 @@ _resolve_issue_implementation_pr() {
   _ripr_candidate="$(_linked_prs_by_branch_name "${issue_num}" 2>/dev/null | head -n1)"
   if [[ "${_ripr_candidate}" =~ ^[0-9]+$ ]]; then
     _ripr_json="$(_fetch_pr_json "${_ripr_candidate}")"
+    if [ -z "${_ripr_json}" ] || [ "${_ripr_json}" = "{}" ]; then
+      echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=pr_fetch_failed" >&2
+    fi
     if _pr_json_is_issue_implementation_pr "${issue_num}" "${_ripr_json}"; then
       STALL_IMPL_PR_NUM="${_ripr_candidate}"
       STALL_IMPL_PR_JSON="${_ripr_json}"
@@ -12270,7 +12273,7 @@ STALL_EOF
 			elif [ -n "${_std_rtr_direct_inflight_id}" ]; then
               echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
               STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
-            elif git fetch origin "+${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
+            elif git fetch origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
               _std_rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
               if [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_std_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
                  [ "${_std_rtr_origin_head_sha}" != "${head_sha}" ]; then

@@ -274,6 +274,18 @@ def test_resolver_logs_fetch_failures_distinctly():
 	assert "STALL_LINKED_PR_REJECTED issue=3816 pr=3999 reason=pr_fetch_failed" in err
 
 
+def test_resolver_logs_conventional_branch_fetch_failures_distinctly():
+	"""The preferred conventional-branch lookup reports the same diagnostic
+	as a failed cross-reference lookup before falling through safely."""
+	rc, resolved, err = _resolver_result(
+		branch_pr="3998",
+		cross_refs="",
+		pr_payloads={},
+	)
+	assert rc == 1 and resolved == "", f"rc={rc} resolved={resolved}"
+	assert "STALL_LINKED_PR_REJECTED issue=3816 pr=3998 reason=pr_fetch_failed" in err
+
+
 # ---------------------------------------------------------------------------
 # Direct-invocation entrypoint
 #

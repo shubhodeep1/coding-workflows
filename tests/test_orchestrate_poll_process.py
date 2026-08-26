@@ -9618,6 +9618,7 @@ def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure(
 		prs=[
 			{
 				"number": 78,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9636,6 +9637,9 @@ def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure(
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1
+	assert result.get("git_push_calls", []), (
+		"expected the no-prior-failure case to exercise the empty-commit push path"
+	)
 
 
 def test_retrigger_review_does_not_increment_when_redispatch_skipped():
@@ -9829,6 +9833,7 @@ def test_retrigger_review_ignores_inflight_run_on_unrelated_branch():
 		prs=[
 			{
 				"number": 81,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9865,6 +9870,9 @@ def test_retrigger_review_ignores_inflight_run_on_unrelated_branch():
 		f"different branch; got stall_recovery_count="
 		f"{issue_entry['stall_recovery_count']}"
 	)
+	assert result.get("git_push_calls", []), (
+		"expected an unrelated in-flight run to leave the empty-commit push path active"
+	)
 
 
 def test_retrigger_review_inflight_guard_treats_zombie_run_as_eligible():
@@ -9888,6 +9896,7 @@ def test_retrigger_review_inflight_guard_treats_zombie_run_as_eligible():
 		prs=[
 			{
 				"number": 82,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9914,6 +9923,9 @@ def test_retrigger_review_inflight_guard_treats_zombie_run_as_eligible():
 	assert issue_entry["stall_recovery_count"] == 1, (
 		f"expected empty-commit push to proceed past zombie in-flight run; "
 		f"got stall_recovery_count={issue_entry['stall_recovery_count']}"
+	)
+	assert result.get("git_push_calls", []), (
+		"expected a zombie review run to leave the empty-commit push path active"
 	)
 
 
