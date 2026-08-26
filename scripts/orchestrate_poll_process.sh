@@ -17025,8 +17025,13 @@ Manual intervention required." >/dev/null
   #     tokens for mature projects).
   MERGED_PR_SUMMARIES=""
   OPEN_PR_SUMMARIES=""
-  _sorted_issue_nums="$(printf '%s\n' ${ISSUE_NUMS} | sort -un)"
-  for inum in ${_sorted_issue_nums}; do
+  _sorted_issue_nums="$(
+    printf '%s\n' "${ISSUE_NUMS}" |
+      tr '[:space:]' '\n' |
+      { grep -E '^[0-9]+$' || true; } |
+      sort -un
+  )"
+  while IFS= read -r inum; do
     [ -n "${inum}" ] || continue
     PR_NUM="$(_issue_cross_ref_pr_number_last "${inum}" 2>/dev/null || echo "")"
     if [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
@@ -17061,7 +17066,7 @@ ${PR_DIFF}
 "
       fi
     fi
-  done
+  done <<< "${_sorted_issue_nums}"
   unset _sorted_issue_nums _issue_status
 
   # Fetch CI status on default branch
