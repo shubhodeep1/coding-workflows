@@ -240,6 +240,9 @@ def normalize_model_output(content: str) -> list[dict[str, object]]:
 
 def request_extracted_learnings(prompt: str) -> list[dict[str, object]]:
 	"""Call OpenRouter, emit safe usage telemetry, and normalize its content."""
+	openrouter_api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+	if not openrouter_api_key:
+		raise ModelExtractionFailure("OPENROUTER_API_KEY is required")
 	request_payload = json.dumps(
 		{
 			"model": REQUESTED_MODEL,
@@ -252,7 +255,7 @@ def request_extracted_learnings(prompt: str) -> list[dict[str, object]]:
 		OPENROUTER_URL,
 		data=request_payload,
 		headers={
-			"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
+			"Authorization": f"Bearer {openrouter_api_key}",
 			"Content-Type": "application/json",
 		},
 		method="POST",

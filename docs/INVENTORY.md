@@ -163,6 +163,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/mcp_handshake_probe.py` — Probe an MCP stdio server with a single JSON-RPC initialize request.
 - `scripts/memory_helpers.sh` — Shell helper for memory helpers.
 - `scripts/memory_injection_patterns.py` — Advisory prompt-injection regex roster for AI-memory candidate writes.
+- `scripts/memory_maintenance_extract_learnings.py` — Extract repository learnings for the memory-maintenance workflow.
 - `scripts/nag_reminder.sh` — Fail-open reminder injection helper for long-running unattended wrapper loops.
 - `scripts/openrouter_prompt_cache.py` — OpenRouter prompt-cache helpers shared by workflow scripts.
 - `scripts/orchestrate_force_tick.sh` — Shell helper for orchestrate force tick.

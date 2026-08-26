@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -190,6 +191,7 @@ def test_success_preserves_discovery_request_normalization_and_telemetry(
 
 	monkeypatch.setattr(extractor.urllib.request, "urlopen", fake_urlopen)
 	usage_calls: list[dict[str, Any]] = []
+	assert callable(extractor.openrouter_prompt_cache.format_openrouter_usage_line)
 
 	def fake_usage_formatter(usage: dict[str, Any], **kwargs: Any) -> str:
 		usage_calls.append({"usage": usage, **kwargs})
