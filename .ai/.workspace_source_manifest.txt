@@ -123,6 +123,7 @@ changelog.d/3809-register-drhyg-ecommerce-automation.md
 changelog.d/3814-extract-implement-guard-handler.md
 changelog.d/3815-direct-openrouter-usage.md
 changelog.d/3816-ignore-unstructured-mcp-counter-echoes.md
+changelog.d/3816-stall-recovery-linkage-guards.md
 changelog.d/3817-ai-memory-push-retry-budget.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
@@ -378,6 +379,7 @@ scripts/mark-stable.sh
 scripts/mcp_handshake_probe.py
 scripts/memory_helpers.sh
 scripts/memory_injection_patterns.py
+scripts/memory_maintenance_extract_learnings.py
 scripts/nag_reminder.sh
 scripts/openrouter_prompt_cache.py
 scripts/orchestrate_force_tick.sh
@@ -599,6 +601,7 @@ tests/test_implement_semble_contract.py
 tests/test_issue_pr_status_payload_fallback_contract.py
 tests/test_judge_semble_prefetch_contract.py
 tests/test_label_helpers_phase_transition_contract.py
+tests/test_linked_pr_implementation_guard.py
 tests/test_lint_plan_archival_completeness.py
 tests/test_lint_plan_decisions.py
 tests/test_lint_pr_body_auto_close.py

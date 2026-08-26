@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (111)
+## Processed source docs (115)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -116,6 +116,10 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-07-19.md`
 - `analysis/workflow-optimization-2026-08-07.md`
 - `analysis/workflow-optimization-2026-08-14.md`
+- `analysis/workflow-optimization-2026-08-19.md`
+- `analysis/workflow-optimization-2026-08-23.md`
+- `analysis/workflow-optimization-2026-08-24.md`
+- `analysis/workflow-optimization-2026-08-25.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -822,6 +826,142 @@ This four-doc batch mixes one narrative workflow-cost memo with three appendix-b
 - `INVALID`
   - None on current HEAD.
 
+## Outcome ledger for the 2026-08-19 through 2026-08-25 optimization docs
+### `analysis/workflow-optimization-2026-08-19.md`
+- This source doc was narrative-only. The same recommendations recur across Executive Summary, Speed, Cost, Reliability, AI Memory, GH API, Prompt Cache, Orchestrator Health, Pipeline Flow, and the repo summary, so they are grouped below under stable short labels.
+
+#### Repeated unnumbered recommendation groups (deduped)
+- `VALID&SAFE/actioned`
+  - `direct OpenRouter usage normalization` — implementing local issue `emit-direct-openrouter-usage` (#3815) landed the shared `scripts/openrouter_prompt_cache.py::format_openrouter_usage_line` contract on committed HEAD and wired direct callers such as `scripts/summarize_unselected_runs.py` and `scripts/memory_maintenance_extract_learnings.py`; `tests/test_cost_audit_semble_metrics.py` verifies prompt, completion, total, and cache token fields without exposing response content. The unrelated worktree deletion in `scripts/openrouter_prompt_cache.py` is not treated as repository state here.
+  - `structured MCP telemetry parsing` — implementing local issue `tighten-mcp-telemetry-parser` (#3816) is represented by `scripts/cost_audit.py` requiring structured Semble/Serena fields and splitting contract-test from runtime fallback counters; `tests/test_collect_workflow_logs.py` and `tests/test_cost_audit_serena_metrics.py` reject counter echoes such as `SERENA_QUERY 0` while accepting fully structured events.
+- `VALID-BUT-RISKY/deferred`
+  - `review pre-gating and reasoning policy` — moving Semble/memory retrieval, editor selection, or `xhigh` escalation behind materiality gates would change review coverage and model policy; `.github/workflows/review_autofix.yml` still owns those live gates and `scripts/review_run_reviewers.sh` still owns reviewer fan-out, so this was not auto-implemented.
+  - `poll scheduling, no-op state publication, and memory events` — cancelling superseded polls or skipping state-snapshot and start/end memory-event publication changes scheduler and audit semantics. `.github/workflows/orchestrate_poll.yml` and `scripts/orchestrate_poll_process.sh` therefore retain the conservative path rather than treating no-work state writes as automatically removable.
+  - `prompt-cache layout and cache policy` — moving volatile fields behind a stable prefix, changing cache breakpoints, or adding cache-key policy changes the prompt contract; the current cache-normalization helper in `scripts/openrouter_prompt_cache.py` is retained without the broader prompt rewrite.
+  - `PR metadata/file reuse and API summaries` — the proposed review PR-file cache and route counters cross paginated reads and later freshness checks in `.github/workflows/review_autofix.yml`; no call was removed without proving page, failure, and staleness equivalence.
+  - `MCP availability, Serena status, and support-ref warning deduplication` — standardized `MCP_STATUS` and one-shot support-ref resolution remain useful, but they span bootstrap/runtime fallback contracts in `scripts/semble_helpers.sh`, `scripts/serena_stats_emit.py`, and support-staging workflow steps; only parser hardening was in the approved safe subset.
+- `STALE-or-already-done`
+  - `structured context-budget warnings` — `scripts/review_run_reviewers.sh::emit_context_budget_warn_for_prompt`, `scripts/review_consolidate.sh`, and `scripts/review_rb_judge.sh` now emit the parseable `CONTEXT_BUDGET_WARN:` line built by `scripts/cost_audit.py`, with review-pipeline and collector coverage in `tests/test_review_autofix_review_pipeline_contract.py` and `tests/test_collect_workflow_logs.py`.
+  - `cancellation classification` — `scripts/collect_workflow_logs.py` now emits `cancelled_before_first_step` for cancelled jobs with no started step, and `tests/test_collect_workflow_logs.py` covers both fresh and cached-row classification.
+  - `AI-memory retrieve telemetry` — `scripts/ai_memory.py` and `scripts/memory_helpers.sh` emit `AI_MEMORY_TELEMETRY` for `op=retrieve`, including zero-hit/disabled/fail-open outcomes and selected-record/budget/keyword data; CLI and processed-command tests cover the payload.
+  - `Semble test/runtime separation` — `scripts/cost_audit.py::_is_contract_test_semble_line` maintains separate `semble_contract_test_fallbacks` and `semble_runtime_fallbacks`, with exact parser coverage in `tests/test_cost_audit_semble_metrics.py` and `tests/test_collect_workflow_logs.py`.
+  - `zero-candidate sweep fast exit` — `.github/workflows/review_autofix_sweep.yml` exits at `total == 0` before `snapshot_active_review_runs`; `tests/test_review_autofix_sweep_zero_candidate_fast_exit.py` pins that ordering.
+- `INVALID/non-material`
+  - None; the remaining unimplemented items are operationally meaningful but require policy or contract validation.
+
+### `analysis/workflow-optimization-2026-08-23.md`
+- This source doc combined repeated window-level recommendations with a 21-ID deep-audit/API appendix. IDs below are source-qualified; similarly named findings in later reports are separate records.
+
+#### Named findings
+- `VALID&SAFE/actioned`
+  - `SHELL-001` — implementing local issue `fix-validation-tg-suffix-status` (#3818) split declaration from `_tg_link_suffix` evaluation in `scripts/validate_process.sh::tg_notify`, preserves the original alert on suffix failure, and is covered by `tests/test_validate_process_template_mode.py::test_tg_notify_preserves_suffixes_and_fails_open`.
+  - `EXPR-001` — implementing local issue `extract-plan-codex-step` (#3813) moved the expression-sensitive planning body into `scripts/run_plan_codex.sh`; `.github/workflows/plan.yml` stages and invokes that helper, and `tests/test_plan_codex_step_extraction.py` pins the interface.
+  - `EXPR-002` — implementing local issue `extract-implement-guard-handler` (#3814) moved the destructive/scope guard body into `scripts/implement_handle_guard_block.sh`; `.github/workflows/implement.yml` stages it into `RUNTIME_DIR` and invokes it, with contract coverage in `tests/test_implement_post_codex_recovery.py` and `tests/test_files_touched_scope_guard.py`.
+  - `EXPR-004` — implementing local issue `extract-memory-learnings-step` (#3829) moved repository-learning extraction into `scripts/memory_maintenance_extract_learnings.py`; `.github/workflows/memory_maintenance.yml` invokes it and `tests/test_memory_maintenance_contract_noop.py` covers workflow wiring, no-op, model, and telemetry behavior.
+- `VALID-BUT-RISKY/deferred`
+  - `SEC-001` — credential-bearing remote mutation remains in `.github/workflows/memory_maintenance.yml` and other authenticated push paths. Replacing it with headers or cleanup changes authentication and git-push behavior, so credentialed-remote changes require a dedicated rollout rather than this document-only closeout.
+  - `API-001`, `BATCH-001`, `BATCH-002`, and `API-002` — review metadata reuse, poller GraphQL batching, and Telegram marker caching cross pagination, fallback, mutation ordering, and cache-freshness boundaries in `.github/workflows/review_autofix.yml`, `scripts/orchestrate_poll_process.sh`, and `scripts/tg_helpers.sh`; none was auto-collapsed.
+  - `DUP-001`, `DUP-002`, `DUP-003`, `EXPR-003`, and `CONSIST-001` — canonical GH/label helper adoption and broad support-staging migration remain valid, but current bootstrap fallbacks intentionally survive missing staged assets. `scripts/stage_workflow_support.sh` is only partially adopted and `scripts/label_helpers.sh::set_issue_phase_label_resilient` still has caller-specific failure semantics, so a broad migration needs cross-workflow contract coverage.
+  - `DEAD-001` — removing the listed reviewer variables would remove existing identifiers and could discard latent telemetry/retry intent in `scripts/review_run_reviewers.sh`; identifier/dead-variable removal was deliberately excluded.
+  - `MERGE-001`, `MERGE-002`, `MERGE-003`, `MERGE-004`, and `REUSE-001` — comment pagination, final-merge reads, reissue/stall-recovery reads, bait-head stability, and check-gate PR refreshes are race-sensitive. The current implementations in `.github/workflows/clarify.yml`, `scripts/orchestrate_poll_process.sh`, `.github/workflows/test-and-mark-stable.yml`, and `scripts/pr_checks_lib.sh` preserve independent failure defaults and live freshness checks.
+- `STALE-or-already-done`
+  - None among the named findings beyond the four actioned extractions/fix above.
+- `INVALID/non-material`
+  - `SHELL-002` — the one-item loops in `scripts/stage_workflow_support.sh` remain, but replacing them with scalar calls is style-only and has no material runtime, correctness, or API effect; it is not optimization backlog.
+
+#### Repeated unnumbered recommendation groups (deduped)
+- `VALID&SAFE/actioned`
+  - `direct model usage telemetry` — `emit-direct-openrouter-usage` (#3815) supplied the normalized usage line and direct-caller coverage described in the 2026-08-19 ledger.
+  - `structured MCP counter hygiene` — `tighten-mcp-telemetry-parser` (#3816) separated real structured runtime events from test/counter echoes in `scripts/cost_audit.py` and its focused tests.
+- `VALID-BUT-RISKY/deferred`
+  - `security-audit path diagnostics` — local issue `add-security-audit-path-diagnostics` (#3817) was intended to add phase/cwd/path diagnostics, but committed `scripts/security_audit.sh` still invokes `render_prompt.sh` and `codex` directly after the scope line without the planned diagnostic preflight. The repository's own `changelog.d/3816-stall-recovery-linkage-guards.md` records that #3817 was incorrectly closed through non-closing PR linkage; this valid recommendation is therefore deferred, not falsely recorded as actioned.
+  - `completed-tracker terminalization` — closing/removing active state from completed tracking issues changes the orchestrator state machine and issue lifecycle; the poller's existing project-complete skip remains the safe fallback.
+  - `memory push batching` — combining `poll_started` and `poll_completed` persistence changes crash visibility and git-backed memory ordering in `scripts/memory_helpers.sh` / poll workflow steps, so the two-event contract was retained.
+  - `poller no-op setup and state-snapshot suppression` — skipping checkout, support setup, state publication, or memory events for no-work polls would alter observability and recovery inputs. This remains outside the safe subset even where runner savings are plausible.
+  - `validation-refresh parallelism and maintenance checkout reduction` — bounded parallel repo validation, timeout policy, and `ls-remote`/shallow maintenance paths change execution ordering and release safety in `.github/workflows/validation-refresh.yml`, `.github/workflows/forward-merge-stable-to-main.yml`, and promotion workflows.
+  - `model/reasoning, Semble laziness, and sweep cadence` — model defaults, lazy MCP installation, and adaptive review-sweep backoff are policy/control-plane changes. Existing model, fallback, and scheduled-cadence contracts remain unchanged.
+- `STALE-or-already-done`
+  - `AI-memory retrieve visibility`, `Semble contract/runtime fallback separation`, and `zero-candidate review sweep short-circuiting` are satisfied by the current helpers and tests cited under the 2026-08-19 ledger.
+- `INVALID/non-material`
+  - None beyond named `SHELL-002`.
+
+### `analysis/workflow-optimization-2026-08-24.md`
+- This source doc combined repeated window-level recommendations with 24 enumerated deep-audit/API findings. Its low-severity summary says eight but enumerates nine; this ledger follows every enumerated ID.
+
+#### Named findings
+- `VALID&SAFE/actioned`
+  - `EXPR-001` — `extract-plan-codex-step` (#3813) is actioned through `scripts/run_plan_codex.sh`, the `.github/workflows/plan.yml` call site, and `tests/test_plan_codex_step_extraction.py`.
+  - `EXPR-002` — `extract-implement-guard-handler` (#3814) is actioned through `scripts/implement_handle_guard_block.sh`, the `.github/workflows/implement.yml` runtime staging/call site, and the implement guard contract tests.
+  - `EXPR-004` — `extract-memory-learnings-step` (#3829) is actioned through `scripts/memory_maintenance_extract_learnings.py`, `.github/workflows/memory_maintenance.yml`, and `tests/test_memory_maintenance_contract_noop.py`.
+- `VALID-BUT-RISKY/deferred`
+  - `BUG-001` and `BUG-002` — label replacement and Telegram marker read/modify/write races are real, but remediation changes concurrent mutation ordering. `scripts/label_helpers.sh::set_issue_phase_label_resilient` still uses GET/compute/PUT with POST fallback, and `scripts/tg_helpers.sh` still owns marker-comment mutation; both need dedicated race fixtures.
+  - `API-001`, `API-002`, `BATCH-001`, `BATCH-002`, and `BATCH-003` — empty-vs-unknown linked-issue caching, later PR-state freshness, active-run snapshots, fallback label hydration, and stall-recovery searches cross GraphQL/REST pagination and dispatch safety. Current live refreshes remain in `.github/workflows/review_autofix.yml`, `.github/workflows/review_autofix_sweep.yml`, and `scripts/orchestrate_poll_process.sh`.
+  - `DUP-001`, `DUP-002`, `DUP-003`, `DUP-004`, and `EXPR-003` — broad support staging, generated label catalogs, marker upsert helpers, and GH-helper bootstrap consolidation alter shared bootstrap/fallback contracts. `scripts/stage_workflow_support.sh`, `scripts/label_helpers.sh`, and workflow-local fallbacks remain intentionally incremental rather than globally substituted.
+  - `SHELL-001` — removing or repurposing the named reviewer variables and changing the existing command chain would remove identifiers and touch retry/telemetry behavior in `scripts/review_run_reviewers.sh`; it is deferred with other dead-variable removals.
+  - `CONSIST-001` and `CONSIST-002` — Telegram/GitHub write transport and release-test retry normalization change retry, rate-limit, and output behavior in `scripts/tg_helpers.sh` and `scripts/comprehensive_test_and_release_gh_api.sh`; helper migration requires focused compatibility tests.
+  - `DEBT-001` — splitting `scripts/orchestrate_poll_process.sh` is a broad poller architectural refactor, not a safe optimization cleanup.
+  - `MERGE-001`, `REUSE-001`, `REUSE-002`, `REUSE-003`, and `REUSE-004` — review context, linked-issue titles, PR auto-merge payloads, triage fork guards, and poller default-branch caches have pagination, freshness, security, or fail-closed semantics. The current independent reads are retained.
+- `STALE-or-already-done`
+  - None among the named findings beyond the three actioned extractions.
+- `INVALID/non-material`
+  - None; the source's named items not actioned above remain material but verification-gated.
+
+#### Repeated unnumbered recommendation groups (deduped)
+- `VALID&SAFE/actioned`
+  - `poller-test timing and heartbeat instrumentation` — implementing local issue `instrument-orchestrate-poll-tests` (#3812) added structured `TEST_CASE_EVENT` start/heartbeat/complete/slowest records in `tests/test_orchestrate_poll_process.py::_run_selected_tests`; its self-test verifies heartbeat ordering and preserves aggregate exit semantics. This is the safe observability subset, not CI sharding.
+  - `direct OpenRouter usage telemetry` — `emit-direct-openrouter-usage` (#3815) landed the shared formatter/direct-caller contract on committed HEAD.
+  - `strict MCP telemetry recognition` — `tighten-mcp-telemetry-parser` (#3816) made Semble/Serena counters evidence-grade through structured-field validation and contract/runtime separation in `scripts/cost_audit.py` and focused tests.
+- `VALID-BUT-RISKY/deferred`
+  - `CI matrix/job/check-name sharding` — splitting `Orchestrate poll process unit tests` changes job/check names and branch-protection requirements in `.github/workflows/ci.yml`; only in-process timing/heartbeat instrumentation (#3812) was safe to land automatically.
+  - `review pass-count and continuation single-flight policy` — suppressing reviewer pass two or adding a PR/head lease changes review quality, continuation dispatch, and fail-open behavior. `scripts/review_run_reviewers.sh` and `.github/workflows/review_autofix.yml` retain current fan-out and `AUTOFIX_CONTINUATION_DISPATCH_ISSUED` behavior.
+  - `poller no-op state/memory suppression` — skipping state snapshots or memory start/end events when active work is zero changes audit/recovery contracts and was not coupled to the safe test instrumentation.
+  - `model/reasoning and prompt-contract substitutions` — reasoning downshifts, stable-prefix rewrites, prompt fan-out compaction, and support-fetch changes can alter generated decisions; external script extraction was actioned only where the runtime body remained equivalent.
+  - `free-disk, cadence, and API-cache behavior` — conditional cleanup, adaptive schedules, active-run batching, and metadata cache freshness all alter live workflow preconditions or page coverage and remain deferred.
+- `STALE-or-already-done`
+  - `structured context-budget warnings`, `cancelled_before_first_step`, `AI-memory retrieve telemetry`, `Semble contract/runtime separation`, and `zero-candidate sweep exit` are already satisfied by the current implementations/tests cited above.
+- `INVALID/non-material`
+  - None in the repeated groups.
+
+### `analysis/workflow-optimization-2026-08-25.md`
+- This source doc combined repeated window-level recommendations with 18 enumerated deep-audit/API findings. The repeated CI/review/poller themes are separated from the named code findings below.
+
+#### Named findings
+- `VALID&SAFE/actioned`
+  - `BUG-001` — implementing local issue `fix-poller-search-get-methods` (#3811) added explicit `--method GET` to all four parameterized `search/issues` calls in `scripts/orchestrate_poll_process.sh`; `tests/test_orchestrate_poll_process.py::test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths` preserves pagination and failure defaults.
+  - `SHELL-001` — implementing local issue `normalize-poller-issue-number-list` (#3830) now quotes `ISSUE_NUMS`, splits whitespace deliberately, filters numeric values, and sorts uniquely before judge-context iteration in `scripts/orchestrate_poll_process.sh`; `test_judge_context_issue_numbers_are_normalized_without_globbing` covers glob-shaped input.
+  - `EXPR-001` — `extract-plan-codex-step` (#3813) is actioned through `scripts/run_plan_codex.sh`, `.github/workflows/plan.yml`, and its extraction contract test.
+  - `EXPR-002` — `extract-implement-guard-handler` (#3814) is actioned through `scripts/implement_handle_guard_block.sh`, `.github/workflows/implement.yml`, and guard/recovery contract tests.
+  - `EXPR-004` — `extract-memory-learnings-step` (#3829) is actioned through `scripts/memory_maintenance_extract_learnings.py`, `.github/workflows/memory_maintenance.yml`, and its focused contract test.
+- `VALID-BUT-RISKY/deferred`
+  - `BATCH-001`, `BATCH-002`, `BATCH-003`, and `API-001` — fallback issue-label batching, phase-label bulk mutation, Actions-run cache consolidation, and shared branch-run snapshots depend on pagination, cache completeness, and opposing fail-open/fail-closed predicates. `.github/workflows/review_autofix.yml`, `scripts/label_helpers.sh`, `scripts/gh_helpers.sh`, and `scripts/orchestrate_poll_process.sh` retain live reads.
+  - `DUP-001`, `DUP-002`, `DUP-003`, and `EXPR-003` — broad support-staging and bootstrap/helper substitution remains a cross-workflow migration. Existing public helper signatures and workflow-local fallbacks are preserved rather than replaced piecemeal.
+  - `CONSIST-001` — routing all direct Telegram sends through one helper changes bootstrap and cleanup fallback behavior; direct fallback sends remain until availability and alert-level parity are covered.
+  - `MERGE-001`, `MERGE-002`, and `REUSE-001` — paginated auto-merge labels, bounded-versus-full clarification comments, and review-blocked linked-issue freshness have explicit page/failure semantics and remain verification-gated.
+  - `DEAD-API-001` — the apparently unused default-branch read is inside the standalone conflict sweep in `scripts/orchestrate_poll_process.sh`; removing an existing variable/API call without full fall-through and diagnostic verification is intentionally deferred.
+- `STALE-or-already-done`
+  - None among the named findings beyond the five actioned items.
+- `INVALID/non-material`
+  - None among the named findings.
+
+#### Repeated unnumbered recommendation groups (deduped)
+- `VALID&SAFE/actioned`
+  - `poller test progress diagnostics` — `instrument-orchestrate-poll-tests` (#3812) landed structured per-test timing, heartbeat, completion, and slowest-test records while preserving the existing test selection and exit code.
+  - `direct model/cache usage fields` — `emit-direct-openrouter-usage` (#3815) landed normalized usage emission for direct OpenRouter callers, with nested cache-token normalization and empty-content coverage in `tests/test_cost_audit_semble_metrics.py`.
+  - `MCP parser/runtime separation` — `tighten-mcp-telemetry-parser` (#3816) landed strict structured event recognition and Semble contract-test/runtime counters.
+- `VALID-BUT-RISKY/deferred`
+  - `CI sharding and timeout budgets` — matrix/job/check-name changes affect branch protection and cancellation semantics; #3812 intentionally landed diagnostics only.
+  - `poller fast-path state-snapshot/memory suppression` — avoiding checkout, state publishing, or memory events on no-active-issue runs changes state continuity and crash observability, so no no-op write was removed.
+  - `review continuation/single-flight and timeout enforcement` — lease keys, cancellation decisions, and model-call aborts alter live recovery behavior. Existing continuation markers and heartbeat diagnostics remain without a new dispatch policy.
+  - `model/reasoning/pass-count and E2E gating policy` — downshifting models, capping prompt expansion, reducing review fan-out, or narrowing stable-release E2E checks changes quality/release guarantees and requires operator policy approval.
+  - `pagination, GraphQL batching, API-cache freshness, final-merge, stall-recovery, and poller consolidation` — the source's API themes all intersect race-sensitive or paginated paths. Current batched helpers are reused where already present, but no new broad cache or read collapse was auto-applied.
+  - `credential/auth and support-staging migration` — token-bearing remotes and broad staging/helper substitution remain dedicated security/compatibility projects, not closeout edits.
+- `STALE-or-already-done`
+  - `review Codex heartbeat` — `scripts/codex_heartbeat.sh` emits `CODEX_HEARTBEAT`, and reviewer, consolidator, review-blocked judge, conflict resolver, and validation callers invoke it with focused tests in `tests/test_codex_heartbeat.py` and review/validate contract suites.
+  - `terminal review run summary` — `.github/workflows/review_autofix.yml` emits `REVIEW_AUTOFIX_RUN_SUMMARY_V1` even on summary-construction fallback; `tests/test_review_autofix_review_pipeline_contract.py` verifies stdout and step-summary persistence.
+  - `cancellation classification`, `structured context-budget warnings`, `AI-memory retrieve telemetry`, `Semble contract/runtime separation`, and `zero-candidate sweep exit` are already satisfied by the current implementations and tests cited in the earlier source sections.
+- `INVALID/non-material`
+  - None in the repeated groups; the one-item-loop cleanup was source-qualified to 2026-08-23 `SHELL-002` and classified non-material there.
+
 ## Preserved machine-maintained artifacts
 - `analysis/validation-selftest-status.json` (kept unchanged)
 - `analysis/last_collection_timestamp.txt` (kept unchanged)
@@ -839,3 +979,5 @@ This four-doc batch mixes one narrative workflow-cost memo with three appendix-b
 - With the earlier 2026-05-22/23 source docs, this pass's eight 2026-05-29/06-06 source docs, `analysis/workflow-optimization-2026-06-08-2.md`, and the 2026-06-25 through 2026-06-28 follow-up docs now deleted, `.github/workflows/comprehensive-test-and-release.yml` will hit its existing fallback path to `analysis/recommendation-processing-report.md` on future runs.
 - `analysis/workflow-optimization-2026-06-23.md` marked `REUSE-001` as `SAFE_TO_MERGE`, but current HEAD still shows `scripts/orchestrate_force_tick.sh` re-fetching `issues/${ISSUE_NUMBER}` after a successful PR lookup when `TRACKING_ISSUE` remains blank, so this closeout records that item as intentionally deferred rather than actioned.
 - `analysis/workflow-optimization-2026-06-25.md` through `analysis/workflow-optimization-2026-06-28.md` are now fully represented in the outcome ledger above, added to `Processed source docs (108)`, and deleted from `analysis/` on this ref.
+- The approved closeout plan mapped `add-security-audit-path-diagnostics` to local issue #3817 as actioned, but committed `scripts/security_audit.sh` still lacks that diagnostic preflight and `changelog.d/3816-stall-recovery-linkage-guards.md` records that #3817 was incorrectly closed through non-closing PR linkage. The 2026-08-23 ledger therefore preserves the recommendation as deferred instead of claiming implementation that is absent from HEAD.
+- `analysis/workflow-optimization-2026-08-19.md`, `analysis/workflow-optimization-2026-08-23.md`, `analysis/workflow-optimization-2026-08-24.md`, and `analysis/workflow-optimization-2026-08-25.md` are fully represented in the source-qualified ledger above, added to `Processed source docs (115)`, and deleted from `analysis/` on this ref.
