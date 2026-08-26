@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Keep `.ai/.workspace_source_manifest.txt` synchronized with tracked source files\n  expected_change_site: .ai/.workspace_source_manifest.txt\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `git ls-files changelog.d/` shows both files are tracked; `scripts/workspace_init.sh:331-356` writes manifest from `current_relpaths` (the actual source tree walk)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: .ai/.workspace_source_manifest.txt\n  Code: lines 121-124 \u2014 entries for `changelog.d/3815-direct-openrouter-usage.md` and `changelog.d/3817-ai-memory-push-retry-budget.md` removed\n  Problem: Both files still exist in the source tree (verified via `git ls-files changelog.d/`). `scripts/workspace_init.sh::materialize_source_tree` auto-regenerates this manifest from `iter_source_relpaths()`, so the next workspace materialization will re-add the removed lines. The LAST RUN cleanup is incorrect \u2014 the tracked files have not been deleted from disk.\n  Why it fails at runtime: On the next workflow run that calls `materialize_source_tree`, the diff between `previous_set` and `current_set` will incorrectly identify `changelog.d/3815-...` and `changelog.d/3817-...` as \"newly added\" files and copy them to the workspace, leaving the manifest out of sync until the next regeneration.\n  Evidence: `git ls-files changelog.d/` shows both files are tracked; `scripts/workspace_init.sh:331-356` writes manifest from `current_relpaths` (the actual source tree walk), making any manual removal incorrect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "d0647c47d0ed3ae9729cd0a7c4bc03a1d3bf89669e99a98db06e9876851147b2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3832,
+    "run_id": "32919706938",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32919706938",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260826023220_d51015e83c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3832,
+    "run_id": "32919706938"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-26T02:32:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
