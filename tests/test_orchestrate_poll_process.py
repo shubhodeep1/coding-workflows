@@ -357,6 +357,65 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 	assert "--jq '.items // []' 2>/dev/null)\"; then" in poller_source_text
 
 
+def test_judge_context_issue_numbers_are_normalized_without_globbing():
+	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	block_start_marker = '  MERGED_PR_SUMMARIES=""\n  OPEN_PR_SUMMARIES=""\n'
+	block_end_marker = '  unset _sorted_issue_nums _issue_status\n'
+	block_start_index = poller_source_text.index(block_start_marker)
+	block_end_index = poller_source_text.index(block_end_marker, block_start_index)
+	production_block = poller_source_text[
+		block_start_index:block_end_index + len(block_end_marker)
+	]
+
+	with tempfile.TemporaryDirectory(prefix="judge-issue-number-normalization-") as tmp:
+		worktree = Path(tmp)
+		# Numeric filenames make both `*` and `[0-9]` expose any regression to
+		# unquoted shell expansion in the production block.
+		(worktree / "3").touch()
+		(worktree / "17").touch()
+		runner = worktree / "run-normalization.sh"
+		runner.write_text(
+			"#!/usr/bin/env bash\n"
+			"set -euo pipefail\n"
+			"LOOKUP_LOG=\"${1}\"\n"
+			"ISSUE_NUMS=\"${2-}\"\n"
+			"_issue_cross_ref_pr_number_last()\n"
+			"{\n"
+			"  printf '%s\\n' \"${1}\" >> \"${LOOKUP_LOG}\"\n"
+			"}\n"
+			f"{production_block}",
+			encoding="utf-8",
+		)
+		runner_env = os.environ.copy()
+		for inherited_name in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+			runner_env.pop(inherited_name, None)
+		cases = (
+			("mixed", "20 3\n20\t11", ["3", "11", "20"]),
+			("empty", "", []),
+			("whitespace", " \n\t ", []),
+			("glob-garbage", "8 * [0-9] 12x 2?", ["8"]),
+		)
+		for case_name, raw_issue_numbers, expected_lookups in cases:
+			lookup_log = worktree / f"{case_name}.log"
+			result = subprocess.run(
+				["bash", str(runner), str(lookup_log), raw_issue_numbers],
+				cwd=worktree,
+				env=runner_env,
+				capture_output=True,
+				text=True,
+				check=False,
+			)
+			assert result.returncode == 0, (
+				f"{case_name} normalization failed: stderr={result.stderr!r}"
+			)
+			actual_lookups = (
+				lookup_log.read_text(encoding="utf-8").splitlines()
+				if lookup_log.exists()
+				else []
+			)
+			assert actual_lookups == expected_lookups, case_name
+
+
 def _base_state(status: str = "in_progress") -> dict:
 	return {
 		"schema_version": "orchestrate_state.v1",
