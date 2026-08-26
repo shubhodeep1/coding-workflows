@@ -157,14 +157,14 @@ def test_empty_or_invalid_pr_json_is_rejected():
 # ---------------------------------------------------------------------------
 
 
-def _resolver_result(branch_pr: str, cross_refs: str, pr_payloads: dict[str, dict]) -> tuple[int, str, str]:
+def _resolver_result(branch_pr: str, cross_refs: str, pr_payloads: dict[str, dict]) -> tuple[int, str, str, str]:
 	"""Run the extracted resolver with stubbed lookups.
 
 	branch_pr: newline list emitted by the _linked_prs_by_branch_name stub.
 	cross_refs: newline list emitted by the _issue_cross_ref_pr_numbers_unique stub.
 	pr_payloads: PR number -> payload dict served by the _fetch_pr_json stub
 	  (missing numbers yield "{}", the helper's fetch-failure shape).
-	Returns (rc, resolved_pr_num, stderr).
+	Returns (rc, resolved_pr_num, failure_reason, stderr).
 	"""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
@@ -192,6 +192,7 @@ def _resolver_result(branch_pr: str, cross_refs: str, pr_payloads: dict[str, dic
 		_resolve_issue_implementation_pr '3816' || _resolver_rc=$?
 		printf 'RC=%s\\n' "${_resolver_rc}"
 		printf 'RESOLVED=%s\\n' "${STALL_IMPL_PR_NUM}"
+		printf 'FAILURE_REASON=%s\\n' "${STALL_IMPL_PR_FAILURE_REASON}"
 		""")
 		r = _run_bash(script, cwd=tmp, env={
 			"STUB_BRANCH_PRS": branch_pr,
@@ -199,13 +200,16 @@ def _resolver_result(branch_pr: str, cross_refs: str, pr_payloads: dict[str, dic
 		})
 		assert r.returncode == 0, f"resolver harness exited {r.returncode}: {r.stderr}"
 		resolved = ""
+		failure_reason = ""
 		rc = -1
 		for line in r.stdout.splitlines():
 			if line.startswith("RESOLVED="):
 				resolved = line[len("RESOLVED="):]
+			if line.startswith("FAILURE_REASON="):
+				failure_reason = line[len("FAILURE_REASON="):]
 			if line.startswith("RC="):
 				rc = int(line[len("RC="):])
-		return rc, resolved, r.stderr
+		return rc, resolved, failure_reason, r.stderr
 
 
 def _impl_payload(num: int, head_ref: str, body: str) -> dict:
@@ -222,7 +226,7 @@ def _impl_payload(num: int, head_ref: str, body: str) -> dict:
 def test_resolver_prefers_conventional_branch_pr():
 	"""The open ai/issue-<n> PR wins even when a newer mention-only PR is the
 	latest cross-reference — the exact incident shape."""
-	rc, resolved, _ = _resolver_result(
+	rc, resolved, _, _ = _resolver_result(
 		branch_pr="3823",
 		cross_refs="3823\n3828",
 		pr_payloads={
@@ -236,7 +240,7 @@ def test_resolver_prefers_conventional_branch_pr():
 def test_resolver_falls_back_to_verified_cross_ref_and_skips_mentions():
 	"""With no open conventional-branch PR, the cross-ref walk (newest first)
 	must skip the mention-only PR and accept the closing-body one."""
-	rc, resolved, err = _resolver_result(
+	rc, resolved, failure_reason, err = _resolver_result(
 		branch_pr="",
 		cross_refs="3823\n3828",
 		pr_payloads={
@@ -251,7 +255,7 @@ def test_resolver_falls_back_to_verified_cross_ref_and_skips_mentions():
 def test_resolver_returns_failure_when_only_mentions_exist():
 	"""Nothing verifiable -> rc 1 and no target, so callers skip the
 	destructive push instead of acting on a mention-only PR."""
-	rc, resolved, err = _resolver_result(
+	rc, resolved, failure_reason, err = _resolver_result(
 		branch_pr="",
 		cross_refs="3828",
 		pr_payloads={
@@ -259,37 +263,40 @@ def test_resolver_returns_failure_when_only_mentions_exist():
 		},
 	)
 	assert rc == 1 and resolved == "", f"rc={rc} resolved={resolved}"
+	assert failure_reason == "not_implementation_pr"
 	assert "reason=not_implementation_pr" in err
 
 
 def test_resolver_logs_fetch_failures_distinctly():
 	"""A candidate whose pulls/<n> fetch fails is logged as pr_fetch_failed
 	and never resolved."""
-	rc, resolved, err = _resolver_result(
+	rc, resolved, failure_reason, err = _resolver_result(
 		branch_pr="",
 		cross_refs="3999",
 		pr_payloads={},
 	)
 	assert rc == 1 and resolved == "", f"rc={rc} resolved={resolved}"
+	assert failure_reason == "pr_fetch_failed"
 	assert "STALL_LINKED_PR_REJECTED issue=3816 pr=3999 reason=pr_fetch_failed" in err
 
 
 def test_resolver_logs_conventional_branch_fetch_failures_distinctly():
 	"""The preferred conventional-branch lookup reports the same diagnostic
 	as a failed cross-reference lookup before falling through safely."""
-	rc, resolved, err = _resolver_result(
+	rc, resolved, failure_reason, err = _resolver_result(
 		branch_pr="3998",
 		cross_refs="",
 		pr_payloads={},
 	)
 	assert rc == 1 and resolved == "", f"rc={rc} resolved={resolved}"
+	assert failure_reason == "pr_fetch_failed"
 	assert "STALL_LINKED_PR_REJECTED issue=3816 pr=3998 reason=pr_fetch_failed" in err
 
 
 def test_resolver_logs_conventional_branch_rejections_distinctly():
 	"""A fetched conventional-branch candidate that fails the predicate is a
 	genuine rejection, not a fetch failure."""
-	rc, resolved, err = _resolver_result(
+	rc, resolved, failure_reason, err = _resolver_result(
 		branch_pr="3997",
 		cross_refs="",
 		pr_payloads={
@@ -297,13 +304,14 @@ def test_resolver_logs_conventional_branch_rejections_distinctly():
 		},
 	)
 	assert rc == 1 and resolved == "", f"rc={rc} resolved={resolved}"
+	assert failure_reason == "not_implementation_pr"
 	assert err.count("STALL_LINKED_PR_REJECTED issue=3816 pr=3997 reason=not_implementation_pr") == 1
 	assert "reason=pr_fetch_failed" not in err
 
 
 def test_resolver_branch_lookup_is_deterministic_and_pipefail_safe():
 	"""Multiple conventional-branch matches choose the newest PR and stay fail-open."""
-	rc, resolved, _ = _resolver_result(
+	rc, resolved, _, _ = _resolver_result(
 		branch_pr="3997\n3998",
 		cross_refs="",
 		pr_payloads={
@@ -312,6 +320,24 @@ def test_resolver_branch_lookup_is_deterministic_and_pipefail_safe():
 		},
 	)
 	assert rc == 0 and resolved == "3998", f"rc={rc} resolved={resolved}"
+
+
+def test_resolver_rejection_outweighs_mixed_fetch_failures_in_either_order():
+	"""One stale cross-reference must not make fetched rejections retry forever."""
+	cases = (
+		{"3998": _impl_payload(3998, "claude/unrelated", "Refs #3816")},
+		{"4000": _impl_payload(4000, "claude/unrelated", "Refs #3816")},
+	)
+	for payloads in cases:
+		rc, resolved, failure_reason, err = _resolver_result(
+			branch_pr="",
+			cross_refs="4000\n3998",
+			pr_payloads=payloads,
+		)
+		assert rc == 1 and resolved == "", f"rc={rc} resolved={resolved}"
+		assert failure_reason == "not_implementation_pr", failure_reason
+		assert "reason=pr_fetch_failed" in err
+		assert "reason=not_implementation_pr" in err
 
 
 # ---------------------------------------------------------------------------

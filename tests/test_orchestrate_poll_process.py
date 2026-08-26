@@ -6620,7 +6620,7 @@ def test_standalone_retrigger_review_retargets_verified_implementation_pr():
 	)
 
 
-def test_standalone_retrigger_review_retries_inconclusive_pr_lookup_without_increment():
+def test_standalone_retrigger_review_mixed_fetch_failure_counts_conclusive_rejection():
 	state = _base_state(status="complete")
 	standalone_state_comment = (
 		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
@@ -6657,10 +6657,14 @@ def test_standalone_retrigger_review_retries_inconclusive_pr_lookup_without_incr
 	)
 	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
 	assert standalone_state is not None
-	assert standalone_state["stall_recovery_count"] == 0
-	assert standalone_state["status_since_ts"] == 1
+	assert standalone_state["stall_recovery_count"] == 1
+	assert standalone_state["status_since_ts"] != 1
 	assert result.get("git_push_calls", []) == []
-	assert "implementation PR lookup was inconclusive (pr_fetch_failed)" in result["stdout"]
+	assert "none could be resolved; skipping empty-commit retrigger" in result["stdout"]
+	assert not any(
+		"/approved" in str(comment.get("body", ""))
+		for comment in result["issues"]["501"]["comments"]
+	)
 
 
 def test_standalone_attempt_merge_retries_inconclusive_pr_lookup_without_increment():

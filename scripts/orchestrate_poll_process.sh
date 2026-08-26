@@ -11255,18 +11255,20 @@ _resolve_issue_implementation_pr() {
   STALL_IMPL_PR_FAILURE_REASON=""
   [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
   local _ripr_candidate _ripr_json _ripr_list
+  local _ripr_saw_fetch_failure="false"
+  local _ripr_saw_rejection="false"
   _ripr_candidate="$(_linked_prs_by_branch_name "${issue_num}" 2>/dev/null | grep -E '^[0-9]+$' | sort -rn | head -n1 || true)"
   if [[ "${_ripr_candidate}" =~ ^[0-9]+$ ]]; then
     _ripr_json="$(_fetch_pr_json "${_ripr_candidate}")"
     if [ -z "${_ripr_json}" ] || [ "${_ripr_json}" = "{}" ]; then
-      STALL_IMPL_PR_FAILURE_REASON="pr_fetch_failed"
+      _ripr_saw_fetch_failure="true"
       echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=pr_fetch_failed" >&2
     elif _pr_json_is_issue_implementation_pr "${issue_num}" "${_ripr_json}"; then
       STALL_IMPL_PR_NUM="${_ripr_candidate}"
       STALL_IMPL_PR_JSON="${_ripr_json}"
       return 0
     else
-      STALL_IMPL_PR_FAILURE_REASON="not_implementation_pr"
+      _ripr_saw_rejection="true"
       echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=not_implementation_pr" >&2
     fi
   fi
@@ -11274,7 +11276,7 @@ _resolve_issue_implementation_pr() {
   for _ripr_candidate in ${_ripr_list}; do
     _ripr_json="$(_fetch_pr_json "${_ripr_candidate}")"
     if [ -z "${_ripr_json}" ] || [ "${_ripr_json}" = "{}" ]; then
-      STALL_IMPL_PR_FAILURE_REASON="pr_fetch_failed"
+      _ripr_saw_fetch_failure="true"
       echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=pr_fetch_failed" >&2
       continue
     fi
@@ -11283,9 +11285,19 @@ _resolve_issue_implementation_pr() {
       STALL_IMPL_PR_JSON="${_ripr_json}"
       return 0
     fi
-    [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ] || STALL_IMPL_PR_FAILURE_REASON="not_implementation_pr"
+    _ripr_saw_rejection="true"
     echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=not_implementation_pr" >&2
   done
+  # A successfully fetched candidate proves that the lookup itself is usable.
+  # Prefer its conclusive rejection over unrelated candidate fetch failures so
+  # one stale cross-reference cannot trap stall recovery in an unbounded retry.
+  # Pure fetch-failure results remain inconclusive and retry without consuming
+  # recovery budget.
+  if [ "${_ripr_saw_rejection}" = "true" ]; then
+    STALL_IMPL_PR_FAILURE_REASON="not_implementation_pr"
+  elif [ "${_ripr_saw_fetch_failure}" = "true" ]; then
+    STALL_IMPL_PR_FAILURE_REASON="pr_fetch_failed"
+  fi
   return 1
 }
 
