@@ -9575,6 +9575,7 @@ def test_retrigger_review_redispatches_when_last_autofix_concluded_failure():
 		prs=[
 			{
 				"number": 77,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9653,6 +9654,7 @@ def test_retrigger_review_does_not_increment_when_redispatch_skipped():
 		prs=[
 			{
 				"number": 79,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9714,6 +9716,7 @@ def test_retrigger_review_skips_empty_commit_when_review_run_inflight():
 		prs=[
 			{
 				"number": 80,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9770,6 +9773,7 @@ def test_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_bran
 		prs=[
 			{
 				"number": 84,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9943,6 +9947,7 @@ def test_retrigger_review_skips_empty_commit_for_review_run_past_stall_threshold
 		prs=[
 			{
 				"number": 3082,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9997,6 +10002,7 @@ def test_retrigger_review_skips_empty_commit_when_pr_head_advanced_after_snapsho
 		prs=[
 			{
 				"number": 83,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -10036,6 +10042,7 @@ def test_retrigger_review_does_not_increment_when_empty_commit_checkout_fails():
 		prs=[
 			{
 				"number": 85,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",

@@ -146,6 +146,135 @@ def test_empty_or_invalid_pr_json_is_rejected():
 
 
 # ---------------------------------------------------------------------------
+# _resolve_issue_implementation_pr — the stall-recovery target resolver
+# (issue #3816 / PR #3828 incident: retrigger_review pushed its empty commit
+# onto an unrelated PR that merely said "Refs #3816", because the target came
+# from _issue_cross_ref_pr_number_last).
+#
+# Dependencies (_linked_prs_by_branch_name, _issue_cross_ref_pr_numbers_unique,
+# _fetch_pr_json) are stubbed via env-driven bash functions so the resolver's
+# ordering and rejection logic is exercised in isolation.
+# ---------------------------------------------------------------------------
+
+
+def _resolver_result(branch_pr: str, cross_refs: str, pr_payloads: dict[str, dict]) -> tuple[int, str, str]:
+	"""Run the extracted resolver with stubbed lookups.
+
+	branch_pr: newline list emitted by the _linked_prs_by_branch_name stub.
+	cross_refs: newline list emitted by the _issue_cross_ref_pr_numbers_unique stub.
+	pr_payloads: PR number -> payload dict served by the _fetch_pr_json stub
+	  (missing numbers yield "{}", the helper's fetch-failure shape).
+	Returns (rc, resolved_pr_num, stderr).
+	"""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		extractor = _EXTRACT_FN.replace("__POLLER__", str(POLLER_SCRIPT))
+		bootstrap = textwrap.dedent(f"""
+		set -euo pipefail
+		{extractor}
+		: > helpers.sh
+		extract_fn '_pr_json_closes_issue' >> helpers.sh
+		extract_fn '_pr_json_is_issue_implementation_pr' >> helpers.sh
+		extract_fn '_resolve_issue_implementation_pr' >> helpers.sh
+		""")
+		r = _run_bash(bootstrap, cwd=tmp)
+		assert r.returncode == 0, f"extraction failed: {r.stderr}\n{r.stdout}"
+		body = (tmp / "helpers.sh").read_text(encoding="utf-8")
+		assert "_resolve_issue_implementation_pr()" in body, "missing resolver in helpers.sh"
+		(tmp / "payloads.json").write_text(json.dumps(pr_payloads), encoding="utf-8")
+		script = textwrap.dedent("""
+		set -uo pipefail
+		_linked_prs_by_branch_name() { printf '%s\\n' "${STUB_BRANCH_PRS}"; }
+		_issue_cross_ref_pr_numbers_unique() { printf '%s\\n' "${STUB_CROSS_REF_PRS}"; }
+		_fetch_pr_json() { jq -c --arg n "$1" '.[$n] // {}' payloads.json; }
+		source helpers.sh
+		_resolver_rc=0
+		_resolve_issue_implementation_pr '3816' || _resolver_rc=$?
+		printf 'RC=%s\\n' "${_resolver_rc}"
+		printf 'RESOLVED=%s\\n' "${STALL_IMPL_PR_NUM}"
+		""")
+		r = _run_bash(script, cwd=tmp, env={
+			"STUB_BRANCH_PRS": branch_pr,
+			"STUB_CROSS_REF_PRS": cross_refs,
+		})
+		assert r.returncode == 0, f"resolver harness exited {r.returncode}: {r.stderr}"
+		resolved = ""
+		rc = -1
+		for line in r.stdout.splitlines():
+			if line.startswith("RESOLVED="):
+				resolved = line[len("RESOLVED="):]
+			if line.startswith("RC="):
+				rc = int(line[len("RC="):])
+		return rc, resolved, r.stderr
+
+
+def _impl_payload(num: int, head_ref: str, body: str) -> dict:
+	return {
+		"number": num,
+		"state": "open",
+		"merged_at": None,
+		"body": body,
+		"head": {"ref": head_ref, "sha": "0" * 40},
+		"base": {"ref": "main"},
+	}
+
+
+def test_resolver_prefers_conventional_branch_pr():
+	"""The open ai/issue-<n> PR wins even when a newer mention-only PR is the
+	latest cross-reference — the exact incident shape."""
+	rc, resolved, _ = _resolver_result(
+		branch_pr="3823",
+		cross_refs="3823\n3828",
+		pr_payloads={
+			"3823": _impl_payload(3823, "ai/issue-3816", "Automated implementation."),
+			"3828": _impl_payload(3828, "claude/stall-recovery-pr-3823-3817-c6li3u", "Refs #3816"),
+		},
+	)
+	assert rc == 0 and resolved == "3823", f"rc={rc} resolved={resolved}"
+
+
+def test_resolver_falls_back_to_verified_cross_ref_and_skips_mentions():
+	"""With no open conventional-branch PR, the cross-ref walk (newest first)
+	must skip the mention-only PR and accept the closing-body one."""
+	rc, resolved, err = _resolver_result(
+		branch_pr="",
+		cross_refs="3823\n3828",
+		pr_payloads={
+			"3823": _impl_payload(3823, "claude/other-branch", "Closes #3816"),
+			"3828": _impl_payload(3828, "claude/unrelated", "Refs #3816"),
+		},
+	)
+	assert rc == 0 and resolved == "3823", f"rc={rc} resolved={resolved}"
+	assert "STALL_LINKED_PR_REJECTED issue=3816 pr=3828 reason=not_implementation_pr" in err
+
+
+def test_resolver_returns_failure_when_only_mentions_exist():
+	"""Nothing verifiable -> rc 1 and no target, so callers skip the
+	destructive push instead of acting on a mention-only PR."""
+	rc, resolved, err = _resolver_result(
+		branch_pr="",
+		cross_refs="3828",
+		pr_payloads={
+			"3828": _impl_payload(3828, "claude/unrelated", "Refs #3816"),
+		},
+	)
+	assert rc == 1 and resolved == "", f"rc={rc} resolved={resolved}"
+	assert "reason=not_implementation_pr" in err
+
+
+def test_resolver_logs_fetch_failures_distinctly():
+	"""A candidate whose pulls/<n> fetch fails is logged as pr_fetch_failed
+	and never resolved."""
+	rc, resolved, err = _resolver_result(
+		branch_pr="",
+		cross_refs="3999",
+		pr_payloads={},
+	)
+	assert rc == 1 and resolved == "", f"rc={rc} resolved={resolved}"
+	assert "STALL_LINKED_PR_REJECTED issue=3816 pr=3999 reason=pr_fetch_failed" in err
+
+
+# ---------------------------------------------------------------------------
 # Direct-invocation entrypoint
 #
 # `.github/workflows/*.yml` runs this test as `python3 tests/<file>.py` from

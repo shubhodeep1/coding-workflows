@@ -3197,7 +3197,7 @@ validation_fix_issue_has_merged_pr_evidence() {
 
   for validation_candidate_pr in ${validation_merged_pr_candidates}; do
     [[ "${validation_candidate_pr}" =~ ^[0-9]+$ ]] || continue
-    # §14 audit: the existing timeline response has merge state and number,
+    # §15 audit: the existing timeline response has merge state and number,
     # but not the PR body/head needed by the implementation-PR predicate.
     # Fetch only merged candidates and fail open to a retry on lookup failure.
     validation_candidate_pr_json="$(_fetch_pr_json "${validation_candidate_pr}")"
@@ -9814,20 +9814,35 @@ STALL_EOF
     retrigger_review)
       echo "  Re-triggering review for issue #${issue_num}..."
       local pr_num
-      pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+      # Target only the issue's OWN implementation PR. The previous
+      # _issue_cross_ref_pr_number_last lookup targeted the last PR that
+      # merely mentions the issue, so the empty-commit push landed on an
+      # unrelated PR's branch (issue #3816 / PR #3828 incident, poller run
+      # 32891613081). When no implementation PR resolves, fall through to
+      # the existing no-PR branch (re-trigger implementation) instead of
+      # pushing to a mention-only PR.
+      if _resolve_issue_implementation_pr "${issue_num}"; then
+        pr_num="${STALL_IMPL_PR_NUM}"
+      else
+        pr_num=""
+      fi
       if [[ "${pr_num}" =~ ^[0-9]+$ ]]; then
         local head_ref
         # Belt-and-braces conflict check (Q1:A, Q2:A, Q3:B).  The
         # pre-dispatch guard in run_standalone_stall_recovery should have
         # redirected this action when the PR is conflicted, but the
         # managed-path recover_stalled_issue dispatches straight here
-        # without that guard.  Single PR fetch (reused below for head_ref)
-        # so this adds no extra API calls on the happy path.
+        # without that guard.  PR payload reused from
+        # _resolve_issue_implementation_pr so this adds no extra API calls
+        # on the happy path.
         local _rtr_pr_json
         local _rtr_mergeable
         local _rtr_merge_state
         local _rtr_head_sha
-        _rtr_pr_json="$(_fetch_pr_json "${pr_num}")"
+        _rtr_pr_json="${STALL_IMPL_PR_JSON:-}"
+        if [ -z "${_rtr_pr_json}" ] || [ "${_rtr_pr_json}" = "{}" ]; then
+          _rtr_pr_json="$(_fetch_pr_json "${pr_num}")"
+        fi
         head_ref="$(_jq_field "${_rtr_pr_json}" '.head.ref')"
         _rtr_mergeable="$(_jq_field "${_rtr_pr_json}" '.mergeable' 'true|false')"
         _rtr_merge_state="$(_jq_field "${_rtr_pr_json}" '.mergeable_state')"
@@ -11193,6 +11208,70 @@ _pr_json_is_issue_implementation_pr() {
   return 1
 }
 
+# _resolve_issue_implementation_pr — resolve the ISSUE'S OWN implementation
+# PR for stall-recovery actions that push to the linked PR's branch.
+#
+# The retrigger_review executor used to target the PR returned by
+# _issue_cross_ref_pr_number_last — the LAST PR that mentions the issue.
+# In poller run 32891613081 issue #3816's latest cross-reference was the
+# unrelated investigation PR #3828 ("Refs #3816"), so the stall recovery
+# pushed its empty commit onto that PR's branch instead of the real
+# implementation PR #3823 (head ai/issue-3816), and the wrong PR's review
+# pipeline failure then labeled the wrong issues ai:review-blocked.
+#
+# Resolution order:
+#   1. Open PR on the conventional implement branch `ai/issue-<n>`
+#      (_linked_prs_by_branch_name) — deterministic and unmaskable by
+#      mention-only cross-references.
+#   2. Cross-referenced PRs, newest first, accepting the first that
+#      passes _pr_json_is_issue_implementation_pr; mention-only PRs are
+#      logged and skipped.
+#
+# §15 audit: callers previously issued 1 timeline fetch + 1 pulls/<n>
+# fetch. This helper issues 1 `gh pr list --head` + 1 pulls/<n> on the
+# conventional path (the overwhelmingly common case); the cross-ref walk
+# runs only when the branch lookup misses and stops at the first verified
+# candidate. Existing caches are not usable here because the candidate's
+# body/head are exactly what the mention-based caches lack.
+#
+# On success returns 0 and sets STALL_IMPL_PR_NUM / STALL_IMPL_PR_JSON
+# (full pulls/<n> payload). On failure returns 1 with both cleared —
+# callers must treat that as "no implementation PR" and skip destructive
+# pushes rather than falling back to a mention-based target.
+declare -g STALL_IMPL_PR_NUM=''
+declare -g STALL_IMPL_PR_JSON=''
+_resolve_issue_implementation_pr() {
+  local issue_num="$1"
+  STALL_IMPL_PR_NUM=""
+  STALL_IMPL_PR_JSON=""
+  [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+  local _ripr_candidate _ripr_json _ripr_list
+  _ripr_candidate="$(_linked_prs_by_branch_name "${issue_num}" 2>/dev/null | head -n1)"
+  if [[ "${_ripr_candidate}" =~ ^[0-9]+$ ]]; then
+    _ripr_json="$(_fetch_pr_json "${_ripr_candidate}")"
+    if _pr_json_is_issue_implementation_pr "${issue_num}" "${_ripr_json}"; then
+      STALL_IMPL_PR_NUM="${_ripr_candidate}"
+      STALL_IMPL_PR_JSON="${_ripr_json}"
+      return 0
+    fi
+  fi
+  _ripr_list="$(_issue_cross_ref_pr_numbers_unique "${issue_num}" 2>/dev/null | grep -E '^[0-9]+$' | sort -rn || true)"
+  for _ripr_candidate in ${_ripr_list}; do
+    _ripr_json="$(_fetch_pr_json "${_ripr_candidate}")"
+    if [ -z "${_ripr_json}" ] || [ "${_ripr_json}" = "{}" ]; then
+      echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=pr_fetch_failed" >&2
+      continue
+    fi
+    if _pr_json_is_issue_implementation_pr "${issue_num}" "${_ripr_json}"; then
+      STALL_IMPL_PR_NUM="${_ripr_candidate}"
+      STALL_IMPL_PR_JSON="${_ripr_json}"
+      return 0
+    fi
+    echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=not_implementation_pr" >&2
+  done
+  return 1
+}
+
 # _check_merged_pr_guard — Shared guard used by both the standalone and
 # orchestrator-managed stall recovery paths.  Given an issue number and
 # a pre-fetched linked-PR JSON object (from either
@@ -12116,6 +12195,24 @@ STALL_EOF
             head_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.ref?) then .head.ref else empty end' 2>/dev/null | tail -n1)"
             head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
           fi
+          # Implementation-PR gate (issue #3816 / PR #3828 incident): the
+          # cached / cross-ref pr_num above can be a PR that merely mentions
+          # the issue. Never push the empty commit onto such a branch —
+          # re-resolve to the issue's own implementation PR, or skip.
+          if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ] && \
+             ! _pr_json_is_issue_implementation_pr "${issue_num}" "${pr_json}"; then
+            if _resolve_issue_implementation_pr "${issue_num}"; then
+              echo "  [standalone-stall] Issue #${issue_num}: linked PR #${pr_num} is not the issue's implementation PR; retargeting to PR #${STALL_IMPL_PR_NUM}."
+              pr_num="${STALL_IMPL_PR_NUM}"
+              pr_json="${STALL_IMPL_PR_JSON}"
+              head_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.ref?) then .head.ref else empty end' 2>/dev/null | tail -n1)"
+              head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
+            else
+              echo "  [standalone-stall] Issue #${issue_num}: linked PR #${pr_num} is not the issue's implementation PR and none could be resolved; skipping empty-commit retrigger."
+              STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_wrong_pr"
+              head_ref=""
+            fi
+          fi
           if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
             # Mirror execute_stall_recovery_action(retrigger_review):
             # if issue_has_active_workflow misses a live review run on
@@ -12173,7 +12270,7 @@ STALL_EOF
 			elif [ -n "${_std_rtr_direct_inflight_id}" ]; then
               echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
               STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
-            elif git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
+            elif git fetch origin "+${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
               _std_rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
               if [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_std_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
                  [ "${_std_rtr_origin_head_sha}" != "${head_sha}" ]; then
@@ -12195,7 +12292,8 @@ STALL_EOF
             tg_notify_issue "${issue_num}" "Standalone stall recovery: re-triggered review flow (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
             STALL_RECOVERY_SHOULD_INCREMENT="true"
             took_action="true"
-          elif [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_inflight" ]; then
+          elif [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_inflight" ] \
+            && [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_wrong_pr" ]; then
             echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} empty-commit retrigger did not reach a successful push; skipping recovery increment."
           fi
         elif [ "${pr_lookup_ok}" = "true" ]; then
@@ -12212,12 +12310,21 @@ STALL_EOF
         ;;
       attempt_merge)
         local merge_pr
-        merge_pr="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+        # Same implementation-PR discipline as retrigger_review: merging is
+        # the most destructive mis-target of all, so never resolve the merge
+        # candidate from a bare mention-only cross-reference (issue #3816 /
+        # PR #3828 incident — the last cross-reference was an unrelated PR).
+        if _resolve_issue_implementation_pr "${issue_num}"; then
+          merge_pr="${STALL_IMPL_PR_NUM}"
+        else
+          merge_pr=""
+        fi
         if [[ "${merge_pr}" =~ ^[0-9]+$ ]]; then
           local merge_pr_json
           local merge_state
           local merge_mergeable
-          merge_pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${merge_pr}" 2>/dev/null || echo "")"
+          merge_pr_json="${STALL_IMPL_PR_JSON:-}"
+          [ -n "${merge_pr_json}" ] || merge_pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${merge_pr}" 2>/dev/null || echo "")"
           merge_state="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .state?) then .state else empty end' 2>/dev/null | tail -n1)"
           merge_mergeable="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and (.mergeable == true or .mergeable == false)) then .mergeable else empty end' 2>/dev/null | tail -n1)"
           if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] && _pr_checks_completed "${merge_pr}"; then
@@ -14566,7 +14673,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     # Inspect every cross-reference so a later mention-only PR cannot mask an
     # earlier implementation PR. Prefer merged evidence, while retaining the
     # last verified unmerged implementation PR as a fallback truth signal.
-    # §14 audit: the existing timeline call omits PR body/head, so each
+    # §15 audit: the existing timeline call omits PR body/head, so each
     # candidate needs the existing `_fetch_pr_json` lookup for verification.
     for _linked_pr_candidate in ${LINKED_PR_CANDIDATES}; do
       [[ "${_linked_pr_candidate}" =~ ^[0-9]+$ ]] || continue
