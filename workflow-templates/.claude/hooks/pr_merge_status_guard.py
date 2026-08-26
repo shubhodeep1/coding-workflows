@@ -165,6 +165,29 @@ def _shell_segments(command: str) -> list[list[str]]:
 	return segments
 
 
+def _contains_shell_substitution(command: str) -> bool:
+	"""Return whether Bash would expand command substitution in the string."""
+	single_quoted = False
+	double_quoted = False
+	escaped = False
+	for index, character in enumerate(command):
+		if escaped:
+			escaped = False
+			continue
+		if character == "\\" and not single_quoted:
+			escaped = True
+			continue
+		if character == "'" and not double_quoted:
+			single_quoted = not single_quoted
+			continue
+		if character == '"' and not single_quoted:
+			double_quoted = not double_quoted
+			continue
+		if not single_quoted and (character == "`" or command.startswith("$(", index)):
+			return True
+	return False
+
+
 def _api_write_requires_confirmation(command: str) -> bool:
 	"""Return whether an allowlisted API write uses non-canonical curl options.
 
@@ -189,7 +212,7 @@ def _api_write_requires_confirmation(command: str) -> bool:
 		return False
 	if "{" in tokens[4] or "[" in tokens[4]:
 		return True
-	if len(segments) != 1 or "$(" in command or "`" in command:
+	if len(segments) != 1 or _contains_shell_substitution(command):
 		return True
 
 	index = 5

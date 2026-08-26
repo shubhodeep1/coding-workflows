@@ -97,6 +97,7 @@ def test_unbalanced_quotes_do_not_raise() -> None:
 		'curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" -d @spec.json',
 		'curl -sS -X POST https://api.cloudflare.com/client/v4/accounts/id/workers/scripts/name --header="Authorization: Bearer ${CF_TOKEN}" --data-binary=@worker.js',
 		'curl -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d \'{"method":"-X DELETE"}\'',
+		"curl -sS -X POST https://api.cloudflare.com/client/v4/workers -d 'prices $(USD) use `literal` markers'",
 	],
 )
 def test_canonical_api_writes_do_not_request_extra_confirmation(command: str) -> None:
@@ -116,6 +117,7 @@ def test_canonical_api_writes_do_not_request_extra_confirmation(command: str) ->
 		"curl -sS -X PUT https://api.digitalocean.com/v2/{apps,droplets}/id",
 		"curl -sS -X POST https://api.cloudflare.com/client/v4/workers; curl -X DELETE https://api.cloudflare.com/client/v4/workers/id",
 		"curl -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d \"$(cat /tmp/body)\"",
+		'curl -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d "it\'s $(cat /tmp/body)"',
 		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id -d 'unterminated",
 		"  curl -sS -X POST https://api.cloudflare.com/client/v4/workers -H 'unterminated",
 		"curl -sS -X PUT https://api.digitalocean.com/v2/apps/id>/tmp/response",
@@ -735,3 +737,5 @@ def test_claude_md_documents_the_guard() -> None:
 	assert "## §21. Merged-PR Commit Guard (MANDATORY)" in text
 	assert ".claude/hooks/pr_merge_status_guard.py" in text
 	assert "CLAUDE_PR_MERGE_GUARD=off" in text
+	assert "The guard is skipped entirely" not in text
+	assert "The API-write\nconfirmation safeguard remains active in both cases." in text
