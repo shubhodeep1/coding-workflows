@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:Lines: 4367, 4402 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A local slop-scan reports false-positive Python heredoc parse errors at these bash heredoc content lines.\n  WHY: The heredoc is correctly delimited and the reported errors have no runtime impact.\n- tests/test_orchestrate_poll_process.py:line 9605 | severity=high | confidence=4\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The fixture does not satisfy the new implementation-PR predicate, so the test no longer verifies the empty-commit path it claims to cover.\n  WHY: The managed retrigger_review action reaches the /approved re-trigger-implementation branch instead, while the existing assertions pass identically on both branches.\n- scripts/orchestrate_poll_process.sh:12198-12217, 12292-12296 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: No poller-level test covers the standalone retrigger retarget-to-verified-PR success branch or the skip-when-unresolvable branch.\n  WHY: The new guard and increment exclusion could regress without CI detecting re-enablement of the wrong-PR push.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh\n  Line: lines 3173\u20133440 (validation_fix_issue_has_merged_pr_evidence)\n  ISSUE_CONFIDENCE: 4\n  PROBLEM: The refactored loop correctly verifies merged candidates, retry-on-fetch-failure semantics, and return statuses.\n- scripts/orchestrate_poll_process.sh\n  Line: lines 11208\u201311277 (_resolve_issue_implementation_pr)\n  ISSUE_CONFIDENCE: 4\n  PROBLEM: The helper correctly declares global outputs, prioritizes the conventional branch, and numerically sorts cross-reference PR numbers.\n- scripts/orchestrate_poll_process.sh\n  Line: lines 12195\u201312218 (standalone stall retrigger implementation-PR gate)\n  ISSUE_CONFIDENCE: 4\n  PROBLEM: Failed resolution correctly skips the wrong-PR action and prevents recovery-counter incrementing.\n- scripts/orchestrate_poll_process.sh\n  Line: lines 3429\u20133481 (close_merged_issues_sweep fetch-failure handling)\n  ISSUE_CONFIDENCE: 4\n  PROBLEM: Fetch failures correctly skip the sweep cycle with a warning for retry on the next cycle.\n- scripts/orchestrate_poll_process.sh\n  Line: lines 11208\u201311277\n  ISSUE_CONFIDENCE: 4\n  PROBLEM: The new helper and globals are internal, while the new log prefix is additive.\n- TASK COMPLETENESS / INTENT GAPS\n  NONE\n- scripts/orchestrate_poll_process.sh\n  Lines: 4367, 4402\n  severity=NIT\n  ISSUE_CONFIDENCE: 4\n  PROBLEM: The local slop-scan reports false-positive Python heredoc parse errors at bash heredoc content lines.\n  WHY: The heredoc is correctly delimited and the errors have no runtime impact.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- tests/test_orchestrate_poll_process.py\n  Line or code reference: line 9605, test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure (fixture PR 78: headRefName \"claude/retrigger-review-no-failed-autofix\", no body)\n  severity=MAJOR\n  confidence=4\n  PROBLEM: The PR's new _resolve_issue_implementation_pr predicate rejects this fixture, yet the fixture was not updated.\n  WHY: The test name claims the empty-commit path, but the managed retrigger_review action now falls through to the /approved re-trigger-implementation branch; its assertions are satisfied identically on both branches, so the behavior is no longer pinned.\n- tests/test_orchestrate_poll_process.py (suite) / scripts/orchestrate_poll_process.sh:12198-12217, 12292-12296\n  Line or code reference: the standalone retrigger gate that re-resolves via _resolve_issue_implementation_pr and yields STALL_RECOVERY_EFFECTIVE_ACTION=retrigger_review_skipped_wrong_pr, plus its increment-guard exclusion.\n  severity=NIT\n  confidence=3\n  PROBLEM: No poller-level test exercises the retarget-to-verified-PR success branch or the skip-when-unresolvable branch.\n  WHY: The new guard could regress without any CI signal, re-enabling the original wrong-PR push.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "4f2362b4f6a649ed06d0dd616ee6364f5c4cb3fbbfb247b0d8ae178d13fe0afe",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32924662335",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32924662335",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260826033119_65013d3aec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "32924662335"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-26T03:31:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
