@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Multiple merged changes targeted process polling, validation template mode, soft-error analysis, and recovery after a blocked Codex step. Changes to these scripts should preserve distinct exit-state semantics and include tests for non-success paths, not just the normal completion path.",
+  "fingerprint": "ba6e45b07e800d6cd36e80f52d8921b1887a4ba65a3979997cea7e5acd079433",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33075427637",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33075427637",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3830",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3833",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3837",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3838",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3846",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3832",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3835",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3839",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3840",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3847"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260827131522_aeea2994dc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Shell process orchestration requires explicit handling for polling, template modes, soft errors, and post-agent recovery.",
+  "timestamps": {
+    "created_at": "2026-08-27T13:15:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
