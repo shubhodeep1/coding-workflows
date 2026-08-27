@@ -131,8 +131,15 @@ jobs:
 
             # OpenCode 1.18.23 emits this structured INFO event from the resolved LLM stream.
             # The helper's pre-run marker uses expected_* keys and cannot satisfy this gate.
-            if ! grep -F "message=stream providerID=openrouter modelID=${model_slug} " "${log_output}" \
-              | grep -Fq " small=false agent=${role} mode=primary"; then
+            # Keep this a single reader: grep -q pipelines can SIGPIPE upstream under pipefail.
+            if ! awk -v expected_stream_model="${model_slug}" -v expected_stream_role="${role}" '
+              index($0, "message=stream providerID=openrouter modelID=" expected_stream_model " ") &&
+                index($0, " small=false agent=" expected_stream_role " mode=primary") {
+                  evidence_line_matched=1
+                  exit
+                }
+              END { exit evidence_line_matched ? 0 : 1 }
+            ' "${log_output}"; then
               model_evidence=FAIL
               call_rc=1
             fi
@@ -151,6 +158,8 @@ jobs:
             second_result=FAIL
             evidence_result=FAIL
             row_status=FAIL
+            # The bootstrap helper emits its own classified alert when entered.
+            bootstrap_alert_handled=false
 
             if bash scripts/write_opencode_config.sh \
               --role "${role}" \
@@ -164,8 +173,9 @@ jobs:
                 and .default_agent == $role
                 and .provider.openrouter.models[$slug].variants.xhigh.reasoning.effort == "xhigh"
               ' "${config_path}" >/dev/null \
-              && opencode_require_bootstrap live_smoke "${role}" "${model_slug}" \
-                "${config_path}" "${OPENCODE_VERSION}" scripts/write_opencode_config.sh; then
+              && { bootstrap_alert_handled=true; \
+                opencode_require_bootstrap live_smoke "${role}" "${model_slug}" \
+                  "${config_path}" "${OPENCODE_VERSION}" scripts/write_opencode_config.sh; }; then
               IFS=$'\t' read -r first_result first_evidence < <(
                 run_smoke_call "${source_slot}" "${role}" "${model_slug}" 1 "${config_path}"
               )
@@ -180,7 +190,9 @@ jobs:
                 row_status=PASS
               fi
             else
-              opencode_emit_failure_alert live_smoke "${role}" "${model_slug}" 1 bootstrap_or_config || true
+              if [ "${bootstrap_alert_handled}" != true ]; then
+                opencode_emit_failure_alert live_smoke "${role}" "${model_slug}" 1 bootstrap_or_config || true
+              fi
             fi
 
             if [ "${row_status}" != PASS ]; then

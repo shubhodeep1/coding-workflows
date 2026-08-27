@@ -69,8 +69,12 @@ def test_smoke_runs_identical_calls_and_aggregates_failures() -> None:
 	assert 'run_smoke_call "${source_slot}" "${role}" "${model_slug}" 1' in smoke
 	assert 'run_smoke_call "${source_slot}" "${role}" "${model_slug}" 2' in smoke
 	assert "opencode_strip_ansi" in smoke
-	assert 'grep -F "message=stream providerID=openrouter modelID=${model_slug} "' in smoke
-	assert 'grep -Fq " small=false agent=${role} mode=primary"' in smoke
+	assert 'awk -v expected_stream_model="${model_slug}" -v expected_stream_role="${role}"' in smoke
+	assert 'index($0, "message=stream providerID=openrouter modelID=" expected_stream_model " ")' in smoke
+	assert 'index($0, " small=false agent=" expected_stream_role " mode=primary")' in smoke
+	assert "evidence_line_matched=1" in smoke
+	assert "END { exit evidence_line_matched ? 0 : 1 }" in smoke
+	assert '| grep -Fq " small=false agent=${role} mode=primary"' not in smoke
 	assert "opencode_agent_start" not in smoke
 	assert "expected_provider=openrouter expected_model=%s" in helpers
 	assert "providerID=openrouter modelID=%s" not in helpers
@@ -79,6 +83,10 @@ def test_smoke_runs_identical_calls_and_aggregates_failures() -> None:
 	assert "Model/variant evidence" in smoke
 	assert "${GITHUB_STEP_SUMMARY}" in smoke
 	assert 'if [ "${any_failed}" = true ]' in smoke
+	assert "bootstrap_alert_handled=false" in smoke
+	assert "bootstrap_alert_handled=true" in smoke
+	assert 'if [ "${bootstrap_alert_handled}" != true ]' in smoke
+	assert smoke.count("bootstrap_or_config") == 1
 
 
 def test_production_review_path_remains_opencode_free() -> None:
