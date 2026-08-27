@@ -9,7 +9,7 @@ The sweep skips any PR that already has a `queued` or `in_progress` review run o
 | Longest observed legitimate concurrency wait | ~94 minutes |
 | Sweep cadence | every 30 minutes |
 | Time PR #3841 stalled behind the wedged run | 11+ hours |
-| New tests | 10 in `tests/test_review_autofix_sweep_stale_queued.py` |
+| New tests | 11 in `tests/test_review_autofix_sweep_stale_queued.py` |
 
 What this means for operators: a review run that GitHub fails to start no longer strands its pull request. The sweep reports each discounted run as an `AUTOFIX_SWEEP_STALE_QUEUED` warning naming the workflow, head ref, and run id, so the wedged run is visible in the tick log rather than silently ignored. Setting `SWEEP_STALE_QUEUED_MINUTES=0` restores the previous always-suppress behaviour.
 

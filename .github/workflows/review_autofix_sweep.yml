@@ -167,7 +167,10 @@ jobs:
                     | .workflow_runs[]?
                     | select((.head_branch // "") != "")
                   ]
-                  | unique_by(.id)
+                  # A run can transition between the sequential status fetches;
+                  # retain its in_progress snapshot so it is never discounted.
+                  | group_by(.id)
+                  | map(max_by(if (.status // "") == "in_progress" then 1 else 0 end))
                   | {
                       active: (
                         reduce (.[] | select(is_stale_queued | not) | .head_branch) as $head_ref ({};

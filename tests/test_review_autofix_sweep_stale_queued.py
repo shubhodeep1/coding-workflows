@@ -123,9 +123,20 @@ class SweepStaleQueuedGuardTest(unittest.TestCase):
 		out = self.run_reduce([run, dict(run)], cutoff_epoch(120))
 		self.assertEqual(out["active"], {"claude/x": 1})
 
+	def test_transitioned_run_prefers_in_progress_snapshot(self) -> None:
+		out = self.run_reduce(
+			[
+				{"id": 8, "head_branch": "claude/x", "status": "queued", "created_at": iso(-180)},
+				{"id": 8, "head_branch": "claude/x", "status": "in_progress", "created_at": iso(-180)},
+			],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {"claude/x": 1})
+		self.assertEqual(out["stale"], [])
+
 	def test_runs_without_a_head_branch_are_ignored(self) -> None:
 		out = self.run_reduce(
-			[{"id": 8, "status": "queued", "created_at": iso(-5)}, {"id": 9, "head_branch": "", "status": "queued"}],
+			[{"id": 9, "status": "queued", "created_at": iso(-5)}, {"id": 10, "head_branch": "", "status": "queued"}],
 			cutoff_epoch(120),
 		)
 		self.assertEqual(out["active"], {})
