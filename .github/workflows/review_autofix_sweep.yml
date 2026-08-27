@@ -22,9 +22,20 @@ name: "Internal: AI Review Autofix Sweep"
 #     the PR's head ref, skip the dispatch. This collapses the
 #     dispatch-vs-synchronize parallel-write window from "indefinite" to
 #     "GitHub API visibility delay" (~few seconds).
-#   - The active-run snapshot intentionally has no fixed `created` cutoff:
-#     older still-queued / still-in_progress runs must keep suppressing a
-#     duplicate sweep dispatch for the same head ref.
+#   - `in_progress` runs suppress a duplicate dispatch with no time limit:
+#     the codex-agent job legitimately runs well over an hour.
+#   - `queued` runs suppress only until `SWEEP_STALE_QUEUED_MINUTES`
+#     (default 120). GitHub can wedge a run in `queued` with zero jobs
+#     and refuse both `cancel` (409 "has not been queued yet") and
+#     `rerun` (403 "already running"), leaving nothing that can clear it.
+#     With no cutoff such a run suppressed this sweep forever, and the
+#     sweep is the only recovery path for the PR it belongs to, so the
+#     guard deadlocked the mechanism it protects: PR #3841 sat unreviewed
+#     for 11+ hours behind run 32984498460 while every 30-minute tick
+#     logged `AUTOFIX_SWEEP_SKIP ... reason=active_run`. The cutoff sits
+#     above the longest observed legitimate concurrency wait (~94 min for
+#     a pull_request run queued behind an in-flight autofix round) so a
+#     real wait is never cut short.
 #   - Sweep-vs-sweep is bounded by the workflow-level concurrency group
 #     below (`review-autofix-sweep`), which serialises sweep ticks.
 #
@@ -74,6 +85,7 @@ jobs:
           HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
           DRY_RUN: ${{ inputs.dry_run }}
           ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) && 'true' || 'false' }}
+          SWEEP_STALE_QUEUED_MINUTES: ${{ vars.SWEEP_STALE_QUEUED_MINUTES || '120' }}
         run: |
           set -euo pipefail
 
@@ -113,28 +125,66 @@ jobs:
 
           snapshot_active_review_runs() {
             local workflow="$1"
-            local status snapshot_json='{}' cached_head_ref cached_count
+            local status snapshot_json='{}' cached_head_ref cached_count stale_run_id stale_run_created_epoch queued_age_minutes
+            local stale_cutoff_epoch=0
+            local stale_snapshot_epoch=0
+
+            # Epoch before which a still-`queued` run is treated as wedged
+            # rather than active. Computed in bash so jq never needs `now`
+            # (keeps the reduce a pure function of its input). A
+            # non-positive / unparseable value disables the cutoff, which
+            # restores the previous always-suppress behaviour — fail-safe
+            # toward the old semantics, not toward duplicate dispatch.
+            if [ "${SWEEP_STALE_QUEUED_MINUTES:-0}" -gt 0 ] 2>/dev/null; then
+              stale_snapshot_epoch="$(date -u +%s 2>/dev/null || echo 0)"
+              stale_cutoff_epoch="$(date -u -d "-${SWEEP_STALE_QUEUED_MINUTES} minutes" +%s 2>/dev/null || echo 0)"
+            fi
 
             # Fetch only active statuses for this workflow, then slurp the
             # page objects and reduce over their `.workflow_runs[]` entries.
+            # `active` counts toward the skip; `stale` is logged instead so a
+            # wedged run is visible rather than silently discounted.
             if snapshot_json="$(
               for status in queued in_progress; do
                 gh api --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
                   -f status="${status}" \
                   -f per_page=100 \
                   2>/dev/null || true
-              done | jq -c -s '
-                  reduce (
-                    [
-                      .[]
-                      | .workflow_runs[]?
-                      | select((.head_branch // "") != "")
-                    ]
-                    | unique_by(.id)[]
-                    | .head_branch
-                  ) as $head_ref ({};
-                    .[$head_ref] = ((.[$head_ref] // 0) + 1)
-                  )
+              done | jq -c -s --argjson cutoff "${stale_cutoff_epoch}" '
+                  def created_epoch:
+                    (.created_at // "")
+                    | if . == "" then null
+                      else (try fromdateiso8601 catch null)
+                      end;
+                  # A queued run older than the cutoff is wedged. Anything
+                  # in_progress, or whose created_at is missing/unparseable,
+                  # still counts as active (fail-safe).
+                  def is_stale_queued:
+                    $cutoff > 0
+                    and (.status // "") == "queued"
+                    and (created_epoch != null)
+                    and (created_epoch <= $cutoff);
+                  [
+                    .[]
+                    | .workflow_runs[]?
+                    | select((.head_branch // "") != "")
+                  ]
+                  # A run can transition between the sequential status fetches;
+                  # retain its in_progress snapshot so it is never discounted.
+                  | group_by(.id)
+                  | map(max_by(if (.status // "") == "in_progress" then 1 else 0 end))
+                  | {
+                      active: (
+                        reduce (.[] | select(is_stale_queued | not) | .head_branch) as $head_ref ({};
+                          .[$head_ref] = ((.[$head_ref] // 0) + 1)
+                        )
+                      ),
+                      stale: (
+                        reduce (.[] | select(is_stale_queued) | "\(.head_branch)\t\(.id)\t\(created_epoch)") as $entry ([];
+                          . + [$entry]
+                        )
+                      )
+                    }
                 ' 2>/dev/null
             )"; then
               :
@@ -145,7 +195,16 @@ jobs:
             while IFS=$'\t' read -r cached_head_ref cached_count; do
               [ -n "${cached_head_ref}" ] || continue
               active_review_runs["${workflow}:${cached_head_ref}"]="${cached_count}"
-            done < <(printf '%s' "${snapshot_json}" | jq -r '. | to_entries[]? | [.key, (.value | tostring)] | @tsv' 2>/dev/null || true)
+            done < <(printf '%s' "${snapshot_json}" | jq -r '(.active // {}) | to_entries[]? | [.key, (.value | tostring)] | @tsv' 2>/dev/null || true)
+
+            while IFS=$'\t' read -r cached_head_ref stale_run_id stale_run_created_epoch; do
+              [ -n "${cached_head_ref}" ] || continue
+              queued_age_minutes="unknown"
+              if [ "${stale_snapshot_epoch}" -gt 0 ] 2>/dev/null && [ "${stale_run_created_epoch}" -gt 0 ] 2>/dev/null; then
+                queued_age_minutes="$(((stale_snapshot_epoch - stale_run_created_epoch) / 60))"
+              fi
+              echo "::warning::AUTOFIX_SWEEP_STALE_QUEUED workflow=${workflow} head_ref=${cached_head_ref} run_id=${stale_run_id} queued_age_minutes=${queued_age_minutes} queued_age_threshold_minutes=${SWEEP_STALE_QUEUED_MINUTES:-0} — treating as wedged and no longer suppressing dispatch."
+            done < <(printf '%s' "${snapshot_json}" | jq -r '(.stale // [])[]?' 2>/dev/null || true)
           }
 
           for wf in internal-review.yml review_autofix.yml; do
