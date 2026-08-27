@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Tests for the sharded orchestrate-poll step in ci.yml.
+"""Tests for the sharded orchestrate-poll steps in CI and release workflows.
+
+The release-gate contract coverage pins `mark-stable.yml` and
+`test-and-mark-stable.yml`.
 
 `tests/test_orchestrate_poll_process.py` is CI's critical path: most of
 the 307 tests in its post-fast-fail sharded subset spawn the real poller
@@ -276,8 +279,13 @@ class ReleaseValidateScriptsShardContractTest(unittest.TestCase):
 		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
 			with self.subTest(workflow=workflow_name):
 				step_run = release_poll_step(workflow_path)["run"]
+				guard_invocation_match = re.search(
+					r"(?m)^[ \t]*PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_poll_test_sharding\.py$",
+					step_run,
+				)
+				self.assertIsNotNone(guard_invocation_match)
 				self.assertLess(
-					step_run.index("tests/test_ci_poll_test_sharding.py"),
+					guard_invocation_match.start(),
 					step_run.index("/tmp/orchestrate_poll_all_tests.txt"),
 					"the partition-contract guard must run before sharding",
 				)
