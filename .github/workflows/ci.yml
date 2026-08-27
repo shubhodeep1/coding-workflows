@@ -13,7 +13,11 @@ env:
 jobs:
   lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45, not 30: the orchestrate-poll module below is the critical path
+    # and its shards can be slower on a cold runner than on a warm one.
+    # At 30 every run — on main as well as on PRs — was cancelled
+    # mid-suite, so the repo had no completing full-test gate at all.
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -806,12 +810,77 @@ jobs:
           done
 
       - name: Orchestrate poll process unit tests
+        env:
+          CI_POLL_TEST_SHARDS: ${{ vars.CI_POLL_TEST_SHARDS || '4' }}
         run: |
           set -euo pipefail
           # The fast-fail step already covers the implementation-failed hot path;
           # keep the rest of this module in CI without re-running that subset.
-          mapfile -t remaining_tests < /tmp/orchestrate_poll_remaining_tests.txt
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py "${remaining_tests[@]}"
+          #
+          # This module is the CI critical path. Most of the 307 tests in the
+          # post-fast-fail sharded subset spawn the real poller as a bash
+          # subprocess inside a throwaway sandbox, so they cost seconds each
+          # rather than milliseconds (measured: 71 of the
+          # first 95 over 4s, slowest 27s). Run sequentially it took ~35 min on
+          # a 4-core box, which on its own overran the job budget and left every
+          # CI run cancelled mid-suite.
+          #
+          # Each test allocates its own tempdir sandbox in _make_poller_sandbox,
+          # so the module shards with no shared state; measured 3.6x on 4 cores
+          # (62s -> 17s on a 16-test slice, all shards green). The runner already
+          # takes test names as argv, so no harness change is needed.
+          shards="${CI_POLL_TEST_SHARDS:-4}"
+          if ! [ "${shards}" -ge 1 ] 2>/dev/null; then
+            echo "::warning::CI_POLL_TEST_SHARDS='${shards}' is not a positive integer; falling back to 1 (sequential)."
+            shards=1
+          fi
+
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_poll_test_sharding.py
+
+          rm -f /tmp/poll_shard_*.txt /tmp/poll_shard_*.log /tmp/poll_shard_*.rc
+          shard_pids=()
+          for shard in $(seq 0 "$((shards - 1))"); do
+            awk -v n="${shard}" -v total="${shards}" 'NR % total == n' \
+              /tmp/orchestrate_poll_remaining_tests.txt > "/tmp/poll_shard_${shard}.txt"
+            [ -s "/tmp/poll_shard_${shard}.txt" ] || continue
+            (
+              mapfile -t shard_tests < "/tmp/poll_shard_${shard}.txt"
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py \
+                "${shard_tests[@]}" > "/tmp/poll_shard_${shard}.log" 2>&1
+              echo "$?" > "/tmp/poll_shard_${shard}.rc"
+            ) &
+            shard_pids+=("$!")
+          done
+
+          # Reap every shard before judging any of them, so one early failure
+          # cannot leave siblings orphaned on the runner.
+          for shard_pid in "${shard_pids[@]}"; do
+            wait "${shard_pid}" || true
+          done
+
+          shard_failures=0
+          for shard in $(seq 0 "$((shards - 1))"); do
+            [ -f "/tmp/poll_shard_${shard}.log" ] || continue
+            echo "::group::orchestrate-poll shard ${shard} ($(wc -l < "/tmp/poll_shard_${shard}.txt" | tr -d '[:space:]') tests)"
+            cat "/tmp/poll_shard_${shard}.log"
+            echo "::endgroup::"
+            # A missing .rc means the subshell died before recording one; treat
+            # that as a failure rather than silently passing the shard.
+            shard_rc="$(cat "/tmp/poll_shard_${shard}.rc" 2>/dev/null || echo 1)"
+            case "${shard_rc}" in
+              ''|*[!0-9]*) shard_rc=1 ;;
+            esac
+            if [ "${shard_rc}" -ne 0 ]; then
+              echo "::error::orchestrate-poll shard ${shard} failed (exit ${shard_rc})"
+              shard_failures=$((shard_failures + 1))
+            fi
+          done
+          if [ "${shard_failures}" -ne 0 ]; then
+            echo "::error::${shard_failures} orchestrate-poll shard(s) failed."
+            exit 1
+          fi
+
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
