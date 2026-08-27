@@ -101,8 +101,23 @@ class ShardPartitionTest(unittest.TestCase):
 			for node in module.body
 			if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
 		]
-		self.assertGreater(len(names), 100, "poll module unexpectedly small; re-check the sharding math")
-		self.assert_partition(len(names), 4)
+		fast_fail_match = re.search(
+			r'fast_fail = \[name for name in tests if name\.startswith\("(?P<prefix>[^"]+)"\)\]',
+			CI_WF.read_text(encoding="utf-8"),
+		)
+		if fast_fail_match is None:
+			self.fail("fast-fail selection not found in ci.yml")
+		fast_fail_prefix = fast_fail_match.group("prefix")
+		fast_fail_names = [name for name in names if name.startswith(fast_fail_prefix)]
+		self.assertGreater(len(fast_fail_names), 0, "fast-fail subset unexpectedly empty")
+		fast_fail_name_set = set(fast_fail_names)
+		remaining_names = [
+			name for name in names if name not in fast_fail_name_set
+		]
+		self.assertGreater(
+			len(remaining_names), 100, "poll subset unexpectedly small; re-check the sharding math"
+		)
+		self.assert_partition(len(remaining_names), 4)
 
 
 class PollStepContractTest(unittest.TestCase):
