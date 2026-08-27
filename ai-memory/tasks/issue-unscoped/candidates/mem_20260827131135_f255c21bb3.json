@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.92,
+  "details": "Changes to GitHub Actions workflows and supporting scripts are commonly paired with focused tests that assert command structure, environment handling, recovery behavior, or output formats. When planning workflow changes, identify or add a contract test rather than relying only on end-to-end execution.",
+  "fingerprint": "b186c7095e1c00d7ed7f87ea977ea0a9126c482c83dbb1a586e00db89046bbca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33075427637",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33075427637",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3830",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3833",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3837",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3838",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3846",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3832",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3835",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3839",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3840",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3847"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260827131135_f255c21bb3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow behavior is maintained through explicit contract tests alongside shell and YAML changes.",
+  "timestamps": {
+    "created_at": "2026-08-27T13:11:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
