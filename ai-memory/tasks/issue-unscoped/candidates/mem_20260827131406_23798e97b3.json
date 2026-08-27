@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.87,
+  "details": "The prompt-cache helper was updated across orchestration, reporting, security-audit, and memory-maintenance work, indicating that caching is cross-cutting rather than isolated to one workflow. Plans that modify model calls should account for the shared cache interface and its associated cost or telemetry behavior.",
+  "fingerprint": "1af247ea2f68498580ce85b4fb79cd4c106d9ddc92e24ba1f748cc1251fd1c56",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33075427637",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33075427637",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3830",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3833",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3837",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3838",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3846",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3832",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3835",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3839",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3840",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3847"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260827131406_23798e97b3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "OpenRouter prompt-cache behavior is a shared integration concern across workflow, analysis, and maintenance scripts.",
+  "timestamps": {
+    "created_at": "2026-08-27T13:14:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
