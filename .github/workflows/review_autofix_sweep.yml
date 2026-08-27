@@ -125,8 +125,9 @@ jobs:
 
           snapshot_active_review_runs() {
             local workflow="$1"
-            local status snapshot_json='{}' cached_head_ref cached_count
+            local status snapshot_json='{}' cached_head_ref cached_count stale_run_id stale_run_created_epoch queued_age_minutes
             local stale_cutoff_epoch=0
+            local stale_snapshot_epoch=0
 
             # Epoch before which a still-`queued` run is treated as wedged
             # rather than active. Computed in bash so jq never needs `now`
@@ -135,6 +136,7 @@ jobs:
             # restores the previous always-suppress behaviour — fail-safe
             # toward the old semantics, not toward duplicate dispatch.
             if [ "${SWEEP_STALE_QUEUED_MINUTES:-0}" -gt 0 ] 2>/dev/null; then
+              stale_snapshot_epoch="$(date -u +%s 2>/dev/null || echo 0)"
               stale_cutoff_epoch="$(date -u -d "-${SWEEP_STALE_QUEUED_MINUTES} minutes" +%s 2>/dev/null || echo 0)"
             fi
 
@@ -178,7 +180,7 @@ jobs:
                         )
                       ),
                       stale: (
-                        reduce (.[] | select(is_stale_queued) | "\(.head_branch)\t\(.id)") as $entry ([];
+                        reduce (.[] | select(is_stale_queued) | "\(.head_branch)\t\(.id)\t\(created_epoch)") as $entry ([];
                           . + [$entry]
                         )
                       )
@@ -195,9 +197,13 @@ jobs:
               active_review_runs["${workflow}:${cached_head_ref}"]="${cached_count}"
             done < <(printf '%s' "${snapshot_json}" | jq -r '(.active // {}) | to_entries[]? | [.key, (.value | tostring)] | @tsv' 2>/dev/null || true)
 
-            while IFS=$'\t' read -r cached_head_ref cached_count; do
+            while IFS=$'\t' read -r cached_head_ref stale_run_id stale_run_created_epoch; do
               [ -n "${cached_head_ref}" ] || continue
-              echo "::warning::AUTOFIX_SWEEP_STALE_QUEUED workflow=${workflow} head_ref=${cached_head_ref} run_id=${cached_count} queued_minutes_gt=${SWEEP_STALE_QUEUED_MINUTES:-0} — treating as wedged and no longer suppressing dispatch."
+              queued_age_minutes="unknown"
+              if [ "${stale_snapshot_epoch}" -gt 0 ] 2>/dev/null && [ "${stale_run_created_epoch}" -gt 0 ] 2>/dev/null; then
+                queued_age_minutes="$(((stale_snapshot_epoch - stale_run_created_epoch) / 60))"
+              fi
+              echo "::warning::AUTOFIX_SWEEP_STALE_QUEUED workflow=${workflow} head_ref=${cached_head_ref} run_id=${stale_run_id} queued_age_minutes=${queued_age_minutes} queued_age_threshold_minutes=${SWEEP_STALE_QUEUED_MINUTES:-0} — treating as wedged and no longer suppressing dispatch."
             done < <(printf '%s' "${snapshot_json}" | jq -r '(.stale // [])[]?' 2>/dev/null || true)
           }
 

@@ -72,12 +72,16 @@ class SweepStaleQueuedGuardTest(unittest.TestCase):
 
 	def test_wedged_queued_run_stops_suppressing_dispatch(self) -> None:
 		"""The PR #3841 case: queued 11 hours, zero jobs, uncancellable."""
+		created_at = iso(-660)
 		out = self.run_reduce(
-			[{"id": 32984498460, "head_branch": "claude/x", "status": "queued", "created_at": iso(-660)}],
+			[{"id": 32984498460, "head_branch": "claude/x", "status": "queued", "created_at": created_at}],
 			cutoff_epoch(120),
 		)
 		self.assertEqual(out["active"], {})
-		self.assertEqual(out["stale"], ["claude/x\t32984498460"])
+		stale_head_ref, stale_run_id, stale_created_epoch = out["stale"][0].split("\t")
+		self.assertEqual(stale_head_ref, "claude/x")
+		self.assertEqual(stale_run_id, "32984498460")
+		self.assertEqual(int(stale_created_epoch), int(datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()))
 
 	def test_recently_queued_run_still_suppresses(self) -> None:
 		"""A genuine concurrency wait must not be cut short."""
@@ -151,6 +155,10 @@ class SweepWorkflowContractTest(unittest.TestCase):
 
 	def test_stale_runs_are_logged_not_silently_discounted(self) -> None:
 		self.assertIn("AUTOFIX_SWEEP_STALE_QUEUED", self.text)
+		self.assertIn("run_id=${stale_run_id}", self.text)
+		self.assertIn("queued_age_minutes=${queued_age_minutes}", self.text)
+		self.assertIn("queued_age_threshold_minutes=${SWEEP_STALE_QUEUED_MINUTES:-0}", self.text)
+		self.assertNotIn("queued_minutes_gt=", self.text)
 
 	def test_header_records_why_the_cutoff_exists(self) -> None:
 		self.assertIn("wedge a run in `queued` with zero jobs", self.text)
