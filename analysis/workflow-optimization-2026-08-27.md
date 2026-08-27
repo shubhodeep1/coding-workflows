@@ -477,3 +477,150 @@ No `TODO`, `FIXME`, or `HACK` markers were found in the scoped files. Repository
 | Code modularization | 12–14 | Large |
 | Expression size reduction | 3–4 | Medium |
 | Medium/Low fixes | 6–9 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-08-27)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is statically proven safe; `NEEDS_VERIFICATION` requires listed checks; `RISKY_SKIP` must not be auto-implemented because it touches pagination, polling, retries, or race-recovery logic.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — Hydrate linked issue details in the existing GraphQL query
+
+- **ID:** `MERGE-001`
+- **Safety tag:** `SAFE_TO_MERGE`
+- **Files/calls:** `scripts/review_rb_judge.sh:834-839` and `scripts/review_rb_judge.sh:869-886`
+- **Current call count:** **1 + M**: one GraphQL request plus M REST issue lookups; normally **2** calls.
+- **Proposed call count:** **1** normal-path GraphQL request; retain REST only for incomplete nodes.
+- **Endpoint(s):** GraphQL `repository.pullRequest.closingIssuesReferences(first:50)`; REST `GET /repos/{repo}/issues/{number}`.
+- **Evidence:**
+
+```bash
+closingIssuesReferences(first: 50) { nodes { number } }
+...
+ISSUE_META_JSON="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" || echo '{}')"
+```
+
+The REST loop only extracts each linked issue’s body and labels, both available on the existing GraphQL node.
+
+- **Proposed fix:** Extend the query at `scripts/review_rb_judge.sh:834-839` with `body` and `labels(first:100) { nodes { name } pageInfo { hasNextPage } }`. Derive `ISSUE_NUMBERS`, `FIRST_ISSUE_BODY`, and `FIRST_ISSUE_LABELS_JSON` locally. Preserve the REST loop only for missing/partial nodes or paginated labels, following the partial-result fallback pattern in `_fetch_candidate_issue_details_graphql` (`scripts/orchestrate_poll_process.sh:10870-11012`).
+- **Safety rationale:** Both calls execute in the same workflow step with identical authentication and no intervening mutation; the existing `first:50` boundary remains unchanged and partial-data fallbacks preserve error semantics.
+- **Downstream signal:** Implement the GraphQL field extension and retain per-node REST fallback only for incomplete results.
+
+#### MERGE-002 — Reuse PR metadata for the auto-merge label guard
+
+- **ID:** `MERGE-002`
+- **Safety tag:** `RISKY_SKIP`
+- **Files/calls:** `scripts/review_enable_auto_merge.sh:54-76` and `scripts/review_enable_auto_merge.sh:110-140`
+- **Current call count:** **2**
+- **Proposed call count:** **1**
+- **Endpoint(s):** `GET /repos/{repo}/issues/{pr}/labels?per_page=100`; `GET /repos/{repo}/pulls/{pr}`.
+- **Evidence:**
+
+```bash
+gh_retry gh api --paginate ".../issues/${PR_NUMBER}/labels?per_page=100"
+...
+_ORCH_PR_META_JSON="$(gh_retry gh api ".../pulls/${PR_NUMBER}")"
+```
+
+The PR metadata payload also contains labels, head ref, and body.
+
+- **Proposed fix:** Fetch PR metadata first and derive `PR_LABELS_RAW` from `.labels[].name`, eliminating the standalone labels request only if label completeness is proven.
+- **Safety rationale:** The existing labels call is explicitly paginated and protects a fail-closed E2E auto-merge guard, triggering mandatory risky treatment.
+- **Downstream signal:** Do not auto-implement; manually compare both endpoints on PRs with more than 30 labels and test fail-closed behavior for missing or truncated label data.
+
+#### MERGE-003 — Fetch clarify comments once when semantic caching is enabled
+
+- **ID:** `MERGE-003`
+- **Safety tag:** `RISKY_SKIP`
+- **Files/calls:** `.github/workflows/clarify.yml:455-486`
+- **Current call count:** **2** with semantic caching enabled; otherwise **1**
+- **Proposed call count:** **1**
+- **Endpoint(s):** `GET /repos/{repo}/issues/{issue}/comments`, first with `per_page=50`, then paginated with `per_page=100`.
+- **Evidence:**
+
+```bash
+gh_retry gh api ".../comments?...&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+...
+gh_retry gh api --paginate --slurp ".../comments?...&per_page=100"
+```
+
+- **Proposed fix:** On semantic-cache runs, save one paginated JSON snapshot, derive the historical first-50 prompt context locally, and render full thread history from the same payload.
+- **Safety rationale:** Consolidation changes pagination and combines a fatal bounded-context read with a fail-open semantic-cache read.
+- **Downstream signal:** Do not auto-implement; manually define merged failure semantics and verify first-50 ordering, multi-page handling, and cache-bypass behavior.
+
+#### MERGE-004 — Fetch issue title and body together in reissue paths
+
+- **ID:** `MERGE-004`
+- **Safety tag:** `RISKY_SKIP`
+- **Files/calls:** `scripts/orchestrate_poll_process.sh:10119-10120`, `scripts/orchestrate_poll_process.sh:12464-12465`, and `scripts/orchestrate_poll_process.sh:16795-16796`
+- **Current call count:** **2 per executed path**; **6** across the three sites.
+- **Proposed call count:** **1 per executed path**; **3** across the three sites.
+- **Endpoint(s):** `GET /repos/{repo}/issues/{issue}`.
+- **Evidence:**
+
+```bash
+orig_title="$(... --jq '.title ...')"
+orig_body="$(... --jq '.body ...')"
+```
+
+The same adjacent pattern appears in managed stall recovery, standalone stall recovery, and the implementation-failed sweep.
+
+- **Proposed fix:** At each site, fetch one full issue JSON object and derive `.title` and `.body` locally.
+- **Safety rationale:** Every call is inside `orchestrate_poll_process.sh`, including explicit stall/race-recovery paths, which mandates risky treatment.
+- **Downstream signal:** Do not auto-implement; manually verify each reissue path’s race assumptions and independent fallback defaults before consolidation.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — Smoke detection discards an already-fetched linked issue title
+
+- **ID:** `REUSE-001`
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files/calls:** `scripts/review_collect_pr_metadata.sh:251-283` and `.github/workflows/review_autofix.yml:2286-2321`
+- **Current call count:** **2** on the linked-issue smoke-detection path.
+- **Proposed call count:** **1** normal path; retain REST on cache miss.
+- **Endpoint(s):** GraphQL `repository.pullRequest.closingIssuesReferences(first:50)`; REST `GET /repos/{repo}/issues/{number}`.
+- **Evidence:**
+
+```bash
+nodes{number title body}
+...
+_linked_numbers=... '[.[] | {number}]'
+```
+
+The title is fetched, then discarded before the later step performs:
+
+```bash
+ISSUE_TITLE=$(_safe_gh_jq ".../issues/${ISSUE_NUM}" --jq '.title // ""')
+```
+
+- **Proposed fix:** Preserve `{number,title}` in `LINKED_ISSUES_JSON` and update the `Detect smoke test and tune LLM settings` step to select the title locally, retaining its REST call only when the cache is absent or lacks the requested number.
+- **Safety rationale:** The reuse crosses workflow steps and changes the documented numbers-only cache contract, so static reading cannot establish all safe-merge preconditions.
+- **Downstream signal:** Verify every `LINKED_ISSUES_JSON` consumer accepts the added `title` field, test output-size limits, and cover GraphQL-empty, partial-result, non-default-base, and REST-fallback cases.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — valid consolidation, but it is inside the race-defensive orchestrator poller.
+- BATCH-001: RISKY_SKIP — valid batching target involving poller discovery and pagination.
+- BATCH-002: RISKY_SKIP — valid batching target inside post-judge poller reconciliation.
+- BATCH-003: RISKY_SKIP — valid target inside a nested blocker-processing loop.
+- API-002: RISKY_SKIP — run polling is race- and rate-limit-sensitive inside the poller.
+- API-003: RISKY_SKIP — update-branch handling is an upstream-race defense inside the poller.
+- API-004: RISKY_SKIP — the existing call is inside an explicit retry loop and security fork guard.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | MERGE-001 |
+| NEEDS_VERIFICATION | 1 | REUSE-001 |
+| RISKY_SKIP | 10 | MERGE-002, MERGE-003, MERGE-004, API-001, BATCH-001, BATCH-002, BATCH-003, API-002, API-003, API-004 |
+
+### Implement-Stage Handoff
+
+- MERGE-001
