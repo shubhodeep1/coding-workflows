@@ -81,12 +81,13 @@
 # retry cycle.
 set -uo pipefail
 
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
 RESOLVE_TMP_DIR=""
+# shellcheck disable=SC2317  # Invoked indirectly by the EXIT trap.
 cleanup_review_resolve_review_threads_tmp()
 {
 	[ -n "${RESOLVE_TMP_DIR}" ] && rm -rf "${RESOLVE_TMP_DIR}"
@@ -279,11 +280,16 @@ do
 	# An "ignored" disposition means the editor deliberately rejected the
 	# suggestion. Resolving that silently would hide a disagreement, so
 	# the reason goes into the thread first; the reviewer can reopen.
+	if [ "${disposition}" = "ignored" ] && ! [[ "${reason}" =~ [^[:space:]] ]]; then
+		skipped_count=$(( skipped_count + 1 ))
+		echo "::warning::review_resolve_review_threads: ignored comment ${comment_id} has no rationale; leaving thread ${thread_id} open."
+		continue
+	fi
 	if [ "${disposition}" = "ignored" ] && [ "${resolution_reply_posted}" != "true" ]; then
 		# The editor summary is derived from untrusted PR content. Keep its
 		# rationale in an indented code block so Markdown is not rendered, and
 		# neutralize @mentions as defense in depth against notification abuse.
-		safe_reason="${reason:-no reason recorded}"
+		safe_reason="${reason}"
 		safe_reason="${safe_reason//@/@$'\u200b'}"
 		reply_body="$(printf '%s' "<!-- ai-autofix-review-resolution:${thread_id} -->
 AI autofix did not apply this suggestion:

@@ -249,10 +249,14 @@ def build_plan() -> int:
 	note(f"{len(audit_entries)} audited entry/entries, {len(threads_by_comment)} thread(s) keyed by comment id")
 
 	plan: list[dict] = []
+	planned_thread_id_indexes: dict[str, int] = {}
 	for entry in sorted(audit_entries, key=lambda item: item["index"]):
 		index = entry["index"]
 		if entry["disposition"] == "applied" and not applied_changes_persisted:
 			note(f"entry[{index}] claims an applied change without a pushed productive commit; leaving the thread open")
+			continue
+		if entry["disposition"] == "ignored" and not entry["reason"]:
+			warn(f"entry[{index}] ignores a suggestion without a rationale; leaving the thread open")
 			continue
 		context = context_entries.get(index)
 		if context is None:
@@ -278,17 +282,29 @@ def build_plan() -> int:
 		if thread.get("is_resolved"):
 			note(f"entry[{index}] thread is already resolved; skipping")
 			continue
-		plan.append(
-			{
-				"thread_id": thread.get("thread_id", ""),
-				"comment_id": int(raw_id),
-				"disposition": entry["disposition"],
-				"reason": entry["reason"],
-				"path": context.get("path", "") or entry["audit_path"],
-				"author": thread.get("author", ""),
-				"resolution_reply_posted": bool(thread.get("resolution_reply_posted")),
-			}
-		)
+		thread_id = thread.get("thread_id", "")
+		if not isinstance(thread_id, str) or not thread_id:
+			warn(f"entry[{index}] thread has no valid node id; leaving the thread open")
+			continue
+		plan_item = {
+			"thread_id": thread_id,
+			"comment_id": int(raw_id),
+			"disposition": entry["disposition"],
+			"reason": entry["reason"],
+			"path": context.get("path", "") or entry["audit_path"],
+			"author": thread.get("author", ""),
+			"resolution_reply_posted": bool(thread.get("resolution_reply_posted")),
+		}
+		planned_index = planned_thread_id_indexes.get(thread_id)
+		if planned_index is not None:
+			if entry["disposition"] == "ignored" and plan[planned_index].get("disposition") != "ignored":
+				note(f"entry[{index}] thread {thread_id} replaces an earlier non-ignored plan row so its rationale is posted")
+				plan[planned_index] = plan_item
+			else:
+				note(f"entry[{index}] thread {thread_id} is already planned from an earlier audited entry; skipping")
+			continue
+		planned_thread_id_indexes[thread_id] = len(plan)
+		plan.append(plan_item)
 
 	if len(plan) > max_threads:
 		dropped = plan[max_threads:]

@@ -124,6 +124,16 @@ def test_ignored_entry_is_resolved_and_carries_its_reason(tmp_path: Path) -> Non
 	assert "BigNumber does not wrap" in plan[0]["reason"]
 
 
+def test_ignored_entry_without_a_reason_stays_open(tmp_path: Path) -> None:
+	plan = _build_plan(
+		tmp_path,
+		"- entry[0] Copilot — `src/app.ts:8` — ignored;\n",
+		_context_entry(0, "review_comment", "77", "src/app.ts"),
+		[{"thread_id": "PRRT_c", "is_resolved": False, "comment_ids": [77], "path": "src/app.ts", "author": "copilot"}],
+	)
+	assert plan == []
+
+
 def test_long_ignored_reason_is_truncated_with_ellipsis(tmp_path: Path) -> None:
 	long_reason = "x" * 600
 	plan = _build_plan(
@@ -284,6 +294,42 @@ def test_audited_reply_comment_resolves_its_thread(tmp_path: Path) -> None:
 	assert [item["thread_id"] for item in plan] == ["PRRT_thread"]
 	# The reply is what the editor audited, so it is what gets replied to.
 	assert plan[0]["comment_id"] == 5678
+
+
+def test_multiple_audited_comments_in_one_thread_are_planned_once(tmp_path: Path) -> None:
+	plan = _build_plan(
+		tmp_path,
+		(
+			"- entry[0] Copilot — `src/app.ts:10` — ignored; original suggestion is inapplicable.\n"
+			"- entry[1] Copilot — `src/app.ts:10` — ignored; follow-up is also inapplicable.\n"
+		),
+		(
+			_context_entry(0, "review_comment", "1234", "src/app.ts")
+			+ _context_entry(1, "review_comment", "5678", "src/app.ts")
+		),
+		[{"thread_id": "PRRT_thread", "is_resolved": False, "comment_ids": [1234, 5678], "path": "src/app.ts", "author": "copilot"}],
+	)
+	assert len(plan) == 1
+	assert plan[0]["comment_id"] == 1234
+
+
+def test_ignored_duplicate_keeps_the_rationale_reply_requirement(tmp_path: Path) -> None:
+	plan = _build_plan(
+		tmp_path,
+		(
+			"- entry[0] Copilot — `src/app.ts:10` — already satisfied; original suggestion is covered.\n"
+			"- entry[1] Copilot — `src/app.ts:10` — ignored; follow-up asks for unrelated behavior.\n"
+		),
+		(
+			_context_entry(0, "review_comment", "1234", "src/app.ts")
+			+ _context_entry(1, "review_comment", "5678", "src/app.ts")
+		),
+		[{"thread_id": "PRRT_thread", "is_resolved": False, "comment_ids": [1234, 5678], "path": "src/app.ts", "author": "copilot"}],
+	)
+	assert len(plan) == 1
+	assert plan[0]["comment_id"] == 5678
+	assert plan[0]["disposition"] == "ignored"
+	assert "unrelated behavior" in plan[0]["reason"]
 
 
 def test_already_resolved_thread_is_not_touched(tmp_path: Path) -> None:
