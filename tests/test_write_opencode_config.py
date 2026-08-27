@@ -151,6 +151,23 @@ def test_serena_configuration_uses_the_resolved_local_binary() -> None:
 		]
 
 
+def test_serena_configuration_rejects_a_non_executable_binary() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		serena = bin_dir / "serena"
+		serena.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+		serena.chmod(0o644)
+		result, _ = _run(
+			root,
+			serena="on",
+			extra_env={"PATH": f"{bin_dir}:{os.environ['PATH']}"},
+		)
+		assert result.returncode == 2
+		assert "requires an executable serena binary" in result.stderr
+
+
 def test_invalid_inputs_and_metadata_fail_with_annotations() -> None:
 	with tempfile.TemporaryDirectory() as directory:
 		root = Path(directory)

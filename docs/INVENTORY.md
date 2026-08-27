@@ -67,6 +67,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/mark-stable.yml` — GitHub Actions workflow: Mark Stable Release.
 - `.github/workflows/memory_maintenance.yml` — GitHub Actions workflow: AI Memory Maintenance (Reusable).
 - `.github/workflows/nightly-validation-selftest.yml` — GitHub Actions workflow: Nightly Validation Self-Test.
+- `.github/workflows/opencode-live-smoke.yml` — GitHub Actions workflow: OpenCode live model smoke.
 - `.github/workflows/orchestrate.yml` — GitHub Actions workflow: AI Orchestrate (Reusable).
 - `.github/workflows/orchestrate_clarify_respond.yml` — GitHub Actions workflow: AI Orchestrate Clarify Respond (Reusable).
 - `.github/workflows/orchestrate_poll.yml` — GitHub Actions workflow: AI Orchestrate Poller (Reusable).
@@ -165,6 +166,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/memory_injection_patterns.py` — Advisory prompt-injection regex roster for AI-memory candidate writes.
 - `scripts/memory_maintenance_extract_learnings.py` — Extract repository learnings for the memory-maintenance workflow.
 - `scripts/nag_reminder.sh` — Fail-open reminder injection helper for long-running unattended wrapper loops.
+- `scripts/opencode_helpers.sh` — Shared OpenCode command, output, bootstrap, and alert helpers.
 - `scripts/openrouter_prompt_cache.py` — OpenRouter prompt-cache helpers shared by workflow scripts.
 - `scripts/orchestrate_force_tick.sh` — Shell helper for orchestrate force tick.
 - `scripts/orchestrate_lib.py` — Orchestrator library: DAG management, wave computation, issue tracking, and judge helpers.
@@ -238,6 +240,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/worktree_registry.sh` — Atomic worktree registry helper with register, deregister, list, and GC subcommands.
 - `scripts/write_codex_config.sh` — write_codex_config.sh — central writer for ~/.codex/config.toml.
 - `scripts/write_guard.sh` — Shell helper for write-guard policy enforcement.
+- `scripts/write_opencode_config.sh` — Write a role-scoped OpenCode configuration.
 
 ## Prompt references
 

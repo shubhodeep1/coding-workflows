@@ -21,7 +21,7 @@ _opencode_alert_field()
 
 opencode_strip_ansi()
 {
-	python3 -c 'import re, sys; data = sys.stdin.buffer.read(); pattern = rb"\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|[P^_].*?\x1b\\|\[[0-?]*[ -/]*[@-~]|[@-_])"; sys.stdout.buffer.write(re.sub(pattern, b"", data, flags=re.DOTALL))'
+	python3 -c 'import re, sys; data = sys.stdin.buffer.read(); pattern = rb"\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|[P^_].*?\x1b\\|\[[0-?]*[ -/]*[@-~]|[ -/]*[0-~])"; sys.stdout.buffer.write(re.sub(pattern, b"", data, flags=re.DOTALL))'
 }
 
 opencode_run_cmd()
@@ -79,8 +79,8 @@ opencode_run_cmd()
 		opencode_argv+=(--auto)
 	fi
 
-	printf 'opencode_agent_start role=%s provider=openrouter model=%s variant=%s\n' \
-		"${role}" "$(_opencode_alert_field "${model_slug}")" "${variant}" >&2
+	printf 'opencode_agent_start role=%s provider=openrouter model=%s variant=%s providerID=openrouter modelID=%s\n' \
+		"${role}" "$(_opencode_alert_field "${model_slug}")" "${variant}" "$(_opencode_alert_field "${model_slug}")" >&2
 	OPENCODE_CONFIG="${config_path}" NO_COLOR=1 "${opencode_argv[@]}"
 }
 
@@ -133,6 +133,9 @@ opencode_require_bootstrap()
 	local writer_path="${6:-${_opencode_helpers_dir}/write_opencode_config.sh}"
 	local installed_version=""
 
+	if [[ ! "${expected_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+		opencode_emit_failure_alert "${phase}" "${role}" "${model_slug}" 2 invalid_expected_version || return $?
+	fi
 	if ! command -v opencode >/dev/null 2>&1; then
 		opencode_emit_failure_alert "${phase}" "${role}" "${model_slug}" 127 binary_missing || return $?
 	fi

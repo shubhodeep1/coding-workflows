@@ -27,7 +27,7 @@ def _bash(script: str, env: dict[str, str] | None = None) -> subprocess.Complete
 
 
 def test_ansi_filter_removes_common_sequences_and_is_idempotent() -> None:
-	payload = b"plain \xe2\x98\x83 \x1b[31mred\x1b[0m \x1b]0;title\x07done\n"
+	payload = b"plain \xe2\x98\x83 \x1b[31mred\x1b[0m \x1b]0;title\x07\x1b(B\x1b#5\x1b)0done\n"
 	first = subprocess.run(
 		["bash", "-c", f"source {HELPERS}; opencode_strip_ansi"],
 		cwd=REPO_ROOT,
@@ -100,6 +100,10 @@ def test_command_argv_is_fixed_and_prompt_remains_on_stdin() -> None:
 		assert prompt not in argv
 		assert stdin_file.read_text(encoding="utf-8") == prompt
 		assert config_env_file.read_text(encoding="utf-8") == str(config)
+		assert result.stderr == (
+			b"opencode_agent_start role=writer provider=openrouter model=vendor/model "
+			b"variant=xhigh providerID=openrouter modelID=vendor/model\n"
+		)
 
 
 def test_reviewer_command_omits_writer_auto_approval() -> None:
@@ -163,6 +167,21 @@ def test_bootstrap_fails_closed_for_missing_and_wrong_binary() -> None:
 		)
 		assert wrong.returncode == 1
 		assert b"failure_class=version_mismatch" in wrong.stderr
+
+
+def test_bootstrap_rejects_an_invalid_expected_version() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		config = root / "config.json"
+		config.write_text("{}\n", encoding="utf-8")
+		writer = root / "writer.sh"
+		writer.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+		result = _bash(
+			f"source {HELPERS}; opencode_require_bootstrap test reviewer vendor/model {config} latest {writer}",
+			{"PATH": "/usr/bin:/bin"},
+		)
+		assert result.returncode == 2
+		assert b"failure_class=invalid_expected_version" in result.stderr
 
 
 def test_bootstrap_validates_writer_and_generated_json() -> None:

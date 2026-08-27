@@ -100,7 +100,9 @@ models_path="${OPENCODE_MODELS_PATH:-${XDG_CACHE_HOME:-${HOME}/.cache}/opencode/
 serena_bin=""
 if [ "${serena_mode}" = "on" ]; then
 	serena_bin="$(command -v serena || true)"
-	[ -n "${serena_bin}" ] || fail "--serena on requires the serena binary on PATH"
+	if [ -z "${serena_bin}" ] || [ ! -x "${serena_bin}" ]; then
+		fail "--serena on requires an executable serena binary on PATH"
+	fi
 fi
 
 config_dir="$(dirname "${config_path}")"
