@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_commit_changes.sh: lines 628-647 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The convergence detector only fires when cumulative `issues already applied` is >= 1, so it does not cover pure convergence runs whose zero-issue audit entries now report all counts as 0.\n  WHY: This does not regress current behavior because the old zero-total shape was already blocked by the validator; it is a non-blocking documentation risk for future readers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/review_commit_changes.sh: lines 628-647 (the audit-driven convergence detector: `_audit_total_already` accumulation at line 635 and the `>= 1` gate at lines 641-644) | severity=low | confidence=2\n  PROBLEM: The convergence detector only fires when cumulative `issues already applied` is >= 1, so the new zero-issue accounting prevents it from covering pure convergence runs.\n  WHY: This does not regress anything today because the old shape already triggered `EDITOR_NOOP_SUSPICIOUS`; the residual risk is that the generic convergence comment overstates coverage.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "bac2cc350326c7bf6b5b6df16f2863c6ab8384fc37c9c3d97a83148185e91088",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3861,
+    "run_id": "33092716114",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33092716114",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260827174558_454ef6c48c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3861,
+    "run_id": "33092716114"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-27T17:45:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
