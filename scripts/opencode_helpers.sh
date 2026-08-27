@@ -26,8 +26,8 @@ opencode_strip_ansi()
 
 opencode_run_cmd()
 {
-	if [ "$#" -ne 5 ]; then
-		_opencode_error "opencode_run_cmd requires role, model, variant, config path, and working directory"
+	if [ "$#" -lt 5 ] || [ "$#" -gt 6 ]; then
+		_opencode_error "opencode_run_cmd requires role, model, variant, config path, working directory, and optional output format"
 		return 2
 	fi
 
@@ -36,6 +36,7 @@ opencode_run_cmd()
 	local variant="$3"
 	local config_path="$4"
 	local working_directory="$5"
+	local output_format="${6:-default}"
 	local -a opencode_argv
 
 	case "${role}" in
@@ -53,6 +54,13 @@ opencode_run_cmd()
 		xhigh|high|medium|low|none) ;;
 		*)
 			_opencode_error "invalid variant '${variant}'"
+			return 2
+			;;
+	esac
+	case "${output_format}" in
+		default|json) ;;
+		*)
+			_opencode_error "invalid output format '${output_format}'"
 			return 2
 			;;
 	esac
@@ -75,6 +83,10 @@ opencode_run_cmd()
 		--print-logs
 		--log-level INFO
 	)
+	# Preserve the existing argv unless a caller explicitly needs machine-readable evidence.
+	if [ "${output_format}" = "json" ]; then
+		opencode_argv+=(--format "${output_format}")
+	fi
 	if [ "${role}" = "writer" ]; then
 		opencode_argv+=(--auto)
 	fi

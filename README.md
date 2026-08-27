@@ -1323,7 +1323,7 @@ Operational behavior:
 
 ### OpenCode Phase 1 live smoke
 
-OpenCode is currently installed only by `.github/workflows/opencode-live-smoke.yml`, a `workflow_dispatch` rollout gate. The smoke generates role-scoped OpenRouter configuration for all six reviewer models plus the primary and fallback editor slots, runs each entry twice with the same stdin request, verifies non-empty ANSI-stripped output and intended model/variant evidence, and fails if any entry fails. After the Phase 1 change merges, dispatch the workflow without a model filter and record its all-green run URL on tracking issue `#3845` before beginning the read-side or write-side cutover.
+OpenCode is currently installed only by `.github/workflows/opencode-live-smoke.yml`, a `workflow_dispatch` rollout gate. The smoke generates role-scoped OpenRouter configuration for all six reviewer models plus the primary and fallback editor slots, runs each entry twice with the same stdin request, verifies non-empty ANSI-stripped output, intended provider/model stream evidence, and provider-reported reasoning usage, and fails if any entry fails. After the Phase 1 change merges, dispatch the workflow without a model filter and record its all-green run URL on tracking issue `#3845` before beginning the read-side or write-side cutover.
 
 The smoke defaults `OPENCODE_VERSION` to `1.18.23`. `CODEX_VERSION` remains independently pinned at `v0.114.0` and continues to select the runtime for all production workflow paths; the smoke does not change existing runtime routing or prompt-cache behavior.
 

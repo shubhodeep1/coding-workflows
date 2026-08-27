@@ -105,25 +105,31 @@ jobs:
             local model_slug="$3"
             local call_number="$4"
             local config_path="$5"
-            local raw_output log_output clean_output call_rc result model_evidence
+            local raw_output log_output clean_output call_rc result model_evidence reasoning_evidence
 
             raw_output="${runtime_dir}/${source_slot}-${call_number}.raw"
             log_output="${runtime_dir}/${source_slot}-${call_number}.log"
             clean_output="${runtime_dir}/${source_slot}-${call_number}.txt"
             call_rc=0
             if printf 'Return exactly OK\n' | opencode_run_cmd \
-              "${role}" "${model_slug}" xhigh "${config_path}" "${GITHUB_WORKSPACE}" \
+              "${role}" "${model_slug}" xhigh "${config_path}" "${GITHUB_WORKSPACE}" json \
               > "${raw_output}" 2> "${log_output}"; then
               call_rc=0
             else
               call_rc=$?
             fi
-            opencode_strip_ansi < "${raw_output}" > "${clean_output}"
+            opencode_strip_ansi < "${raw_output}" > "${clean_output}.jsonl"
+            : > "${clean_output}"
 
             result=PASS
             model_evidence=PASS
+            reasoning_evidence=PASS
             if [ "${call_rc}" -ne 0 ]; then
               result="FAIL(rc=${call_rc})"
+            elif ! jq -r 'select(.type == "text" and (.part.text | type == "string")) | .part.text' \
+              "${clean_output}.jsonl" > "${clean_output}"; then
+              result="FAIL(invalid_json_output)"
+              call_rc=1
             elif ! grep -q '[^[:space:]]' "${clean_output}"; then
               result="FAIL(empty_output)"
               call_rc=1
@@ -144,11 +150,21 @@ jobs:
               call_rc=1
             fi
 
+            # A successful xhigh call must return provider-reported reasoning usage.
+            if ! jq -s -e 'any(.[]; .type == "step_finish" and ((.part.tokens.reasoning // 0) > 0))' \
+              "${clean_output}.jsonl" >/dev/null; then
+              reasoning_evidence=FAIL
+              if [ "${call_rc}" -eq 0 ]; then
+                result="FAIL(no_reasoning_usage)"
+              fi
+              call_rc=1
+            fi
+
             if [ "${call_rc}" -ne 0 ]; then
               opencode_emit_failure_alert live_smoke "${role}" "${model_slug}" "${call_rc}" \
-                "call_${call_number}_${result}_${model_evidence}" || true
+                "call_${call_number}_${result}_${model_evidence}_${reasoning_evidence}" || true
             fi
-            printf '%s\t%s\n' "${result}" "${model_evidence}"
+            printf '%s\t%s\t%s\n' "${result}" "${model_evidence}" "${reasoning_evidence}"
           }
 
           any_failed=false
@@ -157,6 +173,7 @@ jobs:
             first_result=FAIL
             second_result=FAIL
             evidence_result=FAIL
+            reasoning_result=FAIL
             row_status=FAIL
             # The bootstrap helper emits its own classified alert when entered.
             bootstrap_alert_handled=false
@@ -176,17 +193,20 @@ jobs:
               && { bootstrap_alert_handled=true; \
                 opencode_require_bootstrap live_smoke "${role}" "${model_slug}" \
                   "${config_path}" "${OPENCODE_VERSION}" scripts/write_opencode_config.sh; }; then
-              IFS=$'\t' read -r first_result first_evidence < <(
+              IFS=$'\t' read -r first_result first_evidence first_reasoning_evidence < <(
                 run_smoke_call "${source_slot}" "${role}" "${model_slug}" 1 "${config_path}"
               )
-              IFS=$'\t' read -r second_result second_evidence < <(
+              IFS=$'\t' read -r second_result second_evidence second_reasoning_evidence < <(
                 run_smoke_call "${source_slot}" "${role}" "${model_slug}" 2 "${config_path}"
               )
               if [ "${first_evidence}" = PASS ] && [ "${second_evidence}" = PASS ]; then
                 evidence_result=PASS
               fi
+              if [ "${first_reasoning_evidence}" = PASS ] && [ "${second_reasoning_evidence}" = PASS ]; then
+                reasoning_result=PASS
+              fi
               if [ "${first_result}" = PASS ] && [ "${second_result}" = PASS ] \
-                && [ "${evidence_result}" = PASS ]; then
+                && [ "${evidence_result}" = PASS ] && [ "${reasoning_result}" = PASS ]; then
                 row_status=PASS
               fi
             else
@@ -198,9 +218,9 @@ jobs:
             if [ "${row_status}" != PASS ]; then
               any_failed=true
             fi
-            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
               "${source_slot}" "${role}" "${model_slug}" "${first_result}" \
-              "${second_result}" "${evidence_result}" "${row_status}" >> "${results_file}"
+              "${second_result}" "${evidence_result}" "${reasoning_result}" "${row_status}" >> "${results_file}"
           done < "${selected_file}"
 
           {
@@ -208,12 +228,12 @@ jobs:
             echo
             echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             echo
-            echo '| Source | Role | Model slug | First call | Repeated call | Model/variant evidence | Status |'
-            echo '|---|---|---|---|---|---|---|'
-            while IFS=$'\t' read -r source_slot role model_slug first_result second_result evidence_result row_status; do
-              printf '| `%s` | `%s` | `%s` | %s | %s | %s | **%s** |\n' \
+            echo '| Source | Role | Model slug | First call | Repeated call | Model evidence | Reasoning evidence | Status |'
+            echo '|---|---|---|---|---|---|---|---|'
+            while IFS=$'\t' read -r source_slot role model_slug first_result second_result evidence_result reasoning_result row_status; do
+              printf '| `%s` | `%s` | `%s` | %s | %s | %s | %s | **%s** |\n' \
                 "${source_slot}" "${role}" "${model_slug}" "${first_result}" \
-                "${second_result}" "${evidence_result}" "${row_status}"
+                "${second_result}" "${evidence_result}" "${reasoning_result}" "${row_status}"
             done < "${results_file}"
           } >> "${GITHUB_STEP_SUMMARY}"
 

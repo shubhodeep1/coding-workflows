@@ -74,13 +74,17 @@ def test_smoke_runs_identical_calls_and_aggregates_failures() -> None:
 	assert 'index($0, " small=false agent=" expected_stream_role " mode=primary")' in smoke
 	assert "evidence_line_matched=1" in smoke
 	assert "END { exit evidence_line_matched ? 0 : 1 }" in smoke
+	assert '"${role}" "${model_slug}" xhigh "${config_path}" "${GITHUB_WORKSPACE}" json' in smoke
+	assert '.type == "step_finish" and ((.part.tokens.reasoning // 0) > 0)' in smoke
+	assert "reasoning_evidence=FAIL" in smoke
+	assert 'result="FAIL(no_reasoning_usage)"' in smoke
 	assert '| grep -Fq " small=false agent=${role} mode=primary"' not in smoke
 	assert "opencode_agent_start" not in smoke
 	assert "expected_provider=openrouter expected_model=%s" in helpers
 	assert "providerID=openrouter modelID=%s" not in helpers
 	assert '"${role}" "${model_slug}" xhigh "${config_path}"' in smoke
 	assert '.variants.xhigh.reasoning.effort == "xhigh"' in smoke
-	assert "Model/variant evidence" in smoke
+	assert "Model evidence | Reasoning evidence" in smoke
 	assert "${GITHUB_STEP_SUMMARY}" in smoke
 	assert 'if [ "${any_failed}" = true ]' in smoke
 	assert "bootstrap_alert_handled=false" in smoke

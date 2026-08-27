@@ -69,7 +69,7 @@ def test_command_argv_is_fixed_and_prompt_remains_on_stdin() -> None:
 		prompt = "private prompt text"
 		result = _bash(
 			f"source {HELPERS}; printf '%s' \"$PROMPT\" | "
-			f"opencode_run_cmd writer vendor/model xhigh {config} {root}",
+			f"opencode_run_cmd writer vendor/model xhigh {config} {root} json",
 			{
 				"PATH": f"{bin_dir}:{os.environ['PATH']}",
 				"ARGS_FILE": str(args_file),
@@ -95,6 +95,8 @@ def test_command_argv_is_fixed_and_prompt_remains_on_stdin() -> None:
 			"--print-logs",
 			"--log-level",
 			"INFO",
+			"--format",
+			"json",
 			"--auto",
 		]
 		assert prompt not in argv
@@ -122,6 +124,16 @@ def test_reviewer_command_omits_writer_auto_approval() -> None:
 		)
 		assert result.returncode == 0
 		assert b"--auto" not in result.stdout
+		assert b"--format" not in result.stdout
+
+
+def test_command_rejects_an_invalid_output_format() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		config = Path(directory) / "config.json"
+		config.write_text("{}\n", encoding="utf-8")
+		result = _bash(f"source {HELPERS}; opencode_run_cmd reviewer vendor/model low {config} {directory} xml")
+		assert result.returncode == 2
+		assert b"invalid output format 'xml'" in result.stderr
 
 
 def test_alert_is_single_line_sanitized_and_uses_error_level() -> None:
