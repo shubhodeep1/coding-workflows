@@ -3442,7 +3442,12 @@ jobs:
   validate-scripts:
     needs: [source, resolve-version]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45, not 30: the orchestrate-poll module is this job's critical path
+    # even after sharding, and shards can be slower on a cold runner than
+    # on a warm one. At 30 the serial suite was cancelled mid-run (release
+    # v1.27.0, run 33073743283), which skipped `validate`/`release` and
+    # failed the release. Mirrors the `CI / lint` budget from #3844.
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -3499,12 +3504,99 @@ jobs:
           # and the FakeExecutor planned-call sequence desyncs (false failure).
           python3 -m pip install --quiet pyyaml jsonschema jinja2
 
+      - name: Orchestrate poll process unit tests
+        env:
+          CI_POLL_TEST_SHARDS: ${{ vars.CI_POLL_TEST_SHARDS || '4' }}
+        run: |
+          set -euo pipefail
+          # Ported from ci.yml's sharded step (#3844): this module is the
+          # job's critical path. Most of its 300+ tests spawn the real poller
+          # as a bash subprocess inside a throwaway sandbox, so they cost
+          # seconds each rather than milliseconds; run sequentially the module
+          # consumed ~24 of this job's 30 budgeted minutes and the job was
+          # cancelled mid-suite (release v1.27.0, run 33073743283), which
+          # skipped `validate`/`release` and failed the release. Each test
+          # allocates its own tempdir sandbox in _make_poller_sandbox, so the
+          # module shards with no shared state. Unlike ci.yml there is no
+          # fast-fail subset here: the shard input is the full module.
+          shards="${CI_POLL_TEST_SHARDS:-4}"
+          if ! [ "${shards}" -ge 1 ] 2>/dev/null; then
+            echo "::warning::CI_POLL_TEST_SHARDS='${shards}' is not a positive integer; falling back to 1 (sequential)."
+            shards=1
+          fi
+
+          # Partition-contract guard: the awk split below must lose nothing
+          # and duplicate nothing. tests/test_ci_poll_test_sharding.py pins
+          # the expression for every workflow that shards this module.
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_poll_test_sharding.py
+
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+          import ast
+          from pathlib import Path
+
+          module = ast.parse(
+              Path("tests/test_orchestrate_poll_process.py").read_text(encoding="utf-8")
+          )
+          tests = [
+              node.name
+              for node in module.body
+              if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+          ]
+          tests.sort()
+          if not tests:
+              raise SystemExit("No tests discovered in the orchestrate-poll module")
+          Path("/tmp/orchestrate_poll_all_tests.txt").write_text("\n".join(tests) + "\n")
+          PY
+
+          rm -f /tmp/poll_shard_*.txt /tmp/poll_shard_*.log /tmp/poll_shard_*.rc
+          shard_pids=()
+          for shard in $(seq 0 "$((shards - 1))"); do
+            awk -v n="${shard}" -v total="${shards}" 'NR % total == n' \
+              /tmp/orchestrate_poll_all_tests.txt > "/tmp/poll_shard_${shard}.txt"
+            [ -s "/tmp/poll_shard_${shard}.txt" ] || continue
+            (
+              mapfile -t shard_tests < "/tmp/poll_shard_${shard}.txt"
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py \
+                "${shard_tests[@]}" > "/tmp/poll_shard_${shard}.log" 2>&1
+              echo "$?" > "/tmp/poll_shard_${shard}.rc"
+            ) &
+            shard_pids+=("$!")
+          done
+
+          # Reap every shard before judging any of them, so one early failure
+          # cannot leave siblings orphaned on the runner.
+          for shard_pid in "${shard_pids[@]}"; do
+            wait "${shard_pid}" || true
+          done
+
+          shard_failures=0
+          for shard in $(seq 0 "$((shards - 1))"); do
+            [ -f "/tmp/poll_shard_${shard}.log" ] || continue
+            echo "::group::orchestrate-poll shard ${shard} ($(wc -l < "/tmp/poll_shard_${shard}.txt" | tr -d '[:space:]') tests)"
+            cat "/tmp/poll_shard_${shard}.log"
+            echo "::endgroup::"
+            # A missing .rc means the subshell died before recording one; treat
+            # that as a failure rather than silently passing the shard.
+            shard_rc="$(cat "/tmp/poll_shard_${shard}.rc" 2>/dev/null || echo 1)"
+            case "${shard_rc}" in
+              ''|*[!0-9]*) shard_rc=1 ;;
+            esac
+            if [ "${shard_rc}" -ne 0 ]; then
+              echo "::error::orchestrate-poll shard ${shard} failed (exit ${shard_rc})"
+              shard_failures=$((shard_failures + 1))
+            fi
+          done
+          if [ "${shard_failures}" -ne 0 ]; then
+            echo "::error::${shard_failures} orchestrate-poll shard(s) failed."
+            exit 1
+          fi
+
       - name: Unit tests
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_integration_ahead_by_gate.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
