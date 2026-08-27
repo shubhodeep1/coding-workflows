@@ -1225,6 +1225,8 @@ the way to a fix PR without human action.
 | `WORKFLOW_LOG_SCENARIO_TRACE_ENABLED` | `false` | Enables the additive local-only `.ai/workflow_traces/<run_id>.scenario.json` renderer in `workflow-log-analysis.yml`; parseable runs emit `WORKFLOW_SCENARIO_TRACE_WRITTEN`, per-run parser drift fail-opens with `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL`. |
 | `EVENTS_JSONL_ENABLED` | `false` | Opt-in append-only JSONL mirror for stable workflow-event prefixes. When `true`, supported emitters append `.events/run-<GITHUB_RUN_ID\|local>.jsonl` under `GITHUB_WORKSPACE` after writing the original text line/comment marker; write failures emit `EVENTS_EMIT_FAIL` and fail open, so existing stderr/comment behavior remains authoritative. |
 | `REVIEW_MAX_RESUME_ROUNDS` | `3` | Maximum same-head partial-resume rounds before `review_autofix.yml` terminalizes the cached partial state as `round_budget_exhausted`; same-head no-progress rounds terminalize earlier as `no_progress`. |
+| `CODEX_VERSION` | `v0.114.0` | Pinned Codex CLI version retained by every existing production workflow, including review/autofix during the inert OpenCode Phase 1 rollout. |
+| `OPENCODE_VERSION` | `1.18.23` | Exact OpenCode CLI pin used only by the dispatchable `opencode-live-smoke.yml` Phase 1 rollout gate. No existing production workflow invokes OpenCode in this phase. |
 
 ## Semantic Cache (Clarification Only)
 
@@ -1319,6 +1321,12 @@ Operational behavior:
   - request repetition frequency,
   - provider routing/cache retention behavior.
 - Practical expectation: repeated pipeline runs with large unchanged static prefixes should reduce effective input cost/latency versus fully dynamic prompts.
+
+### OpenCode Phase 1 live smoke
+
+OpenCode is currently installed only by `.github/workflows/opencode-live-smoke.yml`, a `workflow_dispatch` rollout gate. The smoke generates role-scoped OpenRouter configuration for all six reviewer models plus the primary and fallback editor slots, runs each entry twice with the same stdin request, verifies non-empty ANSI-stripped output, intended provider/model stream evidence, and provider-reported reasoning usage, and fails if any entry fails. After the Phase 1 change merges, dispatch the workflow without a model filter and record its all-green run URL on tracking issue `#3845` before beginning the read-side or write-side cutover.
+
+The smoke defaults `OPENCODE_VERSION` to `1.18.23`. `CODEX_VERSION` remains independently pinned at `v0.114.0` and continues to select the runtime for all production workflow paths; the smoke does not change existing runtime routing or prompt-cache behavior.
 
 ## Project Orchestrator
 

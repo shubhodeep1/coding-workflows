@@ -200,6 +200,11 @@ a new value, add it to the appropriate overrides file with a
 | workflow log summary | `openai/gpt-5.6-luna` | default | `low` |
 | reviewer consensus summariser | `openai/gpt-5.6-luna` | `medium` (`XPOLL_SUMMARISER_REASONING`) | `low` |
 
+OpenCode Phase 1 is operationally inert: version `1.18.23` is installed only
+by the dispatch-only `.github/workflows/opencode-live-smoke.yml` rollout gate.
+All production phases, including review/autofix, remain Codex-backed until a
+later cutover phase lands after the all-slug live smoke succeeds.
+
 All gpt-5.6-sol phases now resolve to `low` verbosity at every layer: the per-phase
 `MODEL_VERBOSITY` env-var default in `.github/workflows/*.yml` (`VERBOSITY_*`
 repo-vars), the `-c model_verbosity=low` CLI flag on every `codex exec`
@@ -498,6 +503,7 @@ and shipped:
 - `WORKTREE_REGISTER_INVALID_NAME`
 - `WORKTREE_REGISTER_FAIL`
 - `WORKTREE_DEREGISTER_FAIL`
+- `opencode_agent_failure`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -604,6 +610,7 @@ LOG_PREFIX.name=WORKTREE_REGISTRY_REBUILD
 LOG_PREFIX.name=WORKTREE_REGISTER_INVALID_NAME
 LOG_PREFIX.name=WORKTREE_REGISTER_FAIL
 LOG_PREFIX.name=WORKTREE_DEREGISTER_FAIL
+LOG_PREFIX.name=opencode_agent_failure
 
 ---
 
@@ -827,6 +834,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/mark-stable.yml
 .github/workflows/memory_maintenance.yml
 .github/workflows/nightly-validation-selftest.yml
+.github/workflows/opencode-live-smoke.yml
 .github/workflows/orchestrate.yml
 .github/workflows/orchestrate_clarify_respond.yml
 .github/workflows/orchestrate_poll.yml
