@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Tests for the sharded orchestrate-poll step in ci.yml.
+"""Tests for the sharded orchestrate-poll steps in CI and release workflows.
+
+The release-gate contract coverage pins `mark-stable.yml` and
+`test-and-mark-stable.yml`.
 
 `tests/test_orchestrate_poll_process.py` is CI's critical path: most of
 the 307 tests in its post-fast-fail sharded subset spawn the real poller
@@ -33,6 +36,16 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CI_WF = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 POLL_MODULE = REPO_ROOT / "tests" / "test_orchestrate_poll_process.py"
+
+# The release gates carry a port of the same sharded step (no fast-fail
+# subset — the shard input is the full module). Release v1.27.0 (run
+# 33073743283) was lost to the exact failure mode #3844 fixed in ci.yml:
+# the serial module overran `validate-scripts`' `timeout-minutes: 30`,
+# the job was cancelled mid-suite, and `validate`/`release` were skipped.
+RELEASE_WORKFLOWS = {
+	"mark-stable": REPO_ROOT / ".github" / "workflows" / "mark-stable.yml",
+	"test-and-mark-stable": REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml",
+}
 
 # Pull the awk expression out of the workflow rather than restating it, so a
 # change to the split is exercised here instead of silently diverging from a
@@ -171,6 +184,127 @@ class PollStepContractTest(unittest.TestCase):
 class JobBudgetTest(unittest.TestCase):
 	def test_lint_job_has_headroom_over_the_sharded_runtime(self) -> None:
 		self.assertEqual(load_lint_job()["timeout-minutes"], 45)
+
+
+def load_release_validate_scripts_job(workflow_path: Path) -> dict:
+	return yaml.safe_load(workflow_path.read_text(encoding="utf-8"))["jobs"]["validate-scripts"]
+
+
+def release_poll_step(workflow_path: Path) -> dict:
+	for step in load_release_validate_scripts_job(workflow_path)["steps"]:
+		if step.get("name") == "Orchestrate poll process unit tests":
+			return step
+	raise AssertionError(f"orchestrate-poll shard step not found in {workflow_path.name}")
+
+
+def release_unit_tests_step(workflow_path: Path) -> dict:
+	for step in load_release_validate_scripts_job(workflow_path)["steps"]:
+		if step.get("name") == "Unit tests":
+			return step
+	raise AssertionError(f"Unit tests step not found in {workflow_path.name}")
+
+
+def release_shard_awk_expression(workflow_path: Path) -> str:
+	match = SHARD_AWK_RE.search(release_poll_step(workflow_path)["run"])
+	if match is None:
+		raise AssertionError(
+			f"could not locate the shard-split awk expression in {workflow_path.name}"
+		)
+	return match.group("expr").strip()
+
+
+class ReleaseValidateScriptsShardContractTest(unittest.TestCase):
+	"""The release gates' port of the sharded step must not drift from ci.yml.
+
+	`mark-stable.yml` and `test-and-mark-stable.yml` each run the module in
+	their `validate-scripts` job. The port duplicates the awk split, so this
+	class pins the same properties `PollStepContractTest` pins for ci.yml —
+	a divergence here would reintroduce the silent-drop risk in the release
+	path only, where it is least visible.
+	"""
+
+	def test_partition_expression_matches_the_verified_split(self) -> None:
+		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
+			with self.subTest(workflow=workflow_name):
+				self.assertEqual(release_shard_awk_expression(workflow_path), "NR % total == n")
+
+	def test_shard_count_is_configurable_with_the_same_default(self) -> None:
+		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
+			with self.subTest(workflow=workflow_name):
+				self.assertEqual(
+					release_poll_step(workflow_path)["env"]["CI_POLL_TEST_SHARDS"],
+					"${{ vars.CI_POLL_TEST_SHARDS || '4' }}",
+				)
+
+	def test_a_failing_shard_fails_the_step(self) -> None:
+		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
+			with self.subTest(workflow=workflow_name):
+				step_run = release_poll_step(workflow_path)["run"]
+				self.assertIn("shard_failures=$((shard_failures + 1))", step_run)
+				self.assertIn("exit 1", step_run)
+
+	def test_missing_exit_code_is_treated_as_failure(self) -> None:
+		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
+			with self.subTest(workflow=workflow_name):
+				step_run = release_poll_step(workflow_path)["run"]
+				self.assertIn("|| echo 1", step_run)
+				self.assertIn("''|*[!0-9]*) shard_rc=1 ;;", step_run)
+
+	def test_every_shard_is_reaped_before_any_is_judged(self) -> None:
+		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
+			with self.subTest(workflow=workflow_name):
+				step_run = release_poll_step(workflow_path)["run"]
+				self.assertLess(
+					step_run.index('wait "${shard_pid}"'),
+					step_run.index("shard_failures=0"),
+					"shards must all be waited on before failures are tallied",
+				)
+
+	def test_non_numeric_shard_count_falls_back_to_sequential(self) -> None:
+		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
+			with self.subTest(workflow=workflow_name):
+				step_run = release_poll_step(workflow_path)["run"]
+				self.assertIn("shards=1", step_run)
+				self.assertIn("is not a positive integer", step_run)
+
+	def test_shard_input_is_the_full_module_derived_in_step(self) -> None:
+		"""No fast-fail split in the release gates: derive + shard the whole module."""
+		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
+			with self.subTest(workflow=workflow_name):
+				step_run = release_poll_step(workflow_path)["run"]
+				self.assertIn("/tmp/orchestrate_poll_all_tests.txt", step_run)
+				self.assertIn('node.name.startswith("test_")', step_run)
+
+	def test_partition_guard_runs_before_the_shards(self) -> None:
+		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
+			with self.subTest(workflow=workflow_name):
+				step_run = release_poll_step(workflow_path)["run"]
+				guard_invocation_match = re.search(
+					r"(?m)^[ \t]*PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_poll_test_sharding\.py$",
+					step_run,
+				)
+				self.assertIsNotNone(guard_invocation_match)
+				self.assertLess(
+					guard_invocation_match.start(),
+					step_run.index("/tmp/orchestrate_poll_all_tests.txt"),
+					"the partition-contract guard must run before sharding",
+				)
+
+	def test_serial_invocation_is_gone_from_the_unit_tests_step(self) -> None:
+		"""The module must run exactly once — in the sharded step."""
+		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
+			with self.subTest(workflow=workflow_name):
+				self.assertNotIn(
+					"test_orchestrate_poll_process.py",
+					release_unit_tests_step(workflow_path)["run"],
+				)
+
+	def test_validate_scripts_job_has_headroom_over_the_sharded_runtime(self) -> None:
+		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
+			with self.subTest(workflow=workflow_name):
+				self.assertEqual(
+					load_release_validate_scripts_job(workflow_path)["timeout-minutes"], 45
+				)
 
 
 if __name__ == "__main__":

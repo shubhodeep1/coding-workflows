@@ -673,6 +673,36 @@ def test_editor_prompt_documents_convergence_outcome() -> None:
 	assert "- not-edited" in prompt
 
 
+def test_editor_prompt_states_audit_arithmetic_invariant() -> None:
+	"""The prompt must state the exact arithmetic invariant that
+	scripts/validate_editor_audit.sh enforces (total == applied +
+	already_applied + ignored), and must tell the model that a review
+	file listing zero issues gets all four counts as 0 — confirmations
+	of prior fixes are narrative for the "Already satisfied" section,
+	not audit counts. Without this, a genuine convergence run can emit
+	`total 0 / already applied 1`, trip the validator, and block
+	auto-merge as a false-positive EDITOR_NOOP_SUSPICIOUS (observed on
+	tele-funtoken-msg-scoring run 33088357425, PR 3809)."""
+	prompt = _editor_prompt_heredoc()
+	assert (
+		"total issues listed == issues applied + issues already applied + issues ignored"
+		in prompt
+	), (
+		"Prompt must spell out the audit arithmetic invariant enforced "
+		"by scripts/validate_editor_audit.sh."
+	)
+	assert "emit all four counts as 0" in prompt, (
+		"Prompt must define the zero-issue convergence accounting: a "
+		"review file listing zero issues gets all four counts as 0."
+	)
+	# The citation keeps prompt and validator discoverable from each
+	# other so future edits keep the two in lockstep.
+	assert "validate_editor_audit.sh" in prompt, (
+		"Prompt must cite the downstream validator so the contract's "
+		"two halves reference each other."
+	)
+
+
 def test_editor_prompt_requires_changes_match_this_run_writes() -> None:
 	"""Each bullet under `Changes made:` must correspond to an
 	apply_patch / write the model actually performed THIS run — not
@@ -964,6 +994,7 @@ if __name__ == "__main__":
 	test_review_apply_fixes_centralizes_refusal_regex()
 	test_refusal_contract_literals_stay_in_lockstep_across_files()
 	test_editor_prompt_documents_convergence_outcome()
+	test_editor_prompt_states_audit_arithmetic_invariant()
 	test_editor_prompt_requires_changes_match_this_run_writes()
 	test_editor_prompt_forbids_fabricated_edits()
 	test_editor_prompt_requires_self_check_before_emitting()
