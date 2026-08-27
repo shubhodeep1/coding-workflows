@@ -101,8 +101,8 @@ def test_command_argv_is_fixed_and_prompt_remains_on_stdin() -> None:
 		assert stdin_file.read_text(encoding="utf-8") == prompt
 		assert config_env_file.read_text(encoding="utf-8") == str(config)
 		assert result.stderr == (
-			b"opencode_agent_start role=writer provider=openrouter model=vendor/model "
-			b"variant=xhigh providerID=openrouter modelID=vendor/model\n"
+			b"opencode_agent_start role=writer expected_provider=openrouter "
+			b"expected_model=vendor/model variant=xhigh\n"
 		)
 
 

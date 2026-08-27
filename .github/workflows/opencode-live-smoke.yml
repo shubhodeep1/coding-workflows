@@ -129,9 +129,10 @@ jobs:
               call_rc=1
             fi
 
-            if ! grep -Fq "providerID=openrouter" "${log_output}" \
-              || ! grep -Fq "modelID=${model_slug}" "${log_output}" \
-              || ! grep -Fq "opencode_agent_start role=${role} provider=openrouter model=${model_slug} variant=xhigh" "${log_output}"; then
+            # OpenCode 1.18.23 emits this structured INFO event from the resolved LLM stream.
+            # The helper's pre-run marker uses expected_* keys and cannot satisfy this gate.
+            if ! grep -F "message=stream providerID=openrouter modelID=${model_slug} " "${log_output}" \
+              | grep -Fq " small=false agent=${role} mode=primary"; then
               model_evidence=FAIL
               call_rc=1
             fi

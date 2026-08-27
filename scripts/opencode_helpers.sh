@@ -79,8 +79,8 @@ opencode_run_cmd()
 		opencode_argv+=(--auto)
 	fi
 
-	printf 'opencode_agent_start role=%s provider=openrouter model=%s variant=%s providerID=openrouter modelID=%s\n' \
-		"${role}" "$(_opencode_alert_field "${model_slug}")" "${variant}" "$(_opencode_alert_field "${model_slug}")" >&2
+	printf 'opencode_agent_start role=%s expected_provider=openrouter expected_model=%s variant=%s\n' \
+		"${role}" "$(_opencode_alert_field "${model_slug}")" "${variant}" >&2
 	OPENCODE_CONFIG="${config_path}" NO_COLOR=1 "${opencode_argv[@]}"
 }
 

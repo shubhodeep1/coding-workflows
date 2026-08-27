@@ -64,13 +64,17 @@ def test_smoke_roster_and_editor_defaults_match_production() -> None:
 
 def test_smoke_runs_identical_calls_and_aggregates_failures() -> None:
 	smoke = SMOKE.read_text(encoding="utf-8")
+	helpers = (REPO_ROOT / "scripts" / "opencode_helpers.sh").read_text(encoding="utf-8")
 	assert "printf 'Return exactly OK\\n' | opencode_run_cmd" in smoke
 	assert 'run_smoke_call "${source_slot}" "${role}" "${model_slug}" 1' in smoke
 	assert 'run_smoke_call "${source_slot}" "${role}" "${model_slug}" 2' in smoke
 	assert "opencode_strip_ansi" in smoke
-	assert "providerID=openrouter" in smoke
-	assert "modelID=${model_slug}" in smoke
-	assert "variant=xhigh" in smoke
+	assert 'grep -F "message=stream providerID=openrouter modelID=${model_slug} "' in smoke
+	assert 'grep -Fq " small=false agent=${role} mode=primary"' in smoke
+	assert "opencode_agent_start" not in smoke
+	assert "expected_provider=openrouter expected_model=%s" in helpers
+	assert "providerID=openrouter modelID=%s" not in helpers
+	assert '"${role}" "${model_slug}" xhigh "${config_path}"' in smoke
 	assert '.variants.xhigh.reasoning.effort == "xhigh"' in smoke
 	assert "Model/variant evidence" in smoke
 	assert "${GITHUB_STEP_SUMMARY}" in smoke
