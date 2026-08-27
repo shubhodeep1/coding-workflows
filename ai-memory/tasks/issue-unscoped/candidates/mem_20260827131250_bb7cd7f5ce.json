@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.9,
+  "details": "Recent plan-workflow changes added tests around prompt staging, blocked clarification output, scope modes, and untrusted context handling. Any future prompt or agent orchestration change should preserve explicit boundaries and validate that untrusted text cannot alter control instructions.",
+  "fingerprint": "2e4ebb734f6ddd1b42e110927c480b3ba0cd973f8fcc4d6d79fcd2587034bc13",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33075427637",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33075427637",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3830",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3833",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3837",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3838",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3846",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3832",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3835",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3839",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3840",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3847"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260827131250_bb7cd7f5ce",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Untrusted issue and phase context must be staged and delimited before being passed to planning or implementation agents.",
+  "timestamps": {
+    "created_at": "2026-08-27T13:12:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
