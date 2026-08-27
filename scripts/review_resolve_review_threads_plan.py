@@ -10,17 +10,19 @@ Inputs (environment):
   PR_ALL_COMMENTS_CONTEXT_FILE  entry[N].<field> dump written by
                                 scripts/review_collect_pr_metadata.sh
   THREADS_JSON                  [{thread_id, is_resolved, comment_ids, path,
-                                author}] distilled from the GraphQL query;
+                                author, reply_comment_id}] distilled from the
+                                GraphQL query;
                                 comment_ids covers every comment in the
-                                thread, replies included
+                                thread, replies included; reply_comment_id is
+                                the top-level comment accepted by the reply API
   REVIEW_APPLIED_CHANGES_PERSISTED
                                 false skips "applied" dispositions
   PLAN_FILE                     JSONL output path
   MAX_THREADS                   cap on plan length (default 50)
 
 Output: one JSON object per line on PLAN_FILE, each with thread_id,
-comment_id, disposition, reason, path. Skipped entries are reported on
-stderr with the reason, never silently dropped.
+comment_id, reply_comment_id, disposition, reason, and path. Skipped
+entries are reported on stderr with the reason, never silently dropped.
 
 Exit code is 0 whenever a plan could be written (including an empty
 plan); 1 only on unreadable required inputs, which the caller treats as
@@ -286,9 +288,19 @@ def build_plan() -> int:
 		if not isinstance(thread_id, str) or not thread_id:
 			warn(f"entry[{index}] thread has no valid node id; leaving the thread open")
 			continue
+		top_level_reply_comment_id = thread.get("reply_comment_id")
+		if "reply_comment_id" not in thread:
+			thread_comment_ids = thread.get("comment_ids") or []
+			top_level_reply_comment_id = thread_comment_ids[0] if thread_comment_ids else None
+		if entry["disposition"] == "ignored" and (
+			not isinstance(top_level_reply_comment_id, int) or top_level_reply_comment_id <= 0
+		):
+			warn(f"entry[{index}] thread has no top-level comment id for its rationale reply; leaving it open")
+			continue
 		plan_item = {
 			"thread_id": thread_id,
 			"comment_id": int(raw_id),
+			"reply_comment_id": top_level_reply_comment_id,
 			"disposition": entry["disposition"],
 			"reason": entry["reason"],
 			"path": context.get("path", "") or entry["audit_path"],

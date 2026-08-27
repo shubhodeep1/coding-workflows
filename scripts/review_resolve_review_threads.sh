@@ -173,8 +173,10 @@ PLAN_FILE="${RESOLVE_TMP_DIR}/plan.jsonl"
 # than the thread anchor's. Indexing only the anchor would leave those
 # threads unresolved even though the editor audited them — including
 # threads carrying this script's own "ignored" rationale replies from
-# an earlier iteration. A thread with more than 50 comments keeps its
-# tail unindexed and simply stays open, which is the safe direction.
+# an earlier iteration. The top-level comment id is retained separately
+# because GitHub does not permit replies to replies. A thread with more
+# than 50 comments keeps its tail unindexed and simply stays open, which
+# is the safe direction.
 read -r -d '' THREADS_QUERY <<'GRAPHQL'
 query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
@@ -185,7 +187,7 @@ query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
           id
 		  isResolved
 		  comments(first: 50) {
-		    nodes { databaseId path body viewerDidAuthor author { login } }
+		    nodes { databaseId path body viewerDidAuthor replyTo { databaseId } author { login } }
 		  }
 		}
       }
@@ -219,6 +221,7 @@ if ! jq -s '[.[].data.repository.pullRequest.reviewThreads.nodes[]?] | map(. as 
 		thread_id: .id,
 		is_resolved: .isResolved,
 		comment_ids: [.comments.nodes[]?.databaseId | select(. != null)],
+		reply_comment_id: ([.comments.nodes[]? | select(.replyTo == null) | .databaseId | select(. != null)][0] // null),
 		path: (.comments.nodes[0].path // ""),
 		author: (.comments.nodes[0].author.login // ""),
 		resolution_reply_posted: any(.comments.nodes[]?;
@@ -267,6 +270,7 @@ do
 
 	thread_id="$(printf '%s' "${plan_line}" | jq -r '.thread_id // ""' 2>/dev/null || echo "")"
 	comment_id="$(printf '%s' "${plan_line}" | jq -r '.comment_id // ""' 2>/dev/null || echo "")"
+	reply_comment_id="$(printf '%s' "${plan_line}" | jq -r '.reply_comment_id // ""' 2>/dev/null || echo "")"
 	disposition="$(printf '%s' "${plan_line}" | jq -r '.disposition // ""' 2>/dev/null || echo "")"
 	reason="$(printf '%s' "${plan_line}" | jq -r '.reason // ""' 2>/dev/null || echo "")"
 	comment_path="$(printf '%s' "${plan_line}" | jq -r '.path // ""' 2>/dev/null || echo "")"
@@ -285,6 +289,11 @@ do
 		echo "::warning::review_resolve_review_threads: ignored comment ${comment_id} has no rationale; leaving thread ${thread_id} open."
 		continue
 	fi
+	if [ "${disposition}" = "ignored" ] && ! [[ "${reply_comment_id}" =~ ^[1-9][0-9]*$ ]]; then
+		skipped_count=$(( skipped_count + 1 ))
+		echo "::warning::review_resolve_review_threads: thread ${thread_id} has no top-level comment id; leaving it open."
+		continue
+	fi
 	if [ "${disposition}" = "ignored" ] && [ "${resolution_reply_posted}" != "true" ]; then
 		# The editor summary is derived from untrusted PR content. Keep its
 		# rationale in an indented code block so Markdown is not rendered, and
@@ -298,13 +307,13 @@ AI autofix did not apply this suggestion:
 
 Resolving the thread to record that it was reviewed rather than missed. Reopen it if you disagree — the AI autofix pipeline will pick it up again on the next iteration.")"
 		if gh_retry gh api \
-			"repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments/${comment_id}/replies" \
+			"repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments/${reply_comment_id}/replies" \
 			-f body="${reply_body}" >/dev/null 2>&1
 		then
 			replied_count=$(( replied_count + 1 ))
 		else
 			skipped_count=$(( skipped_count + 1 ))
-			echo "::warning::review_resolve_review_threads: reply to comment ${comment_id} failed; leaving thread ${thread_id} open."
+			echo "::warning::review_resolve_review_threads: reply to top-level comment ${reply_comment_id} failed; leaving thread ${thread_id} open."
 			continue
 		fi
 	elif [ "${disposition}" = "ignored" ]; then

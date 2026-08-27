@@ -292,8 +292,10 @@ def test_audited_reply_comment_resolves_its_thread(tmp_path: Path) -> None:
 		[{"thread_id": "PRRT_thread", "is_resolved": False, "comment_ids": [1234, 5678], "path": "src/app.ts", "author": "copilot"}],
 	)
 	assert [item["thread_id"] for item in plan] == ["PRRT_thread"]
-	# The reply is what the editor audited, so it is what gets replied to.
+	# Matching remains keyed on the audited reply, while rationale replies
+	# target the top-level comment because GitHub rejects replies to replies.
 	assert plan[0]["comment_id"] == 5678
+	assert plan[0]["reply_comment_id"] == 1234
 
 
 def test_multiple_audited_comments_in_one_thread_are_planned_once(tmp_path: Path) -> None:
@@ -602,6 +604,56 @@ def test_driver_replies_before_resolving_an_ignored_thread(tmp_path: Path) -> No
 	assert "replied=1" in result.stdout
 	calls = Path(str(tmp_path / "calls.log")).read_text(encoding="utf-8")
 	assert "comments/1234/replies" in calls
+
+
+def test_driver_replies_to_thread_anchor_when_a_reply_was_audited(tmp_path: Path) -> None:
+	files = _write_inputs(
+		tmp_path,
+		"- entry[1] Copilot — `src/app.ts:10` — ignored; the follow-up is inapplicable.\n",
+		_context_entry(1, "review_comment", "5678", "src/app.ts"),
+		[],
+	)
+	fixture = tmp_path / "graphql_page.json"
+	fixture.write_text(
+		json.dumps(
+			{
+				"data": {
+					"repository": {
+						"pullRequest": {
+							"reviewThreads": {
+								"pageInfo": {"hasNextPage": False, "endCursor": None},
+								"nodes": [
+									{
+										"id": "PRRT_a",
+										"isResolved": False,
+										"comments": {
+											"nodes": [
+												{"databaseId": 1234, "path": "src/app.ts", "replyTo": None, "author": {"login": "copilot"}},
+												{"databaseId": 5678, "path": "src/app.ts", "replyTo": {"databaseId": 1234}, "author": {"login": "alice"}},
+											]
+										},
+									}
+								],
+							}
+						}
+					}
+				}
+			}
+		),
+		encoding="utf-8",
+	)
+	result = _run_driver(
+		tmp_path,
+		GH_STUB,
+		THREADS_FIXTURE=str(fixture),
+		EDITOR_SUMMARY_FILE=files["EDITOR_SUMMARY_FILE"],
+		PR_ALL_COMMENTS_CONTEXT_FILE=files["PR_ALL_COMMENTS_CONTEXT_FILE"],
+	)
+	assert result.returncode == 0, result.stderr
+	assert "resolved=1" in result.stdout
+	calls = Path(str(tmp_path / "calls.log")).read_text(encoding="utf-8")
+	assert "comments/1234/replies" in calls
+	assert "comments/5678/replies" not in calls
 
 
 def test_driver_renders_ignored_reason_without_markdown_or_mentions(tmp_path: Path) -> None:
