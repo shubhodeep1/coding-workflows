@@ -9,7 +9,7 @@
 | Job timeout | 30 → 45 minutes |
 | Measured speedup on 4 cores | 3.6x (62s → 17s on a 16-test slice) |
 | Tests in the sharded module | 307 |
-| New tests | 11 in `tests/test_ci_poll_test_sharding.py` |
+| New test methods | 12 in `tests/test_ci_poll_test_sharding.py` |
 
 What this means for operators: CI reaches its final steps and reports a real result instead of being cut off mid-suite, so a green tick again means the suite passed. Set `CI_POLL_TEST_SHARDS=1` to fall back to sequential; a non-numeric or non-positive value warns and does the same.
 
