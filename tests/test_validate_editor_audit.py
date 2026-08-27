@@ -341,6 +341,43 @@ def test_helper_stops_at_generic_future_section_heading(tmp_path):
 	assert result.returncode == 0, result.stderr
 
 
+def test_convergence_shape_total_zero_already_applied_one_is_mismatch(tmp_path):
+	"""Pin the exact false-positive shape observed on
+	tele-funtoken-msg-scoring run 33088357425 (PR 3809): a convergence
+	run whose editor recorded "confirmed a prior fix is already
+	present" as `issues already applied 1` against `total issues
+	listed 0`. The helper MUST keep flagging this as rc=2 — the
+	strictness is intentional (it is what keeps `total` trustworthy as
+	an auto-merge gate); the fix for the false positive lives in the
+	editor prompt (scripts/review_apply_fixes.sh), which now tells the
+	model to emit all four counts as 0 for a zero-issue review file."""
+	summary = textwrap.dedent(
+		"""\
+		Changes made:
+		- none
+
+		Change status:
+		- not-edited
+
+		Review file issue audit:
+		- review_deepseek.md: total issues listed 0; issues applied 0; issues already applied 1; issues ignored 0.
+		- review_qwen.md: total issues listed 1; issues applied 0; issues already applied 0; issues ignored 1.
+
+		PR comment audit:
+		- none
+		"""
+	)
+	result = _run(summary, "4", tmp_path=tmp_path)
+	assert result.returncode == 2, (
+		f"Expected rc=2 for the convergence false-positive shape, got "
+		f"{result.returncode}: {result.stderr}"
+	)
+	assert (
+		"Audit entry arithmetic mismatch: total=0 but applied(0)+already_applied(1)+ignored(0)=1"
+		in result.stderr
+	), result.stderr
+
+
 def main() -> int:
 	# Direct `python3 tests/<file>.py` entrypoint — the repo's CI runs
 	# tests via that pattern rather than pytest discovery, so this file
