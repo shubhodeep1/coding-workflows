@@ -57,6 +57,7 @@
 #   EDITOR_SUMMARY_FILE          editor summary containing "PR comment audit:"
 #   PR_ALL_COMMENTS_CONTEXT_FILE entry[N].{kind,id,path,author} context dump
 #   REVIEW_APPLIED_CHANGES_PERSISTED  "true" only after a productive commit
+#                                     was pushed to the PR branch
 #   REVIEW_RESOLVE_THREADS_ENABLED  "false" disables the whole step
 #   REVIEW_RESOLVE_THREADS_MAX      cap on threads touched per run (default 50)
 #   CLAUDE_BRANCH_REVIEW_MODE       "true" (no PR) short-circuits
@@ -279,8 +280,15 @@ do
 	# suggestion. Resolving that silently would hide a disagreement, so
 	# the reason goes into the thread first; the reviewer can reopen.
 	if [ "${disposition}" = "ignored" ] && [ "${resolution_reply_posted}" != "true" ]; then
+		# The editor summary is derived from untrusted PR content. Keep its
+		# rationale in an indented code block so Markdown is not rendered, and
+		# neutralize @mentions as defense in depth against notification abuse.
+		safe_reason="${reason:-no reason recorded}"
+		safe_reason="${safe_reason//@/@$'\u200b'}"
 		reply_body="$(printf '%s' "<!-- ai-autofix-review-resolution:${thread_id} -->
-AI autofix did not apply this suggestion: ${reason:-no reason recorded}
+AI autofix did not apply this suggestion:
+
+    ${safe_reason}
 
 Resolving the thread to record that it was reviewed rather than missed. Reopen it if you disagree — the AI autofix pipeline will pick it up again on the next iteration.")"
 		if gh_retry gh api \
@@ -289,7 +297,9 @@ Resolving the thread to record that it was reviewed rather than missed. Reopen i
 		then
 			replied_count=$(( replied_count + 1 ))
 		else
-			echo "::warning::review_resolve_review_threads: reply to comment ${comment_id} failed; resolving without it."
+			skipped_count=$(( skipped_count + 1 ))
+			echo "::warning::review_resolve_review_threads: reply to comment ${comment_id} failed; leaving thread ${thread_id} open."
+			continue
 		fi
 	elif [ "${disposition}" = "ignored" ]; then
 		echo "  rationale already posted for thread ${thread_id}; skipping duplicate reply"

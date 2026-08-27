@@ -252,7 +252,7 @@ def build_plan() -> int:
 	for entry in sorted(audit_entries, key=lambda item: item["index"]):
 		index = entry["index"]
 		if entry["disposition"] == "applied" and not applied_changes_persisted:
-			note(f"entry[{index}] claims an applied change without a productive commit; leaving the thread open")
+			note(f"entry[{index}] claims an applied change without a pushed productive commit; leaving the thread open")
 			continue
 		context = context_entries.get(index)
 		if context is None:

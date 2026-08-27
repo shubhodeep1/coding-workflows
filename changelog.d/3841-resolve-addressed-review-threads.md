@@ -8,7 +8,7 @@ The pipeline has always read PR review comments — `scripts/review_collect_pr_m
 | New repo vars | `REVIEW_RESOLVE_THREADS_ENABLED` (`true`), `REVIEW_RESOLVE_THREADS_MAX` (`50`) |
 | GitHub API calls added per run | 1 paginated thread query + 1 mutation per resolved thread + 1 reply per `ignored` thread |
 | Threads resolved per run before the cap warns | 50 |
-| New tests | 25 in `tests/test_review_resolve_review_threads.py` |
+| New tests | 27 in `tests/test_review_resolve_review_threads.py` |
 
 What this means for operators: a PR that has been through the autofix loop now shows its review threads in the state the pipeline actually left them, so an open thread is a real signal again rather than the default. Set `REVIEW_RESOLVE_THREADS_ENABLED=false` in a consumer repo to keep the previous behaviour and leave every thread untouched.
 

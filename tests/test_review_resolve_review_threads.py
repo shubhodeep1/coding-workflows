@@ -367,6 +367,9 @@ if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
 	exit 0
 fi
 if [ "$1" = "api" ]; then
+	if [ "${REPLY_FAIL:-false}" = "true" ] && [[ "$*" == *"/replies"* ]]; then
+		exit 1
+	fi
 	echo '{"id":1}'
 	exit 0
 fi
@@ -555,6 +558,100 @@ def test_driver_replies_before_resolving_an_ignored_thread(tmp_path: Path) -> No
 	assert "comments/1234/replies" in calls
 
 
+def test_driver_renders_ignored_reason_without_markdown_or_mentions(tmp_path: Path) -> None:
+	files = _write_inputs(
+		tmp_path,
+		"- entry[0] Copilot — `src/app.ts:10` — ignored; @org/team requested **bold** [text](https://example.com).\n",
+		_context_entry(0, "review_comment", "1234", "src/app.ts"),
+		[],
+	)
+	fixture = tmp_path / "graphql_page.json"
+	fixture.write_text(
+		json.dumps(
+			{
+				"data": {
+					"repository": {
+						"pullRequest": {
+							"reviewThreads": {
+								"pageInfo": {"hasNextPage": False, "endCursor": None},
+								"nodes": [
+									{
+										"id": "PRRT_a",
+										"isResolved": False,
+										"comments": {"nodes": [{"databaseId": 1234, "path": "src/app.ts", "author": {"login": "copilot"}}]},
+									}
+								],
+							}
+						}
+					}
+				}
+			}
+		),
+		encoding="utf-8",
+	)
+	result = _run_driver(
+		tmp_path,
+		GH_STUB,
+		THREADS_FIXTURE=str(fixture),
+		EDITOR_SUMMARY_FILE=files["EDITOR_SUMMARY_FILE"],
+		PR_ALL_COMMENTS_CONTEXT_FILE=files["PR_ALL_COMMENTS_CONTEXT_FILE"],
+	)
+	assert result.returncode == 0, result.stderr
+	calls = Path(str(tmp_path / "calls.log")).read_text(encoding="utf-8")
+	assert "@org/team" not in calls
+	assert "\n    @\u200borg/team requested **bold** [text](https://example.com).\n" in calls
+
+
+def test_driver_leaves_ignored_thread_open_when_rationale_reply_fails(tmp_path: Path) -> None:
+	files = _write_inputs(
+		tmp_path,
+		"- entry[0] Copilot — `src/app.ts:10` — ignored; the reviewer misread the guard.\n",
+		_context_entry(0, "review_comment", "1234", "src/app.ts"),
+		[],
+	)
+	fixture = tmp_path / "graphql_page.json"
+	fixture.write_text(
+		json.dumps(
+			{
+				"data": {
+					"repository": {
+						"pullRequest": {
+							"reviewThreads": {
+								"pageInfo": {"hasNextPage": False, "endCursor": None},
+								"nodes": [
+									{
+										"id": "PRRT_a",
+										"isResolved": False,
+										"comments": {"nodes": [{"databaseId": 1234, "path": "src/app.ts", "author": {"login": "copilot"}}]},
+									}
+								],
+							}
+						}
+					}
+				}
+			}
+		),
+		encoding="utf-8",
+	)
+	result = _run_driver(
+		tmp_path,
+		GH_STUB,
+		THREADS_FIXTURE=str(fixture),
+		REPLY_FAIL="true",
+		GH_RETRY_MAX_ATTEMPTS="1",
+		EDITOR_SUMMARY_FILE=files["EDITOR_SUMMARY_FILE"],
+		PR_ALL_COMMENTS_CONTEXT_FILE=files["PR_ALL_COMMENTS_CONTEXT_FILE"],
+	)
+	assert result.returncode == 0, result.stderr
+	assert "resolved=0" in result.stdout
+	assert "replied=0" in result.stdout
+	assert "skipped=1" in result.stdout
+	assert "leaving thread PRRT_a open" in result.stdout
+	calls = Path(str(tmp_path / "calls.log")).read_text(encoding="utf-8")
+	assert "comments/1234/replies" in calls
+	assert "resolveReviewThread" not in calls
+
+
 def test_driver_does_not_repeat_an_existing_rationale_reply(tmp_path: Path) -> None:
 	files = _write_inputs(
 		tmp_path,
@@ -665,10 +762,11 @@ def test_workflow_invokes_the_resolver_after_editor_safety_checks() -> None:
 	summary_step = workflow.index("- name: Post editor summary comment")
 	changes_lost_step = workflow.index("- name: Detect editor-claimed-but-uncommitted changes")
 	noop_step = workflow.index("- name: Validate editor no-op disposition")
+	push_step = workflow.index("- name: Push all pending commits")
 	resolve_step = workflow.index("- name: Resolve addressed PR review threads")
-	assert summary_step < changes_lost_step < noop_step < resolve_step
+	assert summary_step < changes_lost_step < noop_step < push_step < resolve_step
 	resolve_block = workflow[resolve_step:workflow.index("\n      - name:", resolve_step + 1)]
 	assert 'if: "success() &&' in resolve_block
 	assert "env.EDITOR_CHANGES_LOST != 'true'" in resolve_block
 	assert "env.EDITOR_NOOP_SUSPICIOUS != 'true'" in resolve_block
-	assert "REVIEW_APPLIED_CHANGES_PERSISTED: ${{ steps.commit_changes.outputs.did_commit == 'true' && steps.commit_changes.outputs.ledger_only_commit_strict != 'true' }}" in resolve_block
+	assert "REVIEW_APPLIED_CHANGES_PERSISTED: ${{ env.AUTOFIX_EDITS_PUSHED == 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.commit_changes.outputs.ledger_only_commit_strict != 'true' }}" in resolve_block
