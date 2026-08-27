@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/3844-ci-poll-test-sharding.md:Line 12 | severity=high | confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The changelog entry reports 11 new test methods although the file contains 12.\n  WHY: This factual inaccuracy may mislead readers about the scope of changes.\n- changelog.d/3844-ci-poll-test-sharding.md:Line 12 | severity=low | confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The changelog entry states \u201cNew tests\u201d instead of \u201cNew test methods.\u201d\n  WHY: The wording is inconsistent with the actual implementation and could confuse readers.\n- changelog.d/3844-ci-poll-test-sharding.md:line 11 \"| Tests in the sharded module | 307 |\" and prose line 4 | severity=low | confidence=[4]\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The \u201c307\u201d test count is stale because the module currently contains 317 top-level test_ functions.\n  WHY: This is a factual accuracy defect in the changelog; readers assembling CHANGELOG.md will publish an incorrect number.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states the changelog should accurately reflect the number of new test methods added.\n  expected_change_site: changelog.d/3844-ci-poll-test-sharding.md\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The file currently reports 11 new tests but contains 12 test methods.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- changelog.d/3844-ci-poll-test-sharding.md\n  Line or code reference: Line 12\n  Problem: The changelog entry reports \"11 in `tests/test_ci_poll_test_sharding.py`\" but the actual test file contains 12 new test methods.\n  Why it fails at runtime: This is a factual inaccuracy in the changelog that will mislead readers about the scope of changes.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- changelog.d/3844-ci-poll-test-sharding.md\n  Line or code reference: Line 12\n  Problem: The changelog entry states \"New tests\" but the actual change is \"New test methods\" (12 in the file).\n  Why it fails at runtime: The wording is inconsistent with the actual implementation and could confuse readers about what was added.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: The PR description states the changelog should accurately reflect the number of new test methods added.\n  Expected change site: changelog.d/3844-ci-poll-test-sharding.md\n  Evidence of absence: The file currently reports 11 new tests but contains 12 test methods.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- changelog.d/3844-ci-poll-test-sharding.md (also .github/workflows/ci.yml line 820 comment and agents.md line 697)\n  Line or code reference: changelog table row line 11 \"| Tests in the sharded module | 307 |\" and prose line 4\n  Problem: the \"307\" test count is stale; the module currently contains 317 top-level test_ functions (verified via AST parse and grep on the current ref).\n  Why it fails at runtime: not a runtime failure \u2014 a factual accuracy defect in this PR's own changelog fragment; the previous autofix round fixed an analogous count (11\u219212) in this same file, and this remaining stale count contradicts that accuracy goal. Readers assembling CHANGELOG.md from these fragments will ship an incorrect number.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "0e346466e666dc5447e13facdb84fbd13771afbbd0a43d86b412954196bbb8dc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3844,
+    "run_id": "33053604276",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33053604276",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260827093343_42ff619d56",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3844,
+    "run_id": "33053604276"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-27T09:33:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
