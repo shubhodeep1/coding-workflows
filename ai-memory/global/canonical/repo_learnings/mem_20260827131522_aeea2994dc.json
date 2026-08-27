@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Shell process orchestration requires explicit handling for polling, template modes, soft errors, and post-agent recovery.",
   "timestamps": {
     "created_at": "2026-08-27T13:15:22Z",
