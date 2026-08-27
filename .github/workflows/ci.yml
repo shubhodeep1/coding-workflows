@@ -26,7 +26,7 @@ jobs:
       - name: Install Python CI dependencies
         run: |
           set -euo pipefail
-          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 ruff
+          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
 
       - name: Derive orchestrate poll test subsets
         run: |
@@ -208,6 +208,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_serena_stats_emit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_template_mode.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
+
+      - name: Memory maintenance extraction contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_memory_maintenance_contract_noop.py
 
       - name: Orchestrate lib unit tests
         run: |
@@ -534,6 +539,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_approve_safe_state_fetch.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_gh_retry_fallback_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_answer_recommended_parser.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_codex_step_extraction.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_diagrams_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_scope_mode_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_skip_gate_telemetry_contract.py
@@ -635,6 +641,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_sweep_zero_candidate_fast_exit.py
+
+      - name: Review autofix sweep stale-queued guard tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_sweep_stale_queued.py
 
       - name: Workflow log collector coverage gate
         run: |

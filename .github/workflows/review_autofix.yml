@@ -2454,14 +2454,14 @@ jobs:
           fetch_max_attempts=4
           fetch_backoff=2
           while true; do
-            if git fetch --no-tags --prune origin "refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}"; then
+            if git fetch --no-tags --prune origin "+refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}"; then
               break
             fi
             if [ "${fetch_attempt}" -ge "${fetch_max_attempts}" ]; then
-              echo "::error::git fetch origin refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF} failed after ${fetch_max_attempts} attempts; giving up."
+              echo "::error::git fetch origin +refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF} failed after ${fetch_max_attempts} attempts; giving up."
               exit 1
             fi
-            echo "::warning::git fetch origin refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF} failed (attempt ${fetch_attempt}/${fetch_max_attempts}); retrying in ${fetch_backoff}s."
+            echo "::warning::git fetch origin +refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF} failed (attempt ${fetch_attempt}/${fetch_max_attempts}); retrying in ${fetch_backoff}s."
             sleep "${fetch_backoff}"
             fetch_attempt=$((fetch_attempt + 1))
             fetch_backoff=$((fetch_backoff * 2))
@@ -2650,8 +2650,8 @@ jobs:
           if [ -f "$(git rev-parse --git-dir)/shallow" ]; then
             if [ -n "${TARGET_BRANCH:-}" ]; then
               echo "Shallow repository detected — deepening TARGET_BRANCH=${TARGET_BRANCH} once (+200) so autofix/judge-fix walks see PR-unique history beyond the initial fetch-depth boundary."
-              if ! git fetch --no-tags --prune --deepen=200 origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null; then
-                echo "::warning::git fetch --deepen=200 origin refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH} failed before autofix/judge-fix walks; walk counts may be undercounted on PRs with >100 commits."
+              if ! git fetch --no-tags --prune --deepen=200 origin "+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null; then
+                echo "::warning::git fetch --deepen=200 origin +refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH} failed before autofix/judge-fix walks; walk counts may be undercounted on PRs with >100 commits."
               fi
             else
               echo "::warning::TARGET_BRANCH unset (Checkout PR head branch likely early-exited); skipping pre-walk deepen safeguard. Walk counts may be undercounted on PRs with >100 commits."
@@ -2748,9 +2748,9 @@ jobs:
             local _remote_ref="$1"
             local _local_ref="${2:-HEAD}"
             local _iter=0
-            local -a _refspecs=("refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")
+            local -a _refspecs=("+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")
             if [ -n "${TARGET_BRANCH:-}" ]; then
-              _refspecs+=("refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
+              _refspecs+=("+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
             fi
             while [ "${_iter}" -lt 4 ]; do
               if [ ! -f "$(git rev-parse --git-dir)/shallow" ]; then
@@ -2777,7 +2777,7 @@ jobs:
           if [ ! -s "${PR_DIFF_FILE}" ]; then
             echo "Primary gh pr diff output is empty. Attempting git fallback diff generation."
             PR_DIFF_ATTEMPTED_PATHS="${PR_DIFF_ATTEMPTED_PATHS};git_diff_origin_base_head:${PR_DIFF_FILE}"
-            if ! git fetch --no-tags --prune origin "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"; then
+            if ! git fetch --no-tags --prune origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"; then
               echo "Warning: git fetch origin ${BASE_BRANCH} failed in fallback path; fallback git diff requires an existing origin/${BASE_BRANCH} ref."
             fi
             if git rev-parse --verify "origin/${BASE_BRANCH}" >/dev/null 2>&1; then
@@ -2812,7 +2812,7 @@ jobs:
           echo "Final PR diff sha256 (${ORIGINAL_PR_DIFF_FILE}): $(sha256sum "${ORIGINAL_PR_DIFF_FILE}" | awk '{print $1}')"
           echo "Final PR diff preview (${PR_DIFF_FILE}) suppressed in logs for security."
 
-          if ! git fetch --no-tags --prune origin "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"; then
+          if ! git fetch --no-tags --prune origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"; then
             echo "Warning: git fetch origin ${BASE_BRANCH} failed before changed-files generation; continuing with current refs."
           fi
 
@@ -3213,15 +3213,15 @@ jobs:
             exit 0
           fi
 
-          if ! git fetch --no-tags --prune origin "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}" 2>/dev/null; then
+          if ! git fetch --no-tags --prune origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}" 2>/dev/null; then
             echo "::warning::git fetch for origin/${BASE_BRANCH} failed during pre-review merge-topology gate; fail-open to reviewer path."
             exit 0
           fi
 
           merge_probe_ambiguous=false
-          _merge_refspecs=("refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")
+          _merge_refspecs=("+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")
           if [ -n "${TARGET_BRANCH:-}" ]; then
-            _merge_refspecs+=("refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
+            _merge_refspecs+=("+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
           fi
           if [ -f "$(git rev-parse --git-dir)/shallow" ]; then
             _merge_base_deepen_iter=0
@@ -4497,7 +4497,7 @@ jobs:
             fi
           done
           bash "${SUPPORT_SCRIPTS_DIR}/git_ref_health_check.sh" repair
-          git fetch --no-tags --prune origin "refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
+          git fetch --no-tags --prune origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
 
           # Ensure the merge-base between HEAD and origin/<base> is reachable
           # in the local clone before invoking `git merge --no-commit` below.
@@ -4523,9 +4523,9 @@ jobs:
           # ancestor is sufficient for git merge-base to resolve, so
           # deepening just these two refs is enough.
           if [ -f "$(git rev-parse --git-dir)/shallow" ]; then
-            _merge_base_refspecs=("refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")
+            _merge_base_refspecs=("+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")
             if [ -n "${TARGET_BRANCH:-}" ]; then
-              _merge_base_refspecs+=("refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
+              _merge_base_refspecs+=("+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
             fi
             _merge_base_deepen_iter=0
             while [ "${_merge_base_deepen_iter}" -lt 4 ]; do
@@ -4651,9 +4651,9 @@ jobs:
             echo "::warning::Merge precheck hit a partial-clone promisor fetch failure; backfilling blobs and retrying the merge once."
             git reset --hard HEAD >/dev/null 2>&1 || true
             git config --unset-all remote.origin.partialclonefilter 2>/dev/null || true
-            _merge_backfill_refspecs=("refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")
+            _merge_backfill_refspecs=("+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")
             if [ -n "${TARGET_BRANCH:-}" ]; then
-              _merge_backfill_refspecs+=("refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
+              _merge_backfill_refspecs+=("+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
             fi
             _merge_refetch_rc=0
             _merge_refetch_stderr="$(git fetch --no-tags --prune --refetch origin "${_merge_backfill_refspecs[@]}" 2>&1 >/dev/null)" || _merge_refetch_rc=$?

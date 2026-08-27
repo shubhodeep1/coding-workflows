@@ -12,6 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_PROMPT = REPO_ROOT / "prompts" / "mode-plan.txt"
 PLAN_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "plan.yml"
+PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
 RENDER_PROMPT = REPO_ROOT / "scripts" / "render_prompt.py"
 
 
@@ -68,20 +69,21 @@ def test_mode_plan_reuse_audit_contract_relaxes_when_flag_disabled() -> None:
 
 def test_plan_workflow_exports_reuse_audit_flag_and_keeps_live_prompt_parity() -> None:
 	workflow = PLAN_WORKFLOW.read_text(encoding="utf-8")
+	plan_runner = PLAN_RUNNER.read_text(encoding="utf-8")
 
 	assert "PLAN_REUSE_AUDIT_REQUIRED: ${{ vars.PLAN_REUSE_AUDIT_REQUIRED || 'true' }}" in workflow
-	assert "9. Reuse-audit requirement gate (current render: `PLAN_REUSE_AUDIT_REQUIRED={{PLAN_REUSE_AUDIT_REQUIRED}}`): emit" in workflow
-	assert "10. Scope-mode justification requirement gate (current render: `PLAN_SCOPE_MODE_REQUIRED={{PLAN_SCOPE_MODE_REQUIRED}}`): emit" in workflow
-	assert "`Reuse-audit: extends <existing-name>`" in workflow
-	assert "`Reuse-audit: net-new (Layer 3) — <justification>`" in workflow
-	assert "`scripts/gh_helpers.sh` and `scripts/memory_helpers.sh`" in workflow
-	assert "`_fetch_candidate_issue_details_graphql`" in workflow
-	assert "`_fetch_linked_pr_status_graphql`" in workflow
-	assert "`ACTIVE_WORKFLOW_ISSUES`" in workflow
-	assert "`STALL_MANAGED_LINKED_PR_CACHE`" in workflow
-	assert "only propose net-new code when Layers 1 and 2 genuinely fail to" in workflow
-	assert "When Layer 3 is necessary, justify why repo reuse fails;" in workflow
-	assert "do not present net-new code as the default when a real reuse candidate" in workflow
+	assert "9. Reuse-audit requirement gate (current render: `PLAN_REUSE_AUDIT_REQUIRED={{PLAN_REUSE_AUDIT_REQUIRED}}`): emit" in plan_runner
+	assert "10. Scope-mode justification requirement gate (current render: `PLAN_SCOPE_MODE_REQUIRED={{PLAN_SCOPE_MODE_REQUIRED}}`): emit" in plan_runner
+	assert "`Reuse-audit: extends <existing-name>`" in plan_runner
+	assert "`Reuse-audit: net-new (Layer 3) — <justification>`" in plan_runner
+	assert "`scripts/gh_helpers.sh` and `scripts/memory_helpers.sh`" in plan_runner
+	assert "`_fetch_candidate_issue_details_graphql`" in plan_runner
+	assert "`_fetch_linked_pr_status_graphql`" in plan_runner
+	assert "`ACTIVE_WORKFLOW_ISSUES`" in plan_runner
+	assert "`STALL_MANAGED_LINKED_PR_CACHE`" in plan_runner
+	assert "only propose net-new code when Layers 1 and 2 genuinely fail to" in plan_runner
+	assert "When Layer 3 is necessary, justify why repo reuse fails;" in plan_runner
+	assert "do not present net-new code as the default when a real reuse candidate" in plan_runner
 
 
 def main() -> int:

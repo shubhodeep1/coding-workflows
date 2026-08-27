@@ -11,6 +11,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
+PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
 CLARIFY_WF = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
 PROMPT_PLAN = REPO_ROOT / "prompts" / "mode-plan.txt"
 PROMPT_CLARIFY = REPO_ROOT / "prompts" / "mode-clarify.txt"
@@ -142,6 +143,7 @@ def test_prompt_contract_includes_blocked_rule() -> None:
 
 def test_plan_workflow_detects_blocked_before_needs_clarification() -> None:
 	wf = _read(PLAN_WF)
+	plan_runner = _read(PLAN_RUNNER)
 	blocked_section = wf.split('BLOCKED_REASON="$(perl -ne \'', 1)[1].split(
 		'if [ -n "${BLOCKED_REASON}" ]; then', 1
 	)[0]
@@ -153,10 +155,10 @@ def test_plan_workflow_detects_blocked_before_needs_clarification() -> None:
 	assert "${CODEX_OUTPUT_PARSE_FILE}" in blocked_section
 	assert "${CODEX_OUTPUT_FILE}" not in blocked_section
 	assert "$in_code" not in blocked_section
-	assert "7. A pre-execution self-check result" in wf
-	assert "PLAN_SELF_CHECK: PASS" in wf
-	assert "PLAN_SELF_CHECK: WARNING:" in wf
-	assert "PLAN_SELF_CHECK: BLOCKER:" in wf
+	assert "7. A pre-execution self-check result" in plan_runner
+	assert "PLAN_SELF_CHECK: PASS" in plan_runner
+	assert "PLAN_SELF_CHECK: WARNING:" in plan_runner
+	assert "PLAN_SELF_CHECK: BLOCKER:" in plan_runner
 	assert 'CODEX_OUTPUT_PARSE_FILE="${RUNTIME_DIR}/codex_output_parse.txt"' in wf
 	assert "malformed fences do not" in wf
 	assert '::error::Failed to sanitize Codex output' in wf
@@ -184,14 +186,15 @@ def test_plan_workflow_detects_blocked_before_needs_clarification() -> None:
 
 def test_plan_workflow_includes_ref_context_and_mismatch_rule() -> None:
 	wf = _read(PLAN_WF)
+	plan_runner = _read(PLAN_RUNNER)
 
 	assert "- name: Capture planning ref context" in wf
 	assert "git rev-parse HEAD" in wf
 	assert "git symbolic-ref --short -q HEAD" in wf
 	assert "PLANNING_REF_INTEGRATION_BRANCH_META" in wf
 	assert "PLANNING REF CONTEXT" in wf
-	assert "If checked-out ref mismatches Integration branch metadata, emit exactly" in wf
-	assert "`BLOCKED: integration branch mismatch`" in wf
+	assert "If checked-out ref mismatches Integration branch metadata, emit exactly" in plan_runner
+	assert "`BLOCKED: integration branch mismatch`" in plan_runner
 
 
 def test_clarify_workflow_detects_and_escalates_blocked_output() -> None:

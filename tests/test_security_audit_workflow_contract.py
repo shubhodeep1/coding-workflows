@@ -117,9 +117,37 @@ state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists(
 state.setdefault("codex_calls", []).append(sys.argv[1:])
 state_path.write_text(json.dumps(state), encoding="utf-8")
 sys.stdout.write(os.environ.get("MOCK_CODEX_OUTPUT", "[]"))
+sys.stderr.write(os.environ.get("MOCK_CODEX_STDERR", ""))
 sys.exit(int(os.environ.get("MOCK_CODEX_EXIT_CODE", "0")))
 '''
 	_write_exec(bin_dir / "codex", codex_script)
+
+
+def _install_security_audit_support_tree(base_dir: Path, *, failure_mode: str) -> Path:
+	support_dir = base_dir / "support"
+	scripts_dir = support_dir / "scripts"
+	prompts_dir = support_dir / "prompts"
+	scripts_dir.mkdir(parents=True, exist_ok=True)
+	prompts_dir.mkdir(parents=True, exist_ok=True)
+
+	for script_name in ("label_helpers.sh", "gh_helpers.sh", "render_prompt.py", "assemble_prompt.sh"):
+		(scripts_dir / script_name).symlink_to(REPO_ROOT / "scripts" / script_name)
+
+	render_helper_path = scripts_dir / "render_prompt.sh"
+	if failure_mode == "render_failure":
+		_write_exec(
+			render_helper_path,
+			'#!/usr/bin/env bash\nprintf \'%s\' "${MOCK_RENDER_STDERR:-}" >&2\nexit 23\n',
+		)
+	elif failure_mode != "missing_render_helper":
+		render_helper_path.symlink_to(REPO_ROOT / "scripts" / "render_prompt.sh")
+
+	if failure_mode != "missing_prompt":
+		(prompts_dir / "mode-security-audit.txt").symlink_to(
+			REPO_ROOT / "prompts" / "mode-security-audit.txt"
+		)
+
+	return support_dir
 
 
 def _run_security_audit(
@@ -127,8 +155,10 @@ def _run_security_audit(
 	*,
 	enabled: bool = True,
 	codex_output: str = "[]",
+	codex_available: bool = True,
 	extra_env: dict | None = None,
 	cwd: Path | None = None,
+	support_failure_mode: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict]:
 	with tempfile.TemporaryDirectory(prefix="security-audit-test-") as td:
 		tmp_path = Path(td)
@@ -136,25 +166,41 @@ def _run_security_audit(
 		bin_dir.mkdir(parents=True, exist_ok=True)
 		state_file = tmp_path / "gh-state.json"
 		_install_mock_gh(bin_dir, state_file)
-		_install_mock_codex(bin_dir, state_file)
+		if codex_available:
+			_install_mock_codex(bin_dir, state_file)
 		state_file.write_text(json.dumps(state), encoding="utf-8")
+		codex_home = tmp_path / "codex-home"
+		codex_home.mkdir(parents=True, exist_ok=True)
+		(codex_home / "config.toml").write_text('model = "test/model"\n', encoding="utf-8")
 
 		run_cwd = cwd or REPO_ROOT
 		env = os.environ.copy()
 		if Path(run_cwd) != REPO_ROOT:
 			env = {key: value for key, value in env.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+		existing_path_entries = env.get("PATH", "").split(os.pathsep)
+		if not codex_available:
+			existing_path_entries = [
+				path_entry
+				for path_entry in existing_path_entries
+				if not os.access(Path(path_entry) / "codex", os.X_OK)
+			]
 		env.update(
 			{
 				"GH_TOKEN": "test-token",
 				"GITHUB_REPOSITORY": "owner/repo",
 				"OPENROUTER_API_KEY": "test-openrouter-key",
+				"CODEX_HOME": str(codex_home),
 				"MOCK_CODEX_OUTPUT": codex_output,
 				"MOCK_GH_STATE_FILE": str(state_file),
-				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+				"PATH": os.pathsep.join((str(bin_dir), *existing_path_entries)),
 				"PYTHONDONTWRITEBYTECODE": "1",
 				"SECURITY_AUDIT_ENABLED": "true" if enabled else "false",
 			}
 		)
+		if support_failure_mode is not None:
+			env["SECURITY_AUDIT_SUPPORT_DIR"] = str(
+				_install_security_audit_support_tree(tmp_path, failure_mode=support_failure_mode)
+			)
 		env.update(extra_env or {})
 		proc = subprocess.run(
 			["bash", "--noprofile", "--norc", str(SCRIPT_PATH)],
@@ -213,6 +259,39 @@ def _iso_utc_for_current_week(*, day_offset: int) -> str:
 		tzinfo=timezone.utc,
 	)
 	return (week_start + timedelta(days=day_offset, hours=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _security_audit_tracker_state() -> dict:
+	return {
+		"issue_list_responses": [
+			[
+				{
+					"number": 9000,
+					"title": "AI Security Audit Tracker",
+					"body": "<!-- ai:security-audit-tracker:v1 -->\n# AI Security Audit Tracker\n",
+					"state": "OPEN",
+					"url": "https://github.com/owner/repo/issues/9000",
+				}
+			]
+		]
+	}
+
+
+def _assert_security_audit_failure_context(
+	proc: subprocess.CompletedProcess[str],
+	*,
+	phase: str,
+	path_suffix: str,
+	expected_cwd: Path = REPO_ROOT,
+) -> None:
+	assert proc.returncode != 0
+	assert f"phase={phase}" in proc.stderr
+	assert f"cwd={expected_cwd}" in proc.stderr
+	assert "path=" in proc.stderr
+	assert path_suffix in proc.stderr
+	assert "test-token" not in proc.stderr
+	assert "test-openrouter-key" not in proc.stderr
+	assert "Chief Security Officer" not in proc.stderr
 
 
 def test_security_audit_workflow_has_required_triggers_and_checkout_contract() -> None:
@@ -388,6 +467,128 @@ def test_security_audit_incremental_scope_drops_out_of_scope_findings() -> None:
 	assert "Suppressed out-of-scope findings: 1" in comment_bodies
 	edit_bodies = "\n".join(final_state.get("issue_edit_bodies", []))
 	assert f"<!-- ai:security-audit-last-sha:{head_sha} -->" in edit_bodies
+
+
+def test_security_audit_missing_render_helper_reports_sanitized_context() -> None:
+	proc, final_state = _run_security_audit(
+		_security_audit_tracker_state(),
+		support_failure_mode="missing_render_helper",
+	)
+	_assert_security_audit_failure_context(
+		proc,
+		phase="prompt-preflight",
+		path_suffix="scripts/render_prompt.sh",
+	)
+	assert proc.returncode == 1
+	assert final_state.get("codex_calls", []) == []
+
+
+def test_security_audit_missing_prompt_reports_sanitized_context() -> None:
+	proc, final_state = _run_security_audit(
+		_security_audit_tracker_state(),
+		support_failure_mode="missing_prompt",
+	)
+	_assert_security_audit_failure_context(
+		proc,
+		phase="prompt-preflight",
+		path_suffix="prompts/mode-security-audit.txt",
+	)
+	assert proc.returncode == 1
+	assert final_state.get("codex_calls", []) == []
+
+
+def test_security_audit_render_failure_preserves_status_and_reports_context() -> None:
+	proc, final_state = _run_security_audit(
+		_security_audit_tracker_state(),
+		support_failure_mode="render_failure",
+		extra_env={
+			"MOCK_RENDER_STDERR": (
+				"test-token Chief Security Officer\n"
+				"bash: /safe/missing-template: No such file or directory\n"
+			)
+		},
+	)
+	_assert_security_audit_failure_context(
+		proc,
+		phase="prompt-render",
+		path_suffix="prompts/mode-security-audit.txt",
+	)
+	assert proc.returncode == 23
+	assert "captured_path_error=" in proc.stderr
+	assert "missing-template" in proc.stderr
+	assert final_state.get("codex_calls", []) == []
+
+
+def test_security_audit_codex_failure_preserves_status_and_reports_context() -> None:
+	proc, final_state = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "29",
+			"MOCK_CODEX_STDERR": (
+				"test-openrouter-key Chief Security Officer\n"
+				"Error: No such file or directory (os error 2)\n"
+			),
+		},
+	)
+	_assert_security_audit_failure_context(
+		proc,
+		phase="codex-execution",
+		path_suffix="codex",
+	)
+	assert proc.returncode == 29
+	assert "captured_path_error=" in proc.stderr
+	assert "os\\ error\\ 2" in proc.stderr
+	assert len(final_state.get("codex_calls", [])) == 1
+	assert final_state.get("issue_comment_args", []) == []
+
+
+def test_security_audit_missing_codex_reports_sanitized_context() -> None:
+	proc, final_state = _run_security_audit(
+		_security_audit_tracker_state(),
+		codex_available=False,
+	)
+	_assert_security_audit_failure_context(
+		proc,
+		phase="codex-preflight",
+		path_suffix="path=codex",
+	)
+	assert proc.returncode == 1
+	assert final_state.get("codex_calls", []) == []
+
+
+def test_security_audit_redacts_credential_shaped_path_context() -> None:
+	credential_values = ("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890", "opaque-auth-value")
+	credential_context = f"{credential_values[0]}-Authorization: {credential_values[1]}"
+	with tempfile.TemporaryDirectory(prefix=f"security-audit-{credential_context}-") as td:
+		credential_cwd = Path(td)
+		proc, _ = _run_security_audit(
+			_security_audit_tracker_state(),
+			cwd=credential_cwd,
+			extra_env={
+				"SECURITY_AUDIT_FP_EXCLUSIONS": str(
+					REPO_ROOT / "scripts" / "security_audit_fp_exclusions.json"
+				)
+			},
+			support_failure_mode="missing_render_helper",
+		)
+
+	assert proc.returncode == 1
+	for credential_value in credential_values:
+		assert credential_value not in proc.stderr
+	assert "redacted" in proc.stderr
+
+
+def test_security_audit_success_path_retains_codex_and_tracker_behavior() -> None:
+	state = _security_audit_tracker_state()
+	state["issue_list_responses"].append([])
+	proc, final_state = _run_security_audit(state)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stderr == ""
+	assert "tracker=#9000 findings=0 followups_created=0" in proc.stdout
+	assert len(final_state.get("codex_calls", [])) == 1
+	assert len(final_state.get("issue_comment_args", [])) == 1
+	assert len(final_state.get("issue_edit_args", [])) >= 2
 
 
 def test_security_audit_filters_findings_and_caps_followups() -> None:

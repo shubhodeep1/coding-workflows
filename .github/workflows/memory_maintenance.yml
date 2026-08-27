@@ -80,257 +80,36 @@ jobs:
           }
           trap cleanup EXIT
 
-          if ! python3 - <<'PY' "${work_dir}/merged_learnings_source.json"
-          import importlib.util
-          import json
-          import os
-          import shutil
-          import sys
-          from pathlib import Path
+          set +e
+          python3 scripts/memory_maintenance_extract_learnings.py \
+            --source-output "${work_dir}/merged_learnings_source.json" \
+            --learning-output "${work_dir}/repo_learnings.json"
+          extract_status=$?
+          set -e
 
-
-          REPO_ROOT = Path.cwd().resolve()
-          OUTPUT_PATH = Path(sys.argv[1])
-          MODULE_PATH = REPO_ROOT / "scripts" / "ai_memory_lib.py"
-
-          spec = importlib.util.spec_from_file_location("ai_memory_lib", MODULE_PATH)
-          assert spec is not None and spec.loader is not None
-          ai_memory_lib = importlib.util.module_from_spec(spec)
-          sys.modules[spec.name] = ai_memory_lib
-          spec.loader.exec_module(ai_memory_lib)
-
-
-          def _load_json(path: Path) -> dict | None:
-              try:
-                  payload = json.loads(path.read_text(encoding="utf-8"))
-              except (OSError, ValueError, json.JSONDecodeError):
-                  return None
-              return payload if isinstance(payload, dict) else None
-
-
-          def _issue_number_for_record(record: dict) -> int | None:
-              lineage = record.get("lineage") or {}
-              scope = record.get("scope") or {}
-              raw_issue_number = lineage.get("issue_number")
-              if raw_issue_number is None:
-                  raw_issue_number = scope.get("issue_number")
-              try:
-                  return int(raw_issue_number)
-              except (TypeError, ValueError):
-                  return None
-
-
-          branch_dir = None
-          try:
-              branch_dir = ai_memory_lib.read_memory_root_from_branch(
-                  REPO_ROOT,
-                  memory_branch=os.getenv("AI_MEMORY_BRANCH", "ai-memory"),
-                  memory_root_relative=os.getenv("AI_MEMORY_ROOT", "ai-memory"),
-              )
-              memory_root = ai_memory_lib.resolve_memory_root_dir(
-                  branch_dir,
-                  os.getenv("AI_MEMORY_ROOT", "ai-memory"),
-              )
-
-              task_summary_records_by_issue: dict[int, dict] = {}
-
-              def consider_record(record: dict) -> None:
-                  if str(record.get("category") or "").strip().lower() != "task_summaries":
-                      return
-                  status = str(record.get("status") or "").strip().lower()
-                  if status not in {"active", "candidate", "promoted"}:
-                      return
-                  issue_number = _issue_number_for_record(record)
-                  if issue_number is None:
-                      return
-                  summary = str(record.get("summary") or "").strip()
-                  details = str(record.get("details") or "").strip()
-                  if not summary or not details:
-                      return
-                  timestamps = record.get("timestamps") or {}
-                  sort_key = (
-                      1 if status == "active" else 0,
-                      str(timestamps.get("promoted_at") or timestamps.get("created_at") or ""),
-                      float(record.get("confidence") or 0.0),
-                      str(record.get("record_id") or ""),
-                  )
-                  candidate = {
-                      "record_id": str(record.get("record_id") or ""),
-                      "summary": summary,
-                      "details": details[:1500],
-                      "confidence": float(record.get("confidence") or 0.0),
-                      "sort_key": sort_key,
-                  }
-                  existing = task_summary_records_by_issue.get(issue_number)
-                  if existing is None or candidate["sort_key"] > existing["sort_key"]:
-                      task_summary_records_by_issue[issue_number] = candidate
-
-              canonical_dir = memory_root / "global" / "canonical"
-              for record_path in sorted(canonical_dir.rglob("*.json")):
-                  payload = _load_json(record_path)
-                  if payload is not None:
-                      consider_record(payload)
-
-              for record_path in sorted((memory_root / "tasks").glob("issue-*/candidates/*.json")):
-                  payload = _load_json(record_path)
-                  if payload is not None:
-                      consider_record(payload)
-
-              merged_items: list[dict] = []
-              # The reusable workflow still runs on the existing monthly scheduler.
-              # Until cadence changes, sample a bounded set of recent merged tasks
-              # instead of assuming a 24h-only extraction window.
-              for lineage_path in sorted((memory_root / "tasks").glob("issue-*/lineage/task_lineage.v1.json")):
-                  lineage = _load_json(lineage_path)
-                  if not isinstance(lineage, dict) or lineage.get("state") != "merged":
-                      continue
-                  try:
-                      issue_number = int(lineage.get("issue_number"))
-                  except (TypeError, ValueError):
-                      continue
-                  summary_record = task_summary_records_by_issue.get(issue_number)
-                  if summary_record is None:
-                      continue
-
-                  prs = lineage.get("prs") or []
-                  pr_entry = prs[-1] if prs else {}
-                  run_ids: list[str] = []
-                  for run_entry in lineage.get("runs") or []:
-                      run_id = str((run_entry or {}).get("run_id") or "").strip()
-                      if run_id:
-                          run_ids.append(run_id)
-
-                  merged_items.append(
-                      {
-                          "issue_number": issue_number,
-                          "issue_url": str(lineage.get("issue_url") or ""),
-                          "pr_number": pr_entry.get("pr_number"),
-                          "pr_url": str(pr_entry.get("url") or ""),
-                          "merged_at": str(lineage.get("updated_at") or ""),
-                          "task_summary": summary_record["summary"],
-                          "task_details": summary_record["details"],
-                          "task_confidence": summary_record["confidence"],
-                          "source_record_id": summary_record["record_id"],
-                          "source_run_ids": run_ids[-3:],
-                      }
-                  )
-
-              merged_items.sort(
-                  key=lambda item: (str(item.get("merged_at") or ""), int(item.get("issue_number") or 0)),
-                  reverse=True,
-              )
-              merged_items = merged_items[:12]
-
-              source_refs: list[str] = []
-              for item in merged_items:
-                  for ref in (item.get("issue_url"), item.get("pr_url")):
-                      if isinstance(ref, str) and ref and ref not in source_refs:
-                          source_refs.append(ref)
-
-              OUTPUT_PATH.write_text(
-                  json.dumps(
-                      {
-                          "source_refs": source_refs[:10],
-                          "items": merged_items,
-                      },
-                      ensure_ascii=True,
-                      sort_keys=True,
-                  ),
-                  encoding="utf-8",
-              )
-          finally:
-              if branch_dir is not None:
-                  shutil.rmtree(branch_dir, ignore_errors=True)
-          PY
-          then
-            echo "::warning::Repository learnings source discovery failed; continuing without extraction"
-            exit 0
-          fi
+          case "${extract_status}" in
+            0)
+              ;;
+            10)
+              echo "::warning::Repository learnings source discovery failed; continuing without extraction"
+              exit 0
+              ;;
+            11)
+              echo "::warning::Repository learnings prompt render failed; continuing without extraction"
+              exit 0
+              ;;
+            12)
+              echo "::warning::Repository learnings model extraction failed; continuing without extraction"
+              exit 0
+              ;;
+            *)
+              echo "::warning::Repository learnings helper failed; continuing without extraction"
+              exit 0
+              ;;
+          esac
 
           if ! jq -e '(.items // []) | length > 0' "${work_dir}/merged_learnings_source.json" >/dev/null 2>&1; then
             echo "::notice::No merged task summaries available for repository learnings extraction"
-            exit 0
-          fi
-
-          if ! LEARNINGS_SOURCE_JSON="$(jq -c '.items // []' "${work_dir}/merged_learnings_source.json")" \
-            bash scripts/render_prompt.sh prompts/mode-extract-learnings.txt > "${work_dir}/extract_learnings_prompt.txt"; then
-            echo "::warning::Repository learnings prompt render failed; continuing without extraction"
-            exit 0
-          fi
-
-          if ! python3 - <<'PY' "${work_dir}/extract_learnings_prompt.txt" "${work_dir}/repo_learnings.json"
-          import json
-          import os
-          import sys
-          import urllib.request
-          from pathlib import Path
-
-
-          PROMPT_PATH = Path(sys.argv[1])
-          OUTPUT_PATH = Path(sys.argv[2])
-
-
-          def _strip_code_fences(text: str) -> str:
-              stripped = text.strip()
-              if not stripped.startswith("```"):
-                  return stripped
-              lines = [line for line in stripped.splitlines() if not line.strip().startswith("```")]
-              return "\n".join(lines).strip()
-
-
-          prompt = PROMPT_PATH.read_text(encoding="utf-8")
-          request_payload = json.dumps(
-              {
-                  "model": "openai/gpt-5.6-luna",
-                  "messages": [{"role": "user", "content": prompt}],
-                  "temperature": 0.0,
-                  "max_tokens": 1200,
-              }
-          ).encode("utf-8")
-          request = urllib.request.Request(
-              "https://openrouter.ai/api/v1/chat/completions",
-              data=request_payload,
-              headers={
-                  "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
-                  "Content-Type": "application/json",
-              },
-              method="POST",
-          )
-
-          with urllib.request.urlopen(request, timeout=120) as response:
-              raw_response = json.loads(response.read().decode("utf-8"))
-
-          content = _strip_code_fences(str((raw_response.get("choices") or [{}])[0].get("message", {}).get("content") or ""))
-          parsed = json.loads(content or "[]")
-          if not isinstance(parsed, list):
-              raise ValueError("repository learnings extractor response must be a JSON array")
-
-          normalized: list[dict[str, object]] = []
-          for item in parsed:
-              if not isinstance(item, dict):
-                  continue
-              summary = " ".join(str(item.get("summary") or "").split()).strip()
-              details = str(item.get("details") or "").strip()
-              try:
-                  confidence = float(item.get("confidence"))
-              except (TypeError, ValueError):
-                  continue
-              if not summary or not details:
-                  continue
-              normalized.append(
-                  {
-                      "summary": summary[:500],
-                      "details": details[:12000],
-                      "confidence": round(max(0.6, min(confidence, 0.95)), 2),
-                  }
-              )
-              if len(normalized) >= 5:
-                  break
-
-          OUTPUT_PATH.write_text(json.dumps(normalized, ensure_ascii=True), encoding="utf-8")
-          PY
-          then
-            echo "::warning::Repository learnings model extraction failed; continuing without extraction"
             exit 0
           fi
 

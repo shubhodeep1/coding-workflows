@@ -26,6 +26,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+try:
+	from openrouter_prompt_cache import format_openrouter_usage_line, is_cache_disabled
+except ModuleNotFoundError:
+	from scripts.openrouter_prompt_cache import format_openrouter_usage_line, is_cache_disabled
+
 # Per-run cap on the *filtered* log payload sent to the analyser.
 #
 # Set to `None` to disable input-side truncation entirely — the
@@ -330,7 +335,29 @@ def call_openrouter(
 	choices = payload.get("choices") or []
 	if not choices:
 		raise RuntimeError(f"OpenRouter returned no choices: {payload!r}")
-	return choices[0].get("message", {}).get("content") or ""
+	first_choice = choices[0]
+	if not isinstance(first_choice, dict):
+		raise RuntimeError("OpenRouter returned a malformed first choice")
+	message = first_choice.get("message")
+	if not isinstance(message, dict):
+		raise RuntimeError("OpenRouter returned a malformed choice message")
+	content = message.get("content") or ""
+	response_model = payload.get("model")
+	if not isinstance(response_model, str) or not response_model.strip():
+		response_model = model
+	print(
+		format_openrouter_usage_line(
+			payload.get("usage"),
+			model=response_model,
+			phase="release-gate",
+			call_label="soft-error-analyzer",
+			cache_enabled=not is_cache_disabled(),
+			cache_breakpoint_enabled=None,
+			cache_breakpoint_fallback_retry=None,
+		),
+		file=sys.stderr,
+	)
+	return content
 
 
 def main() -> int:

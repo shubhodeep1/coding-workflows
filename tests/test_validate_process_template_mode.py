@@ -255,6 +255,96 @@ def test_render_recovery_lint_gate_contract_present() -> None:
 	assert 'Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}.' in text
 
 
+def test_tg_notify_preserves_suffixes_and_fails_open() -> None:
+	text = _validate_process_text()
+	notification_helpers = "_gh_url() {" + text.split("_gh_url() {", 1)[1].split("\n# gh_retry is provided", 1)[0]
+
+	def _run_case(
+		*,
+		tracking_issue: int,
+		level: str | None = None,
+		failing_suffix: bool = False,
+	) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+		with tempfile.TemporaryDirectory(prefix="validate-tg-notify-") as td:
+			capture_path = Path(td) / "capture.bin"
+			suffix_override = ""
+			if failing_suffix:
+				suffix_override = """
+_tg_link_suffix()
+{
+	printf '%s' 'partial suffix that must be discarded'
+	return 17
+}
+"""
+			level_argument = "" if level is None else f" {shlex.quote(level)}"
+			script = f"""set -euo pipefail
+{notification_helpers}
+{suffix_override}
+tg_send_tracked()
+{{
+	printf '%s\\0%s\\0%s' "$1" "$2" "$3" > "${{CAPTURE_FILE}}"
+}}
+tg_send_msg()
+{{
+	printf '%s\\0%s' "$1" "$2" > "${{CAPTURE_FILE}}"
+}}
+
+TRACKING_ISSUE_NUM={tracking_issue}
+GITHUB_SERVER_URL=https://github.example
+GITHUB_REPOSITORY=octo/demo
+GITHUB_RUN_ID=77
+tg_notify 'Original alert'{level_argument}
+"""
+			proc = subprocess.run(
+				["bash", "-s"],
+				env={
+					**os.environ,
+					"BASH_ENV": "",
+					"ENV": "",
+					"CAPTURE_FILE": str(capture_path),
+				},
+				input=script,
+				text=True,
+				capture_output=True,
+				timeout=60,
+			)
+			assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert capture_path.exists(), (
+				f"tg_notify harness did not write capture file.\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			)
+			captured_arguments = capture_path.read_bytes().decode("utf-8").split("\0")
+			return proc, captured_arguments
+
+	success_proc, success_arguments = _run_case(tracking_issue=42)
+	assert success_proc.returncode == 0, success_proc.stderr
+	assert success_proc.stderr == ""
+	assert success_arguments == [
+		"42",
+		"Original alert\nIssue: https://github.example/octo/demo/issues/42\nRun: https://github.example/octo/demo/actions/runs/77",
+		"CRITICAL",
+	]
+
+	failure_proc, failure_arguments = _run_case(
+		tracking_issue=0,
+		level="WARNING",
+		failing_suffix=True,
+	)
+	assert failure_proc.returncode == 0, failure_proc.stderr
+	assert failure_arguments == ["Original alert", "WARNING"]
+	assert "::warning::Validation Telegram link suffix generation failed; sending alert without links." in failure_proc.stderr
+	assert "partial suffix" not in failure_arguments[0]
+
+	tracked_failure_proc, tracked_failure_arguments = _run_case(
+		tracking_issue=42,
+		level="WARNING",
+		failing_suffix=True,
+	)
+	assert tracked_failure_proc.returncode == 0, tracked_failure_proc.stderr
+	assert tracked_failure_arguments == ["42", "Original alert", "WARNING"]
+	assert "::warning::Validation Telegram link suffix generation failed; sending alert without links." in tracked_failure_proc.stderr
+	assert "partial suffix" not in tracked_failure_arguments[1]
+
+
 def test_write_result_files_emits_failure_summary_only_for_non_pass() -> None:
 	text = _validate_process_text()
 	assert 'emit_validation_failure_summary()' in text
@@ -835,6 +925,7 @@ def main() -> int:
 	test_template_mode_missing_manifest_returns_harness_error()
 	test_template_mode_harness_contract_accepts_missing_validate_env()
 	test_render_recovery_lint_gate_contract_present()
+	test_tg_notify_preserves_suffixes_and_fails_open()
 	test_write_result_files_emits_failure_summary_only_for_non_pass()
 	test_phase1_guard_paths_emit_failure_summary_before_exit()
 	test_phase0_guard_paths_emit_failure_summary_before_exit()

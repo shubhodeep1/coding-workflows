@@ -46,33 +46,19 @@ try:
     from cost_audit import (
         BREAK_GLASS_RE,
         CONTEXT_BUDGET_WARN_RE,
-        MCP_FALLBACK_GENERIC_RE,
-        MCP_PROBE_GENERIC_RE,
-        MCP_QUERY_GENERIC_RE,
         OPENROUTER_RE,
-        SEMBLE_FALLBACK_RE,
-        SEMBLE_QUERY_RE,
-        SERENA_FALLBACK_RE,
-        SERENA_PROBE_RE,
-        SERENA_QUERY_RE,
         aggregate_run_cost_telemetry,
         build_run_cost_telemetry,
+        validated_mcp_telemetry_event,
     )
 except ModuleNotFoundError:
     from scripts.cost_audit import (
         BREAK_GLASS_RE,
         CONTEXT_BUDGET_WARN_RE,
-        MCP_FALLBACK_GENERIC_RE,
-        MCP_PROBE_GENERIC_RE,
-        MCP_QUERY_GENERIC_RE,
         OPENROUTER_RE,
-        SEMBLE_FALLBACK_RE,
-        SEMBLE_QUERY_RE,
-        SERENA_FALLBACK_RE,
-        SERENA_PROBE_RE,
-        SERENA_QUERY_RE,
         aggregate_run_cost_telemetry,
         build_run_cost_telemetry,
+        validated_mcp_telemetry_event,
     )
 
 SCHEMA_VERSION = "workflow_log_collector.v2"
@@ -99,14 +85,6 @@ WORKFLOW_LOG_CACHE_SEEN_SET_LIMIT = 500
 WORKFLOW_LOG_CACHE_CANCELLED_FAILURE_POINT_VERSION = 1
 STRUCTURED_COST_TELEMETRY_PATTERNS = (
     OPENROUTER_RE,
-    SEMBLE_QUERY_RE,
-    SEMBLE_FALLBACK_RE,
-    SERENA_QUERY_RE,
-    SERENA_FALLBACK_RE,
-    SERENA_PROBE_RE,
-    MCP_QUERY_GENERIC_RE,
-    MCP_FALLBACK_GENERIC_RE,
-    MCP_PROBE_GENERIC_RE,
     BREAK_GLASS_RE,
     CONTEXT_BUDGET_WARN_RE,
 )
@@ -1241,7 +1219,10 @@ def _structured_cost_telemetry_line_key(line: str) -> str | None:
     line_text = line.rstrip()
     if not line_text:
         return None
-    if any(pattern.search(line_text) for pattern in STRUCTURED_COST_TELEMETRY_PATTERNS):
+    if (
+        validated_mcp_telemetry_event(line_text) is not None
+        or any(pattern.search(line_text) for pattern in STRUCTURED_COST_TELEMETRY_PATTERNS)
+    ):
         return line_text
     return None
 

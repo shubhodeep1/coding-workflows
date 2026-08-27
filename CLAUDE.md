@@ -882,8 +882,9 @@ not a git repo, undeterminable `<owner>/<repo>` — **allows** the command and
 emits a warning naming the branch. A guard that hard-blocks every commit
 whenever a token lapses would cost more than the bug it prevents.
 
-The guard is skipped entirely on the default branch, and when
-`CLAUDE_PR_MERGE_GUARD=off` is set (default: unset, i.e. enabled).
+The merged-PR check is skipped on the default branch and when
+`CLAUDE_PR_MERGE_GUARD=off` is set (default: unset, i.e. enabled). The API-write
+confirmation safeguard remains active in both cases.
 
 ### D) API-call budget
 

@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -28,6 +29,12 @@ POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 # captured output in a few minutes, instead of silently stalling the CI job
 # until the workflow-level `timeout-minutes` kills it.
 POLLER_SUBPROCESS_TIMEOUT_SEC = 180.0
+
+_TEST_RUNNER_EVENT_PREFIX = "TEST_CASE_EVENT: "
+_TEST_RUNNER_HEARTBEAT_INTERVAL_SEC = 60.0
+_TEST_RUNNER_HEARTBEAT_THREAD_PREFIX = "orchestrate-test-heartbeat:"
+_TEST_RUNNER_SLOWEST_LIMIT = 10
+_TEST_RUNNER_OUTPUT_LOCK = threading.Lock()
 
 
 # Directories and top-level files that the poller script under test needs
@@ -319,6 +326,90 @@ def test_judge_reasoning_effort_uses_configured_value_without_downgrade():
 	assert '--reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}"' in script
 
 
+def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths():
+	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	parameterized_search_calls = [
+		line.strip()
+		for line in poller_source_text.splitlines()
+		if "gh_retry gh api" in line and '"search/issues"' in line
+	]
+
+	assert len(parameterized_search_calls) == 4
+	assert all("--method GET" in call for call in parameterized_search_calls)
+	assert sum("--paginate" in call for call in parameterized_search_calls) == 2
+
+	# Preserve the two marker-search fallbacks and their paginated aggregation.
+	assert '-f per_page=100 -f q="${q_state}"' in poller_source_text
+	assert '-f per_page=100 -f q="${q_clarify}"' in poller_source_text
+	assert "jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]'" in poller_source_text
+
+	# Preserve reconstruction's fail-open default and deferred creation's
+	# fail-closed conditional while pinning only their HTTP method.
+	assert '-f q="repo:${GITHUB_REPOSITORY} \\"Tracking issue: #${TRACKING_NUM}\\" in:body"' in poller_source_text
+	assert "--jq '.items // []' 2>/dev/null || echo '[]')\"" in poller_source_text
+	assert '-f q="repo:${GITHUB_REPOSITORY} is:issue \\"Tracking issue: #${TRACKING_NUM}\\" in:body"' in poller_source_text
+	assert "--jq '.items // []' 2>/dev/null)\"; then" in poller_source_text
+
+
+def test_judge_context_issue_numbers_are_normalized_without_globbing():
+	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	block_start_marker = '  MERGED_PR_SUMMARIES=""\n  OPEN_PR_SUMMARIES=""\n'
+	block_end_marker = '  unset _sorted_issue_nums _issue_status\n'
+	block_start_index = poller_source_text.index(block_start_marker)
+	block_end_index = poller_source_text.index(block_end_marker, block_start_index)
+	production_block = poller_source_text[
+		block_start_index:block_end_index + len(block_end_marker)
+	]
+
+	with tempfile.TemporaryDirectory(prefix="judge-issue-number-normalization-") as tmp:
+		worktree = Path(tmp)
+		# Numeric filenames make both `*` and `[0-9]` expose any regression to
+		# unquoted shell expansion in the production block.
+		(worktree / "3").touch()
+		(worktree / "17").touch()
+		runner = worktree / "run-normalization.sh"
+		runner.write_text(
+			"#!/usr/bin/env bash\n"
+			"set -euo pipefail\n"
+			"LOOKUP_LOG=\"${1}\"\n"
+			"ISSUE_NUMS=\"${2-}\"\n"
+			"_issue_cross_ref_pr_number_last()\n"
+			"{\n"
+			"  printf '%s\\n' \"${1}\" >> \"${LOOKUP_LOG}\"\n"
+			"}\n"
+			f"{production_block}",
+			encoding="utf-8",
+		)
+		runner_env = os.environ.copy()
+		for inherited_name in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+			runner_env.pop(inherited_name, None)
+		cases = (
+			("mixed", "20 3\n20\t11", ["3", "11", "20"]),
+			("empty", "", []),
+			("whitespace", " \n\t ", []),
+			("glob-garbage", "8 * [0-9] 12x 2?", ["8"]),
+		)
+		for case_name, raw_issue_numbers, expected_lookups in cases:
+			lookup_log = worktree / f"{case_name}.log"
+			result = subprocess.run(
+				["bash", str(runner), str(lookup_log), raw_issue_numbers],
+				cwd=worktree,
+				env=runner_env,
+				capture_output=True,
+				text=True,
+				check=False,
+			)
+			assert result.returncode == 0, (
+				f"{case_name} normalization failed: stderr={result.stderr!r}"
+			)
+			actual_lookups = (
+				lookup_log.read_text(encoding="utf-8").splitlines()
+				if lookup_log.exists()
+				else []
+			)
+			assert actual_lookups == expected_lookups, case_name
+
+
 def _base_state(status: str = "in_progress") -> dict:
 	return {
 		"schema_version": "orchestrate_state.v1",
@@ -571,6 +662,7 @@ def _run_poller(
 	fail_search_issues: bool = False,
 	search_issue_items: list[dict] | None = None,
 	prs: list[dict] | None = None,
+	pr_commits: dict[int, list[dict]] | None = None,
 	pr_api_sequence: dict[int, list[dict]] | None = None,
 	existing_branches: list[str] | None = None,
 	merge_conflict_on_sync: bool = False,
@@ -643,6 +735,7 @@ def _run_poller(
 	issue_events = issue_events or {}
 	gql_labels = gql_labels or {}
 	prs = prs or []
+	pr_commits = pr_commits or {}
 	pr_api_sequence = pr_api_sequence or {}
 	existing_branches = existing_branches or ["main"]
 	blocked_check_shas = blocked_check_shas or []
@@ -780,6 +873,7 @@ def _run_poller(
 			"search_issue_items": list(search_issue_items or []),
 			"default_branch": "main",
 			"prs": prs,
+			"pr_commits": {str(k): list(v) for k, v in pr_commits.items()},
 			"pr_api_sequence": {str(k): list(v) for k, v in pr_api_sequence.items()},
 			"existing_branches": existing_branches,
 			"update_branch_calls": [],
@@ -1065,7 +1159,7 @@ if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
 		store['validation_dispatches'].append({'workflow': wf, 'tracking_issue': tracking, 'ref': ref})
 		save()
 		sys.exit(0)
-	if wf in ('ai-review.yml', 'internal-review.yml', 'review_autofix.yml'):
+	if wf in ('ai-review.yml', 'internal-review.yml', 'review_autofix.yml', 'review_rb_judge_dispatch.yml'):
 		pr_number = None
 		ref = None
 		for i, arg in enumerate(args):
@@ -1683,7 +1777,11 @@ if args[0] == 'api':
 
 	m = re.search(r'/pulls/(\d+)$', path)
 	m_files = re.search(r'/pulls/(\d+)/files(\?.*)?$', path)
+	m_commits = re.search(r'/pulls/(\d+)/commits(\?.*)?$', path)
 	m_update = re.search(r'/pulls/(\d+)/update-branch$', path)
+	if m_commits:
+		print(json.dumps(store.get('pr_commits', {}).get(m_commits.group(1), [])))
+		sys.exit(0)
 	if m_files:
 		pr_num = int(m_files.group(1))
 		pr = None
@@ -2147,6 +2245,12 @@ if args and args[0] == 'fetch':
 		refspec = args[3]
 	elif len(args) == 3 and args[1] == 'origin':
 		refspec = args[2]
+	# Production refspecs updating remote-tracking refs carry the force
+	# prefix (`+refs/heads/X:refs/remotes/origin/X`). Normalize it away so
+	# call bookkeeping, fail-injection keys, and the src/dst parse below
+	# keep working with the unforced form tests have always used.
+	if refspec and refspec.startswith('+'):
+		refspec = refspec[1:]
 	if refspec:
 		calls = store.setdefault('git_fetch_calls', {})
 		calls[refspec] = int(calls.get(refspec, 0)) + 1
@@ -6402,6 +6506,7 @@ def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blan
 		prs=[
 			{
 				"number": 416,
+				"body": "Closes #501",
 				"state": "open",
 				"baseRefName": "main",
 				"headRefName": head_ref,
@@ -6460,6 +6565,7 @@ def test_standalone_retrigger_review_skips_empty_commit_for_review_run_past_stal
 		prs=[
 			{
 				"number": 416,
+				"body": "Closes #501",
 				"state": "open",
 				"baseRefName": "main",
 				"headRefName": head_ref,
@@ -6495,6 +6601,371 @@ def test_standalone_retrigger_review_skips_empty_commit_for_review_run_past_stal
 	assert result.get("git_push_calls", []) == [], (
 		f"expected no standalone empty-commit push when an in-budget review run blocks recovery; "
 		f"got push calls {result.get('git_push_calls', [])}"
+	)
+
+
+def test_standalone_retrigger_review_counts_unresolvable_wrong_pr_as_attempt():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"body": "Refs #501",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+				"headRefFromApi": "claude/unrelated-fix",
+				"headSha": "sha416",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert standalone_state["phase_attempts"]["ai:done"] == 1
+	assert standalone_state["status_since_ts"] != 1
+	assert result.get("git_push_calls", []) == []
+	assert result["review_dispatches"] == []
+	assert "none could be resolved; skipping empty-commit retrigger" in result["stdout"]
+	assert not any(
+		"/approved" in str(comment.get("body", ""))
+		for comment in result["issues"]["501"]["comments"]
+	)
+
+
+def test_standalone_retrigger_review_retargets_verified_implementation_pr():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: [416, 417]},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"body": "Automated implementation.",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-501",
+				"headRefFromApi": "ai/issue-501",
+				"headSha": "sha416",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+			{
+				"number": 417,
+				"body": "Refs #501",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+				"headRefFromApi": "claude/unrelated-fix",
+				"headSha": "sha417",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert ["origin", "HEAD:ai/issue-501"] in result.get("git_push_calls", [])
+	assert "retargeting to PR #416" in result["stdout"]
+	assert "HEAD:claude/unrelated-fix" not in str(result.get("git_push_calls", []))
+	assert not any(
+		"/approved" in str(comment.get("body", ""))
+		for comment in result["issues"]["501"]["comments"]
+	)
+
+
+def test_standalone_retrigger_review_mixed_fetch_failure_counts_conclusive_rejection():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: [416, 417]},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 417,
+				"body": "Refs #501",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+				"headRefFromApi": "claude/unrelated-fix",
+				"headSha": "sha417",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert standalone_state["status_since_ts"] != 1
+	assert result.get("git_push_calls", []) == []
+	assert "none could be resolved; skipping empty-commit retrigger" in result["stdout"]
+	assert not any(
+		"/approved" in str(comment.get("body", ""))
+		for comment in result["issues"]["501"]["comments"]
+	)
+
+
+def test_standalone_attempt_merge_retries_inconclusive_pr_lookup_without_increment():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:ready-to-merge",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:ready-to-merge"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 0
+	assert standalone_state["status_since_ts"] == 1
+	assert result.get("merged_prs", []) == []
+	assert "retrying merge next poll without consuming recovery budget" in result["stdout"]
+
+
+def test_standalone_attempt_merge_counts_conclusive_missing_implementation_pr_accurately():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:ready-to-merge",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:ready-to-merge"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[{
+			"number": 416,
+			"body": "Refs #501",
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "claude/unrelated-fix",
+		}],
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert result.get("merged_prs", []) == []
+	assert "no implementation PR could be resolved; counting the skipped merge as an attempt" in result["stdout"]
+	assert "attempted merge retry for ready-to-merge issue" not in result["stdout"]
+
+
+def test_standalone_dispatch_rb_judge_retargets_verified_implementation_pr():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:review-blocked",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:review-blocked"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: [416, 417]},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"body": "Automated implementation.",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-501",
+			},
+			{
+				"number": 417,
+				"body": "Refs #501",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+			},
+		],
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert [dispatch["pr_number"] for dispatch in result["review_dispatches"]] == [416]
+
+
+def test_managed_dispatch_rb_judge_retargets_verified_implementation_pr():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:review-blocked"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: [77, 78]},
+		prs=[
+			{
+				"number": 77,
+				"body": "Automated implementation.",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-10",
+			},
+			{
+				"number": 78,
+				"body": "Refs #10",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+			},
+		],
+	)
+	issue_state = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_state["stall_recovery_count"] == 1
+	assert [dispatch["pr_number"] for dispatch in result["review_dispatches"]] == [77]
+
+
+def test_managed_skip_healthy_pr_redirect_targets_verified_implementation_pr():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: [77, 78]},
+		prs=[
+			{
+				"number": 77,
+				"body": "Automated implementation.",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-10",
+			},
+			{
+				"number": 78,
+				"body": "Refs #10",
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "claude/unrelated-fix",
+			},
+		],
+		pr_commits={
+			77: [{"commit": {"message": "[ai-autofix] productive fix", "committer": {"date": "2099-01-01T00:00:00Z"}}}],
+			78: [{"commit": {"message": "[ai-autofix] unrelated fix", "committer": {"date": "2099-01-01T00:00:00Z"}}}],
+		},
+		env_overrides={"MAX_STALL_RECOVERIES_DONE": "1"},
+	)
+	assert [dispatch["pr_number"] for dispatch in result["review_dispatches"]] == [77]
+	assert result["issues"]["10"].get("closed", False) is False
+	assert "skip→dispatch_rb_judge: PR #77" in result["stdout"]
+	assert "skip→dispatch_rb_judge: PR #78" not in result["stdout"]
+
+
+def test_managed_skip_retries_timeline_discovery_failure_without_closing_issue():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		timeline_fail_for_issues=[10],
+		env_overrides={"MAX_STALL_RECOVERIES_DONE": "1"},
+	)
+	issue_state = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_state["stall_recovery_count"] == 1
+	assert issue_state["status_since_ts"] == 1
+	assert result["issues"]["10"].get("closed", False) is False
+	assert result["review_dispatches"] == []
+	assert "skip healthy-PR guard: implementation PR lookup was inconclusive" in result["stdout"]
+	assert not any(
+		"/approved" in str(comment.get("body", ""))
+		for comment in result["issues"]["10"]["comments"]
 	)
 
 
@@ -6616,6 +7087,7 @@ def test_standalone_retrigger_review_does_not_increment_when_empty_commit_checko
 		prs=[
 			{
 				"number": 417,
+				"body": "Closes #502",
 				"state": "open",
 				"baseRefName": "main",
 				"headRefName": head_ref,
@@ -9569,6 +10041,7 @@ def test_retrigger_review_redispatches_when_last_autofix_concluded_failure():
 		prs=[
 			{
 				"number": 77,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9611,6 +10084,7 @@ def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure(
 		prs=[
 			{
 				"number": 78,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9629,6 +10103,33 @@ def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure(
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1
+	assert result.get("git_push_calls", []), (
+		"expected the no-prior-failure case to exercise the empty-commit push path"
+	)
+
+
+def test_retrigger_review_retries_inconclusive_pr_lookup_without_reimplementing():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 86},
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0
+	assert result.get("git_push_calls", []) == []
+	assert "implementation PR lookup was inconclusive" in result["stdout"]
+	assert not any(
+		"/approved" in str(comment.get("body", ""))
+		for comment in result["issues"]["10"]["comments"]
+	)
 
 
 def test_retrigger_review_does_not_increment_when_redispatch_skipped():
@@ -9647,6 +10148,7 @@ def test_retrigger_review_does_not_increment_when_redispatch_skipped():
 		prs=[
 			{
 				"number": 79,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9708,6 +10210,7 @@ def test_retrigger_review_skips_empty_commit_when_review_run_inflight():
 		prs=[
 			{
 				"number": 80,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9764,6 +10267,7 @@ def test_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_bran
 		prs=[
 			{
 				"number": 84,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9819,6 +10323,7 @@ def test_retrigger_review_ignores_inflight_run_on_unrelated_branch():
 		prs=[
 			{
 				"number": 81,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9855,6 +10360,9 @@ def test_retrigger_review_ignores_inflight_run_on_unrelated_branch():
 		f"different branch; got stall_recovery_count="
 		f"{issue_entry['stall_recovery_count']}"
 	)
+	assert result.get("git_push_calls", []), (
+		"expected an unrelated in-flight run to leave the empty-commit push path active"
+	)
 
 
 def test_retrigger_review_inflight_guard_treats_zombie_run_as_eligible():
@@ -9878,6 +10386,7 @@ def test_retrigger_review_inflight_guard_treats_zombie_run_as_eligible():
 		prs=[
 			{
 				"number": 82,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9904,6 +10413,9 @@ def test_retrigger_review_inflight_guard_treats_zombie_run_as_eligible():
 	assert issue_entry["stall_recovery_count"] == 1, (
 		f"expected empty-commit push to proceed past zombie in-flight run; "
 		f"got stall_recovery_count={issue_entry['stall_recovery_count']}"
+	)
+	assert result.get("git_push_calls", []), (
+		"expected a zombie review run to leave the empty-commit push path active"
 	)
 
 
@@ -9937,6 +10449,7 @@ def test_retrigger_review_skips_empty_commit_for_review_run_past_stall_threshold
 		prs=[
 			{
 				"number": 3082,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -9991,6 +10504,7 @@ def test_retrigger_review_skips_empty_commit_when_pr_head_advanced_after_snapsho
 		prs=[
 			{
 				"number": 83,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -10030,6 +10544,7 @@ def test_retrigger_review_does_not_increment_when_empty_commit_checkout_fails():
 		prs=[
 			{
 				"number": 85,
+				"body": "Closes #10",
 				"state": "open",
 				"mergeable": True,
 				"mergeable_state": "clean",
@@ -14425,6 +14940,242 @@ def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration
 		shutil.rmtree(tmp_root, ignore_errors=True)
 
 
+def _test_elapsed_ms(started_at: float) -> int:
+	return max(0, int((time.monotonic() - started_at) * 1000))
+
+
+def _emit_test_runner_event(
+	event: str,
+	test_name: str,
+	elapsed_ms: int,
+	status: str,
+	output_stream,
+	*,
+	rank: int | None = None,
+) -> None:
+	payload = {
+		"elapsed_ms": elapsed_ms,
+		"event": event,
+		"status": status,
+		"test_name": test_name,
+	}
+	if rank is not None:
+		payload["rank"] = rank
+	serialized_payload = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+	# Keep event JSON parseable when a running test leaves stdout mid-line.
+	with _TEST_RUNNER_OUTPUT_LOCK:
+		output_stream.write(f"\n{_TEST_RUNNER_EVENT_PREFIX}{serialized_payload}\n")
+		output_stream.flush()
+
+
+def _test_heartbeat_worker(
+	stop_event: threading.Event,
+	test_name: str,
+	started_at: float,
+	heartbeat_interval_sec: float,
+	output_stream,
+) -> None:
+	if heartbeat_interval_sec <= 0:
+		return
+	while not stop_event.wait(heartbeat_interval_sec):
+		_emit_test_runner_event(
+			"heartbeat",
+			test_name,
+			_test_elapsed_ms(started_at),
+			"running",
+			output_stream,
+		)
+
+
+def _run_selected_tests(
+	test_funcs: list,
+	*,
+	heartbeat_interval_sec: float = _TEST_RUNNER_HEARTBEAT_INTERVAL_SEC,
+	slowest_limit: int = _TEST_RUNNER_SLOWEST_LIMIT,
+) -> int:
+	passed = 0
+	failed = 0
+	results: list[tuple[str, int, str]] = []
+	runner_output = sys.stdout
+	for func in test_funcs:
+		name = func.__name__
+		started_at = time.monotonic()
+		_emit_test_runner_event("start", name, 0, "running", runner_output)
+		heartbeat_stop = None
+		heartbeat_thread = None
+		try:
+			heartbeat_stop = threading.Event()
+			heartbeat_thread = threading.Thread(
+				target=_test_heartbeat_worker,
+				args=(
+					heartbeat_stop,
+					name,
+					started_at,
+					heartbeat_interval_sec,
+					runner_output,
+				),
+				daemon=True,
+				name=f"{_TEST_RUNNER_HEARTBEAT_THREAD_PREFIX}{name}",
+			)
+			heartbeat_thread.start()
+		except Exception:
+			if heartbeat_stop is not None:
+				try:
+					heartbeat_stop.set()
+				except Exception:
+					pass
+			if heartbeat_thread is not None:
+				try:
+					heartbeat_thread.join()
+				except Exception:
+					pass
+			heartbeat_thread = None
+
+		failure = None
+		status = "pass"
+		try:
+			func()
+		except Exception as exc:
+			failure = exc
+			status = "fail"
+		finally:
+			if heartbeat_stop is not None:
+				try:
+					heartbeat_stop.set()
+				except Exception:
+					pass
+			if heartbeat_thread is not None:
+				try:
+					heartbeat_thread.join()
+				except Exception:
+					pass
+
+		elapsed_ms = _test_elapsed_ms(started_at)
+		results.append((name, elapsed_ms, status))
+		_emit_test_runner_event("complete", name, elapsed_ms, status, runner_output)
+		if failure is None:
+			print(f"  PASS  {name}", file=runner_output, flush=True)
+			passed += 1
+		else:
+			print(f"  FAIL  {name}: {failure}", file=runner_output, flush=True)
+			failed += 1
+
+	for rank, (name, elapsed_ms, status) in enumerate(
+		sorted(results, key=lambda result: (-result[1], result[0]))[:max(0, slowest_limit)],
+		start=1,
+	):
+		_emit_test_runner_event(
+			"slowest", name, elapsed_ms, status, runner_output, rank=rank
+		)
+
+	print(
+		f"\n{passed} passed, {failed} failed, {passed + failed} total",
+		file=runner_output,
+		flush=True,
+	)
+	return 1 if failed > 0 else 0
+
+
+def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
+	import contextlib
+	import io
+
+	def synthetic_fast():
+		pass
+
+	def synthetic_slow():
+		print("synthetic partial", end="")
+		time.sleep(0.2)
+
+	def synthetic_failure():
+		raise RuntimeError("synthetic failure")
+
+	output = io.StringIO()
+	with contextlib.redirect_stdout(output):
+		exit_code = _run_selected_tests(
+			[synthetic_fast, synthetic_slow, synthetic_failure],
+			heartbeat_interval_sec=0.005,
+			slowest_limit=2,
+		)
+	assert exit_code == 1
+	assert "synthetic partial\nTEST_CASE_EVENT: " in output.getvalue()
+	lines = output.getvalue().splitlines()
+	assert "  PASS  synthetic_fast" in lines
+	assert "  PASS  synthetic_slow" in lines
+	assert "  FAIL  synthetic_failure: synthetic failure" in lines
+	assert lines[-1] == "2 passed, 1 failed, 3 total"
+
+	events = [
+		json.loads(line.removeprefix(_TEST_RUNNER_EVENT_PREFIX))
+		for line in lines
+		if line.startswith(_TEST_RUNNER_EVENT_PREFIX)
+	]
+	for test_name, expected_status in (
+		("synthetic_fast", "pass"),
+		("synthetic_slow", "pass"),
+		("synthetic_failure", "fail"),
+	):
+		test_events = [
+			event
+			for event in events
+			if event["test_name"] == test_name and event["event"] != "slowest"
+		]
+		assert test_events[0] == {
+			"elapsed_ms": 0,
+			"event": "start",
+			"status": "running",
+			"test_name": test_name,
+		}
+		complete_indexes = [
+			index for index, event in enumerate(test_events) if event["event"] == "complete"
+		]
+		assert complete_indexes == [len(test_events) - 1]
+		assert test_events[-1]["status"] == expected_status
+		assert test_events[-1]["elapsed_ms"] >= 0
+	assert any(
+		event["event"] == "heartbeat" and event["test_name"] == "synthetic_slow"
+		for event in events
+	)
+
+	slowest_events = [event for event in events if event["event"] == "slowest"]
+	assert [event["rank"] for event in slowest_events] == [1, 2]
+	assert [
+		(-event["elapsed_ms"], event["test_name"])
+		for event in slowest_events
+	] == sorted(
+		(-event["elapsed_ms"], event["test_name"])
+		for event in slowest_events
+	)
+	synthetic_thread_names = {
+		f"{_TEST_RUNNER_HEARTBEAT_THREAD_PREFIX}{test_name}"
+		for test_name in ("synthetic_fast", "synthetic_slow", "synthetic_failure")
+	}
+	assert not any(
+		thread.name in synthetic_thread_names
+		for thread in threading.enumerate()
+	)
+
+	pass_output = io.StringIO()
+	with contextlib.redirect_stdout(pass_output):
+		assert _run_selected_tests(
+			[synthetic_fast], heartbeat_interval_sec=0.005, slowest_limit=1
+		) == 0
+	assert pass_output.getvalue().splitlines()[-1] == "1 passed, 0 failed, 1 total"
+	assert not any(
+		thread.name in synthetic_thread_names
+		for thread in threading.enumerate()
+	)
+
+	pass_output.seek(0)
+	pass_output.truncate(0)
+	with contextlib.redirect_stdout(pass_output):
+		assert _run_selected_tests(
+			[synthetic_fast], heartbeat_interval_sec=0, slowest_limit=-1
+		) == 0
+	assert '"event":"heartbeat"' not in pass_output.getvalue()
+	assert '"event":"slowest"' not in pass_output.getvalue()
+
+
 def main() -> int:
 	# Force line-buffered stdout so PASS/FAIL messages surface to CI logs as
 	# each test completes, instead of sitting in Python's default block buffer
@@ -14450,20 +15201,7 @@ def main() -> int:
 		test_funcs = [tests_by_name[name] for name in selected_names]
 	else:
 		test_funcs = list(tests_by_name.values())
-	passed = 0
-	failed = 0
-	for func in test_funcs:
-		name = func.__name__
-		try:
-			func()
-			print(f"  PASS  {name}", flush=True)
-			passed += 1
-		except Exception as e:
-			print(f"  FAIL  {name}: {e}", flush=True)
-			failed += 1
-
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
-	return 1 if failed > 0 else 0
+	return _run_selected_tests(test_funcs)
 
 
 if __name__ == "__main__":

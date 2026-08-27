@@ -1002,7 +1002,7 @@ _record_merge_conflict_telemetry()
 	local attempt
 	for attempt in 1 2 3; do
 		rm -rf "${wt}" 2>/dev/null || true
-		if ! git fetch --quiet origin "${branch}:refs/remotes/origin/${branch}" 2>/dev/null; then
+		if ! git fetch --quiet origin "+refs/heads/${branch}:refs/remotes/origin/${branch}" 2>/dev/null; then
 			# Branch may not exist yet despite memory_ensure_branch; fall
 			# through and try to create the worktree from an orphan.
 			:
@@ -2848,14 +2848,15 @@ _issue_cross_ref_pr_number_last() {
 # event was never recorded (observed in prod for issue #2552 / PR #2568,
 # where the timeline API did not expose the reference even though the PR
 # body said "Closes #<n>").
-# Output: newline-separated PR numbers, empty if none.  Fail-open.
+# Output: newline-separated PR numbers, empty if none. Callers that need
+# fail-open behavior append `|| true`; other callers can inspect failures.
 _linked_prs_by_branch_name()
 {
 	local issue_num="$1"
 	[[ "${issue_num}" =~ ^[0-9]+$ ]] || return 0
 	gh_retry gh pr list --repo "${GITHUB_REPOSITORY}" \
 		--head "ai/issue-${issue_num}" --state open \
-		--json number --jq '.[].number' 2>/dev/null || true
+		--json number --jq '.[].number' 2>/dev/null
 }
 
 # _linked_prs_by_body_reference — Return open PR numbers whose body
@@ -3197,7 +3198,7 @@ validation_fix_issue_has_merged_pr_evidence() {
 
   for validation_candidate_pr in ${validation_merged_pr_candidates}; do
     [[ "${validation_candidate_pr}" =~ ^[0-9]+$ ]] || continue
-    # §14 audit: the existing timeline response has merge state and number,
+    # §15 audit: the existing timeline response has merge state and number,
     # but not the PR body/head needed by the implementation-PR predicate.
     # Fetch only merged candidates and fail open to a retry on lookup failure.
     validation_candidate_pr_json="$(_fetch_pr_json "${validation_candidate_pr}")"
@@ -4075,7 +4076,7 @@ resolve_branch_analysis_ref() {
     return 0
   fi
 
-  if git fetch --no-tags origin "refs/heads/${branch_name}:refs/remotes/origin/${branch_name}" >/dev/null 2>&1 \
+  if git fetch --no-tags origin "+refs/heads/${branch_name}:refs/remotes/origin/${branch_name}" >/dev/null 2>&1 \
     && git rev-parse --verify -q "refs/remotes/origin/${branch_name}" >/dev/null 2>&1; then
     printf 'refs/remotes/origin/%s' "${branch_name}"
     return 0
@@ -6561,8 +6562,8 @@ _attempt_branch_rebuild_after_escalation() {
     return 0
   fi
 
-  if ! git fetch --no-tags origin "refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1 \
-    || ! git fetch --no-tags origin "refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+  if ! git fetch --no-tags origin "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1 \
+    || ! git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
     BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild for '${integration_branch}' was skipped because the local pre-rebuild fetch failed."
     final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "skipped_preflight" "false" "Unable to fetch ${default_branch} and ${integration_branch} refs locally before rebuild." "${rebuild_started_at}")"
     _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
@@ -6620,7 +6621,7 @@ _attempt_branch_rebuild_after_escalation() {
     return 0
   fi
 
-  if ! git fetch --no-tags origin "refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+  if ! git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
     completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild for '${integration_branch}' recreated the remote ref but could not fetch it locally; leaving the project escalated for retry."
     final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "skipped_preflight" "false" "Recreated '${integration_branch}' but could not fetch the new remote branch ref locally; leaving the project escalated for retry." "${completed_at}")"
@@ -9814,20 +9815,40 @@ STALL_EOF
     retrigger_review)
       echo "  Re-triggering review for issue #${issue_num}..."
       local pr_num
-      pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+      # Target only the issue's OWN implementation PR. The previous
+      # _issue_cross_ref_pr_number_last lookup targeted the last PR that
+      # merely mentions the issue, so the empty-commit push landed on an
+      # unrelated PR's branch (issue #3816 / PR #3828 incident, poller run
+      # 32891613081). When no implementation PR resolves, fall through to
+      # the existing no-PR branch (re-trigger implementation) instead of
+      # pushing to a mention-only PR.
+      if _resolve_issue_implementation_pr "${issue_num}"; then
+        pr_num="${STALL_IMPL_PR_NUM}"
+      else
+        if [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
+          echo "  Issue #${issue_num} implementation PR lookup was inconclusive; retrying next poll without re-triggering implementation."
+          STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_pr_lookup_failed"
+          return 1
+        fi
+        pr_num=""
+      fi
       if [[ "${pr_num}" =~ ^[0-9]+$ ]]; then
         local head_ref
         # Belt-and-braces conflict check (Q1:A, Q2:A, Q3:B).  The
         # pre-dispatch guard in run_standalone_stall_recovery should have
         # redirected this action when the PR is conflicted, but the
         # managed-path recover_stalled_issue dispatches straight here
-        # without that guard.  Single PR fetch (reused below for head_ref)
-        # so this adds no extra API calls on the happy path.
+        # without that guard.  PR payload reused from
+        # _resolve_issue_implementation_pr so this adds no extra API calls
+        # on the happy path.
         local _rtr_pr_json
         local _rtr_mergeable
         local _rtr_merge_state
         local _rtr_head_sha
-        _rtr_pr_json="$(_fetch_pr_json "${pr_num}")"
+        _rtr_pr_json="${STALL_IMPL_PR_JSON:-}"
+        if [ -z "${_rtr_pr_json}" ] || [ "${_rtr_pr_json}" = "{}" ]; then
+          _rtr_pr_json="$(_fetch_pr_json "${pr_num}")"
+        fi
         head_ref="$(_jq_field "${_rtr_pr_json}" '.head.ref')"
         _rtr_mergeable="$(_jq_field "${_rtr_pr_json}" '.mergeable' 'true|false')"
         _rtr_merge_state="$(_jq_field "${_rtr_pr_json}" '.mergeable_state')"
@@ -10015,7 +10036,7 @@ STALL_EOF
             STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
             return 1
           fi
-          if git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
+          if git fetch origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
             _rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
             if [[ "${_rtr_head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
                [ "${_rtr_origin_head_sha}" != "${_rtr_head_sha}" ]; then
@@ -10162,12 +10183,14 @@ REISSUE_EOF
       # SKIP_HEALTHY_PR_LOOKBACK_HOURS (default 24h).  Disable by
       # setting SKIP_HEALTHY_PR_GUARD_ENABLED=false.
       local _skip_pr_num=""
-      if [ -n "${STALL_MANAGED_LINKED_PR_CACHE:-}" ]; then
-        _skip_pr_num="$(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" \
-          | jq -r --arg n "${issue_num}" '.[$n].number // empty' 2>/dev/null || echo "")"
-      fi
-      if ! [[ "${_skip_pr_num}" =~ ^[0-9]+$ ]]; then
-        _skip_pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+      if [ "${SKIP_HEALTHY_PR_GUARD_ENABLED:-true}" = "true" ]; then
+        if _resolve_issue_implementation_pr "${issue_num}"; then
+          _skip_pr_num="${STALL_IMPL_PR_NUM}"
+        elif [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
+          echo "::warning::skip healthy-PR guard: implementation PR lookup was inconclusive for issue #${issue_num}; retrying next poll instead of closing or dispatching against an unverified PR."
+          STALL_RECOVERY_EFFECTIVE_ACTION="skip_skipped_pr_lookup_failed"
+          return 1
+        fi
       fi
       if [ "${SKIP_HEALTHY_PR_GUARD_ENABLED:-true}" = "true" ] \
           && [[ "${_skip_pr_num}" =~ ^[0-9]+$ ]]; then
@@ -10276,18 +10299,18 @@ The judge will evaluate this gap when the wave completes and decide whether to r
 
     dispatch_rb_judge)
       # Autonomous escape from ai:review-blocked: dispatch the
-      # standalone review-blocked judge workflow for the linked PR.
+      # standalone review-blocked judge workflow for the issue's own
+      # implementation PR.
       # The judge (scripts/review_rb_judge.sh) then decides merge,
-      # fix, or close_and_reissue.  Linked PR lookup prefers the
-      # shared stall cache (STALL_MANAGED_LINKED_PR_CACHE) and falls
-      # back to the legacy per-issue REST cross-ref helper.
+      # fix, or close_and_reissue. Mention-only cross-references must
+      # never become judge targets.
       local rb_pr_num=""
-      if [ -n "${STALL_MANAGED_LINKED_PR_CACHE:-}" ]; then
-        rb_pr_num="$(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" \
-          | jq -r --arg n "${issue_num}" '.[$n].number // empty' 2>/dev/null || echo "")"
-      fi
-      if ! [[ "${rb_pr_num}" =~ ^[0-9]+$ ]]; then
-        rb_pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+      if _resolve_issue_implementation_pr "${issue_num}"; then
+        rb_pr_num="${STALL_IMPL_PR_NUM}"
+      elif [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
+        echo "::warning::dispatch_rb_judge: implementation PR lookup was inconclusive for issue #${issue_num}; retrying next poll without consuming recovery budget."
+        STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_rb_judge_skipped_pr_lookup_failed"
+        return 1
       fi
       if ! [[ "${rb_pr_num}" =~ ^[0-9]+$ ]]; then
         # No linked PR — the judge has nothing to act on.  Increment
@@ -10789,8 +10812,8 @@ _fetch_standalone_marker_issues_graphql() {
   if [ "${state_has_next}" = "true" ] || [ "${clarify_has_next}" = "true" ]; then
     local marker_state
     local marker_clarify
-    marker_state="$(gh_retry gh api --paginate "search/issues" -f per_page=100 -f q="${q_state}" 2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
-    marker_clarify="$(gh_retry gh api --paginate "search/issues" -f per_page=100 -f q="${q_clarify}" 2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
+    marker_state="$(gh_retry gh api --method GET --paginate "search/issues" -f per_page=100 -f q="${q_state}" 2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
+    marker_clarify="$(gh_retry gh api --method GET --paginate "search/issues" -f per_page=100 -f q="${q_clarify}" 2>/dev/null | jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]')"
     jq -cn --argjson state "${marker_state}" --argjson clarify "${marker_clarify}" '{state:$state,clarify:$clarify}'
     return
   fi
@@ -11189,6 +11212,104 @@ _pr_json_is_issue_implementation_pr() {
   fi
   if _pr_json_closes_issue "${issue_num}" "${pr_json}"; then
     return 0
+  fi
+  return 1
+}
+
+# _resolve_issue_implementation_pr — resolve the ISSUE'S OWN implementation
+# PR for stall-recovery actions that push to the linked PR's branch.
+#
+# The retrigger_review executor used to target the PR returned by
+# _issue_cross_ref_pr_number_last — the LAST PR that mentions the issue.
+# In poller run 32891613081 issue #3816's latest cross-reference was the
+# unrelated investigation PR #3828 ("Refs #3816"), so the stall recovery
+# pushed its empty commit onto that PR's branch instead of the real
+# implementation PR #3823 (head ai/issue-3816), and the wrong PR's review
+# pipeline failure then labeled the wrong issues ai:review-blocked.
+#
+# Resolution order:
+#   1. Open PR on the conventional implement branch `ai/issue-<n>`
+#      (_linked_prs_by_branch_name), newest PR number first — deterministic
+#      and unmaskable by mention-only cross-references.
+#   2. Cross-referenced PRs, newest first, accepting the first that
+#      passes _pr_json_is_issue_implementation_pr; mention-only PRs are
+#      logged and skipped.
+#
+# §15 audit: callers previously issued 1 timeline fetch + 1 pulls/<n>
+# fetch. This helper issues 1 `gh pr list --head` + 1 pulls/<n> on the
+# conventional path (the overwhelmingly common case); the cross-ref walk
+# runs only when the branch lookup misses and stops at the first verified
+# candidate. Existing caches are not usable here because the candidate's
+# body/head are exactly what the mention-based caches lack.
+#
+# On success returns 0 and sets STALL_IMPL_PR_NUM / STALL_IMPL_PR_JSON
+# (full pulls/<n> payload). On failure returns 1 with both cleared and sets
+# STALL_IMPL_PR_FAILURE_REASON to `not_implementation_pr` for a complete miss
+# or `pr_fetch_failed` when discovery/fetching was inconclusive. Callers must
+# skip destructive pushes rather than falling back to a mention-based target.
+declare -g STALL_IMPL_PR_NUM=''
+declare -g STALL_IMPL_PR_JSON=''
+declare -g STALL_IMPL_PR_FAILURE_REASON=''
+_resolve_issue_implementation_pr() {
+  local issue_num="$1"
+  STALL_IMPL_PR_NUM=""
+  STALL_IMPL_PR_JSON=""
+  STALL_IMPL_PR_FAILURE_REASON=""
+  [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+  local _ripr_candidate _ripr_json _ripr_list
+  local _ripr_branch_candidates _ripr_cross_ref_candidates
+  local _ripr_branch_discovery_rc=0
+  local _ripr_cross_ref_discovery_rc=0
+  local _ripr_saw_fetch_failure="false"
+  local _ripr_saw_rejection="false"
+  _ripr_branch_candidates="$(_linked_prs_by_branch_name "${issue_num}" 2>/dev/null)" || _ripr_branch_discovery_rc=$?
+  _ripr_candidate="$(printf '%s\n' "${_ripr_branch_candidates}" | grep -E '^[0-9]+$' | sort -rn | head -n1 || true)"
+  if [[ "${_ripr_candidate}" =~ ^[0-9]+$ ]]; then
+    _ripr_json="$(_fetch_pr_json "${_ripr_candidate}")"
+    if [ -z "${_ripr_json}" ] || [ "${_ripr_json}" = "{}" ]; then
+      echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=pr_fetch_failed" >&2
+      # The branch lookup already found the preferred PR; mention-only
+      # rejections cannot turn its unavailable payload into a verified miss.
+      STALL_IMPL_PR_FAILURE_REASON="pr_fetch_failed"
+      return 1
+    elif _pr_json_is_issue_implementation_pr "${issue_num}" "${_ripr_json}"; then
+      STALL_IMPL_PR_NUM="${_ripr_candidate}"
+      STALL_IMPL_PR_JSON="${_ripr_json}"
+      return 0
+    else
+      _ripr_saw_rejection="true"
+      echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=not_implementation_pr" >&2
+    fi
+  fi
+  _ripr_cross_ref_candidates="$(_issue_cross_ref_pr_numbers_unique "${issue_num}" 2>/dev/null)" || _ripr_cross_ref_discovery_rc=$?
+  _ripr_list="$(printf '%s\n' "${_ripr_cross_ref_candidates}" | grep -E '^[0-9]+$' | sort -rn || true)"
+  for _ripr_candidate in ${_ripr_list}; do
+    _ripr_json="$(_fetch_pr_json "${_ripr_candidate}")"
+    if [ -z "${_ripr_json}" ] || [ "${_ripr_json}" = "{}" ]; then
+      _ripr_saw_fetch_failure="true"
+      echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=pr_fetch_failed" >&2
+      continue
+    fi
+    if _pr_json_is_issue_implementation_pr "${issue_num}" "${_ripr_json}"; then
+      STALL_IMPL_PR_NUM="${_ripr_candidate}"
+      STALL_IMPL_PR_JSON="${_ripr_json}"
+      return 0
+    fi
+    _ripr_saw_rejection="true"
+    echo "STALL_LINKED_PR_REJECTED issue=${issue_num} pr=${_ripr_candidate} reason=not_implementation_pr" >&2
+  done
+  # A discovery failure can hide the preferred implementation PR, so it stays
+  # inconclusive even if another source returned only rejected candidates.
+  # Otherwise, prefer a conclusive rejection over unrelated candidate fetch
+  # failures so one stale cross-reference cannot trap recovery indefinitely.
+  if [ "${_ripr_branch_discovery_rc}" -ne 0 ] || [ "${_ripr_cross_ref_discovery_rc}" -ne 0 ]; then
+    STALL_IMPL_PR_FAILURE_REASON="pr_fetch_failed"
+  elif [ "${_ripr_saw_rejection}" = "true" ]; then
+    STALL_IMPL_PR_FAILURE_REASON="not_implementation_pr"
+  elif [ "${_ripr_saw_fetch_failure}" = "true" ]; then
+    STALL_IMPL_PR_FAILURE_REASON="pr_fetch_failed"
+  else
+    STALL_IMPL_PR_FAILURE_REASON="not_implementation_pr"
   fi
   return 1
 }
@@ -12116,6 +12237,34 @@ STALL_EOF
             head_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.ref?) then .head.ref else empty end' 2>/dev/null | tail -n1)"
             head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
           fi
+          # Implementation-PR gate (issue #3816 / PR #3828 incident): the
+          # cached / cross-ref pr_num above can be a PR that merely mentions
+          # the issue. Never push the empty commit onto such a branch —
+          # re-resolve to the issue's own implementation PR, or skip.
+          if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ] && \
+             ! _pr_json_is_issue_implementation_pr "${issue_num}" "${pr_json}"; then
+            if _resolve_issue_implementation_pr "${issue_num}"; then
+              echo "  [standalone-stall] Issue #${issue_num}: linked PR #${pr_num} is not the issue's implementation PR; retargeting to PR #${STALL_IMPL_PR_NUM}."
+              pr_num="${STALL_IMPL_PR_NUM}"
+              pr_json="${STALL_IMPL_PR_JSON}"
+              head_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.ref?) then .head.ref else empty end' 2>/dev/null | tail -n1)"
+              head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
+            else
+              head_ref=""
+              if [ "${STALL_IMPL_PR_FAILURE_REASON}" = "not_implementation_pr" ]; then
+                echo "  [standalone-stall] Issue #${issue_num}: linked PR #${pr_num} is not the issue's implementation PR and none could be resolved; skipping empty-commit retrigger."
+                STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_wrong_pr"
+                # Count this skip as recovery progress; otherwise standalone
+                # issues with only mention-only PRs reselect retrigger_review forever.
+                tg_notify_issue "${issue_num}" "Standalone stall recovery: no implementation PR could be resolved for review retrigger (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1))). Counting as an attempt so the recovery ladder can escalate." "WARNING"
+                STALL_RECOVERY_SHOULD_INCREMENT="true"
+                took_action="true"
+              else
+                echo "  [standalone-stall] Issue #${issue_num}: implementation PR lookup was inconclusive (${STALL_IMPL_PR_FAILURE_REASON:-unknown}); retrying next poll without consuming recovery budget."
+                STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_pr_lookup_failed"
+              fi
+            fi
+          fi
           if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
             # Mirror execute_stall_recovery_action(retrigger_review):
             # if issue_has_active_workflow misses a live review run on
@@ -12173,7 +12322,7 @@ STALL_EOF
 			elif [ -n "${_std_rtr_direct_inflight_id}" ]; then
               echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
               STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
-            elif git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
+            elif git fetch origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
               _std_rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
               if [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_std_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
                  [ "${_std_rtr_origin_head_sha}" != "${head_sha}" ]; then
@@ -12195,7 +12344,9 @@ STALL_EOF
             tg_notify_issue "${issue_num}" "Standalone stall recovery: re-triggered review flow (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
             STALL_RECOVERY_SHOULD_INCREMENT="true"
             took_action="true"
-          elif [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_inflight" ]; then
+          elif [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_inflight" ] \
+            && [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_wrong_pr" ] \
+            && [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_pr_lookup_failed" ]; then
             echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} empty-commit retrigger did not reach a successful push; skipping recovery increment."
           fi
         elif [ "${pr_lookup_ok}" = "true" ]; then
@@ -12212,12 +12363,21 @@ STALL_EOF
         ;;
       attempt_merge)
         local merge_pr
-        merge_pr="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+        # Same implementation-PR discipline as retrigger_review: merging is
+        # the most destructive mis-target of all, so never resolve the merge
+        # candidate from a bare mention-only cross-reference (issue #3816 /
+        # PR #3828 incident — the last cross-reference was an unrelated PR).
+        if _resolve_issue_implementation_pr "${issue_num}"; then
+          merge_pr="${STALL_IMPL_PR_NUM}"
+        else
+          merge_pr=""
+        fi
         if [[ "${merge_pr}" =~ ^[0-9]+$ ]]; then
           local merge_pr_json
           local merge_state
           local merge_mergeable
-          merge_pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${merge_pr}" 2>/dev/null || echo "")"
+          merge_pr_json="${STALL_IMPL_PR_JSON:-}"
+          [ -n "${merge_pr_json}" ] || merge_pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${merge_pr}" 2>/dev/null || echo "")"
           merge_state="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .state?) then .state else empty end' 2>/dev/null | tail -n1)"
           merge_mergeable="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and (.mergeable == true or .mergeable == false)) then .mergeable else empty end' 2>/dev/null | tail -n1)"
           if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] && _pr_checks_completed "${merge_pr}"; then
@@ -12226,9 +12386,22 @@ STALL_EOF
               || true
           fi
         fi
-        tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted merge retry for ready-to-merge issue (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
-        STALL_RECOVERY_SHOULD_INCREMENT="true"
-        took_action="true"
+        if ! [[ "${merge_pr}" =~ ^[0-9]+$ ]]; then
+          if [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
+            echo "  [standalone-stall] Issue #${issue_num}: implementation PR lookup was inconclusive; retrying merge next poll without consuming recovery budget."
+            STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_pr_lookup_failed"
+          else
+            echo "  [standalone-stall] Issue #${issue_num}: no implementation PR could be resolved; counting the skipped merge as an attempt so the recovery ladder can escalate."
+            STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_no_implementation_pr"
+            tg_notify_issue "${issue_num}" "Standalone stall recovery: no implementation PR could be resolved for merge retry (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1))). Counting as an attempt so the recovery ladder can escalate." "WARNING"
+            STALL_RECOVERY_SHOULD_INCREMENT="true"
+            took_action="true"
+          fi
+        else
+          tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted merge retry for ready-to-merge issue (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          took_action="true"
+        fi
         ;;
       escalate_human)
         set_issue_phase_label "${issue_num}" "ai:needs-human" || true
@@ -12352,28 +12525,23 @@ REISSUE_EOF
         ;;
       dispatch_rb_judge)
         # Autonomous escape from ai:review-blocked: dispatch the
-        # standalone review-blocked judge workflow for the linked PR.
+        # standalone review-blocked judge workflow for the issue's own
+        # implementation PR.
         # See execute_stall_recovery_action's dispatch_rb_judge case
         # for the authoritative implementation pattern; this mirrors
         # it within the standalone loop's switch.
         #
-        # Linked-PR lookup uses the per-iteration _std_linked_json cache
-        # (populated at the top of this loop iteration from the
-        # batched GraphQL _candidate_details_json — same shape:
-        # {number, state, merged, head_ref, ...}), NOT
-        # _STD_ITER_PR_NUM_CACHED.  The latter is only declared inside
-        # the `if action == retrigger_review` block above; because
-        # bash `local` is function-scoped (not block-scoped), a prior
-        # iteration's retrigger_review value would otherwise leak into
-        # this iteration's dispatch_rb_judge and dispatch against the
-        # wrong PR.  Using _std_linked_json avoids both the leak and
-        # the redundant REST fallback.
+        # Resolve the issue's own implementation PR rather than trusting
+        # the mention-based linked-PR cache. The judge may merge, fix, or
+        # close/reissue its target, so a mention-only PR is unsafe here.
         local _std_rb_pr_num=""
-        _std_rb_pr_num="$(printf '%s' "${_std_linked_json:-null}" | jq -r '.number // empty' 2>/dev/null || echo "")"
-        if ! [[ "${_std_rb_pr_num}" =~ ^[0-9]+$ ]]; then
-          _std_rb_pr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+        if _resolve_issue_implementation_pr "${issue_num}"; then
+          _std_rb_pr_num="${STALL_IMPL_PR_NUM}"
         fi
-        if ! [[ "${_std_rb_pr_num}" =~ ^[0-9]+$ ]]; then
+        if ! [[ "${_std_rb_pr_num}" =~ ^[0-9]+$ ]] && [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
+          echo "::warning::[standalone-stall] dispatch_rb_judge: implementation PR lookup was inconclusive for issue #${issue_num}; retrying next poll without consuming recovery budget."
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+        elif ! [[ "${_std_rb_pr_num}" =~ ^[0-9]+$ ]]; then
           # No linked PR — see execute_stall_recovery_action's
           # dispatch_rb_judge case for the same rationale: count this
           # as an attempt so the ladder can escalate to escalate_human
@@ -12400,7 +12568,9 @@ REISSUE_EOF
 	            STALL_RECOVERY_SHOULD_INCREMENT="false"
           fi
         fi
-        took_action="true"
+        if [[ "${_std_rb_pr_num}" =~ ^[0-9]+$ ]] || [ "${STALL_IMPL_PR_FAILURE_REASON}" != "pr_fetch_failed" ]; then
+          took_action="true"
+        fi
         ;;
       *)
         echo "::warning::Unknown standalone stall action ${action} for issue #${issue_num}"
@@ -13230,7 +13400,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     fi
 
     # Search for child issues whose body contains the tracking reference
-    CHILD_ISSUES="$(gh_retry gh api "search/issues" \
+    CHILD_ISSUES="$(gh_retry gh api --method GET "search/issues" \
       -f q="repo:${GITHUB_REPOSITORY} \"Tracking issue: #${TRACKING_NUM}\" in:body" \
       --jq '.items // []' 2>/dev/null || echo '[]')"
 
@@ -14298,7 +14468,7 @@ The poller will resume processing on the next cycle."
       # instead of creating a duplicate.
       if [ "${DEFERRED_EXISTING_LOOKUP_DONE}" != "true" ]; then
         DEFERRED_EXISTING_LOOKUP_DONE=true
-        if _deferred_child_items="$(gh_retry gh api "search/issues" \
+        if _deferred_child_items="$(gh_retry gh api --method GET "search/issues" \
           -f q="repo:${GITHUB_REPOSITORY} is:issue \"Tracking issue: #${TRACKING_NUM}\" in:body" \
           --jq '.items // []' 2>/dev/null)"; then
           if DEFERRED_EXISTING_MAP_JSON="$(printf '%s' "${_deferred_child_items}" | jq '
@@ -14566,7 +14736,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     # Inspect every cross-reference so a later mention-only PR cannot mask an
     # earlier implementation PR. Prefer merged evidence, while retaining the
     # last verified unmerged implementation PR as a fallback truth signal.
-    # §14 audit: the existing timeline call omits PR body/head, so each
+    # §15 audit: the existing timeline call omits PR body/head, so each
     # candidate needs the existing `_fetch_pr_json` lookup for verification.
     for _linked_pr_candidate in ${LINKED_PR_CANDIDATES}; do
       [[ "${_linked_pr_candidate}" =~ ^[0-9]+$ ]] || continue
@@ -15428,7 +15598,7 @@ ${FOLLOWUP_BLOCK_REASON}"
             #      A warning is emitted so operators can intervene.
             _rb_co_src=""
             _rb_co_src_desc=""
-            if git fetch --no-tags origin "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" 2>/dev/null \
+            if git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" 2>/dev/null \
               && git rev-parse --verify "refs/remotes/origin/${BASE_REF}" >/dev/null 2>&1; then
               _rb_co_src="refs/remotes/origin/${BASE_REF}"
               _rb_co_src_desc="${BASE_REF} (fetched from origin)"
@@ -15463,7 +15633,7 @@ ${FOLLOWUP_BLOCK_REASON}"
             unset _rb_co_src _rb_co_src_desc
           fi
         elif [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; then
-          if git fetch --no-tags origin "refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null \
+          if git fetch --no-tags origin "+refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null \
             && git checkout -B "${HEAD_REF}" "refs/remotes/origin/${HEAD_REF}" 2>/dev/null; then
             RB_COMBINED_MODE="true"
             RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF})."
@@ -17159,8 +17329,13 @@ Manual intervention required." >/dev/null
   #     tokens for mature projects).
   MERGED_PR_SUMMARIES=""
   OPEN_PR_SUMMARIES=""
-  _sorted_issue_nums="$(printf '%s\n' ${ISSUE_NUMS} | sort -un)"
-  for inum in ${_sorted_issue_nums}; do
+  _sorted_issue_nums="$(
+    printf '%s\n' "${ISSUE_NUMS}" |
+      tr '[:space:]' '\n' |
+      { grep -E '^[0-9]+$' || true; } |
+      sort -un
+  )"
+  while IFS= read -r inum; do
     [ -n "${inum}" ] || continue
     PR_NUM="$(_issue_cross_ref_pr_number_last "${inum}" 2>/dev/null || echo "")"
     if [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
@@ -17195,7 +17370,7 @@ ${PR_DIFF}
 "
       fi
     fi
-  done
+  done <<< "${_sorted_issue_nums}"
   unset _sorted_issue_nums _issue_status
 
   # Fetch CI status on default branch
