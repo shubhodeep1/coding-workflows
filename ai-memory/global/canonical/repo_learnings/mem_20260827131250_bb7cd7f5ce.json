@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Untrusted issue and phase context must be staged and delimited before being passed to planning or implementation agents.",
   "timestamps": {
     "created_at": "2026-08-27T13:12:50Z",
