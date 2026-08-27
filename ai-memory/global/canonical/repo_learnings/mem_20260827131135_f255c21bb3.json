@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow behavior is maintained through explicit contract tests alongside shell and YAML changes.",
   "timestamps": {
     "created_at": "2026-08-27T13:11:35Z",
