@@ -74,6 +74,10 @@ def test_smoke_runs_identical_calls_and_aggregates_failures() -> None:
 	assert 'index($0, " small=false agent=" expected_stream_role " mode=primary")' in smoke
 	assert "evidence_line_matched=1" in smoke
 	assert "END { exit evidence_line_matched ? 0 : 1 }" in smoke
+	assert (
+		'model_evidence=FAIL\n              if [ "${call_rc}" -eq 0 ]; then\n'
+		'                result="FAIL(model_evidence)"\n'
+	) in smoke
 	assert '"${role}" "${model_slug}" xhigh "${config_path}" "${GITHUB_WORKSPACE}" json' in smoke
 	assert '.type == "step_finish" and ((.part.tokens.reasoning // 0) > 0)' in smoke
 	assert "reasoning_evidence=FAIL" in smoke

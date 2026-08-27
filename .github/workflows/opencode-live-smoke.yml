@@ -147,6 +147,9 @@ jobs:
               END { exit evidence_line_matched ? 0 : 1 }
             ' "${log_output}"; then
               model_evidence=FAIL
+              if [ "${call_rc}" -eq 0 ]; then
+                result="FAIL(model_evidence)"
+              fi
               call_rc=1
             fi
 
