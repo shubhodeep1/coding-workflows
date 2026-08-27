@@ -25,6 +25,7 @@ import re
 import subprocess
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -53,7 +54,8 @@ def poll_step() -> dict:
 
 def shard_awk_expression() -> str:
 	match = SHARD_AWK_RE.search(poll_step()["run"])
-	assert match is not None, "could not locate the shard-split awk expression in ci.yml"
+	if match is None:
+		raise AssertionError("could not locate the shard-split awk expression in ci.yml")
 	return match.group("expr").strip()
 
 
@@ -116,6 +118,12 @@ class PollStepContractTest(unittest.TestCase):
 	def test_step_uses_a_locatable_partition_expression(self) -> None:
 		"""The partition tests above are only meaningful if this resolves."""
 		self.assertEqual(shard_awk_expression(), "NR % total == n")
+
+	def test_missing_partition_expression_has_clear_failure(self) -> None:
+		with mock.patch(f"{__name__}.SHARD_AWK_RE") as missing_expression_pattern:
+			missing_expression_pattern.search.return_value = None
+			with self.assertRaisesRegex(AssertionError, "could not locate the shard-split awk expression"):
+				shard_awk_expression()
 
 	def test_a_failing_shard_fails_the_step(self) -> None:
 		self.assertIn("shard_failures=$((shard_failures + 1))", self.run)
