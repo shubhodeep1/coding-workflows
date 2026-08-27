@@ -5,13 +5,34 @@
   "entry_id": "processed_command_3846_5434441256_approved",
   "issue_number": 3846,
   "metadata": {
+    "branch": "ai/issue-3846",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/actions/install-opencode/action.yml",
+      ".github/workflows/ci.yml",
+      ".github/workflows/opencode-live-smoke.yml",
+      "README.md",
+      "agents.md",
+      "changelog.d/3845-opencode-plumbing.md",
+      "docs/scripts-pending-removal.md",
+      "scripts/opencode_helpers.sh",
+      "scripts/write_opencode_config.sh",
+      "tests/test_opencode_helpers.py",
+      "tests/test_opencode_live_smoke_workflow.py",
+      "tests/test_write_opencode_config.py"
+    ],
+    "issue_number": 3846,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3846",
+    "pr_number": 3847,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3847",
+    "run_attempt": "1",
+    "run_id": "33039973788",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/33039973788"
   },
   "run_attempt": 1,
   "run_id": "33039973788",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-08-27T04:39:02Z",
+  "status": "completed",
+  "timestamp": "2026-08-27T04:52:42Z",
   "workflow": "implement"
 }
