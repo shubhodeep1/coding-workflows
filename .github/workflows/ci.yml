@@ -817,9 +817,10 @@ jobs:
           # The fast-fail step already covers the implementation-failed hot path;
           # keep the rest of this module in CI without re-running that subset.
           #
-          # This module is the CI critical path. Most of its 307 tests spawn the
-          # real poller as a bash subprocess inside a throwaway sandbox, so they
-          # cost seconds each rather than milliseconds (measured: 71 of the
+          # This module is the CI critical path. Most of the 307 tests in the
+          # post-fast-fail sharded subset spawn the real poller as a bash
+          # subprocess inside a throwaway sandbox, so they cost seconds each
+          # rather than milliseconds (measured: 71 of the
           # first 95 over 4s, slowest 27s). Run sequentially it took ~35 min on
           # a 4-core box, which on its own overran the job budget and left every
           # CI run cancelled mid-suite.

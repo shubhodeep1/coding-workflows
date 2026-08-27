@@ -2,8 +2,9 @@
 """Tests for the sharded orchestrate-poll step in ci.yml.
 
 `tests/test_orchestrate_poll_process.py` is CI's critical path: most of
-its 307 tests spawn the real poller as a bash subprocess in a throwaway
-sandbox, so they cost seconds each. Run sequentially the module took
+the 307 tests in its post-fast-fail sharded subset spawn the real poller
+as a bash subprocess in a throwaway sandbox, so they cost seconds each.
+Run sequentially the module took
 ~35 minutes on a 4-core box, which alone overran the `lint` job's
 `timeout-minutes` and left every CI run — on `main` as well as on PRs —
 cancelled mid-suite, so the repo had no completing full-test gate.
