@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""PreToolUse guard — refuse commits/pushes that stack on an already-merged PR.
+"""PreToolUse guard for merged-PR writes and allowlisted API mutations.
 
-Implements CLAUDE.md §21.
+Implements CLAUDE.md §21 and protects the §22/§24 API permission allowlist.
 
 Long-lived Claude Code sessions (days to weeks) outlive the PRs they open. When
 the PR for the working branch merges mid-session, further commits to that same
@@ -39,7 +39,8 @@ Exit codes (Claude Code hook protocol):
   0 — allow the command. A warning may be emitted via `systemMessage`.
   2 — block the command; stderr is fed back to Claude as the reason.
 
-Escape hatch: set CLAUDE_PR_MERGE_GUARD=off to disable the check entirely.
+Escape hatch: set CLAUDE_PR_MERGE_GUARD=off to disable only the merged-PR check.
+The API-write confirmation safeguard remains active.
 """
 
 from __future__ import annotations
@@ -68,7 +69,35 @@ GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
 )
 
 # Shell punctuation we treat as command separators when tokenizing a Bash line.
-_SHELL_PUNCTUATION_CHARS = ";&|\n"
+_SHELL_PUNCTUATION_CHARS = ";&|\n<>"
+
+_API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
+_API_WRITE_URL_PREFIXES = (
+	"https://api.digitalocean.com/",
+	"https://api.cloudflare.com/",
+)
+# `-q` must remain curl's first option so ~/.curlrc cannot add hidden transfers.
+_API_WRITE_COMMAND_PREFIXES = tuple(
+	f"curl -q -sS -X {method} {url_prefix}"
+	for method in _API_WRITE_METHODS
+	for url_prefix in _API_WRITE_URL_PREFIXES
+)
+_API_WRITE_VALUE_OPTIONS = frozenset(
+	{
+		"-H",
+		"--header",
+		"-d",
+		"--data",
+		"--data-ascii",
+		"--data-binary",
+		"--data-raw",
+		"--data-urlencode",
+		"-F",
+		"--form",
+		"--form-string",
+	}
+)
+_API_WRITE_INLINE_OPTION_PREFIXES = ("-H", "-d", "-F")
 
 _SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+/[A-Za-z0-9._-]+$")
 _REMOTE_HEAD_BRANCH_RE = re.compile(r"^ref:\s+refs/heads/([^\s]+)\s+HEAD$", re.MULTILINE)
@@ -121,6 +150,7 @@ def _shell_segments(command: str) -> list[list[str]]:
 	stay inside their argument instead of splitting the command early.
 	"""
 	lexer = shlex.shlex(command, posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	lexer.commenters = ""
 	lexer.whitespace = " \t\r"
 	lexer.whitespace_split = True
 	segments: list[list[str]] = []
@@ -135,6 +165,128 @@ def _shell_segments(command: str) -> list[list[str]]:
 	if current_segment:
 		segments.append(current_segment)
 	return segments
+
+
+def _contains_shell_substitution(command: str) -> bool:
+	"""Return whether Bash would expand command substitution in the string."""
+	single_quoted = False
+	double_quoted = False
+	escaped = False
+	for index, character in enumerate(command):
+		if escaped:
+			escaped = False
+			continue
+		if character == "\\" and not single_quoted:
+			escaped = True
+			continue
+		if character == "'" and not double_quoted:
+			single_quoted = not single_quoted
+			continue
+		if character == '"' and not single_quoted:
+			double_quoted = not double_quoted
+			continue
+		if not single_quoted and (character == "`" or command.startswith("$(", index)):
+			return True
+	return False
+
+
+def _contains_unquoted_shell_expansion(command: str) -> bool:
+	"""Return whether Bash expansion can change argv or execute a command."""
+	single_quoted = False
+	double_quoted = False
+	escaped = False
+	for index, character in enumerate(command):
+		if escaped:
+			escaped = False
+			continue
+		if character == "\\" and not single_quoted:
+			escaped = True
+			continue
+		if character == "'" and not double_quoted:
+			single_quoted = not single_quoted
+			continue
+		if character == '"' and not single_quoted:
+			double_quoted = not double_quoted
+			continue
+		if double_quoted:
+			parameter_expansion = re.match(r"\$\{([^}]*)\}", command[index:])
+			if command.startswith("$@", index) or (
+				parameter_expansion
+				and (
+					parameter_expansion.group(1).startswith("@")
+					or "[@]" in parameter_expansion.group(1)
+					or parameter_expansion.group(1).startswith("!")
+					or parameter_expansion.group(1).endswith("@P")
+				)
+			):
+				return True
+		if not single_quoted and not double_quoted and character in "${*?[~":
+			return True
+	return False
+
+
+def _api_write_requires_confirmation(command: str) -> bool:
+	"""Return whether an allowlisted API write uses non-canonical curl options.
+
+	The settings rules are necessarily prefix matches. Keep their silent path
+	limited to one explicit method and destination followed only by headers and
+	request-body options; anything capable of changing curl's method, URL, or
+	transfer list must go through the normal harness prompt.
+	"""
+	try:
+		segments = _shell_segments(command)
+	except ValueError:
+		return command.lstrip().startswith(_API_WRITE_COMMAND_PREFIXES)
+
+	if not segments:
+		return False
+	tokens = segments[0]
+	if len(tokens) < 6 or tokens[:4] != ["curl", "-q", "-sS", "-X"]:
+		return False
+	if tokens[4] not in _API_WRITE_METHODS:
+		return False
+	if not any(tokens[5].startswith(prefix) for prefix in _API_WRITE_URL_PREFIXES):
+		return False
+	# The URL token is already host-gated above. Prompt only for expansions that
+	# can synthesize shell words before curl sees the approved API URL shape.
+	if any(marker in tokens[5] for marker in ("$", "{", "[", "*", "?")):
+		return True
+	# Scan only following option text so literal query/path URL characters are
+	# not mistaken for value expansions.
+	api_write_raw_parts = command.lstrip().split(None, 6)
+	if (
+		len(segments) != 1
+		or _contains_shell_substitution(command)
+		or (
+			len(api_write_raw_parts) > 6
+			and _contains_unquoted_shell_expansion(api_write_raw_parts[6])
+		)
+	):
+		return True
+
+	index = 6
+	while index < len(tokens):
+		token = tokens[index]
+		if token in _API_WRITE_VALUE_OPTIONS:
+			if index + 1 >= len(tokens):
+				return True
+			index += 2
+			continue
+		if any(
+			token.startswith(prefix) and len(token) > len(prefix)
+			for prefix in _API_WRITE_INLINE_OPTION_PREFIXES
+		):
+			index += 1
+			continue
+		if any(
+			token.startswith(f"{option}=")
+			for option in _API_WRITE_VALUE_OPTIONS
+			if option.startswith("--")
+		):
+			index += 1
+			continue
+		return True
+	return False
 
 
 def git_subcommands(command: str) -> set[str]:
@@ -478,11 +630,26 @@ def _warn(reason: str) -> None:
 	print(json.dumps({"systemMessage": f"merged-PR guard skipped: {reason}"}))
 
 
+def _request_api_write_confirmation() -> None:
+	"""Restore the harness prompt for a non-canonical allowlisted API write."""
+	print(
+		json.dumps(
+			{
+				"hookSpecificOutput": {
+					"hookEventName": "PreToolUse",
+					"permissionDecision": "ask",
+					"permissionDecisionReason": (
+						"Non-canonical API curl options can override the allowlisted "
+						"HTTP method or destination."
+					),
+				}
+			}
+		)
+	)
+
+
 def evaluate(payload: dict) -> tuple[int, str]:
 	"""Core decision. Returns (exit_code, message_for_stderr)."""
-	if os.environ.get("CLAUDE_PR_MERGE_GUARD", "").strip().lower() == "off":
-		return 0, ""
-
 	if payload.get("tool_name") != "Bash":
 		return 0, ""
 
@@ -490,7 +657,19 @@ def evaluate(payload: dict) -> tuple[int, str]:
 	command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
 	if not isinstance(command, str) or not command.strip():
 		return 0, ""
-	if not (git_subcommands(command) & GUARDED_SUBCOMMANDS):
+	guarded_git_subcommands = git_subcommands(command) & GUARDED_SUBCOMMANDS
+	if _api_write_requires_confirmation(command):
+		if guarded_git_subcommands:
+			return 2, (
+				"BLOCKED: run the non-canonical API write and git commit/push as "
+				"separate Bash calls so both permission guards can evaluate them."
+			)
+		_request_api_write_confirmation()
+		return 0, ""
+
+	if os.environ.get("CLAUDE_PR_MERGE_GUARD", "").strip().lower() == "off":
+		return 0, ""
+	if not guarded_git_subcommands:
 		return 0, ""
 
 	cwd = payload.get("cwd") or os.getcwd()
