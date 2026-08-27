@@ -1,0 +1,246 @@
+---
+name: OpenCode live model smoke
+
+"on":
+  workflow_dispatch:
+    inputs:
+      model_filter:
+        description: Exact OpenRouter model slug to test; empty runs every configured entry
+        required: false
+        default: ""
+        type: string
+      alert_msg_level:
+        description: Minimum Telegram alert level
+        required: false
+        default: ERROR
+        type: choice
+        options:
+          - DEBUG
+          - WARNING
+          - ERROR
+          - CRITICAL
+          - SILENT
+
+permissions:
+  contents: read
+
+jobs:
+  live-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
+      MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
+      MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.5' }}
+      REVIEWER_MODELS: |
+        minimax/minimax-m3
+        moonshotai/kimi-k3
+        deepseek/deepseek-v4-pro
+        mistralai/mistral-small-2603
+        qwen/qwen3.7-plus
+        x-ai/grok-4.6
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      TG_ADMIN_CHAT_ID: ${{ secrets.TG_ADMIN_CHAT_ID }}
+      ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned OpenCode
+        uses: ./.github/actions/install-opencode
+        with:
+          opencode_version: ${{ env.OPENCODE_VERSION }}
+
+      - name: Exercise configured OpenRouter models
+        env:
+          MODEL_FILTER: ${{ inputs.model_filter }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+            echo "::error::OPENROUTER_API_KEY is required for the live smoke" >&2
+            exit 2
+          fi
+          if [ -n "${MODEL_FILTER}" ] && [[ ! "${MODEL_FILTER}" =~ ^[A-Za-z0-9][A-Za-z0-9._:+-]*(/[A-Za-z0-9][A-Za-z0-9._:+-]*)+$ ]]; then
+            echo "::error::model_filter must be an exact OpenRouter model slug" >&2
+            exit 2
+          fi
+
+          # shellcheck source=scripts/opencode_helpers.sh
+          source scripts/opencode_helpers.sh
+
+          runtime_dir="${RUNNER_TEMP}/opencode-live-smoke"
+          mkdir -p "${runtime_dir}"
+          entries_file="${runtime_dir}/entries.tsv"
+          selected_file="${runtime_dir}/selected.tsv"
+          results_file="${runtime_dir}/results.tsv"
+          : > "${entries_file}"
+          : > "${selected_file}"
+          : > "${results_file}"
+
+          reviewer_index=0
+          while IFS= read -r reviewer_slug; do
+            [ -n "${reviewer_slug}" ] || continue
+            reviewer_index=$((reviewer_index + 1))
+            printf 'reviewer-%s\treviewer\t%s\n' "${reviewer_index}" "${reviewer_slug}" >> "${entries_file}"
+          done <<< "${REVIEWER_MODELS}"
+          printf 'editor-primary\twriter\t%s\n' "${MODEL_EDITOR}" >> "${entries_file}"
+          printf 'editor-fallback\twriter\t%s\n' "${MODEL_EDITOR_FALLBACK}" >> "${entries_file}"
+
+          while IFS=$'\t' read -r source_slot role model_slug; do
+            if [ -z "${MODEL_FILTER}" ] || [ "${model_slug}" = "${MODEL_FILTER}" ]; then
+              printf '%s\t%s\t%s\n' "${source_slot}" "${role}" "${model_slug}" >> "${selected_file}"
+            fi
+          done < "${entries_file}"
+          if [ ! -s "${selected_file}" ]; then
+            echo "::error::model_filter '${MODEL_FILTER}' did not match any configured entry" >&2
+            exit 2
+          fi
+
+          run_smoke_call()
+          {
+            local source_slot="$1"
+            local role="$2"
+            local model_slug="$3"
+            local call_number="$4"
+            local config_path="$5"
+            local raw_output log_output clean_output call_rc result model_evidence reasoning_evidence
+
+            raw_output="${runtime_dir}/${source_slot}-${call_number}.raw"
+            log_output="${runtime_dir}/${source_slot}-${call_number}.log"
+            clean_output="${runtime_dir}/${source_slot}-${call_number}.txt"
+            call_rc=0
+            if printf 'Return exactly OK\n' | opencode_run_cmd \
+              "${role}" "${model_slug}" xhigh "${config_path}" "${GITHUB_WORKSPACE}" json \
+              > "${raw_output}" 2> "${log_output}"; then
+              call_rc=0
+            else
+              call_rc=$?
+            fi
+            opencode_strip_ansi < "${raw_output}" > "${clean_output}.jsonl"
+            : > "${clean_output}"
+
+            result=PASS
+            model_evidence=PASS
+            reasoning_evidence=PASS
+            if [ "${call_rc}" -ne 0 ]; then
+              result="FAIL(rc=${call_rc})"
+            elif ! jq -r 'select(.type == "text" and (.part.text | type == "string")) | .part.text' \
+              "${clean_output}.jsonl" > "${clean_output}"; then
+              result="FAIL(invalid_json_output)"
+              call_rc=1
+            elif ! grep -q '[^[:space:]]' "${clean_output}"; then
+              result="FAIL(empty_output)"
+              call_rc=1
+            fi
+
+            # OpenCode 1.18.23 emits this structured INFO event from the resolved LLM stream.
+            # The helper's pre-run marker uses expected_* keys and cannot satisfy this gate.
+            # Keep this a single reader: grep -q pipelines can SIGPIPE upstream under pipefail.
+            if ! awk -v expected_stream_model="${model_slug}" -v expected_stream_role="${role}" '
+              index($0, "message=stream providerID=openrouter modelID=" expected_stream_model " ") &&
+                index($0, " small=false agent=" expected_stream_role " mode=primary") {
+                  evidence_line_matched=1
+                  exit
+                }
+              END { exit evidence_line_matched ? 0 : 1 }
+            ' "${log_output}"; then
+              model_evidence=FAIL
+              if [ "${call_rc}" -eq 0 ]; then
+                result="FAIL(model_evidence)"
+              fi
+              call_rc=1
+            fi
+
+            # A successful xhigh call must return provider-reported reasoning usage.
+            if ! jq -s -e 'any(.[]; .type == "step_finish" and ((.part.tokens.reasoning // 0) > 0))' \
+              "${clean_output}.jsonl" >/dev/null; then
+              reasoning_evidence=FAIL
+              if [ "${call_rc}" -eq 0 ]; then
+                result="FAIL(no_reasoning_usage)"
+              fi
+              call_rc=1
+            fi
+
+            if [ "${call_rc}" -ne 0 ]; then
+              opencode_emit_failure_alert live_smoke "${role}" "${model_slug}" "${call_rc}" \
+                "call_${call_number}_${result}_${model_evidence}_${reasoning_evidence}" || true
+            fi
+            printf '%s\t%s\t%s\n' "${result}" "${model_evidence}" "${reasoning_evidence}"
+          }
+
+          any_failed=false
+          while IFS=$'\t' read -r source_slot role model_slug; do
+            config_path="${runtime_dir}/${source_slot}.json"
+            first_result=FAIL
+            second_result=FAIL
+            evidence_result=FAIL
+            reasoning_result=FAIL
+            row_status=FAIL
+            # The bootstrap helper emits its own classified alert when entered.
+            bootstrap_alert_handled=false
+
+            if bash scripts/write_opencode_config.sh \
+              --role "${role}" \
+              --model "${model_slug}" \
+              --project-path "${GITHUB_WORKSPACE}" \
+              --config-path "${config_path}" \
+              --serena off \
+              && jq -e --arg slug "${model_slug}" --arg role "${role}" '
+                .model == ("openrouter/" + $slug)
+                and .small_model == ("openrouter/" + $slug)
+                and .default_agent == $role
+                and .provider.openrouter.models[$slug].variants.xhigh.reasoning.effort == "xhigh"
+              ' "${config_path}" >/dev/null \
+              && { bootstrap_alert_handled=true; \
+                opencode_require_bootstrap live_smoke "${role}" "${model_slug}" \
+                  "${config_path}" "${OPENCODE_VERSION}" scripts/write_opencode_config.sh; }; then
+              IFS=$'\t' read -r first_result first_evidence first_reasoning_evidence < <(
+                run_smoke_call "${source_slot}" "${role}" "${model_slug}" 1 "${config_path}"
+              )
+              IFS=$'\t' read -r second_result second_evidence second_reasoning_evidence < <(
+                run_smoke_call "${source_slot}" "${role}" "${model_slug}" 2 "${config_path}"
+              )
+              if [ "${first_evidence}" = PASS ] && [ "${second_evidence}" = PASS ]; then
+                evidence_result=PASS
+              fi
+              if [ "${first_reasoning_evidence}" = PASS ] && [ "${second_reasoning_evidence}" = PASS ]; then
+                reasoning_result=PASS
+              fi
+              if [ "${first_result}" = PASS ] && [ "${second_result}" = PASS ] \
+                && [ "${evidence_result}" = PASS ] && [ "${reasoning_result}" = PASS ]; then
+                row_status=PASS
+              fi
+            else
+              if [ "${bootstrap_alert_handled}" != true ]; then
+                opencode_emit_failure_alert live_smoke "${role}" "${model_slug}" 1 bootstrap_or_config || true
+              fi
+            fi
+
+            if [ "${row_status}" != PASS ]; then
+              any_failed=true
+            fi
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+              "${source_slot}" "${role}" "${model_slug}" "${first_result}" \
+              "${second_result}" "${evidence_result}" "${reasoning_result}" "${row_status}" >> "${results_file}"
+          done < "${selected_file}"
+
+          {
+            echo "## OpenCode live model smoke"
+            echo
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo '| Source | Role | Model slug | First call | Repeated call | Model evidence | Reasoning evidence | Status |'
+            echo '|---|---|---|---|---|---|---|---|'
+            while IFS=$'\t' read -r source_slot role model_slug first_result second_result evidence_result reasoning_result row_status; do
+              printf '| `%s` | `%s` | `%s` | %s | %s | %s | %s | **%s** |\n' \
+                "${source_slot}" "${role}" "${model_slug}" "${first_result}" \
+                "${second_result}" "${evidence_result}" "${reasoning_result}" "${row_status}"
+            done < "${results_file}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [ "${any_failed}" = true ]; then
+            echo "::error::One or more OpenCode live-smoke entries failed" >&2
+            exit 1
+          fi

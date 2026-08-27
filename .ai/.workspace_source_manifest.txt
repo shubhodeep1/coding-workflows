@@ -23,6 +23,7 @@
 .gitattributes
 .github/ISSUE_TEMPLATE/structured-task.yml
 .github/actions/install-codex/action.yml
+.github/actions/install-opencode/action.yml
 .github/actions/run-soft-error-analyzer/action.yml
 .github/actions/setup-runtime/action.yml
 .github/ai/WORKFLOW.md
@@ -60,6 +61,7 @@
 .github/workflows/mark-stable.yml
 .github/workflows/memory_maintenance.yml
 .github/workflows/nightly-validation-selftest.yml
+.github/workflows/opencode-live-smoke.yml
 .github/workflows/orchestrate.yml
 .github/workflows/orchestrate_clarify_respond.yml
 .github/workflows/orchestrate_poll.yml
@@ -121,9 +123,12 @@ changelog.d/3815-direct-openrouter-usage.md
 changelog.d/3816-ignore-unstructured-mcp-counter-echoes.md
 changelog.d/3816-stall-recovery-linkage-guards.md
 changelog.d/3817-ai-memory-push-retry-budget.md
+changelog.d/3837-security-audit-path-diagnostics.md
+changelog.d/3845-opencode-plumbing.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/deploy-activate-digitalocean-steps.md
+changelog.d/digitalocean-cloudflare-write-allowlist.md
 changelog.d/digitalocean-token-access.md
 changelog.d/github-token-access.md
 changelog.d/investigate-issue-attached-upstream-autochain.md
@@ -378,6 +383,7 @@ scripts/memory_helpers.sh
 scripts/memory_injection_patterns.py
 scripts/memory_maintenance_extract_learnings.py
 scripts/nag_reminder.sh
+scripts/opencode_helpers.sh
 scripts/openrouter_prompt_cache.py
 scripts/orchestrate_force_tick.sh
 scripts/orchestrate_lib.py
@@ -451,6 +457,7 @@ scripts/worktree_gc.sh
 scripts/worktree_registry.sh
 scripts/write_codex_config.sh
 scripts/write_guard.sh
+scripts/write_opencode_config.sh
 test_file.txt
 tests/e2e_smoke_canary.txt
 tests/e2e_smoke_canary_b.txt
@@ -611,6 +618,8 @@ tests/test_merge_probe.py
 tests/test_nag_reminder.sh
 tests/test_nag_reminder_phases.sh
 tests/test_nightly_validation_selftest_workflow_contract.py
+tests/test_opencode_helpers.py
+tests/test_opencode_live_smoke_workflow.py
 tests/test_orchestrate_clarify_loop_guard.py
 tests/test_orchestrate_final_merge_required_checks_gate.py
 tests/test_orchestrate_force_tick.py
@@ -751,6 +760,7 @@ tests/test_worktree_gc.sh
 tests/test_worktree_name_validation.sh
 tests/test_worktree_registry.sh
 tests/test_write_codex_config.py
+tests/test_write_opencode_config.py
 tools/repo_tree/config.yaml
 tools/repo_tree/update_repo_tree.py
 unattended_system_instructions.md

@@ -411,6 +411,13 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_write_codex_config.py
 
+      - name: OpenCode plumbing contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_write_opencode_config.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_opencode_helpers.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_opencode_live_smoke_workflow.py
+
       - name: Codex/watchdog helper shell tests
         run: |
           set -euo pipefail
