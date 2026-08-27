@@ -5578,6 +5578,31 @@ jobs:
             : > "${push_stderr_file}"
           done
 
+      - name: Resolve addressed PR review threads
+        # The editor stage audits every PR review comment it saw (the
+        # "PR comment audit:" section posted above), but nothing ever
+        # marked the underlying thread resolved. Run after the deferred push
+        # and editor safety checks so an "applied" claim cannot close a
+        # still-actionable thread before its productive commit reaches the PR.
+        # Resolution is keyed on comment id, never path/line; the helper is
+        # fail-open. Runs after a skipped push too so safe no-change
+        # dispositions ("already satisfied" / "ignored") can still resolve.
+        if: "success() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'"
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REVIEW_APPLIED_CHANGES_PERSISTED: ${{ env.AUTOFIX_EDITS_PUSHED == 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.commit_changes.outputs.ledger_only_commit_strict != 'true' }}
+          REVIEW_RESOLVE_THREADS_ENABLED: ${{ vars.REVIEW_RESOLVE_THREADS_ENABLED || 'true' }}
+          REVIEW_RESOLVE_THREADS_MAX: ${{ vars.REVIEW_RESOLVE_THREADS_MAX || '50' }}
+        run: |
+          set -uo pipefail
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_resolve_review_threads.sh" ]; then
+            echo "::notice::review_resolve_review_threads.sh is unavailable in this script_ref; leaving review threads as-is."
+            exit 0
+          fi
+          bash "${SUPPORT_SCRIPTS_DIR}/review_resolve_review_threads.sh" \
+            || echo "::warning::Review-thread resolution failed; review threads left as-is."
+
       - name: Re-trigger review via workflow_dispatch
         # The push above fires a pull_request synchronize event, but GitHub
         # resolves reusable workflow refs from the merge ref
