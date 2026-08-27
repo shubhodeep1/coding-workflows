@@ -121,9 +121,11 @@ changelog.d/3815-direct-openrouter-usage.md
 changelog.d/3816-ignore-unstructured-mcp-counter-echoes.md
 changelog.d/3816-stall-recovery-linkage-guards.md
 changelog.d/3817-ai-memory-push-retry-budget.md
+changelog.d/3837-security-audit-path-diagnostics.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/deploy-activate-digitalocean-steps.md
+changelog.d/digitalocean-cloudflare-write-allowlist.md
 changelog.d/digitalocean-token-access.md
 changelog.d/github-token-access.md
 changelog.d/investigate-issue-attached-upstream-autochain.md

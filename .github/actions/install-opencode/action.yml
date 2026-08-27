@@ -1,0 +1,34 @@
+name: Install OpenCode CLI
+description: Install and verify a pinned OpenCode CLI, then warm its models.dev cache.
+
+inputs:
+  opencode_version:
+    description: Pinned OpenCode CLI version.
+    required: false
+    default: 1.18.23
+
+runs:
+  using: composite
+  steps:
+    - name: Install and verify OpenCode CLI
+      shell: bash
+      env:
+        OPENCODE_VERSION: ${{ inputs.opencode_version }}
+      run: |
+        set -euo pipefail
+
+        if [[ ! "${OPENCODE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::install-opencode: opencode_version must be an exact numeric semantic version" >&2
+          exit 2
+        fi
+
+        npm install -g "opencode-ai@${OPENCODE_VERSION}" --no-audit --no-fund
+
+        installed_version="$(opencode --version)"
+        if [ "${installed_version}" != "${OPENCODE_VERSION}" ]; then
+          echo "::error::install-opencode: expected version ${OPENCODE_VERSION}, got ${installed_version}" >&2
+          exit 1
+        fi
+
+        opencode models --refresh
+        opencode run --help >/dev/null

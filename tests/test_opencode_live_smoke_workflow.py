@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Static contracts for the inert OpenCode action and live smoke workflow."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+ACTION = REPO_ROOT / ".github" / "actions" / "install-opencode" / "action.yml"
+SMOKE = REPO_ROOT / ".github" / "workflows" / "opencode-live-smoke.yml"
+PRODUCTION_REVIEW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+CI = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+
+
+def _reviewer_roster(text: str) -> list[str]:
+	lines = text.splitlines()
+	for index, line in enumerate(lines):
+		if line.strip() != "REVIEWER_MODELS: |":
+			continue
+		indent = len(line) - len(line.lstrip())
+		roster = []
+		for candidate in lines[index + 1 :]:
+			candidate_indent = len(candidate) - len(candidate.lstrip())
+			if candidate.strip() and candidate_indent <= indent:
+				break
+			value = candidate.strip()
+			if value:
+				roster.append(value)
+		return roster
+	raise AssertionError("REVIEWER_MODELS block missing")
+
+
+def test_install_action_pins_verifies_and_refreshes() -> None:
+	action = ACTION.read_text(encoding="utf-8")
+	assert re.search(r"(?m)^\s+default: 1\.18\.23$", action)
+	assert 'npm install -g "opencode-ai@${OPENCODE_VERSION}" --no-audit --no-fund' in action
+	assert 'installed_version="$(opencode --version)"' in action
+	assert '[ "${installed_version}" != "${OPENCODE_VERSION}" ]' in action
+	assert "opencode models --refresh" in action
+	assert "opencode run --help >/dev/null" in action
+
+
+def test_smoke_is_dispatch_only_and_read_only() -> None:
+	smoke = SMOKE.read_text(encoding="utf-8")
+	on_block = smoke.split('"on":', 1)[1].split("permissions:", 1)[0]
+	assert "workflow_dispatch:" in on_block
+	for forbidden in ("push:", "pull_request:", "schedule:", "workflow_call:"):
+		assert forbidden not in on_block
+	assert re.search(r"(?m)^permissions:\n  contents: read$", smoke)
+	assert "actions/checkout@v4" in smoke
+
+
+def test_smoke_roster_and_editor_defaults_match_production() -> None:
+	smoke = SMOKE.read_text(encoding="utf-8")
+	production = PRODUCTION_REVIEW.read_text(encoding="utf-8")
+	assert _reviewer_roster(smoke) == _reviewer_roster(production)
+	assert "vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol'" in smoke
+	assert "vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.5'" in smoke
+	assert "vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol'" in production
+	assert "vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.5'" in production
+
+
+def test_smoke_runs_identical_calls_and_aggregates_failures() -> None:
+	smoke = SMOKE.read_text(encoding="utf-8")
+	assert "printf 'Return exactly OK\\n' | opencode_run_cmd" in smoke
+	assert 'run_smoke_call "${source_slot}" "${role}" "${model_slug}" 1' in smoke
+	assert 'run_smoke_call "${source_slot}" "${role}" "${model_slug}" 2' in smoke
+	assert "opencode_strip_ansi" in smoke
+	assert "providerID=openrouter" in smoke
+	assert "modelID=${model_slug}" in smoke
+	assert "variant=xhigh" in smoke
+	assert '.variants.xhigh.reasoning.effort == "xhigh"' in smoke
+	assert "Model/variant evidence" in smoke
+	assert "${GITHUB_STEP_SUMMARY}" in smoke
+	assert 'if [ "${any_failed}" = true ]' in smoke
+
+
+def test_production_review_path_remains_opencode_free() -> None:
+	production = PRODUCTION_REVIEW.read_text(encoding="utf-8").lower()
+	assert "opencode" not in production
+
+
+def test_focused_tests_are_wired_into_ci() -> None:
+	ci = CI.read_text(encoding="utf-8")
+	for test_file in (
+		"tests/test_write_opencode_config.py",
+		"tests/test_opencode_helpers.py",
+		"tests/test_opencode_live_smoke_workflow.py",
+	):
+		assert f"PYTHONDONTWRITEBYTECODE=1 python3 {test_file}" in ci
+
+
+def main() -> int:
+	tests = [value for key, value in sorted(globals().items()) if key.startswith("test_") and callable(value)]
+	for test in tests:
+		test()
+	print(f"{len(tests)} passed")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

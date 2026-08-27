@@ -145,3 +145,33 @@ Copy this block when adding a new entry:
   - `rg -n 'changelog\.d' CLAUDE.md prompts/mode-implement.txt prompts/_templates/mode-implement.txt` returns no hits — §20 and both implement prompts have been migrated to whatever replaces the fragment workflow, so agents are no longer told to write fragments nothing will fold.
   - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_assemble_changelog.py && PYTHONDONTWRITEBYTECODE=1 python3 tests/test_changelog_fragment_contract.py` — both suites removed or migrated alongside the script rather than left asserting a mechanism that no longer exists.
 - **Owner:** @shubhodeep1
+
+### `.github/workflows/opencode-live-smoke.yml`
+
+- **Introduced in:** orchestrator/project-3845 (2026-08-27)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `rg -n 'opencode-live-smoke\.yml' .github/workflows workflow-templates scripts --glob '!.github/workflows/opencode-live-smoke.yml'` returns no matches.
+  - `rg -n 'opencode|OPENCODE_' .github/workflows .github/actions scripts` confirms no remaining OpenCode runtime references before the workflow is removed.
+- **Owner:** @shubhodeep1
+
+### `scripts/opencode_helpers.sh`
+
+- **Introduced in:** orchestrator/project-3845 (2026-08-27)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `rg -n 'opencode_helpers\.sh' .github/workflows scripts --glob '!scripts/opencode_helpers.sh'` returns no matches.
+  - `rg -n 'opencode|OPENCODE_' .github/workflows .github/actions scripts` confirms no remaining OpenCode runtime references before the helper is removed.
+- **Owner:** @shubhodeep1
+
+### `scripts/write_opencode_config.sh`
+
+- **Introduced in:** orchestrator/project-3845 (2026-08-27)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `rg -n 'write_opencode_config\.sh' .github/workflows scripts --glob '!scripts/write_opencode_config.sh'` returns no matches.
+  - `rg -n 'opencode|OPENCODE_' .github/workflows .github/actions scripts` confirms no remaining OpenCode runtime references before the helper is removed.
+- **Owner:** @shubhodeep1
