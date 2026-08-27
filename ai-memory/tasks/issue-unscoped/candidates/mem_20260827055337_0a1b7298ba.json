@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix_sweep.yml:lines 198-201 | severity=major | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The stale-run warning emits the configured threshold as `queued_minutes_gt`, misrepresenting both the value and the inclusive age predicate.\n  WHY: Operators cannot determine the run's actual queued age from the primary recovery log; severity disagreement (MAJOR vs NIT).\n- .github/workflows/review_autofix_sweep.yml:lines 196-201 | severity=major | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603, moonshotai_kimi-k3]\n  PROBLEM: The stale-run loop reuses `cached_count` to hold a run ID rather than a count.\n  WHY: The runtime output is correct, but the misleading variable name can cause future maintainers to misuse the value; severity disagreement (MAJOR vs NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix_sweep.yml:line 200, the AUTOFIX_SWEEP_STALE_QUEUED warning echo | severity=NIT | confidence=4\n  PROBLEM: The log field `queued_minutes_gt=${SWEEP_STALE_QUEUED_MINUTES:-0}` emits the configured cutoff threshold, not the run's actual queued duration, and its `gt` suffix implies a strict greater-than comparison while the jq predicate is inclusive; the loop variable `cached_count` is also reused to hold the run id.\n  WHY: No functional failure, but the primary recovery log misleads operators and the variable name is semantically wrong for future maintainers.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix_sweep.yml:line 200, the `echo \"::warning::AUTOFIX_SWEEP_STALE_QUEUED \u2026\"` inside `snapshot_active_review_runs` | severity=MAJOR | confidence=4\n  PROBLEM: The warning emits `queued_minutes_gt=${SWEEP_STALE_QUEUED_MINUTES:-0}`, but the value is the configured threshold rather than the actual age and the field name describes a strict greater-than predicate while the jq reduce is inclusive.\n  WHY: The primary triage signal does not provide the actual queued age and can mislead operators during incident analysis.\n- .github/workflows/review_autofix_sweep.yml:lines 196-201 (the second `while IFS=$'\\t' read -r cached_head_ref cached_count; do \u2026` loop) | severity=NIT | confidence=4\n  PROBLEM: `cached_count` holds a run id, not a count.\n  WHY: The runtime behaviour is fine, but the misleading name can cause future editors to misuse the value.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/review_autofix_sweep.yml:lines 198-201 | severity=MAJOR | confidence=5\n  PROBLEM: The stale-run warning uses `queued_minutes_gt` for an inclusive threshold value and reads the stale run ID into the misleading variable `cached_count`.\n  WHY: This mislabels the threshold and run ID in the primary recovery log, confusing operator triage.\n- .github/workflows/review_autofix_sweep.yml:line 200 | severity=MAJOR | confidence=5\n  PROBLEM: The warning message uses `cached_count` for a run_id, which is semantically incorrect.\n  WHY: Operators may be misled by the misleading name during log analysis and debugging, potentially delaying incident response.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/review_autofix_sweep.yml:lines 198-201 (the stale-run warning loop inside `snapshot_active_review_runs()`) | severity=NIT | confidence=4\n  PROBLEM: The warning emits `queued_minutes_gt=${SWEEP_STALE_QUEUED_MINUTES:-0}` even though the predicate is inclusive and the value is the configured threshold rather than the run's actual age; the stale entry's run id is also read into `cached_count`.\n  WHY: Operators receive misleading recovery observability, and future editors may copy the misleading variable name.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix_sweep.yml:line 200, the `queued_minutes_gt=${SWEEP_STALE_QUEUED_MINUTES:-0}` field in the `AUTOFIX_SWEEP_STALE_QUEUED` warning | severity=NIT | confidence=4\n  PROBLEM: The field name implies a strict greater-than comparison, but the jq predicate at line 163 is `created_epoch <= $cutoff`, which is inclusive; the emitted value is the configured threshold rather than the run's actual age. The companion concern is that `cached_count` holds a run ID rather than a count.\n  WHY: Operators may interpret `queued_minutes_gt=120` as a strictly greater-than age and cannot determine the actual queued duration from the log; the variable concern is purely internal because the echo correctly labels the output as `run_id=${cached_count}`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "8ba44d3795e82fe26e207ceb11fc2ceb53c3599de317222295503a792f2ee44f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3843,
+    "run_id": "33039867815",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33039867815",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260827055337_0a1b7298ba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3843,
+    "run_id": "33039867815"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-27T05:53:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
