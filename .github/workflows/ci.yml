@@ -820,14 +820,16 @@ jobs:
           # CI run cancelled mid-suite.
           #
           # Each test allocates its own tempdir sandbox in _make_poller_sandbox,
-          # so the module shards with no shared state; measured 3.1x on 4 cores
-          # (62s -> 20s on a 16-test slice, all shards green). The runner already
+          # so the module shards with no shared state; measured 3.6x on 4 cores
+          # (62s -> 17s on a 16-test slice, all shards green). The runner already
           # takes test names as argv, so no harness change is needed.
           shards="${CI_POLL_TEST_SHARDS:-4}"
           if ! [ "${shards}" -ge 1 ] 2>/dev/null; then
             echo "::warning::CI_POLL_TEST_SHARDS='${shards}' is not a positive integer; falling back to 1 (sequential)."
             shards=1
           fi
+
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_poll_test_sharding.py
 
           rm -f /tmp/poll_shard_*.txt /tmp/poll_shard_*.log /tmp/poll_shard_*.rc
           shard_pids=()
@@ -837,6 +839,7 @@ jobs:
             [ -s "/tmp/poll_shard_${shard}.txt" ] || continue
             (
               mapfile -t shard_tests < "/tmp/poll_shard_${shard}.txt"
+              set +e
               PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py \
                 "${shard_tests[@]}" > "/tmp/poll_shard_${shard}.log" 2>&1
               echo "$?" > "/tmp/poll_shard_${shard}.rc"
