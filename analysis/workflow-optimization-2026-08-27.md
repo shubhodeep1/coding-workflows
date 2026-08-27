@@ -268,3 +268,212 @@ Other MCP servers observed: **none**.
 | Retry totals | Not emitted |
 | Rate-limit events | None visible in sampled logs; global coverage incomplete |
 | Required next step | Instrument `gh_helpers.sh` and direct gate calls |
+
+## Deep Audit — Workflows & Scripts (2026-08-27)
+
+### Section 1: Bug & Correctness Sweep
+
+All scoped Bash, Python, and workflow YAML files passed syntax parsing. Previously documented CI timeout, consolidator, editor-retry, and reviewer-cost findings are not duplicated here.
+
+#### BUG-001 — Phase-label replacement can erase concurrent labels
+- **ID:** `BUG-001`
+- **File path:** `scripts/label_helpers.sh:166-216`; callers include `.github/workflows/issue_pr_status.yml:430-458` and `.github/workflows/review_autofix.yml:5111-5116,6657-6661`
+- **Severity:** High
+- **Category tag:** `bug`
+- **Description:** `set_issue_phase_label_resilient` reads all labels, computes a replacement list, then uses `PUT /labels`. Any label added between the GET and PUT—including control labels such as `force-review` or orchestrator metadata—is silently removed.
+- **Recommended fix:** Replace the whole-list PUT with selective `--remove-label`/`--add-label` arguments, following `set_issue_phase_label` in `scripts/orchestrate_poll_process.sh:2453-2498`. Preserve unrelated labels without a read-modify-replace operation.
+
+#### BUG-002 — Failed label reads create contradictory phase states
+- **ID:** `BUG-002`
+- **File path:** `scripts/label_helpers.sh:182-202`
+- **Severity:** Medium
+- **Category tag:** `bug`
+- **Description:** When the current-label GET or local `jq` transformation fails, the helper POSTs the target label without removing the previous phase label and returns success. This violates phase-group exclusivity and can leave states such as `ai:done` plus `ai:review-blocked`.
+- **Recommended fix:** On an unconfirmed current-label snapshot, perform no mutation and return a distinct retryable status. Let the existing poller reconciliation repair the phase on the next cycle.
+
+#### SEC-001 — PAT is persisted in model-accessible Git configuration
+- **ID:** `SEC-001`
+- **File path:** `.github/workflows/clarify.yml:149-158`; `.github/workflows/plan.yml:217-226`; `.github/workflows/implement.yml:786-796`; `.github/workflows/orchestrate.yml:85-94`; `.github/workflows/review_autofix.yml:1441-1450`; `.github/workflows/validate.yml:182-191`; `.github/workflows/orchestrate_poll.yml:201-210`
+- **Severity:** High
+- **Category tag:** `security`
+- **Description:** These steps embed `GH_PAT` into `remote.origin.url`, after which Codex runs with repository access—for example `clarify.yml:754-945`, `orchestrate.yml:613-723`, and `validate.yml:796-820`. **Inference:** an untrusted prompt can cause the model to read `.git/config`, exposing the credential outside GitHub’s log masking.
+- **Recommended fix:** Set checkout `persist-credentials: false`, keep a credential-free origin, and authenticate individual Git operations through a temporary header/askpass helper. Reuse the scrub-before-Codex pattern in `orchestrate_clarify_respond.yml:696-702,1103-1108`.
+
+#### SEC-002 — Check-run text is interpolated into shell source before the fork guard
+- **ID:** `SEC-002`
+- **File path:** `.github/workflows/check_failure_triage.yml:96-145,288-295`; `.github/workflows/internal-check-failure-triage.yml:13-27`
+- **Severity:** High
+- **Category tag:** `security`
+- **Description:** `inputs.check_name` is inserted directly into double-quoted shell commands. Shell metacharacters such as command substitutions become executable syntax after Actions interpolation. The logging step runs before the fork-origin guard while job secrets are configured. Exploitability depends on who can create the associated check-run name. `[NEEDS VERIFICATION]`
+- **Recommended fix:** Pass every input through step `env`, log only quoted shell variables, and validate `pr_number`, `check_run_id`, conclusion, and SHA before API use. Apply the same treatment to the failure-notification step.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+The prior report’s reviewer-watchdog, gate metadata/files, check-run polling, and sweep indexing hotspots are not reissued as new IDs.
+
+#### API-001 — Final PR metadata is fetched twice
+- **ID:** `API-001`
+- **File path:** `scripts/orchestrate_poll_process.sh:7358-7364`
+- **Severity:** Low
+- **Category tag:** `api-redundancy`
+- **Description:** The same `GET /pulls/{final_pr}` endpoint is called separately for `.state` and `.merged_at`. Current count: **2** calls; proposed count: **1**.
+- **Recommended fix:** Fetch one JSON object and derive both fields locally, following the existing `_fetch_pr_json` plus `_jq_field` pattern.
+
+#### BATCH-001 — Standalone discovery makes seven label-list calls
+- **ID:** `BATCH-001`
+- **File path:** `scripts/orchestrate_poll_process.sh:11652-11682`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** The standalone recovery sweep runs one `gh issue list` for each of seven phase labels. Current count: **7** logical calls per sweep; proposed count: **1** normal-path GraphQL request.
+- **Recommended fix:** Extend `_fetch_standalone_marker_issues_graphql` with seven aliased searches and merge their issue numbers. Retain paginated REST only when an alias reports `hasNextPage`.
+
+#### BATCH-002 — Post-judge label refresh reverts to per-issue REST
+- **ID:** `BATCH-002`
+- **File path:** `scripts/orchestrate_poll_process.sh:16475-16513`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** After review-blocked handling, every current or replacement issue’s labels are fetched individually. Current count: **U** calls for U unique issues; proposed count: **ceil(U/25)**.
+- **Recommended fix:** Build one unique issue-number array and call `_fetch_issue_labels_batch_graphql`, retaining per-issue REST only for missing aliases.
+
+#### BATCH-003 — Blocker status is fetched inside a nested loop
+- **ID:** `BATCH-003`
+- **File path:** `scripts/orchestrate_poll_process.sh:16554-16640`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** Every parsed post-Codex blocker receives an individual issue-state lookup. Current count: **B** calls for B blockers; proposed count: **ceil(U/25)** for U unique blockers across the cycle. Restructuring requires collecting blocker IDs before decisions. `[NEEDS VERIFICATION]`
+- **Recommended fix:** Batch blocker states through `_fetch_candidate_issue_details_graphql`, then read `.state` from a cycle-local map.
+
+#### API-002 — Failed-review detection queries three workflows serially
+- **ID:** `API-002`
+- **File path:** `scripts/orchestrate_poll_process.sh:9891-9920`
+- **Severity:** Medium
+- **Category tag:** `api-redundancy`
+- **Description:** Each stalled PR can issue one branch-scoped `gh run list` for each of three workflow files. Current count: **1–3** calls; proposed count: **1**, or **0** when the completed-run cache is conclusive.
+- **Recommended fix:** Extend `_direct_inflight_review_run_on_branch` into a branch-run snapshot helper returning active and completed review-family runs, then filter workflow names locally. Consult `_load_actions_runs_cached` first.
+
+#### API-003 — Feature sweep refetches each behind PR for its head SHA
+- **ID:** `API-003`
+- **File path:** `scripts/orchestrate_poll_process.sh:15195-15239`
+- **Severity:** Medium
+- **Category tag:** `api-redundancy`
+- **Description:** The initial PR listing already supplies each candidate’s metadata, but every behind PR triggers another GET for `.head.sha`. Current count: **1+B** for B behind PRs; proposed count: **1**. Availability of `headRefOid` must be confirmed against the pinned `gh` version. `[NEEDS VERIFICATION]`
+- **Recommended fix:** Add `headRefOid` to the existing `gh pr list --json` fields and use it as `expected_head_sha`.
+
+#### API-004 — Fork guard retries permanent failures as though transient
+- **ID:** `API-004`
+- **File path:** `.github/workflows/check_failure_triage.yml:117-145`
+- **Severity:** Medium
+- **Category tag:** `api-redundancy`
+- **Description:** The guard retries every error three times with fixed 2/4-second sleeps, including malformed input, 401/403, and 404 responses. Current count: **1–3** unconditional attempts; proposed count: **1 logical** `gh_retry` call, with retries restricted to transient failures.
+- **Recommended fix:** Stage and source `gh_helpers.sh`, validate the PR number first, and delegate retry classification and reset-aware backoff to `gh_retry`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Stall-state parser is copied five times
+- **ID:** `DUP-001`
+- **File path:** `scripts/watchdog_helpers.sh:186-201`; `scripts/review_conflict_resolve.sh:173-187`; `scripts/review_rb_judge.sh:115-129`; `scripts/review_run_reviewers.sh:299-313`; `scripts/self_heal_validation.sh:143-158`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** Five byte-equivalent implementations of `read_codex_stall_guard_state` exist.
+- **Recommended fix:** Keep `read_codex_stall_guard_state <status_file>` solely in `watchdog_helpers.sh`; source it from the four callers and retain a minimal fail-open fallback only when the helper is unavailable.
+
+#### DUP-002 — Context-budget warning logic is copied three times
+- **ID:** `DUP-002`
+- **File path:** `scripts/review_apply_fixes.sh:103-141`; `scripts/review_rb_judge.sh:203-241`; `scripts/review_run_reviewers.sh:44-82`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** The same Python import, environment setup, argument validation, and output logic appears in three review stages.
+- **Recommended fix:** Add `scripts/prompt_budget_helpers.sh` owning `emit_context_budget_warn_for_prompt <phase> <prompt_path> <model>`, then source it from all three scripts.
+
+#### DUP-003 — Integration-ref bootstrap is repeated across workflows
+- **ID:** `DUP-003`
+- **File path:** `.github/workflows/clarify.yml:57-130`; `.github/workflows/implement.yml:318-392`; `.github/workflows/orchestrate_clarify_respond.yml:110-184`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** Three approximately 70-line blocks independently clone the workflow source, fetch a preferred ref, redact clone errors, locate `resolve_integration_ref.sh`, and emit the result.
+- **Recommended fix:** Create a composite action with inputs `issue_number`, `repository`, and `token`, and output `ref`. Update all three workflows to call that action.
+
+#### DUP-004 — Prompt path resolution is duplicated
+- **ID:** `DUP-004`
+- **File path:** `scripts/assemble_prompt.sh:12-41,72-93`; `scripts/render_prompt.sh:12-41,138-159`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** `resolve_prompt_file` and `resolve_assembly_source_path` are duplicated between the two prompt entrypoints.
+- **Recommended fix:** Move both functions into `scripts/prompt_path_helpers.sh` with signatures `resolve_prompt_file <path>` and `resolve_assembly_source_path <path>`.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — Implement support-staging block exceeds the medium-risk threshold
+- **ID:** `EXPR-001`
+- **File path:** `.github/workflows/implement.yml:851-1153`
+- **Severity:** Medium
+- **Category tag:** `expression-limit`
+- **Description:** The interpolated run body is approximately **16,339 characters**, leaving **4,661 characters** before the 21,000-character limit. It contains three `${{ }}` interpolations and is at approximately 77.8% of the limit.
+- **Recommended fix:** Extend `scripts/stage_workflow_support.sh` with an implement-specific manifest and replace this inline staging implementation with one script invocation.
+
+#### EXPR-002 — Validation embeds a growth-sensitive support manifest
+- **ID:** `EXPR-002`
+- **File path:** `.github/workflows/validate.yml:202-424`
+- **Severity:** Low
+- **Category tag:** `expression-limit`
+- **Description:** The interpolated run body is approximately **13,096 characters**, leaving **7,904 characters**. It is below the 15,000-character threshold but embeds a large JSON manifest heredoc whose asset lists will grow over time.
+- **Recommended fix:** Move the manifest into a checked-in JSON file or a named manifest inside `stage_workflow_support.sh`, then pass only its path from the workflow.
+
+No workflow exceeds 800 KB. The largest, `review_autofix.yml`, is approximately 453,544 characters.
+
+### Section 5: Cross-Cutting Concerns
+
+No `TODO`, `FIXME`, or `HACK` markers were found in the scoped files. Repository-wide ShellCheck found no validated SC2086, SC2046, or SC2006 defects.
+
+#### DEAD-001 — Current floor classifications are stored but never consumed
+- **ID:** `DEAD-001`
+- **File path:** `scripts/review_issue_ledger.sh:862-920`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `CURRENT_FLOOR` is declared and populated for each issue but never read.
+- **Recommended fix:** Remove the array and assignment, or add a corresponding `FINAL_FLOOR` field and persist it if floor classification is intended to remain part of ledger output.
+
+#### DEAD-002 — Two reviewer raw-artifact aliases are unused
+- **ID:** `DEAD-002`
+- **File path:** `scripts/review_run_reviewers.sh:578-586`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE` and `RAW_REVIEWER_SYMBOL_DIFF_SUMMARY_FILE` are assigned but never referenced; filtered replacements are generated from other inputs.
+- **Recommended fix:** Remove both aliases after confirming no external sourced caller relies on dynamically scoped variables.
+
+#### DEAD-003 — Branch-rebuild diagnostic outputs are never observed
+- **ID:** `DEAD-003`
+- **File path:** `scripts/orchestrate_poll_process.sh:6311-6396`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `BRANCH_REBUILD_SKIP_REASON` and `BRANCH_REBUILD_LAST_REBUILD_AT` are assigned across threshold and cooldown branches but never read or logged.
+- **Recommended fix:** Emit them in a structured `BRANCH_REBUILD_SKIP` diagnostic when `_check_branch_rebuild_threshold` returns false, or remove the assignments.
+
+#### SHELL-001 — Reused `cmd` identifier prevents clean ShellCheck
+- **ID:** `SHELL-001`
+- **File path:** `scripts/codex_thread_reuse.sh:492-505,806-856`
+- **Severity:** Low
+- **Category tag:** `shellcheck`
+- **Description:** ShellCheck reports SC2178/SC2128 because `cmd` is an array in `codex_thread_reuse_run_once` and a scalar subcommand in `codex_thread_reuse_main`. Runtime behavior is protected by function-local scope, but the warning obscures future genuine array mistakes.
+- **Recommended fix:** Add a narrowly scoped ShellCheck suppression documenting function-local isolation, preserving the existing identifier contract.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | BUG-001, SEC-001, SEC-002 |
+| Medium | 9 | BUG-002, API-002, API-003, API-004, BATCH-001, BATCH-002, BATCH-003, DUP-003, EXPR-001 |
+| Low | 9 | API-001, DUP-001, DUP-002, DUP-004, EXPR-002, DEAD-001, DEAD-002, DEAD-003, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 9–11 | Large |
+| API call optimization | 2 | Medium |
+| Code modularization | 12–14 | Large |
+| Expression size reduction | 3–4 | Medium |
+| Medium/Low fixes | 6–9 | Medium |
