@@ -1421,6 +1421,18 @@ Under Review file issue audit: include one bullet per manifest file with:
 - issues applied
 - issues already applied
 - issues ignored
+The four counts on every audit bullet MUST balance:
+total issues listed == issues applied + issues already applied + issues ignored.
+Count each issue the review file actually lists in exactly one of the
+three disposition buckets, and never count anything the review file does
+not list. When a review file lists zero issues (for example it only
+confirms that earlier fixes are already present on HEAD, or only records
+a rate-limit / skip notice), emit all four counts as 0 for that file —
+do NOT record such confirmations under "issues already applied"; that
+narrative belongs in "Already satisfied (suggested but already
+present):" instead. The downstream validator
+(scripts/validate_editor_audit.sh) treats any imbalance as a suspicious
+no-op and blocks auto-merge on the PR.
 Under PR comment audit: include one bullet per bot PR review/review_comment entry with:
 - entry index and author
 - path and line (if available)
