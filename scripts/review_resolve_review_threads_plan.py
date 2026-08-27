@@ -248,7 +248,7 @@ def build_plan() -> int:
 
 	audit_entries = parse_audit_entries(summary_text)
 	context_entries = parse_context_entries(context_text)
-	note(f"{len(audit_entries)} audited entry/entries, {len(threads_by_comment)} thread(s) keyed by comment id")
+	note(f"{len(audit_entries)} audited entry/entries, {len(threads_by_comment)} review comment id(s) keyed for thread lookup")
 
 	plan: list[dict] = []
 	planned_thread_id_indexes: dict[str, int] = {}
