@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "OpenRouter prompt-cache behavior is a shared integration concern across workflow, analysis, and maintenance scripts.",
   "timestamps": {
     "created_at": "2026-08-27T13:14:06Z",
