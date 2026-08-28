@@ -5,13 +5,27 @@
   "entry_id": "processed_command_3870_5454961513_approved",
   "issue_number": 3870,
   "metadata": {
+    "branch": "ai/issue-3870",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/review_autofix.yml",
+      "changelog.d/opencode-bootstrap-stable-alert.md",
+      "scripts/review_run_reviewers.sh",
+      "scripts/summarize_reviewer_consensus.sh",
+      "tests/test_review_autofix_review_pipeline_contract.py"
+    ],
+    "issue_number": 3870,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3870",
+    "pr_number": 3872,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3872",
+    "run_attempt": "1",
+    "run_id": "33189503070",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/33189503070"
   },
   "run_attempt": 1,
   "run_id": "33189503070",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-08-28T16:22:31Z",
+  "status": "completed",
+  "timestamp": "2026-08-28T16:33:41Z",
   "workflow": "implement"
 }
