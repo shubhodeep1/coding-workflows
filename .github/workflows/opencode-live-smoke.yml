@@ -166,6 +166,17 @@ jobs:
             if [ "${call_rc}" -ne 0 ]; then
               opencode_emit_failure_alert live_smoke "${role}" "${model_slug}" "${call_rc}" \
                 "call_${call_number}_${result}_${model_evidence}_${reasoning_evidence}" || true
+              {
+                echo "::group::DIAG ${source_slot} call ${call_number} opencode stderr (tail)"
+                opencode_strip_ansi < "${log_output}" | tail -n 120
+                echo "::endgroup::"
+                echo "::group::DIAG ${source_slot} call ${call_number} event stream"
+                cat "${clean_output}.jsonl"
+                echo "::endgroup::"
+                echo "::group::DIAG ${source_slot} generated config"
+                cat "${config_path}"
+                echo "::endgroup::"
+              } >&2
             fi
             printf '%s\t%s\t%s\n' "${result}" "${model_evidence}" "${reasoning_evidence}"
           }
