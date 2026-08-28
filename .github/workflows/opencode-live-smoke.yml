@@ -70,6 +70,12 @@ jobs:
           # shellcheck source=scripts/opencode_helpers.sh
           source scripts/opencode_helpers.sh
 
+          # The probe prompt must require actual reasoning: adaptive-effort
+          # models (openai/gpt-5.6-sol) treat reasoning effort as a ceiling
+          # and skip reasoning entirely on trivial prompts, which starves the
+          # reasoning-evidence gate below (smoke run 33087059507).
+          smoke_prompt='Silently verify that 391 is the product of two two-digit primes, then output exactly OK'
+
           runtime_dir="${RUNNER_TEMP}/opencode-live-smoke"
           mkdir -p "${runtime_dir}"
           entries_file="${runtime_dir}/entries.tsv"
@@ -106,12 +112,13 @@ jobs:
             local call_number="$4"
             local config_path="$5"
             local raw_output log_output clean_output call_rc result model_evidence reasoning_evidence
+            local probe_body probe_http_status probe_reasoning_text
 
             raw_output="${runtime_dir}/${source_slot}-${call_number}.raw"
             log_output="${runtime_dir}/${source_slot}-${call_number}.log"
             clean_output="${runtime_dir}/${source_slot}-${call_number}.txt"
             call_rc=0
-            if printf 'Return exactly OK\n' | opencode_run_cmd \
+            if printf '%s\n' "${smoke_prompt}" | opencode_run_cmd \
               "${role}" "${model_slug}" xhigh "${config_path}" "${GITHUB_WORKSPACE}" json \
               > "${raw_output}" 2> "${log_output}"; then
               call_rc=0
@@ -153,14 +160,44 @@ jobs:
               call_rc=1
             fi
 
-            # A successful xhigh call must return provider-reported reasoning usage.
+            # A successful xhigh call must show the provider honoring the
+            # reasoning request. Token usage is the primary evidence, but
+            # OpenRouter's chat/completions omits completion_tokens_details
+            # for some models even while they reason (deepseek/deepseek-v4-pro
+            # returns reasoning text with no reasoning token count), so a zero
+            # count falls back to a one-shot non-streaming probe that accepts
+            # non-empty reasoning text for the same model, prompt, and effort.
             if ! jq -s -e 'any(.[]; .type == "step_finish" and ((.part.tokens.reasoning // 0) > 0))' \
               "${clean_output}.jsonl" >/dev/null; then
               reasoning_evidence=FAIL
               if [ "${call_rc}" -eq 0 ]; then
-                result="FAIL(no_reasoning_usage)"
+                probe_body="${clean_output}.reasoning-probe.json"
+                if probe_http_status="$(curl -sS -m 120 -o "${probe_body}" -w '%{http_code}' \
+                  https://openrouter.ai/api/v1/chat/completions \
+                  -H "Authorization: Bearer ${OPENROUTER_API_KEY}" \
+                  -H "Content-Type: application/json" \
+                  -d "$(jq -n --arg model "${model_slug}" --arg prompt "${smoke_prompt}" \
+                    '{model: $model, messages: [{role: "user", content: $prompt}], max_tokens: 4096, reasoning: {effort: "xhigh"}}')")"; then
+                  if [[ "${probe_http_status}" == 2?? ]]; then
+                    probe_reasoning_text="$(jq -r '.choices[0].message.reasoning // empty' "${probe_body}" 2>/dev/null || true)"
+                    if [[ "${probe_reasoning_text}" =~ [^[:space:]] ]]; then
+                      reasoning_evidence="PASS(text)"
+                    fi
+                  else
+                    reasoning_evidence="FAIL(probe_http_${probe_http_status})"
+                    result="FAIL(reasoning_probe_http_${probe_http_status})"
+                    call_rc=1
+                  fi
+                else
+                  reasoning_evidence="FAIL(probe_transport)"
+                  result="FAIL(reasoning_probe_transport)"
+                  call_rc=1
+                fi
+                if [ "${reasoning_evidence}" = FAIL ]; then
+                  result="FAIL(no_reasoning_usage)"
+                  call_rc=1
+                fi
               fi
-              call_rc=1
             fi
 
             if [ "${call_rc}" -ne 0 ]; then
@@ -205,11 +242,17 @@ jobs:
               if [ "${first_evidence}" = PASS ] && [ "${second_evidence}" = PASS ]; then
                 evidence_result=PASS
               fi
-              if [ "${first_reasoning_evidence}" = PASS ] && [ "${second_reasoning_evidence}" = PASS ]; then
-                reasoning_result=PASS
-              fi
+              case "${first_reasoning_evidence}|${second_reasoning_evidence}" in
+                PASS*"|"PASS*)
+                  reasoning_result=PASS
+                  if [ "${first_reasoning_evidence}" = "PASS(text)" ] \
+                    || [ "${second_reasoning_evidence}" = "PASS(text)" ]; then
+                    reasoning_result="PASS(text)"
+                  fi
+                  ;;
+              esac
               if [ "${first_result}" = PASS ] && [ "${second_result}" = PASS ] \
-                && [ "${evidence_result}" = PASS ] && [ "${reasoning_result}" = PASS ]; then
+                && [ "${evidence_result}" = PASS ] && [ "${reasoning_result}" != FAIL ]; then
                 row_status=PASS
               fi
             else
