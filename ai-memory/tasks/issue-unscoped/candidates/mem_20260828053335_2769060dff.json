@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:line 15 | severity=major | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603]\n  PROBLEM: The single-token interpolation chain does not escape backslashes, carriage returns, or line feeds before embedding the entry in a YAML double-quoted scalar.\n  WHY: YAML interprets backslash escapes, causing backslash-bearing or control-character entries to corrupt or invalidate the compose file; severity disagreement: deepseek_deepseek-v4-pro rated this NIT while minimax_minimax-m3 rated it MAJOR.\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:Line: 15 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The multi-token condition only uses whitespace splitting and does not properly handle quoted arguments containing spaces.\n  WHY: An entry such as `bash -lc \"scripts/run_validation_repo_checks.sh\"` can be misclassified and treated as a literal filename instead of a command.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:line 15 | severity=NIT | confidence=3\n  PROBLEM: The single-token entry branch escapes double quotes and dollar signs but not backslashes or carriage-return/line-feed characters.\n  WHY: A backslash-bearing entry places a raw backslash inside the YAML double-quoted scalar, where YAML treats sequences such as `\\r`, `\\n`, or `\\t` as escapes and the generated healthcheck checks a corrupted path.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:line 15 | severity=MAJOR | confidence=5\n  PROBLEM: The single-token interpolation chain does not escape backslashes, CR, or LF.\n  WHY: YAML double-quoted scalars interpret backslash escapes, so a backslash-bearing entry can make the rendered compose file invalid YAML and abort validation.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:15 | confidence=4\n  PROBLEM: The Jinja2 template interpolation chain does not escape backslashes or CR/LF characters in the entry string before it's embedded in a YAML double-quoted scalar.\n  WHY: YAML double-quoted strings interpret backslash as an escape character, causing YAML parsing failures for Windows-style paths or control characters.\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:Line: 15 | confidence=4\n  PROBLEM: The condition for multi-token entries only checks whitespace-separated tokens, but doesn't account for quoted arguments that contain spaces.\n  WHY: A command like `bash -lc \"scripts/run_validation_repo_checks.sh\"` would be treated as a single token and the healthcheck would try to test for a file named `bash -lc \"scripts/run_validation_repo_checks.sh\"`.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "31a052047b3d94fe7577793b94d8fd4cee7017e8bb2c0d64e2b26913995306d5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3862,
+    "run_id": "33141769135",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33141769135",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260828053335_2769060dff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3862,
+    "run_id": "33141769135"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-28T05:33:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
