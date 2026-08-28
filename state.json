@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-08-28T21:02:33Z",
+  "tick_at": "2026-08-28T22:04:26Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -41,7 +41,7 @@
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
-        "in_progress": 0,
+        "in_progress": 1,
         "merged": 2,
         "not_created": 0,
         "ready_to_merge": 0,
@@ -50,10 +50,10 @@
       },
       "number": 3845,
       "project_complete": false,
-      "status": "waiting",
+      "status": "in-progress",
       "title": "[Orchestrator] Opencode cutover for review_autofix",
       "total_waves": 3,
-      "wave_complete": true
+      "wave_complete": false
     }
   ]
 }
