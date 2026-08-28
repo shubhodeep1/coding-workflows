@@ -9,7 +9,7 @@ services:
     healthcheck:
       test:
         - "CMD-SHELL"
-        - "test -f /workspace/scripts/run_validation_repo_checks.sh"
+        - "entry=\"scripts/run_validation_repo_checks.sh\"; for entry_tok in $$entry; do if [ -f \"/workspace/$$entry_tok\" ]; then exit 0; fi; done; exit 1"
       interval: 5s
       timeout: 3s
       retries: 20
