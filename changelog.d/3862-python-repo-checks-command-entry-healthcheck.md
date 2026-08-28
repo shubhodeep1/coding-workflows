@@ -13,4 +13,4 @@ What this means for consumer repos: after the next `@stable` sync regenerates `v
 
 ### For contributors
 
-Regression coverage lives in `tests/test_family_python_repo_checks.py`, which simulates the rendered healthcheck the way docker runs it (compose `$$` → `$` interpolation, then `/bin/sh -c`) for both entry styles. The golden fixture `tests/fixtures/validation_harness/python_repo_checks/docker-compose.test.yml` was regenerated. The fix landed on `stable` and must be ported to `main` before the next promotion.
+Regression coverage lives in `tests/test_family_python_repo_checks.py`, which simulates the rendered healthcheck the way docker runs it (compose `$$` → `$` interpolation, then `/bin/sh -c`) for both entry styles. The golden fixture `tests/fixtures/validation_harness/python_repo_checks/docker-compose.test.yml` was regenerated. The fix landed on `stable`; `forward-merge-stable-to-main.yml` propagates it to `main` automatically on merge.
