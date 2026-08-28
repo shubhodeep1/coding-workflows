@@ -112,6 +112,7 @@ jobs:
             local call_number="$4"
             local config_path="$5"
             local raw_output log_output clean_output call_rc result model_evidence reasoning_evidence
+            local probe_body probe_http_status probe_reasoning_text
 
             raw_output="${runtime_dir}/${source_slot}-${call_number}.raw"
             log_output="${runtime_dir}/${source_slot}-${call_number}.log"
@@ -168,20 +169,34 @@ jobs:
             # non-empty reasoning text for the same model, prompt, and effort.
             if ! jq -s -e 'any(.[]; .type == "step_finish" and ((.part.tokens.reasoning // 0) > 0))' \
               "${clean_output}.jsonl" >/dev/null; then
-              probe_reasoning_text="$(curl -sS -m 120 https://openrouter.ai/api/v1/chat/completions \
-                -H "Authorization: Bearer ${OPENROUTER_API_KEY}" \
-                -H "Content-Type: application/json" \
-                -d "$(jq -n --arg model "${model_slug}" --arg prompt "${smoke_prompt}" \
-                  '{model: $model, messages: [{role: "user", content: $prompt}], max_tokens: 4096, reasoning: {effort: "xhigh"}}')" \
-                | jq -r '.choices[0].message.reasoning // empty' || true)"
-              if [ -n "${probe_reasoning_text}" ]; then
-                reasoning_evidence="PASS(text)"
-              else
-                reasoning_evidence=FAIL
-                if [ "${call_rc}" -eq 0 ]; then
-                  result="FAIL(no_reasoning_usage)"
+              reasoning_evidence=FAIL
+              if [ "${call_rc}" -eq 0 ]; then
+                probe_body="${clean_output}.reasoning-probe.json"
+                if probe_http_status="$(curl -sS -m 120 -o "${probe_body}" -w '%{http_code}' \
+                  https://openrouter.ai/api/v1/chat/completions \
+                  -H "Authorization: Bearer ${OPENROUTER_API_KEY}" \
+                  -H "Content-Type: application/json" \
+                  -d "$(jq -n --arg model "${model_slug}" --arg prompt "${smoke_prompt}" \
+                    '{model: $model, messages: [{role: "user", content: $prompt}], max_tokens: 4096, reasoning: {effort: "xhigh"}}')")"; then
+                  if [[ "${probe_http_status}" == 2?? ]]; then
+                    probe_reasoning_text="$(jq -r '.choices[0].message.reasoning // empty' "${probe_body}" 2>/dev/null || true)"
+                    if [[ "${probe_reasoning_text}" =~ [^[:space:]] ]]; then
+                      reasoning_evidence="PASS(text)"
+                    fi
+                  else
+                    reasoning_evidence="FAIL(probe_http_${probe_http_status})"
+                    result="FAIL(reasoning_probe_http_${probe_http_status})"
+                    call_rc=1
+                  fi
+                else
+                  reasoning_evidence="FAIL(probe_transport)"
+                  result="FAIL(reasoning_probe_transport)"
+                  call_rc=1
                 fi
-                call_rc=1
+                if [ "${reasoning_evidence}" = FAIL ]; then
+                  result="FAIL(no_reasoning_usage)"
+                  call_rc=1
+                fi
               fi
             fi
 
@@ -228,10 +243,16 @@ jobs:
                 evidence_result=PASS
               fi
               case "${first_reasoning_evidence}|${second_reasoning_evidence}" in
-                PASS*"|"PASS*) reasoning_result=PASS ;;
+                PASS*"|"PASS*)
+                  reasoning_result=PASS
+                  if [ "${first_reasoning_evidence}" = "PASS(text)" ] \
+                    || [ "${second_reasoning_evidence}" = "PASS(text)" ]; then
+                    reasoning_result="PASS(text)"
+                  fi
+                  ;;
               esac
               if [ "${first_result}" = PASS ] && [ "${second_result}" = PASS ] \
-                && [ "${evidence_result}" = PASS ] && [ "${reasoning_result}" = PASS ]; then
+                && [ "${evidence_result}" = PASS ] && [ "${reasoning_result}" != FAIL ]; then
                 row_status=PASS
               fi
             else
