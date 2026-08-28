@@ -115,11 +115,11 @@ run_editor_codex_attempt() {
     --config-path "${editor_opencode_config}" \
     --serena "${editor_opencode_serena}"; then
     opencode_emit_failure_alert review_apply_fixes writer "${editor_attempt_model}" 1 config_generation || true
-    return 1
+    return 79
   fi
   if ! opencode_require_bootstrap review_apply_fixes writer "${editor_attempt_model}" \
     "${editor_opencode_config}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
-    return 1
+    return 79
   fi
   editor_opencode_cmd=(
     bash -c
@@ -2079,6 +2079,14 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
       emit_editor_substate "codex_stall_killed" "${attempt}" "${tmp_err}"
       ;;
   esac
+
+  if [ "${cmd_rc}" -eq 79 ]; then
+    echo "Editor attempt ${attempt}: OpenCode configuration/bootstrap failure; aborting without retry."
+    emit_editor_substate "Failed" "${attempt}" "${tmp_err}"
+    cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
+    rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file_cleanup_path}"
+    exit 1
+  fi
 
   if [ "${cmd_rc}" -ne 0 ] && [ "${cmd_rc}" -ne 78 ] && [ "${attempt}" -eq "${editor_max_attempts}" ]; then
     opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" attempt_failed || true
