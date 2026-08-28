@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/opencode-live-smoke.yml:lines 169-178 and aggregation at lines 230-232 | severity=high | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The fallback reasoning probe can pass based on independent OpenRouter reasoning text without verifying that the opencode JSONL stream requested or received the xhigh reasoning variant.\n  WHY: An opencode regression can produce zero reasoning tokens while the independent probe succeeds, causing false PASS evidence for the opencode delivery behavior.\n\n- .github/workflows/opencode-live-smoke.yml:lines 171-185 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The fallback reasoning probe treats curl connection failures, timeouts, and HTTP errors as absent reasoning.\n  WHY: Because curl failures are discarded, provider-side 401, 429, 500, network, or timeout errors become FAIL(no_reasoning_usage) and can falsely block the rollout gate.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/opencode-live-smoke.yml:lines 169-178 and aggregation at lines 230-232 | severity=MAJOR | confidence=3\n  PROBLEM: When the opencode JSONL stream has no positive reasoning token count, the code replaces opencode evidence with an independent OpenRouter chat/completions probe. It never checks whether the opencode JSONL itself contains non-token reasoning text, so PASS(text) proves only that the provider can reason through a direct API call, not that the opencode path requested or received the xhigh reasoning variant.\n  WHY: If opencode stops honoring the xhigh variant, the opencode stream can still report zero reasoning tokens while the independent probe returns reasoning text, causing false PASS evidence.\n\n- .github/workflows/opencode-live-smoke.yml:lines 171-185 | severity=MAJOR | confidence=4\n  PROBLEM: The fallback reasoning probe does not validate the curl HTTP status or distinguish a network, timeout, or HTTP error from a genuinely absent reasoning field.\n  WHY: An HTTP 401, 429, or 500 body, curl connection failure, or timeout produces empty text and is reported as FAIL(no_reasoning_usage), potentially blocking the opencode cutover.\n\n- .github/workflows/opencode-live-smoke.yml:lines 171-185 | risk_score=3\n  ISSUE: The probe treats all curl and HTTP failures as no reasoning.\n  SUGGESTED FIX: Use curl --fail --retry 2 --retry-delay 1, capture the HTTP status before parsing, and on non-2xx or empty response set a distinct result such as FAIL(reasoning_probe_http_NNN) while leaving call_rc nonzero, instead of overwriting the result to no_reasoning_usage.\n  ESTIMATED_LINES_CHANGED: <=10\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "52864c536b3f77fc71972ad4e0b16d1a50130de903d47dce6c8cb6d0ad723381",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33137369185",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33137369185",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260828031744_df2be23fa5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33137369185"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-28T03:17:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
