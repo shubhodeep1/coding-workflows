@@ -5,13 +5,32 @@
   "entry_id": "processed_command_3849_5448764200_approved",
   "issue_number": 3849,
   "metadata": {
+    "branch": "ai/issue-3849",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/review_autofix.yml",
+      "changelog.d/3849-opencode-read-side.md",
+      "scripts/review_run_reviewers.sh",
+      "scripts/stage_workflow_support.sh",
+      "scripts/summarize_reviewer_consensus.sh",
+      "tests/test_opencode_live_smoke_workflow.py",
+      "tests/test_review_autofix_reasoning_schedule.py",
+      "tests/test_review_autofix_review_pipeline_contract.py",
+      "tests/test_review_reviewer_attempt_prompt_isolation.py",
+      "tests/test_summarize_reviewer_consensus_sandbox_pin.py"
+    ],
+    "issue_number": 3849,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3849",
+    "pr_number": 3864,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3864",
+    "run_attempt": "1",
+    "run_id": "33144446204",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/33144446204"
   },
   "run_attempt": 1,
   "run_id": "33144446204",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-08-28T05:21:56Z",
+  "status": "completed",
+  "timestamp": "2026-08-28T05:38:33Z",
   "workflow": "implement"
 }
