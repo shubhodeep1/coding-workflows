@@ -3022,6 +3022,34 @@ jobs:
           }
 
           declare -a missing=()
+          preflight_reviewer_model="$(printf '%s\n' "${REVIEWER_MODELS:-}" | tr ',' '\n' | sed -n '/[^[:space:]]/ { s/^[[:space:]]*//; s/[[:space:]]*$//; p; q; }')"
+          if [ -z "${preflight_reviewer_model}" ]; then
+            preflight_reviewer_model="unknown"
+          fi
+          preflight_reviewer_model="$(printf '%s' "${preflight_reviewer_model}" | LC_ALL=C tr -c 'A-Za-z0-9_.:/+-' '_')"
+
+          emit_opencode_preflight_alert() {
+            local alert_rc="$1"
+            local failure_class="$2"
+            local alert_payload
+            if [ -f "${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh" ]; then
+              # shellcheck source=/dev/null
+              source "${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh" 2>/dev/null || true
+            fi
+            if type opencode_emit_failure_alert >/dev/null 2>&1; then
+              opencode_emit_failure_alert review_autofix_preflight reviewer "${preflight_reviewer_model}" "${alert_rc}" "${failure_class}" || true
+              return 0
+            fi
+            alert_payload="opencode_agent_failure phase=review_autofix_preflight role=reviewer model=${preflight_reviewer_model} rc=${alert_rc} failure_class=${failure_class}"
+            if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" ]; then
+              # shellcheck source=/dev/null
+              source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" 2>/dev/null || true
+            fi
+            if type tg_send_msg >/dev/null 2>&1; then
+              tg_send_msg "${alert_payload}" ERROR >/dev/null || true
+            fi
+            echo "${alert_payload}" >&2
+          }
 
           check_required_dir() {
             local path="$1"
@@ -3068,6 +3096,12 @@ jobs:
           check_required_dir "${SUPPORT_SCRIPTS_DIR}"
           check_required_dir "${SUPPORT_PROMPTS_DIR}"
 
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh" ]; then
+            emit_opencode_preflight_alert 1 helpers_missing
+          fi
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh" ]; then
+            emit_opencode_preflight_alert 1 config_writer_missing
+          fi
           for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS}; do
             check_required_file "${SUPPORT_SCRIPTS_DIR}/${f}"
           done
@@ -3087,6 +3121,7 @@ jobs:
             opencode_missing_message="opencode binary (not found in PATH)"
             echo "MISSING: ${opencode_missing_message}"
             missing+=("${opencode_missing_message}")
+            emit_opencode_preflight_alert 127 binary_missing
           else
             echo "Found opencode binary: ${opencode_bin}"
           fi

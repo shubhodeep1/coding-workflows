@@ -34,10 +34,25 @@ fi
 
 OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
 OPENCODE_CONFIG_WRITER_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh"
-if [ -f "${OPENCODE_HELPERS_PATH}" ]; then
-  # shellcheck source=/dev/null
-  source "${OPENCODE_HELPERS_PATH}"
+reviewer_helpers_alert_model="$(printf '%s\n' "${REVIEWER_MODELS:-}" | tr ',' '\n' | sed -n '/[^[:space:]]/ { s/^[[:space:]]*//; s/[[:space:]]*$//; p; q; }')"
+if [ -z "${reviewer_helpers_alert_model}" ]; then
+  reviewer_helpers_alert_model="unknown"
 fi
+reviewer_helpers_alert_model="$(printf '%s' "${reviewer_helpers_alert_model}" | LC_ALL=C tr -c 'A-Za-z0-9_.:/+-' '_')"
+if [ ! -f "${OPENCODE_HELPERS_PATH}" ]; then
+  reviewer_helpers_missing_alert="opencode_agent_failure phase=review_run_reviewers role=reviewer model=${reviewer_helpers_alert_model} rc=1 failure_class=helpers_missing"
+  if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true
+  fi
+  if type tg_send_msg >/dev/null 2>&1; then
+    tg_send_msg "${reviewer_helpers_missing_alert}" ERROR >/dev/null || true
+  fi
+  echo "${reviewer_helpers_missing_alert}" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "${OPENCODE_HELPERS_PATH}"
 
 WATCHDOG_HELPERS="${SUPPORT_SCRIPTS_DIR:-scripts}/watchdog_helpers.sh"
 if [ -f "${WATCHDOG_HELPERS}" ]; then
