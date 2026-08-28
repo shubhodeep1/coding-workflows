@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3870,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3870\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3872\",\"pr_number\":3872,\"branch\":\"ai/issue-3870\",\"run_id\":\"33189503070\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/33189503070\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/review_autofix.yml\",\"changelog.d/opencode-bootstrap-stable-alert.md\",\"scripts/review_run_reviewers.sh\",\"scripts/summarize_reviewer_consensus.sh\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "0418c493bf47d7d442e0a359f9e8dd3d13d4af74253b0e0304d45d8e0c2b6edc",
+  "lineage": {
+    "issue_number": 3870,
+    "parent_ids": [],
+    "pr_number": 3872,
+    "run_id": "33189503070",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33189503070",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3872"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260828163302_1b44eb770f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3870,
+    "level": "run",
+    "pr_number": 3872,
+    "run_id": "33189503070"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3870: https://github.com/shubhodeep1/coding-workflows/pull/3872",
+  "timestamps": {
+    "created_at": "2026-08-28T16:33:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
