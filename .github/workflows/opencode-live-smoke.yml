@@ -52,6 +52,66 @@ jobs:
         with:
           opencode_version: ${{ env.OPENCODE_VERSION }}
 
+      - name: DIAG reasoning-shape probe matrix (temporary)
+        env:
+          MODEL_FILTER: ${{ inputs.model_filter }}
+        run: |
+          set -uo pipefail
+          summarize() {
+            python3 -c '
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+          except Exception as exc:
+              print("PARSE FAIL:", exc)
+              raise SystemExit
+          err = d.get("error")
+          if err:
+              print("error:", json.dumps(err)[:300])
+          usage = d.get("usage") or {}
+          print("usage:", json.dumps(usage)[:300])
+          choices = d.get("choices") or [{}]
+          msg = choices[0].get("message") or {}
+          print("content:", str(msg.get("content"))[:80])
+          print("reasoning text present:", bool(msg.get("reasoning")))
+          '
+          }
+          probe() {
+            local label="$1" body="$2"
+            echo "== ${label} =="
+            curl -sS -m 120 https://openrouter.ai/api/v1/chat/completions \
+              -H "Authorization: Bearer ${OPENROUTER_API_KEY}" \
+              -H "Content-Type: application/json" \
+              -d "${body}" | summarize
+          }
+          M="${MODEL_FILTER:-deepseek/deepseek-v4-pro}"
+          base='{"model": "'"$M"'", "messages": [{"role": "user", "content": "Return exactly OK"}], "max_tokens": 4096, "usage": {"include": true}'
+          probe "control no-reasoning" "${base}}"
+          probe "effort xhigh" "${base}, \"reasoning\": {\"effort\": \"xhigh\"}}"
+          probe "effort high" "${base}, \"reasoning\": {\"effort\": \"high\"}}"
+          probe "enabled only" "${base}, \"reasoning\": {\"enabled\": true}}"
+          probe "enabled plus effort high" "${base}, \"reasoning\": {\"enabled\": true, \"effort\": \"high\"}}"
+          probe "budget max_tokens 2048" "${base}, \"reasoning\": {\"max_tokens\": 2048}}"
+          probe "legacy reasoning_effort high" "${base}, \"reasoning_effort\": \"high\"}"
+          echo "== responses endpoint effort xhigh =="
+          curl -sS -m 120 https://openrouter.ai/api/v1/responses \
+            -H "Authorization: Bearer ${OPENROUTER_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{"model": "'"$M"'", "input": "Return exactly OK", "max_output_tokens": 4096, "reasoning": {"effort": "xhigh"}}' \
+            | python3 -c '
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+          except Exception as exc:
+              print("PARSE FAIL:", exc)
+              raise SystemExit
+          print("status:", d.get("status"))
+          print("usage:", json.dumps(d.get("usage"))[:300])
+          err = d.get("error")
+          if err:
+              print("error:", json.dumps(err)[:300])
+          '
+
       - name: Exercise configured OpenRouter models
         env:
           MODEL_FILTER: ${{ inputs.model_filter }}
