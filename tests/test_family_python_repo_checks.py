@@ -190,23 +190,33 @@ def test_python_repo_checks_command_style_entry_renders_healthy_healthcheck() ->
 
 
 def test_python_repo_checks_path_style_entry_healthcheck_still_gates_on_script() -> None:
-	with tempfile.TemporaryDirectory(prefix="render-python-repo-checks-") as td:
-		temp_root = Path(td)
-		manifest_path = temp_root / "validate.yml"
-		output_root = temp_root / "out"
-		_write_yaml(manifest_path, _manifest_payload())
+	for path_entry_value in (
+		"scripts/run_validation_repo_checks.sh",
+		r"scripts\run_validation_repo_checks.sh",
+		" scripts/run_validation_repo_checks.sh ",
+	):
+		with tempfile.TemporaryDirectory(prefix="render-python-repo-checks-") as td:
+			temp_root = Path(td)
+			manifest_path = temp_root / "validate.yml"
+			output_root = temp_root / "out"
+			path_entry_payload = _manifest_payload()
+			path_entry_payload["entry"] = path_entry_value
+			_write_yaml(manifest_path, path_entry_payload)
 
-		result = _run_renderer(manifest_path, output_root)
-		assert result.returncode == 0, result.stderr
+			result = _run_renderer(manifest_path, output_root)
+			assert result.returncode == 0, result.stderr
 
-		compose_path = output_root / "docker-compose.test.yml"
-		workspace_root = temp_root / "workspace"
-		(workspace_root / "scripts").mkdir(parents=True)
-		assert _simulate_healthcheck(compose_path, workspace_root) != 0
-		(workspace_root / "scripts" / "run_validation_repo_checks.sh").write_text(
-			"#!/bin/sh\nexit 0\n", encoding="utf-8"
-		)
-		assert _simulate_healthcheck(compose_path, workspace_root) == 0
+			compose_path = output_root / "docker-compose.test.yml"
+			compose_text = compose_path.read_text(encoding="utf-8")
+			if "\\" in path_entry_value:
+				assert r"scripts\\run_validation_repo_checks.sh" in compose_text
+			workspace_root = temp_root / "workspace"
+			workspace_root.mkdir()
+			path_entry_file = workspace_root / path_entry_value.strip()
+			path_entry_file.parent.mkdir(parents=True, exist_ok=True)
+			assert _simulate_healthcheck(compose_path, workspace_root) != 0
+			path_entry_file.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+			assert _simulate_healthcheck(compose_path, workspace_root) == 0
 
 
 def main() -> int:

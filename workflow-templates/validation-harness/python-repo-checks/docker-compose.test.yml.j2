@@ -1,3 +1,4 @@
+{%- set _repo_check_entry = manifest.get('entry', 'scripts/run_validation_repo_checks.sh') | trim -%}
 services:
   app:
     init: true
@@ -9,10 +10,10 @@ services:
     healthcheck:
       test:
         - "CMD-SHELL"
-{%- if manifest.get('entry', 'scripts/run_validation_repo_checks.sh').split() | length > 1 %}
+{%- if _repo_check_entry.split() | length > 1 %}
         - "test -d /workspace"
 {%- else %}
-        - "test -d /workspace && ( test -f \"/workspace/{{ manifest.get('entry', 'scripts/run_validation_repo_checks.sh') | replace('"', '\\"') | replace('$', '$$') }}\" || command -v \"{{ manifest.get('entry', 'scripts/run_validation_repo_checks.sh') | replace('"', '\\"') | replace('$', '$$') }}\" >/dev/null 2>&1 )"
+        - "test -d /workspace && ( test -f \"/workspace/{{ _repo_check_entry | replace('\\', '\\\\') | replace('"', '\\"') | replace('$', '$$') | replace('\r', '\\r') | replace('\n', '\\n') }}\" || command -v \"{{ _repo_check_entry | replace('\\', '\\\\') | replace('"', '\\"') | replace('$', '$$') | replace('\r', '\\r') | replace('\n', '\\n') }}\" >/dev/null 2>&1 )"
 {%- endif %}
       interval: 5s
       timeout: 3s
