@@ -111,8 +111,13 @@ def test_python_repo_checks_invariants_regression_guards() -> None:
 		assert result.returncode == 0, result.stderr
 
 		compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
+		healthcheck_shell_line = yaml.safe_load(compose_text)["services"]["app"]["healthcheck"]["test"][1]
 		assert "sleep infinity" in compose_text
-		assert "test -f /workspace/scripts/run_validation_repo_checks.sh" in compose_text
+		assert healthcheck_shell_line.startswith("test -d /workspace && ( ")
+		assert "for _repo_check_health_token in $$_repo_check_health_entry" in healthcheck_shell_line
+		assert 'case "$$_repo_check_health_token" in *=*)' in healthcheck_shell_line
+		assert 'if [ -f "/workspace/$$_repo_check_health_token" ] || [ -d "/workspace/$$_repo_check_health_token" ]' in healthcheck_shell_line
+		assert 'command -v "$$_repo_check_health_command"' in healthcheck_shell_line
 		assert "condition: service_healthy" not in compose_text
 
 		dockerfile_text = (output_root / "Dockerfile.app").read_text(encoding="utf-8")
@@ -142,6 +147,94 @@ def test_python_repo_checks_invariants_regression_guards() -> None:
 		tap_text = (output_root / "tests" / "90_tap_report.sh").read_text(encoding="utf-8")
 		assert "echo \"1..${TAP_PLAN}\"" in tap_text
 		assert "tap_report family=python-repo-checks stable_summary=1" in tap_text
+
+
+def _simulate_healthcheck(compose_path: Path, workspace_root: Path) -> int:
+	# Reproduce what docker runs: compose interpolates `$$` down to `$`, then
+	# the CMD-SHELL string executes under /bin/sh. `/workspace` is relocated
+	# to a temp dir so the check runs outside a container.
+	compose_doc = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+	healthcheck_test = compose_doc["services"]["app"]["healthcheck"]["test"]
+	assert healthcheck_test[0] == "CMD-SHELL"
+	shell_line = healthcheck_test[1].replace("$$", "$").replace("/workspace", str(workspace_root))
+	return subprocess.run(["/bin/sh", "-c", shell_line], capture_output=True, cwd=workspace_root).returncode
+
+
+def test_python_repo_checks_command_style_entry_renders_healthy_healthcheck() -> None:
+	# A referenced workspace path is a readiness requirement; commands without
+	# path-like tokens instead gate on their command target being available.
+	for command_entry_value, expected_workspace_file in (
+		("sh scripts/run_validation_repo_checks.sh", "scripts/run_validation_repo_checks.sh"),
+		('bash -lc "scripts/run_validation_repo_checks.sh"', "scripts/run_validation_repo_checks.sh"),
+		("scripts/run_validation_repo_checks.sh --flag", "scripts/run_validation_repo_checks.sh"),
+		("pytest tests/", "tests/"),
+		('pytest "tests/"', "tests/"),
+		("FOO=bar sh", None),
+		("PYTHONPATH=/workspace sh", None),
+		("python3 -m pytest", None),
+		("sh", None),
+	):
+		with tempfile.TemporaryDirectory(prefix="render-python-repo-checks-") as td:
+			temp_root = Path(td)
+			manifest_path = temp_root / "validate.yml"
+			output_root = temp_root / "out"
+			command_entry_payload = _manifest_payload()
+			command_entry_payload["entry"] = command_entry_value
+			_write_yaml(manifest_path, command_entry_payload)
+
+			result = _run_renderer(manifest_path, output_root)
+			assert result.returncode == 0, result.stderr
+
+			compose_path = output_root / "docker-compose.test.yml"
+			compose_text = compose_path.read_text(encoding="utf-8")
+			healthcheck_shell_line = yaml.safe_load(compose_text)["services"]["app"]["healthcheck"]["test"][1]
+			assert healthcheck_shell_line.startswith("test -d /workspace && ( ")
+			assert "for _repo_check_health_token in $$_repo_check_health_entry" in healthcheck_shell_line
+			assert 'if [ -f "/workspace/$$_repo_check_health_token" ] || [ -d "/workspace/$$_repo_check_health_token" ]' in healthcheck_shell_line
+
+			workspace_root = temp_root / "workspace"
+			workspace_root.mkdir()
+			if expected_workspace_file is None:
+				assert _simulate_healthcheck(compose_path, workspace_root) == 0
+			else:
+				assert _simulate_healthcheck(compose_path, workspace_root) != 0
+				expected_workspace_path = workspace_root / expected_workspace_file
+				if expected_workspace_file.endswith("/"):
+					expected_workspace_path.mkdir(parents=True)
+				else:
+					expected_workspace_path.parent.mkdir(parents=True, exist_ok=True)
+					expected_workspace_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+				assert _simulate_healthcheck(compose_path, workspace_root) == 0
+
+
+def test_python_repo_checks_path_style_entry_healthcheck_still_gates_on_script() -> None:
+	for path_entry_value in (
+		"scripts/run_validation_repo_checks.sh",
+		r"scripts\run_validation_repo_checks.sh",
+		" scripts/run_validation_repo_checks.sh ",
+	):
+		with tempfile.TemporaryDirectory(prefix="render-python-repo-checks-") as td:
+			temp_root = Path(td)
+			manifest_path = temp_root / "validate.yml"
+			output_root = temp_root / "out"
+			path_entry_payload = _manifest_payload()
+			path_entry_payload["entry"] = path_entry_value
+			_write_yaml(manifest_path, path_entry_payload)
+
+			result = _run_renderer(manifest_path, output_root)
+			assert result.returncode == 0, result.stderr
+
+			compose_path = output_root / "docker-compose.test.yml"
+			compose_text = compose_path.read_text(encoding="utf-8")
+			if "\\" in path_entry_value:
+				assert r"scripts\\run_validation_repo_checks.sh" in compose_text
+			workspace_root = temp_root / "workspace"
+			workspace_root.mkdir()
+			path_entry_file = workspace_root / path_entry_value.strip()
+			path_entry_file.parent.mkdir(parents=True, exist_ok=True)
+			assert _simulate_healthcheck(compose_path, workspace_root) != 0
+			path_entry_file.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+			assert _simulate_healthcheck(compose_path, workspace_root) == 0
 
 
 def main() -> int:
