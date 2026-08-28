@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3849,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3849\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3864\",\"pr_number\":3864,\"branch\":\"ai/issue-3849\",\"run_id\":\"33144446204\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/33144446204\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/review_autofix.yml\",\"changelog.d/3849-opencode-read-side.md\",\"scripts/review_run_reviewers.sh\",\"scripts/stage_workflow_support.sh\",\"scripts/summarize_reviewer_consensus.sh\",\"tests/test_opencode_live_smoke_workflow.py\",\"tests/test_review_autofix_reasoning_schedule.py\",\"tests/test_review_autofix_review_pipeline_contract.py\",\"tests/test_review_reviewer_attempt_prompt_isolation.py\",\"tests/test_summarize_reviewer_consensus_sandbox_pin.py\"]}",
+  "fingerprint": "423f276301973b00e8eab14b250d7dbe7c6d8b544591093bd80f747c1b1a588a",
+  "lineage": {
+    "issue_number": 3849,
+    "parent_ids": [],
+    "pr_number": 3864,
+    "run_id": "33144446204",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33144446204",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3864"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260828053756_cb7c950b7d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3849,
+    "level": "run",
+    "pr_number": 3864,
+    "run_id": "33144446204"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3849: https://github.com/shubhodeep1/coding-workflows/pull/3864",
+  "timestamps": {
+    "created_at": "2026-08-28T05:37:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
