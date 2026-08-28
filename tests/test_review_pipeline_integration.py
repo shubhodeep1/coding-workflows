@@ -25,6 +25,12 @@ def _isolated_test_env(extra_env: dict[str, str] | None = None, *, cwd: Path | N
 		env.update(extra_env)
 	for key in ("BASH_ENV", "ENV"):
 		env.pop(key, None)
+	# The stage chain's fail-open paths (e.g. review_consolidate.sh alerting on
+	# an empty consolidator output) send real Telegram messages when bot
+	# credentials are present in the inherited environment. Strip them so
+	# fixture-driven failure scenarios can never page an operator.
+	for key in ("TG_BOT_SECRET", "TG_ADMIN_CHAT_ID", "TG_CHAT_ID"):
+		env.pop(key, None)
 	for key in ("WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
 		if env.get(key) == baseline_env.get(key):
 			env.pop(key, None)

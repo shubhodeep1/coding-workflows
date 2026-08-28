@@ -17,6 +17,15 @@ def _bash(script: str, env: dict[str, str] | None = None) -> subprocess.Complete
 	full_env = os.environ.copy()
 	if env:
 		full_env.update(env)
+	# The negative-path tests below drive opencode_emit_failure_alert, which
+	# sources scripts/tg_helpers.sh and sends a real Telegram message whenever
+	# bot credentials are present in the environment (e.g. validate.yml exports
+	# TG_BOT_SECRET into the validation harness that runs this suite). Strip
+	# the credentials after merging caller overrides so synthetic fixtures can
+	# never page an operator; the alert-contract test stubs tg_send_msg and is
+	# unaffected.
+	for key in ("TG_BOT_SECRET", "TG_ADMIN_CHAT_ID", "TG_CHAT_ID"):
+		full_env.pop(key, None)
 	return subprocess.run(
 		["bash", "-c", script],
 		cwd=REPO_ROOT,
