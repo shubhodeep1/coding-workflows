@@ -65,7 +65,10 @@ def test_smoke_roster_and_editor_defaults_match_production() -> None:
 def test_smoke_runs_identical_calls_and_aggregates_failures() -> None:
 	smoke = SMOKE.read_text(encoding="utf-8")
 	helpers = (REPO_ROOT / "scripts" / "opencode_helpers.sh").read_text(encoding="utf-8")
-	assert "printf 'Return exactly OK\\n' | opencode_run_cmd" in smoke
+	assert "smoke_prompt='Silently verify that 391 is the product of two two-digit primes, then output exactly OK'" in smoke
+	assert "printf '%s\\n' \"${smoke_prompt}\" | opencode_run_cmd" in smoke
+	assert 'reasoning_evidence="PASS(text)"' in smoke
+	assert "'{model: $model, messages: [{role: \"user\", content: $prompt}], max_tokens: 4096, reasoning: {effort: \"xhigh\"}}'" in smoke
 	assert 'run_smoke_call "${source_slot}" "${role}" "${model_slug}" 1' in smoke
 	assert 'run_smoke_call "${source_slot}" "${role}" "${model_slug}" 2' in smoke
 	assert "opencode_strip_ansi" in smoke

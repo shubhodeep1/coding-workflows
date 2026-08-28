@@ -224,16 +224,7 @@ config = {
 						"output": output_limit,
 					},
 					"variants": {
-						# `enabled` makes the reasoning request explicit for toggle-style
-						# models (e.g. deepseek/deepseek-v4-pro) where OpenRouter ignores
-						# a bare effort; effort-style models accept the pair unchanged.
-						effort: {
-							"reasoning": (
-								{"effort": effort, "enabled": False}
-								if effort == "none"
-								else {"effort": effort, "enabled": True}
-							)
-						}
+						effort: {"reasoning": {"effort": effort}}
 						for effort in ("none", "low", "medium", "high", "xhigh")
 					},
 				}
