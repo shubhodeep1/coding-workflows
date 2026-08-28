@@ -2791,6 +2791,13 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 		assert helper_name in workflow.split("REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS:", 1)[1].split("REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS:", 1)[0]
 	assert 'command -v opencode' in preflight_block
 	assert 'command -v codex' not in preflight_block
+	for expected in (
+		"opencode_emit_failure_alert review_autofix_preflight reviewer",
+		"emit_opencode_preflight_alert 1 helpers_missing",
+		"emit_opencode_preflight_alert 1 config_writer_missing",
+		"emit_opencode_preflight_alert 127 binary_missing",
+	):
+		assert expected in preflight_block
 
 	assert 'source "${OPENCODE_HELPERS_PATH}"' in reviewers
 	assert 'bash "${OPENCODE_CONFIG_WRITER_PATH}" \\' in reviewers
@@ -2822,6 +2829,171 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert '"${_current_reasoning_effort}"' in resolver
 	for converted in (apply_fixes, consolidate, rb_judge, resolver):
 		assert "--ask-for-approval never" not in converted
+
+
+def _write_telegram_capture_helper(support_dir: Path) -> Path:
+	capture_file = support_dir / "telegram_alerts.txt"
+	(support_dir / "tg_helpers.sh").write_text(
+		'tg_send_msg() { printf \'%s|%s\\n\' "$1" "$2" >> "${TG_CAPTURE_FILE}"; }\n',
+		encoding="utf-8",
+	)
+	return capture_file
+
+
+def test_review_preflight_missing_opencode_binary_emits_classified_error() -> None:
+	with tempfile.TemporaryDirectory(prefix="review-preflight-opencode-missing-") as td:
+		workspace = Path(td)
+		support_dir = workspace / "support"
+		prompts_dir = workspace / "prompts"
+		runtime_dir = workspace / "runtime"
+		previous_reviews_dir = workspace / "reviews"
+		context_dir = workspace / "context"
+		bin_dir = workspace / "bin"
+		for directory in (support_dir, prompts_dir, runtime_dir, previous_reviews_dir, context_dir, bin_dir):
+			directory.mkdir()
+
+		(support_dir / "opencode_helpers.sh").write_text(
+			(REPO_ROOT / "scripts" / "opencode_helpers.sh").read_text(encoding="utf-8"),
+			encoding="utf-8",
+		)
+		(support_dir / "write_opencode_config.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+		telegram_capture = _write_telegram_capture_helper(support_dir)
+		codex_capture = workspace / "codex_invoked.txt"
+		(bin_dir / "codex").write_text(
+			'#!/usr/bin/env bash\nprintf invoked > "${CODEX_CAPTURE_FILE}"\n',
+			encoding="utf-8",
+		)
+		(bin_dir / "codex").chmod(0o755)
+		for command_name in ("dirname", "realpath", "sed", "tr"):
+			(bin_dir / command_name).symlink_to(Path("/usr/bin") / command_name)
+
+		required_files: dict[str, Path] = {
+			"SUPPORT_INSTRUCTIONS_FILE": workspace / "instructions.txt",
+			"PR_DIFF_FILE": workspace / "pr.diff",
+			"ORIGINAL_PR_DIFF_FILE": workspace / "original.diff",
+			"PR_CHANGED_FILES_FILE": workspace / "changed.txt",
+			"PR_ALL_COMMENTS_CONTEXT_FILE": workspace / "comments.txt",
+			"PR_CHECK_RUNS_CONTEXT_FILE": workspace / "checks.txt",
+			"SYMBOL_DIFF_SUMMARY_FILE": workspace / "symbols.txt",
+			"MEMORY_CONTEXT_FILE": workspace / "memory.txt",
+		}
+		for required_path in required_files.values():
+			required_path.write_text("fixture\n", encoding="utf-8")
+		(workspace / "pre_assembled_static.txt").write_text("fixture\n", encoding="utf-8")
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": str(bin_dir),
+			"RUNTIME_DIR": str(runtime_dir),
+			"PREVIOUS_REVIEWS_DIR": str(previous_reviews_dir),
+			"RUNTIME_CONTEXT_DIR": str(context_dir),
+			"SUPPORT_SCRIPTS_DIR": str(support_dir),
+			"SUPPORT_PROMPTS_DIR": str(prompts_dir),
+			"REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS": "opencode_helpers.sh write_opencode_config.sh",
+			"REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS": "",
+			"REVIEWER_MODELS": "  minimax/minimax-m3  \nqwen/qwen3.7-plus",
+			"SUPPORT_CODEX_INSTRUCTIONS_FILE": str(workspace / "optional-codex.txt"),
+			"SUPPORT_AGENTS_FILE": str(workspace / "optional-agents.txt"),
+			"LAST_RUN_DIFF_FILE": str(workspace / "optional-last.diff"),
+			"LAST_RUN_CHANGED_FILES_FILE": str(workspace / "optional-last-files.txt"),
+			"LAST_RUN_DIFF_STAT_FILE": str(workspace / "optional-last-stat.txt"),
+			"LAST_COMMIT_STAT_FILE": str(workspace / "optional-commit-stat.txt"),
+			"REVIEW_REVIEWER_CHECKLIST_ENABLED": "0",
+			"REVIEWER_FILTER_UNINTERESTING_ENABLED": "0",
+			"AGENTS_MD_MATERIALITY_ENABLED": "0",
+			"REVIEWER_CIRCUIT_BREAKER_ENABLED": "0",
+			"TG_CAPTURE_FILE": str(telegram_capture),
+			"CODEX_CAPTURE_FILE": str(codex_capture),
+			**{name: str(path) for name, path in required_files.items()},
+		})
+		result = subprocess.run(
+			["/usr/bin/bash", "-c", _step_run_script('"Preflight: Verify required files before reviewer invocation"')],
+			cwd=workspace,
+			env=env,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+
+		stable_alert = "opencode_agent_failure phase=review_autofix_preflight role=reviewer model=minimax/minimax-m3 rc=127 failure_class=binary_missing"
+		assert result.returncode == 1, result
+		assert stable_alert in result.stderr, result.stderr
+		assert telegram_capture.read_text(encoding="utf-8") == f"{stable_alert}|ERROR\n"
+		assert not codex_capture.exists(), "preflight must not invoke Codex"
+
+		(support_dir / "opencode_helpers.sh").unlink()
+		telegram_capture.write_text("", encoding="utf-8")
+		(bin_dir / "opencode").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+		(bin_dir / "opencode").chmod(0o755)
+		preflight_helpers_missing_result = subprocess.run(
+			["/usr/bin/bash", "-c", _step_run_script('"Preflight: Verify required files before reviewer invocation"')],
+			cwd=workspace,
+			env=env,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+
+		preflight_helpers_missing_alert = "opencode_agent_failure phase=review_autofix_preflight role=reviewer model=minimax/minimax-m3 rc=1 failure_class=helpers_missing"
+		assert preflight_helpers_missing_result.returncode == 1, preflight_helpers_missing_result
+		assert preflight_helpers_missing_result.stderr.strip() == preflight_helpers_missing_alert
+		assert telegram_capture.read_text(encoding="utf-8") == f"{preflight_helpers_missing_alert}|ERROR\n"
+		assert not codex_capture.exists(), "preflight helper failure must not invoke Codex"
+
+
+def test_reviewer_missing_opencode_helpers_emits_classified_error() -> None:
+	with tempfile.TemporaryDirectory(prefix="reviewers-opencode-helpers-missing-") as td:
+		support_dir = Path(td)
+		telegram_capture = _write_telegram_capture_helper(support_dir)
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_SCRIPTS_DIR": str(support_dir),
+			"REVIEWER_MODELS": "\n  moonshotai/kimi-k3  \nminimax/minimax-m3",
+			"TG_CAPTURE_FILE": str(telegram_capture),
+		})
+		result = subprocess.run(
+			["/usr/bin/bash", str(REVIEWERS)],
+			env=env,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+
+		stable_alert = "opencode_agent_failure phase=review_run_reviewers role=reviewer model=moonshotai/kimi-k3 rc=1 failure_class=helpers_missing"
+		assert result.returncode == 1, result
+		assert result.stderr.strip() == stable_alert, result.stderr
+		assert telegram_capture.read_text(encoding="utf-8") == f"{stable_alert}|ERROR\n"
+
+
+def test_summariser_missing_opencode_helpers_emits_classified_error() -> None:
+	with tempfile.TemporaryDirectory(prefix="summariser-opencode-helpers-missing-") as td:
+		fixture_root = Path(td)
+		support_dir = fixture_root / "support"
+		previous_reviews_dir = fixture_root / "reviews"
+		runtime_dir = fixture_root / "runtime"
+		for directory in (support_dir, previous_reviews_dir, runtime_dir):
+			directory.mkdir()
+		telegram_capture = _write_telegram_capture_helper(support_dir)
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_SCRIPTS_DIR": str(support_dir),
+			"PREVIOUS_REVIEWS_DIR": str(previous_reviews_dir),
+			"RUNTIME_DIR": str(runtime_dir),
+			"XPOLL_SUMMARISER_MODEL": "openai/gpt-5.6-luna",
+			"TG_CAPTURE_FILE": str(telegram_capture),
+		})
+		result = subprocess.run(
+			["/usr/bin/bash", str(SUMMARISER), "--prefix", "review", "--output", str(fixture_root / "output.txt")],
+			env=env,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+
+		stable_alert = "opencode_agent_failure phase=review_summariser role=reviewer model=openai/gpt-5.6-luna rc=1 failure_class=helpers_missing"
+		assert result.returncode == 1, result
+		assert result.stderr.strip() == stable_alert, result.stderr
+		assert telegram_capture.read_text(encoding="utf-8") == f"{stable_alert}|ERROR\n"
 
 
 def test_review_soft_deadline_budget_contract_is_wired() -> None:
@@ -5830,6 +6002,9 @@ def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_opencode_full_review_cutover_removes_codex_runtime()
+	test_review_preflight_missing_opencode_binary_emits_classified_error()
+	test_reviewer_missing_opencode_helpers_emits_classified_error()
+	test_summariser_missing_opencode_helpers_emits_classified_error()
 	test_review_soft_deadline_budget_contract_is_wired()
 	test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated()
 	test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated()
