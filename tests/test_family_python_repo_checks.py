@@ -115,7 +115,7 @@ def test_python_repo_checks_invariants_regression_guards() -> None:
 		assert "sleep infinity" in compose_text
 		assert healthcheck_shell_line.startswith("test -d /workspace && ( ")
 		assert "for _repo_check_health_token in $$_repo_check_health_entry" in healthcheck_shell_line
-		assert 'if [ -f "/workspace/$$_repo_check_health_token" ]' in healthcheck_shell_line
+		assert 'if [ -f "/workspace/$$_repo_check_health_token" ] || [ -d "/workspace/$$_repo_check_health_token" ]' in healthcheck_shell_line
 		assert 'command -v "$$_repo_check_health_command"' in healthcheck_shell_line
 		assert "condition: service_healthy" not in compose_text
 
@@ -166,6 +166,8 @@ def test_python_repo_checks_command_style_entry_renders_healthy_healthcheck() ->
 		("sh scripts/run_validation_repo_checks.sh", "scripts/run_validation_repo_checks.sh"),
 		('bash -lc "scripts/run_validation_repo_checks.sh"', "scripts/run_validation_repo_checks.sh"),
 		("scripts/run_validation_repo_checks.sh --flag", "scripts/run_validation_repo_checks.sh"),
+		("pytest tests/", "tests/"),
+		('pytest "tests/"', "tests/"),
 		("python -m pytest", None),
 		("sh", None),
 	):
@@ -185,7 +187,7 @@ def test_python_repo_checks_command_style_entry_renders_healthy_healthcheck() ->
 			healthcheck_shell_line = yaml.safe_load(compose_text)["services"]["app"]["healthcheck"]["test"][1]
 			assert healthcheck_shell_line.startswith("test -d /workspace && ( ")
 			assert "for _repo_check_health_token in $$_repo_check_health_entry" in healthcheck_shell_line
-			assert 'if [ -f "/workspace/$$_repo_check_health_token" ]' in healthcheck_shell_line
+			assert 'if [ -f "/workspace/$$_repo_check_health_token" ] || [ -d "/workspace/$$_repo_check_health_token" ]' in healthcheck_shell_line
 
 			workspace_root = temp_root / "workspace"
 			workspace_root.mkdir()
@@ -194,8 +196,11 @@ def test_python_repo_checks_command_style_entry_renders_healthy_healthcheck() ->
 			else:
 				assert _simulate_healthcheck(compose_path, workspace_root) != 0
 				expected_workspace_path = workspace_root / expected_workspace_file
-				expected_workspace_path.parent.mkdir(parents=True, exist_ok=True)
-				expected_workspace_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+				if expected_workspace_file.endswith("/"):
+					expected_workspace_path.mkdir(parents=True)
+				else:
+					expected_workspace_path.parent.mkdir(parents=True, exist_ok=True)
+					expected_workspace_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
 				assert _simulate_healthcheck(compose_path, workspace_root) == 0
 
 
