@@ -1259,8 +1259,7 @@ RB_OPENCODE_WORKSPACE="$(pwd)"
 RB_JUDGE_OPENCODE_CONFIG="${RUNTIME_DIR}/rb_judge_opencode.json"
 RB_FIX_OPENCODE_CONFIG="${RUNTIME_DIR}/rb_fix_opencode.json"
 if ! review_rb_prepare_opencode_config reviewer review_rb_judge "${RB_JUDGE_OPENCODE_CONFIG}" off; then
-  echo "judge_skip_reason=llm_failed" >> "$GITHUB_OUTPUT"
-  exit 0
+  exit 1
 fi
 
 # -----------------------------------------------------------
@@ -1775,8 +1774,8 @@ __EDIT_DISCIPLINE__
       fi
       rb_fix_opencode_ready=true
       if ! review_rb_prepare_opencode_config writer review_rb_fix "${RB_FIX_OPENCODE_CONFIG}" "${rb_fix_serena_mode}"; then
-        rb_fix_opencode_ready=false
-        rb_fix_rc=1
+        rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"
+        exit 1
       fi
       rb_fix_opencode_cmd=(
         bash -c

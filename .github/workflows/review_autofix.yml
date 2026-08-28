@@ -157,6 +157,8 @@ env:
   # mode where xhigh has been observed to time out. Each editor attempt passes
   # EDITOR_REASONING_EFFORT as its isolated OpenCode variant.
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
+  # Compatibility setting retained for existing consumers. OpenCode has no
+  # model-verbosity equivalent; operational CLI logs remain fixed at INFO.
   EDITOR_VERBOSITY: ${{ vars.VERBOSITY_EDITOR || 'low' }}
   CONTEXT_BUDGET_WARN_RATIO: ${{ vars.CONTEXT_BUDGET_WARN_RATIO || '0.7' }}
   MAX_PROMPT_TOKENS_FOR_PHASE: ${{ vars.MAX_PROMPT_TOKENS_FOR_PHASE || '' }}

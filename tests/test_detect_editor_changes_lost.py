@@ -399,6 +399,8 @@ def test_apply_fixes_uses_opencode_writer_with_fresh_prompt_fallback() -> None:
 	assert 'writer\n    "${editor_attempt_model}"' in contents
 	assert '--model "${editor_attempt_model}"' in contents
 	assert "CODEX_THREAD_REUSE_ENABLED requested; OpenCode editor uses the fresh full-prompt path." in contents
+	assert "|^Changes made:" in contents
+	assert '[ "${cmd_rc}" -ne 78 ] && [ "${attempt}" -eq "${editor_max_attempts}" ]' in contents
 	assert "exec codex " not in contents
 
 

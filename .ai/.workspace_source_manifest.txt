@@ -133,6 +133,7 @@ changelog.d/3845-smoke-reasoning-evidence.md
 changelog.d/3849-opencode-read-side.md
 changelog.d/3860-release-gate-poll-sharding.md
 changelog.d/3861-editor-audit-arithmetic-prompt.md
+changelog.d/3865-opencode-write-side.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/deploy-activate-digitalocean-steps.md

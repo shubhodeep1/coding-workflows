@@ -2815,6 +2815,8 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'reviewer\n    "${MODEL_EDITOR}"' in rb_judge
 	assert 'writer\n        "${MODEL_EDITOR}"' in rb_judge
 	assert 'opencode_emit_failure_alert review_rb_judge reviewer' in rb_judge
+	assert 'if ! review_rb_prepare_opencode_config reviewer review_rb_judge "${RB_JUDGE_OPENCODE_CONFIG}" off; then\n  exit 1\nfi' in rb_judge
+	assert 'if ! review_rb_prepare_opencode_config writer review_rb_fix "${RB_FIX_OPENCODE_CONFIG}" "${rb_fix_serena_mode}"; then\n        rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"\n        exit 1\n      fi' in rb_judge
 	assert 'opencode_run_cmd "$@"' in resolver
 	assert 'writer\n    "${MODEL_EDITOR}"' in resolver
 	assert '"${_current_reasoning_effort}"' in resolver

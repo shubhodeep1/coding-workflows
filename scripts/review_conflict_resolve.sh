@@ -1912,7 +1912,6 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: OpenCode exited 0 with elapsed ${_attempt_elapsed}s ≥ per-attempt budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s — likely a graceful SIGTERM-handler exit at the timer boundary; soft validation will inspect the post-agent working-tree state directly (no failure-kind change is needed — see comment block above)."
   fi
   if [ "${_codex_exit}" -ne 0 ]; then
-    opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR}" "${_codex_exit}" invocation_failed || true
     rm -f "${tmp_output}"
     # `timeout` documents two specific exit codes:
     #   - 124: the child was sent SIGTERM after DURATION expired.
@@ -1979,6 +1978,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
         ;;
     esac
     if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
+      opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR}" "${_codex_exit}" invocation_failed || true
       if [ "${_prev_attempt_failure_kind}" = "timeout" ]; then
         echo "Conflict resolver failed after retries (final attempt killed by per-attempt timer)."
       elif [ "${_prev_attempt_failure_kind}" = "stall_guard" ]; then

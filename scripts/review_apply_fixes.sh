@@ -194,7 +194,7 @@ editor_output_has_apply_patch() {
   local output_file="$1"
 
   [ -s "${output_file}" ] || return 1
-  grep -Eiq '\*\*\* Begin Patch|(^|[^[:alnum:]_])apply_patch([^[:alnum:]_]|$)' "${output_file}"
+  grep -Eiq '\*\*\* Begin Patch|(^|[^[:alnum:]_])apply_patch([^[:alnum:]_]|$)|^Changes made:' "${output_file}"
 }
 
 lessons_learned_truthy() {
@@ -2080,7 +2080,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
       ;;
   esac
 
-  if [ "${cmd_rc}" -ne 0 ]; then
+  if [ "${cmd_rc}" -ne 0 ] && [ "${cmd_rc}" -ne 78 ] && [ "${attempt}" -eq "${editor_max_attempts}" ]; then
     opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" attempt_failed || true
   fi
 
