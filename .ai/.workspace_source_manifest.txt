@@ -111,6 +111,7 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
+analysis/workflow-optimization-2026-08-27.md
 changelog.d/.gitkeep
 changelog.d/3738-merge-precheck-promisor-recovery.md
 changelog.d/3763-changes-lost-redispatch-get-method.md
@@ -124,7 +125,13 @@ changelog.d/3816-ignore-unstructured-mcp-counter-echoes.md
 changelog.d/3816-stall-recovery-linkage-guards.md
 changelog.d/3817-ai-memory-push-retry-budget.md
 changelog.d/3837-security-audit-path-diagnostics.md
+changelog.d/3841-resolve-addressed-review-threads.md
+changelog.d/3843-sweep-stale-queued-guard.md
+changelog.d/3844-ci-poll-test-sharding.md
 changelog.d/3845-opencode-plumbing.md
+changelog.d/3845-smoke-reasoning-evidence.md
+changelog.d/3860-release-gate-poll-sharding.md
+changelog.d/3861-editor-audit-arithmetic-prompt.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/deploy-activate-digitalocean-steps.md
@@ -412,6 +419,8 @@ scripts/review_issue_ledger.sh
 scripts/review_parse_consolidator.sh
 scripts/review_rb_judge.sh
 scripts/review_reject_verify.sh
+scripts/review_resolve_review_threads.sh
+scripts/review_resolve_review_threads_plan.py
 scripts/review_run_judge_interim.sh
 scripts/review_run_reviewers.sh
 scripts/review_synthesise_smoke.sh
@@ -571,6 +580,7 @@ tests/test_branch_rebuild.py
 tests/test_changelog_fragment_contract.py
 tests/test_check_integration_pr_readiness.py
 tests/test_ci_inventory_parity_order_contract.py
+tests/test_ci_poll_test_sharding.py
 tests/test_clarify_informal_detect.py
 tests/test_codex_heartbeat.py
 tests/test_codex_skip_git_repo_check_contract.py
@@ -667,6 +677,7 @@ tests/test_review_autofix_reasoning_schedule.py
 tests/test_review_autofix_review_pipeline_contract.py
 tests/test_review_autofix_smoke_conflict_resolver_override.py
 tests/test_review_autofix_smoke_editor_override.py
+tests/test_review_autofix_sweep_stale_queued.py
 tests/test_review_autofix_sweep_zero_candidate_fast_exit.py
 tests/test_review_commit_changelog_fragment_preserved.py
 tests/test_review_conflict_resolve_reasoning_step_down.py
@@ -685,6 +696,7 @@ tests/test_review_rb_judge_reissue_baseline.py
 tests/test_review_rb_judge_self_run_exclusion.py
 tests/test_review_reject_verify.py
 tests/test_review_rereview_and_approval_rubric.py
+tests/test_review_resolve_review_threads.py
 tests/test_review_reviewer_attempt_prompt_isolation.py
 tests/test_review_semble_contract.py
 tests/test_review_surface_prompt_hardening.py

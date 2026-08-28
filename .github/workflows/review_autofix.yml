@@ -94,6 +94,7 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: review_autofix
+  OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
   REVIEWER_MODELS: |
@@ -156,8 +157,8 @@ env:
   # mode where xhigh has been observed to time out. The "Switch reasoning
   # effort for editor" step below re-patches the global ~/.codex/config.toml
   # to EDITOR_REASONING_EFFORT before the editor's codex exec call. The
-  # per-reviewer CODEX_HOME copies used during the reviewer passes are
-  # isolated and never read by the editor.
+  # per-reviewer OpenCode configs used during the reviewer passes are isolated
+  # and never read by the editor's shared Codex home.
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
   EDITOR_VERBOSITY: ${{ vars.VERBOSITY_EDITOR || 'low' }}
   CONTEXT_BUDGET_WARN_RATIO: ${{ vars.CONTEXT_BUDGET_WARN_RATIO || '0.7' }}
@@ -190,7 +191,7 @@ env:
   AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}
   REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}
   # Cross-reviewer consensus summariser: after each pass (pass-1 feeds pass-2,
-  # pass-2 feeds the editor), all reviewer outputs are fed to one codex-cli
+  # pass-2 feeds the editor), all reviewer outputs are fed to one OpenCode
   # call that emits a consolidated ledger. Hard-fails the workflow on repeat
   # failure — job-level "Telegram failure" step surfaces the incident.
   XPOLL_SUMMARISER_MODEL: ${{ vars.XPOLL_SUMMARISER_MODEL || 'openai/gpt-5.6-luna' }}
@@ -229,7 +230,7 @@ env:
   REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-
     codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh
     review_run_reviewers.sh render_prompt.sh assemble_prompt.sh
-    nag_reminder.sh
+    nag_reminder.sh opencode_helpers.sh write_opencode_config.sh
   REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-
     render_prompt.py
 
@@ -1626,6 +1627,11 @@ jobs:
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+
+      - name: Install OpenCode CLI
+        uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde
+        with:
+          opencode_version: ${{ env.OPENCODE_VERSION }}
 
       - name: Install OS-level dependencies
         shell: bash
@@ -3112,6 +3118,14 @@ jobs:
             missing+=("${codex_missing_message}")
           else
             echo "Found codex binary: ${codex_bin}"
+          fi
+
+          if ! opencode_bin="$(command -v opencode 2>/dev/null)"; then
+            opencode_missing_message="opencode binary (not found in PATH)"
+            echo "MISSING: ${opencode_missing_message}"
+            missing+=("${opencode_missing_message}")
+          else
+            echo "Found opencode binary: ${opencode_bin}"
           fi
 
           check_soft_file "${SUPPORT_CODEX_INSTRUCTIONS_FILE}"

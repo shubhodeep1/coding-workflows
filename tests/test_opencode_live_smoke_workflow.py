@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static contracts for the inert OpenCode action and live smoke workflow."""
+"""Static contracts for the OpenCode action, live smoke, and Phase 2 cutover."""
 
 from __future__ import annotations
 
@@ -107,9 +107,16 @@ def test_smoke_runs_identical_calls_and_aggregates_failures() -> None:
 	assert smoke.count("bootstrap_or_config") == 1
 
 
-def test_production_review_path_remains_opencode_free() -> None:
-	production = PRODUCTION_REVIEW.read_text(encoding="utf-8").lower()
-	assert "opencode" not in production
+def test_production_review_path_uses_opencode_only_for_read_side() -> None:
+	production = PRODUCTION_REVIEW.read_text(encoding="utf-8")
+	reviewers = (REPO_ROOT / "scripts" / "review_run_reviewers.sh").read_text(encoding="utf-8")
+	summariser = (REPO_ROOT / "scripts" / "summarize_reviewer_consensus.sh").read_text(encoding="utf-8")
+	apply_fixes = (REPO_ROOT / "scripts" / "review_apply_fixes.sh").read_text(encoding="utf-8")
+	assert "Install OpenCode CLI" in production
+	assert "Install Codex CLI" in production
+	assert 'opencode_run_cmd "$@"' in reviewers
+	assert 'opencode_run_cmd "$@"' in summariser
+	assert "exec codex --ask-for-approval never" in apply_fixes
 
 
 def test_focused_tests_are_wired_into_ci() -> None:
