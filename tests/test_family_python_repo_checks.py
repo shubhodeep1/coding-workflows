@@ -112,8 +112,9 @@ def test_python_repo_checks_invariants_regression_guards() -> None:
 
 		compose_text = (output_root / "docker-compose.test.yml").read_text(encoding="utf-8")
 		assert "sleep infinity" in compose_text
-		assert 'entry=\\"scripts/run_validation_repo_checks.sh\\"' in compose_text
-		assert '[ -f \\"/workspace/$$entry_tok\\" ]' in compose_text
+		assert "test -d /workspace" in compose_text
+		assert 'test -f \\"/workspace/scripts/run_validation_repo_checks.sh\\"' in compose_text
+		assert 'command -v \\"scripts/run_validation_repo_checks.sh\\"' in compose_text
 		assert "condition: service_healthy" not in compose_text
 
 		dockerfile_text = (output_root / "Dockerfile.app").read_text(encoding="utf-8")
@@ -153,37 +154,39 @@ def _simulate_healthcheck(compose_path: Path, workspace_root: Path) -> int:
 	healthcheck_test = compose_doc["services"]["app"]["healthcheck"]["test"]
 	assert healthcheck_test[0] == "CMD-SHELL"
 	shell_line = healthcheck_test[1].replace("$$", "$").replace("/workspace", str(workspace_root))
-	return subprocess.run(["/bin/sh", "-c", shell_line], capture_output=True).returncode
+	return subprocess.run(["/bin/sh", "-c", shell_line], capture_output=True, cwd=workspace_root).returncode
 
 
 def test_python_repo_checks_command_style_entry_renders_healthy_healthcheck() -> None:
-	# Regression: `entry` may be a command (`sh scripts/run_validation_repo_checks.sh`),
-	# not just a path. The old template rendered the healthcheck
-	# `test -f /workspace/sh scripts/run_validation_repo_checks.sh`, which exits 2
-	# (`test: /workspace/sh: unexpected operator`) and leaves the container
-	# permanently unhealthy, aborting validation as harness_error.
-	with tempfile.TemporaryDirectory(prefix="render-python-repo-checks-") as td:
-		temp_root = Path(td)
-		manifest_path = temp_root / "validate.yml"
-		output_root = temp_root / "out"
-		command_entry_payload = _manifest_payload()
-		command_entry_payload["entry"] = "sh scripts/run_validation_repo_checks.sh"
-		_write_yaml(manifest_path, command_entry_payload)
+	# Command validity is reported by 40_repo_checks.sh; readiness only verifies
+	# that the workspace copied into the sleeping app container is available.
+	for command_entry_value in (
+		"sh scripts/run_validation_repo_checks.sh",
+		'bash -lc "scripts/run_validation_repo_checks.sh"',
+		"python -m pytest",
+		"sh",
+	):
+		with tempfile.TemporaryDirectory(prefix="render-python-repo-checks-") as td:
+			temp_root = Path(td)
+			manifest_path = temp_root / "validate.yml"
+			output_root = temp_root / "out"
+			command_entry_payload = _manifest_payload()
+			command_entry_payload["entry"] = command_entry_value
+			_write_yaml(manifest_path, command_entry_payload)
 
-		result = _run_renderer(manifest_path, output_root)
-		assert result.returncode == 0, result.stderr
+			result = _run_renderer(manifest_path, output_root)
+			assert result.returncode == 0, result.stderr
 
-		compose_path = output_root / "docker-compose.test.yml"
-		compose_text = compose_path.read_text(encoding="utf-8")
-		assert "test -f /workspace/sh " not in compose_text
+			compose_path = output_root / "docker-compose.test.yml"
+			compose_text = compose_path.read_text(encoding="utf-8")
+			if command_entry_value == "sh":
+				assert 'command -v \\"sh\\"' in compose_text
+			else:
+				assert "test -d /workspace" in compose_text
 
-		workspace_root = temp_root / "workspace"
-		(workspace_root / "scripts").mkdir(parents=True)
-		assert _simulate_healthcheck(compose_path, workspace_root) != 0
-		(workspace_root / "scripts" / "run_validation_repo_checks.sh").write_text(
-			"#!/bin/sh\nexit 0\n", encoding="utf-8"
-		)
-		assert _simulate_healthcheck(compose_path, workspace_root) == 0
+			workspace_root = temp_root / "workspace"
+			workspace_root.mkdir()
+			assert _simulate_healthcheck(compose_path, workspace_root) == 0
 
 
 def test_python_repo_checks_path_style_entry_healthcheck_still_gates_on_script() -> None:

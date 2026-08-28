@@ -9,7 +9,11 @@ services:
     healthcheck:
       test:
         - "CMD-SHELL"
-        - "entry=\"{{ manifest.get('entry', 'scripts/run_validation_repo_checks.sh') | replace('"', '\\"') | replace('$', '$$') }}\"; for entry_tok in $$entry; do if [ -f \"/workspace/$$entry_tok\" ]; then exit 0; fi; done; exit 1"
+{%- if manifest.get('entry', 'scripts/run_validation_repo_checks.sh').split() | length > 1 %}
+        - "test -d /workspace"
+{%- else %}
+        - "test -d /workspace && ( test -f \"/workspace/{{ manifest.get('entry', 'scripts/run_validation_repo_checks.sh') | replace('"', '\\"') | replace('$', '$$') }}\" || command -v \"{{ manifest.get('entry', 'scripts/run_validation_repo_checks.sh') | replace('"', '\\"') | replace('$', '$$') }}\" >/dev/null 2>&1 )"
+{%- endif %}
       interval: 5s
       timeout: 3s
       retries: 20
