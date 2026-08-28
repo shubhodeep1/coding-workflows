@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static contracts for the inert OpenCode action and live smoke workflow."""
+"""Static contracts for the OpenCode install action and live smoke workflow."""
 
 from __future__ import annotations
 
