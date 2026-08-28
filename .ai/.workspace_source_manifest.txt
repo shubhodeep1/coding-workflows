@@ -136,6 +136,7 @@ changelog.d/3861-editor-audit-arithmetic-prompt.md
 changelog.d/3862-python-repo-checks-command-entry-healthcheck.md
 changelog.d/3865-opencode-write-side.md
 changelog.d/3869-final-merge-telegram-alert.md
+changelog.d/3870-opencode-bootstrap-stable-alert.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/deploy-activate-digitalocean-steps.md
