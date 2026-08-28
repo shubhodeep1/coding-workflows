@@ -7289,6 +7289,9 @@ finalize_integration_merge_if_needed() {
 	local validation_history_gate_reason=""
 	local validation_history_gate_sha=""
 	local validation_history_gate_wait_message=""
+	local _final_merge_alert_title=""
+	local _final_merge_alert_gate=""
+	local _final_merge_alert_msg=""
 
 	# Default behavior: failed finalize attempts consume retry budget.
 	# Transient "not-ready-yet" paths below opt out explicitly.
@@ -7534,6 +7537,29 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     post_tracking_comment "## ✅ Final merge complete
 
 Integration branch \`${integration_branch}\` was squash-merged into \`${default_branch}\` via PR #${final_pr}."
+    # Operator-facing Telegram alert for every final integration merge.
+    # CRITICAL so no DEBUG/WARNING/ERROR/CRITICAL ALERT_MSG_LEVEL
+    # threshold suppresses it (unlike the DEBUG "completed after
+    # validation pass" summary in mark_validation_complete, which stays
+    # as-is); ALERT_MSG_LEVEL=SILENT still silences every helper-based
+    # send, per tg_helpers.sh. The title comes from the pr_json snapshot
+    # already fetched in this tick — no extra API call (§15);
+    # project_title is the fallback when the field is empty.
+    _final_merge_alert_title="$(_jq_field "${pr_json}" '.title')"
+    [ -n "${_final_merge_alert_title}" ] || _final_merge_alert_title="${project_title}"
+    case "${ready_gate_reason}" in
+      tracking-validated-legacy)  _final_merge_alert_gate="validation passed" ;;
+      tracking-ready-to-merge)    _final_merge_alert_gate="operator ai:ready-to-merge" ;;
+      validation-disabled-legacy) _final_merge_alert_gate="validation disabled" ;;
+      *)                          _final_merge_alert_gate="${ready_gate_reason:-unknown}" ;;
+    esac
+    _final_merge_alert_msg="Final integration PR #${final_pr} squash-merged into ${default_branch} (${_final_merge_alert_gate})."
+    _final_merge_alert_msg+=$'\n'"Title: ${_final_merge_alert_title}"
+    _final_merge_alert_msg+=$'\n'"PR: $(_gh_url "pull/${final_pr}")"
+    _final_merge_alert_msg+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
+    # Discard only stdout (the echoed message_id); keep stderr so
+    # tg_send_msg's "Telegram send failed" warning stays in the logs.
+    tg_send_msg "${_final_merge_alert_msg}" "CRITICAL" >/dev/null || true
     return 0
   fi
 

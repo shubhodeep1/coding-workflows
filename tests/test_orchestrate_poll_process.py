@@ -14987,6 +14987,71 @@ def _test_heartbeat_worker(
 		)
 
 
+def test_final_merge_success_sends_critical_telegram_alert():
+	# The finalize merge-success arm must notify the operator over Telegram
+	# whenever the final integration PR is squash-merged into the default
+	# branch. The alert is CRITICAL so none of the DEBUG/WARNING/ERROR/
+	# CRITICAL ALERT_MSG_LEVEL thresholds suppress it; only the explicit
+	# ALERT_MSG_LEVEL=SILENT opt-out silences all helper-based sends, per
+	# tg_helpers.sh (the DEBUG-level "completed after validation pass"
+	# summary in mark_validation_complete is separately gated and
+	# deliberately left untouched). This test pins the placement (inside
+	# the `gh pr merge --squash --delete-branch` success arm, after the
+	# "Final merge complete" tracking comment and before the arm's
+	# `return 0`) and the message surface (PR title sourced from the
+	# already-fetched pr_json snapshot per the §15 no-new-API-calls rule,
+	# PR url, tracking-issue url, human-readable gate description, and the
+	# CRITICAL level).
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	merge_marker = '--squash --delete-branch 2>&1 >/dev/null)"; then'
+	merge_idx = poller_body.find(merge_marker)
+	assert merge_idx != -1, (
+		"finalize merge-success arm (`gh pr merge --squash --delete-branch`) "
+		"marker is missing from scripts/orchestrate_poll_process.sh; the "
+		"final-merge Telegram alert must live inside that arm."
+	)
+	tracking_marker = "## ✅ Final merge complete"
+	tracking_idx = poller_body.find(tracking_marker, merge_idx)
+	assert tracking_idx != -1, (
+		"the `## ✅ Final merge complete` tracking comment is missing from "
+		"the finalize merge-success arm; the Telegram alert is pinned to "
+		"fire alongside it."
+	)
+	return_idx = poller_body.find("return 0", tracking_idx)
+	assert return_idx != -1, (
+		"the finalize merge-success arm no longer ends with `return 0` "
+		"after the tracking comment; cannot bound the alert window."
+	)
+	alert_window = poller_body[tracking_idx:return_idx]
+	for needle, why in (
+		(
+			'_jq_field "${pr_json}" \'.title\'',
+			"final-merge alert no longer sources the PR title from the pr_json snapshot; re-fetching would violate §15 and dropping the title removes the feat:/fix: visibility the alert exists for.",
+		),
+		(
+			'_final_merge_alert_gate="validation passed"',
+			"final-merge alert no longer maps the tracking-validated-legacy gate to the human-readable 'validation passed' description; the operator can no longer tell validated merges apart from operator-forced or validation-disabled merges.",
+		),
+		(
+			'_gh_url "pull/${final_pr}"',
+			"final-merge alert no longer includes the PR url; the operator cannot jump to the merged PR from Telegram.",
+		),
+		(
+			'_gh_url "issues/${TRACKING_NUM}"',
+			"final-merge alert no longer includes the tracking-issue url; the operator loses the link back to the orchestrator project.",
+		),
+		(
+			'tg_send_msg "${_final_merge_alert_msg}" "CRITICAL"',
+			"final-merge alert is no longer sent at CRITICAL level via tg_send_msg; any lower level would let an ALERT_MSG_LEVEL threshold above it silently suppress the alert (only ALERT_MSG_LEVEL=SILENT may silence CRITICAL), which is the exact gap this alert was added to close.",
+		),
+	):
+		assert needle in alert_window, (
+			"final-merge Telegram alert in scripts/orchestrate_poll_process.sh "
+			f"no longer contains `{needle}` between the 'Final merge complete' "
+			f"tracking comment and the arm's `return 0`: {why}"
+		)
+
+
 def _run_selected_tests(
 	test_funcs: list,
 	*,
