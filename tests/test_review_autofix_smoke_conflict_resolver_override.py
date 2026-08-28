@@ -278,6 +278,10 @@ def _render_conflict_resolver_prompt(
 
 	prompt_file = runtime / "conflict_resolver_prompt.txt"
 	env = os.environ.copy()
+	for key in ("BASH_ENV", "ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "WORKSPACE_PATH"):
+		env.pop(key, None)
+	env["PWD"] = str(tmp_p)
+	env.pop("OLDPWD", None)
 	env.update({
 		"SUPPORT_PROMPTS_DIR": str(prompts_dir),
 		"RUNTIME_DIR": str(runtime),

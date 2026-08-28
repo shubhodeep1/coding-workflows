@@ -149,17 +149,16 @@ env:
   REVIEWER_SLOT_BACKOFF_BUDGET_RATIO: ${{ vars.REVIEWER_SLOT_BACKOFF_BUDGET_RATIO || '0.05' }}
   REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}
   REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}
-  # Editor (codex apply-fixes loop). Production defaults to xhigh
+  # Editor (OpenCode apply-fixes loop). Production defaults to xhigh
   # (repo-wide gpt-5.6-sol policy); smoke runs override to `medium` via the
   # "Detect smoke test PR" step (search "EDITOR_REASONING_EFFORT=medium"
   # below) — that medium override is preserved deliberately because the
   # smoke editor's bait-line task is the only known empty-output failure
-  # mode where xhigh has been observed to time out. The "Switch reasoning
-  # effort for editor" step below re-patches the global ~/.codex/config.toml
-  # to EDITOR_REASONING_EFFORT before the editor's codex exec call. The
-  # per-reviewer OpenCode configs used during the reviewer passes are isolated
-  # and never read by the editor's shared Codex home.
+  # mode where xhigh has been observed to time out. Each editor attempt passes
+  # EDITOR_REASONING_EFFORT as its isolated OpenCode variant.
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
+  # Compatibility setting retained for existing consumers. OpenCode has no
+  # model-verbosity equivalent; operational CLI logs remain fixed at INFO.
   EDITOR_VERBOSITY: ${{ vars.VERBOSITY_EDITOR || 'low' }}
   CONTEXT_BUDGET_WARN_RATIO: ${{ vars.CONTEXT_BUDGET_WARN_RATIO || '0.7' }}
   MAX_PROMPT_TOKENS_FOR_PHASE: ${{ vars.MAX_PROMPT_TOKENS_FOR_PHASE || '' }}
@@ -1249,7 +1248,7 @@ jobs:
     runs-on: ubuntu-latest
     # Sized to accommodate the resolver step's 170-min cap plus the
     # pre-resolver work (~24 min observed on run 25629086684: disk
-    # cleanup, checkout, codex install, runtime workspace setup,
+    # cleanup, checkout, OpenCode install, runtime workspace setup,
     # reviewer fan-out, editor, prompt prep) and post-resolver work
     # (validation, push, comments, telegram, EXIT-trap dispatch).
     # The previous 180-min cap left only ~10 min of job-level
@@ -1623,11 +1622,6 @@ jobs:
             echo "PR_CLOSED=true" >> "$GITHUB_ENV"
           fi
 
-      - name: Install Codex CLI
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
-        with:
-          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
-
       - name: Install OpenCode CLI
         continue-on-error: true
         uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde
@@ -1942,15 +1936,6 @@ jobs:
           fi
 
           true
-
-      - name: Create Codex config
-        run: |
-          set -euo pipefail
-          source "${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
-          # See scripts/write_codex_config.sh for the apply_patch /
-          # trust / elevation rationale.
-          CODEX_HELPERS_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR}" \
-            codex_config_assemble "${MODEL_EDITOR}" "${REVIEWER_REASONING_EFFORT}" "low" --web-search disabled
 
       - name: Pre-assemble static context (cacheable across runs)
         run: |
@@ -2364,14 +2349,6 @@ jobs:
             # (THINKING_LEVEL_REVIEWER / THINKING_LEVEL_EDITOR).
             echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
             echo "EDITOR_REASONING_EFFORT=medium" >> "$GITHUB_ENV"
-            # Patch the already-written Codex config so the reviewer phase
-            # (which copies ~/.codex/config.toml into each reviewer's
-            # isolated CODEX_HOME) picks up the low override. Without this
-            # sed the reviewer codex config would still hold the medium value
-            # baked in by the "Create Codex config" step that ran earlier.
-            # The editor phase re-patches the config in "Switch reasoning effort
-            # for editor" using EDITOR_REASONING_EFFORT=medium (set above).
-            sed -i 's/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*".*"/model_reasoning_effort = "low"/' ~/.codex/config.toml
             echo "🔬 Smoke test PR detected — reviewer reasoning=low, editor reasoning=medium (Phase 4b fix)"
             # Suppress per-phase Telegram alerts; the test-and-mark-stable
             # gate emits a single combined pass/fail notification at the
@@ -2407,11 +2384,6 @@ jobs:
               echo '__NO_PR_REVIEWER_MODELS__'
             } >> "$GITHUB_ENV"
           fi
-          # Override the reviewer config written earlier by Create Codex
-          # config. This step intentionally runs after the smoke-test
-          # tuning block so no-PR claude/** comment-only reviews always use
-          # the lightweight single-pass reviewer profile.
-          sed -i 's/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*".*"/model_reasoning_effort = "low"/' ~/.codex/config.toml
           echo "CLAUDE_BRANCH_REVIEW_LIGHT_PROFILE mode=no_pr reviewer_reasoning=low reviewer_two_pass=false reviewer_count=${#reviewer_models[@]}"
 
       - name: Checkout PR head branch
@@ -3111,16 +3083,6 @@ jobs:
           check_required_file "${PR_CHECK_RUNS_CONTEXT_FILE}"
           check_required_file "${SYMBOL_DIFF_SUMMARY_FILE}"
           check_required_file "${MEMORY_CONTEXT_FILE}"
-          check_required_file "${HOME}/.codex/config.toml"
-
-          if ! codex_bin="$(command -v codex 2>/dev/null)"; then
-            codex_missing_message="codex binary (not found in PATH)"
-            echo "MISSING: ${codex_missing_message}"
-            missing+=("${codex_missing_message}")
-          else
-            echo "Found codex binary: ${codex_bin}"
-          fi
-
           if ! opencode_bin="$(command -v opencode 2>/dev/null)"; then
             opencode_missing_message="opencode binary (not found in PATH)"
             echo "MISSING: ${opencode_missing_message}"
@@ -3690,28 +3652,7 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         run: |
           set -euo pipefail
-          sed -i "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${EDITOR_REASONING_EFFORT}\"/" ~/.codex/config.toml
-          echo "Updated reasoning effort to ${EDITOR_REASONING_EFFORT} for editor phase"
-          # Enable reasoning summaries for the editor so the model is forced to
-          # externalize its decision tokens. Investigation of run #25115530167
-          # (the legacy editor default) found that @ xhigh + summaries=none
-          # can complete a session with empty stdout: the model reasons silently,
-          # decides not to call apply_patch, and the session ends cleanly with
-          # 0 bytes output (no stderr error, no SIGTERM). Setting summaries to
-          # "auto" forces at least a brief externalized rationale on every turn —
-          # gives us diagnostic visibility AND nudges the model toward emitting
-          # a final assistant message instead of silent termination. The
-          # field name `model_reasoning_summary` mirrors the Codex CLI
-          # convention used by `model_reasoning_effort`; the catalog at
-          # scripts/codex_model_catalog.json confirms both gpt-5.5 (current
-          # default) and the legacy editor default advertise
-          # `default_reasoning_summary: "auto"`.
-          if grep -q "^model_reasoning_summary = " ~/.codex/config.toml; then
-            sed -i "s/^model_reasoning_summary = \".*\"/model_reasoning_summary = \"auto\"/" ~/.codex/config.toml
-          else
-            sed -i "/^model_reasoning_effort = /a model_reasoning_summary = \"auto\"" ~/.codex/config.toml
-          fi
-          echo "Enabled reasoning summaries (auto) for editor phase"
+          echo "OpenCode editor attempts use reasoning variant ${EDITOR_REASONING_EFFORT}; no shared config mutation is required."
 
       - name: Setup Serena for editor
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.SERENA_ENABLED == 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
@@ -4022,7 +3963,7 @@ jobs:
             NOOP_BODY="$(cat <<EOF
           **AI review/autofix produced no output — will retry**
 
-          The editor stage completed without a structured summary and without committing any file changes. This typically indicates a transient codex crash, timeout, or empty prompt rather than a reviewable defect in the PR. No \`ai:review-blocked\` label is being applied for this run.
+          The editor stage completed without a structured summary and without committing any file changes. This typically indicates a transient agent crash, timeout, or empty prompt rather than a reviewable defect in the PR. No \`ai:review-blocked\` label is being applied for this run.
 
           [View workflow run](${RUN_URL}) for details. The stall poller will retry the review on a subsequent cycle.
           EOF
@@ -4827,7 +4768,7 @@ jobs:
         # other. See the comment block on the prepare step for why the step
         # was split.
         #
-        # timeout-minutes is the safety net for a hung codex exec call.  The
+        # timeout-minutes is the safety net for a hung OpenCode call. The
         # script-internal retry loop does up to INTEGRATION_SYNC_RESOLVER_MAX_
         # ATTEMPTS=3 attempts, with the no-progress check biting after attempt
         # 2 when fingerprint violations are stable.  Per-attempt cap is
@@ -4839,7 +4780,7 @@ jobs:
         # for soft validation, commit, and the EXIT-trap dispatch.  The
         # surrounding job's timeout-minutes (240 — see the `timeout-minutes:`
         # setting on the codex-agent job earlier in this workflow) was sized
-        # to fit ~24 min of pre-resolver work (disk cleanup, checkout, codex
+        # to fit ~24 min of pre-resolver work (disk cleanup, checkout, OpenCode
         # install, runtime workspace, prompt prep, reviewers, editor) plus
         # this 170-min step cap plus ~46 min of post-resolver work, so the
         # EXIT trap is reachable even when every retry uses its full
@@ -4855,9 +4796,9 @@ jobs:
           RESOLVER_ESCAPE_THRESHOLD_N: ${{ vars.RESOLVER_ESCAPE_THRESHOLD_N || '5' }}
           # Decoupled from EDITOR_REASONING_EFFORT: the smoke-test override
           # ("Detect smoke test PR" step) sets editor reasoning to "none" so
-          # the single-line bait removal completes deterministically. That
-          # patches ~/.codex/config.toml, which the conflict resolver below
-          # would otherwise inherit. With reasoning=none the legacy
+          # the single-line bait removal completes deterministically. The
+          # resolver passes its own isolated OpenCode variant instead. With
+          # reasoning=none the legacy
           # the legacy editor default hit an empty-stdout failure mode on this
           # fixture (documented on the editor step
           # ("Switch reasoning effort for editor"): it runs one read tool

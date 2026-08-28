@@ -64,34 +64,35 @@ def _seed_workspace_repo(workspace_dir: Path) -> Path:
 	return runtime_dir
 
 
-def _install_mock_codex(mock_bin_dir: Path, *, consolidator_fixture: str | None) -> None:
+def _install_mock_opencode(mock_bin_dir: Path, *, consolidator_fixture: str | None) -> Path:
 	mock_bin_dir.mkdir(parents=True, exist_ok=True)
-	output_file = mock_bin_dir / "codex_output.txt"
+	output_file = mock_bin_dir / "opencode_output.txt"
 	if consolidator_fixture is None:
 		output_file.write_text("", encoding="utf-8")
 	else:
 		shutil.copy2(FIXTURES / consolidator_fixture, output_file)
 
-	codex_script = mock_bin_dir / "codex"
-	# Scan every arg for `exec` rather than checking $1, since the
-	# canonical Codex CLI v0.114.0+ invocation places `--ask-for-approval`
-	# (a top-level flag) before the `exec` subcommand:
-	#     codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model X --sandbox Y
-	# Anchoring on $1 would only match the legacy form (broken on
-	# v0.114.0+) and silently mis-mock the production layout.
-	codex_script.write_text(
+	opencode_script = mock_bin_dir / "opencode"
+	opencode_script.write_text(
 		"#!/usr/bin/env bash\n"
 		"set -euo pipefail\n\n"
-		"case \" $* \" in\n"
-		"\t*\" exec \"*) ;;\n"
-		"\t*) echo \"mock-codex supports only exec\" >&2; exit 2 ;;\n"
-		"esac\n"
-		"if [ -n \"${MOCK_CODEX_OUTPUT_FILE:-}\" ] && [ -f \"${MOCK_CODEX_OUTPUT_FILE}\" ]; then\n"
-		"\tcat \"${MOCK_CODEX_OUTPUT_FILE}\"\n"
+		"if [ \"${1:-}\" = \"--version\" ]; then printf '1.18.23\\n'; exit 0; fi\n"
+		"if [ \"${1:-}\" != \"run\" ]; then echo \"mock-opencode supports only run\" >&2; exit 2; fi\n"
+		"if [ -n \"${MOCK_OPENCODE_OUTPUT_FILE:-}\" ] && [ -f \"${MOCK_OPENCODE_OUTPUT_FILE}\" ]; then\n"
+		"\tcat \"${MOCK_OPENCODE_OUTPUT_FILE}\"\n"
 		"fi\n",
 		encoding="utf-8",
 	)
-	codex_script.chmod(0o755)
+	opencode_script.chmod(0o755)
+	config_writer = mock_bin_dir / "write_opencode_config.sh"
+	config_writer.write_text(
+		"#!/usr/bin/env bash\nset -euo pipefail\n"
+		"config_path=''\nwhile [ $# -gt 0 ]; do if [ \"$1\" = '--config-path' ]; then config_path=\"$2\"; shift 2; else shift; fi; done\n"
+		"mkdir -p \"$(dirname \"${config_path}\")\"\nprintf '{}\\n' > \"${config_path}\"\n",
+		encoding="utf-8",
+	)
+	config_writer.chmod(0o755)
+	return config_writer
 
 
 def _run_stage_chain(
@@ -105,6 +106,7 @@ def _run_stage_chain(
 		{
 			"PYTHONDONTWRITEBYTECODE": "1",
 			"RUNTIME_DIR": str(runtime_dir),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
 			"SUPPORT_PROMPTS_DIR": str(REPO_ROOT / "prompts"),
 			"PR_NUMBER": "4242",
 			"AUTOFIX_ITERATION": "1",
@@ -121,7 +123,8 @@ def _run_stage_chain(
 		cwd=workspace_dir,
 	)
 	if mock_bin_dir is not None:
-		env["MOCK_CODEX_OUTPUT_FILE"] = str(mock_bin_dir / "codex_output.txt")
+		env["MOCK_OPENCODE_OUTPUT_FILE"] = str(mock_bin_dir / "opencode_output.txt")
+		env["OPENCODE_CONFIG_WRITER_PATH"] = str(mock_bin_dir / "write_opencode_config.sh")
 		env["PATH"] = f"{mock_bin_dir}:{env.get('PATH', '')}"
 
 	results: dict[str, subprocess.CompletedProcess[str]] = {}
@@ -191,7 +194,7 @@ def test_chain_happy_path_with_mocked_consolidator() -> None:
 		workspace = Path(td)
 		runtime = _seed_workspace_repo(workspace)
 		mock_bin = workspace / "mock_bin"
-		_install_mock_codex(mock_bin, consolidator_fixture="consolidator_well_formed.txt")
+		_install_mock_opencode(mock_bin, consolidator_fixture="consolidator_well_formed.txt")
 
 		results = _run_stage_chain(workspace, runtime, mock_bin_dir=mock_bin, consolidator_enabled="1")
 		for stage, result in results.items():
@@ -245,7 +248,7 @@ def test_chain_fail_open_when_consolidator_returns_empty() -> None:
 		workspace = Path(td)
 		runtime = _seed_workspace_repo(workspace)
 		mock_bin = workspace / "mock_bin"
-		_install_mock_codex(mock_bin, consolidator_fixture=None)
+		_install_mock_opencode(mock_bin, consolidator_fixture=None)
 
 		results = _run_stage_chain(workspace, runtime, mock_bin_dir=mock_bin, consolidator_enabled="1")
 		for stage, result in results.items():

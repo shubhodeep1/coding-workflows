@@ -46,6 +46,22 @@ fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
+OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
+OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"
+if [ ! -f "${OPENCODE_HELPERS_PATH}" ]; then
+  editor_helpers_missing_alert="opencode_agent_failure phase=review_apply_fixes role=writer model=${MODEL_EDITOR:-unknown} rc=1 failure_class=helpers_missing"
+  if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh"
+  fi
+  if type tg_send_msg >/dev/null 2>&1; then
+    tg_send_msg "${editor_helpers_missing_alert}" ERROR >/dev/null || true
+  fi
+  echo "${editor_helpers_missing_alert}" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "${OPENCODE_HELPERS_PATH}"
 if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" ]; then
   # shellcheck source=/dev/null
   source "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" 2>/dev/null || true
@@ -83,6 +99,40 @@ run_editor_codex_attempt() {
   # see the loop below and issue #3515). Default to MODEL_EDITOR so a direct
   # call without the loop keeps the historical behaviour.
   local editor_attempt_model="${EDITOR_ATTEMPT_MODEL:-${MODEL_EDITOR}}"
+  local editor_opencode_config="${RUNTIME_DIR}/editor_opencode.json"
+  local editor_opencode_serena="off"
+  local editor_workspace
+  local -a editor_opencode_cmd
+  editor_workspace="$(pwd)"
+
+  if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
+    editor_opencode_serena="on"
+  fi
+  if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
+    --role writer \
+    --model "${editor_attempt_model}" \
+    --project-path "${editor_workspace}" \
+    --config-path "${editor_opencode_config}" \
+    --serena "${editor_opencode_serena}"; then
+    opencode_emit_failure_alert review_apply_fixes writer "${editor_attempt_model}" 1 config_generation || true
+    return 79
+  fi
+  if ! opencode_require_bootstrap review_apply_fixes writer "${editor_attempt_model}" \
+    "${editor_opencode_config}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
+    return 79
+  fi
+  editor_opencode_cmd=(
+    bash -c
+    # shellcheck disable=SC2016
+    'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
+    opencode-editor
+    "${OPENCODE_HELPERS_PATH}"
+    writer
+    "${editor_attempt_model}"
+    "${EDITOR_REASONING_EFFORT}"
+    "${editor_opencode_config}"
+    "${editor_workspace}"
+  )
 
   if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
     bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
@@ -94,10 +144,10 @@ run_editor_codex_attempt() {
       --stdout-file "${stdout_file}" \
       --activity-file "${activity_file}" \
       --status-file "${status_file}" \
-      -- codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${editor_attempt_model}" --sandbox danger-full-access < "${prompt_file}" 2>"${stderr_target}"
+      -- "${editor_opencode_cmd[@]}" < "${prompt_file}" 2>"${stderr_target}"
   fi
 
-  exec codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${editor_attempt_model}" --sandbox danger-full-access < "${prompt_file}" > "${stdout_file}" 2>"${stderr_target}"
+  exec "${editor_opencode_cmd[@]}" < "${prompt_file}" > "${stdout_file}" 2>"${stderr_target}"
 }
 
 emit_context_budget_warn_for_prompt() {
@@ -144,7 +194,7 @@ editor_output_has_apply_patch() {
   local output_file="$1"
 
   [ -s "${output_file}" ] || return 1
-  grep -Eiq '\*\*\* Begin Patch|(^|[^[:alnum:]_])apply_patch([^[:alnum:]_]|$)' "${output_file}"
+  grep -Eiq '\*\*\* Begin Patch|(^|[^[:alnum:]_])apply_patch([^[:alnum:]_]|$)|^Changes made:' "${output_file}"
 }
 
 lessons_learned_truthy() {
@@ -1534,29 +1584,12 @@ fi
 EDITOR_CODEX_PATH="${PATH}"
 editor_continuation_source=""
 editor_wrapper_dir=""
-if review_thread_reuse_enabled; then
-  editor_continuation_source="$(resolve_review_thread_reuse_asset 'prompts/mode-review-apply-fixes-continuation.txt' 2>/dev/null || true)"
-  if [ -z "${editor_continuation_source}" ]; then
-    echo "::warning::Review apply-fixes continuation prompt not found; editor will use the full prompt path."
-  elif [ ! -f "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" ]; then
-    echo "::warning::render_prompt.sh unavailable; editor will use the full prompt path."
-  else
-    EDITOR_CONTINUATION_RENDERED_FILE="${RUNTIME_DIR}/mode-review-apply-fixes-continuation.rendered.txt"
-    if SERENA_TOOL_HINTS="${EDITOR_SERENA_TOOL_HINTS}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${editor_continuation_source}" > "${EDITOR_CONTINUATION_RENDERED_FILE}"; then
-      if editor_wrapper_dir="$(codex_thread_reuse_install_wrapper \
-        'review-apply-fixes-editor' \
-        "${EDITOR_CONTINUATION_RENDERED_FILE}" \
-        'replace-prefix' \
-        'FINAL RESPONSE FORMAT')"; then
-        EDITOR_CODEX_PATH="${editor_wrapper_dir}:${PATH}"
-      else
-        echo "::warning::Failed to install review apply-fixes thread-reuse wrapper; editor will use the full prompt path."
-      fi
-    else
-      echo "::warning::Failed to render review apply-fixes continuation prompt; editor will use the full prompt path."
-    fi
-  fi
-fi
+: "${editor_continuation_source}" "${editor_wrapper_dir}"
+case "$(printf '%s' "${CODEX_THREAD_REUSE_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on)
+    echo "CODEX_THREAD_REUSE_ENABLED requested; OpenCode editor uses the fresh full-prompt path."
+    ;;
+esac
 
 editor_prompt_rendered="$(mktemp)"
 (
@@ -1957,7 +1990,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     fi
   fi
   emit_editor_substate "BuildingPrompt" "${attempt}"
-  # Run codex: stdout → tmp_output, stderr → FIFO (heartbeat reader).
+  # Run OpenCode: stdout → tmp_output, stderr → FIFO (heartbeat reader).
   emit_editor_substate "LaunchingAgentProcess" "${attempt}"
   emit_editor_substate "InitializingSession" "${attempt}"
   emit_editor_substate "StreamingTurn" "${attempt}"
@@ -1970,14 +2003,14 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   cmd_rc=0
   wait "${codex_bg_pid}" 2>/dev/null || cmd_rc=$?
   # Drain the stderr FIFO, but never block on it indefinitely. The
-  # watchdog stall-kills only the codex PID; codex's orphaned
+  # watchdog stall-kills only the agent PID; orphaned
   # tool-subprocesses can keep the FIFO's write-end open so the reader
   # never sees EOF. Without a bound, `wait "${_hb_reader_pid}"` hangs here
   # until the job's hard ceiling (~4h) — the editor-stall hang that wedged
   # PR review autofix. Wait up to EDITOR_DRAIN_GRACE_SECS for a clean drain
   # (signalled by the reader's done-marker); if it doesn't complete, reap
   # whatever still holds the FIFO — that both unblocks the reader and stops
-  # any lingering danger-full-access codex child — then reap the reader.
+  # any lingering writer child — then reap the reader.
   _skip_hb_reader_wait=false
   _drain_deadline=$(( $(date +%s) + EDITOR_DRAIN_GRACE_SECS ))
   while [ ! -e "${_hb_reader_done}" ]; do
@@ -2007,6 +2040,19 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
 
+  editor_clean_output="${tmp_output}.ansi-clean"
+  if opencode_strip_ansi < "${tmp_output}" > "${editor_clean_output}"; then
+    mv "${editor_clean_output}" "${tmp_output}"
+  else
+    rm -f "${editor_clean_output}"
+  fi
+  editor_clean_stderr="${tmp_err}.ansi-clean"
+  if opencode_strip_ansi < "${tmp_err}" > "${editor_clean_stderr}"; then
+    mv "${editor_clean_stderr}" "${tmp_err}"
+  else
+    rm -f "${editor_clean_stderr}"
+  fi
+
   stall_state=""
   if stall_state="$(read_codex_stall_guard_state "${stall_status_file}" 2>/dev/null)"; then
     :
@@ -2033,6 +2079,18 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
       emit_editor_substate "codex_stall_killed" "${attempt}" "${tmp_err}"
       ;;
   esac
+
+  if [ "${cmd_rc}" -eq 79 ]; then
+    echo "Editor attempt ${attempt}: OpenCode configuration/bootstrap failure; aborting without retry."
+    emit_editor_substate "Failed" "${attempt}" "${tmp_err}"
+    cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
+    rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file_cleanup_path}"
+    exit 1
+  fi
+
+  if [ "${cmd_rc}" -ne 0 ] && [ "${cmd_rc}" -ne 78 ] && [ "${attempt}" -eq "${editor_max_attempts}" ]; then
+    opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" attempt_failed || true
+  fi
 
   if [ "${cmd_rc}" -eq 78 ]; then
     echo "Editor attempt ${attempt}: workspace_safety_violation; aborting without retry."

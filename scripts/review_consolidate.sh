@@ -9,6 +9,13 @@ if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" ]; then
 	source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
 fi
 
+OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
+OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"
+if [ -f "${OPENCODE_HELPERS_PATH}" ]; then
+	# shellcheck source=/dev/null
+	source "${OPENCODE_HELPERS_PATH}"
+fi
+
 review_log()
 {
 	printf 'stage=consolidator %s\n' "$*" >&2
@@ -522,78 +529,71 @@ start_epoch="$(date +%s)"
 tmp_out="$(mktemp)"
 tmp_err="$(mktemp)"
 tmp_cap="$(mktemp)"
-consolidator_codex_root=""
-consolidator_codex_home=""
-trap 'rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"; if [ -n "${consolidator_codex_home}" ]; then rm -rf "${consolidator_codex_home}"; fi; if [ -n "${consolidator_codex_root}" ]; then rmdir "${consolidator_codex_root}" 2>/dev/null || true; fi' EXIT INT TERM
+consolidator_opencode_dir=""
+trap 'rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"; if [ -n "${consolidator_opencode_dir}" ]; then rm -rf "${consolidator_opencode_dir}"; fi' EXIT INT TERM
 
-# Isolated CODEX_HOME overlay so consolidator reasoning effort can be set
-# without mutating the shared editor CODEX_HOME. Mirrors the pattern in
-# scripts/summarize_reviewer_consensus.sh (copy base CODEX_HOME, sed-patch
-# model_reasoning_effort in config.toml). codex exec does not accept a
-# --reasoning CLI flag, so the overlay is the supported mechanism.
-codex_bin="$(command -v codex || true)"
-if [ -z "${codex_bin}" ]; then
+if ! command -v opencode_run_cmd >/dev/null 2>&1; then
 	: > "${CONSOLIDATOR_RAW_FILE}"
-	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} missing=codex_bin failopen=1 output_bytes=0"
-	rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"
+	consolidator_helpers_missing_alert="opencode_agent_failure phase=review_consolidate role=writer model=${REVIEW_CONSOLIDATOR_MODEL} rc=1 failure_class=helpers_missing"
+	if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" ]; then
+		# shellcheck source=/dev/null
+		source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh"
+	fi
+	if type tg_send_msg >/dev/null 2>&1; then
+		tg_send_msg "${consolidator_helpers_missing_alert}" ERROR >/dev/null || true
+	fi
+	printf '%s\n' "${consolidator_helpers_missing_alert}" >&2
+	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} missing=opencode_helpers failopen=1 output_bytes=0"
 	exit 0
 fi
 
-consolidator_codex_root="${RUNNER_TEMP:-${RUNTIME_DIR}}/codex_home_consolidator"
-mkdir -p "${consolidator_codex_root}"
-consolidator_codex_home="$(mktemp -d "${consolidator_codex_root}/consolidator.XXXXXX")" || {
+consolidator_opencode_dir="$(mktemp -d "${RUNNER_TEMP:-${RUNTIME_DIR}}/opencode_consolidator.XXXXXX")" || {
 	review_log "mktemp_failed=1"
-	rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"
 	exit 1
 }
-
-if [ -d "${CODEX_HOME:-}" ]; then
-	cp -r "${CODEX_HOME}/." "${consolidator_codex_home}/" || review_log "cp_failed=1 source_codex_home=${CODEX_HOME}"
-	chmod -R u+w "${consolidator_codex_home}" 2>/dev/null || true
+consolidator_opencode_config="${consolidator_opencode_dir}/opencode.json"
+consolidator_workspace="$(pwd)"
+if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
+	--role writer \
+	--model "${REVIEW_CONSOLIDATOR_MODEL}" \
+	--project-path "${consolidator_workspace}" \
+	--config-path "${consolidator_opencode_config}" \
+	--serena off; then
+	opencode_emit_failure_alert review_consolidate writer "${REVIEW_CONSOLIDATOR_MODEL}" 1 config_generation || true
+	: > "${CONSOLIDATOR_RAW_FILE}"
+	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} failopen=1 output_bytes=0"
+	exit 0
 fi
-mkdir -p "${consolidator_codex_home}/bin"
-
-escaped_reasoning="$(printf '%s' "${REVIEW_CONSOLIDATOR_REASONING}" | sed 's/[\\/&]/\\&/g')"
-reasoning_config_applied=0
-for cfg in "${consolidator_codex_home}/config.toml" "${consolidator_codex_home}/.codex/config.toml"; do
-	if [ -f "${cfg}" ]; then
-		reasoning_config_applied=1
-		if ! grep -Eq '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${cfg}"; then
-			printf 'model_reasoning_effort = "%s"\n' "${REVIEW_CONSOLIDATOR_REASONING}" >> "${cfg}"
-		else
-			sed -i \
-				-e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${escaped_reasoning}\"/" \
-				-e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${escaped_reasoning}\"/" \
-				"${cfg}" 2>/dev/null || true
-		fi
-	fi
-done
-if [ "${reasoning_config_applied}" -eq 0 ]; then
-	printf 'model_reasoning_effort = "%s"\n' "${REVIEW_CONSOLIDATOR_REASONING}" > "${consolidator_codex_home}/config.toml"
-	review_log "reasoning_config_created=1 target=${consolidator_codex_home}/config.toml"
+if ! opencode_require_bootstrap review_consolidate writer "${REVIEW_CONSOLIDATOR_MODEL}" \
+	"${consolidator_opencode_config}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
+	: > "${CONSOLIDATOR_RAW_FILE}"
+	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} failopen=1 output_bytes=0"
+	exit 0
 fi
 
 cmd_rc=0
 consolidator_cmd=(
-	"${codex_bin}"
-	--ask-for-approval never
-	-c model_verbosity=low
-	-c include_apply_patch_tool=true
-	exec
-	--model "${REVIEW_CONSOLIDATOR_MODEL}"
-	--sandbox danger-full-access
+	bash -c
+	# shellcheck disable=SC2016
+	'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
+	opencode-consolidator
+	"${OPENCODE_HELPERS_PATH}"
+	writer
+	"${REVIEW_CONSOLIDATOR_MODEL}"
+	"${REVIEW_CONSOLIDATOR_REASONING}"
+	"${consolidator_opencode_config}"
+	"${consolidator_workspace}"
 )
 
-# Strip any invalid UTF-8 from the consolidator prompt before piping
-# to codex (whose stdin reader strictly validates UTF-8). See
+# Strip any invalid UTF-8 from the consolidator prompt before piping it to
+# OpenCode. See
 # sanitize_codex_prompt_file in scripts/gh_helpers.sh for the design.
 if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 	sanitize_codex_prompt_file "${CONSOLIDATOR_PROMPT_FILE}"
 fi
 	emit_context_budget_warn_for_prompt "consolidator" "${CONSOLIDATOR_PROMPT_FILE}" "${REVIEW_CONSOLIDATOR_MODEL}"
 	if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-		if CODEX_HOME="${consolidator_codex_home}" \
-			timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
+		if timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
 			"${CODEX_HEARTBEAT_HELPER}" \
 			--phase review_consolidate \
 			--stdout-file "${tmp_out}" \
@@ -603,12 +603,23 @@ fi
 		else
 			cmd_rc=$?
 		fi
-	elif CODEX_HOME="${consolidator_codex_home}" \
-		timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
+	elif timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
 		"${consolidator_cmd[@]}" < "${CONSOLIDATOR_PROMPT_FILE}" > "${tmp_out}" 2> "${tmp_err}"; then
 		cmd_rc=0
 	else
 		cmd_rc=$?
+	fi
+	clean_output="${tmp_out}.ansi-clean"
+	if opencode_strip_ansi < "${tmp_out}" > "${clean_output}"; then
+		mv "${clean_output}" "${tmp_out}"
+	else
+		rm -f "${clean_output}"
+	fi
+	clean_stderr="${tmp_err}.ansi-clean"
+	if opencode_strip_ansi < "${tmp_err}" > "${clean_stderr}"; then
+		mv "${clean_stderr}" "${tmp_err}"
+	else
+		rm -f "${clean_stderr}"
 	fi
 
 raw_bytes="$(wc -c < "${tmp_out}" | tr -d "[:space:]")"
@@ -647,6 +658,7 @@ wall_secs="$(( $(date +%s) - start_epoch ))"
 failopen=0
 if [ "${cmd_rc}" -ne 0 ] || [ ! -s "${CONSOLIDATOR_RAW_FILE}" ]; then
 	failopen=1
+	opencode_emit_failure_alert review_consolidate writer "${REVIEW_CONSOLIDATOR_MODEL}" "${cmd_rc:-1}" "$([ "${cmd_rc}" -eq 0 ] && printf empty_output || printf invocation_failed)" || true
 	if [ "${cmd_rc}" -ne 0 ]; then
 		: > "${CONSOLIDATOR_RAW_FILE}"
 		output_bytes=0

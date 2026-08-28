@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# review_conflict_resolve.sh — run Codex resolver, validate, stage, and
+# review_conflict_resolve.sh — run the OpenCode resolver, validate, stage, and
 # create the [ai-merge-resolve] commit for review_autofix.yml.
 #
-# Extracted from the "Run Codex resolver, validate, stage, commit" step of
+# Extracted from the compatibility-named resolver step of
 # review_autofix.yml to keep the `run:` block under GitHub Actions' 21,000-
 # char template-expression limit. Consumes artefacts produced by
 # review_conflict_prepare.sh and shares that step's short-circuit conditions.
@@ -11,8 +11,8 @@
 #   RUNTIME_DIR                     Ephemeral per-run directory.
 #   CONFLICT_RESOLVER_PROMPT_FILE   Rendered resolver prompt.
 #   CONFLICT_RESOLVER_SUMMARY_FILE  Path resolver summary is written to.
-#   CONFLICT_RESOLVER_REASONING_EFFORT  Reasoning level applied to ~/.codex/config.toml
-#                                   before the retry loop. One of xhigh|high|medium|none;
+#   CONFLICT_RESOLVER_REASONING_EFFORT  OpenCode reasoning variant selected before
+#                                   the retry loop. One of xhigh|high|medium|none;
 #                                   defaults to high (lowered from xhigh after runs
 #                                   25627236793 / 25627316961 hit `timeout`-killed retries
 #                                   on degenerate orchestrator-stack integrations — see the
@@ -21,7 +21,7 @@
 #                                   from EDITOR_REASONING_EFFORT so the smoke-test override
 #                                   (which sets editor reasoning to "none") doesn't starve
 #                                   the resolver.
-#   MODEL_EDITOR                    Codex model id used for resolution.
+#   MODEL_EDITOR                    Model id used for resolution.
 #   IS_WORKFLOW_SOURCE_REPO         "true" on the coding-workflows repo itself.
 #   SUPPORT_SCRIPTS_DIR             Path to check_resolver_diff.sh / verify_integration_fingerprints.py.
 #   IS_INTEGRATION_SYNC             "true" when acting on an orchestrator integration branch.
@@ -46,6 +46,22 @@ CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
 ORCHESTRATE_FORCE_TICK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_force_tick.sh"
+OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
+OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"
+if [ ! -f "${OPENCODE_HELPERS_PATH}" ]; then
+  resolver_helpers_missing_alert="opencode_agent_failure phase=review_conflict_resolve role=writer model=${MODEL_EDITOR:-unknown} rc=1 failure_class=helpers_missing"
+  if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh"
+  fi
+  if type tg_send_msg >/dev/null 2>&1; then
+    tg_send_msg "${resolver_helpers_missing_alert}" ERROR >/dev/null || true
+  fi
+  echo "${resolver_helpers_missing_alert}" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "${OPENCODE_HELPERS_PATH}"
 CODEX_THREAD_REUSE_ENABLED="${CODEX_THREAD_REUSE_ENABLED:-false}"
 CODEX_THREAD_REUSE_HELPER=""
 for _thread_reuse_candidate in \
@@ -291,31 +307,19 @@ trap _resolver_exit_trap EXIT
 INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS=3
 RESOLVER_ATTEMPT_BASE_DIR="${RUNTIME_DIR}/resolver_attempt_base"
 
-# Pin the resolver's Codex reasoning effort independent of the editor's.
-# review_autofix.yml's "Detect smoke test PR" step rewrites
-# ~/.codex/config.toml's model_reasoning_effort to "low" (smoke-run
-# override — both reviewers and editor use low for the bait-line task).
-# The conflict resolver runs against the same config and would inherit
-# that value; for smoke PRs that's fine since "low" doesn't trip the
-# empty-stdout failure mode. The pin here exists so that future changes
-# to the smoke override level don't accidentally starve the resolver:
-# CONFLICT_RESOLVER_REASONING_EFFORT (workflow env, defaults "high"
-# repo-wide) overrides config.toml unconditionally before the resolver
-# runs. PR #2058 / run 25300219172 originally hit this with override=none.
+# Pin the resolver's OpenCode reasoning variant independently of the editor's
+# smoke override. CONFLICT_RESOLVER_REASONING_EFFORT defaults to "high" and is
+# passed on every resolver attempt. PR #2058 / run 25300219172 originally hit
+# the empty-output failure mode with override=none.
 # Default was lowered from "xhigh" to "high" after runs 25627236793 and
 # 25627316961 hit a hung-thinking failure mode at "xhigh" — see the
 # comment block on review_autofix.yml's CONFLICT_RESOLVER_REASONING_EFFORT
 # env var for the full rationale.
 #
-# Override config.toml here using CONFLICT_RESOLVER_REASONING_EFFORT
-# (set by the workflow step's env, defaults to "high"). Also ensure
-# model_reasoning_summary = "auto" is present — same diagnostic +
-# anti-empty-stdout rationale as the editor step.
 _resolver_reasoning_effort="${CONFLICT_RESOLVER_REASONING_EFFORT:-high}"
-# Validate against known reasoning levels before interpolating into sed —
+# Validate against known reasoning levels before passing the variant —
 # CONFLICT_RESOLVER_REASONING_EFFORT comes from a repo var
-# (vars.THINKING_LEVEL_CONFLICT_RESOLVER) so an unexpected value would
-# corrupt the TOML or break sed under set -e. Mirrors the pattern used
+# (vars.THINKING_LEVEL_CONFLICT_RESOLVER). Mirrors the pattern used
 # in scripts/review_consolidate.sh for REVIEW_CONSOLIDATOR_REASONING.
 # Allowed levels match README.md ("Thinking levels"): xhigh|high|medium|none.
 case "${_resolver_reasoning_effort}" in
@@ -325,36 +329,14 @@ case "${_resolver_reasoning_effort}" in
     _resolver_reasoning_effort="high"
     ;;
 esac
-_codex_config="${HOME}/.codex/config.toml"
-
 # _apply_resolver_reasoning_effort <level>
 #
-# Rewrite ~/.codex/config.toml so the next codex invocation runs at
-# <level> (one of xhigh|high|medium|none) with
-# model_reasoning_summary = "auto" (the anti-empty-stdout safeguard).
-#
-# Extracted from the once-per-step prelude so the retry loop can
-# downgrade the level after a per-attempt-timer kill — see
-# _next_lower_reasoning_effort below and the timeout step-down
-# block inside the resolver loop. The original PR-#2453 prelude
-# rewrote config.toml exactly once; an attempt that timed out at
-# `high` would then retry at the same `high`, repeating the
-# hung-thinking failure mode rather than giving the next attempt
-# a real chance to finish under the per-attempt budget.
-#
-# Fail-open: sed/grep failure (permissions, unexpected file shape,
-# missing GNU sed) surfaces a ::warning:: rather than aborting the
-# resolver step under set -e. Robust grep/sed patterns tolerate
-# whitespace and quoting variants so a non-canonical config is
-# still updated rather than silently no-op'd, which would
-# re-introduce the empty-stdout failure mode this fix prevents.
-# Post-edit verification reads the file back and emits a warning
-# if either expected line is missing.
+# Validate and select the OpenCode variant used by the next invocation.
+# The compatibility function name is retained because contract tests and
+# downstream diagnostics reference it.
 _apply_resolver_reasoning_effort()
 {
   local _arr_level="${1:?reasoning level required}"
-  local _arr_rewrite_ok
-  local _arr_verify_ok
   case "${_arr_level}" in
     xhigh|high|medium|none) ;;
     *)
@@ -362,42 +344,8 @@ _apply_resolver_reasoning_effort()
       _arr_level="high"
       ;;
   esac
-  if [ ! -f "${_codex_config}" ]; then
-    echo "::warning::Codex config ${_codex_config} not found before resolver loop; reasoning effort override (${_arr_level}) skipped."
-    return 0
-  fi
-  _arr_rewrite_ok=1
-  {
-    if grep -qE '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${_codex_config}"; then
-      sed -i "s|^[[:space:]]*model_reasoning_effort[[:space:]]*=.*|model_reasoning_effort = \"${_arr_level}\"|" "${_codex_config}"
-    else
-      printf '\nmodel_reasoning_effort = "%s"\n' "${_arr_level}" >> "${_codex_config}"
-    fi
-    if grep -qE '^[[:space:]]*model_reasoning_summary[[:space:]]*=' "${_codex_config}"; then
-      sed -i 's|^[[:space:]]*model_reasoning_summary[[:space:]]*=.*|model_reasoning_summary = "auto"|' "${_codex_config}"
-    else
-      sed -i '/^[[:space:]]*model_reasoning_effort[[:space:]]*=/a model_reasoning_summary = "auto"' "${_codex_config}"
-    fi
-  } || _arr_rewrite_ok=0
-
-  if [ "${_arr_rewrite_ok}" -eq 0 ]; then
-    echo "::warning::Codex config rewrite failed for ${_codex_config}; resolver will run with whatever reasoning the editor step left in place."
-    return 0
-  fi
-  # Independent checks (not elif) so both mismatches surface together
-  # if the rewrite somehow produced neither expected line.
-  _arr_verify_ok=1
-  if ! grep -qE "^model_reasoning_effort = \"${_arr_level}\"$" "${_codex_config}"; then
-    echo "::warning::Codex config rewrite did not produce the expected model_reasoning_effort = \"${_arr_level}\" line; resolver may run with stale reasoning."
-    _arr_verify_ok=0
-  fi
-  if ! grep -qE '^model_reasoning_summary = "auto"$' "${_codex_config}"; then
-    echo "::warning::Codex config rewrite did not produce the expected model_reasoning_summary = \"auto\" line; the anti-empty-stdout safeguard may be unset."
-    _arr_verify_ok=0
-  fi
-  if [ "${_arr_verify_ok}" -eq 1 ]; then
-    echo "Conflict resolver reasoning effort set to ${_arr_level} (model_reasoning_summary=auto)."
-  fi
+  _current_reasoning_effort="${_arr_level}"
+  echo "Conflict resolver OpenCode reasoning variant set to ${_arr_level}."
 }
 
 # _next_lower_reasoning_effort <level>
@@ -420,13 +368,32 @@ _next_lower_reasoning_effort()
 }
 
 # _current_reasoning_effort tracks the level used by the most-
-# recent codex invocation. It starts at the validated env-provided
+# recent OpenCode invocation. It starts at the validated env-provided
 # value and is mutated by the in-loop step-down block when the
 # previous attempt was timeout-killed. The original
 # _resolver_reasoning_effort is preserved as the "initial" level
 # for log-line provenance.
 _current_reasoning_effort="${_resolver_reasoning_effort}"
 _apply_resolver_reasoning_effort "${_current_reasoning_effort}"
+RESOLVER_OPENCODE_CONFIG="${RUNTIME_DIR}/resolver_opencode.json"
+RESOLVER_OPENCODE_WORKSPACE="$(pwd)"
+resolver_opencode_serena="off"
+if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
+  resolver_opencode_serena="on"
+fi
+if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
+  --role writer \
+  --model "${MODEL_EDITOR}" \
+  --project-path "${RESOLVER_OPENCODE_WORKSPACE}" \
+  --config-path "${RESOLVER_OPENCODE_CONFIG}" \
+  --serena "${resolver_opencode_serena}"; then
+  opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR}" 1 config_generation || true
+  exit 1
+fi
+if ! opencode_require_bootstrap review_conflict_resolve writer "${MODEL_EDITOR}" \
+  "${RESOLVER_OPENCODE_CONFIG}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
+  exit 1
+fi
 
 RESOLVER_ATTEMPT_BASE_MISSING_FILE="${RUNTIME_DIR}/resolver_attempt_base_missing.txt"
 RESOLVER_RETRY_PROMPT_FILE="${RUNTIME_DIR}/resolver_retry_prompt.txt"
@@ -1601,12 +1568,10 @@ if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "${TARGETED_FILE_CONTEXT_SCRIPT
 fi
 # Append the targeted-context block to the rendered prompt once, so
 # every retry (which copies CONFLICT_RESOLVER_PROMPT_FILE into
-# RESOLVER_RETRY_PROMPT_FILE at the loop top) inherits it. The
-# thread-reuse marker itself is only needed when the feature is on.
+# RESOLVER_RETRY_PROMPT_FILE at the loop top) inherits it.
+# The compatibility marker remains defined for downstream diagnostics, but
+# OpenCode uses a fresh full prompt when thread reuse is requested.
 CONFLICT_RESOLVER_THREAD_REUSE_MARKER="=== THREAD REUSE LIVE CONTEXT ==="
-if conflict_thread_reuse_enabled; then
-  printf '\n%s\n' "${CONFLICT_RESOLVER_THREAD_REUSE_MARKER}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
-fi
 if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
   printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
   cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
@@ -1630,30 +1595,14 @@ CONFLICT_RESOLVER_CODEX_PATH="${CONFLICT_RESOLVER_PLAIN_PATH}"
 CONFLICT_RESOLVER_CONTINUATION_RENDERED_FILE="${RUNTIME_DIR}/mode-review-conflict-resolver-continuation.rendered.txt"
 CONFLICT_RESOLVER_CONTINUATION_SOURCE=""
 conflict_wrapper_dir=""
-if conflict_thread_reuse_enabled; then
-  CONFLICT_RESOLVER_CONTINUATION_SOURCE="$(resolve_conflict_thread_reuse_asset 'prompts/mode-review-conflict-resolver-continuation.txt' 2>/dev/null || true)"
-  if [ -z "${CONFLICT_RESOLVER_CONTINUATION_SOURCE}" ]; then
-    echo "::warning::Review conflict-resolver continuation prompt not found; resolver will use the full prompt path."
-  elif render_conflict_thread_reuse_continuation \
-    "0" \
-    "initial" \
-    "${RESOLVER_MARKER_VIOLATIONS_FILE}" \
-    "${RESOLVER_FP_VIOLATIONS_FILE}" \
-    "${CONFLICT_RESOLVER_CONTINUATION_SOURCE}" \
-    "${CONFLICT_RESOLVER_CONTINUATION_RENDERED_FILE}"; then
-    if conflict_wrapper_dir="$(codex_thread_reuse_install_wrapper \
-      'review-conflict-resolver' \
-      "${CONFLICT_RESOLVER_CONTINUATION_RENDERED_FILE}" \
-      'replace-prefix' \
-      "${CONFLICT_RESOLVER_THREAD_REUSE_MARKER}")"; then
-      CONFLICT_RESOLVER_CODEX_PATH="${conflict_wrapper_dir}:${CONFLICT_RESOLVER_PLAIN_PATH}"
-    else
-      echo "::warning::Failed to install review conflict-resolver thread-reuse wrapper; resolver will use the full prompt path."
-    fi
-  else
-    echo "::warning::Failed to render review conflict-resolver continuation prompt; resolver will use the full prompt path."
-  fi
-fi
+: "${CONFLICT_RESOLVER_THREAD_REUSE_MARKER}" "${CONFLICT_RESOLVER_CODEX_PATH}" \
+  "${CONFLICT_RESOLVER_CONTINUATION_RENDERED_FILE}" "${CONFLICT_RESOLVER_CONTINUATION_SOURCE}" \
+  "${conflict_wrapper_dir}"
+case "$(printf '%s' "${CODEX_THREAD_REUSE_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on)
+    echo "CODEX_THREAD_REUSE_ENABLED requested; OpenCode conflict resolver uses the fresh full-prompt path."
+    ;;
+esac
 
 # _prev_attempt_failure_kind tracks why the previous attempt left
 # the loop without breaking out via success.  Three values:
@@ -1740,7 +1689,6 @@ fi
 
 attempt=1
 while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
-  _attempt_codex_path="${CONFLICT_RESOLVER_CODEX_PATH}"
   emit_conflict_resolver_substate "PreparingWorkspace" "${attempt}"
   # On retries: restore the working tree to its post-merge-replay
   # state (so retries don't compound the previous attempt's bad
@@ -1810,7 +1758,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     #
     # The timeout-aware prelude (PR #2453) only changes the prompt:
     # it nudges the model to be decisive and call apply_patch
-    # early. It does not change codex's reasoning level. Production
+    # early. It does not change the agent's reasoning level. Production
     # runs (most recently the review_autofix run linked to PR #155
     # of shubhodeep1/bitsafe.io, log at 2026-05-11) show xhigh/high
     # attempts routinely consume the entire 50-min per-attempt
@@ -1829,25 +1777,9 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       _next_level="$(_next_lower_reasoning_effort "${_current_reasoning_effort}")"
       if [ "${_next_level}" != "${_current_reasoning_effort}" ]; then
         echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: stepping reasoning effort down ${_current_reasoning_effort} → ${_next_level} after timeout-killed previous attempt (initial level ${_resolver_reasoning_effort})."
-        _current_reasoning_effort="${_next_level}"
-        _apply_resolver_reasoning_effort "${_current_reasoning_effort}"
+        _apply_resolver_reasoning_effort "${_next_level}"
       else
         echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt timed out at reasoning level ${_current_reasoning_effort} (ladder floor reached); not stepping down further."
-      fi
-    fi
-    if [ "${CONFLICT_RESOLVER_CODEX_PATH}" != "${CONFLICT_RESOLVER_PLAIN_PATH}" ] \
-       && [ -n "${CONFLICT_RESOLVER_CONTINUATION_SOURCE}" ]; then
-      if render_conflict_thread_reuse_continuation \
-        "$((attempt - 1))" \
-        "${_prev_attempt_failure_kind:-validation}" \
-        "${RESOLVER_MARKER_VIOLATIONS_FILE}" \
-        "${RESOLVER_FP_VIOLATIONS_FILE}" \
-        "${CONFLICT_RESOLVER_CONTINUATION_SOURCE}" \
-        "${CONFLICT_RESOLVER_CONTINUATION_RENDERED_FILE}"; then
-        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: using same-run thread reuse continuation prompt."
-      else
-        echo "::warning::Failed to render review conflict-resolver continuation prompt for retry ${attempt}; falling back to the full prompt path."
-        _attempt_codex_path="${CONFLICT_RESOLVER_PLAIN_PATH}"
       fi
     fi
   else
@@ -1859,14 +1791,11 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   tmp_output="$(mktemp)"
   _stall_status_file="$(mktemp)"
   _stall_state=""
-  # Pass the prompt via stdin (consistent with every other codex
-  # invocation in this repo) rather than as a single positional argv
+  # Pass the prompt via stdin rather than as a single positional argv
   # string. The `"$(cat …)"` shape risks ARG_MAX truncation on large
   # prompts (Linux default is ~2 MiB but environment varies) and drops
   # trailing newlines from command substitution. stdin redirection has
-  # neither failure mode and matches the codex CLI's default `[PROMPT]`
-  # contract: "If not provided as an argument (or if `-` is used),
-  # instructions are read from stdin".
+  # neither failure mode and matches the shared OpenCode command contract.
   #
   # `--` terminates `timeout`'s option parsing so a leading '-' in
   # DURATION cannot be mistaken for an option (defence-in-depth on top
@@ -1882,6 +1811,18 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
     sanitize_codex_prompt_file "${_effective_prompt_file}"
   fi
+  resolver_opencode_cmd=(
+    bash -c
+    # shellcheck disable=SC2016
+    'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
+    opencode-conflict-resolver
+    "${OPENCODE_HELPERS_PATH}"
+    writer
+    "${MODEL_EDITOR}"
+    "${_current_reasoning_effort}"
+    "${RESOLVER_OPENCODE_CONFIG}"
+    "${RESOLVER_OPENCODE_WORKSPACE}"
+  )
   _run_codex=true
   if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
     if ! bash "${WORKSPACE_SAFETY_CHECK_HELPER}"; then
@@ -1894,25 +1835,31 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     emit_conflict_resolver_substate "InitializingSession" "${attempt}"
     emit_conflict_resolver_substate "StreamingTurn" "${attempt}"
     if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-      PATH="${_attempt_codex_path}" timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
         "${CODEX_STALL_GUARD_HELPER}" \
         --phase review_conflict_resolve \
         --stdout-file "${tmp_output}" \
         --status-file "${_stall_status_file}" \
-        -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
+        -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \
         || _codex_exit=$?
     elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-      PATH="${_attempt_codex_path}" timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
         "${CODEX_HEARTBEAT_HELPER}" \
         --phase review_conflict_resolve \
         --stdout-file "${tmp_output}" \
-        -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
+        -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \
         || _codex_exit=$?
     else
-      PATH="${_attempt_codex_path}" timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-        codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}" \
+      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+        "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" > "${tmp_output}" \
         || _codex_exit=$?
     fi
+  fi
+  resolver_clean_output="${tmp_output}.ansi-clean"
+  if opencode_strip_ansi < "${tmp_output}" > "${resolver_clean_output}"; then
+    mv "${resolver_clean_output}" "${tmp_output}"
+  else
+    rm -f "${resolver_clean_output}"
   fi
   _attempt_elapsed=$(( $(date +%s) - _attempt_started_at ))
   emit_conflict_resolver_substate "Finishing" "${attempt}"
@@ -1931,7 +1878,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     emit_conflict_resolver_substate "Failed" "${attempt}"
     exit 78
   fi
-  # Graceful-SIGTERM-at-timer-boundary diagnostic.  If codex installs
+  # Graceful-SIGTERM-at-timer-boundary diagnostic. If OpenCode installs
   # a SIGTERM handler that completes cleanup and exits 0 within the
   # 30s `--kill-after` window, `timeout` propagates the child's 0
   # exit and `_codex_exit` stays 0 — the timeout-classification
@@ -1962,7 +1909,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # repeatedly; this comment block documents why no classification
   # change is warranted.
   if [ "${_codex_exit}" -eq 0 ] && [ "${_attempt_elapsed}" -ge "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" ]; then
-    echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: codex exited 0 with elapsed ${_attempt_elapsed}s ≥ per-attempt budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s — likely a graceful SIGTERM-handler exit at the timer boundary; soft validation will inspect the post-codex working-tree state directly (no failure-kind change is needed — see comment block above)."
+    echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: OpenCode exited 0 with elapsed ${_attempt_elapsed}s ≥ per-attempt budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s — likely a graceful SIGTERM-handler exit at the timer boundary; soft validation will inspect the post-agent working-tree state directly (no failure-kind change is needed — see comment block above)."
   fi
   if [ "${_codex_exit}" -ne 0 ]; then
     rm -f "${tmp_output}"
@@ -1982,7 +1929,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     #     budget produces elapsed << duration and gets routed to
     #     exec_error (where the standard fail-open path retries
     #     with the original prompt verbatim).
-    # Anything else came from codex itself — config / auth / model
+    # Anything else came from OpenCode itself — config / auth / model
     # / network errors that have nothing to do with the per-attempt
     # timer.  Distinguishing matters because the standard / timeout
     # preludes would actively mislead the model on the wrong path:
@@ -2015,7 +1962,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
           ;;
         *)
           _prev_attempt_failure_kind="exec_error"
-          echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} failed with non-timeout exit ${_codex_exit} (codex itself returned non-zero; elapsed ${_attempt_elapsed}s)."
+          echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} failed with non-timeout exit ${_codex_exit} (OpenCode returned non-zero; elapsed ${_attempt_elapsed}s)."
           ;;
         esac
     fi
@@ -2031,12 +1978,13 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
         ;;
     esac
     if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
+      opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR}" "${_codex_exit}" invocation_failed || true
       if [ "${_prev_attempt_failure_kind}" = "timeout" ]; then
         echo "Conflict resolver failed after retries (final attempt killed by per-attempt timer)."
       elif [ "${_prev_attempt_failure_kind}" = "stall_guard" ]; then
         echo "Conflict resolver failed after retries (final attempt killed by codex stall guard)."
       else
-        echo "Conflict resolver failed after retries (final attempt: codex non-zero exit ${_codex_exit})."
+        echo "Conflict resolver failed after retries (final attempt: OpenCode non-zero exit ${_codex_exit})."
       fi
       exit 1
     fi
