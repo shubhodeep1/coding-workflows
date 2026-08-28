@@ -115,6 +115,7 @@ def test_python_repo_checks_invariants_regression_guards() -> None:
 		assert "sleep infinity" in compose_text
 		assert healthcheck_shell_line.startswith("test -d /workspace && ( ")
 		assert "for _repo_check_health_token in $$_repo_check_health_entry" in healthcheck_shell_line
+		assert 'case "$$_repo_check_health_token" in *=*)' in healthcheck_shell_line
 		assert 'if [ -f "/workspace/$$_repo_check_health_token" ] || [ -d "/workspace/$$_repo_check_health_token" ]' in healthcheck_shell_line
 		assert 'command -v "$$_repo_check_health_command"' in healthcheck_shell_line
 		assert "condition: service_healthy" not in compose_text
@@ -168,7 +169,9 @@ def test_python_repo_checks_command_style_entry_renders_healthy_healthcheck() ->
 		("scripts/run_validation_repo_checks.sh --flag", "scripts/run_validation_repo_checks.sh"),
 		("pytest tests/", "tests/"),
 		('pytest "tests/"', "tests/"),
-		("python -m pytest", None),
+		("FOO=bar sh", None),
+		("PYTHONPATH=/workspace sh", None),
+		("python3 -m pytest", None),
 		("sh", None),
 	):
 		with tempfile.TemporaryDirectory(prefix="render-python-repo-checks-") as td:
