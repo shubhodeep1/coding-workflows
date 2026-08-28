@@ -1229,7 +1229,7 @@ the way to a fix PR without human action.
 | `EVENTS_JSONL_ENABLED` | `false` | Opt-in append-only JSONL mirror for stable workflow-event prefixes. When `true`, supported emitters append `.events/run-<GITHUB_RUN_ID\|local>.jsonl` under `GITHUB_WORKSPACE` after writing the original text line/comment marker; write failures emit `EVENTS_EMIT_FAIL` and fail open, so existing stderr/comment behavior remains authoritative. |
 | `REVIEW_MAX_RESUME_ROUNDS` | `3` | Maximum same-head partial-resume rounds before `review_autofix.yml` terminalizes the cached partial state as `round_budget_exhausted`; same-head no-progress rounds terminalize earlier as `no_progress`. |
 | `CODEX_VERSION` | `v0.114.0` | Pinned Codex CLI version retained by production paths whose staged support scripts still use Codex, including main's current review/autofix scripts. |
-| `OPENCODE_VERSION` | `1.18.23` | Exact OpenCode CLI pin used by the dispatchable `opencode-live-smoke.yml` rollout gate and by `review_autofix.yml` when it installs OpenCode and warms the models.dev cache. An invalid or unavailable version fails review setup before any reviewer runs. |
+| `OPENCODE_VERSION` | `1.18.23` | Exact OpenCode CLI pin used by the dispatchable `opencode-live-smoke.yml` rollout gate and by `review_autofix.yml` when it installs OpenCode and warms the models.dev cache. Review setup fails open so Codex-only staged scripts can continue; OpenCode-backed scripts still reject a missing or unreadable cache. |
 
 ## Semantic Cache (Clarification Only)
 

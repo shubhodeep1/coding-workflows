@@ -120,6 +120,11 @@ def test_production_review_path_remains_opencode_free() -> None:
 	# only permitted appearances.
 	production = PRODUCTION_REVIEW.read_text(encoding="utf-8")
 	scrubbed = production
+	assert (
+		"- name: Install OpenCode CLI\n"
+		"        continue-on-error: true\n"
+		"        uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde"
+	) in production
 	for expected in (
 		"OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}",
 		"- name: Install OpenCode CLI",
