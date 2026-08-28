@@ -18,6 +18,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_AUTOFIX_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 CHECK_RUNS_HELPER = REPO_ROOT / "scripts" / "collect_pr_check_runs_context.py"
+REVIEWERS_SCRIPT = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
+OPENCODE_HELPERS = REPO_ROOT / "scripts" / "opencode_helpers.sh"
 
 
 def _workflow() -> str:
@@ -41,6 +43,18 @@ def test_no_cycle_selector_step() -> None:
 	wf = _workflow()
 	assert "Select reviewer reasoning effort for current cycle" not in wf
 	assert "schedule_source" not in wf
+
+
+def test_reviewer_attempt_reasoning_is_passed_as_opencode_variant() -> None:
+	reviewers = REVIEWERS_SCRIPT.read_text(encoding="utf-8")
+	helpers = OPENCODE_HELPERS.read_text(encoding="utf-8")
+	assert '"${attempt_reasoning}"' in reviewers
+	assert 'opencode_run_cmd "$@"' in reviewers
+	assert '--variant "${variant}"' in helpers
+	assert 'reviewer_prepare_reasoning_configs()' in reviewers
+	prepare_block = reviewers.split('reviewer_prepare_reasoning_configs()', 1)[1].split('\n}', 1)[0]
+	assert "reviewer_patch_reasoning_config_file" not in prepare_block
+	assert "per-call --variant argument" in prepare_block
 
 
 def test_smoke_test_reasoning_split() -> None:

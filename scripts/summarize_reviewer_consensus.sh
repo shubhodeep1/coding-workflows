@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Consolidate N reviewer outputs from one review pass into a single findings
-# ledger via codex-cli (model: openai/gpt-5.6-luna, reasoning: medium).
+# ledger via OpenCode (model: openai/gpt-5.6-luna, reasoning: medium).
 #
 # Invoked twice per review run:
 #   --prefix pass1  --output ${CROSS_POLLINATION_FILE}  → feeds pass-2 reviewers
 #   --prefix review --output ${REVIEWER_CONSENSUS_FILE} → feeds editor + memory
 #
 # Reads every ${PREVIOUS_REVIEWS_DIR}/<prefix>_<safe_model>.txt, builds one
-# prompt with per-reviewer sentinels, spawns codex-cli with an isolated
-# CODEX_HOME so the model/reasoning override cannot leak into the editor
-# call. Retries up to 10× with exponential backoff (5s, 10s, 20s, 40s, 80s,
+# prompt with per-reviewer sentinels, and spawns OpenCode with an isolated
+# reviewer-role config so the model/reasoning selection cannot leak into the
+# editor call. Retries up to 10× with exponential backoff (5s, 10s, 20s, 40s, 80s,
 # 160s, 320s, 640s, 1280s between attempts; no cap) on empty stdout /
 # non-zero exit / timeout. Hard-fails the workflow on final failure — the
 # job-level "Telegram failure" step in review_autofix.yml surfaces the
@@ -19,9 +19,8 @@
 #
 # Env contract:
 #   PREVIOUS_REVIEWS_DIR              dir holding <prefix>_*.txt
-#   RUNTIME_DIR                       dir for temp codex home + logs
+#   RUNTIME_DIR                       dir for temp OpenCode config + logs
 #   SUPPORT_SCRIPTS_DIR               helper scripts (for gh_helpers.sh)
-#   CODEX_HOME                        shared codex home (source of config.toml)
 #   XPOLL_SUMMARISER_MODEL            default: openai/gpt-5.6-luna
 #   XPOLL_SUMMARISER_REASONING        default: medium
 #   XPOLL_SUMMARISER_LINES_PER_REVIEWER  target lines per reviewer section (default 160)
@@ -65,6 +64,15 @@ if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" ]; then
 	# shellcheck disable=SC1091
 	source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
 fi
+
+OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
+OPENCODE_CONFIG_WRITER_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh"
+if [ ! -f "${OPENCODE_HELPERS_PATH}" ]; then
+	echo "summariser (${PREFIX}): FATAL — OpenCode helpers not found at ${OPENCODE_HELPERS_PATH}." >&2
+	exit 1
+fi
+# shellcheck source=/dev/null
+source "${OPENCODE_HELPERS_PATH}"
 
 SUMMARISER_MODEL="${XPOLL_SUMMARISER_MODEL:-openai/gpt-5.6-luna}"
 SUMMARISER_REASONING="${XPOLL_SUMMARISER_REASONING:-medium}"
@@ -218,7 +226,7 @@ PROMPT_HEADER
 		slug="${reviewer_slugs[$i]}"
 		echo
 		echo "--- BEGIN ${PREFIX^^} OUTPUT FROM ${slug} ---"
-		# Per-reviewer pre-truncation keeps the whole prompt within codex-cli
+		# Per-reviewer pre-truncation keeps the whole prompt within the model
 		# context budget even if one reviewer produced an enormous log.
 		head -n "${SUMMARISER_MAX_INPUT_LINES}" "${f}"
 		echo "--- END ${PREFIX^^} OUTPUT FROM ${slug} ---"
@@ -229,68 +237,43 @@ PROMPT_HEADER
 
 echo "summariser (${PREFIX}): ${n_reviewers} input(s); target_lines=${target_lines}; prompt_bytes=$(wc -c < "${prompt_file}")"
 
-# ── Isolated CODEX_HOME with gpt-5.6-luna + medium reasoning ────────────
-# Mirrors the reviewer pattern at scripts/review_run_reviewers.sh:906-1024:
-# copy the base CODEX_HOME, then sed-patch model_reasoning_effort in the
-# config.toml so the editor's shared CODEX_HOME is NEVER mutated.
-codex_bin="$(command -v codex || true)"
-if [ -z "${codex_bin}" ]; then
-	echo "summariser (${PREFIX}): FATAL — codex CLI not in PATH." >&2
-	exit 1
-fi
-
-summariser_codex_root="${RUNNER_TEMP:-${HOME}/.cache}/codex_home_summariser"
-mkdir -p "${summariser_codex_root}"
-summariser_codex_home="$(mktemp -d "${summariser_codex_root}/${PREFIX}.XXXXXX")" || {
-	echo "summariser (${PREFIX}): FATAL — failed to create temp codex home." >&2
+# ── Isolated reviewer-role OpenCode config ─────────────────────────────
+summariser_opencode_root="${RUNNER_TEMP:-${HOME}/.cache}/opencode_summariser"
+mkdir -p "${summariser_opencode_root}"
+summariser_opencode_dir="$(mktemp -d "${summariser_opencode_root}/${PREFIX}.XXXXXX")" || {
+	echo "summariser (${PREFIX}): FATAL — failed to create temp OpenCode config directory." >&2
 	exit 1
 }
-trap 'rm -rf "${summariser_codex_home}" "${prompt_file}" 2>/dev/null || true' EXIT
+summariser_opencode_config="${summariser_opencode_dir}/opencode.json"
+summariser_workspace="${GITHUB_WORKSPACE:-$(pwd)}"
+trap 'rm -rf "${summariser_opencode_dir}" "${prompt_file}" 2>/dev/null || true' EXIT
 
-if [ -d "${CODEX_HOME:-}" ]; then
-	cp -r "${CODEX_HOME}/." "${summariser_codex_home}/"
+if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
+	--role reviewer \
+	--model "${SUMMARISER_MODEL}" \
+	--project-path "${summariser_workspace}" \
+	--config-path "${summariser_opencode_config}" \
+	--serena off; then
+	opencode_emit_failure_alert review_summariser reviewer "${SUMMARISER_MODEL}" 1 config_generation || true
+	exit 1
 fi
-mkdir -p "${summariser_codex_home}/bin"
+if ! opencode_require_bootstrap review_summariser reviewer "${SUMMARISER_MODEL}" \
+	"${summariser_opencode_config}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
+	exit 1
+fi
 
-# Patch reasoning effort in the isolated config — same sed recipe the reviewer
-# runner uses. Check both top-level and .codex/ nested layouts.
-#
-# Also pin sandbox_mode to "read-only" in the cloned config. The summariser is
-# advisory: its prompt explicitly says "Your output must never be treated as
-# a gate" and reviewers run sandbox=read-only for the same reason. The CLI
-# already passes `--sandbox read-only` (see the codex invocation below), but
-# run 25370115370 demonstrated that the inherited config.toml's
-# `sandbox_mode = "workspace-write"` takes precedence over the flag — the
-# summariser session header reported `sandbox: workspace-write [...] (network
-# access enabled)` and the model used its write access to overwrite
-# tests/e2e_smoke_canary.txt via `printf >`. That happened to fix the smoke
-# fixture this once but is a latent foot-gun: a future summariser run could
-# rewrite arbitrary repo files with no allowlist guard. Fix at config-source.
-for cfg in "${summariser_codex_home}/config.toml" "${summariser_codex_home}/.codex/config.toml"; do
-	if [ -f "${cfg}" ]; then
-		sed -i "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${SUMMARISER_REASONING}\"/" "${cfg}" 2>/dev/null || true
-		if grep -qE '^[[:space:]]*sandbox_mode[[:space:]]*=' "${cfg}" 2>/dev/null; then
-			sed -i 's|^[[:space:]]*sandbox_mode[[:space:]]*=.*|sandbox_mode = "read-only"|' "${cfg}" 2>/dev/null || true
-		else
-			printf '\nsandbox_mode = "read-only"\n' >> "${cfg}" 2>/dev/null || true
-		fi
-		# Post-edit verification: the sed/printf above silence errors with
-		# `2>/dev/null || true` so a permission / disk-full / sed-syntax
-		# failure would otherwise leave the config carrying whatever
-		# sandbox_mode the inherited file had (including workspace-write,
-		# the exact thing this pin is meant to neutralise). Verify the
-		# canonical line landed; warn loudly if it didn't so the operator
-		# sees the regression in the live job log instead of trusting a
-		# silent pin failure. We do NOT hard-fail the summariser step on
-		# a missed pin — the summariser is non-gating and the CLI's own
-		# `--sandbox read-only` flag still applies; an audible warning is
-		# the right severity (matches the pattern in
-		# scripts/review_conflict_resolve.sh's reasoning-effort verifier).
-		if ! grep -qE '^sandbox_mode = "read-only"$' "${cfg}" 2>/dev/null; then
-			echo "::warning::summariser sandbox pin did not take effect on ${cfg}: expected line 'sandbox_mode = \"read-only\"' is missing. Inherited sandbox setting may persist; verify the run's session-header sandbox line." >&2
-		fi
-	fi
-done
+# shellcheck disable=SC2016
+summariser_opencode_cmd=(
+	bash -c
+	'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
+	opencode-summariser
+	"${OPENCODE_HELPERS_PATH}"
+	reviewer
+	"${SUMMARISER_MODEL}"
+	"${SUMMARISER_REASONING}"
+	"${summariser_opencode_config}"
+	"${summariser_workspace}"
+)
 
 # ── Retry loop (10 attempts, exponential backoff 5s→1280s, hard-fail) ────
 # Backoff base=5s doubles each failure (5,10,20,40,80,160,320,640,1280); no
@@ -342,11 +325,23 @@ while [ "${attempt}" -le "${SUMMARISER_MAX_ATTEMPTS}" ]; do
 	if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 		sanitize_codex_prompt_file "${prompt_file}"
 	fi
-	CODEX_HOME="${summariser_codex_home}" \
-		timeout --signal=KILL "${SUMMARISER_CALL_TIMEOUT}" \
-		"${codex_bin}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${SUMMARISER_MODEL}" --sandbox read-only < "${prompt_file}" \
+	timeout --signal=KILL "${SUMMARISER_CALL_TIMEOUT}" \
+		"${summariser_opencode_cmd[@]}" < "${prompt_file}" \
 		> "${tmp_stdout}" 2> "${tmp_stderr}" \
 		|| last_rc=$?
+
+	clean_stdout="${tmp_stdout}.ansi-clean"
+	if opencode_strip_ansi < "${tmp_stdout}" > "${clean_stdout}"; then
+		mv "${clean_stdout}" "${tmp_stdout}"
+	else
+		rm -f "${clean_stdout}"
+	fi
+	clean_stderr="${tmp_stderr}.ansi-clean"
+	if opencode_strip_ansi < "${tmp_stderr}" > "${clean_stderr}"; then
+		mv "${clean_stderr}" "${tmp_stderr}"
+	else
+		rm -f "${clean_stderr}"
+	fi
 
 	# Append stderr tail for diagnostics regardless of outcome.
 	{
@@ -368,7 +363,7 @@ while [ "${attempt}" -le "${SUMMARISER_MAX_ATTEMPTS}" ]; do
 	elif [ "${last_rc}" -ne 0 ]; then
 		echo "summariser (${PREFIX}): attempt ${attempt} exited rc=${last_rc}." | tee -a "${log_file}" >&2
 	else
-		echo "summariser (${PREFIX}): attempt ${attempt} produced empty stdout (codex-cli returned 0 but emitted no final message)." | tee -a "${log_file}" >&2
+		echo "summariser (${PREFIX}): attempt ${attempt} produced empty stdout (OpenCode returned 0 but emitted no final message)." | tee -a "${log_file}" >&2
 	fi
 
 	rm -f "${tmp_stdout}" "${tmp_stderr}"
@@ -384,6 +379,7 @@ while [ "${attempt}" -le "${SUMMARISER_MAX_ATTEMPTS}" ]; do
 done
 
 echo "::error::summariser (${PREFIX}): all ${SUMMARISER_MAX_ATTEMPTS} attempts failed (last rc=${last_rc}). See ${log_file}." >&2
+opencode_emit_failure_alert review_summariser reviewer "${SUMMARISER_MODEL}" "${last_rc:-1}" attempts_exhausted || true
 # Hard-fail so the workflow job enters failure() and the existing
 # "Telegram failure" step at review_autofix.yml:4196-4220 alerts the operator.
 exit 1

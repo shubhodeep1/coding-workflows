@@ -22,6 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
+SUMMARISER = REPO_ROOT / "scripts" / "summarize_reviewer_consensus.sh"
 APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 CONSOLIDATE = REPO_ROOT / "scripts" / "review_consolidate.sh"
 RB_JUDGE = REPO_ROOT / "scripts" / "review_rb_judge.sh"
@@ -2761,6 +2762,46 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}",
 	):
 		assert workflow.count(expected) >= 2, f"Missing workflow-level + codex-agent env wiring: {expected}"
+
+
+def test_opencode_read_side_cutover_keeps_codex_write_side() -> None:
+	workflow = _workflow_text()
+	stage_helper = _stage_helper_text()
+	reviewers = _reviewers_text()
+	summariser = SUMMARISER.read_text(encoding="utf-8")
+	preflight_block = _step_block('"Preflight: Verify required files before reviewer invocation"')
+
+	assert "OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}" in workflow
+	assert _step_block("Install Codex CLI")
+	opencode_install = _step_block("Install OpenCode CLI")
+	assert "install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde" in opencode_install
+	assert "opencode_version: ${{ env.OPENCODE_VERSION }}" in opencode_install
+
+	required_bootstrap_line = next(
+		line for line in stage_helper.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
+	)
+	for helper_name in ("opencode_helpers.sh", "write_opencode_config.sh"):
+		assert helper_name in required_bootstrap_line
+		assert helper_name in workflow.split("REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS:", 1)[1].split("REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS:", 1)[0]
+	assert 'command -v opencode' in preflight_block
+	assert 'command -v codex' in preflight_block
+
+	assert 'source "${OPENCODE_HELPERS_PATH}"' in reviewers
+	assert 'bash "${OPENCODE_CONFIG_WRITER_PATH}" \\' in reviewers
+	assert '--model "${effective_model}"' in reviewers
+	assert '--variant "${variant}"' in (REPO_ROOT / "scripts" / "opencode_helpers.sh").read_text(encoding="utf-8")
+	assert reviewers.count('"${probe_opencode_cmd[@]}"') == 2
+	assert 'reviewer_strip_opencode_output_file "${tmp_output}"' in reviewers
+	assert 'reviewer_strip_opencode_output_file "${tmp_stderr}"' in reviewers
+	assert 'opencode_emit_failure_alert review_run_reviewers reviewer' in reviewers
+	assert 'REVIEWER_FAILBACK:' in reviewers
+	assert 'reviewer_record_health_outcome' in reviewers
+
+	assert 'opencode_run_cmd "$@"' in summariser
+	assert 'opencode_emit_failure_alert review_summariser reviewer' in summariser
+	assert 'opencode_strip_ansi < "${tmp_stdout}"' in summariser
+	assert 'exec codex --ask-for-approval never' in _apply_fixes_text()
+	assert 'codex_bin="$(command -v codex || true)"' in _consolidate_text()
 
 
 def test_review_soft_deadline_budget_contract_is_wired() -> None:
@@ -5768,6 +5809,7 @@ def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_
 
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
+	test_opencode_read_side_cutover_keeps_codex_write_side()
 	test_review_soft_deadline_budget_contract_is_wired()
 	test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated()
 	test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated()

@@ -32,6 +32,13 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
 
+OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
+OPENCODE_CONFIG_WRITER_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh"
+if [ -f "${OPENCODE_HELPERS_PATH}" ]; then
+  # shellcheck source=/dev/null
+  source "${OPENCODE_HELPERS_PATH}"
+fi
+
 WATCHDOG_HELPERS="${SUPPORT_SCRIPTS_DIR:-scripts}/watchdog_helpers.sh"
 if [ -f "${WATCHDOG_HELPERS}" ]; then
   # shellcheck source=/dev/null
@@ -493,7 +500,15 @@ run_cache_probe() {
     echo "INFO: cache probe skipped for Gemini-family reviewer model ${probe_model}."
     return 0
   fi
-  local probe_prompt_file probe_prompt probe_log_one probe_log_two probe_home probe_out
+  local probe_prompt_file probe_log_one probe_log_two probe_home probe_out
+  local probe_config probe_stdout_one probe_stdout_two probe_call_one_rc probe_call_two_rc probe_reasoning
+  local probe_workspace="${GITHUB_WORKSPACE:-$(pwd)}"
+  local -a probe_opencode_cmd=()
+  probe_reasoning="${REVIEWER_REASONING_EFFORT:-xhigh}"
+  case "${probe_reasoning}" in
+    xhigh|high|medium|low|none) ;;
+    *) probe_reasoning=xhigh ;;
+  esac
   probe_prompt_file="${PREVIOUS_REVIEWS_DIR}/cache_probe_prompt.txt"
   probe_log_one="${PREVIOUS_REVIEWS_DIR}/cache_probe_call_1.log"
   probe_log_two="${PREVIOUS_REVIEWS_DIR}/cache_probe_call_2.log"
@@ -507,31 +522,64 @@ EOF
     cat "${probe_prompt_file}"
   } > "${probe_out}"
 
-  probe_home="$(mktemp -d "${RUNNER_TEMP:-${HOME}/.cache}/codex_home_probe.XXXXXX")"
-  local old_codex_home="${CODEX_HOME:-}"
-  if [ -d "${CODEX_HOME:-}" ]; then
-    cp -r "${CODEX_HOME}/." "${probe_home}/"
+  probe_home="$(mktemp -d "${RUNNER_TEMP:-${HOME}/.cache}/opencode_probe.XXXXXX")"
+  probe_config="${probe_home}/opencode.json"
+  probe_stdout_one="${probe_home}/call_1.stdout"
+  probe_stdout_two="${probe_home}/call_2.stdout"
+  if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
+    --role reviewer \
+    --model "${probe_model}" \
+    --project-path "${probe_workspace}" \
+    --config-path "${probe_config}" \
+    --serena off; then
+    opencode_emit_failure_alert review_autofix_cache_probe reviewer "${probe_model}" 1 config_generation || true
+    rm -rf "${probe_home}" 2>/dev/null || true
+    return 0
   fi
-  export CODEX_HOME="${probe_home}"
+  if ! opencode_require_bootstrap review_autofix_cache_probe reviewer "${probe_model}" \
+    "${probe_config}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
+    rm -rf "${probe_home}" 2>/dev/null || true
+    return 0
+  fi
 
-  codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_one}" || true
-  codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_two}" || true
+  # shellcheck disable=SC2016
+  probe_opencode_cmd=(
+    bash -c
+    'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
+    opencode-reviewer
+    "${OPENCODE_HELPERS_PATH}"
+    reviewer
+    "${probe_model}"
+    "${probe_reasoning}"
+    "${probe_config}"
+    "${probe_workspace}"
+  )
+  probe_call_one_rc=0
+  "${probe_opencode_cmd[@]}" < "${probe_out}" >"${probe_stdout_one}" 2>"${probe_log_one}" || probe_call_one_rc=$?
+  probe_call_two_rc=0
+  "${probe_opencode_cmd[@]}" < "${probe_out}" >"${probe_stdout_two}" 2>"${probe_log_two}" || probe_call_two_rc=$?
+
+  reviewer_strip_opencode_output_file "${probe_stdout_one}"
+  reviewer_strip_opencode_output_file "${probe_stdout_two}"
+  reviewer_strip_opencode_output_file "${probe_log_one}"
+  reviewer_strip_opencode_output_file "${probe_log_two}"
+  if [ "${probe_call_one_rc}" -ne 0 ] || ! grep -q 'CACHE_PROBE_OK' "${probe_stdout_one}"; then
+    opencode_emit_failure_alert review_autofix_cache_probe reviewer "${probe_model}" "${probe_call_one_rc:-1}" call_1_failed || true
+  fi
+  if [ "${probe_call_two_rc}" -ne 0 ] || ! grep -q 'CACHE_PROBE_OK' "${probe_stdout_two}"; then
+    opencode_emit_failure_alert review_autofix_cache_probe reviewer "${probe_model}" "${probe_call_two_rc:-1}" call_2_failed || true
+  fi
 
   normalize_openrouter_usage "${probe_log_one}" "review_autofix_cache_probe" "1" "${probe_model}" || true
   normalize_openrouter_usage "${probe_log_two}" "review_autofix_cache_probe" "2" "${probe_model}" || true
-  if [ -n "${old_codex_home}" ]; then
-    export CODEX_HOME="${old_codex_home}"
-  else
-    unset CODEX_HOME
-  fi
   rm -rf "${probe_home}" 2>/dev/null || true
 }
 
-# Reviewer slugs whose upstream OpenRouter providers reject codex-cli's
+# Reviewer slugs whose upstream OpenRouter providers rejected codex-cli's
 # v0.125+ `type: "namespace"` MCP tool envelope on /v1/responses with
 # HTTP 422 "Provider returned error". When a model is on this list, the
-# per-reviewer codex-home has every `[mcp_servers.*]` table stripped so
-# no namespace tool gets sent.
+# per-reviewer Codex home had every `[mcp_servers.*]` table stripped so no
+# namespace tool was sent. The identifiers remain as compatibility no-ops.
 #
 # Currently empty by default. Re-populate when next bumping codex-cli to a
 # version whose namespace-wrapped tool envelope causes specific provider
@@ -541,28 +589,33 @@ MCP_INCOMPATIBLE_REVIEWER_MODELS="${MCP_INCOMPATIBLE_REVIEWER_MODELS-}"
 
 is_mcp_incompatible_model() {
   local model="$1"
-  local incompat
-  # Use default IFS so `read` strips leading/trailing whitespace (spaces, tabs)
-  # — robust to operator-supplied values that may carry indentation or tabs
-  # from multi-line GitHub Actions env definitions.
-  while read -r incompat; do
-    [ -z "${incompat}" ] && continue
-    [ "${model}" = "${incompat}" ] && return 0
-  done <<< "${MCP_INCOMPATIBLE_REVIEWER_MODELS}"
+  # Retained for compatibility. OpenCode emits its native MCP shape, so the
+  # codex-cli namespace incompatibility list is not consulted on this path.
+  : "${model}"
   return 1
 }
 
 # Strip every [mcp_servers.*] table (and sub-tables like [mcp_servers.foo.env])
-# from the given codex config.toml. Used to neuter MCP for reviewer slugs that
-# 422 on namespace-wrapped tool envelopes.
+# from the given Codex config.toml. Retained as a compatibility no-op after the
+# reviewer path moved to OpenCode-native MCP configuration.
 strip_all_mcp_server_blocks() {
   local codex_cfg="$1"
-  [ -f "${codex_cfg}" ] || return 0
-  awk '
-    /^[[:space:]]*\[mcp_servers\./ { skip=1; next }
-    /^[[:space:]]*\[/ { skip=0 }
-    !skip { print }
-  ' "${codex_cfg}" > "${codex_cfg}.tmp" && mv "${codex_cfg}.tmp" "${codex_cfg}" || { rm -f "${codex_cfg}.tmp"; return 1; }
+  # Retained for compatibility; OpenCode JSON configs need no TOML stripping.
+  : "${codex_cfg}"
+  return 0
+}
+
+reviewer_strip_opencode_output_file() {
+  local source_file="$1"
+  local clean_file=""
+  [ -f "${source_file}" ] || return 0
+  command -v opencode_strip_ansi >/dev/null 2>&1 || return 0
+  clean_file="${source_file}.ansi-clean.${BASHPID:-$$}"
+  if opencode_strip_ansi < "${source_file}" > "${clean_file}"; then
+    mv "${clean_file}" "${source_file}"
+  else
+    rm -f "${clean_file}"
+  fi
 }
 
 mkdir -p "${PREVIOUS_REVIEWS_DIR}"
@@ -1776,7 +1829,7 @@ run_cache_probe || true
 
 # ── Cross-reviewer consensus summariser ──────────────────────────────────
 # After each review pass (pass-1 and pass-2) completes, all reviewer outputs
-# are fed as a single prompt to codex-cli (openai/gpt-5.6-luna, medium
+# are fed as a single prompt to OpenCode (openai/gpt-5.6-luna, medium
 # reasoning by default) which emits ONE consolidated findings ledger (CONSENSUS block +
 # per-reviewer sections). The pass-1 ledger feeds pass-2 reviewers; the
 # pass-2 ledger (written to REVIEWER_CONSENSUS_FILE) feeds the editor and
@@ -3402,22 +3455,10 @@ reviewer_prepare_reasoning_configs() {
   local alt_config_backup="$4"
   local reasoning_level="${5:-}"
 
-  if [ -n "${config_backup}" ] && [ -f "${config_backup}" ] && [ -n "${config_path}" ]; then
-    cp "${config_backup}" "${config_path}" 2>/dev/null || true
-  fi
-  if [ -n "${alt_config_backup}" ] && [ -f "${alt_config_backup}" ] && [ -n "${alt_config_path}" ]; then
-    mkdir -p "$(dirname "${alt_config_path}")"
-    cp "${alt_config_backup}" "${alt_config_path}" 2>/dev/null || true
-  fi
-  if [ -z "${reasoning_level}" ]; then
-    return 0
-  fi
-  if [ -n "${config_path}" ]; then
-    reviewer_patch_reasoning_config_file "${config_path}" "${reasoning_level}"
-  fi
-  if [ -n "${alt_config_path}" ]; then
-    reviewer_patch_reasoning_config_file "${alt_config_path}" "${reasoning_level}"
-  fi
+  # Retained under its existing name for compatibility. Reviewer reasoning now
+  # rides OpenCode's per-call --variant argument, so no Codex config is mutated.
+  : "${config_path}" "${config_backup}" "${alt_config_path}" "${alt_config_backup}" "${reasoning_level}"
+  return 0
 }
 
 reviewer_classify_retryable_failure() {
@@ -3622,18 +3663,29 @@ execute_reviewer_attempt() {
     "${reviewer_alt_config_backup:-}" \
     "${attempt_reasoning}"
 
-  if is_mcp_incompatible_model "${effective_model}"; then
-    for cfg_path in "${reviewer_codex_home}/config.toml" "${reviewer_codex_home}/.codex/config.toml"; do
-      if [ -f "${cfg_path}" ]; then
-        strip_all_mcp_server_blocks "${cfg_path}" || \
-          echo "::warning::Failed to strip MCP blocks from ${cfg_path} for reviewer ${effective_model}; namespace tool envelope may still trigger 422." >&2
-      fi
-    done
-  fi
-
   if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
     echo "Reviewer slot ${slot_model} skipped — PR #${PR_NUMBER} was closed/merged." | tee -a "${log_file}"
     REVIEWER_ATTEMPT_OUTCOME="pr_closed"
+    return 0
+  fi
+
+  if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
+    --role reviewer \
+    --model "${effective_model}" \
+    --project-path "${reviewer_opencode_workspace}" \
+    --config-path "${reviewer_opencode_config_path}" \
+    --serena off; then
+    echo "Reviewer slot ${slot_model} (${effective_model}) failed to generate its OpenCode config on ${attempt_label}." | tee -a "${log_file}" >&2
+    REVIEWER_ATTEMPT_OUTCOME="failed"
+    REVIEWER_ATTEMPT_CMD_RC=1
+    return 0
+  fi
+  if ! opencode_require_bootstrap review_run_reviewers reviewer "${effective_model}" \
+    "${reviewer_opencode_config_path}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
+    reviewer_terminal_alert_emitted=true
+    echo "Reviewer slot ${slot_model} (${effective_model}) failed OpenCode bootstrap validation on ${attempt_label}." | tee -a "${log_file}" >&2
+    REVIEWER_ATTEMPT_OUTCOME="failed"
+    REVIEWER_ATTEMPT_CMD_RC=1
     return 0
   fi
 
@@ -3642,7 +3694,7 @@ execute_reviewer_attempt() {
   # model-family overlay exists, prepare_reviewer_prompt_for_model returns
   # the SHARED pass prompt file for every slot, and all reviewer workers run
   # concurrently — a shared "<prompt>.attempt_N" path is then cp-truncated,
-  # nag-appended, and sanitize-rewritten by all of them at once while codex
+  # nag-appended, and sanitize-rewritten by all of them at once while OpenCode
   # reads it as stdin. One bad interleaving leaves the file empty and every
   # reviewer fails with "No prompt provided via stdin" (consumer run
   # tele-funtoken-msg-scoring/actions/runs/32222803753, pass 2: 6/6 failed).
@@ -3753,7 +3805,7 @@ execute_reviewer_attempt() {
   if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
     sanitize_codex_prompt_file "${reviewer_effective_prompt_file}"
   fi
-  # Last-line-of-defence for the empty-stdin failure mode: codex exits
+  # Last-line-of-defence for the empty-stdin failure mode: OpenCode exits
   # non-retryably on empty stdin ("No prompt provided via stdin"), so an
   # unexpectedly empty effective prompt must be restored (or at least
   # surfaced loudly) before launch instead of silently failing the slot.
@@ -3765,7 +3817,7 @@ execute_reviewer_attempt() {
       reviewer_effective_prompt_file="${prompt_file}"
       echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file was empty before launch on ${attempt_label} and the attempt copy could not be restored; continuing with the base prompt to avoid empty stdin." | tee -a "${log_file}" >&2
     else
-      echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file is empty before launch on ${attempt_label} and no non-empty base prompt is available; codex will fail this slot with empty stdin." | tee -a "${log_file}" >&2
+      echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file is empty before launch on ${attempt_label} and no non-empty base prompt is available; OpenCode will fail this slot with empty stdin." | tee -a "${log_file}" >&2
     fi
   elif [ "${reviewer_effective_prompt_file}" != "${prompt_file}" ] && [ "${reviewer_base_prompt_bytes}" -gt 0 ] 2>/dev/null; then
     reviewer_effective_prompt_bytes="$(wc -c < "${reviewer_effective_prompt_file}" 2>/dev/null | tr -d '[:space:]')"
@@ -3780,7 +3832,7 @@ execute_reviewer_attempt() {
     fi
   fi
   if [ ! -s "${reviewer_effective_prompt_file}" ]; then
-    echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file is still empty after fallback on ${attempt_label}; refusing to launch codex with empty stdin." | tee -a "${log_file}" >&2
+    echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file is still empty after fallback on ${attempt_label}; refusing to launch OpenCode with empty stdin." | tee -a "${log_file}" >&2
     kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
     emit_reviewer_substate "Failed" "${attempt_number}"
     rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}" "${wd_reason_file}" "${stall_status_file}" "${tmp_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
@@ -3790,15 +3842,17 @@ execute_reviewer_attempt() {
   emit_reviewer_substate "LaunchingAgentProcess" "${attempt_number}"
   emit_reviewer_substate "InitializingSession" "${attempt_number}"
   emit_reviewer_substate "StreamingTurn" "${attempt_number}"
+  # shellcheck disable=SC2016
   reviewer_codex_cmd=(
-    "${codex_bin}"
-    --ask-for-approval never
-    -c model_verbosity=low
-    -c include_apply_patch_tool=true
-    exec
-    --skip-git-repo-check
-    --model "${effective_model}"
-    --sandbox read-only
+    bash -c
+    'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
+    opencode-reviewer
+    "${OPENCODE_HELPERS_PATH}"
+    reviewer
+    "${effective_model}"
+    "${attempt_reasoning}"
+    "${reviewer_opencode_config_path}"
+    "${reviewer_opencode_workspace}"
   )
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
     "${CODEX_STALL_GUARD_HELPER}" \
@@ -3842,6 +3896,9 @@ execute_reviewer_attempt() {
     echo "Reviewer slot ${slot_model} (${effective_model}) could not parse codex stall guard status from ${stall_status_file}." | tee -a "${log_file}"
   fi
   rm -f "${stall_status_file}"
+
+  reviewer_strip_opencode_output_file "${tmp_output}"
+  reviewer_strip_opencode_output_file "${tmp_stderr}"
 
   if reviewer_output_has_findings "${tmp_output}" || reviewer_output_has_explicit_none "${tmp_output}"; then
     REVIEWER_ATTEMPT_SILENT=false
@@ -3903,7 +3960,7 @@ execute_reviewer_attempt() {
         echo "------------------------------------------------------------------------------------"
       } | tee -a "${log_file}" >&2
     else
-      echo "Reviewer slot ${slot_model} (${effective_model}) ${attempt_label}: codex-cli stderr was also empty (no diagnostic available)." | tee -a "${log_file}" >&2
+      echo "Reviewer slot ${slot_model} (${effective_model}) ${attempt_label}: OpenCode stderr was also empty (no diagnostic available)." | tee -a "${log_file}" >&2
     fi
   else
     if [ "${stall_state}" = "killed" ]; then
@@ -3924,7 +3981,7 @@ execute_reviewer_attempt() {
   fi
 
   if [ -s "${tmp_stderr}" ]; then
-    echo "Reviewer slot ${slot_model} (${effective_model}) codex-cli stderr on ${attempt_label}:" | tee -a "${log_file}"
+    echo "Reviewer slot ${slot_model} (${effective_model}) OpenCode stderr on ${attempt_label}:" | tee -a "${log_file}"
     sed 's/^/  | /' "${tmp_stderr}" | tee -a "${log_file}"
   fi
 
@@ -3987,6 +4044,7 @@ run_reviewer() {
   local fallback_model=""
   local final_failure_message=""
   local final_retryable_class=""
+  # shellcheck disable=SC2034
   local reviewer_codex_root=""
   local reviewer_codex_home=""
   local reviewer_config_path=""
@@ -3994,7 +4052,13 @@ run_reviewer() {
   local reviewer_alt_config_path=""
   local reviewer_alt_config_backup=""
   local context_budget_warn_models_emitted=""
+  # shellcheck disable=SC2034
   local codex_bin=""
+  local reviewer_opencode_root=""
+  local reviewer_opencode_runtime_dir=""
+  local reviewer_opencode_config_path=""
+  local reviewer_opencode_workspace="${GITHUB_WORKSPACE:-$(pwd)}"
+  local reviewer_terminal_alert_emitted=false
   local slot_model="${model}"
   local effective_model="${model}"
   local reviewer_silent_rounds=0
@@ -4027,6 +4091,20 @@ run_reviewer() {
   {
     rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
     rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+    rm -rf "${reviewer_opencode_runtime_dir}" 2>/dev/null || true
+  }
+
+  reviewer_emit_terminal_failure_alert()
+  {
+    local terminal_rc="${1:-1}"
+    local terminal_failure_class="${2:-terminal_failure}"
+    if [ "${reviewer_terminal_alert_emitted}" = "true" ]; then
+      return 0
+    fi
+    if command -v opencode_emit_failure_alert >/dev/null 2>&1; then
+      opencode_emit_failure_alert review_run_reviewers reviewer "${effective_model}" "${terminal_rc}" "${terminal_failure_class}" || true
+    fi
+    reviewer_terminal_alert_emitted=true
   }
 
   reviewer_emit_slot_state()
@@ -4345,23 +4423,11 @@ run_reviewer() {
     echo "::warning::rate_limit_audit_fallback key=REVIEW_PR_STATE_POLL_INTERVAL_SECS capped=${reviewer_pr_poll_interval} idle_timeout=${reviewer_idle_timeout} effective_sleep=${reviewer_watchdog_sleep}" >&2
   fi
 
-  codex_bin="$(command -v codex || true)"
-  if [ -z "${codex_bin}" ]; then
-    echo "Reviewer ${model} failed: codex CLI not found in PATH." | tee -a "${log_file}"
-    echo "Reviewer ${model} failed: codex CLI not found in PATH." > "${output_file}"
-    echo "failed" > "${status_file}"
-    return 0
-  fi
-
-  reviewer_codex_root="${RUNNER_TEMP:-${HOME}/.cache}/codex_home_reviewers"
-  mkdir -p "${reviewer_codex_root}"
-  reviewer_codex_home="$(mktemp -d "${reviewer_codex_root}/reviewer.${safe_name}.XXXXXX")"
-  if [ -d "${CODEX_HOME:-}" ]; then
-    cp -r "${CODEX_HOME}/." "${reviewer_codex_home}/"
-  fi
-  mkdir -p "${reviewer_codex_home}/bin"
-  export CODEX_HOME="${reviewer_codex_home}"
-  prompt_file="$(prepare_reviewer_prompt_for_model "${model}" "${prompt_file}" "${safe_name}" "${reviewer_codex_home}" "${log_file}")"
+  reviewer_opencode_root="${RUNNER_TEMP:-${HOME}/.cache}/opencode_reviewers"
+  mkdir -p "${reviewer_opencode_root}"
+  reviewer_opencode_runtime_dir="$(mktemp -d "${reviewer_opencode_root}/reviewer.${safe_name}.XXXXXX")"
+  reviewer_opencode_config_path="${reviewer_opencode_runtime_dir}/opencode.json"
+  prompt_file="$(prepare_reviewer_prompt_for_model "${model}" "${prompt_file}" "${safe_name}" "${reviewer_opencode_runtime_dir}" "${log_file}")"
   if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
     sanitize_codex_prompt_file "${prompt_file}"
   fi
@@ -4501,6 +4567,7 @@ run_reviewer() {
             printf '%s\n' "${REVIEWER_RETRY_PLAN_MESSAGE:-Reviewer ${model} failed after retryable failure recovery was exhausted.}" > "${output_file}"
             echo "failed" > "${status_file}"
             echo "${REVIEWER_RETRY_PLAN_MESSAGE:-Reviewer ${model} failed after retryable failure recovery was exhausted.}" | tee -a "${log_file}"
+            reviewer_emit_terminal_failure_alert "${REVIEWER_ATTEMPT_CMD_RC:-1}" "${final_retryable_class:-retryable_failure}"
             reviewer_emit_slot_state
             reviewer_cleanup
             return 0
@@ -4513,6 +4580,7 @@ run_reviewer() {
         printf '%s\n' "${final_failure_message}" > "${output_file}"
         echo "failed" > "${status_file}"
         echo "${final_failure_message}" | tee -a "${log_file}"
+        reviewer_emit_terminal_failure_alert "${REVIEWER_ATTEMPT_CMD_RC:-1}" non_retryable
         reviewer_emit_slot_state
         reviewer_cleanup
         return 0
@@ -4530,6 +4598,7 @@ run_reviewer() {
   printf '%s\n' "${final_failure_message}" > "${output_file}"
   echo "failed" > "${status_file}"
   echo "${final_failure_message}" | tee -a "${log_file}"
+  reviewer_emit_terminal_failure_alert "${REVIEWER_ATTEMPT_CMD_RC:-1}" "${final_retryable_class:-silent_retry}"
   reviewer_emit_slot_state
   reviewer_cleanup
   return 0
@@ -4746,7 +4815,7 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
     fi
 
     # ── Consolidate all pass-1 reviewer outputs into one ledger ──
-    # One codex-cli call (gpt-5.6-luna, medium reasoning by default — see
+    # One OpenCode call (gpt-5.6-luna, medium reasoning by default — see
     # XPOLL_SUMMARISER_REASONING) produces a consensus ledger + per-reviewer
     # sections. Retries 3×; hard-fails the workflow on final failure
     # (triggers job-level Telegram failure alert).
@@ -4898,7 +4967,7 @@ if [ "${reviewers_successful}" -eq 0 ]; then
   echo "Reviewer failure diagnostics:"
   for log_file in "${PREVIOUS_REVIEWS_DIR}"/review_*.log; do
     if [ -f "${log_file}" ]; then
-      grep -E "Reviewer .* (produced empty output|execution failed|failed after|codex-cli stderr on attempt)" "${log_file}" || true
+      grep -E "Reviewer .* (produced empty output|execution failed|failed after|(codex-cli|OpenCode) stderr on attempt)" "${log_file}" || true
     fi
   done
   echo "All reviewers failed."
