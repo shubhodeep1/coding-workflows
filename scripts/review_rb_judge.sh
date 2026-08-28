@@ -1823,11 +1823,11 @@ __EDIT_DISCIPLINE__
       fi
       case "${rb_fix_stall_state}" in
         observed)
-          echo "Review-blocked fix codex recorded codex_stall_observed (observe-only mode)."
+          echo "Review-blocked fix OpenCode recorded codex_stall_observed (observe-only mode)."
           emit_review_rb_substate "review_rb_fix" "judge_fix" "codex_stall_observed" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
           ;;
         killed)
-          echo "::warning::Review-blocked fix codex recorded codex_stall_killed."
+          echo "::warning::Review-blocked fix OpenCode recorded codex_stall_killed."
           emit_review_rb_substate "review_rb_fix" "judge_fix" "codex_stall_killed" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
           ;;
       esac
@@ -1842,7 +1842,7 @@ __EDIT_DISCIPLINE__
 
       # Check for changes and commit
       if codex_stall_guard_kill_detected "${rb_fix_rc}" "${rb_fix_stall_state}"; then
-        echo "::warning::Review-blocked fix codex was killed by codex stall guard; skipping commit/merge and falling back to manual intervention."
+        echo "::warning::Review-blocked fix OpenCode was killed by codex stall guard; skipping commit/merge and falling back to manual intervention."
       elif [ -n "$(git status --porcelain)" ]; then
         git config user.name "codex-bot"
         git config user.email "codex@users.noreply.github.com"
