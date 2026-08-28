@@ -108,8 +108,27 @@ def test_smoke_runs_identical_calls_and_aggregates_failures() -> None:
 
 
 def test_production_review_path_remains_opencode_free() -> None:
-	production = PRODUCTION_REVIEW.read_text(encoding="utf-8").lower()
-	assert "opencode" not in production
+	# Phase 2 pre-staging: the workflow-side install step (which warms the
+	# models.dev cache via `opencode models --refresh`) must land on main
+	# ahead of the script-side cutover, because internal-review.yml pins
+	# review_autofix.yml@main while support scripts are staged from the PR's
+	# merge ref. PRs targeting the integration branch run branch scripts that
+	# already require the opencode binary and a warmed cache (see the run on
+	# PR #3867 where every reviewer/editor slot failed with "models.dev cache
+	# is not readable"). Beyond that install step, main's production review
+	# path must still never invoke opencode — the exact strings below are the
+	# only permitted appearances.
+	production = PRODUCTION_REVIEW.read_text(encoding="utf-8")
+	scrubbed = production
+	for expected in (
+		"OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}",
+		"- name: Install OpenCode CLI",
+		"uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde",
+		"opencode_version: ${{ env.OPENCODE_VERSION }}",
+	):
+		assert expected in scrubbed
+		scrubbed = scrubbed.replace(expected, "", 1)
+	assert "opencode" not in scrubbed.lower()
 
 
 def test_focused_tests_are_wired_into_ci() -> None:
