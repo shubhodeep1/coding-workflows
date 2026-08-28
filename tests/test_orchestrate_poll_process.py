@@ -14990,9 +14990,11 @@ def _test_heartbeat_worker(
 def test_final_merge_success_sends_critical_telegram_alert():
 	# The finalize merge-success arm must notify the operator over Telegram
 	# whenever the final integration PR is squash-merged into the default
-	# branch. The alert is CRITICAL so an ALERT_MSG_LEVEL threshold above
-	# DEBUG cannot suppress it (the DEBUG-level "completed after validation
-	# pass" summary in mark_validation_complete is separately gated and
+	# branch. The alert is CRITICAL so none of the DEBUG/WARNING/ERROR/
+	# CRITICAL ALERT_MSG_LEVEL thresholds suppress it; only the explicit
+	# ALERT_MSG_LEVEL=SILENT opt-out silences all helper-based sends, per
+	# tg_helpers.sh (the DEBUG-level "completed after validation pass"
+	# summary in mark_validation_complete is separately gated and
 	# deliberately left untouched). This test pins the placement (inside
 	# the `gh pr merge --squash --delete-branch` success arm, after the
 	# "Final merge complete" tracking comment and before the arm's
@@ -15040,7 +15042,7 @@ def test_final_merge_success_sends_critical_telegram_alert():
 		),
 		(
 			'tg_send_msg "${_final_merge_alert_msg}" "CRITICAL"',
-			"final-merge alert is no longer sent at CRITICAL level via tg_send_msg; any ALERT_MSG_LEVEL above DEBUG would silently suppress it, which is the exact gap this alert was added to close.",
+			"final-merge alert is no longer sent at CRITICAL level via tg_send_msg; any lower level would let an ALERT_MSG_LEVEL threshold above it silently suppress the alert (only ALERT_MSG_LEVEL=SILENT may silence CRITICAL), which is the exact gap this alert was added to close.",
 		),
 	):
 		assert needle in alert_window, (
