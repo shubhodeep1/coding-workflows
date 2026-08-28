@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/opencode-live-smoke.yml: lines 169-181 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Diagnostic commands run unguarded under `set -euo pipefail` and can abort the smoke run before emitting the per-call result row.\n  WHY: A diagnostic failure can terminate the process-substitution subshell, causing the live-smoke script to exit before remaining models, the summary table, and the final failure path execute.\n- .github/workflows/opencode-live-smoke.yml: lines 157-162 | severity=major | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The reasoning-evidence gate fails completed calls when provider-reported reasoning usage is zero.\n  WHY: Upstream calls completed successfully but returned `tokens.reasoning: 0`, causing entries to fail with `FAIL_no_reasoning_usage`; this is an upstream/gate-sensitivity signal rather than a defect introduced by the diagnostic change.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/opencode-live-smoke.yml\n  Line or code reference: lines 169-181 (the new `{ ... } >&2` diagnostic group inside `if [ \"${call_rc}\" -ne 0 ]; then`)\n  Problem: The diagnostic commands (`opencode_strip_ansi < \"${log_output}\" | tail -n 120`, `cat \"${clean_output}.jsonl\"`, and `cat \"${config_path}\"`) run without any failure guard, while the step runs under `set -euo pipefail`. The immediately preceding `opencode_emit_failure_alert` call is deliberately guarded with `|| true`, but the new diagnostic block is not.\n  Why it fails at runtime: `run_smoke_call` is consumed through process substitution (`IFS=$'\\t' read -r ... < <(run_smoke_call ...)`). When the diagnostic block aborts the subshell, `read` receives EOF and returns non-zero; under `set -e` the whole live-smoke script then exits immediately. That truncates the run before the remaining configured model entries are exercised and before the final step-summary table and `exit 1` path run. A diagnostic failure, which should be best-effort, instead escalates into a truncated smoke run.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/opencode-live-smoke.yml\n  Line or code reference: lines 157-162 (the reasoning-evidence gate `jq -s -e 'any(.[]; .type == \"step_finish\" and ((.part.tokens.reasoning // 0) > 0))'`)\n  Problem: Two `live-smoke` check-runs on the PR head SHA are failing with `FAIL_no_reasoning_usage` (editor-primary/writer on openai/gpt-5.6-sol call 2, and reviewer-3 deepseek/deepseek-v4-pro call 1). Verified against the check-run log_tail: opencode completed the call (rc=0, text \"OK\") but reported `tokens.reasoning: 0` at the xhigh variant, so the gate at line 157 trips.\n  Why it fails at runtime: The gate requires any xhigh call to return provider-reported reasoning usage > 0; upstream returned zero reasoning tokens, so every entry whose event stream reports reasoning=0 is marked failed and the job exits 1.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "b3c1a519f84c6944d6c29d9516bbaa17c86a9ade8812620f54522d5958365579",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33132940769",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33132940769",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260828015714_1912496c05",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33132940769"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-28T01:57:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
