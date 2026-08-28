@@ -31,7 +31,13 @@ APPLY_FIXES_SH = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 
 
 def _init_clean_repo(tmp_path: Path) -> None:
-	subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+	import os
+	clean_git_env = os.environ.copy()
+	for key in ("BASH_ENV", "ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "WORKSPACE_PATH"):
+		clean_git_env.pop(key, None)
+	clean_git_env["PWD"] = str(tmp_path)
+	clean_git_env.pop("OLDPWD", None)
+	subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, env=clean_git_env, check=True)
 	# Test-local config only: disable signing + gpg inside this throwaway
 	# repo so environments that mandate signed commits still let the
 	# fixture boot (the repo is never pushed anywhere).
@@ -42,12 +48,13 @@ def _init_clean_repo(tmp_path: Path) -> None:
 		("tag.gpgsign", "false"),
 		("gpg.format", "openpgp"),
 	):
-		subprocess.run(["git", "config", key, val], cwd=tmp_path, check=True)
+		subprocess.run(["git", "config", key, val], cwd=tmp_path, env=clean_git_env, check=True)
 	(tmp_path / "placeholder").write_text("seed\n", encoding="utf-8")
-	subprocess.run(["git", "add", "placeholder"], cwd=tmp_path, check=True)
+	subprocess.run(["git", "add", "placeholder"], cwd=tmp_path, env=clean_git_env, check=True)
 	subprocess.run(
 		["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "seed"],
 		cwd=tmp_path,
+		env=clean_git_env,
 		check=True,
 	)
 
@@ -55,6 +62,10 @@ def _init_clean_repo(tmp_path: Path) -> None:
 def _run_shim(tmp_path: Path, summary: Path, committed_files: Path | None = None) -> str:
 	import os
 	env = os.environ.copy()
+	for key in ("BASH_ENV", "ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "WORKSPACE_PATH"):
+		env.pop(key, None)
+	env["PWD"] = str(tmp_path)
+	env.pop("OLDPWD", None)
 	if committed_files is None:
 		env.pop("COMMITTED_FILES_FILE", None)
 	else:
@@ -380,6 +391,15 @@ def test_apply_fixes_contains_editor_input_authority_contract() -> None:
 	assert "CONSOLIDATOR_OVERRIDDEN: <issue_id> — <reason>" in contents
 	assert "CONSOLIDATOR_OVERRIDDEN: no-issue-id — <reason>" in contents
 	assert 'Place that bullet inside "Ignored suggestions (with short reason):"' in contents
+
+
+def test_apply_fixes_uses_opencode_writer_with_fresh_prompt_fallback() -> None:
+	contents = APPLY_FIXES_SH.read_text(encoding="utf-8")
+	assert 'opencode_run_cmd "$@"' in contents
+	assert 'writer\n    "${editor_attempt_model}"' in contents
+	assert '--model "${editor_attempt_model}"' in contents
+	assert "CODEX_THREAD_REUSE_ENABLED requested; OpenCode editor uses the fresh full-prompt path." in contents
+	assert "exec codex " not in contents
 
 
 def test_workflow_uses_defense_in_depth_shim() -> None:

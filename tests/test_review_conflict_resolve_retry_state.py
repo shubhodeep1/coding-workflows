@@ -382,6 +382,12 @@ def test_review_autofix_wires_escape_threshold_and_failure_comment_suppression()
 	assert body.index("Post partial finalize comment and persist runtime marker") < body.index(
 		"Post review-blocked comment on PR (workflow failure)"
 	)
+	assert "Install Codex CLI" not in body
+	assert "Create Codex config" not in body
+	assert 'opencode_run_cmd "$@"' in resolve_body
+	assert 'writer\n    "${MODEL_EDITOR}"' in resolve_body
+	assert '"${_current_reasoning_effort}"' in resolve_body
+	assert "CODEX_THREAD_REUSE_ENABLED requested; OpenCode conflict resolver uses the fresh full-prompt path." in resolve_body
 
 
 def test_resolve_script_baseline_fallback_and_comment_gate_contract() -> None:

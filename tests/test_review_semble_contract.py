@@ -273,7 +273,7 @@ def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() 
 	assert 'echo "SERENA_PROJECT_PREEXISTED=true" >> "$GITHUB_ENV"' in detect_serena_block
 	assert 'echo "SERENA_PROJECT_PREEXISTED=false" >> "$GITHUB_ENV"' in detect_serena_block
 	assert workflow.find("- name: Run reviewer models") < workflow.find("- name: Setup Serena for editor") < workflow.find("- name: Apply fixes with editor model")
-	assert workflow.find("- name: Create Codex config") < workflow.find("- name: Setup Serena for editor")
+	assert workflow.find("- name: Build semble index") < workflow.find("- name: Setup Serena for editor")
 	assert workflow.find("- name: Detect preexisting Serena project config") < workflow.find("- name: Setup Serena for editor")
 	assert workflow.find("- name: Apply fixes with editor model") < workflow.find("- name: Clear Serena after editor") < workflow.find("- name: Prepare merge-conflict resolver prompt and pre-snapshot")
 
@@ -292,8 +292,8 @@ def test_reviewer_prompt_assembles_semble_context_in_dynamic_section_without_ser
 	assert 'cat "${REVIEWER_SEMBLE_CONTEXT_FILE}"' in assemble_block
 	assert 'cat "${extra_context_file}"' in assemble_block
 	assert assemble_block.index('cat "${prompt_body_file}"') < assemble_block.index('cat "${REVIEWER_SEMBLE_CONTEXT_FILE}"') < assemble_block.index('cat "${extra_context_file}"')
-	assert 'cp -r "${CODEX_HOME}/." "${reviewer_codex_home}/"' in reviewers
-	assert 'export CODEX_HOME="${reviewer_codex_home}"' in reviewers
+	assert 'bash "${OPENCODE_CONFIG_WRITER_PATH}" \\' in reviewers
+	assert 'opencode_run_cmd "$@"' in reviewers
 	assert "SERENA_TOOL_HINTS" not in reviewers
 	assert "setup_serena.sh" not in reviewers
 	assert workflow.find("- name: Run reviewer models") < workflow.find("- name: Setup Serena for editor")

@@ -62,8 +62,8 @@ def test_smoke_test_reasoning_split() -> None:
 	wf = _workflow()
 	assert 'REVIEWER_REASONING_EFFORT=low' in wf
 	assert 'EDITOR_REASONING_EFFORT=medium' in wf
-	# The reviewer-config sed still patches to low; editor re-patches separately.
-	assert 'model_reasoning_effort = "low"' in wf
+	# OpenCode receives both values as per-call variants; no shared config is patched.
+	assert 'model_reasoning_effort = "low"' not in wf
 	# Ensure the old all-low assignment is gone.
 	assert 'EDITOR_REASONING_EFFORT=low' not in wf
 
@@ -77,7 +77,7 @@ def test_no_pr_claude_branch_review_uses_lightweight_reviewer_profile() -> None:
 	assert "head -n 3" in block
 	assert "REVIEWER_MODELS<<__NO_PR_REVIEWER_MODELS__" in block
 	assert "printf '%s\\n' \"${reviewer_models[@]}\"" in block
-	assert 'sed -i \'s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*".*"/model_reasoning_effort = "low"/\' ~/.codex/config.toml' in block
+	assert ".codex/config.toml" not in block
 	assert 'CLAUDE_BRANCH_REVIEW_LIGHT_PROFILE mode=no_pr reviewer_reasoning=low reviewer_two_pass=false reviewer_count=${#reviewer_models[@]}' in block
 
 
@@ -91,10 +91,10 @@ def test_check_runs_wait_timeout_default_and_fallback_are_aligned() -> None:
 	assert "DEFAULT_WAIT_TIMEOUT_SECS = 900" not in helper
 
 
-def test_editor_switch_replaces_any_reasoning_value() -> None:
-	wf = _workflow()
-	assert 'sed -i "s/^model_reasoning_effort = \\".*\\"/model_reasoning_effort = \\"${EDITOR_REASONING_EFFORT}\\"/" ~/.codex/config.toml' in wf
-	assert 'sed -i "s/model_reasoning_effort = \\"${REVIEWER_REASONING_EFFORT}\\"/model_reasoning_effort = \\"${EDITOR_REASONING_EFFORT}\\"/" ~/.codex/config.toml' not in wf
+def test_editor_switch_documents_opencode_variant_without_mutation() -> None:
+	block = _step_block("Switch reasoning effort for editor")
+	assert "OpenCode editor attempts use reasoning variant ${EDITOR_REASONING_EFFORT}" in block
+	assert ".codex/config.toml" not in block
 
 
 def test_conflict_resolver_reasoning_env_wired() -> None:
@@ -111,6 +111,5 @@ def test_conflict_resolver_reasoning_env_wired() -> None:
 	# — `low` is not a documented level and must not be silently accepted.
 	assert "xhigh|high|medium|none)" in resolver_script
 	assert "xhigh|high|medium|low|none" not in resolver_script
-	# grep/sed must tolerate whitespace + unquoted variants so a non-canonical
-	# config doesn't silently no-op and leave the resolver on stale `none`.
-	assert "[[:space:]]*model_reasoning_effort[[:space:]]*=" in resolver_script
+	assert '"${_current_reasoning_effort}"' in resolver_script
+	assert 'opencode_run_cmd "$@"' in resolver_script

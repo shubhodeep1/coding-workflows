@@ -18,9 +18,8 @@ none) on every consecutive timeout-classified retry.  These
 tests pin three contracts at the source level:
 
   1. `_apply_resolver_reasoning_effort` and
-     `_next_lower_reasoning_effort` are defined and exercised
-     against the codex config file (`_codex_config`) — the
-     ladder cannot work without both helpers.
+     `_next_lower_reasoning_effort` are defined and the selected level is
+     passed to OpenCode as the per-attempt variant.
   2. The retry loop's step-down block is gated on
      `_prev_attempt_failure_kind == "timeout"` (so non-timeout
      failure kinds — exec_error, validation — do not falsely
@@ -53,25 +52,20 @@ def _resolve_script_text() -> str:
 	return RESOLVE_SCRIPT.read_text(encoding="utf-8")
 
 
-def test_apply_helper_defined_and_uses_codex_config() -> None:
-	"""`_apply_resolver_reasoning_effort` must exist and operate on
-	the validated `_codex_config` path. Without this helper the
-	retry loop cannot rewrite the reasoning level between
-	attempts, defeating the whole step-down."""
+def test_apply_helper_defined_and_selects_opencode_variant() -> None:
+	"""The compatibility helper must validate and select the next variant."""
 	src = _resolve_script_text()
 	assert "_apply_resolver_reasoning_effort()" in src, (
 		"scripts/review_conflict_resolve.sh must define "
 		"`_apply_resolver_reasoning_effort()` so the retry loop "
-		"can re-rewrite ~/.codex/config.toml with a new reasoning "
-		"level between attempts.  If this helper is gone, "
+		"can select a new OpenCode variant between attempts. If this helper is gone, "
 		"step-down silently no-ops and we regress to the "
 		"pre-step-down behaviour of retrying at the same level."
 	)
-	# The helper must touch _codex_config — otherwise it could not
-	# affect the next codex invocation.
+	# The helper must update the tracker consumed by the OpenCode command.
 	apply_idx = src.find("_apply_resolver_reasoning_effort()")
 	# Bound the slice by the next top-level function header so an
-	# accidental capture of unrelated _codex_config references
+	# accidental capture of unrelated tracker references
 	# elsewhere in the file does not satisfy the contract.
 	end_marker = "\n_next_lower_reasoning_effort()"
 	end_idx = src.find(end_marker, apply_idx)
@@ -81,10 +75,9 @@ def test_apply_helper_defined_and_uses_codex_config() -> None:
 		"refactored, update this test's slicing anchor."
 	)
 	body = src[apply_idx:end_idx]
-	assert "${_codex_config}" in body, (
-		"`_apply_resolver_reasoning_effort()` must read/write "
-		"${_codex_config}; otherwise it cannot affect the next "
-		"codex invocation."
+	assert '_current_reasoning_effort="${_arr_level}"' in body, (
+		"`_apply_resolver_reasoning_effort()` must update the current "
+		"reasoning tracker consumed by OpenCode."
 	)
 	# Defence-in-depth: the helper must validate its input against
 	# the same xhigh|high|medium|none allowlist used at startup,
@@ -96,6 +89,12 @@ def test_apply_helper_defined_and_uses_codex_config() -> None:
 		"allowlist before interpolating into sed — same defence "
 		"applied to CONFLICT_RESOLVER_REASONING_EFFORT at startup."
 	)
+	command_idx = src.index("resolver_opencode_cmd=(")
+	command_body = src[command_idx:command_idx + 600]
+	assert "writer" in command_body
+	assert '"${_current_reasoning_effort}"' in command_body
+	assert '"${RESOLVER_OPENCODE_CONFIG}"' in command_body
+	assert ".codex/config.toml" not in body
 
 
 def test_next_lower_helper_defined() -> None:
@@ -114,8 +113,8 @@ def test_initial_apply_call_uses_current_effort_tracker() -> None:
 	"""The once-per-step prelude must seed `_current_reasoning_effort`
 	from the validated env-provided level AND call the helper.
 	If either is missing, the retry loop's step-down has nothing
-	to start from and the initial codex invocation runs with
-	whatever reasoning the editor step left in place."""
+	to start from and the initial OpenCode invocation runs with the wrong
+	variant."""
 	src = _resolve_script_text()
 	assert '_current_reasoning_effort="${_resolver_reasoning_effort}"' in src, (
 		"`_current_reasoning_effort` must be seeded from the "
@@ -174,9 +173,9 @@ def test_loop_step_down_is_gated_on_timeout_failure_kind() -> None:
 		"with the current level — passing a stale literal would "
 		"not advance the ladder on consecutive timeouts."
 	)
-	assert '_apply_resolver_reasoning_effort "${_current_reasoning_effort}"' in tail, (
+	assert '_apply_resolver_reasoning_effort "${_next_level}"' in tail, (
 		"Step-down block must re-apply the new level via "
-		"`_apply_resolver_reasoning_effort` so the next codex "
+		"`_apply_resolver_reasoning_effort` so the next OpenCode "
 		"invocation actually picks it up."
 	)
 	# Floor-handling: the block must log a distinct message when
@@ -251,7 +250,7 @@ def main() -> int:
 	ci.yml, mark-stable.yml, and test-and-mark-stable.yml) without
 	requiring pytest on the runner. Mirrors the sibling
 	test_review_conflict_resolve_retry_prelude_render.py shape."""
-	test_apply_helper_defined_and_uses_codex_config()
+	test_apply_helper_defined_and_selects_opencode_variant()
 	test_next_lower_helper_defined()
 	test_initial_apply_call_uses_current_effort_tracker()
 	test_loop_step_down_is_gated_on_timeout_failure_kind()

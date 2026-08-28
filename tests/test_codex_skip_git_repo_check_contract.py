@@ -47,6 +47,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPER = REPO_ROOT / "scripts" / "codex_thread_reuse.sh"
 DISCOVERY_BOOTSTRAP = REPO_ROOT / "scripts" / "validation_discovery_bootstrap.py"
+REVIEW_AUTOFIX = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+P3_REVIEW_SCRIPTS = (
+	"review_apply_fixes.sh",
+	"review_rb_judge.sh",
+	"review_consolidate.sh",
+	"review_conflict_resolve.sh",
+)
 
 # A fully-specified codex invocation on one logical shell / YAML command line:
 # after reassembling backslash-continued physical lines, the command must
@@ -167,6 +174,18 @@ def test_all_codex_exec_invocations_skip_git_repo_check() -> None:
 		"'Not inside a trusted directory' in the worktree workspace):\n"
 		+ "\n".join(violations)
 	)
+
+
+def test_review_autofix_write_side_has_no_codex_runtime() -> None:
+	workflow = REVIEW_AUTOFIX.read_text(encoding="utf-8")
+	assert "Install Codex CLI" not in workflow
+	assert "Create Codex config" not in workflow
+	assert "write_codex_config.sh" not in workflow
+	assert "command -v codex" not in workflow
+	assert ".codex/config.toml" not in workflow
+	for script_name in P3_REVIEW_SCRIPTS:
+		text = (REPO_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+		assert not _INVOCATION.search(" ".join(text.splitlines())), script_name
 
 
 
