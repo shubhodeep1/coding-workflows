@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:1826, 1830, 1845 | severity=low | confidence=5\n  flagged_by: [moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The judge-fix stall-handling warning messages still identify the fix agent as \"codex\" even though the fix stage now runs via OpenCode.\n  WHY: During a stall-guard kill, the operator-facing warning names the wrong agent and can misdirect failure triage; the \"codex stall guard\" helper identifier remains intentionally compatible, but the \"fix codex\" wording should reference OpenCode or agent.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/review_rb_judge.sh\n  Line or code reference: lines 1826, 1830, 1845 \u2014 the judge-fix stall-handling echo messages (\"Review-blocked fix codex recorded codex_stall_observed/killed\" and \"Review-blocked fix codex was killed by codex stall guard; skipping commit/merge and falling back to manual intervention.\")\n  Problem: This PR renamed the sibling judge-fix messages to the OpenCode convention (\"Fix OpenCode completed.\" at line 1819, \"Fix OpenCode failed for PR #...\" at line 1821, and \"Review-blocked fix OpenCode\" in the stall-state read call), but these three messages still name \"fix codex\" as the agent even though the fix stage now runs via `opencode_run_cmd`.\n  Why it fails at runtime: No execution failure; on a stall-guard kill of the judge-fix stage the operator-facing warning attributes the failure to Codex, sending triage toward a runtime that no longer exists in this workflow. The `codex_stall_guard` helper name itself is intentionally retained per the issue constraints; only the \"fix codex\" agent reference is stale. One-line wording alignment per message fixes it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_rb_judge.sh\n  Line or code reference: 1845\n  Problem: The warning message reads \"Review-blocked fix codex was killed by codex stall guard\" but the fix stage now runs via OpenCode. The sibling messages at lines 1819 and 1821 were renamed to \"Fix OpenCode completed.\" and \"Fix OpenCode failed for PR #...\" respectively by this PR, but line 1845 was missed.\n  Why it fails at runtime: During a stall-guard kill of the judge-fix path, the operator-facing warning names the wrong agent. While the \"codex stall guard\" helper identifier is intentionally retained for compatibility, the \"fix codex\" phrase should reference \"OpenCode\" or \"agent\" to match the PR's own convention and avoid misleading failure triage in the exact path where this warning is the primary diagnostic.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "6c18e8c5d384eadee1792be103cdfd39f5b33fae38ff422b9f03f352fad273ed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3867,
+    "run_id": "33173925383",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33173925383",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260828143301_e0493beb5d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3867,
+    "run_id": "33173925383"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-28T14:33:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
