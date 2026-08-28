@@ -2921,6 +2921,25 @@ def test_review_preflight_missing_opencode_binary_emits_classified_error() -> No
 		assert telegram_capture.read_text(encoding="utf-8") == f"{stable_alert}|ERROR\n"
 		assert not codex_capture.exists(), "preflight must not invoke Codex"
 
+		(support_dir / "opencode_helpers.sh").unlink()
+		telegram_capture.write_text("", encoding="utf-8")
+		(bin_dir / "opencode").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+		(bin_dir / "opencode").chmod(0o755)
+		preflight_helpers_missing_result = subprocess.run(
+			["/usr/bin/bash", "-c", _step_run_script('"Preflight: Verify required files before reviewer invocation"')],
+			cwd=workspace,
+			env=env,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+
+		preflight_helpers_missing_alert = "opencode_agent_failure phase=review_autofix_preflight role=reviewer model=minimax/minimax-m3 rc=1 failure_class=helpers_missing"
+		assert preflight_helpers_missing_result.returncode == 1, preflight_helpers_missing_result
+		assert preflight_helpers_missing_result.stderr.strip() == preflight_helpers_missing_alert
+		assert telegram_capture.read_text(encoding="utf-8") == f"{preflight_helpers_missing_alert}|ERROR\n"
+		assert not codex_capture.exists(), "preflight helper failure must not invoke Codex"
+
 
 def test_reviewer_missing_opencode_helpers_emits_classified_error() -> None:
 	with tempfile.TemporaryDirectory(prefix="reviewers-opencode-helpers-missing-") as td:
