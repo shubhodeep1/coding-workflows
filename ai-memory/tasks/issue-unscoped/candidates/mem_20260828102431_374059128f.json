@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:line 4 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The command fallback adopts the first whitespace-separated token verbatim, so environment-assignment prefixes such as `FOO=bar` become the command target.\n  WHY: For entries such as `FOO=bar pytest`, `command -v \"FOO=bar\"` fails although the real command is on PATH, leaving the container unhealthy and aborting validation.\n- tests/test_family_python_repo_checks.py:line 167, line 171 | severity=high | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The `(\"python -m pytest\", None)` test case depends on a host `python` executable rather than the repo-standard `python3`.\n  WHY: On environments with `python3` but no `python` shim, the simulated healthcheck fails; severity was reported as NIT by three reviewers and MAJOR by one.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:line 4 (the token loop; specifically `[ -n \"$$_repo_check_health_command\" ] || _repo_check_health_command=$$_repo_check_health_token` followed by the trailing `command -v \"$$_repo_check_health_command\"` fallback) | severity=high | confidence=4\n  PROBLEM: The command fallback takes the first whitespace-separated token of `entry` verbatim as the command target, without skipping a leading environment-assignment token (`NAME=value`).\n  WHY: For `FOO=bar pytest` or `FOO=bar sh`, `_repo_check_health_command` becomes `FOO=bar`, `command -v \"FOO=bar\"` fails, and validation aborts as `harness_error` before repo checks execute.\n- tests/test_family_python_repo_checks.py:line 171, test parameter `(\"python -m pytest\", None)` in `test_python_repo_checks_command_style_entry_renders_healthy_healthcheck` | severity=low | confidence=3\n  PROBLEM: The test depends on a host `python` executable.\n  WHY: On a runner with `python3` but no `python` symlink, the simulated healthcheck fails.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:line 4, the loop clause `[ -n \"$$_repo_check_health_command\" ] || _repo_check_health_command=$$_repo_check_health_token` together with the trailing `command -v \"$$_repo_check_health_command\"` fallback | severity=high | confidence=4\n  PROBLEM: The first whitespace token of `_repo_check_health_entry` is unconditionally adopted as the command target, including env-var assignment prefixes and option-flag tokens.\n  WHY: `FOO=bar sh` produces `_repo_check_health_command=FOO=bar`; the final `command -v \"FOO=bar\"` returns rc=1 and the app container stays unhealthy.\n- tests/test_family_python_repo_checks.py:line 171 inside `test_python_repo_checks_command_style_entry_renders_healthy_healthcheck`, the tuple entry `(\"python -m pytest\", None)` | severity=high | confidence=3\n  PROBLEM: The command-only test depends on a host `python` executable.\n  WHY: `_simulate_healthcheck` runs `/bin/sh -c` on the test host, so environments lacking a `python` shim fail the assertion.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:line 4 (the `_repo_check_healthcheck` block), specifically `[ -n \"$$_repo_check_health_command\" ] || _repo_check_health_command=$$_repo_check_health_token` and the trailing `command -v \"$$_repo_check_health_command\"` fallback | severity=high | confidence=4\n  PROBLEM: The command fallback captures the first whitespace token verbatim, so an env-assignment prefix such as `FOO=bar` becomes the command target.\n  WHY: `command -v \"FOO=bar\"` fails even though the real command is on PATH, leaving the container unhealthy and aborting validation.\n- tests/test_family_python_repo_checks.py:line 167, test parameter `(\"python -m pytest\", None)` inside `test_python_repo_checks_command_style_entry_renders_healthy_healthcheck` | severity=low | confidence=3\n  PROBLEM: The `None` branch depends on a `python` executable existing on PATH.\n  WHY: On a minimal environment lacking the `python` symlink, the simulation fails although the repository consistently uses `python3`.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:line 4, the `_repo_check_health_command` assignment (`[ -n \"$$_repo_check_health_command\" ] || _repo_check_health_command=$$_repo_check_health_token`) and trailing `command -v \"$$_repo_check_health_command\"` fallback | severity=low | confidence=4\n  PROBLEM: The command-target fallback assigns the first whitespace token verbatim, including env-var assignment prefixes like `FOO=bar`.\n  WHY: For `FOO=bar pytest` or `FOO=bar sh`, `command -v \"FOO=bar\"` fails and the container stays unhealthy.\n- tests/test_family_python_repo_checks.py:line 171, test parameter `(\"python -m pytest\", None)` in `test_python_repo_checks_command_style_entry_renders_healthy_healthcheck` | severity=low | confidence=3\n  PROBLEM: The test asserts the simulated healthcheck for `python -m pytest`, requiring `python` on the host PATH.\n  WHY: If `python` is unavailable, `command -v python` fails even though the healthcheck logic is correct.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "b33e48f0972f9ad1ce0b623b49e3088db7eb1cabaa7ef9d94365656a92a96aa5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3862,
+    "run_id": "33157932694",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33157932694",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260828102431_374059128f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3862,
+    "run_id": "33157932694"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-28T10:24:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
