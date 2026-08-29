@@ -488,6 +488,20 @@ def test_render_prompt_py_fails_open_on_missing_reference_in_untrusted_assembled
 			capture_output=True,
 			timeout=60,
 		)
+		body_file.write_text(f"Trusted template line: {unresolvable_token}\n", encoding="utf-8")
+		skip_only_proc = subprocess.run(
+			[
+				sys.executable,
+				str(render_script),
+				str(body_file),
+				"--skip-syntax-validation",
+			],
+			cwd=str(repo_root),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
 
 	assert proc.returncode == 0, proc.stderr
 	assert proc.stdout == (
@@ -500,6 +514,8 @@ def test_render_prompt_py_fails_open_on_missing_reference_in_untrusted_assembled
 	assert "REFERENCE_SECURITY_MONEY_LENS" in proc.stderr
 	assert "unsupported reference placeholder" in proc.stderr
 	assert "WARNING" in proc.stderr
+	assert skip_only_proc.returncode == 1
+	assert "Reference file for placeholder 'REFERENCE_SECURITY_MONEY_LENS' not found" in skip_only_proc.stderr
 
 
 def test_render_prompt_py_reports_unknown_placeholder_contract_violation() -> None:
@@ -1255,6 +1271,7 @@ def main() -> int:
 	test_render_prompt_py_renders_reference_placeholders_and_mode_specific_append()
 	test_render_prompt_py_reports_missing_append_in_untrusted_assembled_body()
 	test_render_prompt_py_reports_missing_reference_file()
+	test_render_prompt_py_fails_open_on_missing_reference_in_untrusted_assembled_body()
 	test_render_prompt_py_reports_unknown_placeholder_contract_violation()
 	test_render_prompt_py_renders_security_audit_mode_contract()
 	test_render_prompt_py_rejects_unsupported_placeholder_expression()

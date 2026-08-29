@@ -10,8 +10,8 @@ Run 33245886964 killed all reviewers in the `Run reviewer models` step because t
 | Behaviour on missing reference (untrusted body) | warn + render token verbatim |
 | Behaviour on missing reference (trusted template) | unchanged hard failure |
 
-What this means for operators: a docs-only or plan PR that merely mentions a future `{{REFERENCE_*}}` placeholder no longer takes down its own review_autofix run; the token passes through to the reviewer prompt as plain text.
+What this means for operators: a docs-only or plan PR that merely mentions a future `REFERENCE_*` placeholder no longer takes down its own review_autofix run; the token passes through to the reviewer prompt as plain text.
 
 ### For contributors
 
-`hydrate_reference_placeholders()` gained a `strict` keyword (default `True`); `main()` passes `strict=not args.skip_syntax_validation`, mirroring how include resolution already keys leniency off the same flag. Regression test: `test_render_prompt_py_fails_open_on_missing_reference_in_untrusted_assembled_body`.
+`hydrate_reference_placeholders()` gained a `strict` keyword (default `True`); `main()` enables leniency only when both `--input-already-assembled` and `--skip-syntax-validation` identify an untrusted assembled body. Regression test: `test_render_prompt_py_fails_open_on_missing_reference_in_untrusted_assembled_body`.

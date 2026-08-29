@@ -1379,16 +1379,16 @@ def main(argv: list[str] | None = None) -> int:
 		else:
 			effective_values = dict(legacy_env_values)
 			effective_values.update(provided_values)
-		# --skip-syntax-validation is the untrusted-assembled-body marker (see
-		# the include-resolution comment above); on that path a missing
-		# reference file must fail open, because the placeholder may be the
-		# embedded PR-diff's own text rather than a real template directive.
+		# The two flags together mark an untrusted assembled body (see the
+		# include-resolution comment above); only on that path may a missing
+		# reference file fail open, because the placeholder may be embedded
+		# PR-diff text rather than a real template directive.
 		effective_values = hydrate_reference_placeholders(
 			prompt_text=prompt_text,
 			prompt_path=prompt_path,
 			mode_name=mode_name,
 			values=effective_values,
-			strict=not args.skip_syntax_validation,
+			strict=not (args.input_already_assembled and args.skip_syntax_validation),
 		)
 		prompt_text = apply_identity_recall(prompt_text, prompt_path=prompt_path, mode_name=mode_name)
 		prompt_text = apply_phase_c_persona_prefix(prompt_text, prompt_path=prompt_path, mode_name=mode_name)
