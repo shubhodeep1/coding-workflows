@@ -1542,15 +1542,16 @@ jobs:
               printf '%s\n' "${template_path_candidate}" >> "${TEMPLATE_PATH_BLOCKED_FILE}"
               continue
             fi
-            fetched_script_name="${template_path_candidate#scripts/}"
-            if [ -z "${fetched_script_name}" ] || [ "${fetched_script_name}" = "${template_path_candidate}" ]; then
+            normalized_template_path_candidate="$(PYTHONDONTWRITEBYTECODE=1 python3 -c 'import posixpath, sys; print(posixpath.normpath(sys.argv[1]))' "${template_path_candidate}")"
+            fetched_script_name="${normalized_template_path_candidate#scripts/}"
+            if [ -z "${fetched_script_name}" ] || [ "${fetched_script_name}" = "${normalized_template_path_candidate}" ]; then
               # A bare `scripts/` reference names no specific file; keep the
               # conservative rejection rather than guessing.
               printf '%s\n' "${template_path_candidate}" >> "${TEMPLATE_PATH_BLOCKED_FILE}"
               continue
             fi
-            if [ "${template_path_candidate}" = "scripts/templates/serena_project.yml.j2" ] && \
-               git ls-files --error-unmatch -- "${template_path_candidate}" >/dev/null 2>&1; then
+            if [ "${normalized_template_path_candidate}" = "scripts/templates/serena_project.yml.j2" ] && \
+               git ls-files --error-unmatch -- "${normalized_template_path_candidate}" >/dev/null 2>&1; then
               continue
             fi
             while IFS= read -r fetched_ignore_entry; do

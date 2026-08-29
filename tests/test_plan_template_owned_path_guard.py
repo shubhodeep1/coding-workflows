@@ -128,9 +128,11 @@ def _plan_listing(path: str) -> str:
 		# deadlocked validation fix-up projects (the consumer could never plan
 		# a fix for its own validation entry script).
 		"scripts/run_validation_repo_checks.sh",
+		"scripts/./run_validation_repo_checks.sh",
 		# implement.yml's own comment cites this as a consumer-owned file the
 		# blanket exclusion wrongly blocked.
 		"scripts/security/check-npm-audit.js",
+		"scripts//security/check-npm-audit.js",
 	],
 )
 def test_consumer_owned_scripts_are_allowed(path: str) -> None:
@@ -156,6 +158,8 @@ def test_similarly_prefixed_root_files_are_allowed(path: str) -> None:
 	"path",
 	[
 		"scripts/render_prompt.sh",
+		"scripts/./render_prompt.sh",
+		"scripts//render_prompt.sh",
 		"scripts/gh_helpers.sh",
 		# Regression: this implement-only helper is absent from FETCHED_HELPERS,
 		# so reading plan.yml's scripts/.gitignore alone would allow it.
