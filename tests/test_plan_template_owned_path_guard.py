@@ -245,8 +245,10 @@ def test_missing_scripts_gitignore_falls_back_to_blanket_rejection() -> None:
 @pytest.mark.parametrize("path", ["scripts", "scripts/"])
 def test_bare_scripts_directory_reference_is_rejected(path: str) -> None:
 	"""A bare scripts directory reference names no file, so stay conservative."""
-	returncode, _ = _run_guard(_plan_listing(path), FETCHED_HELPERS)
+	returncode, output = _run_guard(_plan_listing(path), FETCHED_HELPERS)
 	assert returncode == 1
+	assert path in output
+	assert "falling back to blanket scripts/ rejection" not in output
 
 
 def test_prose_mention_outside_files_section_is_allowed() -> None:
