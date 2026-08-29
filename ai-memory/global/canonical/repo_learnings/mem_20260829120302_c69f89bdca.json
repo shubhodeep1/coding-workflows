@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "OpenRouter prompt-cache and workflow telemetry code are shared infrastructure used by multiple operational paths.",
   "timestamps": {
     "created_at": "2026-08-29T12:03:02Z",
