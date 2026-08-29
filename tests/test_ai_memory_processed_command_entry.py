@@ -1699,6 +1699,77 @@ def test_push_retries_env_default_override_and_validation() -> None:
 			os.environ["AI_MEMORY_PUSH_RETRIES"] = original
 
 
+def _run_memory_helper_with_failing_cli(command: str) -> subprocess.CompletedProcess[str]:
+	"""Run a memory helper under the workflow's own `set -euo pipefail` shell.
+
+	`MEMORY_SCRIPTS_DIR` is repointed at a stub `ai_memory.py` that exits
+	non-zero, so the test exercises the wrapper's failure path rather than the
+	real CLI.  `STEP-REACHED-END` is echoed after the helper: it appears in
+	stdout only when the helper let the step continue.
+	"""
+	stub_dir = Path(tempfile.mkdtemp(prefix="memory-helper-stub-"))
+	globals().setdefault("_TEST_CLEANUP_PATHS", []).append(stub_dir)
+	(stub_dir / "ai_memory.py").write_text(
+		"import sys\n"
+		"print('AI_MEMORY_ERROR: Memory branch rebase failed while retrying push', file=sys.stderr)\n"
+		"sys.exit(2)\n",
+		encoding="utf-8",
+	)
+	script = (
+		"set -euo pipefail\n"
+		"source scripts/memory_helpers.sh\n"
+		f'MEMORY_SCRIPTS_DIR="{stub_dir}"\n'
+		f"{command}\n"
+		"echo STEP-REACHED-END\n"
+	)
+	return subprocess.run(
+		["bash", "-c", script],
+		cwd=REPO_ROOT,
+		text=True,
+		capture_output=True,
+		check=False,
+		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+
+
+def test_memory_finalize_task_fails_open_when_cli_fails() -> None:
+	"""A losing ai-memory writer must not turn a successful run red.
+
+	`implement.yml` calls `memory_finalize_task` only after the PR already
+	exists, under `set -euo pipefail`.  The shared ai-memory branch is written
+	concurrently by several workflows, so a rebase conflict there is routine;
+	propagating it marked a run that had already pushed its branch and opened
+	its PR as `failure`, firing a false failure comment and Telegram alert.
+	"""
+	result = _run_memory_helper_with_failing_cli(
+		"memory_finalize_task --issue-number 3833 --final-state in_progress"
+	)
+	assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
+	assert "STEP-REACHED-END" in result.stdout, result.stdout
+	assert "::warning::memory finalize-task failed (fail-open)" in result.stderr, result.stderr
+	assert '"op":"finalize-task"' in result.stderr, result.stderr
+	assert '"fail_open":true' in result.stderr, result.stderr
+
+
+def test_memory_post_pr_bookkeeping_helpers_all_fail_open() -> None:
+	"""Every post-PR ai-memory bookkeeping wrapper shares the fail-open contract.
+
+	These run after the PR exists and only record state, so none of them may
+	fail its calling step.  `memory_processed_command_claim` is deliberately
+	excluded: it is a mutual-exclusion gate whose failure must stop the caller.
+	"""
+	for command in (
+		"memory_finalize_task --issue-number 1 --final-state in_progress",
+		"memory_record_candidate --issue-number 1",
+		"memory_record_run_event --issue-number 1",
+		"memory_processed_command_complete --issue-number 1",
+	):
+		result = _run_memory_helper_with_failing_cli(command)
+		helper_name = command.split(" ", 1)[0]
+		assert result.returncode == 0, (helper_name, result.returncode, result.stderr)
+		assert "STEP-REACHED-END" in result.stdout, (helper_name, result.stdout)
+
+
 def main() -> int:
 	test_cleanup_paths = globals().setdefault("_TEST_CLEANUP_PATHS", [])
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
