@@ -776,7 +776,7 @@ def hydrate_reference_placeholders(
 			# (reviewer/editor bodies carry raw PR-diff and comment text). A
 			# REFERENCE_* token collected from such a body may be the embedded
 			# content itself — e.g. a diff that documents the prompt-templating
-			# system with a literal {{REFERENCE_SECURITY_MONEY_LENS}} — with no
+			# system with a braced REFERENCE_SECURITY_MONEY_LENS token — with no
 			# matching prompts/references/ file. Leave it unhydrated so it
 			# renders verbatim like every other untrusted {{...}} token instead
 			# of hard-failing every reviewer (observed on run 33245886964).

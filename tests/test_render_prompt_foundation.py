@@ -434,10 +434,19 @@ def test_render_prompt_py_reports_missing_reference_file() -> None:
 
 def test_render_prompt_py_fails_open_on_missing_reference_in_untrusted_assembled_body() -> None:
 	"""An already-assembled body embedding untrusted PR-diff text can carry a
-	literal REFERENCE_* token with no matching reference file (e.g. a plan doc
-	documenting {{REFERENCE_SECURITY_MONEY_LENS}}; observed on run 33245886964).
-	On the --skip-syntax-validation path that token must render verbatim while
-	resolvable references still hydrate."""
+	literal braced REFERENCE_* token with no matching reference file (e.g. a
+	plan doc documenting a future REFERENCE_SECURITY_MONEY_LENS placeholder;
+	observed on run 33245886964). On the --skip-syntax-validation path that
+	token must render verbatim while resolvable references still hydrate.
+
+	The braced tokens below are built by concatenation so this test's own
+	source never contains a contiguous braced token: this file's diff gets
+	embedded in reviewer prompt bodies too, and until the fix under test is
+	on main the reviewing renderer would hard-fail on it (the recursion that
+	broke run 33246480829 — this fix's own PR).
+	"""
+	resolvable_token = "{{" + "REFERENCE_OUTPUT_CONTRACT" + "}}"
+	unresolvable_token = "{{" + "REFERENCE_SECURITY_MONEY_LENS" + "}}"
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_failopen_reference_") as td:
 		repo_root = Path(td)
 		body_file = repo_root / "reviewer_prompt_body.txt"
@@ -448,8 +457,8 @@ def test_render_prompt_py_fails_open_on_missing_reference_in_untrusted_assembled
 
 		body_file.write_text(
 			"Header\n"
-			"{{REFERENCE_OUTPUT_CONTRACT}}\n"
-			"Untrusted diff line: {{REFERENCE_SECURITY_MONEY_LENS}}\n"
+			f"{resolvable_token}\n"
+			f"Untrusted diff line: {unresolvable_token}\n"
 			"Footer\n",
 			encoding="utf-8",
 		)
@@ -475,7 +484,7 @@ def test_render_prompt_py_fails_open_on_missing_reference_in_untrusted_assembled
 	assert proc.stdout == (
 		"Header\n"
 		"Shared output block.\n"
-		"Untrusted diff line: {{REFERENCE_SECURITY_MONEY_LENS}}\n"
+		f"Untrusted diff line: {unresolvable_token}\n"
 		"Footer\n"
 	)
 	assert "REFERENCE_SECURITY_MONEY_LENS" in proc.stderr
