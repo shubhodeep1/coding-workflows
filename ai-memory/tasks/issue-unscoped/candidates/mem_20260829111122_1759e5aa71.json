@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:1482-1511 | severity=major | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603, qwen_qwen3_7-plus]\n  PROBLEM: The guard does not cover paths registered solely through FETCHED_MANIFEST, specifically scripts/templates/serena_project.yml.j2.\n  WHY: A plan targeting this path can pass the guard, after which implement removes it before commit, producing a silent no-op PR; severity disagreement: qwen_qwen3_7-plus rated this NIT.\n- .github/workflows/plan.yml:1467-1511 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The guard's case pattern for blocking bare directory tokens `.github/prompts` and `.github/scripts` is incomplete.\n  WHY: A plan listing `.github/prompts` or `.github/scripts` would proceed to implementation and be excluded by implement.yml's blanket directory exclusion, producing a silent no-op PR that never lands changes.\n- .github/workflows/plan.yml:1467-1511 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The fallback path for locating staged implement.yml checks only `.codex-workflow-src-main/.github/workflows/implement.yml` and does not check `.codex-workflow-src/.github/workflows/implement.yml` after the first attempt fails.\n  WHY: The guard may fail to locate an existing staged workflow and fall back to blanket rejection of scripts/ paths even when implement.yml exists under the canonical `.codex-workflow-src` path.\n- .github/workflows/plan.yml:1467-1511 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Bootstrap failures inside the Python harness do not emit the bootstrap-failure warning; only the else branch emits the warning.\n  WHY: Operators may be unable to distinguish bootstrap degradation from normal template-owned rejection, making debugging harder.\n- tests/test_plan_template_owned_path_guard.py:133-171 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The parametrized test cases allow similarly prefixed root files such as `.github/prompts.md` and `.github/scripts.yml`, but they do not include the bare directory tokens `.github/prompts` and `.github/scripts` (no trailing slash).\n  WHY: The test suite would miss regression coverage for the bare directory token case that the guard must reject.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/plan.yml\n  Line or code reference: The guard's Python helper-manifest parser at lines 1487-1500 (inside the heredoc `<<'PY'`)\n  severity=major | confidence=4\n  PROBLEM: The parser only extracts helper names from `for f in ...; do ... _fetched_scripts+=(\"${f}\") ... done` loops in the implement workflow's staging step and does not parse direct `echo \"...some_path...\" >> \"${FETCHED_MANIFEST}\"` lines.\n  WHY: `scripts/templates/serena_project.yml.j2` is absent from both the loop-extracted names and the plan-job gitignore, so a plan listing it passes the guard and implement.yml silently deletes the file from the commit.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/plan.yml\n  Code: lines 1467-1511 (guard logic)\n  confidence=4\n  PROBLEM: The guard's case pattern for blocking bare directory tokens `.github/prompts` and `.github/scripts` is incomplete.\n  WHY: A plan listing `.github/prompts` or `.github/scripts` would proceed to implementation and be excluded by implement.yml's blanket directory exclusion, producing a silent no-op PR that never lands changes.\n- .github/workflows/plan.yml\n  Code: lines 1467-1511 (fallback path)\n  confidence=4\n  PROBLEM: The fallback path for locating staged implement.yml checks only `.codex-workflow-src-main/.github/workflows/implement.yml` and does not check `.codex-workflow-src/.github/workflows/implement.yml` after the first attempt fails.\n  WHY: The guard may fail to locate an existing staged workflow and fall back to blanket rejection of scripts/ paths even when implement.yml exists under the canonical `.codex-workflow-src` path.\n- .github/workflows/plan.yml\n  Code: lines 1467-1511 (bootstrap failure handling)\n  confidence=4\n  PROBLEM: Bootstrap failures inside the Python harness do not emit the bootstrap-failure warning; only the else branch emits the warning.\n  WHY: Operators may be unable to distinguish bootstrap degradation from normal template-owned rejection, making debugging harder.\n- .github/workflows/plan.yml\n  Code: lines 1467-1511 (fetched paths coverage)\n  confidence=4\n  PROBLEM: The guard does not cover fetched paths registered solely through FETCHED_MANIFEST (e.g., scripts/templates/serena_project.yml.j2), while implement still deletes those paths before commit.\n  WHY: A plan listing such a fetched path would be allowed, while implement removes it, producing a silent no-op PR.\n- tests/test_plan_template_owned_path_guard.py\n  Code: lines 133-171 (test coverage)\n  confidence=4\n  PROBLEM: The parametrized test cases allow similarly prefixed root files such as `.github/prompts.md` and `.github/scripts.yml`, but they do not include the bare directory tokens `.github/prompts` and `.github/scripts` (no trailing slash).\n  WHY: The test suite would miss regression coverage for the bare directory token case that the guard must reject.\n- .github/workflows/plan.yml\n  Location: lines 1467-1511 (guard logic)\n  HARDENING_SUGGESTION: Missing defensive check for fetched paths registered solely through FETCHED_MANIFEST.\n  SUGGESTED_MINIMAL_FIX: Add a fallback blocklist entry for known FETCHED_MANIFEST paths (e.g., scripts/templates/serena_project.yml.j2) when FETCHED_SCRIPTS_IGNORE_FILE is empty or parsing fails.\n  HARDENING_RISK_SCORE: 3\n\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/plan.yml\n  Line or code reference: Guard step, Python parser section (lines 1482-1511)\n  severity=NIT | confidence=3\n  PROBLEM: The guard derives blocked helper names from implement.yml's `_fetched_scripts` loops and plan.yml's `scripts/.gitignore`, but does not cover paths registered solely through FETCHED_MANIFEST.\n  WHY: `scripts/templates/serena_project.yml.j2` is added to FETCHED_MANIFEST (implement.yml:979) but not to `_fetched_scripts`, so it is absent from both derivation sources; implement_commit_changes.sh would `rm -f` it before commit.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "a8bbb8937802295c44a4a674c42899bc243f7adb5747e7b3eda31f9d74a4fa35",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3880,
+    "run_id": "33246562953",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33246562953",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260829111122_1759e5aa71",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3880,
+    "run_id": "33246562953"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-29T11:11:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
