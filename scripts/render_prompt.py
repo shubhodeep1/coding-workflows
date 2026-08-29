@@ -765,13 +765,21 @@ def hydrate_reference_placeholders(
 			continue
 		if hydrated.get(placeholder_name, "") != "":
 			continue
-		try:
-			hydrated[placeholder_name] = _load_reference_placeholder_value(
-				prompt_path=prompt_path,
-				mode_name=mode_name,
-				placeholder_name=placeholder_name,
+		fail_open_reference_file_name = _reference_file_name_for_placeholder(placeholder_name)
+		if not strict and fail_open_reference_file_name is None:
+			print(
+				f"WARNING: reference placeholder '{placeholder_name}' left unhydrated: "
+				"unsupported reference placeholder (untrusted assembled body; fail-open)",
+				file=sys.stderr,
 			)
-		except PromptLoadError:
+			continue
+		if (
+			not strict
+			and fail_open_reference_file_name is not None
+			and discover_reference_path(prompt_path, fail_open_reference_file_name) is None
+		):
+			# Only a missing primary reference is benign here. Read failures and
+			# missing mode-specific append references still flow through the loader.
 			# strict=False marks a prompt body that embeds untrusted content
 			# (reviewer/editor bodies carry raw PR-diff and comment text). A
 			# REFERENCE_* token collected from such a body may be the embedded
@@ -781,13 +789,19 @@ def hydrate_reference_placeholders(
 			# renders verbatim like every other untrusted {{...}} token instead
 			# of hard-failing every reviewer (observed on run 33245886964).
 			# Resolvable references still hydrate on this path.
-			if strict:
-				raise
 			print(
 				f"WARNING: reference placeholder '{placeholder_name}' left unhydrated: "
-				f"no reference file found for it (untrusted assembled body; fail-open)",
+				f"no reference file found at "
+				f"{_expected_reference_path(prompt_path, fail_open_reference_file_name)} "
+				f"(untrusted assembled body; fail-open)",
 				file=sys.stderr,
 			)
+			continue
+		hydrated[placeholder_name] = _load_reference_placeholder_value(
+			prompt_path=prompt_path,
+			mode_name=mode_name,
+			placeholder_name=placeholder_name,
+		)
 	return hydrated
 
 
