@@ -390,3 +390,158 @@ No TODO/FIXME/HACK markers were found in the scoped files.
 | Code modularization | 14–15 | Large |
 | Expression size reduction | 2 | Medium |
 | Medium/Low fixes | 4–6 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-08-29)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is directly implementable; `NEEDS_VERIFICATION` requires the stated checks first; `RISKY_SKIP` touches pagination, retries, race-sensitive poller logic, or other protected semantics and must not be automated.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — Clarify fetches the same comment thread twice
+- **Safety tag:** `RISKY_SKIP`
+- **File path / lines:** `.github/workflows/clarify.yml:455-486`
+- **Current call count:** 2 logical GETs when semantic caching is enabled.
+- **Proposed call count:** 1 successful paginated GET; retain the bounded GET only as failure fallback.
+- **Endpoint(s):** `GET /repos/{repo}/issues/{issue}/comments`
+- **Evidence:**
+  ```bash
+  gh_retry gh api ".../comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+  gh_retry gh api --paginate --slurp ".../comments?sort=created&direction=asc&per_page=100"
+  ```
+  The full ordered snapshot contains the bounded first 50 comments.
+- **Proposed fix:** In the `Fetch issue comments` step, fetch paginated JSON once into a temporary snapshot, derive `${ISSUE_COMMENTS_FILE}` with `add // [] | .[:50]`, and derive `${THREAD_HISTORY_FILE}` from the full array. Preserve the current bounded call when the paginated fetch fails.
+- **Safety rationale:** `RISKY_SKIP` is mandatory because one call implements pagination and consolidation changes page-boundary and independent failure semantics.
+- **Downstream signal:** Manually verify first-50 ordering, multi-page output, and paginated-failure fallback before implementation.
+
+#### MERGE-002 — Final-merge status performs consecutive identical PR reads
+- **Safety tag:** `RISKY_SKIP`
+- **File path / lines:** `scripts/orchestrate_poll_process.sh:7361-7367`, function `finalize_integration_merge_if_needed`
+- **Current call count:** 2.
+- **Proposed call count:** 1.
+- **Endpoint(s):** `GET /repos/{repo}/pulls/{final_pr}`
+- **Evidence:**
+  ```bash
+  existing_pr_state="$(gh_retry _safe_gh_jq ".../pulls/${final_pr}" --jq '.state' || echo "")"
+  existing_pr_merged="$(gh_retry _safe_gh_jq ".../pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  ```
+- **Proposed fix:** Fetch one `existing_pr_json` payload in `finalize_integration_merge_if_needed`, then extract both `.state` and `(.merged_at != null)`.
+- **Safety rationale:** Although the calls are adjacent with no mutation, the poller trigger requires `RISKY_SKIP`, and one failed merged read would replace two independently recoverable reads.
+- **Downstream signal:** Do not auto-implement; manually confirm an unavailable or malformed payload leaves final merge pending for the next poll.
+
+#### MERGE-003 — Poller reissue paths fetch issue title and body separately
+- **Safety tag:** `RISKY_SKIP`
+- **File path / lines:** `scripts/orchestrate_poll_process.sh:10139-10146`, function `execute_stall_recovery_action`; `scripts/orchestrate_poll_process.sh:12483-12491`, function `run_standalone_stall_recovery`; `scripts/orchestrate_poll_process.sh:16820-16822`, implementation-failed reconciliation loop
+- **Current call count:** 6 static reads across three sites; 2 per executed site.
+- **Proposed call count:** 3 static reads; 1 per executed site.
+- **Endpoint(s):** `GET /repos/{repo}/issues/{issue}`
+- **Evidence:**
+  ```bash
+  orig_title="$(gh_retry _safe_gh_jq ".../issues/${issue_num}" --jq '.title // ""' || echo "")"
+  orig_body="$(gh_retry _safe_gh_jq ".../issues/${issue_num}" --jq '.body // ""' || echo "")"
+  ```
+  The same pattern appears for `IF_TITLE` and `IF_BODY`.
+- **Proposed fix:** At each site, fetch `{title, body}` once and populate both variables from that payload.
+- **Safety rationale:** All sites are inside `orchestrate_poll_process.sh`, and two are explicit stall-recovery paths, requiring `RISKY_SKIP` despite having no intervening mutation.
+- **Downstream signal:** Do not auto-implement; manually test partial/malformed responses and reissue behavior for managed, standalone, and implementation-failed issues.
+
+#### MERGE-004 — Auto-merge guard separately fetches labels and PR metadata
+- **Safety tag:** `RISKY_SKIP`
+- **File path / lines:** `scripts/review_enable_auto_merge.sh:54-76` and `scripts/review_enable_auto_merge.sh:110-140`
+- **Current call count:** 2 logical reads.
+- **Proposed call count:** 1 when PR-payload labels are proven complete; otherwise retain the label-list fallback.
+- **Endpoint(s):** `GET /repos/{repo}/issues/{pr}/labels`; `GET /repos/{repo}/pulls/{pr}`
+- **Evidence:**
+  ```bash
+  PR_LABELS_RAW="$(gh_retry gh api --paginate ".../issues/${PR_NUMBER}/labels?per_page=100" ...)"
+  _ORCH_PR_META_JSON="$(gh_retry gh api ".../pulls/${PR_NUMBER}" ...)"
+  ```
+  `.github/workflows/review_autofix.yml:338-363` already consumes `.labels` from the PR payload.
+- **Proposed fix:** Move the PR metadata fetch before the e2e guard and derive `PR_LABELS_RAW` from `_ORCH_PR_META_JSON.labels`; retain the paginated endpoint when label completeness cannot be established.
+- **Safety rationale:** The removed call is paginated and protects a safety-critical auto-merge suppression path, so page completeness and fail-closed behavior cannot be assumed.
+- **Downstream signal:** Do not auto-implement; manually test PRs with more than 30 and more than 100 labels, missing label arrays, and API failures.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — Issue-status GraphQL labels are immediately re-fetched by the phase-label helper
+- **Safety tag:** `RISKY_SKIP`
+- **File path / lines:** `.github/workflows/issue_pr_status.yml:249-269,358-428,430-444`; `scripts/label_helpers.sh:166-216`
+- **Current call count:** `1 + N` reads on the complete closing-reference path, or `2 + N` when alias classification is needed.
+- **Proposed call count:** `1 + K` or `2 + K`, where `K` contains only issues with missing or incomplete cached labels.
+- **Endpoint(s):** GraphQL `repository.pullRequest.closingIssuesReferences` / aliased `repository.issue`; `GET /repos/{repo}/issues/{issue}/labels`
+- **Evidence:**
+  ```bash
+  closingIssuesReferences(first: 50) {
+    nodes { number body labels(first: 50) { nodes { name } } }
+  }
+  ```
+  followed by:
+  ```bash
+  set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"
+  ```
+  whose helper executes:
+  ```bash
+  gh_retry gh api --paginate "repos/${repo}/issues/${issue_number}/labels"
+  ```
+- **Proposed fix:** Extend `set_issue_phase_label_resilient` with optional complete-label JSON. Add `labels(first:100) { nodes { name } pageInfo { hasNextPage } }` to both GraphQL shapes, build a number-keyed cache, and preserve the paginated GET whenever completeness is false or unknown.
+- **Safety rationale:** Reusing an earlier label snapshot could overwrite concurrently added labels during the subsequent PUT, while the existing helper uses a paginated just-in-time read.
+- **Downstream signal:** Do not auto-implement; manually verify concurrent-label races, custom-label preservation, `hasNextPage`, partial GraphQL errors, and cache-miss fallback.
+
+#### REUSE-002 — Failure-path PR metadata is fetched and then potentially fetched again
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **File path / lines:** `.github/workflows/review_autofix.yml:6585-6603` and `.github/workflows/review_autofix.yml:6605-6651`
+- **Current call count:** Worst-case 2.
+- **Proposed call count:** 1.
+- **Endpoint(s):** `GET /repos/{repo}/pulls/{pr}`
+- **Evidence:**
+  ```bash
+  pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" ...)"
+  ```
+  The following step re-fetches title/body if `${PR_META_FILE}` is unavailable:
+  ```bash
+  PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' ...)"
+  ```
+- **Proposed fix:** Have `Check PR state before failure alerts` export validated `{title,body}` as `FAILURE_ALERT_PR_TEXT_JSON`; consume it before `${PR_META_FILE}` in `Mark linked issues review-blocked (workflow failure)`.
+- **Safety rationale:** The same endpoint and auth are used without an intervening PR mutation, but the reuse crosses workflow steps and failure-path environment initialization is not statically guaranteed.
+- **Downstream signal:** Verify present/missing/malformed `${PR_META_FILE}` and first-read success/failure combinations, confirming the second GET remains available on cache failure.
+
+#### REUSE-003 — Poller independently resolves the repository default branch at nine sites
+- **Safety tag:** `RISKY_SKIP`
+- **File path / lines:** `scripts/orchestrate_poll_process.sh:2250-2256,3741-3754,8275-8290,13623-13646,14054-14057,17402-17405,17686-17693,18284-18299`
+- **Current call count:** `D` same-endpoint reads from 9 static call sites, where `D` is branch- and issue-count-dependent.
+- **Proposed call count:** 1 successful lazy cycle-local read, with legacy reads retained only after cache miss.
+- **Endpoint(s):** `GET /repos/{repo}`
+- **Evidence:** Each site executes:
+  ```bash
+  gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch'
+  ```
+  despite `compute_cycle_integration_ahead_by` already storing `CWS_DEFAULT_BRANCH`.
+- **Proposed fix:** Extend `compute_cycle_integration_ahead_by` to populate `CYCLE_DEFAULT_BRANCH` and `CYCLE_DEFAULT_BRANCH_KNOWN`; add a `cycle_default_branch` accessor and update `refresh_validation_dispatch_wave_gate`, `mark_validation_complete`, final-merge paths, judge context, and standalone conflict sweep to reuse it.
+- **Safety rationale:** This is poller code, and callers currently use different fail-open defaults (`""` versus `"main"`), so caching must not collapse those failure semantics.
+- **Downstream signal:** Do not auto-implement; manually verify cache initialization order, multi-tracking-issue processing, empty-vs-main fallbacks, and behavior when the initial repository read fails.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — the proposed repository-label listing is paginated and must preserve create-race fallback behavior.
+- API-002: `RISKY_SKIP` — retry and backoff behavior must not be mechanically rewritten.
+- BATCH-001: `NEEDS_VERIFICATION` — verify REST-content versus GraphQL-blob parity for refs, encoding, symlinks, submodules, and large files.
+- BATCH-002: `RISKY_SKIP` — the calls are poller timeline/race-defense operations.
+- BATCH-003: `RISKY_SKIP` — post-mutation poller caches require explicit freshness proof.
+- BATCH-004: `NEEDS_VERIFICATION` — aliased mutations must preserve per-thread partial-failure handling and diagnostics.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | REUSE-002 |
+| RISKY_SKIP | 6 | MERGE-001, MERGE-002, MERGE-003, MERGE-004, REUSE-001, REUSE-003 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
