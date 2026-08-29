@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.93,
+  "details": "Changes to reviewer execution, consensus summarization, conflict resolution, fix application, and rerereview behavior consistently included targeted contract or integration tests. Plan review-pipeline changes by identifying the relevant contract tests first, especially for retry state, reasoning schedules, sandboxing, and editor no-op handling.",
+  "fingerprint": "77e0f80784575d9d4cd9f1a029e295c5ab50c2ba84748892b988b4dae3a28b7b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33251328653",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33251328653",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3846",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3849",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3865",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3870",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3873",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3847",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3864",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3867",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3872",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3877"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260829120029_473ab8472c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "The review pipeline relies heavily on contract tests to protect shell-script interfaces and orchestration behavior.",
+  "timestamps": {
+    "created_at": "2026-08-29T12:00:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
