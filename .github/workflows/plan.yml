@@ -1510,6 +1510,8 @@ jobs:
               echo "::warning::Unable to derive implement.yml's fetched-helper manifest; falling back to blanket scripts/ rejection."
               : > "${FETCHED_SCRIPTS_IGNORE_FILE}"
             fi
+          else
+            echo "::warning::Unable to derive fetched-helper manifest: implement.yml source or scripts/.gitignore missing; falling back to blanket scripts/ rejection."
           fi
           if [ -s "${FILES_SECTION_FILE}" ] && grep -qE "${EXCLUDED_RE}" "${FILES_SECTION_FILE}"; then
             perl -ne '

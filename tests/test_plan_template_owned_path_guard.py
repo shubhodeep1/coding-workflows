@@ -170,10 +170,12 @@ def test_unquoted_template_helper_with_trailing_punctuation_is_rejected(
 
 def test_missing_scripts_gitignore_falls_back_to_blanket_rejection() -> None:
 	"""Bootstrap failure must not silently widen what plans may target."""
-	returncode, _ = _run_guard(
+	returncode, output = _run_guard(
 		_plan_listing("scripts/run_validation_repo_checks.sh"), None
 	)
 	assert returncode == 1
+	assert "::warning::Unable to derive fetched-helper manifest" in output
+	assert "scripts/.gitignore missing; falling back" in output
 
 
 @pytest.mark.parametrize("path", ["scripts", "scripts/"])
