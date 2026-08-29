@@ -139,6 +139,7 @@ changelog.d/3867-review-autofix-opencode-install.md
 changelog.d/3869-final-merge-telegram-alert.md
 changelog.d/3870-opencode-bootstrap-stable-alert.md
 changelog.d/3873-cache-read-baseline-forward-only.md
+changelog.d/3873-opencode-parity-telemetry.md
 changelog.d/3875-audit-plans-conflict-gate.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
@@ -511,6 +512,7 @@ tests/fixtures/review_pipeline/consolidator_well_formed.txt
 tests/fixtures/review_pipeline/floor_keywords_override.txt
 tests/fixtures/review_pipeline/floor_tags_mixed_expected.txt
 tests/fixtures/review_pipeline/floor_tags_security.txt
+tests/fixtures/review_pipeline/opencode-reviewer-events.jsonl
 tests/fixtures/review_pipeline/phase_f_prior_ledger.txt
 tests/fixtures/review_pipeline/phase_f_residual_suppressed.txt
 tests/fixtures/review_pipeline/phase_f_reviewer_bundle.txt

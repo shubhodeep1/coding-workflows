@@ -2173,8 +2173,15 @@ def _run_review_pipeline_summary_step_harness(*, extra_env: dict[str, str] | Non
 			"Reviewer slot moonshotai/kimi-k2.5 (moonshotai/kimi-k2.5) recorded codex_stall_killed on attempt 1 (exit=137).\n"
 			"Reviewer slot moonshotai/kimi-k2.5 (moonshotai/kimi-k2.5) failure classified as retryable (timeout) on attempt 1.\n"
 			"REVIEWER_ADVANCE: slot=moonshotai/kimi-k2.5 model=moonshotai/kimi-k2.5 reason=stall_guard next_action=skip_unmapped\n"
-				"INFO: openrouter usage phase=review call=review model=moonshotai/kimi-k2.5 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=2800 completion_tokens=80 total_tokens=2880 cache_creation_input_tokens=0 cache_read_input_tokens=0 usage_available=true\n"
+			"INFO: openrouter usage phase=review call=review model=moonshotai/kimi-k2.5 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=2800 completion_tokens=80 total_tokens=2880 cache_creation_input_tokens=0 cache_read_input_tokens=0 usage_available=true\n"
 			"REVIEWER_SLOT_STATE: slot=moonshotai/kimi-k2.5 retryable_failure_count=1 retryable_failure_classes=timeout backoff_sleep_secs_total=0 slot_retry_budget_exhausted=false fallback_model_used=false cache_status=unsupported cache_reuse_attempted=false\n",
+			encoding="utf-8",
+		)
+
+		(reviews / "status_review_model_three.txt").write_text("failed\n", encoding="utf-8")
+		(reviews / "review_model_three.txt").write_text("reviewer failure\n", encoding="utf-8")
+		(reviews / "review_model_three.log").write_text(
+			"INFO: openrouter usage phase=review call=review model=fixture/model cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=900 completion_tokens=30 total_tokens=930 cache_creation_input_tokens=0 cache_read_input_tokens=33 usage_available=true\n",
 			encoding="utf-8",
 		)
 
@@ -5018,6 +5025,7 @@ def test_review_pipeline_summary_reports_stall_recovery_for_retried_and_skipped_
 	assert slots["model_one"]["cache_read_input_tokens_available"] is False
 
 	assert slots["model_two"]["failure_class"] == "stall_guard"
+	assert slots["model_two"]["attempt_count"] == 1
 	assert slots["model_two"]["stall_kill_count"] == 1
 	assert slots["model_two"]["stall_recovery_next_action"] == "skip_unmapped"
 	assert slots["model_two"]["stall_recovered"] is False
@@ -5030,6 +5038,9 @@ def test_review_pipeline_summary_reports_stall_recovery_for_retried_and_skipped_
 	assert slots["model_two"]["cache_reuse_attempted"] is False
 	assert slots["model_two"]["cache_read_input_tokens_total"] == 0
 	assert slots["model_two"]["cache_read_input_tokens_available"] is True
+	assert slots["model_three"]["attempt_count"] == 1
+	assert slots["model_three"]["cache_read_input_tokens_total"] == 33
+	assert slots["model_three"]["cache_read_input_tokens_available"] is True
 
 	assert summary["stall_recovery"] == {
 		"advanced_slots": 2,

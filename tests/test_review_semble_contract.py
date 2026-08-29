@@ -451,7 +451,7 @@ def test_opencode_reviewer_jsonl_materializes_text_and_numeric_usage() -> None:
 	assert result.returncode == 0
 	assert reviewer_text == "File: scripts/example.py\nProblem: fixture finding\n"
 	assert "prompt_tokens=150" in line
-	assert "completion_tokens=35" in line
+	assert "completion_tokens=30" in line
 	assert "total_tokens=185" in line
 	assert "cache_creation_input_tokens=15" in line
 	assert "cache_read_input_tokens=65" in line

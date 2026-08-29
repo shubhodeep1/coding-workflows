@@ -7428,12 +7428,12 @@ jobs:
                   attempt_count = max_attempt_from_text(log_text)
                   stall_kill_count = reviewer_stall_kill_count(log_text)
                   stall_recovery_next_action = reviewer_stall_recovery_next_action(log_text)
+                  if attempt_count == 0 and status_value in {"success", "failed", "pr_closed", "skipped_unmapped", "skipped_budget"} and (log_text or output_text):
+                      attempt_count = 1
                   cache_read_input_tokens_total, cache_read_input_tokens_available = reviewer_cache_read_input_tokens(
                       log_text,
                       attempt_count,
                   )
-                  if attempt_count == 0 and status_value in {"success", "failed", "pr_closed", "skipped_unmapped", "skipped_budget"} and (log_text or output_text):
-                      attempt_count = 1
                   reviewer_slots.append({
                       "slot": slot_name,
                       "attempt_count": attempt_count,

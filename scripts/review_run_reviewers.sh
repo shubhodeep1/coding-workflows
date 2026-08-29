@@ -445,7 +445,7 @@ def aggregate_step_finish_usage(payloads):
 			return None
 		input_tokens = nonnegative_int(tokens.get("input"))
 		output_tokens = nonnegative_int(tokens.get("output"))
-		reasoning_tokens = nonnegative_int(tokens.get("reasoning"))
+		reasoning_tokens = nonnegative_int(tokens.get("reasoning", 0))
 		cache_write_tokens = nonnegative_int(cache.get("write"))
 		cache_read_tokens = nonnegative_int(cache.get("read"))
 		if None in (
@@ -4019,7 +4019,7 @@ execute_reviewer_attempt() {
   rm -f "${stall_status_file}"
 
   reviewer_strip_opencode_output_file "${tmp_structured_output}"
-	  reviewer_strip_opencode_output_file "${tmp_stderr}"
+  reviewer_strip_opencode_output_file "${tmp_stderr}"
   if ! reviewer_materialize_opencode_json_text "${tmp_structured_output}" "${tmp_output}"; then
     printf '%s\n' "OpenCode structured reviewer output was malformed or contained no text events." >> "${tmp_stderr}"
     if [ "${cmd_rc}" -eq 0 ]; then
