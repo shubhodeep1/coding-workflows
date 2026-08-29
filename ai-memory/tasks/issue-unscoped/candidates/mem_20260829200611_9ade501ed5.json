@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_plan_template_owned_path_guard.py:test_bare_scripts_directory_reference_is_rejected(path: str) -> None | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The test incorrectly asserts that the bootstrap-failure fallback warning is absent when rejecting bare `scripts` references.\n  WHY: The guard emits that warning when the fetched-helper manifest is unavailable or unparseable.\n- tests/test_plan_template_owned_path_guard.py:test_missing_scripts_gitignore_falls_back_to_blanket_rejection() -> None | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The test does not assert that the guard exits with code 1 when `scripts/.gitignore` is missing.\n  WHY: Without checking the exit code, the test could pass even if the guard incorrectly allows the plan.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_plan_template_owned_path_guard.py:test_bare_scripts_directory_reference_is_rejected(path: str) -> None | confidence=4\n  PROBLEM: The test asserts that bare `scripts` references are rejected and appear in the rejection output, but it also asserts the bootstrap-failure fallback message is NOT in the output.\n  WHY: The test will fail when the fetched-helper manifest is missing, because the assertion `assert \"falling back to blanket scripts/ rejection\" not in output` will be violated by the actual fallback warning emitted by the guard.\n- tests/test_plan_template_owned_path_guard.py:test_bare_scripts_directory_reference_is_rejected(path: str) -> None | confidence=4\n  PROBLEM: The test asserts `assert \"falling back to blanket scripts/ rejection\" not in output` for a case where the guard should conservatively reject a bare `scripts` directory reference.\n  WHY: The assertion will fail when the guard emits its fallback warning, which is expected behavior when the fetched-helper manifest is unavailable or unparseable.\n- tests/test_plan_template_owned_path_guard.py:test_missing_scripts_gitignore_falls_back_to_blanket_rejection() -> None | confidence=4\n  PROBLEM: The test does not assert that the exit code is 1.\n  WHY: Without asserting the exit code, the test does not fully validate that the guard behaves as expected when the helper manifest is missing.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "0c7a6f385f4c9f883e3866233afad71b1cff90b1147b5838ac3ff3b95a997d89",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3880,
+    "run_id": "33268960224",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33268960224",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260829200611_9ade501ed5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3880,
+    "run_id": "33268960224"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-29T20:06:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
