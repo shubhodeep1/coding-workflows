@@ -8,10 +8,10 @@ The `Guard plans targeting template-owned paths` step in `plan.yml` rejected eve
 | Workflow changed | `.github/workflows/plan.yml` |
 | Still blanket-rejected | `.github/prompts/`, `.github/scripts/` |
 | New test file | `tests/test_plan_template_owned_path_guard.py` |
-| Guard tests added | 32 |
+| Guard tests added | 43 |
 
 What this means for operators: a plan that lists a consumer-owned file under `scripts/` now proceeds to implementation instead of failing the AI Plan run with a template-owned-path error. Nothing the guard previously caught is let through, so plans targeting fetched helpers such as `scripts/render_prompt.sh` are still rejected with the same routing back to this repository.
 
 ### For contributors
 
-The guard parses the staged implementation workflow's helper-staging block, including literal `scripts/...` entries written to `FETCHED_MANIFEST`, rather than carrying another copy of that list, then unions those names with the plan job's own `scripts/.gitignore` entries. It mirrors the implementation workflow's ownership exception for a consumer-tracked Serena template while still rejecting an untracked runtime copy. `EXCLUDED_RE` is kept as the pre-filter before path extraction; trailing sentence punctuation and redundant path separators are normalized before exact helper matching. The guard had no test coverage before this change; the consumer-owned and implement-only-helper regression cases fail against the previous body.
+The guard parses the staged implementation workflow's helper-staging block, including literal `scripts/...` entries written to `FETCHED_MANIFEST`, rather than carrying another copy of that list, then unions those names with the plan job's own `scripts/.gitignore` entries. It mirrors the implementation workflow's ownership exception for a consumer-tracked Serena template while still rejecting an untracked runtime copy. `EXCLUDED_RE` is kept as the pre-filter before path extraction; trailing sentence punctuation, redundant path separators, and lexical path segments are normalized before directory classification and exact helper matching. The guard had no test coverage before this change; the consumer-owned and implement-only-helper regression cases fail against the previous body.

@@ -129,6 +129,8 @@ def _plan_listing(path: str) -> str:
 		# a fix for its own validation entry script).
 		"scripts/run_validation_repo_checks.sh",
 		"scripts/./run_validation_repo_checks.sh",
+		"scripts/nested/../run_validation_repo_checks.sh",
+		"scripts/subdir/../.github/prompts/mode-plan.txt",
 		# implement.yml's own comment cites this as a consumer-owned file the
 		# blanket exclusion wrongly blocked.
 		"scripts/security/check-npm-audit.js",
@@ -154,12 +156,21 @@ def test_similarly_prefixed_root_files_are_allowed(path: str) -> None:
 	assert returncode == 0, f"similarly prefixed {path} was rejected:\n{output}"
 
 
+def test_other_consumer_github_paths_are_allowed() -> None:
+	path = ".github/workflows/custom.yml"
+	returncode, output = _run_guard(_plan_listing(path), FETCHED_HELPERS)
+	assert returncode == 0, f"consumer-owned {path} was rejected:\n{output}"
+
+
 @pytest.mark.parametrize(
 	"path",
 	[
 		"scripts/render_prompt.sh",
 		"scripts/./render_prompt.sh",
 		"scripts//render_prompt.sh",
+		"scripts/nested/../render_prompt.sh",
+		"scripts/nested/../../.github/prompts/mode-plan.txt",
+		"scripts/../../README.md",
 		"scripts/gh_helpers.sh",
 		# Regression: this implement-only helper is absent from FETCHED_HELPERS,
 		# so reading plan.yml's scripts/.gitignore alone would allow it.
@@ -173,9 +184,14 @@ def test_similarly_prefixed_root_files_are_allowed(path: str) -> None:
 		".github/prompts",
 		".github/prompts/",
 		".github/prompts/mode-plan.txt",
+		".github//prompts/mode-plan.txt",
+		".github/./prompts/mode-plan.txt",
 		".github/scripts",
 		".github/scripts/",
 		".github/scripts/some_helper.sh",
+		".github//scripts/some_helper.sh",
+		".github/./scripts/some_helper.sh",
+		".github/tmp/../scripts/some_helper.sh",
 	],
 )
 def test_template_owned_paths_are_rejected(path: str) -> None:
