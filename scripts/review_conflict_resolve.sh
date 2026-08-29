@@ -63,10 +63,19 @@ OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DI
 _resolver_dependency_fallback()
 {
   local dependency_name="$1" dependency_candidate
-  for dependency_candidate in \
-    "${GITHUB_WORKSPACE:-${PWD}}/.codex-workflow-src-main/scripts/${dependency_name}" \
-    "${GITHUB_WORKSPACE:-${PWD}}/.codex-workflow-src/scripts/${dependency_name}" \
-    "${GITHUB_WORKSPACE:-${PWD}}/scripts/${dependency_name}"; do
+  local -a dependency_candidates=(
+    "${GITHUB_WORKSPACE:-${PWD}}/.codex-workflow-src-main/scripts/${dependency_name}"
+    "${GITHUB_WORKSPACE:-${PWD}}/.codex-workflow-src/scripts/${dependency_name}"
+  )
+  # The workspace scripts/ candidate is trusted only on the workflow source
+  # repo itself, where scripts/ is the canonical source. On consumer repos
+  # that path can carry PR-modified code, and sourcing it would break the
+  # "run only staged support helpers" posture — the support checkouts above
+  # are the only acceptable fallbacks there.
+  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+    dependency_candidates+=("${GITHUB_WORKSPACE:-${PWD}}/scripts/${dependency_name}")
+  fi
+  for dependency_candidate in "${dependency_candidates[@]}"; do
     if [ -f "${dependency_candidate}" ] && [ -r "${dependency_candidate}" ]; then
       printf '%s\n' "${dependency_candidate}"
       return 0
