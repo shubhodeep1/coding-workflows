@@ -757,6 +757,7 @@ def hydrate_reference_placeholders(
 	prompt_path: Path,
 	mode_name: str,
 	values: dict[str, str],
+	strict: bool = True,
 ) -> dict[str, str]:
 	hydrated = dict(values)
 	for placeholder_name in collect_placeholders(prompt_text):
@@ -764,11 +765,29 @@ def hydrate_reference_placeholders(
 			continue
 		if hydrated.get(placeholder_name, "") != "":
 			continue
-		hydrated[placeholder_name] = _load_reference_placeholder_value(
-			prompt_path=prompt_path,
-			mode_name=mode_name,
-			placeholder_name=placeholder_name,
-		)
+		try:
+			hydrated[placeholder_name] = _load_reference_placeholder_value(
+				prompt_path=prompt_path,
+				mode_name=mode_name,
+				placeholder_name=placeholder_name,
+			)
+		except PromptLoadError:
+			# strict=False marks a prompt body that embeds untrusted content
+			# (reviewer/editor bodies carry raw PR-diff and comment text). A
+			# REFERENCE_* token collected from such a body may be the embedded
+			# content itself — e.g. a diff that documents the prompt-templating
+			# system with a literal {{REFERENCE_SECURITY_MONEY_LENS}} — with no
+			# matching prompts/references/ file. Leave it unhydrated so it
+			# renders verbatim like every other untrusted {{...}} token instead
+			# of hard-failing every reviewer (observed on run 33245886964).
+			# Resolvable references still hydrate on this path.
+			if strict:
+				raise
+			print(
+				f"WARNING: reference placeholder '{placeholder_name}' left unhydrated: "
+				f"no reference file found for it (untrusted assembled body; fail-open)",
+				file=sys.stderr,
+			)
 	return hydrated
 
 
@@ -1346,11 +1365,16 @@ def main(argv: list[str] | None = None) -> int:
 		else:
 			effective_values = dict(legacy_env_values)
 			effective_values.update(provided_values)
+		# --skip-syntax-validation is the untrusted-assembled-body marker (see
+		# the include-resolution comment above); on that path a missing
+		# reference file must fail open, because the placeholder may be the
+		# embedded PR-diff's own text rather than a real template directive.
 		effective_values = hydrate_reference_placeholders(
 			prompt_text=prompt_text,
 			prompt_path=prompt_path,
 			mode_name=mode_name,
 			values=effective_values,
+			strict=not args.skip_syntax_validation,
 		)
 		prompt_text = apply_identity_recall(prompt_text, prompt_path=prompt_path, mode_name=mode_name)
 		prompt_text = apply_phase_c_persona_prefix(prompt_text, prompt_path=prompt_path, mode_name=mode_name)

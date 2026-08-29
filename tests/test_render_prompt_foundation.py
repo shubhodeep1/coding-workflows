@@ -432,6 +432,56 @@ def test_render_prompt_py_reports_missing_reference_file() -> None:
 	assert "prompts/references/output-contract.txt" in proc.stderr
 
 
+def test_render_prompt_py_fails_open_on_missing_reference_in_untrusted_assembled_body() -> None:
+	"""An already-assembled body embedding untrusted PR-diff text can carry a
+	literal REFERENCE_* token with no matching reference file (e.g. a plan doc
+	documenting {{REFERENCE_SECURITY_MONEY_LENS}}; observed on run 33245886964).
+	On the --skip-syntax-validation path that token must render verbatim while
+	resolvable references still hydrate."""
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_failopen_reference_") as td:
+		repo_root = Path(td)
+		body_file = repo_root / "reviewer_prompt_body.txt"
+		reference_dir = repo_root / "prompts" / "references"
+		render_script = repo_root / "scripts" / "render_prompt.py"
+		reference_dir.mkdir(parents=True, exist_ok=True)
+		render_script.parent.mkdir(parents=True, exist_ok=True)
+
+		body_file.write_text(
+			"Header\n"
+			"{{REFERENCE_OUTPUT_CONTRACT}}\n"
+			"Untrusted diff line: {{REFERENCE_SECURITY_MONEY_LENS}}\n"
+			"Footer\n",
+			encoding="utf-8",
+		)
+		(reference_dir / "output-contract.txt").write_text("Shared output block.\n", encoding="utf-8")
+		shutil.copy2(RENDER_PROMPT_PY, render_script)
+
+		proc = subprocess.run(
+			[
+				sys.executable,
+				str(render_script),
+				str(body_file),
+				"--input-already-assembled",
+				"--skip-syntax-validation",
+			],
+			cwd=str(repo_root),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout == (
+		"Header\n"
+		"Shared output block.\n"
+		"Untrusted diff line: {{REFERENCE_SECURITY_MONEY_LENS}}\n"
+		"Footer\n"
+	)
+	assert "REFERENCE_SECURITY_MONEY_LENS" in proc.stderr
+	assert "WARNING" in proc.stderr
+
+
 def test_render_prompt_py_reports_unknown_placeholder_contract_violation() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_py_") as td:
 		prompt_file = Path(td) / "prompt.txt"
