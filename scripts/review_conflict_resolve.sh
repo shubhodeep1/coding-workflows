@@ -67,20 +67,20 @@ _resolver_dependency_fallback()
     "${GITHUB_WORKSPACE:-${PWD}}/.codex-workflow-src-main/scripts/${dependency_name}" \
     "${GITHUB_WORKSPACE:-${PWD}}/.codex-workflow-src/scripts/${dependency_name}" \
     "${GITHUB_WORKSPACE:-${PWD}}/scripts/${dependency_name}"; do
-    if [ -r "${dependency_candidate}" ]; then
+    if [ -f "${dependency_candidate}" ] && [ -r "${dependency_candidate}" ]; then
       printf '%s\n' "${dependency_candidate}"
       return 0
     fi
   done
   return 1
 }
-if [ ! -r "${OPENCODE_HELPERS_PATH}" ]; then
+if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || [ ! -r "${OPENCODE_HELPERS_PATH}" ]; then
   if _resolver_fallback_path="$(_resolver_dependency_fallback opencode_helpers.sh)"; then
     echo "::warning::opencode_helpers.sh not staged in SUPPORT_SCRIPTS_DIR (${SUPPORT_SCRIPTS_DIR:-scripts}); falling back to ${_resolver_fallback_path} (staging list at SCRIPT_REF=${SCRIPT_REF:-unknown} likely predates the opencode cutover)."
     OPENCODE_HELPERS_PATH="${_resolver_fallback_path}"
   fi
 fi
-if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
+if [ ! -f "${OPENCODE_CONFIG_WRITER_PATH}" ] || [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
   if _resolver_fallback_path="$(_resolver_dependency_fallback write_opencode_config.sh)"; then
     echo "::warning::write_opencode_config.sh not staged in SUPPORT_SCRIPTS_DIR (${SUPPORT_SCRIPTS_DIR:-scripts}); falling back to ${_resolver_fallback_path}."
     OPENCODE_CONFIG_WRITER_PATH="${_resolver_fallback_path}"
