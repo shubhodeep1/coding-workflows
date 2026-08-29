@@ -1430,13 +1430,23 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          # Template-owned paths (scripts/, .github/prompts/, .github/scripts/) are
-          # fetched from coding-workflows templates at runtime and explicitly
-          # excluded from Codex commits in implement.yml.  A plan that targets
-          # those paths cannot be committed by the implementation step and would
-          # fall through to the no-op handler.  Reject such plans here so the
-          # issue is routed back to humans with a clear reason rather than
-          # producing a silent no-op PR downstream.
+          # Template-owned paths (.github/prompts/, .github/scripts/, and the
+          # runtime-fetched helper scripts under scripts/) are fetched from
+          # coding-workflows templates at runtime and explicitly excluded from
+          # Codex commits by scripts/implement_commit_changes.sh.  A plan that
+          # targets those paths cannot be committed by the implementation step
+          # and would fall through to the no-op handler.  Reject such plans
+          # here so the issue is routed back to humans with a clear reason
+          # rather than producing a silent no-op PR downstream.
+          #
+          # scripts/ is NOT blanket-excluded: implement_commit_changes.sh
+          # excludes only the fetched helpers listed in the runtime-generated
+          # scripts/.gitignore, so consumer-repo-owned files under scripts/
+          # (e.g. a validation entry script) ARE committable and must not be
+          # rejected here.  This guard mirrors that per-file contract exactly;
+          # it falls back to the legacy blanket scripts/ rejection only when
+          # scripts/.gitignore is missing (bootstrap failure), which is the
+          # same fallback the commit helper uses.
           #
           # This guard is skipped entirely when the workflow is running inside
           # the canonical `*/coding-workflows` repository, because in that repo
@@ -1453,11 +1463,37 @@ jobs:
             if ($in && /^\s{0,3}#{1,6}\s+\S/) { $in = 0; }
             print if $in;
           ' "${CODEX_OUTPUT_FILE}" > "${FILES_SECTION_FILE}"
-          EXCLUDED_RE='(^|[^[:alnum:]_./-])`?(\./|/)?(scripts/|\.github/prompts/|\.github/scripts/)'
-          if [ -s "${FILES_SECTION_FILE}" ] && grep -nE "${EXCLUDED_RE}" "${FILES_SECTION_FILE}" >/dev/null; then
-            echo "::error::Plan's 'Files likely to change' section lists template-owned paths (scripts/, .github/prompts/, .github/scripts/) which are excluded from Codex commits in implement.yml. Changes to those paths belong in the coding-workflows repository."
+          EXCLUDED_RE='(^|[^[:alnum:]_./-])`?(\./|/)?(\.github/prompts/|\.github/scripts/)'
+          SCRIPTS_EXCLUDED_RE=''
+          if [ -f scripts/.gitignore ]; then
+            # Build a per-file alternation from the runtime-generated
+            # scripts/.gitignore (bare paths relative to scripts/, written by
+            # the "Stage workflow support files" step).  Escape ERE
+            # metacharacters so filenames with dots match literally.
+            FETCHED_HELPER_ALT=''
+            while IFS= read -r _fetched_entry; do
+              case "${_fetched_entry}" in ''|'#'*) continue ;; esac
+              _fetched_entry_esc="$(printf '%s' "${_fetched_entry}" | sed 's/[][\\.|${}()?+*^]/\\&/g')"
+              FETCHED_HELPER_ALT="${FETCHED_HELPER_ALT:+${FETCHED_HELPER_ALT}|}${_fetched_entry_esc}"
+            done < scripts/.gitignore
+            if [ -n "${FETCHED_HELPER_ALT}" ]; then
+              SCRIPTS_EXCLUDED_RE='(^|[^[:alnum:]_./-])`?(\./|/)?scripts/('"${FETCHED_HELPER_ALT}"')([^[:alnum:]_.-]|$)'
+            fi
+          else
+            SCRIPTS_EXCLUDED_RE='(^|[^[:alnum:]_./-])`?(\./|/)?scripts/'
+          fi
+          OFFENDING_LINES_FILE="${RUNTIME_DIR}/files_section_offending.txt"
+          : > "${OFFENDING_LINES_FILE}"
+          if [ -s "${FILES_SECTION_FILE}" ]; then
+            grep -nE "${EXCLUDED_RE}" "${FILES_SECTION_FILE}" >> "${OFFENDING_LINES_FILE}" || true
+            if [ -n "${SCRIPTS_EXCLUDED_RE}" ]; then
+              grep -nE "${SCRIPTS_EXCLUDED_RE}" "${FILES_SECTION_FILE}" >> "${OFFENDING_LINES_FILE}" || true
+            fi
+          fi
+          if [ -s "${OFFENDING_LINES_FILE}" ]; then
+            echo "::error::Plan's 'Files likely to change' section lists template-owned paths (.github/prompts/, .github/scripts/, or runtime-fetched helper scripts listed in scripts/.gitignore) which are excluded from Codex commits by implement_commit_changes.sh. Changes to those paths belong in the coding-workflows repository."
             echo "Offending lines (from Files section):"
-            grep -nE "${EXCLUDED_RE}" "${FILES_SECTION_FILE}" || true
+            cat "${OFFENDING_LINES_FILE}" || true
             source scripts/gh_helpers.sh 2>/dev/null || true
             type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
             # Clean up the progress comment so the failure comment (posted by
@@ -1467,7 +1503,7 @@ jobs:
               gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
             fi
             RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            REJECTION_BODY=$'The generated plan targets template-owned paths (`scripts/`, `.github/prompts/`, or `.github/scripts/`) which are fetched from the `coding-workflows` repository at runtime and are excluded from Codex commits in `implement.yml`. Implementing this plan would produce a no-op PR.\n\nIf a change to those files is genuinely required, open an issue or PR directly against [`shubhodeep1/coding-workflows`](https://github.com/shubhodeep1/coding-workflows) instead.\n\nRun: '"${RUN_URL}"
+            REJECTION_BODY=$'The generated plan targets template-owned paths (`.github/prompts/`, `.github/scripts/`, or runtime-fetched helper scripts under `scripts/` listed in the generated `scripts/.gitignore`) which are fetched from the `coding-workflows` repository at runtime and are excluded from Codex commits by `implement_commit_changes.sh`. Implementing this plan would produce a no-op PR.\n\nIf a change to those files is genuinely required, open an issue or PR directly against [`shubhodeep1/coding-workflows`](https://github.com/shubhodeep1/coding-workflows) instead. Consumer-repo-owned files under `scripts/` (those not listed in `scripts/.gitignore`) are committable and are not rejected by this guard.\n\nRun: '"${RUN_URL}"
             gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
               -f body="${REJECTION_BODY}" >/dev/null 2>&1 || true
             exit 1
