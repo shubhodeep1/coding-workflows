@@ -62,6 +62,12 @@ RUN_LIMIT_PER_WORKFLOW = 100
 PERSISTENT_RUN_THRESHOLD = 2
 TRACKER_MARKER_PREFIX = "drift-audit:cluster-key="
 JSON_DECODER = json.JSONDecoder()
+# Completed runs with these conclusions routinely upload no logs at all —
+# concurrency-superseded review runs are cancelled on every active PR branch,
+# so a failed log fetch for them is expected and must not degrade the run's
+# coverage verdict to "partial" (which escalates the Telegram alert to
+# WARNING). Their logs are still scanned whenever the fetch succeeds.
+UNSCANNABLE_CONCLUSIONS = frozenset({"cancelled", "skipped"})
 
 # Repository checkout root. The audit only files a tracker when a
 # fingerprint names a file that actually exists here, which keeps markers
@@ -96,6 +102,8 @@ _RESULT: dict[str, Any] = {
 	"logs_fetched": 0,
 	"logs_missing": 0,
 	"missing_run_ids": [],
+	"logs_unscannable": 0,
+	"unscannable_run_ids": [],
 	"created": 0,
 	"edited": 0,
 	"closed": 0,
@@ -121,18 +129,29 @@ def _sorted_unique_run_ids(run_ids: list[str]) -> list[str]:
 	)
 
 
-def _emit_coverage_summary(scanned_runs: int, fetched_logs: int, missing_run_ids: list[str]) -> None:
+def _emit_coverage_summary(
+	scanned_runs: int,
+	fetched_logs: int,
+	missing_run_ids: list[str],
+	unscannable_run_ids: list[str],
+) -> None:
 	unique_missing_run_ids = _sorted_unique_run_ids(missing_run_ids)
+	unique_unscannable_run_ids = _sorted_unique_run_ids(unscannable_run_ids)
 	logs_missing = len(unique_missing_run_ids)
+	logs_unscannable = len(unique_unscannable_run_ids)
 	coverage_status = "partial" if logs_missing > 0 else "full"
 	_RESULT["coverage_status"] = coverage_status
 	_RESULT["logs_fetched"] = fetched_logs
 	_RESULT["logs_missing"] = logs_missing
 	_RESULT["missing_run_ids"] = unique_missing_run_ids
+	_RESULT["logs_unscannable"] = logs_unscannable
+	_RESULT["unscannable_run_ids"] = unique_unscannable_run_ids
 	missing_run_ids_text = ",".join(unique_missing_run_ids) if unique_missing_run_ids else "none"
+	unscannable_run_ids_text = ",".join(unique_unscannable_run_ids) if unique_unscannable_run_ids else "none"
 	print(
 		f"DRIFT_AUDIT_COVERAGE scanned={scanned_runs} fetched={fetched_logs} "
-		f"missing={logs_missing} missing_run_ids={missing_run_ids_text}",
+		f"missing={logs_missing} missing_run_ids={missing_run_ids_text} "
+		f"unscannable={logs_unscannable} unscannable_run_ids={unscannable_run_ids_text}",
 		flush=True,
 	)
 
@@ -430,16 +449,20 @@ def _list_recent_runs(repo: str, workflow_file: str, cutoff: datetime) -> list[d
 				"workflow_file": workflow_file,
 				"created_at": created_at,
 				"url": run.get("url"),
+				"conclusion": str(run.get("conclusion") or ""),
 			}
 		)
 	return selected
 
 
-def _fetch_run_log(repo: str, run_id: str) -> str | None:
+def _fetch_run_log(repo: str, run_id: str, *, log_expected: bool = True) -> str | None:
 	rc, stdout, stderr = _run_gh(["run", "view", run_id, "--repo", repo, "--log"])
 	if rc != 0:
 		message = stderr.strip() or stdout.strip() or f"gh exited {rc}"
-		_warn(f"run #{run_id} log fetch failed: {message}")
+		if log_expected:
+			_warn(f"run #{run_id} log fetch failed: {message}")
+		else:
+			_log(f"run #{run_id} has no fetchable log ({message}); cancelled/skipped runs upload none.")
 		return None
 	return stdout
 
@@ -781,7 +804,7 @@ def main() -> int:
 			runs.append(run)
 	_RESULT["processed_runs"] = len(runs)
 	if not runs:
-		_emit_coverage_summary(0, 0, [])
+		_emit_coverage_summary(0, 0, [], [])
 		_RESULT["status"] = "no_runs"
 		_log("no recent review/autofix runs found; nothing to audit.")
 		return 0
@@ -789,14 +812,19 @@ def main() -> int:
 	occurrences: list[dict[str, Any]] = []
 	logs_fetched = 0
 	missing_run_ids: list[str] = []
+	unscannable_run_ids: list[str] = []
 	for run in sorted(runs, key=lambda row: ((row.get("created_at") or ""), row["run_id"])):
-		log_text = _fetch_run_log(repo, run["run_id"])
+		log_expected = str(run.get("conclusion") or "") not in UNSCANNABLE_CONCLUSIONS
+		log_text = _fetch_run_log(repo, run["run_id"], log_expected=log_expected)
 		if log_text is None:
-			missing_run_ids.append(run["run_id"])
+			if log_expected:
+				missing_run_ids.append(run["run_id"])
+			else:
+				unscannable_run_ids.append(run["run_id"])
 			continue
 		logs_fetched += 1
 		occurrences.extend(_parse_run_markers(run, log_text))
-	_emit_coverage_summary(len(runs), logs_fetched, missing_run_ids)
+	_emit_coverage_summary(len(runs), logs_fetched, missing_run_ids, unscannable_run_ids)
 	_RESULT["marker_occurrences"] = len(occurrences)
 	if not occurrences:
 		_RESULT["status"] = "no_markers"
@@ -909,6 +937,7 @@ da_coverage_status="unknown"
 da_logs_fetched=0
 da_logs_missing=0
 da_missing_run_ids="none"
+da_logs_unscannable=0
 da_created=0
 da_edited=0
 da_closed=0
@@ -930,10 +959,11 @@ if [ "${DRIFT_AUDIT_HAVE_JQ}" = "true" ] && [ -n "${DRIFT_AUDIT_SUMMARY_FILE:-}"
 			(.created // 0 | n),
 			(.edited // 0 | n),
 			(.closed // 0 | n),
-			(.suppressed // 0 | n)
+			(.suppressed // 0 | n),
+			(.logs_unscannable // 0 | n)
 		] | @tsv
 	' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null)"; then
-		IFS=$'\t' read -r da_status da_coverage_status da_processed_runs da_marker_occurrences da_persistent_clusters da_skipped_absent_path da_logs_fetched da_logs_missing da_missing_run_ids da_created da_edited da_closed da_suppressed <<<"${da_summary_tsv}"
+		IFS=$'\t' read -r da_status da_coverage_status da_processed_runs da_marker_occurrences da_persistent_clusters da_skipped_absent_path da_logs_fetched da_logs_missing da_missing_run_ids da_created da_edited da_closed da_suppressed da_logs_unscannable <<<"${da_summary_tsv}"
 		da_summary_loaded="true"
 	else
 		echo "::warning::drift-audit: could not parse run summary file; notifications will omit run counts." >&2
@@ -980,6 +1010,9 @@ case "${da_status}" in
 		da_detail="Completed with status '${da_status}'; see the run log."
 		;;
 esac
+if [ "${da_logs_unscannable}" -gt 0 ] 2>/dev/null; then
+	da_detail="${da_detail} ${da_logs_unscannable} cancelled/skipped run(s) had no logs to scan (expected; not counted as missing coverage)."
+fi
 if [ "${da_skipped_absent_path}" -gt 0 ] 2>/dev/null; then
 	da_detail="${da_detail} Skipped ${da_skipped_absent_path} cluster(s) for paths absent from the repo."
 fi
@@ -1003,6 +1036,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 			echo "- **Log coverage:** ${da_coverage_status}"
 			echo "- **Log fetches:** fetched ${da_logs_fetched} / missing ${da_logs_missing}"
 			echo "- **Missing log run IDs:** ${da_missing_run_ids}"
+			echo "- **Cancelled/skipped runs without logs:** ${da_logs_unscannable}"
 		fi
 		echo "- **Tracker issues:** created ${da_created} / updated ${da_edited} / closed ${da_closed} / suppressed ${da_suppressed}"
 		if [ -n "${da_report_url}" ]; then
