@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "The review pipeline relies heavily on contract tests to protect shell-script interfaces and orchestration behavior.",
   "timestamps": {
     "created_at": "2026-08-29T12:00:29Z",
