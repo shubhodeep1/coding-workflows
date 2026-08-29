@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-08-26T16:55:20Z",
+  "tick_at": "2026-08-29T11:34:04Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -27,10 +27,10 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 3810,
+      "number": 3845,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] Triage and apply safe workflow optimizations from August 19-25",
+      "title": "[Orchestrator] Opencode cutover for review_autofix",
       "total_waves": 0,
       "wave_complete": false
     }
