@@ -443,8 +443,9 @@ def test_render_prompt_py_fails_open_on_missing_reference_in_untrusted_assembled
 	"""An already-assembled body embedding untrusted PR-diff text can carry a
 	literal braced REFERENCE_* token with no matching reference file (e.g. a
 	plan doc documenting a future REFERENCE_SECURITY_MONEY_LENS placeholder;
-	observed on run 33245886964). On the --skip-syntax-validation path that
-	token must render verbatim while resolvable references still hydrate.
+	observed on run 33245886964). When both --input-already-assembled and
+	--skip-syntax-validation are set, that token must render verbatim while
+	resolvable references still hydrate.
 
 	The braced tokens below are built by concatenation so this test's own
 	source never contains a contiguous braced token: this file's diff gets

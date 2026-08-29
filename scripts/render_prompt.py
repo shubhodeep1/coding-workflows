@@ -1350,13 +1350,13 @@ def main(argv: list[str] | None = None) -> int:
 				load_prompt(prompt_path),
 				mode_name=mode_name,
 			)
-			# --skip-syntax-validation marks the input as an already-assembled body
-			# that embeds untrusted content (reviewer/editor bodies carry raw PR-diff
-			# and full changed-file text). Do not resolve `{% include "..." %}`
-			# directives over that body: a standalone double-quoted include line in a
+			# Reviewer/editor callers pair --input-already-assembled with
+			# --skip-syntax-validation to mark an untrusted assembled body. When this
+			# fallback assembly branch is reached, --skip-syntax-validation alone still
+			# disables include resolution. A standalone double-quoted include line in a
 			# reviewed template is the diff's own content, not a fragment to expand,
 			# and treating it as one hard-fails the whole render. The strict `{{...}}`
-			# syntax gate is skipped for the same inputs a few lines below; this closes
+			# syntax gate is skipped by the same flag a few lines below; this closes
 			# the matching gap for the `{% include %}` assembly pass.
 			prompt_text = assemble_prompt_fragments(
 				prompt_fragments,
