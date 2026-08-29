@@ -1,4 +1,4 @@
-Audit every plan under `docs/` — read each one, classify it **implemented completely / partially / not implemented** against the *current* repo state, and recommend the single **next highest-value** plan to implement **that will not create merge conflicts with in-flight orchestrator work** (open `ai:orchestrator-tracking` issues and their unmerged PRs). If no candidate is conflict-safe, the correct output is *no recommendation*. Read-only: this command reports in chat and never edits files or opens a PR. `$ARGUMENTS` is optional — pass a filter (a subdirectory, a topic, or a glob) to narrow the audit; empty means audit all plans under `docs/plans/`.
+Audit every plan under `docs/` — read each one, classify it **implemented completely / partially / not implemented** against the *current* repo state, and recommend the single **next highest-value** plan to implement **that will not create merge conflicts with in-flight orchestrator work** (open `ai:orchestrator-tracking` issues and their unmerged PRs). If no candidate is conflict-safe, the correct output is *no recommendation*. The recommendation itself is report-only — this command never implements a plan — but every run also performs two bounded maintenance actions: it **archives verified-complete plans** (moves `docs/plans/` files classified COMPLETE into `docs/completed/`) and **sweeps `docs/scripts-pending-removal.md`** (removes scripts whose §18.F removal trigger is met and whose preflight checks all pass, deleting the registry entry alongside), committing and opening a maintenance PR only when either action changed something. `$ARGUMENTS` is optional — pass a filter (a subdirectory, a topic, or a glob) to narrow the audit; empty means audit all plans under `docs/plans/`.
 
 $ARGUMENTS
 
@@ -33,7 +33,22 @@ $ARGUMENTS
    - **Pick.** The recommendation is the **highest-ranked conflict-free candidate**. If *every* candidate carries conflict risk, recommend **nothing**: say so explicitly, report per candidate what blocks it and on which paths, and name the merge/close events that would unblock the audit — do not fall back to a "least risky" pick.
    - **Degraded mode.** If GitHub state cannot be read (missing/invalid token, API failure — degrade per §23.E, say so once), still report the value ranking but mark the pick **UNSCREENED**, instructing the user to check open `ai:orchestrator-tracking` issues and their PRs before starting. Never present an unscreened pick as conflict-safe.
 
-7. **Report.** Emit the [Output Format](#output-format). No edits, no commits, no PR.
+7. **Archive verified-complete plans.** For every `docs/plans/*.md` plan step 4 classified **COMPLETE**, move it into `docs/completed/` with `git mv` (create the directory if missing) so history follows the file. If `docs/completed/` already holds a file with the same name, diff the two: byte-identical → `git rm` the `docs/plans/` copy; different → `git mv -f` so the `docs/plans/` version (the maintained copy) replaces the stale archive copy. PARTIAL and NOT-IMPLEMENTED plans never move — archival is the "this project is done" signal and must be earned by step 4's evidence, not by a plan's self-reported status.
+
+8. **Sweep the removal registry.** Read `docs/scripts-pending-removal.md` (§18.F) and evaluate every entry:
+   - **`permanent — review annually` entries are never auto-removed.** Report them as kept; they have no sunset.
+   - For each entry with a concrete removal trigger, judge whether the trigger is met, then run **every** preflight check exactly as written and compare against the entry's expected result.
+   - **Trigger met and all checks pass** → remove what the entry names (`git rm` the script / workflow) and delete the entry from the registry **in the same commit** — the registry is a live list, not an audit log. Remove only what the entry covers; adjacent cleanup is out of scope.
+   - **Any check fails, cannot be run (missing token, API failure — degrade per §23.E), or is ambiguous** → keep the script and the entry, and report which check blocked removal. A partial pass is a fail.
+   The full §18.F pass is what authorizes the §6 removal; there is no other path by which this command deletes a script.
+
+9. **Land the maintenance changes — only when steps 7–8 changed anything.** If nothing moved and nothing was removed, skip this step entirely: the run stays report-only, with no commit and no PR. Otherwise:
+   - Commit on the session's designated working branch when the harness assigns one; otherwise create `claude/audit-plans-maintenance-<YYYYMMDD>` (append `-2`, `-3`, … on collision). One commit for the plan archival, a separate commit for the registry sweep (§12.E).
+   - When a removal changes observable behaviour (§20.A — a workflow, scheduled job, or operator-visible script), add a `changelog.d/<issue-or-pr>-<slug>.md` fragment in the same PR; plan moves alone are docs-only and need no fragment.
+   - **PR-body contract:** the plan-archival lint (`.github/workflows/lint-plan-archival.yml`) fails any PR that adds `docs/completed/` files without referencing an issue. For each moved plan, include `Refs #N` for its tracking issue (or, when none exists, the issue / PR that shipped it) — never `Fixes` / `Closes` / `Resolves` (§19). When a referenced `ai:orchestrator-tracking` issue still has unchecked checkboxes, add a non-empty `## De-scoped phases` section naming every unshipped box with a rationale. Enumerate every removed script with its preflight evidence.
+   - Push with `git push -u origin <branch>` (retry transient network errors with exponential backoff: 2s, 4s, 8s, 16s — up to 4 retries), then open a non-draft PR via `mcp__github__create_pull_request` against the default branch (resolve it dynamically — do **not** hardcode `main`). Pushing the branch and opening the PR are §23.B routine writes.
+
+10. **Report.** Emit the [Output Format](#output-format).
 
 ## Output Format
 
@@ -57,6 +72,15 @@ In-flight orchestrator work: <issue #N (open, waves pending), PR #M (open, files
 Conflict-screened out (only if any):
 - <plan> — overlaps <path(s)> with <issue #N / PR #M>
 
+Archived to docs/completed/ (only if any):
+- <plan> — moved; Refs #<issue> (<boxes all ticked / de-scoped in PR body>)
+
+Registry sweep (docs/scripts-pending-removal.md): removed X, kept Y of N entries
+- removed: <script path> — trigger met; all preflight checks passed
+- kept: <script path> — <permanent — review annually / which check failed or was unrunnable>
+
+Maintenance: <branch> → <PR url>   (or: no changes — report-only run)
+
 ➡ Next highest-value to implement: <plan>
 Why: <2–4 lines — value, cost, §1 priority, dependencies, and confirmation of no overlap
 with in-flight orchestrator work (or the UNSCREENED caveat). Reference
@@ -75,15 +99,17 @@ Omit empty sections. Keep evidence terse but specific — a classification witho
 
 ## Tool Access
 
-Read-only surface:
+Audit surface (read) plus the bounded step 7–9 write path:
 
 - **`Read` / `Grep` / `Glob`** — primary tools for reading plans and verifying repo state.
-- **`Bash`** — for cheap verification only (running a targeted test, listing files). No mutating git operations.
-- **`mcp__github__*` / `gh` CLI** — for two read paths: (a) when a plan references an issue / PR whose merge state settles whether it shipped, and (b) the step-6 conflict gate — listing open `ai:orchestrator-tracking` issues, their unmerged PRs, and those PRs' changed files. Read-only work (§23.A); shared rules live in **CLAUDE.md §23** (auth check, the mandatory `-R <owner>/<repo>` flag, REST-over-GraphQL preference, token hygiene); batch the gate's calls per §15/§23.F.
+- **`Bash`** — cheap verification (running a targeted test, listing files), step-8 preflight-check commands, and the step 7–9 maintenance writes: `git mv` / `git rm`, commit, push. No mutating git operations outside steps 7–9.
+- **`mcp__github__*` / `gh` CLI** — read paths (§23.A): (a) when a plan references an issue / PR whose merge state settles whether it shipped, (b) the step-6 conflict gate — listing open `ai:orchestrator-tracking` issues, their unmerged PRs, and those PRs' changed files — and (c) registry preflight checks that query GitHub state; plus one routine write (§23.B): opening the step-9 maintenance PR. Shared rules live in **CLAUDE.md §23** (auth check, the mandatory `-R <owner>/<repo>` flag, REST-over-GraphQL preference, token hygiene); batch the gate's calls per §15/§23.F.
 
 ## Rules
 
-- **Read-only.** This command produces a verdict, not changes. No file edits, no commits, no PR. To act on the recommendation, the user runs `/implement-plan-claude` (Claude implements it in-session) or `/implement-plan-ai` (hand it to the AI orchestrator).
+- **Report-first; writes are bounded to maintenance.** The verdict, ranking, and recommendation are chat output — this command never implements a plan and never edits code outside steps 7–9: plan moves into `docs/completed/`, §18.F-gated script + registry-entry removals, the changelog fragment those removals may require, and the commit / push / PR that lands them. A run with nothing to archive or remove makes no commit and opens no PR. To act on the recommendation, the user runs `/implement-plan-claude` (Claude implements it in-session) or `/implement-plan-ai` (hand it to the AI orchestrator).
+- **Archival must be earned.** Only plans step 4 classified COMPLETE — every goal cited — move to `docs/completed/`; a PARTIAL plan never moves, whatever its own Status line says. Use `git mv` so history follows, and satisfy the plan-archival lint via step 9's PR-body contract.
+- **The preflight gate is a hard gate.** No script is removed while any §18.F check fails, cannot be run, or is ambiguous, and no `permanent — review annually` entry is ever auto-removed. The removal's blast radius stays inside what the registry entry names.
 - **Verify, don't trust the plan's self-reported status.** Classification must cite repo evidence (`file:line`, a passing/failing test, an absent symbol). "The plan says it's done" is not evidence.
 - **Treat `docs/completed/` as presumed-done but auditable** — surface any plan there that the repo shows is regressed or was never fully implemented.
 - **Value ranking obeys §1.** Security and correctness outrank performance and speed. Factor dependencies (unblocking value), blast radius, and effort into the single recommendation.
