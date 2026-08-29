@@ -225,3 +225,168 @@ Semble unavailability was visible only through environment booleans, not probe e
 | Retry events | 0 observed |
 | Primary structural hotspot | Scheduled orchestrate poller |
 | Existing batching | Review sweep snapshots; orchestrator GraphQL prefetch/cache |
+
+## Deep Audit — Workflows & Scripts (2026-08-29)
+
+### Section 1: Bug & Correctness Sweep
+
+Audit coverage: 46 workflows and 132 scripts. All YAML, Python, and Bash files passed syntax parsing. Previously documented routing, late-CI-guard, and prompt-render findings are not duplicated here.
+
+#### SEC-001 — Untrusted triage inputs reach a secret-bearing shell before fork validation
+- **File path / lines:** `.github/workflows/internal-check-failure-triage.yml:20-27`; `.github/workflows/check_failure_triage.yml:96-126,288-295`
+- **Severity:** High
+- **Category:** `security`
+- **Description:** The wrapper forwards raw check-run fields, including `check_name`, into a job carrying `GH_TOKEN`, `OPENROUTER_API_KEY`, and Telegram credentials. The first step interpolates these inputs directly into Bash source before the fork-origin guard runs. Quotes, backticks, or `$(...)` in an input would be interpreted by Bash. The guard and failure notifier repeat this pattern. Whether a fork can control a check name that reaches this event is deployment-dependent. [NEEDS VERIFICATION]
+- **Recommended fix:** Pass every input through `env:`, validate numeric IDs and SHA formats, and use `printf '%s\n'`. Move fork validation into a credential-minimal prerequisite job and gate the secret-bearing job on its `same_repo` output.
+
+#### SEC-002 — Dispatch and reusable-workflow inputs are interpolated directly into Bash
+- **File path / lines:** `.github/workflows/validation-refresh.yml:89-155`; `.github/workflows/workflow-log-analysis.yml:82-176`; `.github/workflows/mark-stable.yml:71-85`; `.github/workflows/test-and-mark-stable.yml:176-190`; `.github/workflows/validate.yml:425-435`
+- **Severity:** High
+- **Category:** `security`
+- **Description:** Values such as `repos_file`, `branch_name`, `repos_override`, `since`, `version_tag`, and `tracking_issue` are inserted into shell source before their runtime validation. Several affected jobs possess cross-repository PATs or content-write capability. Validation after interpolation cannot prevent command substitution during shell parsing.
+- **Recommended fix:** Declare each value in the step’s `env:` block and reference only quoted shell variables. Validate path inputs against an allow-list, repository names against `owner/repo`, numeric inputs before arithmetic, and version tags before use.
+
+#### BUG-001 — Wrapper-update invocations can race direct pushes
+- **File path / lines:** `.github/workflows/update_workflows.yml:42-52,453-552`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** The reusable job has no concurrency group, checks out the caller’s branch, creates a commit, and runs an unconditional `git push`. Concurrent scheduled, dispatch, or `workflow_call` invocations can start from the same parent; the later push then fails non-fast-forward after doing all update work. This is an inferred overlap race. [NEEDS VERIFICATION]
+- **Recommended fix:** Add job-level concurrency using `update-workflows-${{ github.repository }}` with `cancel-in-progress: false`. Before committing, refresh the target branch and recompute or safely rebase generated changes.
+
+#### BUG-002 — Changelog-only updates bypass the update notification
+- **File path / lines:** `.github/workflows/update_workflows.yml:453-555,589-640`
+- **Severity:** Low
+- **Category:** `bug`
+- **Description:** The commit predicate includes `changelog_assets_has_changes` and `changelog_assembled`; the notification predicate omits both. The notification body also never adds the already-computed changelog asset or assembly details. An enabled notification therefore remains silent for a changelog-only commit.
+- **Recommended fix:** Reuse one shared `HAS_MANAGED_CHANGES` output for commit and notification gates, and include changelog asset and assembly summaries in `MSG`.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001 — Label synchronization performs one existence read per contract label
+- **File path / lines:** `scripts/ai_labels.py:433-624`
+- **Severity:** Medium
+- **Category:** `api-redundancy`
+- **Description:** The current 46-label contract causes 46 individual label GETs before any required writes. A create race can add another re-read. Current reads: **46**; proposed reads: **1 paginated repository-label listing**, with mutation counts unchanged.
+- **Recommended fix:** Fetch `GET /repos/{repo}/labels?per_page=100` once, build a name-keyed cache, and retain the existing 422 re-read only as a race fallback. Mirror the cycle-local `LABELS_JSON` cache pattern used by `_fetch_issue_labels_batch_graphql`.
+
+#### API-002 — Ad-hoc retry loops retry permanent failures or miss transient failures
+- **File path / lines:** `.github/workflows/check_failure_triage.yml:117-135`; `scripts/dispatch_and_watch_workflow_run.sh:66-90`; `scripts/comprehensive_test_and_release_gh_api.sh:3-47`
+- **Severity:** Medium
+- **Category:** `api-redundancy`
+- **Description:** Triage retries every failure up to three times; workflow dispatch retries every failure up to `DISPATCH_MAX_ATTEMPTS`; the release helper retries only messages containing “rate limit,” missing normal 5xx/network failures. Current permanent-error counts are up to **3**, **D**, and **1** respectively; proposed permanent-error count is **1**, while transient failures retain their existing bounded caps.
+- **Recommended fix:** Route these paths through a shared status-aware retry helper based on `gh_helpers.sh::gh_retry`, including reset-aware rate-limit handling, transient HTTP classification, exponential backoff, and immediate termination for permanent 4xx responses.
+
+#### BATCH-001 — Consumer drift audit scales as repositories × templates
+- **File path / lines:** `scripts/audit_consumer_drift.py:397-480,530-531`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** Each repository uses one directory-list call followed by one raw-content call per installed canonical template. With 13 registered consumers and 15 templates, the current worst case is **208 logical calls** before retries. A GraphQL alias query can fetch all 15 paths per repository in **13 calls**.
+- **Recommended fix:** Add a per-repository GraphQL query using aliased `object(expression: "HEAD:.github/workflows/<file>")` blob selections. Extend the alias-batching pattern used by `_fetch_candidate_issue_details_graphql`; retain current REST reads only as per-repository fallback.
+
+#### BATCH-002 — Current-wave reconciliation discards an existing batched PR timeline
+- **File path / lines:** `scripts/orchestrate_poll_process.sh:10896-11018,14710-14787`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** `_fetch_candidate_issue_details_graphql` already fetches up to 50 PR cross-references for every issue, but transforms them into only the last closing PR. Reconciliation then performs one additional timeline call per issue and one REST PR fetch per candidate. Current calls: **ceil(N/25) + N + M**; proposed: **ceil(N/25)**, where `M` is the number of cross-referenced PR candidates.
+- **Recommended fix:** Add PR body and repository identity to the existing GraphQL selection and retain a `linked_pr_candidates[]` array in its cache. Perform `_pr_json_is_issue_implementation_pr`-equivalent classification from that cached data.
+
+#### BATCH-003 — Post-mutation label and blocker refreshes revert to per-item REST
+- **File path / lines:** `scripts/orchestrate_poll_process.sh:16501-16535,16550-16666`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** After review-blocked mutations, every current/reissued issue’s labels are fetched individually. Implementation-failed blocker states are then fetched individually. Current calls: **N + R + B**; proposed: **ceil((N+R)/25) + ceil(B/25)**.
+- **Recommended fix:** Re-run `_fetch_issue_labels_batch_graphql` for the union of current and reissued issues, and use `_fetch_candidate_issue_details_graphql` for blocker states. Preserve per-item REST only for missing batch keys.
+
+#### BATCH-004 — Review-thread resolution issues one mutation per thread
+- **File path / lines:** `scripts/review_resolve_review_threads.sh:150-167,259-339`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** The script batches thread discovery but performs one GraphQL resolve mutation per selected thread. With `REVIEW_RESOLVE_THREADS_MAX=50`, the mutation phase costs **R + I** calls, where `I` is ignored-thread replies. Batched aliases reduce this to **ceil(R/25) + I**, or at most 2 resolve requests.
+- **Recommended fix:** Generate bounded aliased `resolveReviewThread` mutations, parse success per alias, and leave failed aliases unresolved. Extend the alias-fragment approach in `_fetch_issue_labels_batch_graphql`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Integration-ref bootstrap is copied byte-for-byte across three workflows
+- **File path / lines:** `.github/workflows/clarify.yml:61-130`; `.github/workflows/implement.yml:323-392`; `.github/workflows/orchestrate_clarify_respond.yml:115-184`
+- **Severity:** Medium
+- **Category:** `duplication`
+- **Description:** These workflows contain identical 2,963-character blocks that clone the workflow source, select a fallback ref, redact clone logs, and invoke `resolve_integration_ref.sh`.
+- **Recommended fix:** Introduce `scripts/resolve_integration_ref_bootstrap.sh resolve <repo> <issue> <script-ref>`, or a composite action exposing the same three inputs and a `ref` output. Update all three callers.
+
+#### DUP-002 — Seven workflows retain bespoke support-staging implementations
+- **File path / lines:** `.github/workflows/check_failure_triage.yml:196-259`; `.github/workflows/clarify.yml:215-351`; `.github/workflows/implement.yml:851-1153`; `.github/workflows/orchestrate.yml:340-469`; `.github/workflows/orchestrate_clarify_respond.yml:277-412`; `.github/workflows/orchestrate_poll.yml:331-523`; `.github/workflows/plan.yml:278-414`
+- **Severity:** Medium
+- **Category:** `duplication`
+- **Description:** Each block independently maintains script, schema, prompt, fallback-ref, and optional-asset lists. `review_autofix.yml` and `validate.yml` already use `scripts/stage_workflow_support.sh`, proving a centralized pattern exists.
+- **Recommended fix:** Extend `stage_workflow_support.sh` with `stage --profile <phase> --manifest <path>`. Keep shared required assets in one base profile and phase-specific additions in data manifests.
+
+#### DUP-003 — Context-budget warning logic is implemented four times
+- **File path / lines:** `scripts/review_apply_fixes.sh:103-141`; `scripts/review_rb_judge.sh:203-241`; `scripts/review_run_reviewers.sh:44-82`; `scripts/review_consolidate.sh:258-297`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** All four functions construct the same Python path, import `build_context_budget_warn_line_for_file`, and print an optional warning.
+- **Recommended fix:** Add `scripts/prompt_budget_helpers.sh::emit_context_budget_warn_for_prompt <phase> <prompt_path> <model>` and source it from all four scripts.
+
+#### DUP-004 — Codex cache restoration is repeated five times
+- **File path / lines:** `.github/workflows/plan.yml:72-119`; `.github/workflows/workflow-log-analysis.yml:212-248,695-741,1378-1424,1885-1931`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** The same cache key, package validation, copy, symlink, and version-check sequence appears in five jobs.
+- **Recommended fix:** Create a `setup-cached-codex(codex_version, cache_key_suffix)` composite-action interface, backed by a single cache restore/persist helper.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — Implement support-staging block exceeds the 15,000-character threshold
+- **File path / lines:** `.github/workflows/implement.yml:853-1153`
+- **Severity:** Medium
+- **Category:** `expression-limit`
+- **Description:** The interpolated `run:` scalar is approximately **16,339 characters** with three `${{ }}` interpolations, leaving approximately **4,661 characters** before GitHub’s 21,000-character limit. Runtime substitutions can reduce that headroom further.
+- **Recommended fix:** Apply DUP-002 by moving asset manifests and copy logic into `stage_workflow_support.sh`. Split optional MCP assets and prompt/schema installation into separate steps if extraction cannot land atomically.
+
+No block exceeded 18,000 characters. No workflow exceeded 800 KB; the largest was `review_autofix.yml` at approximately 454 KB.
+
+### Section 5: Cross-Cutting Concerns
+
+No TODO/FIXME/HACK markers were found in the scoped files.
+
+#### DEAD-001 — `render_prompt.py` is staged twice in the same step
+- **File path / lines:** `.github/workflows/implement.yml:868-925`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** The required-script loop includes and installs `render_prompt.py`; the later “optional backend” loop installs it again and appends a duplicate `_fetched_scripts` entry. Its missing-file warning is unreachable because the earlier required loop would already exit.
+- **Recommended fix:** Keep the file in exactly one list. Based on the current required-path behavior, remove the second loop and its stale optionality comment.
+
+#### DEAD-002 — Several values are assigned but never consumed
+- **File path / lines:** `scripts/orchestrate_poll_process.sh:14758-14787,16559-16616`; `scripts/review_issue_ledger.sh:866-917`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** `LINKED_PR_NUM`, `IF_BLOCKERS_SOURCE`, and `CURRENT_FLOOR` are populated but have no subsequent reads in the repository. They add state-maintenance cost without affecting behavior.
+- **Recommended fix:** Remove them, or make them operational by including the selected linked PR, blocker source, and floor category in the resulting cache/ledger telemetry.
+
+#### SHELL-001 — Ledger range parsing ignores the range endpoint
+- **File path / lines:** `scripts/review_issue_ledger.sh:62-107`
+- **Severity:** Low
+- **Category:** `shellcheck`
+- **Description:** `read_anchor_context` parses both `line_start` and `line_end`, but always renders only `line_start ± 2`. A finding covering `120-145` therefore ignores lines 123-145. Shellcheck reports the unused endpoint. This may be intentional start-line anchoring. [NEEDS VERIFICATION]
+- **Recommended fix:** Either calculate bounded context from `line_start - 2` through `line_end + 2`, with a maximum-line cap, or remove range parsing and document that only the first line is authoritative.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | SEC-001, SEC-002 |
+| Medium | 10 | BUG-001, API-001, API-002, BATCH-001, BATCH-002, BATCH-003, BATCH-004, DUP-001, DUP-002, EXPR-001 |
+| Low | 6 | BUG-002, DUP-003, DUP-004, DEAD-001, DEAD-002, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 7 | Medium |
+| API call optimization | 7 | Large |
+| Code modularization | 14–15 | Large |
+| Expression size reduction | 2 | Medium |
+| Medium/Low fixes | 4–6 | Medium |
