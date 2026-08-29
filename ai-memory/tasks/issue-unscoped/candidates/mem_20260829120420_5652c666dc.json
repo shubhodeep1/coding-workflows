@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "The .ai/.workspace_source_manifest.txt file appeared in the changed-file set across nearly every recent merged workflow change. When adding or modifying workflow-support files, verify whether this manifest is generated or expected to change and include the repository\u2019s normal update step.",
+  "fingerprint": "a04c961f197fce8d73539347806feac1207627459cd19fce705f4ba2e325ec8e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33251328653",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33251328653",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3846",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3849",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3865",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3870",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3873",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3847",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3864",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3867",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3872",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3877"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260829120420_5652c666dc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Repository workflow changes commonly require updating the workspace source manifest as part of the implementation.",
+  "timestamps": {
+    "created_at": "2026-08-29T12:04:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
