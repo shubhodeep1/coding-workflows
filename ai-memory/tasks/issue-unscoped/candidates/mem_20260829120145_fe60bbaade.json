@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.87,
+  "details": "Merged work added or maintained tests for reviewer-attempt prompt isolation and sandbox pinning while also changing reviewer orchestration. Any new reviewer invocation or retry path should preserve per-attempt isolation and explicitly test that shared state cannot leak between reviewers.",
+  "fingerprint": "d05ce5be817f5ecee0c49967f46538484ce09d3c94fd690868fc219eb201e893",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33251328653",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33251328653",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3846",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3849",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3865",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3870",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3873",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3847",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3864",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3867",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3872",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3877"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260829120145_fe60bbaade",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer attempts are deliberately isolated, including prompt inputs and sandbox configuration, to prevent cross-review contamination.",
+  "timestamps": {
+    "created_at": "2026-08-29T12:01:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
