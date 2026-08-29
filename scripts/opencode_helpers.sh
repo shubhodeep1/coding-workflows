@@ -121,7 +121,7 @@ opencode_emit_failure_alert()
 	if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${_opencode_helpers_dir}/tg_helpers.sh" ]; then
 		# shellcheck source=tg_helpers.sh
 		# shellcheck disable=SC1091
-		source "${_opencode_helpers_dir}/tg_helpers.sh"
+		source "${_opencode_helpers_dir}/tg_helpers.sh" 2>/dev/null || true
 	fi
 	if type tg_send_msg >/dev/null 2>&1; then
 		tg_send_msg "${payload}" "ERROR" >/dev/null || true

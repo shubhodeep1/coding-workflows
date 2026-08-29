@@ -287,7 +287,7 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 		"actual cache-buster; without it the per-attempt copy is byte-"
 		"identical and the cache still hits."
 	)
-	# codex must read the per-attempt file (which carries the nonce trailer),
+	# OpenCode must read the per-attempt file (which carries the nonce trailer),
 	# never the unchanging base prompt. The stdin redirect may be inline
 	# (`< "${attempt_prompt_file}"`) or inside a one-arg helper that the call
 	# site feeds `${attempt_prompt_file}` into — the S4 continuation-thread-
@@ -295,7 +295,7 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 	# Assert the behaviour, not one code shape, so a cache-buster-preserving
 	# refactor does not trip this guard while a regression to the base prompt
 	# still does.
-	assert 'codex --ask-for-approval never' in text
+	assert 'opencode_run_cmd "$@"' in text
 
 
 	def _shell_function_blocks(script_text: str) -> dict[str, str]:
@@ -369,7 +369,7 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 							pending_function = function_declaration.group(1)
 			if not re.match(r'^\s*#', line):
 				for operand in re.findall(
-					r'codex --ask-for-approval never[^\n]*<\s*"?([$](?:\{?\w+\}?))"?',
+					r'"[$]\{editor_opencode_cmd\[@\]\}"[^\n]*<\s*"?([$](?:\{?\w+\}?))"?',
 					line,
 				):
 					targets.append((
@@ -390,15 +390,15 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 	function_blocks = _shell_function_blocks(text)
 	codex_stdin_targets = _codex_stdin_targets(text)
 	assert codex_stdin_targets, (
-		"No `codex --ask-for-approval never … < \"$file\"`-style stdin "
+			"No OpenCode editor command with a `< \"$file\"` stdin "
 		"redirect "
-		"found; the editor must feed codex a prompt file on stdin."
+			"redirect found; the editor must feed OpenCode a prompt file on stdin."
 	)
 	assert all(
 		stdin_var != "EDITOR_PROMPT_FILE"
 		for stdin_var, _helper_name in codex_stdin_targets
 	), (
-		"codex stdin is the unchanging `${EDITOR_PROMPT_FILE}` — every retry "
+			"OpenCode stdin is the unchanging `${EDITOR_PROMPT_FILE}` — every retry "
 		"sends identical bytes and a cached refusal is served instantly "
 		"(PR #3053 / run 26081926521). Feed `${attempt_prompt_file}` instead."
 	)

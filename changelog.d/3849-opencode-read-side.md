@@ -1,0 +1,2 @@
+<!-- changelog: changed -->
+- **Review/autofix read-side model calls now run through OpenCode.** Both reviewer passes, cache probes, and consensus summarisation use isolated read-only OpenCode configurations with the existing reasoning, retry, failback, heartbeat, and ledger contracts. The later write-side cutover, documented separately in this release, moves the remaining review/autofix model calls to OpenCode.

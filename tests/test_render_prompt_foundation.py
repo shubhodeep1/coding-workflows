@@ -356,7 +356,7 @@ def test_render_prompt_py_renders_reference_placeholders_and_mode_specific_appen
 	assert proc.stdout == "Header\nShared output block.\nValidate-only output block.\nFooter\n"
 
 
-def test_render_prompt_py_reports_missing_mode_specific_append_reference() -> None:
+def test_render_prompt_py_reports_missing_append_in_untrusted_assembled_body() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_missing_append_") as td:
 		repo_root = Path(td)
 		prompt_file = repo_root / "prompts" / "mode-validate-generate.txt"
@@ -380,7 +380,13 @@ def test_render_prompt_py_reports_missing_mode_specific_append_reference() -> No
 		shutil.copy2(RENDER_PROMPT_PY, render_script)
 
 		proc = subprocess.run(
-			[sys.executable, str(render_script), str(prompt_file)],
+			[
+				sys.executable,
+				str(render_script),
+				str(prompt_file),
+				"--input-already-assembled",
+				"--skip-syntax-validation",
+			],
 			cwd=str(repo_root),
 			env=_base_env(),
 			text=True,
@@ -395,6 +401,7 @@ def test_render_prompt_py_reports_missing_mode_specific_append_reference() -> No
 		in proc.stderr
 	)
 	assert "prompts/references/validate-output-contract.txt" in proc.stderr
+	assert "left unhydrated" not in proc.stderr
 
 
 def test_render_prompt_py_reports_missing_reference_file() -> None:
@@ -430,6 +437,97 @@ def test_render_prompt_py_reports_missing_reference_file() -> None:
 	assert proc.stdout == ""
 	assert "Reference file for placeholder 'REFERENCE_OUTPUT_CONTRACT' not found" in proc.stderr
 	assert "prompts/references/output-contract.txt" in proc.stderr
+
+
+def test_render_prompt_py_fails_open_on_missing_reference_in_untrusted_assembled_body() -> None:
+	"""An already-assembled body embedding untrusted PR-diff text can carry a
+	literal braced REFERENCE_* token with no matching reference file (e.g. a
+	plan doc documenting a future REFERENCE_SECURITY_MONEY_LENS placeholder;
+	observed on run 33245886964). When both --input-already-assembled and
+	--skip-syntax-validation are set, that token must render verbatim while
+	resolvable references still hydrate.
+
+	The braced tokens below are built by concatenation so this test's own
+	source never contains a contiguous braced token: this file's diff gets
+	embedded in reviewer prompt bodies too, and until the fix under test is
+	on main the reviewing renderer would hard-fail on it (the recursion that
+	broke run 33246480829 — this fix's own PR).
+	"""
+	resolvable_token = "{{" + "REFERENCE_OUTPUT_CONTRACT" + "}}"
+	unresolvable_token = "{{" + "REFERENCE_SECURITY_MONEY_LENS" + "}}"
+	unsupported_token = "{{" + "REFERENCE_" + "}}"
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_failopen_reference_") as td:
+		repo_root = Path(td)
+		body_file = repo_root / "reviewer_prompt_body.txt"
+		contract_file = repo_root / "prompts" / "contracts" / "reviewer_prompt_body.yml"
+		reference_dir = repo_root / "prompts" / "references"
+		render_script = repo_root / "scripts" / "render_prompt.py"
+		contract_file.parent.mkdir(parents=True, exist_ok=True)
+		reference_dir.mkdir(parents=True, exist_ok=True)
+		render_script.parent.mkdir(parents=True, exist_ok=True)
+
+		body_file.write_text(
+			"Header\n"
+			f"{resolvable_token}\n"
+			f"Untrusted diff line: {unresolvable_token}\n"
+			f"Malformed diff line: {unsupported_token}\n"
+			"Footer\n",
+			encoding="utf-8",
+		)
+		contract_file.write_text(
+			"required_vars: []\n"
+			"optional_vars:\n"
+			"  REFERENCE_OUTPUT_CONTRACT: \"\"\n"
+			"  REFERENCE_SECURITY_MONEY_LENS: \"\"\n"
+			"  REFERENCE_: \"\"\n"
+			"forbidden_vars: []\n",
+			encoding="utf-8",
+		)
+		(reference_dir / "output-contract.txt").write_text("Shared output block.\n", encoding="utf-8")
+		shutil.copy2(RENDER_PROMPT_PY, render_script)
+
+		proc = subprocess.run(
+			[
+				sys.executable,
+				str(render_script),
+				str(body_file),
+				"--input-already-assembled",
+				"--skip-syntax-validation",
+			],
+			cwd=str(repo_root),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		body_file.write_text(f"Trusted template line: {unresolvable_token}\n", encoding="utf-8")
+		skip_only_proc = subprocess.run(
+			[
+				sys.executable,
+				str(render_script),
+				str(body_file),
+				"--skip-syntax-validation",
+			],
+			cwd=str(repo_root),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout == (
+		"Header\n"
+		"Shared output block.\n"
+		f"Untrusted diff line: {unresolvable_token}\n"
+		f"Malformed diff line: {unsupported_token}\n"
+		"Footer\n"
+	)
+	assert "REFERENCE_SECURITY_MONEY_LENS" in proc.stderr
+	assert "unsupported reference placeholder" in proc.stderr
+	assert "WARNING" in proc.stderr
+	assert skip_only_proc.returncode == 1
+	assert "Reference file for placeholder 'REFERENCE_SECURITY_MONEY_LENS' not found" in skip_only_proc.stderr
 
 
 def test_render_prompt_py_reports_unknown_placeholder_contract_violation() -> None:
@@ -1183,8 +1281,9 @@ def main() -> int:
 	test_render_prompt_py_renders_inline_placeholders_and_yaml_scalar_defaults()
 	test_render_prompt_sh_uses_trusted_backend_locations_only()
 	test_render_prompt_py_renders_reference_placeholders_and_mode_specific_append()
-	test_render_prompt_py_reports_missing_mode_specific_append_reference()
+	test_render_prompt_py_reports_missing_append_in_untrusted_assembled_body()
 	test_render_prompt_py_reports_missing_reference_file()
+	test_render_prompt_py_fails_open_on_missing_reference_in_untrusted_assembled_body()
 	test_render_prompt_py_reports_unknown_placeholder_contract_violation()
 	test_render_prompt_py_renders_security_audit_mode_contract()
 	test_render_prompt_py_rejects_unsupported_placeholder_expression()

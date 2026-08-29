@@ -18,7 +18,7 @@ added, every concurrent worker then derived the SAME attempt path
 the nag block appends to it, ``sanitize_codex_prompt_file`` rewrites it via
 iconv → tmp → ``mv`` (and mv's an *empty* tmp over the path whenever iconv
 reads mid-truncation, after which every later sanitize preserves the
-emptiness), while each worker's codex reads it as stdin. One bad interleaving
+emptiness), while each worker's model process reads it as stdin. One bad interleaving
 left the file empty and every reviewer failed non-retryably with::
 
     Reading prompt from stdin...
@@ -30,12 +30,12 @@ tele-funtoken-msg-scoring/actions/runs/32222803753 (PR #3721, pass 2: 6/6
 reviewers failed identically ~1.5s after launch while the assembled pass-2
 prompt file was 571935 bytes).
 
-This test pins the two halves of the fix:
+This test pins the two halves of the fix across the OpenCode cutover:
 
 1. the attempt prompt path embeds the per-slot ``safe_name`` so concurrent
    slots never share a mutable attempt file;
 2. the pre-launch guard restores/flags an unexpectedly empty effective prompt
-   instead of letting codex fail the slot silently.
+   instead of letting the model process fail the slot silently.
 """
 
 from __future__ import annotations
@@ -84,12 +84,12 @@ def test_empty_effective_prompt_is_guarded_before_launch() -> None:
 	)
 	assert guard, (
 		"expected a pre-launch guard on an empty reviewer_effective_prompt_file "
-		"(codex fails a slot non-retryably on empty stdin)"
+		"(the model process fails a slot non-retryably on empty stdin)"
 	)
 	launch = text.find('-- "${reviewer_codex_cmd[@]}" < "${reviewer_effective_prompt_file}"')
-	assert launch != -1, "expected the codex launch redirect to be present"
+	assert launch != -1, "expected the supervised OpenCode launch redirect to be present"
 	assert guard.start() < launch, (
-		"the empty-prompt guard must run before the codex launch redirect"
+		"the empty-prompt guard must run before the OpenCode launch redirect"
 	)
 	guard_block = text[guard.start():launch]
 	assert 'reviewer_effective_prompt_file="${prompt_file}"' in guard_block, (
@@ -101,12 +101,21 @@ def test_empty_effective_prompt_is_guarded_before_launch() -> None:
 	)
 	assert "continuing with the base prompt to avoid empty stdin" in text, (
 		"an unrestorable empty attempt prompt should fall back to the base prompt "
-		"instead of launching codex with empty stdin"
+		"instead of launching OpenCode with empty stdin"
 	)
-	assert "refusing to launch codex with empty stdin" in guard_block, (
+	assert "refusing to launch OpenCode with empty stdin" in guard_block, (
 		"if every fallback still leaves an empty prompt, the slot should fail before "
-		"the codex stdin redirect"
+		"the OpenCode stdin redirect"
 	)
 	assert '"${reviewer_effective_prompt_bytes}" -lt "${reviewer_base_prompt_bytes}"' in text, (
 		"the pre-launch guard should restore a non-empty but truncated attempt prompt"
+	)
+	command_start = text.find('reviewer_codex_cmd=(\n    bash -c')
+	assert command_start != -1, "expected the OpenCode command-array assignment"
+	command_block = text[command_start:launch]
+	assert 'opencode_run_cmd "$@"' in command_block
+	assert '"${attempt_reasoning}"' in command_block
+	assert '"${reviewer_opencode_config_path}"' in command_block
+	assert "reviewer_effective_prompt_file" not in command_block, (
+		"prompt content/path must remain stdin-only and must not be embedded in OpenCode argv"
 	)

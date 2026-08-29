@@ -24,24 +24,30 @@ REVIEW_BLOCKED_PROMPT = REPO_ROOT / "prompts" / "mode-judge-review-blocked.txt"
 GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
 
 
-def _install_mock_codex(mock_bin_dir: Path, output_fixture: Path, *, exit_code: int = 0) -> Path:
+def _install_mock_opencode(mock_bin_dir: Path, output_fixture: Path, *, exit_code: int = 0) -> tuple[Path, Path]:
 	mock_bin_dir.mkdir(parents=True, exist_ok=True)
-	output_file = mock_bin_dir / "codex_output.txt"
+	output_file = mock_bin_dir / "opencode_output.txt"
 	shutil.copy2(output_fixture, output_file)
-	codex_script = mock_bin_dir / "codex"
-	codex_script.write_text(
+	opencode_script = mock_bin_dir / "opencode"
+	opencode_script.write_text(
 		"#!/usr/bin/env bash\n"
 		"set -euo pipefail\n\n"
-			"case \" $* \" in\n"
-			"\t*\" exec \"*) ;;\n"
-			"\t*) echo \"mock-codex supports only exec\" >&2; exit 2 ;;\n"
-			"esac\n"
-			"cat \"${MOCK_CODEX_OUTPUT_FILE}\"\n"
+			"if [ \"${1:-}\" = \"--version\" ]; then printf '1.18.23\\n'; exit 0; fi\n"
+			"if [ \"${1:-}\" != \"run\" ]; then echo \"mock-opencode supports only run\" >&2; exit 2; fi\n"
+			"cat \"${MOCK_OPENCODE_OUTPUT_FILE}\"\n"
 			f"exit {exit_code}\n",
 			encoding="utf-8",
 		)
-	codex_script.chmod(0o755)
-	return output_file
+	opencode_script.chmod(0o755)
+	config_writer = mock_bin_dir / "write_opencode_config.sh"
+	config_writer.write_text(
+		"#!/usr/bin/env bash\nset -euo pipefail\n"
+		"config_path=''\nwhile [ $# -gt 0 ]; do if [ \"$1\" = '--config-path' ]; then config_path=\"$2\"; shift 2; else shift; fi; done\n"
+		"mkdir -p \"$(dirname \"${config_path}\")\"\nprintf '{}\\n' > \"${config_path}\"\n",
+		encoding="utf-8",
+	)
+	config_writer.chmod(0o755)
+	return output_file, config_writer
 
 
 def _run_consolidator(
@@ -61,19 +67,27 @@ def _run_consolidator(
 	else:
 		ledger_path.write_text(ledger_text, encoding="utf-8")
 	mock_bin = tmp_dir / "mock_bin"
-	mock_output = _install_mock_codex(mock_bin, FIXTURES / output_fixture_name, exit_code=codex_exit_code)
+	mock_output, mock_config_writer = _install_mock_opencode(mock_bin, FIXTURES / output_fixture_name, exit_code=codex_exit_code)
+	effective_support_dir = support_scripts_dir or (REPO_ROOT / "scripts")
+	if support_scripts_dir is not None:
+		shutil.copy2(REPO_ROOT / "scripts" / "opencode_helpers.sh", effective_support_dir / "opencode_helpers.sh")
 
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env["RUNTIME_DIR"] = str(runtime_dir)
 	env["SUPPORT_PROMPTS_DIR"] = str(REPO_ROOT / "prompts")
-	env["SUPPORT_SCRIPTS_DIR"] = str(support_scripts_dir or (REPO_ROOT / "scripts"))
+	env["SUPPORT_SCRIPTS_DIR"] = str(effective_support_dir)
 	env["REVIEW_CONSOLIDATOR_ENABLED"] = "1"
 	env["REVIEW_LEDGER_ENABLED"] = "1"
 	env["REVIEW_LEDGER_REREVIEW_ENABLED"] = "1"
 	env["REVIEW_LEDGER_PATH"] = str(ledger_path)
-	env["MOCK_CODEX_OUTPUT_FILE"] = str(mock_output)
+	env["MOCK_OPENCODE_OUTPUT_FILE"] = str(mock_output)
+	env["OPENCODE_CONFIG_WRITER_PATH"] = str(mock_config_writer)
 	env["PATH"] = f"{mock_bin}:{env.get('PATH', '')}"
+	for key in ("BASH_ENV", "ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "WORKSPACE_PATH"):
+		env.pop(key, None)
+	env["PWD"] = str(tmp_dir)
+	env.pop("OLDPWD", None)
 
 	result = subprocess.run(
 		["bash", str(CONSOLIDATE_SCRIPT)],

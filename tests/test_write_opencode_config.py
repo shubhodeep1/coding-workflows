@@ -101,12 +101,12 @@ def test_reviewer_configuration_is_read_only_and_model_pinned() -> None:
 		}
 		permission = config["agent"]["reviewer"]["permission"]
 		assert permission["edit"] == "deny"
-		assert permission["bash"] == "allow"
+		assert permission["bash"] == "deny"
 		assert permission["read"] == "allow"
 		assert permission["task"] == "deny"
 		assert permission["webfetch"] == "deny"
 		tools = config["agent"]["reviewer"]["tools"]
-		assert tools["bash"] is True
+		assert tools["bash"] is False
 		assert tools["edit"] is False
 		assert tools["apply_patch"] is False
 		assert tools["task"] is False

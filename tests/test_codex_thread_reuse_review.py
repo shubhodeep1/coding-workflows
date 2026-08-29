@@ -107,7 +107,7 @@ def test_transform_prompt_replace_prefix_preserves_review_editor_response_schema
 		output = tmp_path / "output.txt"
 		source_text = (
 			"full editor prompt header\n"
-			+ ("reviewer evidence\n" * 40)
+			+ ("reviewer evidence\n" * 200)
 			+ "FINAL RESPONSE FORMAT\n"
 			+ "Changes made:\n"
 			+ "Change status:\n"
@@ -143,7 +143,7 @@ def test_transform_prompt_replace_prefix_preserves_resolver_live_context_tail_an
 		output = tmp_path / "output.txt"
 		source_text = (
 			"full resolver prompt header\n"
-			+ ("merged sub-issue detail\n" * 50)
+			+ ("merged sub-issue detail\n" * 200)
 			+ f"{CONFLICT_LIVE_CONTEXT_MARKER}\n"
 			+ "conflicted-file-tail\n"
 			+ "semble-tail\n"
@@ -186,10 +186,8 @@ def test_review_apply_fixes_contains_thread_reuse_wiring() -> None:
 	assert 'CODEX_THREAD_REUSE_HELPER="$(resolve_support_script codex_thread_reuse.sh || true)"' in text
 	assert "resolve_review_thread_reuse_asset()" in text
 	assert "review_thread_reuse_enabled()" in text
-	assert "prompts/mode-review-apply-fixes-continuation.txt" in text
-	assert "review-apply-fixes-editor" in text
-	assert "replace-prefix" in text
-	assert "FINAL RESPONSE FORMAT" in text
+	assert "CODEX_THREAD_REUSE_ENABLED requested; OpenCode editor uses the fresh full-prompt path." in text
+	assert "codex_thread_reuse_install_wrapper" not in text
 	assert 'PATH="${EDITOR_CODEX_PATH}" run_editor_codex_attempt' in text
 
 
@@ -201,11 +199,10 @@ def test_review_conflict_resolve_contains_thread_reuse_wiring() -> None:
 	assert "resolve_conflict_thread_reuse_asset()" in text
 	assert "conflict_thread_reuse_enabled()" in text
 	assert "render_conflict_thread_reuse_continuation()" in text
-	assert "prompts/mode-review-conflict-resolver-continuation.txt" in text
 	assert CONFLICT_LIVE_CONTEXT_MARKER in text
-	assert "review-conflict-resolver" in text
-	assert "replace-prefix" in text
-	assert 'PATH="${_attempt_codex_path}" timeout' in text
+	assert "CODEX_THREAD_REUSE_ENABLED requested; OpenCode conflict resolver uses the fresh full-prompt path." in text
+	assert "codex_thread_reuse_install_wrapper" not in text
+	assert '"${resolver_opencode_cmd[@]}"' in text
 	assert 'PREVIOUS_ATTEMPT_FAILURE_KIND="${failure_kind}"' in text
 
 
@@ -215,7 +212,7 @@ def main() -> int:
 	test_transform_prompt_replace_prefix_preserves_resolver_live_context_tail_and_shrinks_prompt()
 	test_review_apply_fixes_contains_thread_reuse_wiring()
 	test_review_conflict_resolve_contains_thread_reuse_wiring()
-	print("OK: review-side Codex thread reuse wiring assertions hold")
+	print("OK: review-side thread reuse compatibility assertions hold")
 	return 0
 
 

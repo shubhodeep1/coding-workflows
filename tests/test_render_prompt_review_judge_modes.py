@@ -222,6 +222,12 @@ def test_reference_backed_review_and_judge_prompts_render_shared_blocks() -> Non
 			assert CONSOLIDATOR_ALIAS_SENTINEL in proc.stdout
 		if prompt_name == "review-reviewer-checklist.txt":
 			assert "SEVERITY: BLOCKER | MAJOR | NIT" in proc.stdout
+		if prompt_name == "mode-judge-interim.txt":
+			assert "read-only repository access through the read, grep, glob, and list" in proc.stdout
+			assert "all tools (shell" not in proc.stdout
+			template_text = (PROMPTS_DIR / "_templates" / prompt_name).read_text(encoding="utf-8")
+			assert "read-only repository access through the read, grep, glob, and list" in template_text
+			assert "all tools (shell" not in template_text
 
 
 def test_review_consolidator_renders_additive_diataxis_lens_contract() -> None:
