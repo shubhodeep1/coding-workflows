@@ -116,6 +116,8 @@ def test_production_review_path_uses_opencode_for_read_and_write_sides() -> None
 	assert "Install Codex CLI" not in production
 	assert "Create Codex config" not in production
 	assert 'opencode_run_cmd "$@"' in reviewers
+	assert '"${reviewer_opencode_workspace}"\n    json' in reviewers
+	assert 'reviewer_materialize_opencode_json_text "${tmp_structured_output}" "${tmp_output}"' in reviewers
 	assert 'opencode_run_cmd "$@"' in summariser
 	assert 'opencode_run_cmd "$@"' in apply_fixes
 	assert "exec codex --ask-for-approval never" not in apply_fixes
