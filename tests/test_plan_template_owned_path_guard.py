@@ -54,12 +54,19 @@ def _guard_body() -> str:
 	return body
 
 
-def _run_guard(plan_text: str, gitignore_entries: tuple[str, ...] | None):
+def _run_guard(
+	plan_text: str,
+	gitignore_entries: tuple[str, ...] | None,
+	tracked_paths: tuple[str, ...] = (),
+):
 	"""Execute the guard against a synthetic plan; return (exit_code, output).
 
 	``gitignore_entries`` of ``None`` simulates a bootstrap failure in which
 	the support checkout and scripts/.gitignore were never written.
 	"""
+	env = os.environ.copy()
+	env.pop("GIT_DIR", None)
+	env.pop("GIT_WORK_TREE", None)
 	with tempfile.TemporaryDirectory() as tmp:
 		workspace = Path(tmp)
 		(workspace / "scripts").mkdir()
@@ -74,11 +81,19 @@ def _run_guard(plan_text: str, gitignore_entries: tuple[str, ...] | None):
 			)
 			implement_workflow.parent.mkdir(parents=True)
 			shutil.copy2(IMPLEMENT_WORKFLOW, implement_workflow)
+		if tracked_paths:
+			subprocess.run(["git", "init", "-q"], cwd=workspace, env=env, check=True)
+			for tracked_path in tracked_paths:
+				tracked_file = workspace / tracked_path
+				tracked_file.parent.mkdir(parents=True, exist_ok=True)
+				tracked_file.write_text("consumer-owned\n")
+			subprocess.run(
+				["git", "add", "--", *tracked_paths], cwd=workspace, env=env, check=True
+			)
 		runtime_dir = workspace / "runtime"
 		runtime_dir.mkdir()
 		codex_output = runtime_dir / "codex_output.txt"
 		codex_output.write_text(plan_text)
-		env = os.environ.copy()
 		env.update(
 			{
 				"PYTHONDONTWRITEBYTECODE": "1",
@@ -123,6 +138,12 @@ def test_consumer_owned_scripts_are_allowed(path: str) -> None:
 	assert returncode == 0, f"consumer-owned {path} was rejected:\n{output}"
 
 
+def test_tracked_consumer_serena_template_is_allowed() -> None:
+	path = "scripts/templates/serena_project.yml.j2"
+	returncode, output = _run_guard(_plan_listing(path), FETCHED_HELPERS, (path,))
+	assert returncode == 0, f"consumer-owned {path} was rejected:\n{output}"
+
+
 @pytest.mark.parametrize(
 	"path", ["scripts.txt", ".github/prompts.md", ".github/scripts.yml"]
 )
@@ -140,9 +161,8 @@ def test_similarly_prefixed_root_files_are_allowed(path: str) -> None:
 		# so reading plan.yml's scripts/.gitignore alone would allow it.
 		"scripts/codex_stall_guard.sh",
 		"scripts/lint_pr_body_auto_close.py",
-		# This nested template is registered directly in implement.yml's
-		# FETCHED_MANIFEST rather than through an _fetched_scripts loop, so
-		# basename-only extraction cannot cover it.
+		# An untracked copy is registered directly in implement.yml's
+		# FETCHED_MANIFEST and must remain protected.
 		"scripts/templates/serena_project.yml.j2",
 		# The catalog is also fetched by the plan job and listed in its gitignore.
 		"scripts/codex_model_catalog.json",

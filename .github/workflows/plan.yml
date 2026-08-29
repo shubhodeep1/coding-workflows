@@ -1448,10 +1448,12 @@ jobs:
           # guard derives those helper paths, including literal scripts/...
           # FETCHED_MANIFEST entries, from the staged implement.yml workflow
           # itself, then unions them with this job's scripts/.gitignore entries.
-          # That keeps implement-only and plan-only helpers covered without
-          # duplicating their lists here.  When either source is unavailable or
-          # cannot be parsed (bootstrap failure), we fall back to rejecting
-          # every scripts/ path, matching implement.yml's own fallback.
+          # The tracked Serena template remains consumer-owned, matching
+          # implement.yml's ownership check.  That keeps implement-only and
+          # plan-only helpers covered without duplicating their lists here.
+          # When either source is unavailable or cannot be parsed (bootstrap
+          # failure), we fall back to rejecting every scripts/ path, matching
+          # implement.yml's own fallback.
           #
           # This guard is skipped entirely when the workflow is running inside
           # the canonical `*/coding-workflows` repository, because in that repo
@@ -1500,7 +1502,7 @@ jobs:
               if '_fetched_scripts+=("${f}")' in loop_match.group("body"):
                   implementation_helpers.update(loop_match.group("names").split())
           direct_manifest_pattern = re.compile(
-              r'^\s*echo\s+"scripts/([^"$]+)"\s*>>\s*"\$\{FETCHED_MANIFEST\}"\s*$',
+              r'^\s*echo\s+"scripts/([^"$]+)"\s*>>\s*"\$\{FETCHED_MANIFEST\}"(?:\s*#[^\n]*)?\s*$',
               re.MULTILINE,
           )
           implementation_helpers.update(direct_manifest_pattern.findall(stage_body))
@@ -1545,6 +1547,10 @@ jobs:
               # A bare `scripts/` reference names no specific file; keep the
               # conservative rejection rather than guessing.
               printf '%s\n' "${template_path_candidate}" >> "${TEMPLATE_PATH_BLOCKED_FILE}"
+              continue
+            fi
+            if [ "${template_path_candidate}" = "scripts/templates/serena_project.yml.j2" ] && \
+               git ls-files --error-unmatch -- "${template_path_candidate}" >/dev/null 2>&1; then
               continue
             fi
             while IFS= read -r fetched_ignore_entry; do
