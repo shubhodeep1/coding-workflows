@@ -3212,14 +3212,23 @@ def persist_memory_operation(
                 if _run_git(clone_dir, ["show-ref", "--verify", f"refs/remotes/origin/{memory_branch}"], check=False).returncode == 0:
                     rebase = _run_git(clone_dir, ["rebase", f"refs/remotes/origin/{memory_branch}"], check=False)
                     if rebase.returncode != 0:
+                        # git writes the conflicting paths ("CONFLICT (add/add):
+                        # Merge conflict in <path>") to stdout, while stderr only
+                        # carries "error: could not apply <sha>" plus generic
+                        # hints. Reporting stderr alone leaves the operator log
+                        # naming no file, so append stdout when it is non-empty.
+                        rebase_detail = rebase.stderr.strip()
+                        rebase_stdout = rebase.stdout.strip()
+                        if rebase_stdout:
+                            rebase_detail = f"{rebase_detail} | rebase stdout: {rebase_stdout}"
                         rebase_abort = _run_git(clone_dir, ["rebase", "--abort"], check=False)
                         if rebase_abort.returncode != 0:
                             raise MemoryGitError(
                                 "Memory branch rebase failed while retrying push: "
-                                f"{rebase.stderr.strip()} (rebase --abort also failed: {rebase_abort.stderr.strip()})"
+                                f"{rebase_detail} (rebase --abort also failed: {rebase_abort.stderr.strip()})"
                             )
                         raise MemoryGitError(
-                            f"Memory branch rebase failed while retrying push: {rebase.stderr.strip()}"
+                            f"Memory branch rebase failed while retrying push: {rebase_detail}"
                         )
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
