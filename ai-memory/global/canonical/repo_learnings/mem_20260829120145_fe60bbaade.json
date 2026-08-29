@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Reviewer attempts are deliberately isolated, including prompt inputs and sandbox configuration, to prevent cross-review contamination.",
   "timestamps": {
     "created_at": "2026-08-29T12:01:45Z",
