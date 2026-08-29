@@ -1972,12 +1972,12 @@ PROMPT_ARTIFACT_PATH_HINT="$(printf '%s\n' \
   'The workflow runs from the repository root.' \
   "All transient reviewer artifacts are under ${PREVIOUS_REVIEWS_DIR}." \
   'Do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow.' \
-  "Example command: cat ${PREVIOUS_REVIEWS_DIR}/review_<model>.txt")"
+  "Example file to read: ${PREVIOUS_REVIEWS_DIR}/review_<model>.txt")"
 PROMPT_RUNTIME_CONTEXT_HINT="$(printf '%s\n' \
   'RUNTIME CONTEXT FILES (READ-ONLY)' \
   "Runtime context is stored under ${RUNTIME_CONTEXT_DIR}." \
   'Useful files include git_status.txt, git_diff_stat.txt, shallow_tree.txt, environment_sorted.txt, recent_commits.txt, branches.txt, workflow_snapshot.yml, and run_logs_best_effort.txt.' \
-  "Example command: cat ${RUNTIME_CONTEXT_DIR}/git_status.txt")"
+  "Example file to read: ${RUNTIME_CONTEXT_DIR}/git_status.txt")"
 
 # Detect whether this is the first review iteration (no prior AI autofix run).
 # Two conditions cover all first-run states:
@@ -2535,7 +2535,7 @@ Use these files when needed to validate runtime assumptions:
 - branches.txt
 - workflow_snapshot.yml
 - run_logs_best_effort.txt
-Example command: cat ${RUNTIME_CONTEXT_DIR}/git_status.txt
+Example file to read: ${RUNTIME_CONTEXT_DIR}/git_status.txt
 
 Avoid reviewing unrelated areas of the repository.
 Do not suggest repository-wide refactors.
@@ -2605,8 +2605,8 @@ Do not access the internet.
 All required context is already provided.
 reviewer artifacts are stored under ${PREVIOUS_REVIEWS_DIR}
 do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow
-example command: cat ${PREVIOUS_REVIEWS_DIR}/review_<model>.txt
-you may use shell commands only for read-only inspection of repository files
+use the read tool for files such as ${PREVIOUS_REVIEWS_DIR}/review_<model>.txt
+use read, grep, and glob tools only for repository inspection
 do not modify repository files
 do not create new files except your assigned reviewer output/log files managed by the workflow
 

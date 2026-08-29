@@ -55,6 +55,29 @@ def _install_mock_codex(
 		encoding="utf-8",
 	)
 	(mock_bin_dir / "codex").chmod(0o755)
+	(mock_bin_dir / "opencode").write_text(
+		"#!/usr/bin/env bash\n"
+		"set -euo pipefail\n\n"
+		"if [ \"${1:-}\" = \"--version\" ]; then printf '1.18.23\\n'; exit 0; fi\n"
+		"if [ \"${1:-}\" != \"run\" ]; then echo \"mock-opencode supports only run\" >&2; exit 2; fi\n"
+		"cat \"${MOCK_CODEX_STDOUT_FILE}\"\n"
+		"cat \"${MOCK_CODEX_STDERR_FILE}\" >&2\n"
+		f"exit \"${{MOCK_CODEX_EXIT_CODE:-{exit_code}}}\"\n",
+		encoding="utf-8",
+	)
+	(mock_bin_dir / "opencode").chmod(0o755)
+	(mock_bin_dir / "write_opencode_config.sh").write_text(
+		"#!/usr/bin/env bash\n"
+		"set -euo pipefail\n"
+		"config_path=''\n"
+		"while [ $# -gt 0 ]; do\n"
+		"\tif [ \"$1\" = '--config-path' ]; then config_path=\"$2\"; shift 2; else shift; fi\n"
+		"done\n"
+		"mkdir -p \"$(dirname \"${config_path}\")\"\n"
+		"printf '{}\\n' > \"${config_path}\"\n",
+		encoding="utf-8",
+	)
+	(mock_bin_dir / "write_opencode_config.sh").chmod(0o755)
 
 
 def _install_mock_timeout(mock_bin_dir: Path) -> Path:
@@ -135,6 +158,8 @@ def _base_env(workspace: Path, runtime_dir: Path, mock_bin_dir: Path) -> dict[st
 	env["ROUND_NUMBER"] = "0"
 	env["HEAD_SHA"] = "stale-head-sha"
 	env["BEHAVIOURAL_SMOKE_LANG"] = "python"
+	env["OPENCODE_CONFIG_WRITER_PATH"] = str(mock_bin_dir / "write_opencode_config.sh")
+	env["OPENCODE_VERSION"] = "1.18.23"
 	env["MOCK_CODEX_STDOUT_FILE"] = str(mock_bin_dir / "codex_stdout.txt")
 	env["MOCK_CODEX_STDERR_FILE"] = str(mock_bin_dir / "codex_stderr.txt")
 	return env
@@ -684,6 +709,8 @@ def test_review_autofix_workflow_wires_behavioural_smoke_after_interim_judge() -
 	assert "env.JUDGE_INTERIM_ENABLED == 'true'" in step_block
 	assert 'timeout --signal=TERM --kill-after=30s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}"' in SYNTH_SCRIPT.read_text(encoding="utf-8")
 	assert '--model "${BEHAVIOURAL_SMOKE_MODEL}"' in SYNTH_SCRIPT.read_text(encoding="utf-8")
+	assert 'opencode_run_cmd "$@"' in SYNTH_SCRIPT.read_text(encoding="utf-8")
+	assert 'command -v codex' not in SYNTH_SCRIPT.read_text(encoding="utf-8")
 
 
 def test_review_synthesise_smoke_is_registered_in_ci_workflows() -> None:

@@ -50,6 +50,29 @@ def _install_mock_codex(
 		encoding="utf-8",
 	)
 	(mock_bin_dir / "codex").chmod(0o755)
+	(mock_bin_dir / "opencode").write_text(
+		"#!/usr/bin/env bash\n"
+		"set -euo pipefail\n\n"
+		"if [ \"${1:-}\" = \"--version\" ]; then printf '1.18.23\\n'; exit 0; fi\n"
+		"if [ \"${1:-}\" != \"run\" ]; then echo \"mock-opencode supports only run\" >&2; exit 2; fi\n"
+		"cat \"${MOCK_CODEX_STDOUT_FILE}\"\n"
+		"cat \"${MOCK_CODEX_STDERR_FILE}\" >&2\n"
+		"exit \"${MOCK_CODEX_EXIT_CODE:-0}\"\n",
+		encoding="utf-8",
+	)
+	(mock_bin_dir / "opencode").chmod(0o755)
+	(mock_bin_dir / "write_opencode_config.sh").write_text(
+		"#!/usr/bin/env bash\n"
+		"set -euo pipefail\n"
+		"config_path=''\n"
+		"while [ $# -gt 0 ]; do\n"
+		"\tif [ \"$1\" = '--config-path' ]; then config_path=\"$2\"; shift 2; else shift; fi\n"
+		"done\n"
+		"mkdir -p \"$(dirname \"${config_path}\")\"\n"
+		"printf '{}\\n' > \"${config_path}\"\n",
+		encoding="utf-8",
+	)
+	(mock_bin_dir / "write_opencode_config.sh").chmod(0o755)
 
 
 def _seed_repo_with_autofix_commit(workspace: Path) -> str:
@@ -123,6 +146,8 @@ def _base_env(workspace: Path, runtime_dir: Path, mock_bin_dir: Path) -> dict[st
 	env["JUDGE_INTERIM_REASONING"] = "low"
 	env["JUDGE_INTERIM_TIMEOUT_S"] = "10"
 	env["MODEL_EDITOR"] = "openai/gpt-5.4"
+	env["OPENCODE_CONFIG_WRITER_PATH"] = str(mock_bin_dir / "write_opencode_config.sh")
+	env["OPENCODE_VERSION"] = "1.18.23"
 	env["TOOL_CALL_BUDGET_JUDGE"] = "20"
 	env["MOCK_CODEX_STDOUT_FILE"] = str(mock_bin_dir / "codex_stdout.txt")
 	env["MOCK_CODEX_STDERR_FILE"] = str(mock_bin_dir / "codex_stderr.txt")
@@ -688,9 +713,12 @@ def test_review_autofix_workflow_skips_interim_judge_on_strict_ledger_only_commi
 def test_review_run_judge_interim_uses_bounded_timeout() -> None:
 	script = JUDGE_INTERIM_SCRIPT.read_text(encoding="utf-8")
 	assert 'timeout --signal=TERM --kill-after=30s -- "${JUDGE_INTERIM_TIMEOUT_S}"' in script, (
-		"Interim judge must mirror the resolver's bounded timeout so hung codex children "
+		"Interim judge must mirror the resolver's bounded timeout so hung OpenCode children "
 		"cannot outlive JUDGE_INTERIM_TIMEOUT_S indefinitely."
 	)
+	assert 'opencode_run_cmd "$@"' in script
+	assert 'reviewer\n\t"${MODEL_EDITOR:-openai/gpt-5.6-sol}"' in script
+	assert 'command -v codex' not in script
 
 
 # ---------------------------------------------------------------------------

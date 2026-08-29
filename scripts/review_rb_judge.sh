@@ -1386,6 +1386,16 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   review_rb_strip_opencode_output_file "${RB_JUDGE_OUTPUT}"
   review_rb_strip_opencode_output_file "${JUDGE_STDERR_FILE}"
   emit_review_rb_substate "review_rb_judge" "judge" "Finishing" "${attempt}" "${JUDGE_STDERR_FILE}"
+  case "${judge_stall_state}" in
+    observed)
+      echo "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_observed (observe-only mode)."
+      emit_review_rb_substate "review_rb_judge" "judge" "codex_stall_observed" "${attempt}" "${JUDGE_STDERR_FILE}"
+      ;;
+    killed)
+      echo "::warning::Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_killed."
+      emit_review_rb_substate "review_rb_judge" "judge" "codex_stall_killed" "${attempt}" "${JUDGE_STDERR_FILE}"
+      ;;
+  esac
   if [ "${rc}" -eq 0 ] && grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT}"; then
     JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
     JUDGE_SUCCESS=true
@@ -1414,16 +1424,6 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
     break
   fi
   rm -f "${judge_stall_status_file}"
-  case "${judge_stall_state}" in
-    observed)
-      echo "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_observed (observe-only mode)."
-      emit_review_rb_substate "review_rb_judge" "judge" "codex_stall_observed" "${attempt}" "${JUDGE_STDERR_FILE}"
-      ;;
-    killed)
-      echo "::warning::Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_killed."
-      emit_review_rb_substate "review_rb_judge" "judge" "codex_stall_killed" "${attempt}" "${JUDGE_STDERR_FILE}"
-      ;;
-  esac
   if codex_stall_guard_kill_detected "${rc:-0}" "${judge_stall_state}"; then
     emit_review_rb_substate "review_rb_judge" "judge" "Stalled" "${attempt}" "${JUDGE_STDERR_FILE}"
   else

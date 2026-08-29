@@ -2859,6 +2859,13 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in resolver
 	for converted in (apply_fixes, consolidate, rb_judge, resolver):
 		assert "--ask-for-approval never" not in converted
+	judge_stall_case = rb_judge.index('case "${judge_stall_state}" in')
+	judge_success_branch = rb_judge.index('if [ "${rc}" -eq 0 ] && grep -q', judge_stall_case)
+	assert judge_stall_case < judge_success_branch
+	assert "shell commands only for read-only inspection" not in reviewers
+	judge_prompt = (REPO_ROOT / "prompts" / "mode-judge-review-blocked.txt").read_text(encoding="utf-8")
+	assert "all tools (shell" not in judge_prompt
+	assert "read, grep, glob, and list" in judge_prompt
 
 
 def _write_telegram_capture_helper(support_dir: Path) -> Path:

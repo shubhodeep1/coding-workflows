@@ -267,66 +267,71 @@ LATEST_COMMIT_DIFF="$(git show --find-renames --stat --patch --format=medium "${
 	printf '%s\n' "${LATEST_COMMIT_DIFF}"
 } > "${PROMPT_FILE}"
 
-codex_bin="$(command -v codex || true)"
-if [ -z "${codex_bin}" ]; then
-	judge_interim_log_fail "missing_codex" "${CURRENT_ROUND}" "${ARTIFACT_PATH}"
+OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"
+OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"
+if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then
+	judge_interim_log_fail "missing_opencode_helpers" "${CURRENT_ROUND}" "${ARTIFACT_PATH}"
+	exit 0
+fi
+if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
+	opencode_emit_failure_alert review_run_judge_interim reviewer "${MODEL_EDITOR:-openai/gpt-5.6-sol}" 1 config_writer_missing || true
+	judge_interim_log_fail "config_writer_missing" "${CURRENT_ROUND}" "${ARTIFACT_PATH}"
 	exit 0
 fi
 
-judge_codex_root="${RUNNER_TEMP:-${RUNTIME_DIR}}/codex_home_judge_interim"
-judge_codex_home=""
-cleanup_judge_interim()
-{
-	if [ -n "${judge_codex_home}" ]; then
-		rm -rf "${judge_codex_home}" 2>/dev/null || true
-	fi
-	if [ -n "${judge_codex_root}" ]; then
-		rmdir "${judge_codex_root}" 2>/dev/null || true
-	fi
-}
-trap cleanup_judge_interim EXIT INT TERM
-
-mkdir -p "${judge_codex_root}"
-judge_codex_home="$(mktemp -d "${judge_codex_root}/judge-interim.XXXXXX" 2>/dev/null || printf '')"
-if [ -z "${judge_codex_home}" ]; then
-	judge_interim_log_fail "mktemp_failed" "${CURRENT_ROUND}" "${ARTIFACT_PATH}"
+JUDGE_INTERIM_OPENCODE_CONFIG="${RUNTIME_DIR}/judge_interim_opencode.json"
+JUDGE_INTERIM_OPENCODE_WORKSPACE="$(pwd)"
+if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
+	--role reviewer \
+	--model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" \
+	--project-path "${JUDGE_INTERIM_OPENCODE_WORKSPACE}" \
+	--config-path "${JUDGE_INTERIM_OPENCODE_CONFIG}" \
+	--serena off; then
+	opencode_emit_failure_alert review_run_judge_interim reviewer "${MODEL_EDITOR:-openai/gpt-5.6-sol}" 1 config_generation || true
+	judge_interim_log_fail "config_generation" "${CURRENT_ROUND}" "${ARTIFACT_PATH}"
+	exit 0
+fi
+if ! opencode_require_bootstrap review_run_judge_interim reviewer "${MODEL_EDITOR:-openai/gpt-5.6-sol}" \
+	"${JUDGE_INTERIM_OPENCODE_CONFIG}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
+	judge_interim_log_fail "opencode_bootstrap" "${CURRENT_ROUND}" "${ARTIFACT_PATH}"
 	exit 0
 fi
 
-if [ -d "${CODEX_HOME:-}" ]; then
-	cp -r "${CODEX_HOME}/." "${judge_codex_home}/" 2>/dev/null || true
-	chmod -R u+w "${judge_codex_home}" 2>/dev/null || true
-elif [ -d "${HOME}/.codex" ]; then
-	cp -r "${HOME}/.codex/." "${judge_codex_home}/" 2>/dev/null || true
-	chmod -R u+w "${judge_codex_home}" 2>/dev/null || true
-fi
+judge_interim_opencode_cmd=(
+	bash -c
+	# shellcheck disable=SC2016
+	'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
+	opencode-judge-interim
+	"${OPENCODE_HELPERS_PATH}"
+	reviewer
+	"${MODEL_EDITOR:-openai/gpt-5.6-sol}"
+	"${JUDGE_INTERIM_REASONING}"
+	"${JUDGE_INTERIM_OPENCODE_CONFIG}"
+	"${JUDGE_INTERIM_OPENCODE_WORKSPACE}"
+)
 
-escaped_reasoning="$(printf '%s' "${JUDGE_INTERIM_REASONING}" | sed 's/[\\/&]/\\&/g')"
-reasoning_config_applied=0
-for cfg in "${judge_codex_home}/config.toml" "${judge_codex_home}/.codex/config.toml"; do
-	if [ -f "${cfg}" ]; then
-		reasoning_config_applied=1
-		if ! grep -Eq '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${cfg}"; then
-			printf 'model_reasoning_effort = "%s"\n' "${JUDGE_INTERIM_REASONING}" >> "${cfg}"
-		else
-			sed -i \
-				-e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${escaped_reasoning}\"/" \
-				-e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${escaped_reasoning}\"/" \
-				"${cfg}" 2>/dev/null || true
-		fi
-	fi
-done
-if [ "${reasoning_config_applied}" -eq 0 ]; then
-	printf 'model_reasoning_effort = "%s"\n' "${JUDGE_INTERIM_REASONING}" > "${judge_codex_home}/config.toml"
-fi
-
-if CODEX_HOME="${judge_codex_home}" \
-	timeout --signal=TERM --kill-after=30s -- "${JUDGE_INTERIM_TIMEOUT_S}" \
-	"${codex_bin}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" --sandbox read-only \
+if timeout --signal=TERM --kill-after=30s -- "${JUDGE_INTERIM_TIMEOUT_S}" \
+	"${judge_interim_opencode_cmd[@]}" \
 	< "${PROMPT_FILE}" > "${RAW_OUTPUT_FILE}" 2> "${STDERR_FILE}"; then
 	cmd_rc=0
 else
 	cmd_rc=$?
+fi
+
+judge_interim_clean_output="${RAW_OUTPUT_FILE}.ansi-clean"
+if opencode_strip_ansi < "${RAW_OUTPUT_FILE}" > "${judge_interim_clean_output}"; then
+	mv "${judge_interim_clean_output}" "${RAW_OUTPUT_FILE}"
+else
+	rm -f "${judge_interim_clean_output}"
+fi
+judge_interim_clean_stderr="${STDERR_FILE}.ansi-clean"
+if opencode_strip_ansi < "${STDERR_FILE}" > "${judge_interim_clean_stderr}"; then
+	mv "${judge_interim_clean_stderr}" "${STDERR_FILE}"
+else
+	rm -f "${judge_interim_clean_stderr}"
+fi
+if [ "${cmd_rc}" -ne 0 ]; then
+	opencode_emit_failure_alert review_run_judge_interim reviewer "${MODEL_EDITOR:-openai/gpt-5.6-sol}" "${cmd_rc}" invocation_failed || true
 fi
 
 remaining_count=""

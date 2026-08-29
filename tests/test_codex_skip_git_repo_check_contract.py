@@ -53,6 +53,8 @@ P3_REVIEW_SCRIPTS = (
 	"review_rb_judge.sh",
 	"review_consolidate.sh",
 	"review_conflict_resolve.sh",
+	"review_run_judge_interim.sh",
+	"review_synthesise_smoke.sh",
 )
 
 # A fully-specified codex invocation on one logical shell / YAML command line:
