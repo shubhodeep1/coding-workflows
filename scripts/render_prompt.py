@@ -757,12 +757,47 @@ def hydrate_reference_placeholders(
 	prompt_path: Path,
 	mode_name: str,
 	values: dict[str, str],
+	strict: bool = True,
 ) -> dict[str, str]:
 	hydrated = dict(values)
 	for placeholder_name in collect_placeholders(prompt_text):
 		if not placeholder_name.startswith("REFERENCE_"):
 			continue
 		if hydrated.get(placeholder_name, "") != "":
+			continue
+		fail_open_reference_file_name = _reference_file_name_for_placeholder(placeholder_name)
+		if not strict and fail_open_reference_file_name is None:
+			hydrated.pop(placeholder_name, None)
+			print(
+				f"WARNING: reference placeholder '{placeholder_name}' left unhydrated: "
+				"unsupported reference placeholder (untrusted assembled body; fail-open)",
+				file=sys.stderr,
+			)
+			continue
+		if (
+			not strict
+			and fail_open_reference_file_name is not None
+			and discover_reference_path(prompt_path, fail_open_reference_file_name) is None
+		):
+			hydrated.pop(placeholder_name, None)
+			# Only a missing primary reference is benign here. Read failures and
+			# missing mode-specific append references still flow through the loader.
+			# strict=False marks a prompt body that embeds untrusted content
+			# (reviewer/editor bodies carry raw PR-diff and comment text). A
+			# REFERENCE_* token collected from such a body may be the embedded
+			# content itself — e.g. a diff that documents the prompt-templating
+			# system with a braced REFERENCE_SECURITY_MONEY_LENS token — with no
+			# matching prompts/references/ file. Leave it unhydrated so it
+			# renders verbatim like every other untrusted {{...}} token instead
+			# of hard-failing every reviewer (observed on run 33245886964).
+			# Resolvable references still hydrate on this path.
+			print(
+				f"WARNING: reference placeholder '{placeholder_name}' left unhydrated: "
+				f"no reference file found at "
+				f"{_expected_reference_path(prompt_path, fail_open_reference_file_name)} "
+				f"(untrusted assembled body; fail-open)",
+				file=sys.stderr,
+			)
 			continue
 		hydrated[placeholder_name] = _load_reference_placeholder_value(
 			prompt_path=prompt_path,
@@ -1317,13 +1352,13 @@ def main(argv: list[str] | None = None) -> int:
 				load_prompt(prompt_path),
 				mode_name=mode_name,
 			)
-			# --skip-syntax-validation marks the input as an already-assembled body
-			# that embeds untrusted content (reviewer/editor bodies carry raw PR-diff
-			# and full changed-file text). Do not resolve `{% include "..." %}`
-			# directives over that body: a standalone double-quoted include line in a
+			# Reviewer/editor callers pair --input-already-assembled with
+			# --skip-syntax-validation to mark an untrusted assembled body. When this
+			# fallback assembly branch is reached, --skip-syntax-validation alone still
+			# disables include resolution. A standalone double-quoted include line in a
 			# reviewed template is the diff's own content, not a fragment to expand,
 			# and treating it as one hard-fails the whole render. The strict `{{...}}`
-			# syntax gate is skipped for the same inputs a few lines below; this closes
+			# syntax gate is skipped by the same flag a few lines below; this closes
 			# the matching gap for the `{% include %}` assembly pass.
 			prompt_text = assemble_prompt_fragments(
 				prompt_fragments,
@@ -1346,11 +1381,16 @@ def main(argv: list[str] | None = None) -> int:
 		else:
 			effective_values = dict(legacy_env_values)
 			effective_values.update(provided_values)
+		# The two flags together mark an untrusted assembled body (see the
+		# include-resolution comment above); only on that path may a missing
+		# reference file fail open, because the placeholder may be embedded
+		# PR-diff text rather than a real template directive.
 		effective_values = hydrate_reference_placeholders(
 			prompt_text=prompt_text,
 			prompt_path=prompt_path,
 			mode_name=mode_name,
 			values=effective_values,
+			strict=not (args.input_already_assembled and args.skip_syntax_validation),
 		)
 		prompt_text = apply_identity_recall(prompt_text, prompt_path=prompt_path, mode_name=mode_name)
 		prompt_text = apply_phase_c_persona_prefix(prompt_text, prompt_path=prompt_path, mode_name=mode_name)
