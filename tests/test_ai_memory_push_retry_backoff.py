@@ -114,6 +114,8 @@ def _scripted_run_git(
 	show_ref_codes: list[int] | None = None,
 	rebase_codes: list[int] | None = None,
 	rebase_abort_codes: list[int] | None = None,
+	rebase_stderr: str = "rebase conflict",
+	rebase_stdout: str = "",
 	call_log: list[tuple[str, tuple[str, ...]]] | None = None,
 ):
 	"""Build a fake _run_git with scripted failure points in the retry loop."""
@@ -152,7 +154,11 @@ def _scripted_run_git(
 				rc = next(rebase_abort_results, 0)
 				return _FakeProc(returncode=rc, stderr="" if rc == 0 else "rebase abort failed")
 			rc = next(rebase_results, 0)
-			return _FakeProc(returncode=rc, stderr="" if rc == 0 else "rebase conflict")
+			return _FakeProc(
+				returncode=rc,
+				stdout="" if rc == 0 else rebase_stdout,
+				stderr="" if rc == 0 else rebase_stderr,
+			)
 		if op == "push":
 			rc = next(push_results)
 			return _FakeProc(
@@ -172,6 +178,8 @@ def _run_persist(
 	show_ref_codes: list[int] | None = None,
 	rebase_codes: list[int] | None = None,
 	rebase_abort_codes: list[int] | None = None,
+	rebase_stderr: str = "rebase conflict",
+	rebase_stdout: str = "",
 ):
 	"""Drive persist_memory_operation; return (result, backoff_attempts, call_log, exc).
 
@@ -207,6 +215,8 @@ def _run_persist(
 			show_ref_codes=show_ref_codes,
 			rebase_codes=rebase_codes,
 			rebase_abort_codes=rebase_abort_codes,
+			rebase_stderr=rebase_stderr,
+			rebase_stdout=rebase_stdout,
 			call_log=call_log,
 		)
 		ai_memory_lib._push_retry_backoff_seconds = fake_backoff
@@ -335,6 +345,72 @@ def test_persist_memory_operation_surfaces_rebase_abort_failure() -> None:
 	assert "rebase --abort also failed: rebase abort failed" in str(exc)
 	assert backoff_attempts == [1], backoff_attempts
 	assert any(args == ("rebase", "--abort") for _op, args in call_log), call_log
+
+
+def test_persist_memory_operation_surfaces_conflicting_paths_from_rebase_stdout() -> None:
+	"""git names the conflicting files on stdout, not stderr.
+
+	A losing writer on the shared ai-memory branch hits an add/add conflict on a
+	lineage file; reporting only stderr leaves the operator log naming no path
+	("error: could not apply <sha>" plus generic hints), which is what made the
+	original incident undiagnosable from the run log alone.
+	"""
+	conflict_stdout = (
+		"Auto-merging ai-memory/tasks/issue-3833/lineage/task_lineage.v1.json\n"
+		"CONFLICT (add/add): Merge conflict in ai-memory/tasks/issue-3833/lineage/task_lineage.v1.json"
+	)
+	result, _backoff_attempts, _call_log, exc = _run_persist(
+		[1],
+		push_retries=2,
+		rebase_codes=[1],
+		rebase_stdout=conflict_stdout,
+	)
+	assert result is None
+	assert isinstance(exc, ai_memory_lib.MemoryGitError), exc
+	assert "Memory branch rebase failed while retrying push: rebase conflict" in str(exc)
+	assert "CONFLICT (add/add)" in str(exc), str(exc)
+	assert "ai-memory/tasks/issue-3833/lineage/task_lineage.v1.json" in str(exc), str(exc)
+
+
+def test_persist_memory_operation_surfaces_conflicting_paths_when_abort_also_fails() -> None:
+	result, _backoff_attempts, _call_log, exc = _run_persist(
+		[1],
+		push_retries=2,
+		rebase_codes=[1],
+		rebase_abort_codes=[1],
+		rebase_stderr="",
+		rebase_stdout="CONFLICT (add/add): Merge conflict in ai-memory/tasks/issue-42/lineage/task_lineage.v1.json",
+	)
+	assert result is None
+	assert isinstance(exc, ai_memory_lib.MemoryGitError), exc
+	assert "push: rebase stdout: CONFLICT (add/add)" in str(exc), str(exc)
+	assert "rebase --abort also failed: rebase abort failed" in str(exc), str(exc)
+
+
+def test_persist_memory_operation_rebase_error_unchanged_when_stdout_empty() -> None:
+	"""No stdout to add means the message keeps its original shape."""
+	result, _backoff_attempts, _call_log, exc = _run_persist([1], push_retries=2, rebase_codes=[1])
+	assert result is None
+	assert isinstance(exc, ai_memory_lib.MemoryGitError), exc
+	assert str(exc) == "Memory branch rebase failed while retrying push: rebase conflict", str(exc)
+	assert "rebase stdout:" not in str(exc), str(exc)
+
+
+def test_persist_memory_operation_rebase_error_uses_stdout_when_stderr_empty() -> None:
+	"""A stdout-only failure has no dangling separator in its diagnostic."""
+	result, _backoff_attempts, _call_log, exc = _run_persist(
+		[1],
+		push_retries=2,
+		rebase_codes=[1],
+		rebase_stderr="",
+		rebase_stdout="CONFLICT (add/add): Merge conflict in lineage.json",
+	)
+	assert result is None
+	assert isinstance(exc, ai_memory_lib.MemoryGitError), exc
+	assert str(exc) == (
+		"Memory branch rebase failed while retrying push: "
+		"rebase stdout: CONFLICT (add/add): Merge conflict in lineage.json"
+	), str(exc)
 
 
 def main() -> int:
