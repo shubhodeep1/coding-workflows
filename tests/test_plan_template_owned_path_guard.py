@@ -123,6 +123,14 @@ def test_consumer_owned_scripts_are_allowed(path: str) -> None:
 
 
 @pytest.mark.parametrize(
+	"path", ["scripts.txt", ".github/prompts.md", ".github/scripts.yml"]
+)
+def test_similarly_prefixed_root_files_are_allowed(path: str) -> None:
+	returncode, output = _run_guard(_plan_listing(path), FETCHED_HELPERS)
+	assert returncode == 0, f"similarly prefixed {path} was rejected:\n{output}"
+
+
+@pytest.mark.parametrize(
 	"path",
 	[
 		"scripts/render_prompt.sh",
@@ -133,7 +141,11 @@ def test_consumer_owned_scripts_are_allowed(path: str) -> None:
 		"scripts/lint_pr_body_auto_close.py",
 		# The catalog is also fetched by the plan job and listed in its gitignore.
 		"scripts/codex_model_catalog.json",
+		".github/prompts",
+		".github/prompts/",
 		".github/prompts/mode-plan.txt",
+		".github/scripts",
+		".github/scripts/",
 		".github/scripts/some_helper.sh",
 	],
 )
@@ -164,9 +176,10 @@ def test_missing_scripts_gitignore_falls_back_to_blanket_rejection() -> None:
 	assert returncode == 1
 
 
-def test_bare_scripts_directory_reference_is_rejected() -> None:
-	"""A bare `scripts/` names no file, so stay conservative."""
-	returncode, _ = _run_guard(_plan_listing("scripts/"), FETCHED_HELPERS)
+@pytest.mark.parametrize("path", ["scripts", "scripts/"])
+def test_bare_scripts_directory_reference_is_rejected(path: str) -> None:
+	"""A bare scripts directory reference names no file, so stay conservative."""
+	returncode, _ = _run_guard(_plan_listing(path), FETCHED_HELPERS)
 	assert returncode == 1
 
 

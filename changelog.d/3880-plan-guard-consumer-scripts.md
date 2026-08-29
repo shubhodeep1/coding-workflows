@@ -8,7 +8,7 @@ The `Guard plans targeting template-owned paths` step in `plan.yml` rejected eve
 | Workflow changed | `.github/workflows/plan.yml` |
 | Still blanket-rejected | `.github/prompts/`, `.github/scripts/` |
 | New test file | `tests/test_plan_template_owned_path_guard.py` |
-| Guard tests added | 18 |
+| Guard tests added | 26 |
 
 What this means for operators: a plan that lists a consumer-owned file under `scripts/` now proceeds to implementation instead of failing the AI Plan run with a template-owned-path error. Nothing the guard previously caught is let through, so plans targeting fetched helpers such as `scripts/render_prompt.sh` are still rejected with the same routing back to this repository.
 

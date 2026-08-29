@@ -1467,7 +1467,7 @@ jobs:
             if ($in && /^\s{0,3}#{1,6}\s+\S/) { $in = 0; }
             print if $in;
           ' "${CODEX_OUTPUT_FILE}" > "${FILES_SECTION_FILE}"
-          EXCLUDED_RE='(^|[^[:alnum:]_./-])`?(\./|/)?(scripts/|\.github/prompts/|\.github/scripts/)'
+          EXCLUDED_RE='(^|[^[:alnum:]_./-])`?(\./|/)?(scripts|\.github/prompts|\.github/scripts)'
           TEMPLATE_PATH_CANDIDATES_FILE="${RUNTIME_DIR}/template_path_candidates.txt"
           TEMPLATE_PATH_BLOCKED_FILE="${RUNTIME_DIR}/template_path_blocked.txt"
           IMPLEMENT_WORKFLOW_SOURCE_FILE=".codex-workflow-src/.github/workflows/implement.yml"
@@ -1513,7 +1513,7 @@ jobs:
           fi
           if [ -s "${FILES_SECTION_FILE}" ] && grep -qE "${EXCLUDED_RE}" "${FILES_SECTION_FILE}"; then
             perl -ne '
-              while (m{(?:^|[^[:alnum:]_./-])`?(?:\./|/)?((?:scripts/|\.github/prompts/|\.github/scripts/)[^\s`,;:*)\]]*)}g) {
+              while (m{(?:^|[^[:alnum:]_./-])`?(?:\./|/)?((?:scripts|\.github/prompts|\.github/scripts)(?:/[^\s`,;:*)\]]*)?)(?=$|[\s`,;:*)\]\x22\x27\x7d]|[.!?](?=$|[\s`\x22\x27\x7d]))}g) {
                 my $candidate = $1;
                 $candidate =~ s/[.!?\x22\x27}\]]+$//;
                 print "$candidate\n" if length $candidate;
@@ -1523,7 +1523,7 @@ jobs:
           while IFS= read -r template_path_candidate; do
             [ -n "${template_path_candidate}" ] || continue
             case "${template_path_candidate}" in
-              .github/prompts/*|.github/scripts/*)
+              .github/prompts|.github/prompts/*|.github/scripts|.github/scripts/*)
                 printf '%s\n' "${template_path_candidate}" >> "${TEMPLATE_PATH_BLOCKED_FILE}"
                 continue
                 ;;
