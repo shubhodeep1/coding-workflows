@@ -100,6 +100,7 @@ jobs:
             | jq -s '(add // []) | map(select(.draft == false) | {
               number,
               head_ref: .head.ref,
+              head_repo: (.head.repo.full_name // ""),
               title: (.title // ""),
               body: (.body // "")
             })')"
@@ -144,8 +145,18 @@ jobs:
             # page objects and reduce over their `.workflow_runs[]` entries.
             # `active` counts toward the skip; `stale` is logged instead so a
             # wedged run is visible rather than silently discounted.
+            #
+            # `pending` is fetched alongside queued/in_progress (one extra
+            # API call per workflow per tick, §15-audited: the runs API has
+            # no multi-status filter) because a run held back by the
+            # review_autofix concurrency group (cancel-in-progress=false)
+            # reports status=pending. During the PR #3895 incident the
+            # queued/in_progress-only snapshot never saw the pending
+            # duplicate, so every tick re-dispatched and each new run
+            # replaced the pending predecessor. A pending run never counts
+            # as stale — it is bounded by its running peer's job timeout.
             if snapshot_json="$(
-              for status in queued in_progress; do
+              for status in queued in_progress pending; do
                 gh api --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
                   -f status="${status}" \
                   -f per_page=100 \
@@ -217,6 +228,7 @@ jobs:
           for row in "${rows[@]}"; do
             pr_number="$(printf '%s' "${row}" | jq -r '.number')"
             head_ref="$(printf '%s' "${row}" | jq -r '.head_ref')"
+            head_repo="$(printf '%s' "${row}" | jq -r '.head_repo')"
             pr_title="$(printf '%s' "${row}" | jq -r '.title')"
             pr_body="$(printf '%s' "${row}" | jq -r '.body')"
 
@@ -264,10 +276,24 @@ jobs:
             # `ALLOW_WORKFLOW_EDITS` repo variable matches
             # `_dispatch_review_for_conflicts`
             # (orchestrate_poll_process.sh:7862-7868).
-            if gh workflow run internal-review.yml \
-              --repo "${REPOSITORY}" \
-              -f pr_number="${pr_number}" \
-              -f allow_workflow_edits="${ALLOW_WORKFLOW_EDITS}" >/dev/null 2>&1; then
+            # Dispatch on the PR's head branch for same-repo PRs so the
+            # resulting run is keyed to that branch. Head-branch keying is
+            # what makes the run visible to the active-run guards (this
+            # sweep's snapshot and the orchestrator poller's
+            # _has_active_autofix_run both look runs up by head branch) —
+            # a default-branch-keyed run is invisible to them and gets
+            # duplicate-dispatched, as in the PR #3895 incident. It also
+            # matches _dispatch_review_for_conflicts, which already
+            # dispatches --ref <head_ref>. Fork PRs keep the default-branch
+            # dispatch: their head ref does not exist in this repo, so
+            # --ref would fail outright.
+            dispatch_args=(--repo "${REPOSITORY}"
+              -f "pr_number=${pr_number}"
+              -f "allow_workflow_edits=${ALLOW_WORKFLOW_EDITS}")
+            if [ "${head_repo}" = "${REPOSITORY}" ] && [ -n "${head_ref}" ]; then
+              dispatch_args+=(--ref "${head_ref}")
+            fi
+            if gh workflow run internal-review.yml "${dispatch_args[@]}" >/dev/null 2>&1; then
               echo "AUTOFIX_SWEEP_DISPATCH pr=#${pr_number} head_ref=${head_ref}"
               dispatched=$((dispatched + 1))
             else
