@@ -66,7 +66,7 @@ _resolver_dependency_fallback()
   for dependency_candidate in \
     "${GITHUB_WORKSPACE:-${PWD}}/.codex-workflow-src-main/scripts/${dependency_name}" \
     "${GITHUB_WORKSPACE:-${PWD}}/.codex-workflow-src/scripts/${dependency_name}" \
-    "${PWD}/scripts/${dependency_name}"; do
+    "${GITHUB_WORKSPACE:-${PWD}}/scripts/${dependency_name}"; do
     if [ -f "${dependency_candidate}" ]; then
       printf '%s\n' "${dependency_candidate}"
       return 0
