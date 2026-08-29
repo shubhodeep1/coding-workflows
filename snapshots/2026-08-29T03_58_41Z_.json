@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-08-26T04:41:34Z",
+  "tick_at": "2026-08-29T03:58:41Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -16,22 +16,22 @@
   "tracking_issues": [
     {
       "current_wave": 3,
-      "integration_ahead_by": "12",
+      "integration_ahead_by": "17",
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
+        "in_progress": 1,
+        "merged": 2,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 3810,
+      "number": 3845,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] Triage and apply safe workflow optimizations from August 19-25",
+      "title": "[Orchestrator] Opencode cutover for review_autofix",
       "total_waves": 3,
       "wave_complete": false
     }
