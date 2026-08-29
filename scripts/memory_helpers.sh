@@ -487,7 +487,18 @@ memory_finalize_task()
 		return 0
 	fi
 
-	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" finalize-task "$@"
+	# Lineage finalization is best-effort bookkeeping that runs only after the
+	# PR already exists, so a failure here must never turn a successful run red.
+	# The shared ai-memory branch is written concurrently by several workflows
+	# (implement, issue_pr_status, orchestrate_poll, ...), and a losing writer can
+	# hit an unresolvable add/add rebase conflict on the same lineage file. Fail
+	# open like the sibling post-PR bookkeeping helpers instead of propagating a
+	# non-zero exit into the caller's `set -euo pipefail` step.
+	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" finalize-task "$@" || {
+		_memory_warn "finalize-task failed (fail-open)"
+		_memory_telemetry '{"op":"finalize-task","ok":false,"fail_open":true,"source":"shell"}'
+		return 0
+	}
 }
 
 memory_promote()
