@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Several independent merged changes modified scripts/openrouter_prompt_cache.py, with related work in polling, maintenance, security auditing, log collection, and cost-audit metrics. Changes to cache or telemetry behavior should be treated as compatibility-sensitive and checked against all consumers and metric tests rather than only the originating workflow.",
+  "fingerprint": "e23a26a209c1c6b10d7d9cf2d640ee0cd51071f6d4aa9ba4d6697bf36d122a15",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33251328653",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33251328653",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3846",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3849",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3865",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3870",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3873",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3847",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3864",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3867",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3872",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3877"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260829120302_c69f89bdca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "OpenRouter prompt-cache and workflow telemetry code are shared infrastructure used by multiple operational paths.",
+  "timestamps": {
+    "created_at": "2026-08-29T12:03:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
