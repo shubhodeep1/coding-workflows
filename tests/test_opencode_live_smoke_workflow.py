@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static contracts for the OpenCode install action and live smoke workflow."""
+"""Static contracts for the OpenCode action, live smoke, and Phase 2 cutover."""
 
 from __future__ import annotations
 
@@ -86,6 +86,8 @@ def test_smoke_runs_identical_calls_and_aggregates_failures() -> None:
 	assert (
 		'model_evidence=FAIL\n              if [ "${call_rc}" -eq 0 ]; then\n'
 		'                result="FAIL(model_evidence)"\n'
+		'                call_rc=1\n'
+		'              fi\n'
 	) in smoke
 	assert '"${role}" "${model_slug}" xhigh "${config_path}" "${GITHUB_WORKSPACE}" json' in smoke
 	assert '.type == "step_finish" and ((.part.tokens.reasoning // 0) > 0)' in smoke
@@ -107,37 +109,27 @@ def test_smoke_runs_identical_calls_and_aggregates_failures() -> None:
 	assert smoke.count("bootstrap_or_config") == 1
 
 
-def test_production_review_path_remains_opencode_free() -> None:
-	# Phase 2 pre-staging: the workflow-side install step (which warms the
-	# models.dev cache via `opencode models --refresh`) must land on main
-	# ahead of the script-side cutover, because internal-review.yml pins
-	# review_autofix.yml@main while support scripts are staged from the PR's
-	# merge ref. PRs targeting the integration branch run branch scripts that
-	# already require the opencode binary and a warmed cache (see the run on
-	# PR #3867 where every reviewer/editor slot failed with "models.dev cache
-	# is not readable"). Beyond that install step, main's production review
-	# path must still never invoke opencode — the exact strings below are the
-	# only permitted appearances.
+def test_production_review_path_uses_opencode_for_read_and_write_sides() -> None:
 	production = PRODUCTION_REVIEW.read_text(encoding="utf-8")
-	scrubbed = production
-	assert (
-		"- name: Install OpenCode CLI\n"
-		"        continue-on-error: true\n"
-		"        uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde"
-	) in production
-	for expected in (
-		"OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}",
-		"- name: Install OpenCode CLI",
-		"uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde",
-		"opencode_version: ${{ env.OPENCODE_VERSION }}",
-	):
-		assert expected in scrubbed
-		scrubbed = scrubbed.replace(expected, "", 1)
-	assert "opencode" not in scrubbed.lower()
+	reviewers = (REPO_ROOT / "scripts" / "review_run_reviewers.sh").read_text(encoding="utf-8")
+	summariser = (REPO_ROOT / "scripts" / "summarize_reviewer_consensus.sh").read_text(encoding="utf-8")
+	apply_fixes = (REPO_ROOT / "scripts" / "review_apply_fixes.sh").read_text(encoding="utf-8")
+	assert "Install OpenCode CLI" in production
+	assert "Install Codex CLI" not in production
+	assert "Create Codex config" not in production
+	install_block = production.split("- name: Install OpenCode CLI", 1)[1].split("- name:", 1)[0]
+	assert "continue-on-error" not in install_block
+	assert 'opencode_run_cmd "$@"' in reviewers
+	assert '"${reviewer_opencode_workspace}"\n    json' in reviewers
+	assert 'reviewer_materialize_opencode_json_text "${tmp_structured_output}" "${tmp_output}"' in reviewers
+	assert 'opencode_run_cmd "$@"' in summariser
+	assert 'opencode_run_cmd "$@"' in apply_fixes
+	assert "exec codex --ask-for-approval never" not in apply_fixes
 
 
 def test_focused_tests_are_wired_into_ci() -> None:
 	ci = CI.read_text(encoding="utf-8")
+	assert "if grep -q 'codex_config_assemble' .github/workflows/review_autofix.yml; then" in ci
 	for test_file in (
 		"tests/test_write_opencode_config.py",
 		"tests/test_opencode_helpers.py",

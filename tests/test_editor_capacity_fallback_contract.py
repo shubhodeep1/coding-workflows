@@ -3,7 +3,7 @@
 Issue #3515 / run 28640359211: a sustained OpenRouter/OpenAI per-model TPM
 saturation on the primary editor model (gpt-5.4 at the time; the primary
 default is now gpt-5.6-sol) burned every retry attempt because all attempts used
-the same model. The fix lets the codex retry loops switch to a fallback
+the same model. The fix lets the editor retry loops switch to a fallback
 editor model (MODEL_EDITOR_FALLBACK, default openai/gpt-5.5 — a different
 capacity bucket) on their FINAL attempt.
 
@@ -11,7 +11,7 @@ This test pins the three moving parts so a future edit cannot silently drop
 the fallback:
   1. openai/gpt-5.5 is declared in the model catalog (so codex can resolve
      apply_patch / verbosity for it when the loop switches --model).
-  2. Each codex-driven workflow exposes MODEL_EDITOR_FALLBACK.
+  2. Each editor-driven workflow exposes MODEL_EDITOR_FALLBACK.
   3. Each retry loop actually switches to the fallback on the final attempt.
 """
 
@@ -106,8 +106,13 @@ def test_review_apply_fixes_switches_model_on_final_attempt() -> None:
 	assert 'editor_max_attempts=3' in text
 	assert 'while [ "${attempt}" -le "${editor_max_attempts}" ]' in text
 	assert '[ "${attempt}" -eq "${editor_max_attempts}" ]' in text
-	# The editor codex invocations consume the per-attempt model.
+	# The OpenCode config and command consume the per-attempt model, so the
+	# fallback receives matching limits and role permissions.
+	assert '--role writer' in text
 	assert '--model "${editor_attempt_model}"' in text
+	assert 'opencode_run_cmd "$@"' in text
+	assert 'writer\n    "${editor_attempt_model}"' in text
+	assert '"${EDITOR_REASONING_EFFORT}"' in text
 	# The loop sets the fallback on the final attempt.
 	assert 'EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR_FALLBACK}"' in text
 	assert 'local editor_attempt_model="${EDITOR_ATTEMPT_MODEL:-${MODEL_EDITOR}}"' in text

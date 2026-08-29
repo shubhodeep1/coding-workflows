@@ -22,6 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
+SUMMARISER = REPO_ROOT / "scripts" / "summarize_reviewer_consensus.sh"
 APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 CONSOLIDATE = REPO_ROOT / "scripts" / "review_consolidate.sh"
 RB_JUDGE = REPO_ROOT / "scripts" / "review_rb_judge.sh"
@@ -2153,9 +2154,10 @@ def _run_review_pipeline_summary_step_harness(*, extra_env: dict[str, str] | Non
 			"Reviewer slot x-ai/grok-4.20 (x-ai/grok-4.20) recorded codex_stall_killed on attempt 1 (exit=137).\n"
 			"Reviewer slot x-ai/grok-4.20 (x-ai/grok-4.20) failure classified as retryable (stall_guard) on attempt 1.\n"
 			"REVIEWER_ADVANCE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 reason=stall_guard next_action=retry_cheaper_reasoning next_attempt=2 next_model=x-ai/grok-4.20\n"
-			"REVIEWER_BACKOFF: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 reason=stall_guard next_action=retry_cheaper_reasoning next_attempt=2 sleep_secs=2 total_sleep_secs=2\n"
-			"REVIEWER_CACHE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 attempt=2 status=supported prompt_reused=true\n"
-			"INFO: openrouter usage phase=review call=review model=x-ai/grok-4.20 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=4000 completion_tokens=100 total_tokens=4100 cache_creation_input_tokens=0 cache_read_input_tokens=120\n"
+				"REVIEWER_BACKOFF: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 reason=stall_guard next_action=retry_cheaper_reasoning next_attempt=2 sleep_secs=2 total_sleep_secs=2\n"
+				"INFO: openrouter usage phase=review call=review model=x-ai/grok-4.20 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=na completion_tokens=na total_tokens=na cache_creation_input_tokens=na cache_read_input_tokens=na usage_available=false\n"
+				"REVIEWER_CACHE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 attempt=2 status=supported prompt_reused=true\n"
+				"INFO: openrouter usage phase=review call=review model=x-ai/grok-4.20 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=4000 completion_tokens=100 total_tokens=4100 cache_creation_input_tokens=0 cache_read_input_tokens=120 usage_available=true\n"
 			"Reviewer slot x-ai/grok-4.20 (x-ai/grok-4.20) succeeded on attempt 2.\n"
 			"REVIEWER_SLOT_STATE: slot=x-ai/grok-4.20 retryable_failure_count=1 retryable_failure_classes=stall_guard backoff_sleep_secs_total=2 slot_retry_budget_exhausted=false fallback_model_used=false cache_status=supported cache_reuse_attempted=true\n",
 			encoding="utf-8",
@@ -2171,8 +2173,15 @@ def _run_review_pipeline_summary_step_harness(*, extra_env: dict[str, str] | Non
 			"Reviewer slot moonshotai/kimi-k2.5 (moonshotai/kimi-k2.5) recorded codex_stall_killed on attempt 1 (exit=137).\n"
 			"Reviewer slot moonshotai/kimi-k2.5 (moonshotai/kimi-k2.5) failure classified as retryable (timeout) on attempt 1.\n"
 			"REVIEWER_ADVANCE: slot=moonshotai/kimi-k2.5 model=moonshotai/kimi-k2.5 reason=stall_guard next_action=skip_unmapped\n"
-			"INFO: openrouter usage phase=review call=review model=moonshotai/kimi-k2.5 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=2800 completion_tokens=80 total_tokens=2880 cache_creation_input_tokens=0 cache_read_input_tokens=0\n"
+			"INFO: openrouter usage phase=review call=review model=moonshotai/kimi-k2.5 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=2800 completion_tokens=80 total_tokens=2880 cache_creation_input_tokens=0 cache_read_input_tokens=0 usage_available=true\n"
 			"REVIEWER_SLOT_STATE: slot=moonshotai/kimi-k2.5 retryable_failure_count=1 retryable_failure_classes=timeout backoff_sleep_secs_total=0 slot_retry_budget_exhausted=false fallback_model_used=false cache_status=unsupported cache_reuse_attempted=false\n",
+			encoding="utf-8",
+		)
+
+		(reviews / "status_review_model_three.txt").write_text("failed\n", encoding="utf-8")
+		(reviews / "review_model_three.txt").write_text("reviewer failure\n", encoding="utf-8")
+		(reviews / "review_model_three.log").write_text(
+			"INFO: openrouter usage phase=review call=review model=fixture/model cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=900 completion_tokens=30 total_tokens=930 cache_creation_input_tokens=0 cache_read_input_tokens=33 usage_available=true\n",
 			encoding="utf-8",
 		)
 
@@ -2761,6 +2770,268 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}",
 	):
 		assert workflow.count(expected) >= 2, f"Missing workflow-level + codex-agent env wiring: {expected}"
+
+
+def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
+	workflow = _workflow_text()
+	stage_helper = _stage_helper_text()
+	reviewers = _reviewers_text()
+	summariser = SUMMARISER.read_text(encoding="utf-8")
+	apply_fixes = _apply_fixes_text()
+	consolidate = _consolidate_text()
+	rb_judge = RB_JUDGE.read_text(encoding="utf-8")
+	resolver = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	preflight_block = _step_block('"Preflight: Verify required files before reviewer invocation"')
+
+	assert "OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}" in workflow
+	assert "Install Codex CLI" not in workflow
+	assert "Create Codex config" not in workflow
+	assert ".codex/config.toml" not in workflow
+	opencode_install = _step_block("Install OpenCode CLI")
+	assert "install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde" in opencode_install
+	assert "opencode_version: ${{ env.OPENCODE_VERSION }}" in opencode_install
+	assert "continue-on-error" not in opencode_install
+
+	required_bootstrap_line = next(
+		line for line in stage_helper.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
+	)
+	for helper_name in ("opencode_helpers.sh", "write_opencode_config.sh"):
+		assert helper_name in required_bootstrap_line
+		assert helper_name in workflow.split("REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS:", 1)[1].split("REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS:", 1)[0]
+	assert 'command -v opencode' in preflight_block
+	assert 'command -v codex' not in preflight_block
+	for expected in (
+		"opencode_emit_failure_alert review_autofix_preflight reviewer",
+		"emit_opencode_preflight_alert 1 helpers_missing",
+		"emit_opencode_preflight_alert 1 config_writer_missing",
+		"emit_opencode_preflight_alert 127 binary_missing",
+	):
+		assert expected in preflight_block
+
+	assert 'source "${OPENCODE_HELPERS_PATH}"' in reviewers
+	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in reviewers
+	assert 'OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"' in reviewers
+	assert 'opencode_emit_failure_alert review_run_reviewers reviewer "${reviewer_helpers_alert_model}" 1 config_writer_missing' in reviewers
+	assert 'bash "${OPENCODE_CONFIG_WRITER_PATH}" \\' in reviewers
+	assert '--model "${effective_model}"' in reviewers
+	assert '--variant "${variant}"' in (REPO_ROOT / "scripts" / "opencode_helpers.sh").read_text(encoding="utf-8")
+	assert reviewers.count('"${probe_opencode_cmd[@]}"') == 2
+	assert 'reviewer_strip_opencode_output_file "${tmp_structured_output}"' in reviewers
+	assert 'reviewer_materialize_opencode_json_text "${tmp_structured_output}" "${tmp_output}"' in reviewers
+	assert 'if [ "${reviewer_materialize_rc}" -eq 2 ]; then' in reviewers
+	assert 'reviewer_strip_opencode_output_file "${tmp_stderr}"' in reviewers
+	assert 'opencode_emit_failure_alert review_run_reviewers reviewer' in reviewers
+	assert 'REVIEWER_FAILBACK:' in reviewers
+	assert 'reviewer_record_health_outcome' in reviewers
+
+	assert 'opencode_run_cmd "$@"' in summariser
+	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in summariser
+	assert 'OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"' in summariser
+	assert 'opencode_emit_failure_alert review_summariser reviewer "${SUMMARISER_MODEL}" 1 config_writer_missing' in summariser
+	assert 'opencode_emit_failure_alert review_summariser reviewer' in summariser
+	assert 'opencode_strip_ansi < "${tmp_stdout}"' in summariser
+	assert 'opencode_run_cmd "$@"' in apply_fixes
+	assert 'writer\n    "${editor_attempt_model}"' in apply_fixes
+	assert 'opencode_emit_failure_alert review_apply_fixes writer' in apply_fixes
+	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in apply_fixes
+	assert 'failure_class=config_writer_missing' in apply_fixes
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in apply_fixes
+	assert 'opencode_run_cmd "$@"' in consolidate
+	assert '\twriter\n\t"${REVIEW_CONSOLIDATOR_MODEL}"' in consolidate
+	assert 'opencode_emit_failure_alert review_consolidate writer' in consolidate
+	assert 'opencode_helpers_loaded=false' in consolidate
+	assert 'if source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in consolidate
+	assert 'missing=opencode_config_writer failopen=1 output_bytes=0' in consolidate
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in consolidate
+	assert 'reviewer\n    "${MODEL_EDITOR}"' in rb_judge
+	assert 'writer\n        "${MODEL_EDITOR}"' in rb_judge
+	assert 'OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"' in rb_judge
+	assert 'opencode_emit_failure_alert review_rb_judge reviewer' in rb_judge
+	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in rb_judge
+	assert 'opencode_emit_failure_alert review_rb_judge reviewer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing' in rb_judge
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" 2>/dev/null || true' in rb_judge
+	assert 'if ! review_rb_prepare_opencode_config reviewer review_rb_judge "${RB_JUDGE_OPENCODE_CONFIG}" off; then\n  exit 1\nfi' in rb_judge
+	assert 'if ! review_rb_prepare_opencode_config writer review_rb_fix "${RB_FIX_OPENCODE_CONFIG}" "${rb_fix_serena_mode}"; then\n        rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"\n        exit 1\n      fi' in rb_judge
+	assert 'opencode_run_cmd "$@"' in resolver
+	assert 'writer\n    "${MODEL_EDITOR}"' in resolver
+	assert '"${_current_reasoning_effort}"' in resolver
+	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in resolver
+	assert 'opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing' in resolver
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in resolver
+	for converted in (apply_fixes, consolidate, rb_judge, resolver):
+		assert "--ask-for-approval never" not in converted
+	judge_stall_case = rb_judge.index('case "${judge_stall_state}" in')
+	judge_success_branch = rb_judge.index('if [ "${rc}" -eq 0 ] && grep -q', judge_stall_case)
+	assert judge_stall_case < judge_success_branch
+	assert "shell commands only for read-only inspection" not in reviewers
+	judge_prompt = (REPO_ROOT / "prompts" / "mode-judge-review-blocked.txt").read_text(encoding="utf-8")
+	assert "all tools (shell" not in judge_prompt
+	assert "read, grep, glob, and list" in judge_prompt
+
+
+def _write_telegram_capture_helper(support_dir: Path) -> Path:
+	capture_file = support_dir / "telegram_alerts.txt"
+	(support_dir / "tg_helpers.sh").write_text(
+		'tg_send_msg() { printf \'%s|%s\\n\' "$1" "$2" >> "${TG_CAPTURE_FILE}"; }\n',
+		encoding="utf-8",
+	)
+	return capture_file
+
+
+def test_review_preflight_missing_opencode_binary_emits_classified_error() -> None:
+	with tempfile.TemporaryDirectory(prefix="review-preflight-opencode-missing-") as td:
+		workspace = Path(td)
+		support_dir = workspace / "support"
+		prompts_dir = workspace / "prompts"
+		runtime_dir = workspace / "runtime"
+		previous_reviews_dir = workspace / "reviews"
+		context_dir = workspace / "context"
+		bin_dir = workspace / "bin"
+		for directory in (support_dir, prompts_dir, runtime_dir, previous_reviews_dir, context_dir, bin_dir):
+			directory.mkdir()
+
+		(support_dir / "opencode_helpers.sh").write_text(
+			(REPO_ROOT / "scripts" / "opencode_helpers.sh").read_text(encoding="utf-8"),
+			encoding="utf-8",
+		)
+		(support_dir / "write_opencode_config.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+		telegram_capture = _write_telegram_capture_helper(support_dir)
+		codex_capture = workspace / "codex_invoked.txt"
+		(bin_dir / "codex").write_text(
+			'#!/usr/bin/env bash\nprintf invoked > "${CODEX_CAPTURE_FILE}"\n',
+			encoding="utf-8",
+		)
+		(bin_dir / "codex").chmod(0o755)
+		for command_name in ("dirname", "realpath", "sed", "tr"):
+			(bin_dir / command_name).symlink_to(Path("/usr/bin") / command_name)
+
+		required_files: dict[str, Path] = {
+			"SUPPORT_INSTRUCTIONS_FILE": workspace / "instructions.txt",
+			"PR_DIFF_FILE": workspace / "pr.diff",
+			"ORIGINAL_PR_DIFF_FILE": workspace / "original.diff",
+			"PR_CHANGED_FILES_FILE": workspace / "changed.txt",
+			"PR_ALL_COMMENTS_CONTEXT_FILE": workspace / "comments.txt",
+			"PR_CHECK_RUNS_CONTEXT_FILE": workspace / "checks.txt",
+			"SYMBOL_DIFF_SUMMARY_FILE": workspace / "symbols.txt",
+			"MEMORY_CONTEXT_FILE": workspace / "memory.txt",
+		}
+		for required_path in required_files.values():
+			required_path.write_text("fixture\n", encoding="utf-8")
+		(workspace / "pre_assembled_static.txt").write_text("fixture\n", encoding="utf-8")
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": str(bin_dir),
+			"RUNTIME_DIR": str(runtime_dir),
+			"PREVIOUS_REVIEWS_DIR": str(previous_reviews_dir),
+			"RUNTIME_CONTEXT_DIR": str(context_dir),
+			"SUPPORT_SCRIPTS_DIR": str(support_dir),
+			"SUPPORT_PROMPTS_DIR": str(prompts_dir),
+			"REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS": "opencode_helpers.sh write_opencode_config.sh",
+			"REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS": "",
+			"REVIEWER_MODELS": "  minimax/minimax-m3  \nqwen/qwen3.7-plus",
+			"SUPPORT_CODEX_INSTRUCTIONS_FILE": str(workspace / "optional-codex.txt"),
+			"SUPPORT_AGENTS_FILE": str(workspace / "optional-agents.txt"),
+			"LAST_RUN_DIFF_FILE": str(workspace / "optional-last.diff"),
+			"LAST_RUN_CHANGED_FILES_FILE": str(workspace / "optional-last-files.txt"),
+			"LAST_RUN_DIFF_STAT_FILE": str(workspace / "optional-last-stat.txt"),
+			"LAST_COMMIT_STAT_FILE": str(workspace / "optional-commit-stat.txt"),
+			"REVIEW_REVIEWER_CHECKLIST_ENABLED": "0",
+			"REVIEWER_FILTER_UNINTERESTING_ENABLED": "0",
+			"AGENTS_MD_MATERIALITY_ENABLED": "0",
+			"REVIEWER_CIRCUIT_BREAKER_ENABLED": "0",
+			"TG_CAPTURE_FILE": str(telegram_capture),
+			"CODEX_CAPTURE_FILE": str(codex_capture),
+			**{name: str(path) for name, path in required_files.items()},
+		})
+		result = subprocess.run(
+			["/usr/bin/bash", "-c", _step_run_script('"Preflight: Verify required files before reviewer invocation"')],
+			cwd=workspace,
+			env=env,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+
+		stable_alert = "opencode_agent_failure phase=review_autofix_preflight role=reviewer model=minimax/minimax-m3 rc=127 failure_class=binary_missing"
+		assert result.returncode == 1, result
+		assert stable_alert in result.stderr, result.stderr
+		assert telegram_capture.read_text(encoding="utf-8") == f"{stable_alert}|ERROR\n"
+		assert not codex_capture.exists(), "preflight must not invoke Codex"
+
+		(support_dir / "opencode_helpers.sh").unlink()
+		telegram_capture.write_text("", encoding="utf-8")
+		(bin_dir / "opencode").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+		(bin_dir / "opencode").chmod(0o755)
+		preflight_helpers_missing_result = subprocess.run(
+			["/usr/bin/bash", "-c", _step_run_script('"Preflight: Verify required files before reviewer invocation"')],
+			cwd=workspace,
+			env=env,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+
+		preflight_helpers_missing_alert = "opencode_agent_failure phase=review_autofix_preflight role=reviewer model=minimax/minimax-m3 rc=1 failure_class=helpers_missing"
+		assert preflight_helpers_missing_result.returncode == 1, preflight_helpers_missing_result
+		assert preflight_helpers_missing_result.stderr.strip() == preflight_helpers_missing_alert
+		assert telegram_capture.read_text(encoding="utf-8") == f"{preflight_helpers_missing_alert}|ERROR\n"
+		assert not codex_capture.exists(), "preflight helper failure must not invoke Codex"
+
+
+def test_reviewer_missing_opencode_helpers_emits_classified_error() -> None:
+	with tempfile.TemporaryDirectory(prefix="reviewers-opencode-helpers-missing-") as td:
+		support_dir = Path(td)
+		telegram_capture = _write_telegram_capture_helper(support_dir)
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_SCRIPTS_DIR": str(support_dir),
+			"REVIEWER_MODELS": "\n  moonshotai/kimi-k3  \nminimax/minimax-m3",
+			"TG_CAPTURE_FILE": str(telegram_capture),
+		})
+		result = subprocess.run(
+			["/usr/bin/bash", str(REVIEWERS)],
+			env=env,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+
+		stable_alert = "opencode_agent_failure phase=review_run_reviewers role=reviewer model=moonshotai/kimi-k3 rc=1 failure_class=helpers_missing"
+		assert result.returncode == 1, result
+		assert result.stderr.strip() == stable_alert, result.stderr
+		assert telegram_capture.read_text(encoding="utf-8") == f"{stable_alert}|ERROR\n"
+
+
+def test_summariser_missing_opencode_helpers_emits_classified_error() -> None:
+	with tempfile.TemporaryDirectory(prefix="summariser-opencode-helpers-missing-") as td:
+		fixture_root = Path(td)
+		support_dir = fixture_root / "support"
+		previous_reviews_dir = fixture_root / "reviews"
+		runtime_dir = fixture_root / "runtime"
+		for directory in (support_dir, previous_reviews_dir, runtime_dir):
+			directory.mkdir()
+		telegram_capture = _write_telegram_capture_helper(support_dir)
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_SCRIPTS_DIR": str(support_dir),
+			"PREVIOUS_REVIEWS_DIR": str(previous_reviews_dir),
+			"RUNTIME_DIR": str(runtime_dir),
+			"XPOLL_SUMMARISER_MODEL": "openai/gpt-5.6-luna",
+			"TG_CAPTURE_FILE": str(telegram_capture),
+		})
+		result = subprocess.run(
+			["/usr/bin/bash", str(SUMMARISER), "--prefix", "review", "--output", str(fixture_root / "output.txt")],
+			env=env,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+
+		stable_alert = "opencode_agent_failure phase=review_summariser role=reviewer model=openai/gpt-5.6-luna rc=1 failure_class=helpers_missing"
+		assert result.returncode == 1, result
+		assert result.stderr.strip() == stable_alert, result.stderr
+		assert telegram_capture.read_text(encoding="utf-8") == f"{stable_alert}|ERROR\n"
 
 
 def test_review_soft_deadline_budget_contract_is_wired() -> None:
@@ -4637,8 +4908,9 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		'"slot_retry_budget_exhausted":',
 		'"fallback_model_used":',
 		'"cache_status":',
-		'"cache_reuse_attempted":',
-		'"cache_read_input_tokens_total":',
+			'"cache_reuse_attempted":',
+			'"cache_read_input_tokens_total":',
+			'"cache_read_input_tokens_available":',
 		'"budget_elapsed_secs":',
 		'"budget_total_secs":',
 		'"budget_remaining_secs":',
@@ -4779,8 +5051,10 @@ def test_review_pipeline_summary_reports_stall_recovery_for_retried_and_skipped_
 	assert slots["model_one"]["cache_status"] == "supported"
 	assert slots["model_one"]["cache_reuse_attempted"] is True
 	assert slots["model_one"]["cache_read_input_tokens_total"] == 120
+	assert slots["model_one"]["cache_read_input_tokens_available"] is False
 
 	assert slots["model_two"]["failure_class"] == "stall_guard"
+	assert slots["model_two"]["attempt_count"] == 1
 	assert slots["model_two"]["stall_kill_count"] == 1
 	assert slots["model_two"]["stall_recovery_next_action"] == "skip_unmapped"
 	assert slots["model_two"]["stall_recovered"] is False
@@ -4792,6 +5066,10 @@ def test_review_pipeline_summary_reports_stall_recovery_for_retried_and_skipped_
 	assert slots["model_two"]["cache_status"] == "unsupported"
 	assert slots["model_two"]["cache_reuse_attempted"] is False
 	assert slots["model_two"]["cache_read_input_tokens_total"] == 0
+	assert slots["model_two"]["cache_read_input_tokens_available"] is True
+	assert slots["model_three"]["attempt_count"] == 1
+	assert slots["model_three"]["cache_read_input_tokens_total"] == 33
+	assert slots["model_three"]["cache_read_input_tokens_available"] is True
 
 	assert summary["stall_recovery"] == {
 		"advanced_slots": 2,
@@ -5768,6 +6046,10 @@ def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_
 
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
+	test_opencode_full_review_cutover_removes_codex_runtime()
+	test_review_preflight_missing_opencode_binary_emits_classified_error()
+	test_reviewer_missing_opencode_helpers_emits_classified_error()
+	test_summariser_missing_opencode_helpers_emits_classified_error()
 	test_review_soft_deadline_budget_contract_is_wired()
 	test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated()
 	test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated()

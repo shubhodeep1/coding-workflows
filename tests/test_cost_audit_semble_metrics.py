@@ -74,6 +74,8 @@ def test_format_openrouter_usage_line_preserves_complete_usage_contract() -> Non
 	assert parsed["or_total_tokens"] == 125
 	assert parsed["or_cache_write_tokens"] == 30
 	assert parsed["or_cache_read_tokens"] == 40
+	assert parsed["or_usage_available_calls"] == 1
+	assert parsed["or_usage_unavailable_calls"] == 0
 
 
 def test_format_openrouter_usage_line_normalizes_nested_cache_usage() -> None:
@@ -115,6 +117,8 @@ def test_format_openrouter_usage_line_uses_na_for_missing_usage() -> None:
 		"cache_creation_input_tokens=na cache_read_input_tokens=na"
 	)
 	assert parse_log(line)["or_calls"] == 1
+	assert parse_log(line)["or_usage_available_calls"] == 0
+	assert parse_log(line)["or_usage_unavailable_calls"] == 1
 
 
 def test_direct_openrouter_callers_preserve_output_and_emit_safe_usage() -> None:
@@ -310,6 +314,9 @@ INFO: openrouter usage phase=review call=review model=openai/gpt-5.4 cache_enabl
 
 	assert parsed["or_calls"] == 1
 	assert parsed["or_total_tokens"] == 0
+	assert parsed["or_usage_available_calls"] == 0
+	assert parsed["or_usage_unavailable_calls"] == 1
+	assert parsed["cache_hit_rate"] is None
 	assert parsed["or_phases"] == {
 		"review": {
 			"prompt_tokens": 0,
@@ -332,6 +339,8 @@ INFO: openrouter usage phase=review call=review model=openai/gpt-5.4 cache_enabl
 	assert parsed["or_total_tokens"] == 125000
 	assert parsed["or_cache_write_tokens"] == 30000
 	assert parsed["or_cache_read_tokens"] == 40000
+	assert parsed["or_usage_available_calls"] == 1
+	assert parsed["or_usage_unavailable_calls"] == 0
 	assert parsed["or_phases"] == {
 		"review": {
 			"prompt_tokens": 100000,
@@ -426,6 +435,19 @@ def test_context_budget_warn_fixture_generates_and_parses_review_telemetry() -> 
 	assert aggregate["context_budget_warn_count"] == 1
 	assert aggregate["wall_clock_p50_ms"] == 3210
 	assert aggregate["wall_clock_p99_ms"] == 3210
+
+	mixed_telemetry = build_run_cost_telemetry(
+		log
+		+ "\nINFO: openrouter usage phase=review call=pass2 model=openai/gpt-5.4 "
+		"cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na "
+		"prompt_tokens=na completion_tokens=na total_tokens=na "
+		"cache_creation_input_tokens=na cache_read_input_tokens=na usage_available=false"
+	)
+	assert mixed_telemetry["or_usage_available_calls"] == 1
+	assert mixed_telemetry["or_usage_unavailable_calls"] == 1
+	assert mixed_telemetry["cache_hit_rate"] is None
+	mixed_aggregate = aggregate_run_cost_telemetry([{"cost_telemetry": mixed_telemetry}])
+	assert mixed_aggregate["cache_hit_rate"] is None
 
 	override = build_context_budget_warning(
 		phase="review",

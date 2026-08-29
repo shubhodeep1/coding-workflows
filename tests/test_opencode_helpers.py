@@ -162,6 +162,25 @@ def test_alert_is_single_line_sanitized_and_uses_error_level() -> None:
 		assert capture.read_text(encoding="utf-8").splitlines() == [stderr_lines[0], "ERROR"]
 
 
+def test_alert_survives_broken_telegram_helper() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		helper_copy = root / "opencode_helpers.sh"
+		helper_copy.write_text(HELPERS.read_text(encoding="utf-8"), encoding="utf-8")
+		(root / "tg_helpers.sh").write_text("return 9\n", encoding="utf-8")
+
+		result = _bash(
+			"set -euo pipefail; "
+			f"source {helper_copy}; "
+			"opencode_emit_failure_alert phase reviewer vendor/model 17 notify_failure"
+		)
+
+		assert result.returncode == 17
+		assert result.stderr.decode().splitlines() == [
+			"opencode_agent_failure phase=phase role=reviewer model=vendor/model rc=17 failure_class=notify_failure"
+		]
+
+
 def test_bootstrap_fails_closed_for_missing_and_wrong_binary() -> None:
 	with tempfile.TemporaryDirectory() as directory:
 		root = Path(directory)

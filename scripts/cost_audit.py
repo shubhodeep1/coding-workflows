@@ -77,7 +77,8 @@ OPENROUTER_RE = re.compile(
     r"completion_tokens=(?P<ct>" + _NUM + r")\s+"
     r"total_tokens=(?P<tt>" + _NUM + r")\s+"
     r"cache_creation_input_tokens=(?P<cw>" + _NUM + r")\s+"
-    r"cache_read_input_tokens=(?P<cr>" + _NUM + r")",
+    r"cache_read_input_tokens=(?P<cr>" + _NUM + r")"
+    r"(?:\s+usage_available=(?P<available>true|false))?",
     re.IGNORECASE,
 )
 
@@ -117,6 +118,8 @@ RUN_COST_TELEMETRY_FIELDS = (
     "or_cache_write_tokens",
     "or_cache_read_tokens",
     "or_calls",
+    "or_usage_available_calls",
+    "or_usage_unavailable_calls",
     "semble_query_calls",
     "semble_query_bytes",
     "semble_fallbacks",
@@ -145,6 +148,8 @@ AGGREGATABLE_COST_FIELDS = (
     "or_cache_write_tokens",
     "or_cache_read_tokens",
     "or_calls",
+    "or_usage_available_calls",
+    "or_usage_unavailable_calls",
     "semble_query_calls",
     "semble_query_bytes",
     "semble_fallbacks",
@@ -329,6 +334,8 @@ def estimate_prompt_tokens_from_bytes(prompt_bytes: int) -> int:
 
 
 def compute_cache_hit_rate(values: dict[str, Any]) -> Optional[float]:
+    if _to_int(values.get("or_usage_unavailable_calls"), 0) > 0:
+        return None
     prompt_tokens = _to_int(values.get("or_prompt_tokens"), 0)
     cache_write_tokens = _to_int(values.get("or_cache_write_tokens"), 0)
     cache_read_tokens = _to_int(values.get("or_cache_read_tokens"), 0)
@@ -567,6 +574,8 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
         "or_cache_write_tokens": 0,
         "or_cache_read_tokens": 0,
         "or_calls": 0,
+        "or_usage_available_calls": 0,
+        "or_usage_unavailable_calls": 0,
         "or_phases": defaultdict(lambda: defaultdict(int)),
         "semble_query_calls": 0,
         "semble_query_bytes": 0,
@@ -612,6 +621,15 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
         out["or_cache_write_tokens"] += cw
         out["or_cache_read_tokens"] += cr
         out["or_calls"] += 1
+        explicit_availability = (m.group("available") or "").lower()
+        usage_values = (m.group("pt"), m.group("ct"), m.group("tt"), m.group("cw"), m.group("cr"))
+        usage_available = explicit_availability != "false" and all(
+            re.fullmatch(r"[0-9][0-9,]*", value) for value in usage_values
+        )
+        availability_field = (
+            "or_usage_available_calls" if usage_available else "or_usage_unavailable_calls"
+        )
+        out[availability_field] += 1
         phase = m.group("phase")
         out["or_phases"][phase]["prompt_tokens"] += pt
         out["or_phases"][phase]["completion_tokens"] += ct
@@ -722,6 +740,12 @@ def fmt_ms(value: int | None) -> str:
     return f"{value:,}"
 
 
+def fmt_cache_tokens(value: int, unavailable_calls: int) -> str:
+    if unavailable_calls > 0:
+        return "N/A"
+    return fmt(value)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     ap.add_argument("--repo", default="shubhodeep1/coding-workflows",
@@ -755,6 +779,8 @@ def main() -> int:
             "or_cache_write_tokens": 0,
             "or_cache_read_tokens": 0,
             "or_calls": 0,
+            "or_usage_available_calls": 0,
+            "or_usage_unavailable_calls": 0,
             "or_phases": defaultdict(lambda: defaultdict(int)),
             "semble_query_calls": 0,
             "semble_query_bytes": 0,
@@ -814,7 +840,8 @@ def main() -> int:
             for k in ("codex_tokens_used", "codex_calls", "or_prompt_tokens",
                       "or_completion_tokens", "or_total_tokens",
                       "or_cache_write_tokens", "or_cache_read_tokens",
-                      "or_calls", "semble_query_calls",
+                      "or_calls", "or_usage_available_calls",
+                      "or_usage_unavailable_calls", "semble_query_calls",
                       "semble_query_bytes", "semble_fallbacks",
                       "semble_contract_test_fallbacks", "semble_runtime_fallbacks",
                       "serena_query_calls", "serena_query_response_bytes",
@@ -850,6 +877,7 @@ def main() -> int:
                     "codex_tokens_used", "codex_calls", "or_prompt_tokens",
                     "or_completion_tokens", "or_total_tokens",
                     "or_cache_write_tokens", "or_cache_read_tokens", "or_calls",
+                    "or_usage_available_calls", "or_usage_unavailable_calls",
                     "semble_query_calls", "semble_query_bytes", "semble_fallbacks",
                     "semble_contract_test_fallbacks", "semble_runtime_fallbacks",
                     "serena_query_calls", "serena_query_response_bytes",
@@ -901,16 +929,18 @@ def main() -> int:
     print("| Workflow | runs | with_data | codex_tokens | codex_calls | "
           "or_prompt | or_completion | or_total | or_cache_write | "
           "or_cache_read | or_calls | cache_hit_rate | wall_clock_p50_ms | "
-          "wall_clock_p99_ms | break_glass | context_budget_warn |")
-    print("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+          "usage_available | usage_unavailable | wall_clock_p99_ms | break_glass | context_budget_warn |")
+    print("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for wf, a in per_wf.items():
         print(
             f"| {wf} | {a['run_count']} | {a['runs_with_data']} | "
             f"{fmt(a['codex_tokens_used'])} | {fmt(a['codex_calls'])} | "
             f"{fmt(a['or_prompt_tokens'])} | {fmt(a['or_completion_tokens'])} | "
             f"{fmt(a['or_total_tokens'])} | {fmt(a['or_cache_write_tokens'])} | "
-            f"{fmt(a['or_cache_read_tokens'])} | {fmt(a['or_calls'])} | "
+            f"{fmt_cache_tokens(a['or_cache_read_tokens'], a['or_usage_unavailable_calls'])} | "
+            f"{fmt(a['or_calls'])} | "
             f"{fmt_rate(a['cache_hit_rate'])} | {fmt_ms(a['wall_clock_p50_ms'])} | "
+            f"{fmt(a['or_usage_available_calls'])} | {fmt(a['or_usage_unavailable_calls'])} | "
             f"{fmt_ms(a['wall_clock_p99_ms'])} | {fmt(a['break_glass_count'])} | "
             f"{fmt(a['context_budget_warn_count'])} |"
         )

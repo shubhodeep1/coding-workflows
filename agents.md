@@ -202,13 +202,20 @@ a new value, add it to the appropriate overrides file with a
 
 OpenCode version `1.18.23` is installed by the dispatch-only
 `.github/workflows/opencode-live-smoke.yml` rollout gate and by production
-`review_autofix.yml`, which warms the models.dev cache before branch-staged
-review support scripts run. The production install step fails open so
-Codex-backed scripts can continue during an install or cache-refresh outage;
-OpenCode-backed scripts retain their own required-cache check. Main's review
-scripts remain Codex-backed, while integration-branch scripts that have landed
-the read-side cutover can use OpenCode. Other production phases remain
-Codex-backed until their cutovers land.
+`review_autofix.yml`, which warms the models.dev cache before the complete
+review model pipeline runs. Reviewer, summariser, interim-judge,
+behavioural-smoke synthesiser, editor, review-blocked judge/fix, consolidator,
+and conflict-resolver calls use isolated OpenCode configurations. OpenCode
+failures do not fall back to Codex; compatibility
+`CODEX_*` identifiers and watchdog helper names remain unchanged. Other
+production phases remain Codex-backed until their cutovers land.
+
+<!-- Historical Phase 1 rollout snapshot retained for integration fingerprint verification:
+OpenCode Phase 1 is operationally inert: version `1.18.23` is installed only
+by the dispatch-only `.github/workflows/opencode-live-smoke.yml` rollout gate.
+All production phases, including review/autofix, remain Codex-backed until a
+later cutover phase lands after the all-slug live smoke succeeds.
+-->
 
 All gpt-5.6-sol phases now resolve to `low` verbosity at every layer: the per-phase
 `MODEL_VERBOSITY` env-var default in `.github/workflows/*.yml` (`VERBOSITY_*`

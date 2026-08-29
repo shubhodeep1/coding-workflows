@@ -148,7 +148,7 @@ Copy this block when adding a new entry:
 
 ### `.github/workflows/opencode-live-smoke.yml`
 
-- **Introduced in:** orchestrator/project-3845 (2026-08-27)
+- **Introduced in:** #3858 (2026-08-27)
 - **Type:** long-running
 - **Removal trigger:** permanent — review annually
 - **Removal preflight checks:**
@@ -158,7 +158,7 @@ Copy this block when adding a new entry:
 
 ### `scripts/opencode_helpers.sh`
 
-- **Introduced in:** orchestrator/project-3845 (2026-08-27)
+- **Introduced in:** #3858 (2026-08-27)
 - **Type:** long-running
 - **Removal trigger:** permanent — review annually
 - **Removal preflight checks:**
@@ -168,7 +168,7 @@ Copy this block when adding a new entry:
 
 ### `scripts/write_opencode_config.sh`
 
-- **Introduced in:** orchestrator/project-3845 (2026-08-27)
+- **Introduced in:** #3858 (2026-08-27)
 - **Type:** long-running
 - **Removal trigger:** permanent — review annually
 - **Removal preflight checks:**
