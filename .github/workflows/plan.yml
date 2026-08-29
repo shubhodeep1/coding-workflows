@@ -1441,16 +1441,16 @@ jobs:
           # implement.yml, so every path under them is rejected.
           #
           # `scripts/` is NOT blanket-excluded there.  implement.yml builds
-          # per-file exclusions from the runtime-generated scripts/.gitignore
-          # so consumer repos can still commit their own scripts/ files - for
-          # example the scripts/run_validation_repo_checks.sh validation entry
-          # that scripts/validation_template_bootstrap.py seeds into them.
-          # This guard mirrors that rule: a scripts/ path is rejected only
-          # when it names a runtime-fetched helper listed in
-          # scripts/.gitignore, the same file written by the "Stage workflow
-          # support files" step above.  When that file is missing (bootstrap
-          # failure) we fall back to rejecting every scripts/ path, matching
-          # implement.yml's own fallback.
+          # per-file exclusions for its runtime-fetched helpers so consumer
+          # repos can still commit their own scripts/ files - for example the
+          # scripts/run_validation_repo_checks.sh validation entry that
+          # scripts/validation_template_bootstrap.py seeds into them.  This
+          # guard derives those helper names from the staged implement.yml
+          # workflow itself, then unions them with this job's scripts/.gitignore
+          # entries.  That keeps implement-only and plan-only helpers covered
+          # without duplicating their lists here.  When either source is unavailable or
+          # cannot be parsed (bootstrap failure), we fall back to rejecting
+          # every scripts/ path, matching implement.yml's own fallback.
           #
           # This guard is skipped entirely when the workflow is running inside
           # the canonical `*/coding-workflows` repository, because in that repo
@@ -1470,13 +1470,53 @@ jobs:
           EXCLUDED_RE='(^|[^[:alnum:]_./-])`?(\./|/)?(scripts/|\.github/prompts/|\.github/scripts/)'
           TEMPLATE_PATH_CANDIDATES_FILE="${RUNTIME_DIR}/template_path_candidates.txt"
           TEMPLATE_PATH_BLOCKED_FILE="${RUNTIME_DIR}/template_path_blocked.txt"
-          FETCHED_SCRIPTS_IGNORE_FILE="scripts/.gitignore"
+          IMPLEMENT_WORKFLOW_SOURCE_FILE=".codex-workflow-src/.github/workflows/implement.yml"
+          if [ ! -f "${IMPLEMENT_WORKFLOW_SOURCE_FILE}" ] && [ -f ".codex-workflow-src-main/.github/workflows/implement.yml" ]; then
+            IMPLEMENT_WORKFLOW_SOURCE_FILE=".codex-workflow-src-main/.github/workflows/implement.yml"
+          fi
+          FETCHED_SCRIPTS_IGNORE_FILE="${RUNTIME_DIR}/implementation_fetched_scripts.txt"
           : > "${TEMPLATE_PATH_CANDIDATES_FILE}"
           : > "${TEMPLATE_PATH_BLOCKED_FILE}"
+          : > "${FETCHED_SCRIPTS_IGNORE_FILE}"
+          if [ -f "${IMPLEMENT_WORKFLOW_SOURCE_FILE}" ] && [ -f scripts/.gitignore ]; then
+            if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${IMPLEMENT_WORKFLOW_SOURCE_FILE}" scripts/.gitignore "${FETCHED_SCRIPTS_IGNORE_FILE}" <<'PY'; then
+          import re
+          import sys
+          from pathlib import Path
+
+          workflow_text = Path(sys.argv[1]).read_text()
+          stage_marker = "      - name: Stage workflow support files\n"
+          if stage_marker not in workflow_text:
+              raise ValueError("implement workflow support step not found")
+          stage_body = workflow_text.split(stage_marker, 1)[1].split("\n      - name: ", 1)[0]
+          implementation_helpers = set()
+          loop_pattern = re.compile(
+              r"^(?P<indent>[ \t]+)for f in (?P<names>[^;\n]+); do\n"
+              r"(?P<body>.*?)(?=^(?P=indent)done\s*$)",
+              re.MULTILINE | re.DOTALL,
+          )
+          for loop_match in loop_pattern.finditer(stage_body):
+              if '_fetched_scripts+=("${f}")' in loop_match.group("body"):
+                  implementation_helpers.update(loop_match.group("names").split())
+          if not implementation_helpers:
+              raise ValueError("implement workflow helper manifest is empty")
+          plan_helpers = {
+              entry.strip()
+              for entry in Path(sys.argv[2]).read_text().splitlines()
+              if entry.strip() and not entry.lstrip().startswith("#")
+          }
+          Path(sys.argv[3]).write_text("\n".join(sorted(implementation_helpers | plan_helpers)) + "\n")
+          PY
+              echo "::warning::Unable to derive implement.yml's fetched-helper manifest; falling back to blanket scripts/ rejection."
+              : > "${FETCHED_SCRIPTS_IGNORE_FILE}"
+            fi
+          fi
           if [ -s "${FILES_SECTION_FILE}" ] && grep -qE "${EXCLUDED_RE}" "${FILES_SECTION_FILE}"; then
             perl -ne '
               while (m{(?:^|[^[:alnum:]_./-])`?(?:\./|/)?((?:scripts/|\.github/prompts/|\.github/scripts/)[^\s`,;:*)\]]*)}g) {
-                print "$1\n";
+                my $candidate = $1;
+                $candidate =~ s/[.!?\x22\x27}\]]+$//;
+                print "$candidate\n" if length $candidate;
               }
             ' "${FILES_SECTION_FILE}" | sort -u > "${TEMPLATE_PATH_CANDIDATES_FILE}"
           fi
@@ -1488,7 +1528,7 @@ jobs:
                 continue
                 ;;
             esac
-            if [ ! -f "${FETCHED_SCRIPTS_IGNORE_FILE}" ]; then
+            if [ ! -s "${FETCHED_SCRIPTS_IGNORE_FILE}" ]; then
               printf '%s\n' "${template_path_candidate}" >> "${TEMPLATE_PATH_BLOCKED_FILE}"
               continue
             fi
@@ -1520,7 +1560,7 @@ jobs:
               gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" >/dev/null 2>&1 || true
             fi
             RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            REJECTION_BODY=$'The generated plan targets template-owned paths - runtime-fetched `scripts/` helpers, `.github/prompts/`, or `.github/scripts/` - which are fetched from the `coding-workflows` repository at runtime and are excluded from Codex commits in `implement.yml`. Implementing this plan would produce a no-op PR.\n\nConsumer-owned files under `scripts/` are not affected: only helpers listed in the runtime-generated `scripts/.gitignore` are blocked.\n\nIf a change to those files is genuinely required, open an issue or PR directly against [`shubhodeep1/coding-workflows`](https://github.com/shubhodeep1/coding-workflows) instead.\n\nRun: '"${RUN_URL}"
+            REJECTION_BODY=$'The generated plan targets template-owned paths - runtime-fetched `scripts/` helpers, `.github/prompts/`, or `.github/scripts/` - which are fetched from the `coding-workflows` repository at runtime and are excluded from Codex commits in `implement.yml`. Implementing this plan would produce a no-op PR.\n\nConsumer-owned files under `scripts/` are not affected: only helpers derived from the implementation workflow\x27s runtime staging manifest are blocked.\n\nIf a change to those files is genuinely required, open an issue or PR directly against [`shubhodeep1/coding-workflows`](https://github.com/shubhodeep1/coding-workflows) instead.\n\nRun: '"${RUN_URL}"
             gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
               -f body="${REJECTION_BODY}" >/dev/null 2>&1 || true
             exit 1

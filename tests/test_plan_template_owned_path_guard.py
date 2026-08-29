@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -25,11 +26,17 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "plan.yml"
+IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 GUARD_STEP_NAME = "Guard plans targeting template-owned paths"
 
 # Representative subset of the helpers plan.yml stages into scripts/ and lists
 # in the generated scripts/.gitignore.
-FETCHED_HELPERS = ("gh_helpers.sh", "render_prompt.sh", "codex_helpers.sh")
+FETCHED_HELPERS = (
+	"gh_helpers.sh",
+	"render_prompt.sh",
+	"codex_helpers.sh",
+	"codex_model_catalog.json",
+)
 
 
 def _guard_body() -> str:
@@ -50,7 +57,7 @@ def _run_guard(plan_text: str, gitignore_entries: tuple[str, ...] | None):
 	"""Execute the guard against a synthetic plan; return (exit_code, output).
 
 	``gitignore_entries`` of ``None`` simulates a bootstrap failure in which
-	scripts/.gitignore was never written.
+	the support checkout and scripts/.gitignore were never written.
 	"""
 	with tempfile.TemporaryDirectory() as tmp:
 		workspace = Path(tmp)
@@ -61,6 +68,11 @@ def _run_guard(plan_text: str, gitignore_entries: tuple[str, ...] | None):
 				+ "\n".join(gitignore_entries)
 				+ "\n.gitignore\n"
 			)
+			implement_workflow = (
+				workspace / ".codex-workflow-src" / ".github" / "workflows" / "implement.yml"
+			)
+			implement_workflow.parent.mkdir(parents=True)
+			shutil.copy2(IMPLEMENT_WORKFLOW, implement_workflow)
 		runtime_dir = workspace / "runtime"
 		runtime_dir.mkdir()
 		codex_output = runtime_dir / "codex_output.txt"
@@ -69,6 +81,8 @@ def _run_guard(plan_text: str, gitignore_entries: tuple[str, ...] | None):
 		env.update(
 			{
 				"PYTHONDONTWRITEBYTECODE": "1",
+				"GITHUB_WORKSPACE": str(workspace),
+				"WORKSPACE_PATH": str(workspace),
 				"RUNTIME_DIR": str(runtime_dir),
 				"CODEX_OUTPUT_FILE": str(codex_output),
 				"ISSUE_NUMBER": "1",
@@ -113,6 +127,12 @@ def test_consumer_owned_scripts_are_allowed(path: str) -> None:
 	[
 		"scripts/render_prompt.sh",
 		"scripts/gh_helpers.sh",
+		# Regression: this implement-only helper is absent from FETCHED_HELPERS,
+		# so reading plan.yml's scripts/.gitignore alone would allow it.
+		"scripts/codex_stall_guard.sh",
+		"scripts/lint_pr_body_auto_close.py",
+		# The catalog is also fetched by the plan job and listed in its gitignore.
+		"scripts/codex_model_catalog.json",
 		".github/prompts/mode-plan.txt",
 		".github/scripts/some_helper.sh",
 	],
@@ -121,6 +141,19 @@ def test_template_owned_paths_are_rejected(path: str) -> None:
 	returncode, output = _run_guard(_plan_listing(path), FETCHED_HELPERS)
 	assert returncode == 1, f"template-owned {path} was allowed:\n{output}"
 	assert path in output
+
+
+@pytest.mark.parametrize("suffix", [".", "!", "?", '"', "'"])
+def test_unquoted_template_helper_with_trailing_punctuation_is_rejected(
+	suffix: str,
+) -> None:
+	plan_text = (
+		f"## Files likely to change\n- scripts/render_prompt.sh{suffix}\n\n"
+		"## Current behavior\nUnchanged.\n"
+	)
+	returncode, output = _run_guard(plan_text, FETCHED_HELPERS)
+	assert returncode == 1, output
+	assert "scripts/render_prompt.sh" in output
 
 
 def test_missing_scripts_gitignore_falls_back_to_blanket_rejection() -> None:
