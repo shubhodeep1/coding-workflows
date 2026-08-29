@@ -1445,10 +1445,11 @@ jobs:
           # repos can still commit their own scripts/ files - for example the
           # scripts/run_validation_repo_checks.sh validation entry that
           # scripts/validation_template_bootstrap.py seeds into them.  This
-          # guard derives those helper names from the staged implement.yml
-          # workflow itself, then unions them with this job's scripts/.gitignore
-          # entries.  That keeps implement-only and plan-only helpers covered
-          # without duplicating their lists here.  When either source is unavailable or
+          # guard derives those helper paths, including literal scripts/...
+          # FETCHED_MANIFEST entries, from the staged implement.yml workflow
+          # itself, then unions them with this job's scripts/.gitignore entries.
+          # That keeps implement-only and plan-only helpers covered without
+          # duplicating their lists here.  When either source is unavailable or
           # cannot be parsed (bootstrap failure), we fall back to rejecting
           # every scripts/ path, matching implement.yml's own fallback.
           #
@@ -1498,6 +1499,11 @@ jobs:
           for loop_match in loop_pattern.finditer(stage_body):
               if '_fetched_scripts+=("${f}")' in loop_match.group("body"):
                   implementation_helpers.update(loop_match.group("names").split())
+          direct_manifest_pattern = re.compile(
+              r'^\s*echo\s+"scripts/([^"$]+)"\s*>>\s*"\$\{FETCHED_MANIFEST\}"\s*$',
+              re.MULTILINE,
+          )
+          implementation_helpers.update(direct_manifest_pattern.findall(stage_body))
           if not implementation_helpers:
               raise ValueError("implement workflow helper manifest is empty")
           plan_helpers = {

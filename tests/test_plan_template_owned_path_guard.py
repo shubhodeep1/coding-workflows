@@ -4,11 +4,12 @@
 The guard rejects plans whose "Files likely to change" section targets paths
 that implement.yml excludes from Codex commits in consumer repos.  Those
 exclusions are per-file for ``scripts/`` (driven by the runtime-generated
-``scripts/.gitignore``) and blanket for ``.github/prompts/`` and
+``scripts/.gitignore`` plus literal ``scripts/...`` entries written to
+``FETCHED_MANIFEST``) and blanket for ``.github/prompts/`` and
 ``.github/scripts/``, so the guard must mirror that split: a consumer-owned
 script such as ``scripts/run_validation_repo_checks.sh`` is committable and
-must be allowed, while a runtime-fetched helper such as
-``scripts/render_prompt.sh`` is not and must be rejected.
+must be allowed, while runtime-fetched paths such as
+``scripts/render_prompt.sh`` are not and must be rejected.
 """
 
 from __future__ import annotations
@@ -139,6 +140,10 @@ def test_similarly_prefixed_root_files_are_allowed(path: str) -> None:
 		# so reading plan.yml's scripts/.gitignore alone would allow it.
 		"scripts/codex_stall_guard.sh",
 		"scripts/lint_pr_body_auto_close.py",
+		# This nested template is registered directly in implement.yml's
+		# FETCHED_MANIFEST rather than through an _fetched_scripts loop, so
+		# basename-only extraction cannot cover it.
+		"scripts/templates/serena_project.yml.j2",
 		# The catalog is also fetched by the plan job and listed in its gitignore.
 		"scripts/codex_model_catalog.json",
 		".github/prompts",
