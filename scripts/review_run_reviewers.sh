@@ -731,7 +731,7 @@ except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
 	sys.exit(1)
 
 if not text_parts or not any(part.strip() for part in text_parts):
-	sys.exit(1)
+	sys.exit(2)
 
 text_path.write_text("\n".join(text_parts) + "\n", encoding="utf-8")
 PY
@@ -3764,6 +3764,7 @@ execute_reviewer_attempt() {
   local reviewer_nag_block=""
   local reviewer_base_prompt_bytes=0
   local reviewer_effective_prompt_bytes=0
+  local reviewer_materialize_rc=0
 
   REVIEWER_ATTEMPT_OUTCOME="failed"
   REVIEWER_ATTEMPT_RETRYABLE_CLASS=""
@@ -4020,11 +4021,12 @@ execute_reviewer_attempt() {
 
   reviewer_strip_opencode_output_file "${tmp_structured_output}"
   reviewer_strip_opencode_output_file "${tmp_stderr}"
-  if ! reviewer_materialize_opencode_json_text "${tmp_structured_output}" "${tmp_output}"; then
-    printf '%s\n' "OpenCode structured reviewer output was malformed or contained no text events." >> "${tmp_stderr}"
-    if [ "${cmd_rc}" -eq 0 ]; then
-      cmd_rc=1
-    fi
+  reviewer_materialize_opencode_json_text "${tmp_structured_output}" "${tmp_output}" || reviewer_materialize_rc=$?
+  if [ "${reviewer_materialize_rc}" -eq 2 ]; then
+    printf '%s\n' "OpenCode structured reviewer output contained no text events." >> "${tmp_stderr}"
+  elif [ "${reviewer_materialize_rc}" -ne 0 ]; then
+    printf '%s\n' "OpenCode structured reviewer output was malformed." >> "${tmp_stderr}"
+    [ "${cmd_rc}" -ne 0 ] || cmd_rc=1
   fi
 
   if reviewer_output_has_findings "${tmp_output}" || reviewer_output_has_explicit_none "${tmp_output}"; then

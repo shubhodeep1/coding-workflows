@@ -372,12 +372,12 @@ the reviewer phase are excluded.
 | Run | Reviewer phase | Seconds |
 |---|---:|---:|
 | [`33177800142`](https://github.com/shubhodeep1/coding-workflows/actions/runs/33177800142) | 57m 03s | 3,423 |
+| [`33167154516`](https://github.com/shubhodeep1/coding-workflows/actions/runs/33167154516) | 58m 56s | 3,536 |
 | [`33160867375`](https://github.com/shubhodeep1/coding-workflows/actions/runs/33160867375) | 73m 08s | 4,388 |
-| [`32907158075`](https://github.com/shubhodeep1/coding-workflows/actions/runs/32907158075) | 64m 49s | 3,889 |
 
-- Arithmetic mean: **3,900 seconds (65m 00s)**.
-- Informational ±20% range: **3,120–4,680 seconds (52m–78m)**.
-- Median: **3,889 seconds (64m 49s)**.
+- Arithmetic mean: **3,782 seconds (63m 02s)**.
+- Informational ±20% range: **3,026–4,539 seconds (50m 26s–75m 39s)**.
+- Median: **3,536 seconds (58m 56s)**.
 - Pre-P2 cache-read baseline: **unavailable**. Run `33177800142` records
   `cache_read_input_tokens=na` for every reviewer slot, and the Codex-era
   ledger contains no cache-read field; zero must not be substituted.

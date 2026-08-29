@@ -2814,6 +2814,7 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert reviewers.count('"${probe_opencode_cmd[@]}"') == 2
 	assert 'reviewer_strip_opencode_output_file "${tmp_structured_output}"' in reviewers
 	assert 'reviewer_materialize_opencode_json_text "${tmp_structured_output}" "${tmp_output}"' in reviewers
+	assert 'if [ "${reviewer_materialize_rc}" -eq 2 ]; then' in reviewers
 	assert 'reviewer_strip_opencode_output_file "${tmp_stderr}"' in reviewers
 	assert 'opencode_emit_failure_alert review_run_reviewers reviewer' in reviewers
 	assert 'REVIEWER_FAILBACK:' in reviewers

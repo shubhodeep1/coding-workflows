@@ -460,6 +460,9 @@ def test_opencode_reviewer_jsonl_materializes_text_and_numeric_usage() -> None:
 
 def test_opencode_reviewer_jsonl_marks_missing_usage_unavailable_and_rejects_malformed_events() -> None:
 	text_only_event = '{"type":"text","part":{"text":"NONE"}}\n'
+	no_text_result, _ = _materialize_opencode_reviewer_text(
+		'{"type":"session_start","sessionID":"ses_fixture"}\n'
+	)
 	line = _normalize_openrouter_usage(
 		text_only_event,
 		phase="review",
@@ -472,6 +475,7 @@ def test_opencode_reviewer_jsonl_marks_missing_usage_unavailable_and_rejects_mal
 
 	assert "cache_read_input_tokens=na" in line
 	assert "usage_available=false" in line
+	assert no_text_result.returncode == 2
 	assert malformed_result.returncode != 0
 
 
