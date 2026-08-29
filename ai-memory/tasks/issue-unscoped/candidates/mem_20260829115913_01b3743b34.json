@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.92,
+  "details": "Recent merged changes repeatedly touched review_autofix.yml, OpenCode helper/configuration scripts, CI or live-smoke workflows, and their contract tests together. When changing OpenCode plumbing or provider behavior, update the workflow wiring and smoke/contract coverage as one change.",
+  "fingerprint": "12db257dff4d4d61dafd06d8a54d6b1d4f7461a06a230b7fed03903fe779a340",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33251328653",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33251328653",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3846",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3849",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3865",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3870",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3873",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3847",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3864",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3867",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3872",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3877"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260829115913_01b3743b34",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "OpenCode integration is cross-cutting and must stay aligned across workflow YAML, shell helpers, configuration generation, and live-smoke tests.",
+  "timestamps": {
+    "created_at": "2026-08-29T11:59:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
