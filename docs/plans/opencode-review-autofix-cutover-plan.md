@@ -55,7 +55,7 @@ User-approved decisions (clarification rounds, this plan's authority):
 |---|---|
 | Q1: C / F1: A | All six Codex call sites in review_autofix switch to opencode |
 | Q2: C / F2: A | No flag. Merge = cutover for this repo's `main` runs; `@stable` (consumer propagation) tagged only after the parity criterion passes |
-| Q3: A | Parity criterion: 3 consecutive real review_autofix runs with `REVIEWERS_SUCCESSFUL=6/6`, no new failure classes in the ledger, latency + cache telemetry within ~20% of the Codex baseline |
+| Q3: A | Parity criterion: 3 consecutive real review_autofix runs with `REVIEWERS_SUCCESSFUL=6/6`, no new failure classes in the ledger, latency + cache telemetry within ~20% of the Codex baseline (cache-read leg amended 2026-08-29 — see "Production criterion" under Tests; the Codex-era pipeline never recorded numeric cache-read values, so that leg is gated forward-only) |
 | Q4: A | Live-key validation runs as a `workflow_dispatch` smoke workflow (no operator shell steps, §18) |
 | Q5: A | Reviewer permission posture: `edit: deny`, bash allowed; existing pre/post git-state guards remain the enforcement layer |
 | Q6: B | No Codex failback on model-call failures; failures alert via Telegram instead |
@@ -335,11 +335,33 @@ None. No MongoDB collections, indexes, or `/db/contracts/*` are touched.
 - **e2e:** the existing release gate (`test-and-mark-stable.yml` smoke
   phases, including the review/editor bait test and conflict-resolver
   path) runs unmodified and is the merge gate for P2/P3.
-- **Production criterion (Q3: A):** after P3 is on `main`, 3 consecutive
-  real review_autofix runs with `REVIEWERS_SUCCESSFUL=6/6`, no new
-  failure classes in the run ledger, and latency + cache-read telemetry
-  within ~20% of the pre-cutover baseline (baseline: the last 3 Codex
-  runs before P2 merges, captured in the P2 PR description).
+- **Production criterion (Q3: A, amended 2026-08-29):** after P3 is on
+  `main`, 3 consecutive real review_autofix runs with
+  `REVIEWERS_SUCCESSFUL=6/6`, no new failure classes in the run ledger,
+  and telemetry gates split by what pre-cutover evidence exists:
+  - **Latency** — within ~20% of the pre-cutover baseline. Baseline: the
+    last 3 real Codex-reviewer review_autofix runs before the cutover,
+    reconstructed from GitHub Actions run metadata (run IDs plus
+    reviewer-phase durations) and recorded in the parity report. The
+    original capture step never happened — the P2 PR (#3864) body
+    carries no baseline — so reconstruction from run metadata is the
+    authoritative source.
+  - **Cache-read** — forward-only; no backward comparison. The
+    Codex-era pipeline never recorded a numeric cache-read value in any
+    production run: `normalize_openrouter_usage` emits
+    `cache_read_input_tokens=na` unless a JSON `usage` object appears
+    in the reviewer's stderr (which the Codex CLI never produced), and
+    the run ledger records only input/output/total tokens (verified
+    against run 33177800142, where every reviewer slot logged
+    `cache_read_input_tokens=na`). A numeric pre-P2 cache-read baseline
+    therefore does not exist and must not be invented (issue #3873,
+    requirement 6). Instead the 3 post-cutover runs must each emit
+    numeric cache-read telemetry via the structured-event capture from
+    issue #3873, show cache reuse functioning
+    (`cache_read_input_tokens > 0` on reviewer calls where prompt
+    reuse is expected), and stay within ~20% of one another across the
+    three runs. The parity report records the pre-P2 cache-read
+    baseline explicitly as `unavailable`, never as zero.
 
 ## Risks & Mitigations
 
@@ -386,7 +408,9 @@ None. No MongoDB collections, indexes, or `/db/contracts/*` are touched.
    review_autofix.
 5. Hold `@stable`: do not run the mark-stable/release flow until the Q3:A
    criterion passes (3 consecutive runs, 6/6, no new failure classes,
-   telemetry within ~20%). The release gate's own smoke tests must also be
+   telemetry per the amended production criterion under Tests: latency
+   within ~20% of the reconstructed Codex baseline, cache-read gated
+   forward-only). The release gate's own smoke tests must also be
    green — both conditions are required.
 6. Tag `@stable` → the 13 consumer repos in
    `.github/ai/consumer_repos.json` cut over on their next
