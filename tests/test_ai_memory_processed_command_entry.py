@@ -1747,8 +1747,8 @@ def test_memory_finalize_task_fails_open_when_cli_fails() -> None:
 	assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
 	assert "STEP-REACHED-END" in result.stdout, result.stdout
 	assert "::warning::memory finalize-task failed (fail-open)" in result.stderr, result.stderr
-	assert '"op":"finalize-task"' in result.stdout, result.stdout
-	assert '"fail_open":true' in result.stdout, result.stdout
+	assert '"op":"finalize-task"' in result.stderr, result.stderr
+	assert '"fail_open":true' in result.stderr, result.stderr
 
 
 def test_memory_post_pr_bookkeeping_helpers_all_fail_open() -> None:

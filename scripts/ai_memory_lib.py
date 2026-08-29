@@ -3220,7 +3220,9 @@ def persist_memory_operation(
                         rebase_detail = rebase.stderr.strip()
                         rebase_stdout = rebase.stdout.strip()
                         if rebase_stdout:
-                            rebase_detail = f"{rebase_detail} | rebase stdout: {rebase_stdout}"
+                            if rebase_detail:
+                                rebase_detail = f"{rebase_detail} | "
+                            rebase_detail += f"rebase stdout: {rebase_stdout}"
                         rebase_abort = _run_git(clone_dir, ["rebase", "--abort"], check=False)
                         if rebase_abort.returncode != 0:
                             raise MemoryGitError(

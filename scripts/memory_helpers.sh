@@ -496,7 +496,7 @@ memory_finalize_task()
 	# non-zero exit into the caller's `set -euo pipefail` step.
 	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" finalize-task "$@" || {
 		_memory_warn "finalize-task failed (fail-open)"
-		_memory_telemetry '{"op":"finalize-task","ok":false,"fail_open":true,"source":"shell"}'
+		_memory_telemetry '{"op":"finalize-task","ok":false,"fail_open":true,"source":"shell"}' >&2
 		return 0
 	}
 }
