@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`\n\nScope-mode justification: The issue is fully specified and restricts changes to one existing fixture. Per \u00a76 priorities, the complete and safest implementation is the exact three-line replacement without additional tests, documentation, or workflow changes.\n\n## Planning reference\n\n- HEAD: `3b3394491203a521bf4f20d8678b98fb1ce2ac73`\n- Branch: `main`\n- Target file exists and currently has a different `run_id`.\n\n## Automation integration\n\n- Extends existing content only; introduces no script.\n- Scheduler/PR-push wiring: not applicable.\n- Long-running supervisor: not required.\n- Database gate: not applicable.\n- Removal-registry entry: not required.\n\n## Implementation steps\n\n1. Replace `tests/e2e_smoke_canary.txt` with exactly:\n   ```text\n   status: ok\n   run_id: alt-33250639048\n   updated-by: ai-pipeline\n   ```\n2. Preserve the conventional final newline without adding a blank fourth line.\n3. Confirm no other path changed.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt` \u2014 update the `run_id` line only in effect, while rewriting/verifying the complete required content.\n\n## Functions or modules\n\nNone.\n\n## Data structures affected\n\n- Three-line plain-text smoke-canary record.\n- `run_id` changes from `26151428977` to `alt-33250639048`.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Use an exact fixture replacement\n\n- **Chosen:** Write the three specified lines verbatim with a final newline.\n- **Alternatives considered:** Modify only the existing `run_id` substring.\n- **Why:** Exact replacement directly enforces the issue\u2019s full-file content contract and avoids retaining unexpected bytes.\n\n### D2 \u2014 Keep the change single-file\n\n- **Chosen:** Do not add tests, documentation, or changelog fragments.\n- **Alternatives considered:** Add a regression test or changelog entry.\n- **Why:** The explicit constraint permits only `tests/e2e_smoke_canary.txt` to change.\n\n## Risks and edge cases\n\n- Avoid extra whitespace, blank lines, encoding markers, or altered key ordering.\n- Integration branch metadata is absent, so no branch mismatch can be established.\n\n## Testing considerations\n\n- Compare the file byte-for-byte against `printf 'status: ok\\nrun_id: alt-33250639048\\nupdated-by: ai-pipeline\\n'`.\n- Run `git diff --check`.\n- Verify `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n- No broader test suite is warranted for this fixture-only edit.\n\n## Assumptions\n\n- A final newline is required, matching the file\u2019s current convention.\n- The editor-model override does not affect implementation scope.\n\n## Pre-execution self-check\n\nPLAN_SELF_CHECK: WARNING: Integration branch metadata was empty; the verified checkout is `main`, but mismatch status could not be independently evaluated.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ad71590b29ac0e48ff2d254a58dc2c0ae2eceb73f05ae937323af656a243e167",
+  "lineage": {
+    "issue_number": 3887,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33250763474",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33250763474",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3887"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260829114638_bdf0c2488a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3887,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33250763474"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3887",
+  "timestamps": {
+    "created_at": "2026-08-29T11:46:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
