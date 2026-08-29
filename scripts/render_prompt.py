@@ -767,6 +767,7 @@ def hydrate_reference_placeholders(
 			continue
 		fail_open_reference_file_name = _reference_file_name_for_placeholder(placeholder_name)
 		if not strict and fail_open_reference_file_name is None:
+			hydrated.pop(placeholder_name, None)
 			print(
 				f"WARNING: reference placeholder '{placeholder_name}' left unhydrated: "
 				"unsupported reference placeholder (untrusted assembled body; fail-open)",
@@ -778,6 +779,7 @@ def hydrate_reference_placeholders(
 			and fail_open_reference_file_name is not None
 			and discover_reference_path(prompt_path, fail_open_reference_file_name) is None
 		):
+			hydrated.pop(placeholder_name, None)
 			# Only a missing primary reference is benign here. Read failures and
 			# missing mode-specific append references still flow through the loader.
 			# strict=False marks a prompt body that embeds untrusted content

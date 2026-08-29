@@ -459,8 +459,10 @@ def test_render_prompt_py_fails_open_on_missing_reference_in_untrusted_assembled
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_failopen_reference_") as td:
 		repo_root = Path(td)
 		body_file = repo_root / "reviewer_prompt_body.txt"
+		contract_file = repo_root / "prompts" / "contracts" / "reviewer_prompt_body.yml"
 		reference_dir = repo_root / "prompts" / "references"
 		render_script = repo_root / "scripts" / "render_prompt.py"
+		contract_file.parent.mkdir(parents=True, exist_ok=True)
 		reference_dir.mkdir(parents=True, exist_ok=True)
 		render_script.parent.mkdir(parents=True, exist_ok=True)
 
@@ -470,6 +472,15 @@ def test_render_prompt_py_fails_open_on_missing_reference_in_untrusted_assembled
 			f"Untrusted diff line: {unresolvable_token}\n"
 			f"Malformed diff line: {unsupported_token}\n"
 			"Footer\n",
+			encoding="utf-8",
+		)
+		contract_file.write_text(
+			"required_vars: []\n"
+			"optional_vars:\n"
+			"  REFERENCE_OUTPUT_CONTRACT: \"\"\n"
+			"  REFERENCE_SECURITY_MONEY_LENS: \"\"\n"
+			"  REFERENCE_: \"\"\n"
+			"forbidden_vars: []\n",
 			encoding="utf-8",
 		)
 		(reference_dir / "output-contract.txt").write_text("Shared output block.\n", encoding="utf-8")
