@@ -2154,9 +2154,10 @@ def _run_review_pipeline_summary_step_harness(*, extra_env: dict[str, str] | Non
 			"Reviewer slot x-ai/grok-4.20 (x-ai/grok-4.20) recorded codex_stall_killed on attempt 1 (exit=137).\n"
 			"Reviewer slot x-ai/grok-4.20 (x-ai/grok-4.20) failure classified as retryable (stall_guard) on attempt 1.\n"
 			"REVIEWER_ADVANCE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 reason=stall_guard next_action=retry_cheaper_reasoning next_attempt=2 next_model=x-ai/grok-4.20\n"
-			"REVIEWER_BACKOFF: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 reason=stall_guard next_action=retry_cheaper_reasoning next_attempt=2 sleep_secs=2 total_sleep_secs=2\n"
-			"REVIEWER_CACHE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 attempt=2 status=supported prompt_reused=true\n"
-			"INFO: openrouter usage phase=review call=review model=x-ai/grok-4.20 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=4000 completion_tokens=100 total_tokens=4100 cache_creation_input_tokens=0 cache_read_input_tokens=120\n"
+				"REVIEWER_BACKOFF: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 reason=stall_guard next_action=retry_cheaper_reasoning next_attempt=2 sleep_secs=2 total_sleep_secs=2\n"
+				"INFO: openrouter usage phase=review call=review model=x-ai/grok-4.20 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=na completion_tokens=na total_tokens=na cache_creation_input_tokens=na cache_read_input_tokens=na usage_available=false\n"
+				"REVIEWER_CACHE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 attempt=2 status=supported prompt_reused=true\n"
+				"INFO: openrouter usage phase=review call=review model=x-ai/grok-4.20 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=4000 completion_tokens=100 total_tokens=4100 cache_creation_input_tokens=0 cache_read_input_tokens=120 usage_available=true\n"
 			"Reviewer slot x-ai/grok-4.20 (x-ai/grok-4.20) succeeded on attempt 2.\n"
 			"REVIEWER_SLOT_STATE: slot=x-ai/grok-4.20 retryable_failure_count=1 retryable_failure_classes=stall_guard backoff_sleep_secs_total=2 slot_retry_budget_exhausted=false fallback_model_used=false cache_status=supported cache_reuse_attempted=true\n",
 			encoding="utf-8",
@@ -2172,7 +2173,7 @@ def _run_review_pipeline_summary_step_harness(*, extra_env: dict[str, str] | Non
 			"Reviewer slot moonshotai/kimi-k2.5 (moonshotai/kimi-k2.5) recorded codex_stall_killed on attempt 1 (exit=137).\n"
 			"Reviewer slot moonshotai/kimi-k2.5 (moonshotai/kimi-k2.5) failure classified as retryable (timeout) on attempt 1.\n"
 			"REVIEWER_ADVANCE: slot=moonshotai/kimi-k2.5 model=moonshotai/kimi-k2.5 reason=stall_guard next_action=skip_unmapped\n"
-			"INFO: openrouter usage phase=review call=review model=moonshotai/kimi-k2.5 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=2800 completion_tokens=80 total_tokens=2880 cache_creation_input_tokens=0 cache_read_input_tokens=0\n"
+				"INFO: openrouter usage phase=review call=review model=moonshotai/kimi-k2.5 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=2800 completion_tokens=80 total_tokens=2880 cache_creation_input_tokens=0 cache_read_input_tokens=0 usage_available=true\n"
 			"REVIEWER_SLOT_STATE: slot=moonshotai/kimi-k2.5 retryable_failure_count=1 retryable_failure_classes=timeout backoff_sleep_secs_total=0 slot_retry_budget_exhausted=false fallback_model_used=false cache_status=unsupported cache_reuse_attempted=false\n",
 			encoding="utf-8",
 		)
@@ -2804,7 +2805,8 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert '--model "${effective_model}"' in reviewers
 	assert '--variant "${variant}"' in (REPO_ROOT / "scripts" / "opencode_helpers.sh").read_text(encoding="utf-8")
 	assert reviewers.count('"${probe_opencode_cmd[@]}"') == 2
-	assert 'reviewer_strip_opencode_output_file "${tmp_output}"' in reviewers
+	assert 'reviewer_strip_opencode_output_file "${tmp_structured_output}"' in reviewers
+	assert 'reviewer_materialize_opencode_json_text "${tmp_structured_output}" "${tmp_output}"' in reviewers
 	assert 'reviewer_strip_opencode_output_file "${tmp_stderr}"' in reviewers
 	assert 'opencode_emit_failure_alert review_run_reviewers reviewer' in reviewers
 	assert 'REVIEWER_FAILBACK:' in reviewers
@@ -4870,8 +4872,9 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 		'"slot_retry_budget_exhausted":',
 		'"fallback_model_used":',
 		'"cache_status":',
-		'"cache_reuse_attempted":',
-		'"cache_read_input_tokens_total":',
+			'"cache_reuse_attempted":',
+			'"cache_read_input_tokens_total":',
+			'"cache_read_input_tokens_available":',
 		'"budget_elapsed_secs":',
 		'"budget_total_secs":',
 		'"budget_remaining_secs":',
@@ -5012,6 +5015,7 @@ def test_review_pipeline_summary_reports_stall_recovery_for_retried_and_skipped_
 	assert slots["model_one"]["cache_status"] == "supported"
 	assert slots["model_one"]["cache_reuse_attempted"] is True
 	assert slots["model_one"]["cache_read_input_tokens_total"] == 120
+	assert slots["model_one"]["cache_read_input_tokens_available"] is False
 
 	assert slots["model_two"]["failure_class"] == "stall_guard"
 	assert slots["model_two"]["stall_kill_count"] == 1
@@ -5025,6 +5029,7 @@ def test_review_pipeline_summary_reports_stall_recovery_for_retried_and_skipped_
 	assert slots["model_two"]["cache_status"] == "unsupported"
 	assert slots["model_two"]["cache_reuse_attempted"] is False
 	assert slots["model_two"]["cache_read_input_tokens_total"] == 0
+	assert slots["model_two"]["cache_read_input_tokens_available"] is True
 
 	assert summary["stall_recovery"] == {
 		"advanced_slots": 2,

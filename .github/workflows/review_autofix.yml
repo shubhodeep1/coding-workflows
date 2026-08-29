@@ -7348,11 +7348,20 @@ jobs:
               return False
 
 
-          def reviewer_cache_read_input_tokens_total(log_text: str) -> int:
+          def reviewer_cache_read_input_tokens(log_text: str, expected_attempt_count: int) -> tuple[int, bool]:
               total_cache_read_input_tokens = 0
-              for fields in marker_fields_from_lines(log_text, "INFO: openrouter usage "):
-                  total_cache_read_input_tokens += marker_int(fields.get("cache_read_input_tokens", "0"))
-              return total_cache_read_input_tokens
+              usage_rows = marker_fields_from_lines(log_text, "INFO: openrouter usage ")
+              if not usage_rows:
+                  return total_cache_read_input_tokens, False
+              cache_read_input_tokens_available = len(usage_rows) == expected_attempt_count
+              for fields in usage_rows:
+                  raw_cache_read_input_tokens = fields.get("cache_read_input_tokens", "").replace(",", "")
+                  row_usage_available = fields.get("usage_available", "").strip().lower()
+                  if row_usage_available == "false" or not raw_cache_read_input_tokens.isdigit():
+                      cache_read_input_tokens_available = False
+                      continue
+                  total_cache_read_input_tokens += int(raw_cache_read_input_tokens)
+              return total_cache_read_input_tokens, cache_read_input_tokens_available
 
 
           def reviewer_failure_class(status: str, log_text: str, output_text: str) -> str:
@@ -7419,6 +7428,10 @@ jobs:
                   attempt_count = max_attempt_from_text(log_text)
                   stall_kill_count = reviewer_stall_kill_count(log_text)
                   stall_recovery_next_action = reviewer_stall_recovery_next_action(log_text)
+                  cache_read_input_tokens_total, cache_read_input_tokens_available = reviewer_cache_read_input_tokens(
+                      log_text,
+                      attempt_count,
+                  )
                   if attempt_count == 0 and status_value in {"success", "failed", "pr_closed", "skipped_unmapped", "skipped_budget"} and (log_text or output_text):
                       attempt_count = 1
                   reviewer_slots.append({
@@ -7442,7 +7455,8 @@ jobs:
                       "fallback_model_used": reviewer_fallback_model_used(log_text, slot_state_fields),
                       "cache_status": reviewer_cache_status(log_text, slot_state_fields),
                       "cache_reuse_attempted": reviewer_cache_reuse_attempted(log_text, slot_state_fields),
-                      "cache_read_input_tokens_total": reviewer_cache_read_input_tokens_total(log_text),
+                      "cache_read_input_tokens_total": cache_read_input_tokens_total,
+                      "cache_read_input_tokens_available": cache_read_input_tokens_available,
                   })
 
           reviewers_phase_state = "completed" if reviewer_slots else "skipped"

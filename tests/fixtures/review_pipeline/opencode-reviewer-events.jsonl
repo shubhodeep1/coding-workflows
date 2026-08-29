@@ -1,0 +1,6 @@
+{"type":"session_start","sessionID":"ses_fixture"}
+{"type":"text","part":{"text":"File: scripts/example.py"}}
+{"type":"step_finish","part":{"reason":"tool-calls","tokens":{"input":100,"output":20,"reasoning":5,"total":125,"cache":{"read":40,"write":10}}}}
+{"type":"tool_use","part":{"tool":"read","state":{"status":"completed"}}}
+{"type":"text","part":{"text":"Problem: fixture finding"}}
+{"type":"step_finish","part":{"reason":"stop","tokens":{"input":50,"output":8,"reasoning":2,"total":60,"cache":{"read":25,"write":5}}}}

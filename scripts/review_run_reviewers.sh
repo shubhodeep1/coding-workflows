@@ -419,7 +419,59 @@ def find_usage_dict(payload):
 				return found
 	return None
 
+
+def nonnegative_int(value):
+	if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+		return None
+	return value
+
+
+def aggregate_step_finish_usage(payloads):
+	aggregated = {
+		"prompt_tokens": 0,
+		"completion_tokens": 0,
+		"total_tokens": 0,
+		"cache_creation_input_tokens": 0,
+		"cache_read_input_tokens": 0,
+	}
+	found_event = False
+	for payload in payloads:
+		if not isinstance(payload, dict) or payload.get("type") != "step_finish":
+			continue
+		part = payload.get("part")
+		tokens = part.get("tokens") if isinstance(part, dict) else None
+		cache = tokens.get("cache") if isinstance(tokens, dict) else None
+		if not isinstance(tokens, dict) or not isinstance(cache, dict):
+			return None
+		input_tokens = nonnegative_int(tokens.get("input"))
+		output_tokens = nonnegative_int(tokens.get("output"))
+		reasoning_tokens = nonnegative_int(tokens.get("reasoning"))
+		cache_write_tokens = nonnegative_int(cache.get("write"))
+		cache_read_tokens = nonnegative_int(cache.get("read"))
+		if None in (
+			input_tokens,
+			output_tokens,
+			reasoning_tokens,
+			cache_write_tokens,
+			cache_read_tokens,
+		):
+			return None
+		structured_total = nonnegative_int(tokens.get("total"))
+		aggregated["prompt_tokens"] += input_tokens
+		aggregated["completion_tokens"] += output_tokens + reasoning_tokens
+		aggregated["total_tokens"] += (
+			structured_total
+			if structured_total is not None
+			else input_tokens + output_tokens + reasoning_tokens
+		)
+		aggregated["cache_creation_input_tokens"] += cache_write_tokens
+		aggregated["cache_read_input_tokens"] += cache_read_tokens
+		found_event = True
+	return aggregated if found_event else None
+
+
 usage = normalize_usage(None)
+payloads = []
 if log_path.exists():
 	text = log_path.read_text(encoding="utf-8", errors="replace")
 	decoder = json.JSONDecoder()
@@ -434,13 +486,28 @@ if log_path.exists():
 		except json.JSONDecodeError:
 			index = next_object_start + 1
 			continue
-		found_usage = find_usage_dict(payload)
-		if isinstance(found_usage, dict):
-			usage = normalize_usage(found_usage)
-			if isinstance(payload, dict) and isinstance(payload.get("model"), str) and payload.get("model"):
-				model_name = payload["model"]
-			break
+		payloads.append(payload)
 		index = max(end, next_object_start + 1)
+
+	structured_usage = aggregate_step_finish_usage(payloads)
+	if isinstance(structured_usage, dict):
+		usage = normalize_usage(structured_usage)
+	else:
+		for payload in payloads:
+			found_usage = find_usage_dict(payload)
+			if isinstance(found_usage, dict):
+				usage = normalize_usage(found_usage)
+				if isinstance(payload, dict) and isinstance(payload.get("model"), str) and payload.get("model"):
+					model_name = payload["model"]
+				break
+
+usage_available = all(usage.get(field) is not None for field in (
+	"prompt_tokens",
+	"completion_tokens",
+	"total_tokens",
+	"cache_creation_input_tokens",
+	"cache_read_input_tokens",
+))
 
 print(
 	"INFO: openrouter usage "
@@ -451,7 +518,8 @@ print(
 	f"completion_tokens={format_usage_value(usage.get('completion_tokens'))} "
 	f"total_tokens={format_usage_value(usage.get('total_tokens'))} "
 	f"cache_creation_input_tokens={format_usage_value(usage.get('cache_creation_input_tokens'))} "
-	f"cache_read_input_tokens={format_usage_value(usage.get('cache_read_input_tokens'))}"
+	f"cache_read_input_tokens={format_usage_value(usage.get('cache_read_input_tokens'))} "
+	f"usage_available={str(usage_available).lower()}"
 )
 PY
 }
@@ -631,6 +699,42 @@ reviewer_strip_opencode_output_file() {
   else
     rm -f "${clean_file}"
   fi
+}
+
+reviewer_materialize_opencode_json_text() {
+  local structured_output_file="$1"
+  local reviewer_text_file="$2"
+
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${structured_output_file}" "${reviewer_text_file}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+structured_path = Path(sys.argv[1])
+text_path = Path(sys.argv[2])
+text_parts = []
+
+try:
+	for raw_line in structured_path.read_text(encoding="utf-8", errors="strict").splitlines():
+		if not raw_line.strip():
+			continue
+		event = json.loads(raw_line)
+		if not isinstance(event, dict):
+			raise ValueError("OpenCode event is not an object")
+		if event.get("type") != "text":
+			continue
+		part = event.get("part")
+		if not isinstance(part, dict) or not isinstance(part.get("text"), str):
+			raise ValueError("OpenCode text event has no string part.text")
+		text_parts.append(part["text"])
+except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+	sys.exit(1)
+
+if not text_parts or not any(part.strip() for part in text_parts):
+	sys.exit(1)
+
+text_path.write_text("\n".join(text_parts) + "\n", encoding="utf-8")
+PY
 }
 
 mkdir -p "${PREVIOUS_REVIEWS_DIR}"
@@ -3744,6 +3848,7 @@ execute_reviewer_attempt() {
     "${effective_model}"
 
   tmp_output="$(mktemp)"
+  tmp_structured_output="$(mktemp)"
   tmp_stderr="$(mktemp)"
   hb_file="$(mktemp /tmp/heartbeat_reviewer.XXXXXX)"
   printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}"
@@ -3850,7 +3955,7 @@ execute_reviewer_attempt() {
     echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file is still empty after fallback on ${attempt_label}; refusing to launch OpenCode with empty stdin." | tee -a "${log_file}" >&2
     kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
     emit_reviewer_substate "Failed" "${attempt_number}"
-    rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}" "${wd_reason_file}" "${stall_status_file}" "${tmp_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
+    rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}" "${wd_reason_file}" "${stall_status_file}" "${tmp_output}" "${tmp_structured_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
     REVIEWER_ATTEMPT_OUTCOME="failed"
     return 0
   fi
@@ -3868,11 +3973,12 @@ execute_reviewer_attempt() {
     "${attempt_reasoning}"
     "${reviewer_opencode_config_path}"
     "${reviewer_opencode_workspace}"
+    json
   )
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
     "${CODEX_STALL_GUARD_HELPER}" \
       --phase review_run_reviewers \
-      --stdout-file "${tmp_output}" \
+      --stdout-file "${tmp_structured_output}" \
       --stderr-file "${tmp_stderr}" \
       --activity-file "${hb_file}" \
       --status-file "${stall_status_file}" \
@@ -3880,14 +3986,14 @@ execute_reviewer_attempt() {
   elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
     "${CODEX_HEARTBEAT_HELPER}" \
       --phase review_run_reviewers \
-      --stdout-file "${tmp_output}" \
+      --stdout-file "${tmp_structured_output}" \
       --stderr-file "${tmp_stderr}" \
       --activity-file "${hb_file}" \
       -- "${reviewer_codex_cmd[@]}" < "${reviewer_effective_prompt_file}" &
   else
     (
       exec "${reviewer_codex_cmd[@]}" < "${reviewer_effective_prompt_file}"
-    ) > "${tmp_output}" 2> >(
+    ) > "${tmp_structured_output}" 2> >(
       while IFS= read -r line || [ -n "$line" ]; do
         printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
         printf '%s\n' "$line"
@@ -3912,21 +4018,27 @@ execute_reviewer_attempt() {
   fi
   rm -f "${stall_status_file}"
 
-  reviewer_strip_opencode_output_file "${tmp_output}"
-  reviewer_strip_opencode_output_file "${tmp_stderr}"
+  reviewer_strip_opencode_output_file "${tmp_structured_output}"
+	  reviewer_strip_opencode_output_file "${tmp_stderr}"
+  if ! reviewer_materialize_opencode_json_text "${tmp_structured_output}" "${tmp_output}"; then
+    printf '%s\n' "OpenCode structured reviewer output was malformed or contained no text events." >> "${tmp_stderr}"
+    if [ "${cmd_rc}" -eq 0 ]; then
+      cmd_rc=1
+    fi
+  fi
 
   if reviewer_output_has_findings "${tmp_output}" || reviewer_output_has_explicit_none "${tmp_output}"; then
     REVIEWER_ATTEMPT_SILENT=false
   fi
 
-  emit_reviewer_substate "Finishing" "${attempt_number}" "${tmp_stderr}"
-  normalize_openrouter_usage "${tmp_stderr}" "review" "${output_prefix}" "${effective_model}" | tee -a "${log_file}" || true
+  emit_reviewer_substate "Finishing" "${attempt_number}" "${tmp_structured_output}"
+  normalize_openrouter_usage "${tmp_structured_output}" "review" "${output_prefix}" "${effective_model}" | tee -a "${log_file}" || true
 
   case "${wd_reason}" in
     pr_closed_sentinel|pr_closed_api)
       cat "${tmp_stderr}" >> "${log_file}"
       echo "Reviewer slot ${slot_model} stopped — PR #${PR_NUMBER:-unknown} was closed/merged (reason: ${wd_reason})." | tee -a "${log_file}"
-      rm -f "${tmp_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
+      rm -f "${tmp_output}" "${tmp_structured_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
       REVIEWER_ATTEMPT_OUTCOME="pr_closed"
       REVIEWER_ATTEMPT_WD_REASON="${wd_reason}"
       return 0
@@ -3950,7 +4062,7 @@ execute_reviewer_attempt() {
       echo "Reviewer slot ${slot_model} (${effective_model}) produced no findings or explicit NONE on ${attempt_label}; retrying." | tee -a "${log_file}"
       emit_reviewer_substate "Failed" "${attempt_number}" "${tmp_stderr}"
       reviewer_silent_rounds=$((reviewer_silent_rounds + 1))
-      rm -f "${tmp_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
+      rm -f "${tmp_output}" "${tmp_structured_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
       REVIEWER_ATTEMPT_OUTCOME="silent_retry"
       REVIEWER_ATTEMPT_CMD_RC=0
       return 0
@@ -3960,7 +4072,7 @@ execute_reviewer_attempt() {
     echo "Reviewer slot ${slot_model} (${effective_model}) succeeded on ${attempt_label}." | tee -a "${log_file}"
     emit_reviewer_substate "Succeeded" "${attempt_number}" "${tmp_stderr}"
     reviewer_silent_rounds=0
-    rm -f "${tmp_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
+    rm -f "${tmp_output}" "${tmp_structured_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
     REVIEWER_ATTEMPT_OUTCOME="success"
     REVIEWER_ATTEMPT_CMD_RC=0
     return 0
@@ -4025,7 +4137,7 @@ execute_reviewer_attempt() {
   else
     reviewer_silent_rounds=0
   fi
-  rm -f "${tmp_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
+  rm -f "${tmp_output}" "${tmp_structured_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
   return 0
 }
 # ── End reviewer failback / health helpers ─────────────────────────

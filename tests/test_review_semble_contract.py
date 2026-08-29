@@ -21,6 +21,9 @@ CONFLICT_PROMPT = REPO_ROOT / "prompts" / "conflict-resolver.txt"
 INTEGRATION_CONFLICT_PROMPT = REPO_ROOT / "prompts" / "integration-sync-conflict-resolver.txt"
 INTEGRATION_RETRY_PRELUDE = REPO_ROOT / "prompts" / "integration-sync-conflict-resolver-retry-prelude.txt"
 REVIEWER_CHECKLIST_PROMPT = REPO_ROOT / "prompts" / "review-reviewer-checklist.txt"
+OPENCODE_REVIEWER_EVENTS_FIXTURE = (
+	REPO_ROOT / "tests" / "fixtures" / "review_pipeline" / "opencode-reviewer-events.jsonl"
+)
 
 
 def _read(path: Path) -> str:
@@ -123,6 +126,35 @@ def _normalize_openrouter_usage(log_text: str, *, phase: str, call: str, model: 
 			text=True,
 		)
 		return result.stdout.strip()
+
+
+def _materialize_opencode_reviewer_text(log_text: str) -> tuple[subprocess.CompletedProcess[str], str]:
+	reviewers = _read(REVIEWERS)
+	start = reviewers.index("reviewer_materialize_opencode_json_text() {")
+	end = reviewers.index("mkdir -p", start)
+	block = reviewers[start:end]
+
+	with tempfile.TemporaryDirectory(prefix="materialize-opencode-reviewer-") as tmp:
+		tmp_p = Path(tmp)
+		structured_file = tmp_p / "events.jsonl"
+		text_file = tmp_p / "review.txt"
+		structured_file.write_text(log_text, encoding="utf-8")
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{block}\n"
+				'reviewer_materialize_opencode_json_text "$1" "$2"\n',
+				"bash",
+				str(structured_file),
+				str(text_file),
+			],
+			cwd=str(REPO_ROOT),
+			capture_output=True,
+			text=True,
+		)
+		return result, text_file.read_text(encoding="utf-8") if text_file.exists() else ""
 
 
 def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> None:
@@ -403,6 +435,44 @@ def test_normalize_openrouter_usage_keeps_first_valid_usage_payload() -> None:
 	assert "cache_read_input_tokens=3" in line
 	assert "second-model" not in line
 	assert "prompt_tokens=99" not in line
+	assert "usage_available=true" in line
+
+
+def test_opencode_reviewer_jsonl_materializes_text_and_numeric_usage() -> None:
+	events = _read(OPENCODE_REVIEWER_EVENTS_FIXTURE)
+	result, reviewer_text = _materialize_opencode_reviewer_text(events)
+	line = _normalize_openrouter_usage(
+		events,
+		phase="review",
+		call="pass1",
+		model="fixture/model",
+	)
+
+	assert result.returncode == 0
+	assert reviewer_text == "File: scripts/example.py\nProblem: fixture finding\n"
+	assert "prompt_tokens=150" in line
+	assert "completion_tokens=35" in line
+	assert "total_tokens=185" in line
+	assert "cache_creation_input_tokens=15" in line
+	assert "cache_read_input_tokens=65" in line
+	assert "usage_available=true" in line
+
+
+def test_opencode_reviewer_jsonl_marks_missing_usage_unavailable_and_rejects_malformed_events() -> None:
+	text_only_event = '{"type":"text","part":{"text":"NONE"}}\n'
+	line = _normalize_openrouter_usage(
+		text_only_event,
+		phase="review",
+		call="pass1",
+		model="fixture/model",
+	)
+	malformed_result, _ = _materialize_opencode_reviewer_text(
+		text_only_event + "not-json\n"
+	)
+
+	assert "cache_read_input_tokens=na" in line
+	assert "usage_available=false" in line
+	assert malformed_result.returncode != 0
 
 
 def test_editor_targeted_file_context_and_prompt_render_path_passes_flags() -> None:
@@ -537,6 +607,8 @@ def main() -> int:
 	test_reviewer_prompt_assembles_semble_context_in_dynamic_section_without_serena()
 	test_reviewer_checklist_prompt_contract_and_gate()
 	test_normalize_openrouter_usage_keeps_first_valid_usage_payload()
+	test_opencode_reviewer_jsonl_materializes_text_and_numeric_usage()
+	test_opencode_reviewer_jsonl_marks_missing_usage_unavailable_and_rejects_malformed_events()
 	test_editor_targeted_file_context_and_prompt_render_path_passes_flags()
 	test_commit_changes_drops_bootstrap_owned_serena_runtime_tree_before_staging()
 	test_commit_changes_withheld_partial_finalize_discards_local_edits_and_exits_cleanly()

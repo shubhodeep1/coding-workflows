@@ -363,6 +363,36 @@ None. No MongoDB collections, indexes, or `/db/contracts/*` are touched.
     three runs. The parity report records the pre-P2 cache-read
     baseline explicitly as `unavailable`, never as zero.
 
+### Production parity evidence
+
+The last three successful pre-P2 runs where `Run reviewer models` actually
+executed establish the Codex latency baseline. Successful runs that skipped
+the reviewer phase are excluded.
+
+| Run | Reviewer phase | Seconds |
+|---|---:|---:|
+| [`33177800142`](https://github.com/shubhodeep1/coding-workflows/actions/runs/33177800142) | 57m 03s | 3,423 |
+| [`33160867375`](https://github.com/shubhodeep1/coding-workflows/actions/runs/33160867375) | 73m 08s | 4,388 |
+| [`32907158075`](https://github.com/shubhodeep1/coding-workflows/actions/runs/32907158075) | 64m 49s | 3,889 |
+
+- Arithmetic mean: **3,900 seconds (65m 00s)**.
+- Informational ±20% range: **3,120–4,680 seconds (52m–78m)**.
+- Median: **3,889 seconds (64m 49s)**.
+- Pre-P2 cache-read baseline: **unavailable**. Run `33177800142` records
+  `cache_read_input_tokens=na` for every reviewer slot, and the Codex-era
+  ledger contains no cache-read field; zero must not be substituted.
+
+Post-cutover evidence remains pending real production runs:
+
+| Consecutive run | Run ID | Reviewers | New failure classes | Reviewer latency | Cache-read telemetry | Result |
+|---|---|---:|---|---:|---|---|
+| 1 | pending | pending | pending | pending | pending | pending |
+| 2 | pending | pending | pending | pending | pending | pending |
+| 3 | pending | pending | pending | pending | pending | pending |
+
+`@stable` remains held until all three rows satisfy the amended production
+criterion above.
+
 ## Risks & Mitigations
 
 - **Reasoning-effort delivery over chat/completions is unconfirmed** (the
