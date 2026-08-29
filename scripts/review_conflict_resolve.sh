@@ -67,14 +67,14 @@ _resolver_dependency_fallback()
     "${GITHUB_WORKSPACE:-${PWD}}/.codex-workflow-src-main/scripts/${dependency_name}" \
     "${GITHUB_WORKSPACE:-${PWD}}/.codex-workflow-src/scripts/${dependency_name}" \
     "${GITHUB_WORKSPACE:-${PWD}}/scripts/${dependency_name}"; do
-    if [ -f "${dependency_candidate}" ]; then
+    if [ -r "${dependency_candidate}" ]; then
       printf '%s\n' "${dependency_candidate}"
       return 0
     fi
   done
   return 1
 }
-if [ ! -f "${OPENCODE_HELPERS_PATH}" ]; then
+if [ ! -r "${OPENCODE_HELPERS_PATH}" ]; then
   if _resolver_fallback_path="$(_resolver_dependency_fallback opencode_helpers.sh)"; then
     echo "::warning::opencode_helpers.sh not staged in SUPPORT_SCRIPTS_DIR (${SUPPORT_SCRIPTS_DIR:-scripts}); falling back to ${_resolver_fallback_path} (staging list at SCRIPT_REF=${SCRIPT_REF:-unknown} likely predates the opencode cutover)."
     OPENCODE_HELPERS_PATH="${_resolver_fallback_path}"
