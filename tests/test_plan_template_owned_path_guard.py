@@ -5,10 +5,10 @@ The guard rejects plans whose "Files likely to change" section targets paths
 that implement.yml excludes from Codex commits in consumer repos.  Those
 exclusions are per-file for ``scripts/`` (driven by the runtime-generated
 ``scripts/.gitignore`` plus literal ``scripts/...`` entries written to
-``FETCHED_MANIFEST``) and blanket for ``.github/prompts/`` and
-``.github/scripts/``, so the guard must mirror that split: a consumer-owned
-script such as ``scripts/run_validation_repo_checks.sh`` is committable and
-must be allowed, while runtime-fetched paths such as
+``FETCHED_MANIFEST``) and blanket for ``prompts/``, ``ai-memory/``,
+``.github/prompts/``, and ``.github/scripts/``, so the guard must mirror that
+split: a consumer-owned script such as ``scripts/run_validation_repo_checks.sh``
+is committable and must be allowed, while runtime-fetched paths such as
 ``scripts/render_prompt.sh`` are not and must be rejected.
 """
 
@@ -149,7 +149,14 @@ def test_tracked_consumer_serena_template_is_allowed() -> None:
 
 
 @pytest.mark.parametrize(
-	"path", ["scripts.txt", ".github/prompts.md", ".github/scripts.yml"]
+	"path",
+	[
+		"scripts.txt",
+		"prompts.md",
+		"ai-memory.md",
+		".github/prompts.md",
+		".github/scripts.yml",
+	],
 )
 def test_similarly_prefixed_root_files_are_allowed(path: str) -> None:
 	returncode, output = _run_guard(_plan_listing(path), FETCHED_HELPERS)
@@ -181,6 +188,18 @@ def test_other_consumer_github_paths_are_allowed() -> None:
 		"scripts/templates/serena_project.yml.j2",
 		# The catalog is also fetched by the plan job and listed in its gitignore.
 		"scripts/codex_model_catalog.json",
+		"prompts",
+		"prompts/",
+		"prompts/mode-plan.txt",
+		"prompts//mode-plan.txt",
+		"prompts/./mode-plan.txt",
+		"prompts/nested/../mode-plan.txt",
+		"ai-memory",
+		"ai-memory/",
+		"ai-memory/schemas/memory_record.v1.json",
+		"ai-memory//schemas/memory_record.v1.json",
+		"ai-memory/./schemas/memory_record.v1.json",
+		"ai-memory/nested/../schemas/memory_record.v1.json",
 		".github/prompts",
 		".github/prompts/",
 		".github/prompts/mode-plan.txt",
