@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:lines 1502-1506 | severity=major | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: The `direct_manifest_pattern` regex silently misses `FETCHED_MANIFEST` entries followed by shell comments, allowing template-owned helpers through the plan guard.\n  WHY: The regex requires an immediate line end; minimax_minimax-m3 rated this MAJOR while the other reviewers rated it NIT.\n- .github/workflows/plan.yml:lines 1502-1506 | severity=nit | confidence=4\n  flagged_by: [moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: Static extraction unconditionally blocks `scripts/templates/serena_project.yml.j2` even when a consumer already owns the file.\n  WHY: `implement.yml:974-984` conditionally omits the manifest entry for consumer-owned files, but the plan guard cannot model that condition and fails closed with a known false positive.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description Verification table claims \"New guard tests \u2014 10 passed\" and \"Same tests against the previous guard body \u2014 2 failed (both consumer-owned cases), 8 passed.\"\n  expected_change_site: The PR description body (user-authored metadata, not a code file).\n  confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The test file grew from 10 initial parametric cases to 27; the changelog fragment correctly reports 27 tests; the PR description's 10/8/2 split is stale.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/plan.yml\n  Location: direct_manifest_pattern regex in the inline Python heredoc, lines 1502-1506 (approx)\n  PROBLEM: The regex does not tolerate an optional trailing shell comment, so a future commented manifest line could be omitted from `FETCHED_SCRIPTS_IGNORE_FILE`.\n  WHY: This is a future false negative; the two current `FETCHED_MANIFEST` lines have no trailing comments.\n- TASK_GAP\n  Requirement: The PR description Verification table claims \"New guard tests \u2014 10 passed\" and \"Same tests against the previous guard body \u2014 2 failed (both consumer-owned cases), 8 passed.\"\n  Expected change site: The PR description body (user-authored metadata, not a code file).\n  Evidence of absence: The test file grew from 10 initial parametric cases to 27; the changelog fragment correctly reports 27 tests; the PR description's 10/8/2 split is stale.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- Addendum: implement.yml:974-979 contains a documented, fail-closed false positive for `scripts/templates/serena_project.yml.j2`; no code change warranted.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml\n  Line or code reference: direct_manifest_pattern regex (~lines 1502-1505)\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n  PROBLEM: The regex misses entries followed by inline shell comments.\n  WHY: The manifest-derivation Python block silently skips unmatched lines, reducing the ignore set and allowing template-owned helpers through.\n- .github/workflows/plan.yml\n  Line or code reference: direct_manifest_pattern regex (~lines 1502-1505)\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n  PROBLEM: Partial manifest derivation is not rejected when only some entries fail to match.\n  WHY: `implementation_helpers` remains non-empty, so the reduced ignore file passes validation.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/plan.yml (direct_manifest_pattern block, ~line 1502-1506) interacting with .github/workflows/implement.yml:974-984\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n  PROBLEM: Static extraction unconditionally blocks `scripts/templates/serena_project.yml.j2` even when a consumer already git-tracks it.\n  WHY: The regex cannot evaluate the git-ownership condition; the guard fails closed and rejects a legitimate consumer-owned template.\n- PR body \"Verification\" table vs changelog.d/3880-plan-guard-consumer-scripts.md:13 and tests/test_plan_template_owned_path_guard.py parametrized cases\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n  PROBLEM: The PR description reports 10 tests while the accumulated suite contains 27.\n  WHY: The user-facing verification record is stale.\n- .github/workflows/plan.yml \u2014 direct_manifest_pattern in the inline python heredoc (~lines 1502-1506)\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n  PROBLEM: The regex does not tolerate optional trailing shell comments.\n  WHY: A commented manifest line would silently drop from the blocked set; current entries have no comments.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/plan.yml\n  Line or code reference: lines 1502-1506 (the `direct_manifest_pattern` regex in the inline Python heredoc)\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n  PROBLEM: A trailing shell comment causes the regex to omit a helper from `FETCHED_SCRIPTS_IGNORE_FILE`.\n  WHY: The `\\s*$` anchor leaves no room for trailing content, and partial extraction silently degrades the ignore set.\n- .github/workflows/plan.yml\n  Line or code reference: lines 1502-1506 interacting with implement.yml:974-979\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n  PROBLEM: The guard unconditionally blocks `templates/serena_project.yml.j2` when a consumer legitimately owns it.\n  WHY: Static scanning ignores the conditional git-ownership check; the failure is fail-closed rather than a silent no-op.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- .github/workflows/plan.yml\n  location: direct_manifest_pattern around lines 1502-1506\n  PROBLEM: The regex requires the echo line to end immediately after the redirect and does not allow an optional trailing shell comment.\n  WHY: Current implement.yml entries at lines 979 and 1015 match, so this is not a live miss.\n- .github/workflows/plan.yml\n  location: last-run FETCHED_MANIFEST extraction plus implement.yml lines 974-979\n  PROBLEM: Static extraction always blocks `scripts/templates/serena_project.yml.j2` even when a consumer already git-tracks that file.\n  WHY: Fail-closed is safer than a no-op for untracked copies; this is a known ownership exception, not a current runtime miss.\n\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "c1363a38eb3c1ee637558cf01953c22f2271eae8d8035bddd53826e8770ba1ee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3880,
+    "run_id": "33250308779",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33250308779",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260829124407_6d4f248404",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3880,
+    "run_id": "33250308779"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-29T12:44:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
