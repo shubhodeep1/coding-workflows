@@ -1623,7 +1623,6 @@ jobs:
           fi
 
       - name: Install OpenCode CLI
-        continue-on-error: true
         uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde
         with:
           opencode_version: ${{ env.OPENCODE_VERSION }}

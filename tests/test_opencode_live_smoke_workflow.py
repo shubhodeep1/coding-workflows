@@ -86,6 +86,8 @@ def test_smoke_runs_identical_calls_and_aggregates_failures() -> None:
 	assert (
 		'model_evidence=FAIL\n              if [ "${call_rc}" -eq 0 ]; then\n'
 		'                result="FAIL(model_evidence)"\n'
+		'                call_rc=1\n'
+		'              fi\n'
 	) in smoke
 	assert '"${role}" "${model_slug}" xhigh "${config_path}" "${GITHUB_WORKSPACE}" json' in smoke
 	assert '.type == "step_finish" and ((.part.tokens.reasoning // 0) > 0)' in smoke
@@ -115,6 +117,8 @@ def test_production_review_path_uses_opencode_for_read_and_write_sides() -> None
 	assert "Install OpenCode CLI" in production
 	assert "Install Codex CLI" not in production
 	assert "Create Codex config" not in production
+	install_block = production.split("- name: Install OpenCode CLI", 1)[1].split("- name:", 1)[0]
+	assert "continue-on-error" not in install_block
 	assert 'opencode_run_cmd "$@"' in reviewers
 	assert '"${reviewer_opencode_workspace}"\n    json' in reviewers
 	assert 'reviewer_materialize_opencode_json_text "${tmp_structured_output}" "${tmp_output}"' in reviewers
@@ -125,6 +129,7 @@ def test_production_review_path_uses_opencode_for_read_and_write_sides() -> None
 
 def test_focused_tests_are_wired_into_ci() -> None:
 	ci = CI.read_text(encoding="utf-8")
+	assert "if grep -q 'codex_config_assemble' .github/workflows/review_autofix.yml; then" in ci
 	for test_file in (
 		"tests/test_write_opencode_config.py",
 		"tests/test_opencode_helpers.py",

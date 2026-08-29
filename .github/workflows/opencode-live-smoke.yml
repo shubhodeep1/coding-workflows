@@ -156,8 +156,8 @@ jobs:
               model_evidence=FAIL
               if [ "${call_rc}" -eq 0 ]; then
                 result="FAIL(model_evidence)"
+                call_rc=1
               fi
-              call_rc=1
             fi
 
             # A successful xhigh call must show the provider honoring the

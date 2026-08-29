@@ -70,9 +70,10 @@ summariser_helpers_alert_model="$(printf '%s' "${SUMMARISER_MODEL}" | LC_ALL=C t
 if [ -z "${summariser_helpers_alert_model}" ]; then
 	summariser_helpers_alert_model="unknown"
 fi
-OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
-OPENCODE_CONFIG_WRITER_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh"
-if [ ! -f "${OPENCODE_HELPERS_PATH}" ]; then
+OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh}"
+OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"
+# shellcheck source=/dev/null
+if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then
 	summariser_helpers_missing_alert="opencode_agent_failure phase=review_summariser role=reviewer model=${summariser_helpers_alert_model} rc=1 failure_class=helpers_missing"
 	if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" ]; then
 		# shellcheck source=/dev/null
@@ -84,8 +85,10 @@ if [ ! -f "${OPENCODE_HELPERS_PATH}" ]; then
 	echo "${summariser_helpers_missing_alert}" >&2
 	exit 1
 fi
-# shellcheck source=/dev/null
-source "${OPENCODE_HELPERS_PATH}"
+if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
+	opencode_emit_failure_alert review_summariser reviewer "${SUMMARISER_MODEL}" 1 config_writer_missing || true
+	exit 1
+fi
 
 SUMMARISER_REASONING="${XPOLL_SUMMARISER_REASONING:-medium}"
 SUMMARISER_TARGET_PER_REVIEWER="${XPOLL_SUMMARISER_LINES_PER_REVIEWER:-160}"

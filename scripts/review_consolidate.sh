@@ -11,9 +11,12 @@ fi
 
 OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"
+opencode_helpers_loaded=false
 if [ -f "${OPENCODE_HELPERS_PATH}" ]; then
 	# shellcheck source=/dev/null
-	source "${OPENCODE_HELPERS_PATH}"
+	if source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then
+		opencode_helpers_loaded=true
+	fi
 fi
 
 review_log()
@@ -532,18 +535,25 @@ tmp_cap="$(mktemp)"
 consolidator_opencode_dir=""
 trap 'rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"; if [ -n "${consolidator_opencode_dir}" ]; then rm -rf "${consolidator_opencode_dir}"; fi' EXIT INT TERM
 
-if ! command -v opencode_run_cmd >/dev/null 2>&1; then
+if [ "${opencode_helpers_loaded}" != true ] || ! command -v opencode_run_cmd >/dev/null 2>&1; then
 	: > "${CONSOLIDATOR_RAW_FILE}"
 	consolidator_helpers_missing_alert="opencode_agent_failure phase=review_consolidate role=writer model=${REVIEW_CONSOLIDATOR_MODEL} rc=1 failure_class=helpers_missing"
 	if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" ]; then
 		# shellcheck source=/dev/null
-		source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh"
+		source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true
 	fi
 	if type tg_send_msg >/dev/null 2>&1; then
 		tg_send_msg "${consolidator_helpers_missing_alert}" ERROR >/dev/null || true
 	fi
 	printf '%s\n' "${consolidator_helpers_missing_alert}" >&2
 	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} missing=opencode_helpers failopen=1 output_bytes=0"
+	exit 0
+fi
+
+if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
+	: > "${CONSOLIDATOR_RAW_FILE}"
+	opencode_emit_failure_alert review_consolidate writer "${REVIEW_CONSOLIDATOR_MODEL}" 1 config_writer_missing || true
+	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} missing=opencode_config_writer failopen=1 output_bytes=0"
 	exit 0
 fi
 

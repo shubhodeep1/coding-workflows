@@ -2790,6 +2790,7 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	opencode_install = _step_block("Install OpenCode CLI")
 	assert "install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde" in opencode_install
 	assert "opencode_version: ${{ env.OPENCODE_VERSION }}" in opencode_install
+	assert "continue-on-error" not in opencode_install
 
 	required_bootstrap_line = next(
 		line for line in stage_helper.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
@@ -2808,6 +2809,9 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 		assert expected in preflight_block
 
 	assert 'source "${OPENCODE_HELPERS_PATH}"' in reviewers
+	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in reviewers
+	assert 'OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"' in reviewers
+	assert 'opencode_emit_failure_alert review_run_reviewers reviewer "${reviewer_helpers_alert_model}" 1 config_writer_missing' in reviewers
 	assert 'bash "${OPENCODE_CONFIG_WRITER_PATH}" \\' in reviewers
 	assert '--model "${effective_model}"' in reviewers
 	assert '--variant "${variant}"' in (REPO_ROOT / "scripts" / "opencode_helpers.sh").read_text(encoding="utf-8")
@@ -2821,22 +2825,38 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'reviewer_record_health_outcome' in reviewers
 
 	assert 'opencode_run_cmd "$@"' in summariser
+	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in summariser
+	assert 'OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"' in summariser
+	assert 'opencode_emit_failure_alert review_summariser reviewer "${SUMMARISER_MODEL}" 1 config_writer_missing' in summariser
 	assert 'opencode_emit_failure_alert review_summariser reviewer' in summariser
 	assert 'opencode_strip_ansi < "${tmp_stdout}"' in summariser
 	assert 'opencode_run_cmd "$@"' in apply_fixes
 	assert 'writer\n    "${editor_attempt_model}"' in apply_fixes
 	assert 'opencode_emit_failure_alert review_apply_fixes writer' in apply_fixes
+	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in apply_fixes
+	assert 'failure_class=config_writer_missing' in apply_fixes
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in apply_fixes
 	assert 'opencode_run_cmd "$@"' in consolidate
 	assert '\twriter\n\t"${REVIEW_CONSOLIDATOR_MODEL}"' in consolidate
 	assert 'opencode_emit_failure_alert review_consolidate writer' in consolidate
+	assert 'opencode_helpers_loaded=false' in consolidate
+	assert 'if source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in consolidate
+	assert 'missing=opencode_config_writer failopen=1 output_bytes=0' in consolidate
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in consolidate
 	assert 'reviewer\n    "${MODEL_EDITOR}"' in rb_judge
 	assert 'writer\n        "${MODEL_EDITOR}"' in rb_judge
 	assert 'opencode_emit_failure_alert review_rb_judge reviewer' in rb_judge
+	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in rb_judge
+	assert 'opencode_emit_failure_alert review_rb_judge reviewer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing' in rb_judge
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" 2>/dev/null || true' in rb_judge
 	assert 'if ! review_rb_prepare_opencode_config reviewer review_rb_judge "${RB_JUDGE_OPENCODE_CONFIG}" off; then\n  exit 1\nfi' in rb_judge
 	assert 'if ! review_rb_prepare_opencode_config writer review_rb_fix "${RB_FIX_OPENCODE_CONFIG}" "${rb_fix_serena_mode}"; then\n        rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"\n        exit 1\n      fi' in rb_judge
 	assert 'opencode_run_cmd "$@"' in resolver
 	assert 'writer\n    "${MODEL_EDITOR}"' in resolver
 	assert '"${_current_reasoning_effort}"' in resolver
+	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in resolver
+	assert 'opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing' in resolver
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in resolver
 	for converted in (apply_fixes, consolidate, rb_judge, resolver):
 		assert "--ask-for-approval never" not in converted
 

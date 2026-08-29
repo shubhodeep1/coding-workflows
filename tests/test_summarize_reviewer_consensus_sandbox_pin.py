@@ -13,8 +13,8 @@ CONFIG_WRITER = REPO_ROOT / "scripts" / "write_opencode_config.sh"
 
 def test_summariser_uses_isolated_reviewer_opencode_config() -> None:
 	src = SUMMARISER_SCRIPT.read_text(encoding="utf-8")
-	assert 'OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"' in src
-	assert 'OPENCODE_CONFIG_WRITER_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh"' in src
+	assert 'OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh}"' in src
+	assert 'OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"' in src
 	assert '--role reviewer' in src
 	assert '--model "${SUMMARISER_MODEL}"' in src
 	assert '--config-path "${summariser_opencode_config}"' in src
@@ -39,7 +39,8 @@ def test_summariser_does_not_mutate_shared_codex_config() -> None:
 def test_reviewer_role_denies_edits_and_allows_read_bash() -> None:
 	writer = CONFIG_WRITER.read_text(encoding="utf-8")
 	assert '"read": "allow"' in writer
-	assert '"bash": "allow"' in writer
+	assert '"bash": "deny"' in writer
+	assert '"bash": False' in writer
 	assert '"edit": "deny"' in writer
 	assert '"write": False' in writer
 	assert '"patch": False' in writer

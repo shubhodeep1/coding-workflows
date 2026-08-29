@@ -760,13 +760,17 @@ jobs:
             .github/workflows/clarify.yml \
             .github/workflows/plan.yml \
             .github/workflows/implement.yml \
-            .github/workflows/review_autofix.yml \
             scripts/validate_process.sh; do
             if ! grep -q 'codex_config_assemble' "${f}"; then
               echo "::error file=${f}::Shared Codex config helper is not wired into this targeted call site."
               exit 1
             fi
           done
+
+          if grep -q 'codex_config_assemble' .github/workflows/review_autofix.yml; then
+            echo "::error file=.github/workflows/review_autofix.yml::OpenCode-only review workflow must not assemble Codex config."
+            exit 1
+          fi
 
           for f in \
             .github/workflows/clarify.yml \

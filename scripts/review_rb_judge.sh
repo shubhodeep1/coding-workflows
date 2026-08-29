@@ -42,11 +42,12 @@ done
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"
-if [ ! -f "${OPENCODE_HELPERS_PATH}" ]; then
+# shellcheck source=/dev/null
+if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then
   rb_helpers_missing_alert="opencode_agent_failure phase=review_rb_judge role=reviewer model=${MODEL_EDITOR:-unknown} rc=1 failure_class=helpers_missing"
   if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" ]; then
     # shellcheck source=/dev/null
-    source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
+    source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" 2>/dev/null || true
   fi
   if type tg_send_msg >/dev/null 2>&1; then
     tg_send_msg "${rb_helpers_missing_alert}" ERROR >/dev/null || true
@@ -54,8 +55,10 @@ if [ ! -f "${OPENCODE_HELPERS_PATH}" ]; then
   echo "${rb_helpers_missing_alert}" >&2
   exit 1
 fi
-# shellcheck source=/dev/null
-source "${OPENCODE_HELPERS_PATH}"
+if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
+  opencode_emit_failure_alert review_rb_judge reviewer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing || true
+  exit 1
+fi
 
 review_rb_prepare_opencode_config() {
   local role="$1"
