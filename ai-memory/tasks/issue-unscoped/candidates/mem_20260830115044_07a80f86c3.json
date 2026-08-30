@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/check_failure_triage.yml:Lines 129-141 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The test assertion for the normalized secret-bearing job gate is missing the exact normalized if-condition string, allowing weakened boolean conditions to pass contract tests.\n  WHY: The workflow's triage job gate must contain the exact normalized string to prevent weakened conditions from being accepted. The current test only checks for presence of the required conditions but does not assert the exact normalized gate string that the workflow uses.\n- changelog.d/3901-check-triage-input-hardening.md:Line 4 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The changelog entry does not document that fork-skip notices now retain the rejected PR number and head repository context for auditability.\n  WHY: Operators need to know that fork-skip notices include identifying context (PR number and head repository) for audit trails. This is a user-visible behavior change that should be documented.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/check_failure_triage.yml:Lines 129-141\n  Problem: The test assertion for the normalized secret-bearing job gate is missing the exact normalized if-condition string, allowing weakened boolean conditions to pass contract tests.\n  Why it fails at runtime: The workflow's triage job gate must contain the exact normalized string to prevent weakened conditions from being accepted. The current test only checks for presence of the required conditions but does not assert the exact normalized gate string that the workflow uses.\n  ISSUE_CONFIDENCE: 5\n- changelog.d/3901-check-triage-input-hardening.md:Line 4\n  Problem: The changelog entry does not document that fork-skip notices now retain the rejected PR number and head repository context for auditability.\n  Why it fails at runtime: Operators need to know that fork-skip notices include identifying context (PR number and head repository) for audit trails. This is a user-visible behavior change that should be documented.\n  ISSUE_CONFIDENCE: 5\n- HARDENING_SUGGESTIONS:\n  - File: .github/workflows/check_failure_triage.yml\n    Location: derive_check_name_key job step hash_check_name\n    Issue: The validation logic for PR number, check_run_id, and head_sha could be more robust by using stricter regex patterns and clearer error messages\n    Suggested minimal fix:\n    ```bash\n    # Replace the numeric validation with stricter patterns\n    if ! [[ \"${PR_NUMBER}\" =~ ^[1-9][0-9]*$ ]]; then\n      echo \"::error::PR number must be a positive integer\" >&2\n      exit 1\n    fi\n    if [ -n \"${CHECK_RUN_ID}\" ] && ! [[ \"${CHECK_RUN_ID}\" =~ ^[1-9][0-9]*$ ]]; then\n      echo \"::error::check_run_id must be a positive integer or empty\" >&2\n      exit 1\n    fi\n    if [ -n \"${HEAD_SHA}\" ] && ! [[ \"${HEAD_SHA}\" =~ ^[0-9a-fA-F]{40}$ ]]; then\n      echo \"::error::head_sha must be a 40-character hexadecimal string or empty\" >&2\n      exit 1\n    fi\n    ```\n    Estimated lines changed: 6\n    HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "61bda512d6a713f6271796dffe90c0a19d5de95b768268ed055652bdbd2ed78c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3912,
+    "run_id": "33304922307",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33304922307",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260830115044_07a80f86c3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3912,
+    "run_id": "33304922307"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-30T11:50:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
