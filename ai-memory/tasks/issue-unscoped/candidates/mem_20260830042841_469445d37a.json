@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:111 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The config-writer guard only checks readability (`-r`) but not regular-file status (`-f`), allowing directories or special files to pass validation before execution.\n  WHY: A non-regular path could pass the guard and later fail during execution of the config writer, causing a runtime failure with `failure_class=config_writer_missing`.\n- scripts/review_conflict_resolve.sh: lines 94-99 (helper fallback warning) and lines 101-106 (config-writer fallback warning) | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Both fallback warnings lack identical diagnostic context about SCRIPT_REF, making it harder for operators to diagnose staging-list skew issues.\n  WHY: Operators cannot easily correlate the warning with the specific staging list version that caused the skew.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_conflict_resolve.sh\n  Code: final config-writer guard at line 111\n  Problem: The config-writer guard only checks readability (`-r`) but not regular-file status (`-f`), allowing directories or special files to pass validation before execution.\n  Why it fails at runtime: A non-regular path could pass the guard and later fail during execution of the config writer, causing a runtime failure with `failure_class=config_writer_missing`.\n  ISSUE_CONFIDENCE: 5\n- scripts/review_conflict_resolve.sh\n  Code: lines 94-99 (helper fallback warning) and lines 101-106 (config-writer fallback warning)\n  Problem: Both fallback warnings lack identical diagnostic context about SCRIPT_REF, making it harder for operators to diagnose staging-list skew issues.\n  Why it fails at runtime: Operators cannot easily correlate the warning with the specific staging list version that caused the skew.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "16de8b9def777bf8c1ee737fbffa596181d3d351bf1bfb5aa2657c07c935da31",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3897,
+    "run_id": "33290072974",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33290072974",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260830042841_469445d37a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3897,
+    "run_id": "33290072974"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-30T04:28:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
