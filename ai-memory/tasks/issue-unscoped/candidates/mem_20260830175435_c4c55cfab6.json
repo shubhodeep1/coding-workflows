@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.92,
+  "details": "Recent changes added or modified tests covering untrusted input handling, shell block structure, failure triage security, and workflow predicates. Plans involving GitHub Actions should identify these tests early and preserve their exact safety contracts rather than relying only on runtime validation.",
+  "fingerprint": "17ea051aa0a1ce8bee118546963ff5c9fa396c5d559b908c598a3074943babee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33326431783",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33326431783",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3900",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3901",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3916",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3918",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3919",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3909",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3912",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3917",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3920",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3921"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260830175435_c4c55cfab6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow security is enforced through repository-specific contract tests for untrusted inputs and shared shell blocks.",
+  "timestamps": {
+    "created_at": "2026-08-30T17:54:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
