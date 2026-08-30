@@ -22,6 +22,169 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      - name: Shared shell-block anti-regression checks
+        run: |
+          set -euo pipefail
+
+          ci_guard_report_failure() {
+            local ci_guard_identifier="$1"
+            local ci_guard_condition="$2"
+            local ci_guard_file_path="$3"
+            local ci_guard_line_number="$4"
+            local ci_guard_expected_policy="$5"
+            local ci_guard_scanned_file_set="$6"
+            printf '::error::CI_GUARD_FAILURE guard=%s check=%s file=%s line=%s expected=%s scanned_files=%s\n' \
+              "${ci_guard_identifier}" \
+              "${ci_guard_condition}" \
+              "${ci_guard_file_path}" \
+              "${ci_guard_line_number}" \
+              "${ci_guard_expected_policy}" \
+              "${ci_guard_scanned_file_set}"
+          }
+
+          ci_guard_codex_files=(
+            .github/workflows/clarify.yml
+            .github/workflows/plan.yml
+            .github/workflows/implement.yml
+            .github/workflows/review_autofix.yml
+            scripts/validate_process.sh
+          )
+          ci_guard_codex_scanned="$(IFS=,; echo "${ci_guard_codex_files[*]}")"
+          ci_guard_failure_count=0
+          for ci_guard_file in "${ci_guard_codex_files[@]}"; do
+            while IFS= read -r ci_guard_line; do
+              ci_guard_report_failure \
+                "codex-config-shared-helper" \
+                "forbidden-inline-config-assembly" \
+                "${ci_guard_file}" \
+                "${ci_guard_line}" \
+                "scripts/codex_helpers.sh:codex_config_assemble" \
+                "${ci_guard_codex_scanned}"
+              ci_guard_failure_count=$((ci_guard_failure_count + 1))
+            done < <(
+              grep -nE 'bash ("\$\{[^}]+\}/|scripts/)?write_codex_config\.sh|WRITE_CODEX_CONFIG=' \
+                "${ci_guard_file}" | cut -d: -f1 || true
+            )
+          done
+          if [ "${ci_guard_failure_count}" -ne 0 ]; then
+            exit 1
+          fi
+
+          ci_guard_required_codex_files=(
+            .github/workflows/clarify.yml
+            .github/workflows/plan.yml
+            .github/workflows/implement.yml
+            scripts/validate_process.sh
+          )
+          ci_guard_required_codex_scanned="$(IFS=,; echo "${ci_guard_required_codex_files[*]}")"
+          for ci_guard_file in "${ci_guard_required_codex_files[@]}"; do
+            if ! grep -q 'codex_config_assemble' "${ci_guard_file}"; then
+              ci_guard_report_failure \
+                "codex-config-shared-helper" \
+                "required-helper-missing" \
+                "${ci_guard_file}" \
+                "none" \
+                "codex_config_assemble" \
+                "${ci_guard_required_codex_scanned}"
+              exit 1
+            fi
+          done
+
+          ci_guard_review_file=.github/workflows/review_autofix.yml
+          ci_guard_review_scanned="${ci_guard_review_file}"
+          if grep -q 'codex_config_assemble' .github/workflows/review_autofix.yml; then
+            while IFS= read -r ci_guard_line; do
+              ci_guard_report_failure \
+                "opencode-only-review" \
+                "forbidden-codex-config-assembly" \
+                "${ci_guard_review_file}" \
+                "${ci_guard_line}" \
+                "OpenCode-only-review-without-codex_config_assemble" \
+                "${ci_guard_review_scanned}"
+            done < <(grep -n 'codex_config_assemble' "${ci_guard_review_file}" | cut -d: -f1 || true)
+            exit 1
+          fi
+
+          ci_guard_memory_files=(
+            .github/workflows/clarify.yml
+            .github/workflows/plan.yml
+            .github/workflows/implement.yml
+            .github/workflows/validate.yml
+            .github/workflows/review_autofix.yml
+          )
+          ci_guard_memory_scanned="$(IFS=,; echo "${ci_guard_memory_files[*]}")"
+          for ci_guard_file in "${ci_guard_memory_files[@]}"; do
+            if ! grep -q 'memory_bootstrap' "${ci_guard_file}"; then
+              ci_guard_report_failure \
+                "memory-bootstrap-shared-helper" \
+                "required-helper-missing" \
+                "${ci_guard_file}" \
+                "none" \
+                "memory_bootstrap" \
+                "${ci_guard_memory_scanned}"
+              exit 1
+            fi
+          done
+
+          ci_guard_telegram_files=(
+            .github/workflows/clarify.yml
+            .github/workflows/plan.yml
+            .github/workflows/implement.yml
+            .github/workflows/review_autofix.yml
+          )
+          ci_guard_telegram_scanned="$(IFS=,; echo "${ci_guard_telegram_files[*]}")"
+          for ci_guard_file in "${ci_guard_telegram_files[@]}"; do
+            if ! grep -q 'tg_send_phase_failure' "${ci_guard_file}"; then
+              ci_guard_report_failure \
+                "telegram-failure-shared-helper" \
+                "required-helper-missing" \
+                "${ci_guard_file}" \
+                "none" \
+                "tg_send_phase_failure" \
+                "${ci_guard_telegram_scanned}"
+              exit 1
+            fi
+          done
+
+          ci_guard_watchdog_files=(
+            .github/workflows/implement.yml
+            scripts/review_apply_fixes.sh
+            scripts/validate_process.sh
+          )
+          ci_guard_watchdog_scanned="$(IFS=,; echo "${ci_guard_watchdog_files[*]}")"
+          ci_guard_failure_count=0
+          for ci_guard_file in "${ci_guard_watchdog_files[@]}"; do
+            while IFS= read -r ci_guard_line; do
+              ci_guard_report_failure \
+                "watchdog-shared-helper" \
+                "forbidden-inline-stall-parser" \
+                "${ci_guard_file}" \
+                "${ci_guard_line}" \
+                "scripts/watchdog_helpers.sh" \
+                "${ci_guard_watchdog_scanned}"
+              ci_guard_failure_count=$((ci_guard_failure_count + 1))
+            done < <(
+              grep -nE 'read_codex_stall_guard_state\(\)|read_validate_codex_stall_guard_state\(\)|codex_stall_guard_kill_detected\(\)|resolve_editor_network_probe_pid\(\)|_reap_editor_fifo_holders\(\)' \
+                "${ci_guard_file}" | cut -d: -f1 || true
+            )
+          done
+          if [ "${ci_guard_failure_count}" -ne 0 ]; then
+            exit 1
+          fi
+
+          for ci_guard_file in "${ci_guard_watchdog_files[@]}"; do
+            if ! grep -qE 'watchdog_helpers\.sh' "${ci_guard_file}"; then
+              ci_guard_report_failure \
+                "watchdog-shared-helper" \
+                "required-helper-missing" \
+                "${ci_guard_file}" \
+                "none" \
+                "watchdog_helpers.sh" \
+                "${ci_guard_watchdog_scanned}"
+              exit 1
+            fi
+          done
+
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -31,6 +194,11 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
+
+      - name: Shared shell-block anti-regression contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_shared_shell_block_guard.py
 
       - name: Derive orchestrate poll test subsets
         run: |
@@ -744,79 +912,6 @@ jobs:
           bash -c 'source scripts/memory_helpers.sh && declare -F memory_ensure_branch >/dev/null && declare -F memory_bootstrap >/dev/null' \
             && echo "OK: memory_ensure_branch and memory_bootstrap are defined after sourcing scripts/memory_helpers.sh" \
             || { echo "FAIL: memory_ensure_branch and/or memory_bootstrap not defined after sourcing scripts/memory_helpers.sh"; exit 1; }
-
-      - name: Shared shell-block anti-regression checks
-        run: |
-          set -euo pipefail
-
-          # Use ubiquitous grep instead of ripgrep so this gate does not
-          # fail on runner images that omit `rg`.
-          if grep -nE 'bash ("\$\{[^}]+\}/|scripts/)?write_codex_config\.sh|WRITE_CODEX_CONFIG=' \
-            .github/workflows/clarify.yml \
-            .github/workflows/plan.yml \
-            .github/workflows/implement.yml \
-            .github/workflows/review_autofix.yml \
-            scripts/validate_process.sh; then
-            echo "::error::Inline Codex config assembly detected; use scripts/codex_helpers.sh"
-            exit 1
-          fi
-
-          for f in \
-            .github/workflows/clarify.yml \
-            .github/workflows/plan.yml \
-            .github/workflows/implement.yml \
-            scripts/validate_process.sh; do
-            if ! grep -q 'codex_config_assemble' "${f}"; then
-              echo "::error file=${f}::Shared Codex config helper is not wired into this targeted call site."
-              exit 1
-            fi
-          done
-
-          if grep -q 'codex_config_assemble' .github/workflows/review_autofix.yml; then
-            echo "::error file=.github/workflows/review_autofix.yml::OpenCode-only review workflow must not assemble Codex config."
-            exit 1
-          fi
-
-          for f in \
-            .github/workflows/clarify.yml \
-            .github/workflows/plan.yml \
-            .github/workflows/implement.yml \
-            .github/workflows/validate.yml \
-            .github/workflows/review_autofix.yml; do
-            if ! grep -q 'memory_bootstrap' "${f}"; then
-              echo "::error file=${f}::Shared memory bootstrap helper is not wired into this targeted workflow domain."
-              exit 1
-            fi
-          done
-
-          for f in \
-            .github/workflows/clarify.yml \
-            .github/workflows/plan.yml \
-            .github/workflows/implement.yml \
-            .github/workflows/review_autofix.yml; do
-            if ! grep -q 'tg_send_phase_failure' "${f}"; then
-              echo "::error file=${f}::Shared Telegram failure helper is not wired into this targeted workflow."
-              exit 1
-            fi
-          done
-
-          if grep -nE 'read_codex_stall_guard_state\(\)|read_validate_codex_stall_guard_state\(\)|codex_stall_guard_kill_detected\(\)|resolve_editor_network_probe_pid\(\)|_reap_editor_fifo_holders\(\)' \
-            .github/workflows/implement.yml \
-            scripts/review_apply_fixes.sh \
-            scripts/validate_process.sh; then
-            echo "::error::Inline stall-guard parsing helpers detected; use scripts/watchdog_helpers.sh"
-            exit 1
-          fi
-
-          for f in \
-            .github/workflows/implement.yml \
-            scripts/review_apply_fixes.sh \
-            scripts/validate_process.sh; do
-            if ! grep -qE 'watchdog_helpers\.sh' "${f}"; then
-              echo "::error file=${f}::Shared watchdog helper is not wired into this targeted runtime."
-              exit 1
-            fi
-          done
 
       - name: ShellCheck static analysis
         run: |
