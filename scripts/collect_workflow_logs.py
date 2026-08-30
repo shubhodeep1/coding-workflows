@@ -1726,12 +1726,17 @@ def main(argv: list[str] | None = None) -> int:
                 if (run.get("conclusion") or "").lower() in {"failure", "cancelled"}:
                     row_copy["jobs_fetch_status"] = "cached"
                 cached_log_data_available = (
-                    run_id in set(logs_seen_set)
-                    and _cached_log_excerpts(row_copy) is not None
+                    _cached_log_excerpts(row_copy) is not None
                     and _cached_cost_telemetry(row_copy) is not None
                 )
-                row_copy["log_download_status"] = "cached" if cached_log_data_available else "not_selected"
-                _set_diagnostic_failure_reason(row_copy, "logs", None)
+                if cached_log_data_available:
+                    row_copy["log_download_status"] = "cached"
+                    _set_diagnostic_failure_reason(row_copy, "logs", None)
+                elif row_copy.get("log_download_status") not in {
+                    "missing_archive", "transient_failure", "empty_archive", "failure"
+                }:
+                    row_copy["log_download_status"] = "not_selected"
+                    _set_diagnostic_failure_reason(row_copy, "logs", None)
                 row_copy.pop("_success_sampled", None)
                 run_rows.append(row_copy)
                 collected_rows_for_repo.append(dict(row_copy))
@@ -1818,7 +1823,7 @@ def main(argv: list[str] | None = None) -> int:
             logs_seen_lookup = set(logs_seen_set)
             cached_rows_by_run_id = _index_cached_rows(repo_cache.get("rows_snapshot"))
             cache_key = _cache_run_key(run_id, _to_int(run.get("run_attempt"), 1))
-            if run_id in logs_seen_lookup:
+            if run_id in logs_seen_lookup or cache_key in cached_rows_by_run_id:
                 cached_row = cached_rows_by_run_id.get(cache_key)
                 cached_excerpts = _cached_log_excerpts(cached_row)
                 cached_cost_telemetry = _cached_cost_telemetry(cached_row)

@@ -529,6 +529,8 @@ def test_main_reuses_current_cancelled_cache_row_without_cancellation_clue() -> 
 			"_workflow_family": "validate",
 		}
 		cached_row = collector.compute_run_metrics("owner/repo", cached_run, jobs=[])
+		cached_row["log_download_status"] = "missing_archive"
+		cached_row["diagnostic_failure_reason"] = "logs: archive missing"
 		cache_payload = {
 			"schema_version": "v1",
 			"repositories": {
@@ -597,6 +599,8 @@ def test_main_reuses_current_cancelled_cache_row_without_cancellation_clue() -> 
 			"job_name": None,
 			"step_name": None,
 		}
+		assert report["runs"][0]["log_download_status"] == "missing_archive"
+		assert report["runs"][0]["diagnostic_failure_reason"] == "logs: archive missing"
 
 
 def test_list_runs_for_repo_paginates_and_includes_all_families():
@@ -726,7 +730,7 @@ def test_main_reuses_cached_snapshot_on_304_and_skips_jobs_and_logs() -> None:
 					"runs_etag": "W/\"cached\"",
 					"runs_window_start": "2026-04-01T00:00:00Z",
 					"jobs_seen_set": [501],
-					"logs_seen_set": [501],
+					"logs_seen_set": [],
 					"last_updated": "2026-04-11T00:00:00Z",
 					"runs_snapshot": [cached_run],
 					"rows_snapshot": [cached_row],
