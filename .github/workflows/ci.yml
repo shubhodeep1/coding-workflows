@@ -51,6 +51,8 @@ jobs:
           )
           ci_guard_codex_scanned="$(IFS=,; echo "${ci_guard_codex_files[*]}")"
           ci_guard_failure_count=0
+          # Use ubiquitous grep instead of ripgrep so this gate does not
+          # fail on runner images that omit `rg`.
           for ci_guard_file in "${ci_guard_codex_files[@]}"; do
             while IFS= read -r ci_guard_line; do
               ci_guard_report_failure \
