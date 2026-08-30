@@ -1163,6 +1163,30 @@ def test_select_notable_runs_for_logs_prioritizes_failed_then_retried_then_slow_
 	]
 
 
+def test_select_notable_runs_for_logs_prioritizes_zero_duration_startup_failure():
+	runs = [
+		{
+			"repository": "owner/repo",
+			"run_id": 204,
+			"conclusion": "startup_failure",
+			"retries": 0,
+			"duration_seconds": 0,
+			"created_at": "2026-04-10T10:00:00Z",
+		},
+		{
+			"repository": "owner/repo",
+			"run_id": 205,
+			"conclusion": "success",
+			"retries": 0,
+			"duration_seconds": 900,
+			"created_at": "2026-04-10T12:00:00Z",
+		},
+	]
+
+	selected = collector.select_notable_runs_for_logs(runs, max_log_runs=1)
+	assert [item["run_id"] for item in selected] == [204]
+
+
 def test_select_runs_for_log_export_categories_deterministic_and_capped():
 	runs = [
 		{
@@ -1918,6 +1942,65 @@ def test_export_categorized_logs_writes_diagnostic_metadata_when_archive_fails()
 		assert str(metadata["diagnostic_failure_reason"]).startswith("logs: connection reset")
 		assert not list(metadata_path.parent.glob("*.log"))
 		assert errors
+
+
+def test_export_categorized_logs_keeps_startup_failure_metadata_when_archive_fails():
+	with tempfile.TemporaryDirectory(prefix="collector-startup-metadata-test-") as td:
+		output_dir = Path(td) / "logs"
+		startup_run = {
+			"repository": "owner/repo",
+			"run_id": 603,
+			"run_attempt": 1,
+			"workflow_family": "implement",
+			"conclusion": "startup_failure",
+			"duration_seconds": 0,
+			"created_at": "2026-04-10T10:00:00Z",
+			"jobs_fetch_status": "not_required",
+			"log_download_status": "not_selected",
+			"diagnostic_failure_reason": None,
+			"observed_job_conclusions": [],
+			"workflow_validation_annotations_status": "unavailable_from_existing_payloads",
+		}
+		successful_run = {
+			"repository": "owner/repo",
+			"run_id": 604,
+			"run_attempt": 1,
+			"workflow_family": "implement",
+			"conclusion": "success",
+			"duration_seconds": 900,
+			"created_at": "2026-04-10T12:00:00Z",
+			"jobs_fetch_status": "not_required",
+			"log_download_status": "not_selected",
+			"diagnostic_failure_reason": None,
+			"observed_job_conclusions": [],
+			"workflow_validation_annotations_status": "unavailable_from_existing_payloads",
+		}
+		errors: list[dict[str, str]] = []
+		orig_fetch_logs = collector._fetch_run_log_archive
+
+		def fake_fetch_run_log_archive(*args: object, **kwargs: object):
+			raise RuntimeError("connection reset by peer")
+
+		collector._fetch_run_log_archive = fake_fetch_run_log_archive
+		try:
+			collector.export_categorized_logs(
+				output_dir,
+				[startup_run, successful_run],
+				max_log_runs=1,
+				token="token",
+				errors=errors,
+				log_archive_cache={},
+			)
+		finally:
+			collector._fetch_run_log_archive = orig_fetch_logs
+
+		metadata_path = output_dir / "errors" / "owner_repo" / "implement" / "603" / "metadata.json"
+		metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+		assert not (output_dir / "errors" / "owner_repo" / "implement" / "604").exists()
+		assert metadata["log_download_status"] == "transient_failure"
+		assert str(metadata["diagnostic_failure_reason"]).startswith("logs: connection reset")
+		assert metadata["workflow_validation_annotations_status"] == "unavailable_from_existing_payloads"
+		assert not list(metadata_path.parent.glob("*.log"))
 
 
 def test_main_partial_jobs_failure_still_emits_report_with_errors():
