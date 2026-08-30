@@ -164,9 +164,9 @@ def test_similarly_prefixed_root_files_are_allowed(path: str) -> None:
 
 
 def test_other_consumer_github_paths_are_allowed() -> None:
-	path = ".github/workflows/custom.yml"
-	returncode, output = _run_guard(_plan_listing(path), FETCHED_HELPERS)
-	assert returncode == 0, f"consumer-owned {path} was rejected:\n{output}"
+	for path in (".github", ".github/", ".github/workflows/custom.yml"):
+		returncode, output = _run_guard(_plan_listing(path), FETCHED_HELPERS)
+		assert returncode == 0, f"consumer-owned {path} was rejected:\n{output}"
 
 
 @pytest.mark.parametrize(

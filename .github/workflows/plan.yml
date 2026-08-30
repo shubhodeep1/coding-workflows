@@ -1551,11 +1551,11 @@ jobs:
                 printf '%s\n' "${template_path_candidate}" >> "${TEMPLATE_PATH_BLOCKED_FILE}"
                 continue
                 ;;
-              .github|.github/prompts|.github/prompts/*|.github/scripts|.github/scripts/*)
+              .github/prompts|.github/prompts/*|.github/scripts|.github/scripts/*)
                 printf '%s\n' "${template_path_candidate}" >> "${TEMPLATE_PATH_BLOCKED_FILE}"
                 continue
                 ;;
-              .github/*)
+              .github|.github/*)
                 continue
                 ;;
             esac
