@@ -123,6 +123,32 @@ def test_stage_workflow_support_files_bootstraps_optional_semble_assets() -> Non
 	assert "implement_commit_changes.sh" in required_loop_line
 
 
+def test_render_prompt_python_is_staged_once_as_required_support() -> None:
+	stage_block = _step_run_text("Stage workflow support files")
+	render_prompt_loop_lines = [
+		line.strip()
+		for line in stage_block.splitlines()
+		if line.strip().startswith("for f in ")
+		and line.strip().endswith("; do")
+		and "render_prompt.py" in line
+	]
+	assert len(render_prompt_loop_lines) == 1
+	assert render_prompt_loop_lines[0].startswith("for f in gh_helpers.sh ")
+	assert "for f in render_prompt.py; do" not in stage_block
+	assert "Optional render_prompt.py backend unavailable" not in stage_block
+
+	required_loop_start = stage_block.index(render_prompt_loop_lines[0])
+	required_loop_end = stage_block.index("\ndone", required_loop_start)
+	required_loop_block = stage_block[required_loop_start:required_loop_end]
+	assert 'src=".codex-workflow-src/scripts/${f}"' in required_loop_block
+	assert '[ -f ".codex-workflow-src-main/scripts/${f}" ]' in required_loop_block
+	assert 'src=".codex-workflow-src-main/scripts/${f}"' in required_loop_block
+	assert 'echo "::error::Missing required support script ${f}' in required_loop_block
+	assert "exit 1" in required_loop_block
+	assert 'install -m 0755 "${src}" "scripts/${f}"' in required_loop_block
+	assert '_fetched_scripts+=("${f}")' in required_loop_block
+
+
 def test_stage_workflow_support_files_bootstraps_revalidate_lifecycle_ai_memory_schemas() -> None:
 	stage_block = _step_run_text("Stage workflow support files")
 	assert "validation_history.v1.json" in stage_block
