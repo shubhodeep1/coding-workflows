@@ -17,9 +17,10 @@ name: "Internal: AI Review Autofix Sweep"
 #
 # Concurrency safety:
 #   - Per-PR preflight reuses the `_has_active_autofix_run` pattern
-#     (orchestrate_poll_process.sh:7792-7814): if any in_progress or queued
-#     run already exists on `internal-review.yml` / `review_autofix.yml` for
-#     the PR's head ref, skip the dispatch. This collapses the
+#     (orchestrate_poll_process.sh:7792-7814): if any in_progress, queued, or
+#     pending run already exists on `internal-review.yml` / `review_autofix.yml`
+#     for the PR's head ref, skip the dispatch. In-progress and pending runs
+#     are never age-discounted; only queued runs may expire. This collapses the
 #     dispatch-vs-synchronize parallel-write window from "indefinite" to
 #     "GitHub API visibility delay" (~few seconds).
 #   - `in_progress` runs suppress a duplicate dispatch with no time limit:
@@ -247,9 +248,9 @@ jobs:
             fi
 
             # Preflight (mirrors scripts/orchestrate_poll_process.sh:7792-7814).
-            # Skip when a review run is already in_progress or queued for this
-            # branch on either workflow, so the sweep cannot stomp on a
-            # synchronize-fired run that is mid-edit.
+            # Skip when a review run is already in_progress, queued, or pending
+            # for this branch on either workflow. In-progress and pending runs
+            # always suppress dispatch; only queued runs can age out.
             active=0
             for wf in internal-review.yml review_autofix.yml; do
               count="${active_review_runs["${wf}:${head_ref}"]:-0}"
