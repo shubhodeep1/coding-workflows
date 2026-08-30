@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope\nReuse-audit: extends the existing `Send Telegram notification` step and changelog workflow contract tests.\nScope-mode justification: This is a surgical parity fix. Adding both existing changelog conditions and their message sections is the complete solution with negligible extra cost, consistent with \u00a76 priorities: correctness and operational clarity over speed.\n\n## Planning basis\n\n- Ref: `fbec387b6d8f7d5eba511d943edd0772a4690ec9`\n- Branch: `orchestrator/project-3898`\n- Integration metadata matches the checkout.\n- No substantive clarification questions were posed; the orchestrator auto-answer indicates the issue is clear.\n- Estimated implementation time: 20\u201330 minutes.\n\n## Automation wiring\n\n- Modify existing code only; no new script.\n- Existing entry points remain:\n  - `workflow-templates/ai-update-workflows.yml`: daily `0 4 * * *`, stable-release dispatch, and manual dispatch.\n  - `.github/workflows/update_workflows.yml`: reusable `workflow_call` and manual dispatch.\n- No PR-push trigger, supervisor, database operation, or removal-registry entry is required.\n\n## Files likely to change\n\n1. `.github/workflows/update_workflows.yml`\n   - Align the Telegram step gate with the commit gate.\n   - Add changelog asset and assembly details to the existing message.\n\n2. `tests/test_changelog_fragment_contract.py`\n   - Add focused predicate-parity and notification-message contract coverage.\n\n## Functions or modules to implement\n\n### `.github/workflows/update_workflows.yml`\n\nWithin `Send Telegram notification`:\n\n- Add the existing conditions:\n  - `steps.changelog_sync.outputs.changelog_assets_has_changes == 'true'`\n  - `steps.changelog_assemble.outputs.changelog_assembled == 'true'`\n- Reuse `/tmp/changelog_asset_files.txt` to populate a changelog asset list.\n- Reuse the existing assembly outputs:\n  - `changelog_fragment_count`\n  - `changelog_layout`\n- Append conditional message sections after the existing CLAUDE.md section and before source/run metadata:\n  - Changed changelog asset paths.\n  - Assembly summary containing fragment count and layout.\n- Preserve all existing wrapper, audit-gate, `.claude/`, and top-level `CLAUDE.md` wording and ordering.\n- Leave `ALERT_MSG_LEVEL`, `tg_send_msg`, curl fallback, and commit behavior unchanged.\n\n### `tests/test_changelog_fragment_contract.py`\n\n- Extract and normalize the `if:` predicates for the commit and notification steps, then assert exact managed-change parity.\n- Assert changelog-only conditions are present in the notification gate.\n- Assert the notification script reads the asset-list file and includes the assembly count/layout outputs.\n- Pin existing notification text for the four pre-existing categories to prevent incidental changes.\n- Assert the predicate remains a managed-change disjunction, preserving the true no-op path.\n\n## Data structures affected\n\n- Existing GitHub Actions outputs are consumed without renaming or changing their types.\n- Existing `/tmp/changelog_asset_files.txt` newline-delimited path list is reused.\n- No schemas, persisted state, workflow inputs, or environment variables change.\n\n## API/interface changes\n\n- Additive Telegram message content for changelog-related updates.\n- No new external API calls or public interfaces.\n- Existing helper-first and direct Telegram fallback interfaces remain unchanged.\n\n## Risks and edge cases\n\n- Predicate duplication may drift later; exact parity testing should make future divergence fail visibly.\n- Asset sections must remain conditional on a non-empty path list.\n- Assembly count/layout should only be rendered when `changelog_assembled` is true.\n- Mixed updates must include changelog details without altering existing sections.\n- Missing Telegram credentials and default `SILENT` behavior must continue to exit without sending.\n- Conflict detection: no repository-path, output-name, or integration-branch conflicts found.\n\n## Testing considerations\n\nRun in order:\n\n1. `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_changelog_fragment_contract.py`\n2. `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_guardrails.py`\n3. YAML validation through the repository\u2019s existing CI/toolchain.\n\nVerify changelog-asset-only, assembly-only, mixed-update, and true no-op contracts.\n\n## Decisions\n\n### D1 \u2014 Enforce predicate parity directly\n\n- **Chosen:** Compare the normalized commit and notification predicates in the contract test.\n- **Alternatives considered:** Assert only that both changelog conditions occur somewhere in the workflow.\n- **Why:** Exact comparison prevents future managed-change categories from silently diverging again.\n\n### D2 \u2014 Extend the existing message in place\n\n- **Chosen:** Add changelog sections to the current Telegram message builder.\n- **Alternatives considered:** Introduce a shared script or rebuild all notification formatting.\n- **Why:** The existing mechanism already handles every other managed category and preserves helper fallback and alert-level behavior.\n\n## Assumptions\n\n- The issue\u2019s `files_touched` scope refers to the reusable workflow and its focused changelog contract test.\n- Existing changelog output and temporary-file contracts remain authoritative.\n\n## Missing-context notes\n\n- No explicit `files_touched` list was supplied; the plan conservatively limits changes to the two directly implicated files.\n\n## Pre-execution self-check\n\n- Acceptance criteria mapped to concrete workflow and test changes.\n- No identifier renames, new triggers, scripts, dependencies, or external interfaces.\n- Plan remains within the orchestrator\u2019s 60-minute budget.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "12dc97c3d1145188ebc35be76ad4254c2583b10c45efebe98eb36064b865e431",
+  "lineage": {
+    "issue_number": 3903,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33294876243",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33294876243",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3903"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260830053547_6d7dbef2d6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3903,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33294876243"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3903",
+  "timestamps": {
+    "created_at": "2026-08-30T05:35:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
