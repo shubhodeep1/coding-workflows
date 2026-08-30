@@ -1093,7 +1093,7 @@ def _graphql_linked_issues(nodes: list[object]) -> dict:
 	}
 
 
-def _complete_graphql_issue(number: int, body: str, labels: list[str]) -> dict:
+def _complete_graphql_issue(number: int, body: str | None, labels: list[str]) -> dict:
 	return {
 		"number": number,
 		"body": body,
@@ -1130,7 +1130,7 @@ def test_complete_graphql_node_avoids_issue_rest_read() -> None:
 def test_complete_graphql_empty_body_preserves_first_issue_labels() -> None:
 	state = _run_linked_issue_hydration(
 		graphql_response=_graphql_linked_issues([
-			_complete_graphql_issue(41, "", ["ai:orchestrator-managed"]),
+			_complete_graphql_issue(41, None, ["ai:orchestrator-managed"]),
 			_complete_graphql_issue(42, "Fallback body", ["bug"]),
 		]),
 	)

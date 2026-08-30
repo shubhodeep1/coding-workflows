@@ -936,7 +936,7 @@ while IFS= read -r issue_number; do
 			(type == "object")
 			and ((.number | type) == "number")
 			and has("body")
-			and ((.body | type) == "string")
+			and ((.body == null) or ((.body | type) == "string"))
 			and ((.labels | type) == "object")
 			and ((.labels.nodes | type) == "array")
 			and all(.labels.nodes[];
