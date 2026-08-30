@@ -55,33 +55,109 @@ jobs:
       !contains(inputs.check_name, 'Check Failure Triage')
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      pull-requests: read
     outputs:
       check_name_key: ${{ steps.hash_check_name.outputs.check_name_key }}
+      same_repo: ${{ steps.hash_check_name.outputs.same_repo }}
     steps:
-      - name: Hash check name for concurrency key
+      - name: Validate inputs, hash check name, and verify PR origin
         id: hash_check_name
         env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          CHECK_RUN_ID: ${{ inputs.check_run_id }}
           CHECK_NAME: ${{ inputs.check_name }}
+          CHECK_CONCLUSION: ${{ inputs.check_conclusion }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          DETAILS_URL: ${{ inputs.details_url }}
         run: |
           set -euo pipefail
+
+          if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Invalid PR number"
+            exit 1
+          fi
+          if [ -n "${CHECK_RUN_ID}" ] && ! [[ "${CHECK_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Invalid check-run id"
+            exit 1
+          fi
+          case "${CHECK_CONCLUSION}" in
+            failure|timed_out) ;;
+            *)
+              echo "::error::Unsupported check conclusion"
+              exit 1
+              ;;
+          esac
+          if [ -n "${HEAD_SHA}" ] && ! [[ "${HEAD_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Invalid head SHA"
+            exit 1
+          fi
+
           check_name_key="$(printf '%s' "${CHECK_NAME}" | sha256sum | awk '{print $1}')"
           echo "check_name_key=${check_name_key}" >> "$GITHUB_OUTPUT"
+
+          pr_payload="$(mktemp)"
+          api_error="$(mktemp)"
+          trap 'rm -f "${pr_payload}" "${api_error}"' EXIT
+
+          attempt=1
+          while true; do
+            if gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" > "${pr_payload}" 2> "${api_error}"; then
+              break
+            fi
+
+            http_status="$(grep -Eo 'HTTP [0-9]{3}' "${api_error}" | tail -1 | awk '{print $2}' || true)"
+            retryable=false
+            case "${http_status}" in
+              408|429|5??) retryable=true ;;
+              403)
+                if grep -qiE 'rate limit|secondary rate limit|abuse' "${api_error}"; then
+                  retryable=true
+                fi
+                ;;
+              '') retryable=true ;;
+            esac
+
+            if [ "${retryable}" != "true" ]; then
+              echo "::error::Permanent failure while determining PR origin (HTTP ${http_status:-unknown})"
+              exit 1
+            fi
+            if [ "${attempt}" -ge 3 ]; then
+              echo "::error::Unable to determine PR origin after ${attempt} attempts"
+              exit 1
+            fi
+            sleep $((attempt * 2))
+            attempt=$((attempt + 1))
+          done
+
+          head_repo="$(jq -r '.head.repo.full_name // ""' "${pr_payload}" 2>/dev/null || echo '')"
+          if [ -z "${head_repo}" ] || [ "${head_repo}" = "null" ]; then
+            echo "::error::Unable to determine PR head repository"
+            exit 1
+          fi
+          if [ "${head_repo}" != "${REPOSITORY}" ]; then
+            echo "same_repo=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping check-failure triage for fork PR #${PR_NUMBER} (head repo: ${head_repo})."
+            exit 0
+          fi
+          echo "same_repo=true" >> "$GITHUB_OUTPUT"
 
   triage:
     needs: derive_check_name_key
     # Cost gate: enabled by default; a consumer opts OUT via
     # CHECK_FAILURE_TRIAGE_ENABLED=false. Only genuine failure conclusions on a
     # real PR proceed. The job is skipped (no checkout / no codex install) when
-    # disabled. always() preserves the
-    # triage run if the hash-only dependency fails transiently; the
-    # concurrency key then falls back to the check-run id, then the raw check
-    # name for direct callers that omit check_run_id.
+    # disabled. The prerequisite must validate the inputs and confirm a
+    # same-repository PR before this secret-bearing job can start.
     if: >-
-      always() &&
       !contains(fromJson('["false"]'), vars.CHECK_FAILURE_TRIAGE_ENABLED) &&
       inputs.pr_number != '' &&
       contains(fromJson('["failure","timed_out"]'), inputs.check_conclusion) &&
-      !contains(inputs.check_name, 'Check Failure Triage')
+      !contains(inputs.check_name, 'Check Failure Triage') &&
+      needs.derive_check_name_key.result == 'success' &&
+      needs.derive_check_name_key.outputs.same_repo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -108,46 +184,21 @@ jobs:
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
     steps:
       - name: Log trigger context
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          CHECK_NAME: ${{ inputs.check_name }}
+          CHECK_CONCLUSION: ${{ inputs.check_conclusion }}
+          HEAD_SHA: ${{ inputs.head_sha }}
         run: |
           set -euo pipefail
-          echo "Check-failure triage for ${GITHUB_REPOSITORY} PR #${{ inputs.pr_number }}"
-          echo "Check: ${{ inputs.check_name }} (conclusion: ${{ inputs.check_conclusion }})"
-          echo "Head SHA: ${{ inputs.head_sha }}"
-
-      - name: Guard against fork PRs
-        id: pr_origin_guard
-        run: |
-          set -euo pipefail
-          pr_payload="$(mktemp)"
-          trap 'rm -f "${pr_payload}"' EXIT
-
-          attempt=1
-          while true; do
-            if gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ inputs.pr_number }}" > "${pr_payload}" 2>/dev/null; then
-              break
-            fi
-            if [ "${attempt}" -ge 3 ]; then
-              echo "::error::Unable to determine PR head repository for PR #${{ inputs.pr_number }} after ${attempt} attempts"
-              exit 1
-            fi
-            sleep $((attempt * 2))
-            attempt=$((attempt + 1))
-          done
-
-          HEAD_REPO="$(jq -r '.head.repo.full_name // ""' "${pr_payload}" 2>/dev/null || echo '')"
-          if [ -z "${HEAD_REPO}" ] || [ "${HEAD_REPO}" = "null" ]; then
-            echo "::error::Unable to determine PR head repository for PR #${{ inputs.pr_number }}"
-            exit 1
-          fi
-          if [ "${HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]; then
-            echo "same_repo=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping check-failure triage for fork PR #${{ inputs.pr_number }} (head repo: ${HEAD_REPO})."
-            exit 0
-          fi
-          echo "same_repo=true" >> "$GITHUB_OUTPUT"
+          safe_check_name="${CHECK_NAME//$'\r'/ }"
+          safe_check_name="${safe_check_name//$'\n'/ }"
+          safe_check_name="${safe_check_name:0:200}"
+          printf 'Check-failure triage for %s PR #%s\n' "${GITHUB_REPOSITORY}" "${PR_NUMBER}"
+          printf 'Check: %s (conclusion: %s)\n' "${safe_check_name}" "${CHECK_CONCLUSION}"
+          printf 'Head SHA: %s\n' "${HEAD_SHA}"
 
       - name: Checkout PR head (failing branch)
-        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         uses: actions/checkout@v5
         with:
           ref: ${{ inputs.head_sha || github.sha }}
@@ -155,13 +206,11 @@ jobs:
           token: ${{ secrets.GH_PAT }}
 
       - name: Install Codex CLI
-        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Resolve workflow support ref
-        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -173,7 +222,6 @@ jobs:
 
       - name: Checkout workflow support source
         id: checkout_support_source
-        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -184,7 +232,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' && steps.checkout_support_source.outcome == 'failure' }}
+        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -194,7 +242,6 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
-        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -258,14 +305,12 @@ jobs:
           rm -rf .codex-workflow-src
 
       - name: Create Codex config
-        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         run: |
           set -euo pipefail
           source scripts/codex_helpers.sh
           codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low"
 
       - name: Create runtime workspace
-        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         run: |
           set -euo pipefail
           RUNTIME_DIR="/tmp/check-triage-${GITHUB_RUN_ID}"
@@ -273,7 +318,6 @@ jobs:
           echo "RUNTIME_DIR=${RUNTIME_DIR}" >> "$GITHUB_ENV"
 
       - name: Run check-failure triage
-        if: ${{ steps.pr_origin_guard.outputs.same_repo == 'true' }}
         env:
           CHECK_TRIAGE_PR_NUMBER: ${{ inputs.pr_number }}
           CHECK_TRIAGE_CHECK_RUN_ID: ${{ inputs.check_run_id }}
@@ -287,9 +331,16 @@ jobs:
 
       - name: Notify on triage workflow failure
         if: ${{ failure() }}
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          CHECK_NAME: ${{ inputs.check_name }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh 2>/dev/null || true
           type tg_send_msg >/dev/null 2>&1 || exit 0
+          safe_check_name="${CHECK_NAME//$'\r'/ }"
+          safe_check_name="${safe_check_name//$'\n'/ }"
+          safe_check_name="${safe_check_name:0:160}"
           RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          tg_send_msg "AI Check Failure Triage workflow itself failed for ${GITHUB_REPOSITORY} PR #${{ inputs.pr_number }} (check '${{ inputs.check_name }}')."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+          notification="AI Check Failure Triage workflow itself failed for ${GITHUB_REPOSITORY} PR #${PR_NUMBER} (check '${safe_check_name}')."
+          tg_send_msg "${notification}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true

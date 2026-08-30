@@ -991,6 +991,11 @@ the way to a fix PR without human action.
 - **Same-repo guard:** fork-origin PRs are skipped before checkout / model
   execution, so `GH_PAT` and model credentials are never exposed to untrusted
   fork code.
+- **Input security:** a credential-minimal prerequisite validates numeric IDs,
+  supported conclusions, and SHA shape, then confirms the PR head repository
+  with read-only pull-request permission. Untrusted check names and URLs remain
+  environment data, and log or Telegram display values are single-line and
+  bounded before the secret-bearing triage job starts.
 - **Diagnosis:** for same-repo PRs, the repo is checked out at the failing head
   SHA; the diagnosis model (`WORKFLOW_CHECK_TRIAGE_MODEL`, default
   `openai/gpt-5.6-sol`, `xhigh`) reads the failing check's logs (via
