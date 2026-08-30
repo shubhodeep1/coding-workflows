@@ -66,6 +66,14 @@ Selective Expansion when the marginal completeness cost is small, and editors /
 reviewers must then stay surgical inside that approved scope rather than
 shrinking it ad hoc.
 
+CI guard contract: `.github/workflows/ci.yml` runs the `Shared shell-block
+anti-regression checks` step immediately after checkout, before Python setup,
+dependency installation, lint, and tests. Rejections emit the secret-safe
+`CI_GUARD_FAILURE` diagnostic with `guard`, `check`, `file`, `line`,
+`expected`, and `scanned_files` fields, and the guard deliberately uses
+ubiquitous `grep` instead of `rg` so runner images without ripgrep still fail
+only on real policy drift.
+
 Plan prompt note: `PLAN_DIAGRAMS_OPTIONAL` defaults to `true`, so plan outputs
 may include `Data flow:`, `State machines:`, and `Failure modes:` only when
 they materially help. Trivial plans should omit them, and `State machines:` is

@@ -81,10 +81,11 @@ jobs:
 
       - name: Resolve repositories
         id: resolve_repos
+        env:
+          OVERRIDE_INPUT: ${{ github.event.inputs.repos_override || '' }}
         run: |
           set -euo pipefail
 
-          OVERRIDE_INPUT="${{ github.event.inputs.repos_override || '' }}"
           REPO_REGISTRY_PATH=".github/ai/consumer_repos.json"
 
           declare -a repos=()
@@ -146,11 +147,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
+          SINCE_INPUT: ${{ github.event.inputs.since || '' }}
+          LOOKBACK_DAYS_INPUT: ${{ github.event.inputs.lookback_days || '7' }}
         run: |
           set -euo pipefail
 
-          SINCE_INPUT="${{ github.event.inputs.since || '' }}"
-          LOOKBACK_DAYS="${{ github.event.inputs.lookback_days || '7' }}"
           mapfile -t REPOS < /tmp/workflow-analysis-repos.txt
 
           LOG_OUTPUT_DIR="${RUNNER_TEMP:-/tmp}/workflow-log-output"
@@ -166,7 +167,11 @@ jobs:
           if [ -n "${SINCE_INPUT//[[:space:]]/}" ]; then
             COLLECT_ARGS+=(--since "${SINCE_INPUT}")
           else
-            COLLECT_ARGS+=(--lookback-days "${LOOKBACK_DAYS}")
+            if ! [[ "${LOOKBACK_DAYS_INPUT}" =~ ^[0-9]+$ ]] || [ "${LOOKBACK_DAYS_INPUT}" -lt 1 ]; then
+              echo "::error::lookback_days must be a positive integer."
+              exit 1
+            fi
+            COLLECT_ARGS+=(--lookback-days "${LOOKBACK_DAYS_INPUT}")
           fi
 
           for repo in "${REPOS[@]}"; do
@@ -886,7 +891,11 @@ jobs:
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
-          if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]] && [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then
+          if ! [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]]; then
+            echo "::error::tracking_issue must be 0 or a positive integer."
+            exit 1
+          fi
+          if [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then
             TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"
           fi
 
@@ -1528,7 +1537,11 @@ jobs:
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
-          if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]] && [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then
+          if ! [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]]; then
+            echo "::error::tracking_issue must be 0 or a positive integer."
+            exit 1
+          fi
+          if [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then
             TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"
           fi
 
@@ -2028,7 +2041,11 @@ jobs:
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
-          if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]] && [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then
+          if ! [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]]; then
+            echo "::error::tracking_issue must be 0 or a positive integer."
+            exit 1
+          fi
+          if [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then
             TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"
           fi
 

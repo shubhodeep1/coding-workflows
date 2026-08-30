@@ -424,13 +424,19 @@ jobs:
           bash "${helper_path}" validate --manifest "${manifest_path}"
       - name: Initialize workspace metadata
         id: workspace_meta
+        env:
+          TRACKING_ISSUE_INPUT: ${{ inputs.tracking_issue }}
         run: |
           set -euo pipefail
 
           workspace_reuse_enabled="${WORKSPACE_REUSE_ENABLED:-false}"
           workspace_identifier=""
-          if [[ "${{ inputs.tracking_issue }}" =~ ^[0-9]+$ ]] && [ "${{ inputs.tracking_issue }}" -gt 0 ]; then
-            workspace_identifier="${{ inputs.tracking_issue }}"
+          if ! [[ "${TRACKING_ISSUE_INPUT}" =~ ^[0-9]+$ ]]; then
+            echo "::error::tracking_issue must be 0 or a positive integer."
+            exit 1
+          fi
+          if [ "${TRACKING_ISSUE_INPUT}" -gt 0 ]; then
+            workspace_identifier="${TRACKING_ISSUE_INPUT}"
           else
             workspace_reuse_enabled="false"
           fi

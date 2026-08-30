@@ -112,10 +112,30 @@ jobs:
           VALIDATION_DISCOVERY_REASONING_EFFORT: ${{ vars.VALIDATION_DISCOVERY_REASONING_EFFORT || 'xhigh' }}
           VALIDATION_DISCOVERY_PR_BRANCH_PREFIX: ${{ vars.VALIDATION_DISCOVERY_PR_BRANCH_PREFIX || 'automation/validate-discovery' }}
           VALIDATION_DISCOVERY_PR_LABEL: ${{ vars.VALIDATION_DISCOVERY_PR_LABEL || 'automation:validate-bootstrap' }}
+          VALIDATION_REFRESH_REPOS_FILE_INPUT: ${{ github.event.inputs.repos_file || '.github/ai/consumer_repos.json' }}
+          VALIDATION_REFRESH_BRANCH_NAME_INPUT: ${{ github.event.inputs.branch_name || 'ai/validation-refresh' }}
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
             echo "ERROR: secrets.GH_PAT is required for validation-refresh cross-repository operations."
+            exit 1
+          fi
+
+          REPOS_FILE="${VALIDATION_REFRESH_REPOS_FILE_INPUT}"
+          BRANCH_NAME="${VALIDATION_REFRESH_BRANCH_NAME_INPUT}"
+          if [ -z "${REPOS_FILE}" ] || [[ "${REPOS_FILE}" = /* ]] || [[ "/${REPOS_FILE}/" = *"/../"* ]]; then
+            echo "::error::repos_file must be a non-empty repository-relative path without '..' traversal."
+            exit 1
+          fi
+          WORKSPACE_REAL="$(realpath -e "${GITHUB_WORKSPACE}")"
+          if ! REPOS_FILE_REAL="$(realpath -e "${GITHUB_WORKSPACE}/${REPOS_FILE}" 2>/dev/null)" \
+              || [ ! -f "${REPOS_FILE_REAL}" ] \
+              || [[ "${REPOS_FILE_REAL}" != "${WORKSPACE_REAL}/"* ]]; then
+            echo "::error::repos_file must resolve to an existing regular file inside GITHUB_WORKSPACE."
+            exit 1
+          fi
+          if ! git check-ref-format --branch "${BRANCH_NAME}" >/dev/null 2>&1; then
+            echo "::error::branch_name is not a valid Git branch name."
             exit 1
           fi
 
@@ -145,9 +165,6 @@ jobs:
           RUNTIME_DIR="${RUNNER_TEMP}/validation-refresh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "${RUNTIME_DIR}"
           SUMMARY_JSON="${RUNTIME_DIR}/summary.json"
-
-          REPOS_FILE="${{ github.event.inputs.repos_file || '.github/ai/consumer_repos.json' }}"
-          BRANCH_NAME="${{ github.event.inputs.branch_name || 'ai/validation-refresh' }}"
 
           python3 scripts/validation_refresh_runner.py \
             --repos-file "${REPOS_FILE}" \
