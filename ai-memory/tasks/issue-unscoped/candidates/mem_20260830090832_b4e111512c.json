@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:guard step definition (lines 25-192) | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The guard step uses a complex bash script with multiple nested loops and arrays that could be error-prone and harder to maintain.\n  WHY: While the logic appears correct, the complexity increases the risk of subtle bugs in shell scripting, especially with error handling and array manipulation.\n- .github/workflows/ci.yml:guard step (lines 25-192) | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The guard step uses `printf '::error::CI_GUARD_FAILURE ...'` to emit diagnostics, but GitHub Actions requires the error format to be `::error file={name},line={line}::{message}` for the error to be properly attached to a file and line number.\n  WHY: The diagnostics will be emitted but won't be properly linked to specific files and line numbers in the GitHub UI, reducing their usefulness for debugging.\n- .github/workflows/ci.yml:guard step (lines 25-192) | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The guard step uses `exit 1` to fail the job, but doesn't ensure all error diagnostics are emitted before exiting.\n  WHY: In cases with multiple policy violations, only a subset of failures will be visible to the user, making debugging harder.\n- tests/test_ci_shared_shell_block_guard.py:test_valid_shared_helper_wiring_passes() (lines 208-214) | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The test creates a temporary directory fixture but doesn't clean up shell environment variables that might affect the guard execution.\n  WHY: The test could have false positives or negatives due to environment pollution from parent process environment.\n- tests/test_ci_shared_shell_block_guard.py:test_each_existing_rejection_emits_actionable_diagnostic_fields() (lines 216-298) | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The test uses `self.assertEqual(output.count(\"CI_GUARD_FAILURE\"), 2)` and `self.assertEqual(len(re.findall(r\"line=\\d+\", output)), 2)` to verify the number of failures, but these assertions don't verify that the diagnostic fields are correctly formatted or contain the expected values for each specific test case.\n  WHY: The test could pass even if the diagnostic format is wrong or the fields are swapped between test cases.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Improve failure output so each rejection identifies the guard, offending file or matched line, expected policy, and scanned file set.\"\n  expected_change_site: The diagnostic output format in the guard step\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The test file checks for the presence of \"CI_GUARD_FAILURE\" but doesn't validate the complete diagnostic format with all required fields for each specific failure case\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/ci.yml:guard step definition (lines 25-192) | confidence=3\n  PROBLEM: The guard step uses a complex bash script with multiple nested loops and arrays that could be error-prone and harder to maintain.\n  WHY: While the logic appears correct, the complexity increases the risk of subtle bugs in shell scripting, especially with error handling and array manipulation.\n- .github/workflows/ci.yml:guard step (lines 25-192) | confidence=4\n  PROBLEM: The guard step uses `printf '::error::CI_GUARD_FAILURE ...'` to emit diagnostics, but GitHub Actions requires the error format to be `::error file={name},line={line}::{message}` for the error to be properly attached to a file and line number.\n  WHY: The diagnostics will be emitted but won't be properly linked to specific files and line numbers in the GitHub UI, reducing their usefulness for debugging.\n- .github/workflows/ci.yml:guard step (lines 25-192) | confidence=4\n  PROBLEM: The guard step uses `exit 1` to fail the job, but doesn't ensure all error diagnostics are emitted before exiting.\n  WHY: In cases with multiple policy violations, only a subset of failures will be visible to the user, making debugging harder.\n- tests/test_ci_shared_shell_block_guard.py:test_valid_shared_helper_wiring_passes() (lines 208-214) | confidence=3\n  PROBLEM: The test creates a temporary directory fixture but doesn't clean up shell environment variables that might affect the guard execution.\n  WHY: The test could have false positives or negatives due to environment pollution from parent process environment.\n- tests/test_ci_shared_shell_block_guard.py:test_each_existing_rejection_emits_actionable_diagnostic_fields() (lines 216-298) | confidence=3\n  PROBLEM: The test uses `self.assertEqual(output.count(\"CI_GUARD_FAILURE\"), 2)` and `self.assertEqual(len(re.findall(r\"line=\\d+\", output)), 2)` to verify the number of failures, but these assertions don't verify that the diagnostic fields are correctly formatted or contain the expected values for each specific test case.\n  WHY: The test could pass even if the diagnostic format is wrong or the fields are swapped between test cases.\n- TASK_GAP\n  Requirement: \"Improve failure output so each rejection identifies the guard, offending file or matched line, expected policy, and scanned file set.\"\n  Expected change site: The diagnostic output format in the guard step\n  Evidence of absence: The test file checks for the presence of \"CI_GUARD_FAILURE\" but doesn't validate the complete diagnostic format with all required fields for each specific failure case\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "f25bb1075ec88262edec2732abb8c68ac012a09f1f273cf3b32efbaed7928b71",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3911,
+    "run_id": "33300218911",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33300218911",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260830090832_b4e111512c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3911,
+    "run_id": "33300218911"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-30T09:08:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
