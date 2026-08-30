@@ -904,27 +904,6 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
-          # render_prompt.py is the optional Python backend for the
-          # render_prompt.sh shim adopted by branches that took the issue
-          # #3043 refactor.  main ships a self-contained bash render_prompt.sh
-          # that needs no backend, so the file is absent on main and must be
-          # staged only when the branch under processing actually carries it.
-          # Absence is expected (non-shim branches, incl. main) and must not
-          # fail the bootstrap; presence stages it beside the shim so the
-          # shim resolves ${SCRIPT_DIR}/render_prompt.py.
-          for f in render_prompt.py; do
-            src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              src=".codex-workflow-src-main/scripts/${f}"
-            fi
-            if [ ! -f "${src}" ]; then
-              echo "::notice::Optional render_prompt.py backend unavailable on ${SCRIPT_REF}; render_prompt.sh shim (if present) resolves it elsewhere or the bundled bash renderer is used."
-              continue
-            fi
-            install -m 0755 "${src}" "scripts/${f}"
-            _fetched_scripts+=("${f}")
-          done
-
           for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
