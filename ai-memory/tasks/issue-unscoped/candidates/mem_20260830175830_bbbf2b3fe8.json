@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "Merged work added dedicated tests for reviewer-label propagation, changelog fragment format, implement-stage ensemble behavior, and review pipeline contracts. When changing workflow outputs or handoffs, inspect consumers and encode the interface in a focused contract test.",
+  "fingerprint": "25bae839f7d9808730212669f5bfda1ca2ab44f45ac5d240a40abc0480bb1a27",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33326431783",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33326431783",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3900",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3901",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3916",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3918",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3919",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3909",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3912",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3917",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3920",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3921"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260830175830_bbbf2b3fe8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow contract changes commonly require explicit tests for labels, changelog fragments, and downstream job interfaces.",
+  "timestamps": {
+    "created_at": "2026-08-30T17:58:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
