@@ -69,6 +69,8 @@ DEFAULT_SUCCESS_SAMPLE_RATE = 0.07
 LOG_ARCHIVE_FETCH_RETRIES = 3
 LOG_ARCHIVE_FETCH_BACKOFF_SECONDS = 1.0
 MISSING_LOG_ARCHIVE_MARKER = "partial_data:missing_log_archive"
+DIAGNOSTIC_FAILURE_REASON_MAX_CHARS = 512
+WORKFLOW_VALIDATION_ANNOTATIONS_STATUS = "unavailable_from_existing_payloads"
 RETRY_MARKERS = (
     "rate limit",
     "secondary",
@@ -712,8 +714,86 @@ def _normalize_error_text(exc: Exception) -> str:
     return text or exc.__class__.__name__
 
 
+def _sanitize_diagnostic_text(value: Any) -> str:
+    text = "".join(character if character.isprintable() else " " for character in str(value))
+    normalized = " ".join(text.split()).replace("=", ":").replace(";", ",")
+    return normalized or "unknown"
+
+
+def _bound_diagnostic_reason_parts(parts: list[str]) -> str | None:
+    if not parts:
+        return None
+    combined = "; ".join(parts)
+    if len(combined) <= DIAGNOSTIC_FAILURE_REASON_MAX_CHARS:
+        return combined
+    separator_chars = 2 * (len(parts) - 1)
+    part_limit = max(1, (DIAGNOSTIC_FAILURE_REASON_MAX_CHARS - separator_chars) // len(parts))
+    return "; ".join(part[:part_limit] for part in parts)[:DIAGNOSTIC_FAILURE_REASON_MAX_CHARS]
+
+
+def _set_diagnostic_failure_reason(run: dict[str, Any], scope: str, detail: Any | None) -> None:
+    scope_prefix = f"{_sanitize_diagnostic_text(scope)}: "
+    existing = run.get("diagnostic_failure_reason")
+    parts = [part for part in str(existing or "").split("; ") if part and not part.startswith(scope_prefix)]
+    if detail is not None:
+        parts.append(f"{scope_prefix}{_sanitize_diagnostic_text(detail)}")
+    run["diagnostic_failure_reason"] = _bound_diagnostic_reason_parts(parts)
+
+
+def _normalize_job_conclusions(jobs: list[dict[str, Any]]) -> list[str]:
+    conclusions: set[str] = set()
+    for job in jobs:
+        raw_conclusion = job.get("conclusion")
+        if raw_conclusion is None:
+            continue
+        normalized = re.sub(r"[^a-z0-9_-]+", "_", str(raw_conclusion).strip().lower()).strip("_")
+        if normalized:
+            conclusions.add(normalized)
+    return sorted(conclusions)
+
+
+def _ensure_run_diagnostics(run: dict[str, Any]) -> dict[str, Any]:
+    normalized_conclusion = str(run.get("conclusion") or "").lower()
+    if run.get("jobs_fetch_status") not in {"success", "failure", "not_required", "cached"}:
+        run["jobs_fetch_status"] = (
+            "cached" if normalized_conclusion in {"failure", "cancelled"} else "not_required"
+        )
+    if run.get("log_download_status") not in {
+        "success",
+        "missing_archive",
+        "transient_failure",
+        "empty_archive",
+        "failure",
+        "not_selected",
+        "cached",
+    }:
+        run["log_download_status"] = "not_selected"
+    if not isinstance(run.get("observed_job_conclusions"), list):
+        run["observed_job_conclusions"] = []
+    else:
+        run["observed_job_conclusions"] = sorted(
+            {
+                normalized
+                for value in run["observed_job_conclusions"]
+                if (normalized := re.sub(r"[^a-z0-9_-]+", "_", str(value).strip().lower()).strip("_"))
+            }
+        )
+    existing_reason = run.get("diagnostic_failure_reason")
+    if not isinstance(existing_reason, str):
+        run["diagnostic_failure_reason"] = None
+    else:
+        normalized_parts = [
+            _sanitize_diagnostic_text(part)
+            for part in existing_reason.split("; ")
+            if part.strip()
+        ]
+        run["diagnostic_failure_reason"] = _bound_diagnostic_reason_parts(normalized_parts)
+    run["workflow_validation_annotations_status"] = WORKFLOW_VALIDATION_ANNOTATIONS_STATUS
+    return run
+
+
 def _sanitize_missing_log_archive_detail(detail: str) -> str:
-    sanitized = detail.replace("=", ":")
+    sanitized = _sanitize_diagnostic_text(detail)
     return sanitized[:512] or "unknown"
 
 
@@ -801,15 +881,9 @@ def _fetch_run_log_archive(
             raise
 
         if not payload:
-            empty_exc = RuntimeError("empty_log_archive_payload")
-            wrapped_empty_exc = RuntimeError(
-                f"{MISSING_LOG_ARCHIVE_MARKER} repository={repo} run_id={run_id} "
-                f"detail={_sanitize_missing_log_archive_detail(_normalize_error_text(empty_exc))}"
-            )
-            wrapped_empty_exc.__cause__ = empty_exc
             if cache is not None:
-                cache[identity] = wrapped_empty_exc
-            raise wrapped_empty_exc from empty_exc
+                cache[identity] = payload
+            return payload
         if cache is not None:
             cache[identity] = payload
         return payload
@@ -886,6 +960,9 @@ def compute_run_metrics(
     repository: str,
     run: dict[str, Any],
     jobs: list[dict[str, Any]],
+    *,
+    jobs_fetch_status: str | None = None,
+    diagnostic_failure_reason: Any | None = None,
 ) -> dict[str, Any]:
     run_attempt = max(1, _to_int(run.get("run_attempt"), 1))
     retries = max(0, run_attempt - 1)
@@ -906,7 +983,7 @@ def compute_run_metrics(
         if not (failure_point.get("job_name") or failure_point.get("step_name")):
             failure_point = extract_failure_point(jobs)
 
-    return {
+    row = {
         "repository": repository,
         "run_id": run.get("id"),
         "workflow_name": run.get("name"),
@@ -921,7 +998,16 @@ def compute_run_metrics(
         "updated_at": run.get("updated_at"),
         "duration_seconds": duration_seconds,
         "failure_point": failure_point,
+        "jobs_fetch_status": jobs_fetch_status
+        or ("success" if normalized_conclusion in {"failure", "cancelled"} else "not_required"),
+        "log_download_status": "not_selected",
+        "diagnostic_failure_reason": None,
+        "observed_job_conclusions": _normalize_job_conclusions(jobs),
+        "workflow_validation_annotations_status": WORKFLOW_VALIDATION_ANNOTATIONS_STATUS,
     }
+    if diagnostic_failure_reason is not None:
+        _set_diagnostic_failure_reason(row, "jobs", diagnostic_failure_reason)
+    return row
 
 
 def _dedupe_errors(errors: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -1185,6 +1271,45 @@ def extract_full_logs(log_archive: bytes) -> list[dict[str, str]]:
     return full_logs
 
 
+def _classify_log_download_exception(exc: Exception) -> str:
+    error_text = _normalize_error_text(exc)
+    if error_text.startswith(f"{MISSING_LOG_ARCHIVE_MARKER} "):
+        return "missing_archive"
+    if _is_retryable_log_archive_exception(exc):
+        return "transient_failure"
+    return "failure"
+
+
+def _apply_log_download_exception(run: dict[str, Any], exc: Exception) -> None:
+    run["log_download_status"] = _classify_log_download_exception(exc)
+    _set_diagnostic_failure_reason(run, "logs", _normalize_error_text(exc))
+
+
+def _extract_full_logs_with_diagnostics(
+    run: dict[str, Any],
+    log_archive: bytes,
+) -> list[dict[str, str]]:
+    if not log_archive:
+        run["log_download_status"] = "empty_archive"
+        _set_diagnostic_failure_reason(run, "logs", "empty_log_archive_payload")
+        return []
+
+    try:
+        full_logs = extract_full_logs(log_archive)
+    except Exception as exc:  # noqa: BLE001
+        _apply_log_download_exception(run, exc)
+        raise
+
+    if not full_logs:
+        run["log_download_status"] = "empty_archive"
+        _set_diagnostic_failure_reason(run, "logs", "empty_log_archive")
+        return []
+
+    run["log_download_status"] = "success"
+    _set_diagnostic_failure_reason(run, "logs", None)
+    return full_logs
+
+
 def build_log_excerpts_from_full_logs(
     full_logs: list[dict[str, str]],
     max_chars: int = LOG_EXCERPT_MAX_CHARS,
@@ -1403,15 +1528,50 @@ def export_categorized_logs(
                 token=token,
                 cache=log_archive_cache,
             )
-            full_logs = extract_full_logs(payload)
+            full_logs = _extract_full_logs_with_diagnostics(run, payload)
             full_logs_by_identity[identity] = full_logs
-            _apply_cost_telemetry_from_full_logs(run, full_logs)
+            if full_logs:
+                _apply_cost_telemetry_from_full_logs(run, full_logs)
         except Exception as exc:  # noqa: BLE001
+            _apply_log_download_exception(run, exc)
             _append_log_error(errors, repository, run_id, exc)
 
     for category in LOG_EXPORT_CATEGORIES:
         for run in categories[category]:
             _write_run_log_bundle(output_dir, category, run, full_logs_by_identity.get(_run_identity(run)))
+
+
+def _sync_run_rows_to_cache(
+    cached_repositories: dict[str, Any],
+    runs: list[dict[str, Any]],
+) -> None:
+    rows_by_repository: dict[str, dict[tuple[int, int], dict[str, Any]]] = {}
+    for run in runs:
+        repository = str(run.get("repository") or "")
+        cache_key = _run_key_from_payload(run)
+        if not repository or cache_key is None:
+            continue
+        cache_row = dict(run)
+        cache_row.pop("_success_sampled", None)
+        rows_by_repository.setdefault(repository, {})[cache_key] = cache_row
+
+    for repository, current_rows in rows_by_repository.items():
+        repo_cache = cached_repositories.get(repository)
+        if not isinstance(repo_cache, dict):
+            continue
+        synced_rows: list[dict[str, Any]] = []
+        synced_keys: set[tuple[int, int]] = set()
+        for cached_row in _normalize_runs_snapshot(repo_cache.get("rows_snapshot")):
+            cache_key = _run_key_from_payload(cached_row)
+            if cache_key is not None and cache_key in current_rows:
+                synced_rows.append(dict(current_rows[cache_key]))
+                synced_keys.add(cache_key)
+            else:
+                synced_rows.append(cached_row)
+        for cache_key, current_row in current_rows.items():
+            if cache_key not in synced_keys:
+                synced_rows.append(dict(current_row))
+        repo_cache["rows_snapshot"] = synced_rows
 
 
 def _resolve_since_utc(args: argparse.Namespace) -> datetime:
@@ -1562,13 +1722,24 @@ def main(argv: list[str] | None = None) -> int:
                 cancelled_failure_point_version,
             )
             if run_id > 0 and run_id in jobs_seen_lookup and isinstance(reused_row, dict) and not needs_cancelled_backfill:
-                row_copy = dict(reused_row)
+                row_copy = _ensure_run_diagnostics(dict(reused_row))
+                if (run.get("conclusion") or "").lower() in {"failure", "cancelled"}:
+                    row_copy["jobs_fetch_status"] = "cached"
+                cached_log_data_available = (
+                    run_id in set(logs_seen_set)
+                    and _cached_log_excerpts(row_copy) is not None
+                    and _cached_cost_telemetry(row_copy) is not None
+                )
+                row_copy["log_download_status"] = "cached" if cached_log_data_available else "not_selected"
+                _set_diagnostic_failure_reason(row_copy, "logs", None)
                 row_copy.pop("_success_sampled", None)
                 run_rows.append(row_copy)
                 collected_rows_for_repo.append(dict(row_copy))
                 continue
 
             jobs: list[dict[str, Any]] = []
+            jobs_fetch_status = "not_required"
+            jobs_failure_reason: str | None = None
             if run_id > 0 and (run.get("conclusion") or "").lower() in {"failure", "cancelled"}:
                 try:
                     jobs = list_jobs_for_run(
@@ -1579,6 +1750,8 @@ def main(argv: list[str] | None = None) -> int:
                         token=token,
                     )
                 except Exception as exc:  # noqa: BLE001
+                    jobs_fetch_status = "failure"
+                    jobs_failure_reason = _normalize_error_text(exc)
                     errors.append(
                         {
                             "repository": repo,
@@ -1588,6 +1761,7 @@ def main(argv: list[str] | None = None) -> int:
                         }
                     )
                 else:
+                    jobs_fetch_status = "success"
                     jobs_seen_set = _touch_seen_set(jobs_seen_set, run_id)
                     jobs_seen_lookup = set(jobs_seen_set)
                     if (run.get("conclusion") or "").lower() == "cancelled":
@@ -1598,7 +1772,13 @@ def main(argv: list[str] | None = None) -> int:
                 jobs_seen_set = _touch_seen_set(jobs_seen_set, run_id)
                 jobs_seen_lookup = set(jobs_seen_set)
 
-            row = compute_run_metrics(repo, run, jobs)
+            row = compute_run_metrics(
+                repo,
+                run,
+                jobs,
+                jobs_fetch_status=jobs_fetch_status,
+                diagnostic_failure_reason=jobs_failure_reason,
+            )
             run_rows.append(row)
             collected_rows_for_repo.append(dict(row))
 
@@ -1645,28 +1825,41 @@ def main(argv: list[str] | None = None) -> int:
                 if cached_excerpts is not None and cached_cost_telemetry is not None:
                     run["log_excerpts"] = cached_excerpts
                     run["cost_telemetry"] = cached_cost_telemetry
+                    run["log_download_status"] = "cached"
+                    _set_diagnostic_failure_reason(run, "logs", None)
                     identity = (repository, run_id)
                     canonical = run_rows_by_identity.get(identity)
                     if canonical is not None:
                         canonical["log_excerpts"] = cached_excerpts
                         canonical["cost_telemetry"] = cached_cost_telemetry
+                        canonical["log_download_status"] = "cached"
+                        _set_diagnostic_failure_reason(canonical, "logs", None)
                     continue
 
         try:
             payload = _fetch_run_log_archive(repository, run_id, token=token, cache=log_archive_cache)
-            full_logs = extract_full_logs(payload)
-            log_excerpts = build_log_excerpts_from_full_logs(full_logs)
-            _apply_cost_telemetry_from_full_logs(run, full_logs)
-
-            run["log_excerpts"] = log_excerpts
+            full_logs = _extract_full_logs_with_diagnostics(run, payload)
+            log_excerpts = build_log_excerpts_from_full_logs(full_logs) if full_logs else []
+            if full_logs:
+                _apply_cost_telemetry_from_full_logs(run, full_logs)
+                run["log_excerpts"] = log_excerpts
+            else:
+                run.pop("log_excerpts", None)
+                run.pop("cost_telemetry", None)
             identity = (repository, run_id)
             canonical = run_rows_by_identity.get(identity)
             if canonical is not None:
-                canonical["log_excerpts"] = log_excerpts
+                canonical["log_download_status"] = run["log_download_status"]
+                canonical["diagnostic_failure_reason"] = run["diagnostic_failure_reason"]
+                if full_logs:
+                    canonical["log_excerpts"] = log_excerpts
+                else:
+                    canonical.pop("log_excerpts", None)
+                    canonical.pop("cost_telemetry", None)
                 if "cost_telemetry" in run:
                     canonical["cost_telemetry"] = dict(run["cost_telemetry"])
 
-            if isinstance(repo_cache, dict):
+            if isinstance(repo_cache, dict) and run["log_download_status"] == "success":
                 logs_seen_set = _touch_seen_set(_normalize_seen_set(repo_cache.get("logs_seen_set")), run_id)
                 repo_cache["logs_seen_set"] = logs_seen_set
                 rows_snapshot = _normalize_runs_snapshot(repo_cache.get("rows_snapshot"))
@@ -1690,15 +1883,12 @@ def main(argv: list[str] | None = None) -> int:
                 repo_cache["rows_snapshot"] = updated_rows
                 repo_cache["last_updated"] = _format_iso8601(datetime.now(timezone.utc))
         except Exception as exc:  # noqa: BLE001
+            _apply_log_download_exception(run, exc)
+            canonical = run_rows_by_identity.get((repository, run_id))
+            if canonical is not None:
+                canonical["log_download_status"] = run["log_download_status"]
+                canonical["diagnostic_failure_reason"] = run["diagnostic_failure_reason"]
             _append_log_error(errors, repository, run_id, exc)
-
-    _cache_write_context(
-        repo_root=repo_root,
-        memory_branch=memory_branch,
-        memory_root_relative=memory_root_relative,
-        push_retries=push_retries,
-        payload=cache_payload,
-    )
 
     run_rows.sort(key=lambda item: (item.get("created_at") or ""), reverse=True)
     if args.log_output_dir:
@@ -1720,6 +1910,15 @@ def main(argv: list[str] | None = None) -> int:
                     "message": str(exc),
                 }
             )
+
+    _sync_run_rows_to_cache(cached_repositories, run_rows)
+    _cache_write_context(
+        repo_root=repo_root,
+        memory_branch=memory_branch,
+        memory_root_relative=memory_root_relative,
+        push_retries=push_retries,
+        payload=cache_payload,
+    )
 
     errors = _dedupe_errors(errors)
     report = build_report(repositories, run_rows, errors, success_sample_rate=success_sample_rate)
