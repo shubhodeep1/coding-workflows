@@ -13058,10 +13058,20 @@ recover_stalled_issue() {
 _CONFLICT_DISPATCH_TRACKER="${TMPDIR:-/tmp}/.conflict_dispatch_$$"
 : > "${_CONFLICT_DISPATCH_TRACKER}"
 
-# Queries the GitHub Actions API for in_progress or queued runs of
-# review/autofix workflows on the given branch.  A new dispatch would
-# cancel the existing run (cancel-in-progress concurrency) and trigger
-# a spurious "cancelled/timed out" Telegram alert.
+# Queries the GitHub Actions API for in_progress, queued, or pending
+# runs of review/autofix workflows on the given branch.  A duplicate
+# dispatch joins the review_autofix concurrency group
+# (cancel-in-progress=false for PR-backed branches): the in-progress
+# peer keeps running, but GitHub replaces — i.e. cancels — the older
+# pending duplicate, leaving a trail of cancelled runs and spurious
+# "cancelled/timed out" Telegram alerts.
+#
+# "pending" matters: a duplicate dispatch held back by the
+# review_autofix concurrency group (cancel-in-progress=false) reports
+# status=pending, not queued.  During the PR #3895 incident the guard's
+# in_progress/queued-only filter never saw its own previous pending
+# dispatch, so every poll cycle re-dispatched — each new run replaced
+# the pending predecessor and re-fired the conflict Telegram warning.
 #
 # Usage: _has_active_autofix_run <pr_number> <head_ref>
 # Returns 0 if an active run exists (skip dispatch), 1 otherwise.
@@ -13078,7 +13088,7 @@ _has_active_autofix_run()
 			--branch "${head_ref}" \
 			--limit 5 \
 			--json status \
-			--jq '[.[] | select(.status == "in_progress" or .status == "queued")] | length' \
+			--jq '[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending")] | length' \
 			2>/dev/null || echo "0")"
 		if [ "${active}" -gt 0 ]; then
 			echo "  ${log_prefix} Active autofix run found (workflow=${wf_candidate}, count=${active}). Skipping dispatch."
@@ -13121,8 +13131,10 @@ _dispatch_review_for_conflicts()
 	fi
 
 	# Guard 2: skip dispatch if an autofix run is already active for this PR.
-	# A new dispatch would cancel the running job (cancel-in-progress
-	# concurrency) and fire a spurious "cancelled/timed out" alert.
+	# A duplicate dispatch would not cancel the running peer
+	# (cancel-in-progress=false for PR-backed branches), but GitHub
+	# replaces — cancels — the older pending duplicate in the concurrency
+	# group, firing a spurious "cancelled/timed out" alert.
 	if _has_active_autofix_run "${pr_number}" "${head_ref}"; then
 		return 2
 	fi

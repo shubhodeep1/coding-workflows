@@ -658,6 +658,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_sweep_stale_queued.py
 
+      - name: Conflict-dispatch active-run visibility contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_dispatch_active_run_visibility.py
+
       - name: Workflow log collector coverage gate
         run: |
           set -euo pipefail
