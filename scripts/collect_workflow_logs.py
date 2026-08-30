@@ -795,7 +795,7 @@ def _ensure_run_diagnostics(run: dict[str, Any]) -> dict[str, Any]:
 
 def _sanitize_missing_log_archive_detail(detail: str) -> str:
     sanitized = _sanitize_diagnostic_text(detail)
-    return sanitized[:512] or "unknown"
+    return sanitized[:DIAGNOSTIC_FAILURE_REASON_MAX_CHARS] or "unknown"
 
 
 def _is_missing_log_archive_error(error_text: str, run_id: int) -> bool:

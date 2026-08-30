@@ -55,6 +55,8 @@ def _run_step_prefix(
 	prefix, separator, _remainder = run.partition(marker)
 	assert separator, f"Missing test marker in {name}:{step_name}: {marker}"
 	env = os.environ.copy()
+	env.pop("BASH_ENV", None)
+	env.pop("ENV", None)
 	env.update(env_overrides)
 	return subprocess.run(
 		["bash", "-c", prefix],
