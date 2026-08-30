@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "The repository tracks source-workspace provenance through .ai/.workspace_source_manifest.txt in many implementation changes.",
   "timestamps": {
     "created_at": "2026-08-30T17:57:12Z",
