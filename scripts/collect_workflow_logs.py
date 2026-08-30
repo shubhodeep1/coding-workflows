@@ -90,6 +90,7 @@ STRUCTURED_COST_TELEMETRY_PATTERNS = (
     BREAK_GLASS_RE,
     CONTEXT_BUDGET_WARN_RE,
 )
+DIAGNOSTIC_FAILURE_CONCLUSIONS = frozenset({"failure", "startup_failure"})
 
 
 def _parse_iso8601(value: str | None) -> datetime | None:
@@ -1131,7 +1132,11 @@ def select_notable_runs_for_logs(
         return []
 
     failed_runs = _sort_runs_by_created_desc(
-        [run for run in eligible if (run.get("conclusion") or "").lower() == "failure"]
+        [
+            run
+            for run in eligible
+            if (run.get("conclusion") or "").lower() in DIAGNOSTIC_FAILURE_CONCLUSIONS
+        ]
     )
     retried_runs = _sort_runs_by_created_desc([run for run in eligible if _to_int(run.get("retries"), 0) > 0])
 
@@ -1214,7 +1219,11 @@ def select_runs_for_log_export_categories(
         return categories
 
     error_runs = _sort_runs_by_created_desc(
-        [run for run in eligible if (run.get("conclusion") or "").lower() == "failure"]
+        [
+            run
+            for run in eligible
+            if (run.get("conclusion") or "").lower() in DIAGNOSTIC_FAILURE_CONCLUSIONS
+        ]
     )
 
     runs_by_repository: dict[str, list[dict[str, Any]]] = {}
