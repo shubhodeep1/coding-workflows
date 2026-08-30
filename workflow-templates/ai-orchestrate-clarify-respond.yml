@@ -10,5 +10,20 @@ permissions:
   issues: write
 jobs:
   respond:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.pull_request == null &&
+      (
+        (
+          github.event.comment.user.type == 'Bot' &&
+          github.event.comment.user.login == 'github-actions[bot]'
+        ) ||
+        (
+          github.event.comment.user.type == 'User' &&
+          contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+        )
+      ) &&
+      contains(github.event.comment.body, 'Clarification required')
     uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_clarify_respond.yml@stable
     secrets: inherit

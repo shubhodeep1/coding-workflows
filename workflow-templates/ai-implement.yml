@@ -12,7 +12,21 @@ permissions:
 jobs:
   implement:
     if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
       github.event.issue.pull_request == null &&
-      startsWith(github.event.comment.body, '/approved')
+      (
+        (
+          github.event.comment.user.type == 'User' &&
+          contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+          startsWith(github.event.comment.body, '/approved')
+        ) ||
+        (
+          github.event.comment.user.type == 'Bot' &&
+          github.event.comment.user.login == 'github-actions[bot]' &&
+          startsWith(github.event.comment.body, '/approved') &&
+          contains(github.event.comment.body, '[auto-approved-by-plan]')
+        )
+      )
     uses: shubhodeep1/coding-workflows/.github/workflows/implement.yml@stable
     secrets: inherit

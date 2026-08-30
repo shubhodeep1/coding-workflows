@@ -12,5 +12,8 @@ permissions:
   issues: write
 jobs:
   clarify:
+    if: >-
+      (github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) ||
+      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
     uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@stable
     secrets: inherit
