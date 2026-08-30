@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-3898` at `fbec387b6d8f7d5eba511d943edd0772a4690ec9`  \nEstimated implementation time: 30\u201345 minutes\n\nScope-mode: Hold Scope\nReuse-audit: extends reusable workflow `jobs.<phase>.if` predicates\nScope-mode justification: Mirror all four canonical predicates into both wrapper families and lock parity with one focused contract test. This is the complete requested implementation without new infrastructure. Per \u00a76 priorities, correctness and safety outweigh the smaller shortcut of partial or marker-only checks.\n\n## Automation integration\n\n- Extends existing internal and consumer workflow wrappers; no new script.\n- Entry points remain `issues.opened` and/or `issue_comment.created` in the existing wrapper files.\n- No scheduler, PR-push hook, supervisor, database operation, or removal-registry entry is required.\n\n## Decisions\n\n### D1 \u2014 Treat reusable predicates as canonical\n\n- **Chosen:** Copy each reusable job\u2019s complete `if` expression into its internal wrapper and consumer template.\n- **Alternatives considered:** Duplicate only actor/body checks, or create a new predicate-generation helper.\n- **Why:** Exact parity directly satisfies the requirement while avoiding new runtime machinery or independently drifting logic.\n\n### D2 \u2014 Add structural parity contract tests\n\n- **Chosen:** Parse workflow YAML, compare normalized job predicates across each reusable/internal/template triplet, and assert critical allowlist and marker clauses.\n- **Alternatives considered:** String-presence checks only or runtime GitHub event simulation.\n- **Why:** Equality catches future drift, while explicit clause assertions prevent all three files from being weakened together.\n\n## Files likely to change\n\n- `.github/workflows/internal-clarify.yml`\n- `workflow-templates/ai-clarify.yml`\n- `.github/workflows/internal-plan.yml`\n- `workflow-templates/ai-plan.yml`\n- `.github/workflows/internal-implement.yml`\n- `workflow-templates/ai-implement.yml`\n- `.github/workflows/internal-orchestrate-clarify-respond.yml`\n- `workflow-templates/ai-orchestrate-clarify-respond.yml`\n- `tests/test_phase_wrapper_predicate_contract.py` \u2014 new focused contract test.\n- `.github/workflows/ci.yml` \u2014 execute the new test in the existing contract-test suite.\n- `agents.md` \u2014 append a concise workflow-architecture parity note without reflowing surrounding text.\n\nThe reusable workflows remain unchanged and serve as the canonical predicates:\n\n- `.github/workflows/clarify.yml`\n- `.github/workflows/plan.yml`\n- `.github/workflows/implement.yml`\n- `.github/workflows/orchestrate_clarify_respond.yml`\n\n## Functions or modules to implement\n\n- Add a small test helper that loads a workflow, extracts `jobs.<job>.if`, and normalizes YAML-folded whitespace.\n- Add parameterized or table-driven checks covering the four reusable/internal/template triplets.\n- Add explicit assertions for each phase\u2019s security-sensitive clauses.\n\n## Data structures affected\n\n- GitHub Actions job-level `if` scalar expressions only.\n- No persisted state, schemas, payload formats, labels, or environment variables change.\n\n## API/interface changes\n\n- Clarify wrappers admit:\n  - eligible `issues.opened` events excluding orchestrator-tracking, security-audit, and retro issues;\n  - trusted `OWNER`/`MEMBER`/`COLLABORATOR` user comments beginning `/reclarify`.\n- Plan wrappers admit trusted human `/answer` commands and exact `github-actions[bot]` auto-answer markers:\n  - `[auto-answered-by-clarify]`\n  - `[auto-answered-by-orchestrator]`\n- Implement wrappers admit trusted human `/approved` commands and the exact bot marker `[auto-approved-by-plan]`.\n- Clarify-response wrappers require a non-PR issue comment, an allowed trusted user or exact GitHub Actions bot actor, and `Clarification required` content.\n- Existing trigger declarations and reusable workflow inputs remain unchanged.\n\n## Failure modes\n\n- **Predicate under-copy:** untrusted comments still create reusable jobs; parity test fails.\n- **Predicate over-narrowing:** legitimate human commands or bot marker paths stop dispatching; explicit clause assertions fail.\n- **Wrapper drift later:** normalized predicate equality fails in CI.\n- **Malformed YAML expression:** YAML parsing or scoped linting fails before merge.\n\n## Risks and edge cases\n\n- Preserve `startsWith` behavior so commands with trailing answer/approval content remain accepted.\n- Require exact bot login and marker combinations; a bot-authored bare command must remain rejected.\n- Preserve the non-PR guard on every comment-driven path.\n- Keep clarify tracker exclusions scoped exactly as the canonical reusable predicate defines them.\n- Do not alter the reusable predicates while performing the mirror.\n- No codebase conflict was found; the current wrappers are demonstrably broader than their reusable counterparts.\n\n## Testing considerations\n\n1. Parse all twelve workflow files as YAML.\n2. Assert each internal and consumer predicate equals its reusable counterpart after whitespace normalization.\n3. Assert phase-specific actor, association, event/action, non-PR, command, marker, and exclusion clauses.\n4. Register and run:\n   `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_wrapper_predicate_contract.py`\n5. Run scoped YAML linting and `git diff --check`.\n6. Confirm no trigger type, reusable target ref, permissions, or secrets wiring changed.\n\n## Assumptions and missing context\n\n- The automated clarification answer adds no constraints; the issue itself is implementation-ready.\n- No explicit `files_touched` list was supplied, so this plan limits work to the directly required wrappers, templates, contract test, CI registration, and append-only architecture note.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "6a6f3da1ddfece98c175907dec1113a1ef1e596a9e0c4ec7f5f8bc5f44d914be",
+  "lineage": {
+    "issue_number": 3900,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33294868740",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33294868740",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3900"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260830053547_3e78f3193e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3900,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33294868740"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3900",
+  "timestamps": {
+    "created_at": "2026-08-30T05:35:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
