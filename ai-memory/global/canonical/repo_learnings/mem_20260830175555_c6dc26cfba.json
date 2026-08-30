@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Changes to workflow-support scripts should be paired with focused regression tests and diagnostic behavior.",
   "timestamps": {
     "created_at": "2026-08-30T17:55:55Z",
