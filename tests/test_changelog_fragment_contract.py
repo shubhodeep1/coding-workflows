@@ -39,7 +39,9 @@ def _read(path: Path) -> str:
 
 
 def _workflow_step(workflow: str, name: str) -> str:
-	return workflow.split(f"      - name: {name}", 1)[1].split("\n      - name: ", 1)[0]
+	step_parts = workflow.split(f"      - name: {name}", 1)
+	assert len(step_parts) == 2, f"workflow step {name!r} not found"
+	return step_parts[1].split("\n      - name: ", 1)[0]
 
 
 def _normalized_step_predicate(workflow: str, name: str) -> tuple[str, ...]:
