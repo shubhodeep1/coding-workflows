@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:938-955 | severity=major | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: The completeness predicate rejects GraphQL linked-issue nodes whose `body` is `null`, causing an unnecessary REST fallback and potentially losing `ai:orchestrator-managed` label propagation.\n  WHY: GitHub returns empty GraphQL issue bodies as `null`, while the script already accepts null at line 904 and normalizes it at line 957; the rejected node triggers a REST read, and a failed fallback produces empty labels and prevents propagation; severity was major in the correctness findings and nit in the performance finding, so major is used.\n- tests/test_review_rb_judge_label_propagation.py:1130-1142 | severity=major | confidence=5\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The hydration test covers an empty body as `\"\"` but not the production GraphQL representation `null`, so it does not catch the rejected-null-body path.\n  WHY: The existing test satisfies the string-type predicate and therefore passes without exercising the REST-avoidance and label-preservation behavior for `body: null`.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh:938-950 (completeness predicate jq expression) | severity=MAJOR | confidence=4\n  PROBLEM: The completeness predicate requires `(.body | type) == \"string\"`, rejecting GraphQL nodes with `body: null`.\n  WHY: The null body fails completeness, causing an unnecessary REST fallback and potentially setting `FIRST_ISSUE_LABELS_JSON` to `[]`, disabling `ai:orchestrator-managed` label propagation on `close_and_reissue`.\n- scripts/review_rb_judge.sh:925-933 (RB_LINKED_ISSUE_NODE_JSON extraction per iteration) | severity=NIT | confidence=2\n  PROBLEM: The jq selector scans the full GraphQL JSON for each linked issue in the while-read loop.\n  WHY: This performs N full-tree jq scans, although the linked-issue count is bounded at 50 and the loop breaks early at the first body-bearing issue.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_rb_judge.sh:938-939 (predicate requires `(.body | type) == \"string\"`) | severity=MAJOR | confidence=5\n  PROBLEM: A GraphQL node with `body: null` fails the completeness predicate even when labels and pageInfo are complete.\n  WHY: The script performs an unnecessary REST GET; if `_safe_gh_jq` fails, the GraphQL labels are discarded and `close_and_reissue` cannot propagate `ai:orchestrator-managed`.\n- tests/test_review_rb_judge_label_propagation.py: _complete_graphql_issue helper (lines ~1070-1078) and test_complete_graphql_empty_body_preserves_first_issue_labels (lines ~1078-1093) | severity=MAJOR | confidence=4\n  PROBLEM: The hydration test helper feeds `body=\"\"`, but GitHub GraphQL returns `body=null` for issues with no body.\n  WHY: No test covers the null-body, complete-labels, REST-failure path, so the production failure is not pinned by CI.\n- scripts/review_rb_judge.sh:938-939, 955 | severity=NIT | confidence=4\n  PROBLEM: Rejecting `body: null` causes an extra REST GET for linked issues with empty bodies.\n  WHY: This partially defeats the API-hygiene goal of no per-linked-issue REST reads.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_rb_judge.sh:938-955 (completeness predicate requires (.body | type) == \"string\") | confidence=5\n  PROBLEM: A GraphQL node with body null is treated as incomplete even when labels are complete.\n  WHY: The script performs an unnecessary REST fallback and may lose `ai:orchestrator-managed` label propagation.\n- scripts/review_rb_judge.sh:957 (BODY extraction uses .body // \"\") | confidence=5\n  PROBLEM: Null-safe BODY extraction is reached only after the completeness predicate has already rejected a null body.\n  WHY: The check fails before `.body // \"\"` can normalize the value, causing an unnecessary REST fallback.\n\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/review_rb_judge.sh: lines 938\u2013939 (completeness predicate `has(\"body\") and ((.body | type) == \"string\")`), with the REST fallback at line 955 and the label capture at line 960 | severity=MAJOR | confidence=4\n  PROBLEM: A GraphQL node with `body: null` is classified as incomplete even when its labels connection is complete.\n  WHY: The script performs a forbidden per-linked-issue REST read, and a failed read causes `FIRST_ISSUE_LABELS_JSON` to become `[]`, preventing `ai:orchestrator-managed` propagation; the test suite covers `body: \"\"` but not `body: null`.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_rb_judge.sh:938-939 (completeness predicate) | severity=MAJOR | confidence=5\n  PROBLEM: The predicate requires `((.body | type) == \"string\")`, rejecting GraphQL nodes where `body` is `null`.\n  WHY: The complete node's labels are ignored and REST is called; if that fallback fails, `FIRST_ISSUE_LABELS_JSON` becomes `[]` and `close_and_reissue` does not propagate `ai:orchestrator-managed`.\n- tests/test_review_rb_judge_label_propagation.py:1130-1142 (test_complete_graphql_empty_body_preserves_first_issue_labels) | severity=MAJOR | confidence=5\n  PROBLEM: The test passes `body: \"\"` instead of GraphQL's production `body: null` representation.\n  WHY: The test satisfies the predicate and does not catch the null-body path that triggers the REST fallback.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- scripts/review_rb_judge.sh: 938-955 (completeness predicate requires has(\"body\") and (.body | type) == \"string\"; REST fallback at 954-955) | severity=MAJOR | confidence=5\n  PROBLEM: A GraphQL node with `body null` and otherwise complete labels is classified incomplete.\n  WHY: The script issues a per-issue REST GET, and if it fails, `FIRST_ISSUE_LABELS_JSON` becomes `[]` so `close_and_reissue` does not propagate `ai:orchestrator-managed`; the test supplies `body: \"\"`, not `body: null`.\n\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "15afdbf5aa527e60740bce90fe24e47de68d42a4885af548e6edbd595d459d5d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3910,
+    "run_id": "33295443782",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33295443782",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260830065611_5755b5439b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3910,
+    "run_id": "33295443782"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-30T06:56:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
