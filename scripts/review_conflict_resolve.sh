@@ -91,7 +91,7 @@ if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || [ ! -r "${OPENCODE_HELPERS_PATH}" ]; t
 fi
 if [ ! -f "${OPENCODE_CONFIG_WRITER_PATH}" ] || [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
   if _resolver_fallback_path="$(_resolver_dependency_fallback write_opencode_config.sh)"; then
-    echo "::warning::write_opencode_config.sh not staged in SUPPORT_SCRIPTS_DIR (${SUPPORT_SCRIPTS_DIR:-scripts}); falling back to ${_resolver_fallback_path}."
+    echo "::warning::write_opencode_config.sh not staged in SUPPORT_SCRIPTS_DIR (${SUPPORT_SCRIPTS_DIR:-scripts}); falling back to ${_resolver_fallback_path} (staging list at SCRIPT_REF=${SCRIPT_REF:-unknown} likely predates the opencode cutover)."
     OPENCODE_CONFIG_WRITER_PATH="${_resolver_fallback_path}"
   fi
 fi
@@ -108,7 +108,7 @@ if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>
   echo "${resolver_helpers_missing_alert}" >&2
   exit 1
 fi
-if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
+if [ ! -f "${OPENCODE_CONFIG_WRITER_PATH}" ] || [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
   opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing || true
   exit 1
 fi
