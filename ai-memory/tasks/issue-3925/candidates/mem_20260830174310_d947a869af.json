@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends existing `tests/e2e_smoke_canary.txt` fixture\n\nScope-mode justification: The issue specifies an exact two-line fixture and forbids other changes. A surgical one-file replacement fully satisfies correctness and scope requirements.\n\n## Planning ref\n\n- Commit: `fbec387b6d8f7d5eba511d943edd0772a4690ec9`\n- Branch: `orchestrator/project-3924`\n- Integration branch matches checkout.\n\n## Automation impact\n\n- Modifies existing content only; no new script.\n- No scheduler, workflow trigger, supervisor, database operation, or removal-registry entry required.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Preserve `status: ok`.\n  - Replace the remaining content with `decompose-run: 33325623845`.\n  - Ensure exactly two newline-terminated lines.\n\n## Functions or modules\n\n- None; this is a static fixture update.\n\n## Data structures affected\n\n- Plain-text canary record changes from three lines to the required two-line key/value format.\n\n## API/interface changes\n\n- None.\n\n## Decisions\n\n### D1 \u2014 Replace the complete fixture content\n\n- **Chosen:** Rewrite the existing file to contain only the two specified lines.\n- **Alternatives considered:** Edit only the run identifier while retaining `updated-by`; add the new field alongside existing content.\n- **Why:** Both alternatives violate the exact-content acceptance criteria.\n\n## Risks and edge cases\n\n- An obsolete third line could remain accidentally.\n- The second key must be `decompose-run`, not the current `run_id`.\n- No other file, including documentation or changelog fragments, may change.\n\n## Testing considerations\n\n- Compare the file byte-for-byte with `status: ok\\ndecompose-run: 33325623845\\n`.\n- Confirm the file has exactly two lines.\n- Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n\n## Pre-execution self-check\n\n- Requirements are explicit and complete.\n- Target file exists; its current content differs as expected.\n- No factual conflicts or external dependencies were found.\n- Planned scope matches the declared `files_touched` restriction.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "031b2b058b57e00e82afa579ce08ea2d500c8573402a29ce0656b3833a0d5fa6",
+  "lineage": {
+    "issue_number": 3925,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33325850058",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33325850058",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3925"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260830174310_d947a869af",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3925,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33325850058"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3925",
+  "timestamps": {
+    "created_at": "2026-08-30T17:43:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
