@@ -151,6 +151,7 @@ changelog.d/3885-verify-activation-correctness-audit.md
 changelog.d/3895-conflict-dispatch-pending-visibility.md
 changelog.d/3897-resolver-opencode-helpers-fallback.md
 changelog.d/3899-move-ci-policy-guards-first.md
+changelog.d/3901-check-triage-input-hardening.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/deploy-activate-digitalocean-steps.md
