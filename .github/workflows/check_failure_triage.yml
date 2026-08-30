@@ -139,7 +139,7 @@ jobs:
           fi
           if [ "${head_repo}" != "${REPOSITORY}" ]; then
             echo "same_repo=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping check-failure triage for fork PR."
+            echo "::notice::Skipping check-failure triage for fork PR #${PR_NUMBER} (head repo: ${head_repo})."
             exit 0
           fi
           echo "same_repo=true" >> "$GITHUB_OUTPUT"

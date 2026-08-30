@@ -126,9 +126,15 @@ class CheckFailureTriageWorkflowSecurityTests(unittest.TestCase):
 			derive_job["outputs"]["same_repo"],
 			"${{ steps.hash_check_name.outputs.same_repo }}",
 		)
-		self.assertIn("needs.derive_check_name_key.result == 'success'", triage_job["if"])
-		self.assertIn("needs.derive_check_name_key.outputs.same_repo == 'true'", triage_job["if"])
-		self.assertNotIn("always()", triage_job["if"])
+		self.assertEqual(
+			" ".join(triage_job["if"].split()),
+			"!contains(fromJson('[\"false\"]'), vars.CHECK_FAILURE_TRIAGE_ENABLED) && "
+			"inputs.pr_number != '' && "
+			"contains(fromJson('[\"failure\",\"timed_out\"]'), inputs.check_conclusion) && "
+			"!contains(inputs.check_name, 'Check Failure Triage') && "
+			"needs.derive_check_name_key.result == 'success' && "
+			"needs.derive_check_name_key.outputs.same_repo == 'true'",
+		)
 		self.assertEqual(
 			triage_job["concurrency"]["group"],
 			"ai-check-triage-${{ github.repository }}-${{ inputs.pr_number }}-"
@@ -174,6 +180,7 @@ class CheckFailureTriageWorkflowSecurityTests(unittest.TestCase):
 		self.assertEqual(proc.returncode, 0, proc.stderr)
 		self.assertEqual(outputs["same_repo"], "false")
 		self.assertEqual(calls, 1)
+		self.assertIn("Skipping check-failure triage for fork PR #17 (head repo: fork/repo).", proc.stdout)
 
 	def test_invalid_inputs_never_reach_github_api(self) -> None:
 		invalid_cases = (
