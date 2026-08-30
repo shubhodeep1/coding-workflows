@@ -74,12 +74,14 @@ jobs:
           LOOKBACK_DAYS_STR="$(sanitize_single_line "${LOOKBACK_DAYS_FALLBACK}")"
 
           if ! is_positive_integer "${PHASE_TIMEOUT_STR}"; then
-            PHASE_TIMEOUT_STR="30"
+            echo "::error::phase_timeout must be a positive integer."
+            exit 1
           fi
           INACTIVITY_LIMIT=$((PHASE_TIMEOUT_STR * 60))
 
           if ! is_positive_integer "${LOOKBACK_DAYS_STR}"; then
-            LOOKBACK_DAYS_STR="7"
+            echo "::error::lookback_days_fallback must be a positive integer."
+            exit 1
           fi
 
           LAST_COLLECTION_TS=""
@@ -166,8 +168,8 @@ jobs:
             sleep 2
           done
 
-          if [ -z "${RUN_ID}" ]; then
-            echo "::error::Unable to resolve dispatched run id for ${WORKFLOW_FILE}."
+          if ! [[ "${RUN_ID}" =~ ^[0-9]+$ ]] || [ "${RUN_ID}" -lt 1 ]; then
+            echo "::error::Unable to resolve a positive numeric run id for ${WORKFLOW_FILE}."
             exit 1
           fi
 
@@ -314,7 +316,8 @@ jobs:
 
           PHASE_TIMEOUT_STR="$(sanitize_single_line "${PHASE_TIMEOUT}")"
           if ! is_positive_integer "${PHASE_TIMEOUT_STR}"; then
-            PHASE_TIMEOUT_STR="30"
+            echo "::error::phase_timeout must be a positive integer."
+            exit 1
           fi
           INACTIVITY_LIMIT=$((PHASE_TIMEOUT_STR * 60))
 
@@ -403,8 +406,8 @@ jobs:
             sleep 2
           done
 
-          if [ -z "${ORCH_RUN_ID}" ]; then
-            echo "::error::Unable to resolve dispatched run id for ${WORKFLOW_FILE}."
+          if ! [[ "${ORCH_RUN_ID}" =~ ^[0-9]+$ ]] || [ "${ORCH_RUN_ID}" -lt 1 ]; then
+            echo "::error::Unable to resolve a positive numeric run id for ${WORKFLOW_FILE}."
             exit 1
           fi
 
@@ -437,6 +440,10 @@ jobs:
 
             if [ "${NEW_TRACKING_COUNT}" = "1" ]; then
               TRACKING_ISSUE_NUMBER="$(echo "${NEW_TRACKING_JSON}" | jq -r '.[0]')"
+              if ! [[ "${TRACKING_ISSUE_NUMBER}" =~ ^[0-9]+$ ]] || [ "${TRACKING_ISSUE_NUMBER}" -lt 1 ]; then
+                echo "::error::Resolved tracking issue must be a positive integer."
+                exit 1
+              fi
             elif [ "${NEW_TRACKING_COUNT}" != "0" ]; then
               echo "::error::Detected multiple new orchestrator tracking issues; refusing ambiguous tagging."
               exit 1
