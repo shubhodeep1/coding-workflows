@@ -29,7 +29,7 @@ def _parse_kv_file(path: Path) -> dict[str, str]:
 def _run_helper(command: str, tmp_path: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
 	output_file = tmp_path / "github_output.txt"
 	env_file = tmp_path / "github_env.txt"
-	env = os.environ.copy()
+	env = {key: value for key, value in os.environ.items() if not key.startswith("WORKSPACE_")}
 	env.update(
 		{
 			"GITHUB_OUTPUT": str(output_file),
@@ -295,9 +295,12 @@ def test_workspace_shell_context_activates_before_repo_sensitive_steps() -> None
 
 
 def test_validate_workspace_metadata_disables_reuse_without_numeric_tracking_issue() -> None:
+	metadata_step = _step(VALIDATE_WORKFLOW, "Initialize workspace metadata")
 	metadata_block = _step_run_text(VALIDATE_WORKFLOW, "Initialize workspace metadata")
+	assert metadata_step.get("env", {}).get("TRACKING_ISSUE_INPUT") == "${{ inputs.tracking_issue }}"
 	assert 'workspace_reuse_enabled="${WORKSPACE_REUSE_ENABLED:-false}"' in metadata_block
-	assert 'if [[ "${{ inputs.tracking_issue }}" =~ ^[0-9]+$ ]] && [ "${{ inputs.tracking_issue }}" -gt 0 ]; then' in metadata_block
+	assert 'if ! [[ "${TRACKING_ISSUE_INPUT}" =~ ^[0-9]+$ ]]; then' in metadata_block
+	assert 'if [ "${TRACKING_ISSUE_INPUT}" -gt 0 ]; then' in metadata_block
 	assert 'workspace_reuse_enabled="false"' in metadata_block
 	assert 'WORKSPACE_REQUIRE_STABLE_IDENTIFIER_FOR_REUSE="true"' in metadata_block
 
@@ -308,6 +311,8 @@ def _run_tmp_path_case(case_fn) -> None:
 
 
 def main() -> int:
+	from test_workflow_untrusted_input_contract import run_all_contract_tests
+
 	test_helper_script_exists_and_is_executable()
 	for case_fn in (
 		test_metadata_sanitizes_key_and_derives_workspace_path,
@@ -323,6 +328,7 @@ def main() -> int:
 	test_validate_workflow_stages_workspace_helper_and_uses_workspace_paths()
 	test_workspace_shell_context_activates_before_repo_sensitive_steps()
 	test_validate_workspace_metadata_disables_reuse_without_numeric_tracking_issue()
+	run_all_contract_tests()
 	return 0
 
 

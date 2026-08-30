@@ -67,11 +67,80 @@ def test_compute_run_metrics_retries_and_duration_with_missing_timestamps():
 	assert row["run_attempt"] == 3
 	assert row["retries"] == 2
 	assert row["duration_seconds"] == 150
+	assert row["jobs_fetch_status"] == "not_required"
+	assert row["log_download_status"] == "not_selected"
+	assert row["diagnostic_failure_reason"] is None
+	assert row["observed_job_conclusions"] == []
+	assert row["workflow_validation_annotations_status"] == "unavailable_from_existing_payloads"
 
 	run_missing = dict(run)
 	run_missing["run_started_at"] = None
 	row_missing = collector.compute_run_metrics("owner/repo", run_missing, jobs=[])
 	assert row_missing["duration_seconds"] == 0
+
+
+def test_compute_run_metrics_normalizes_job_conclusions_and_bounds_failure_reason():
+	run = {
+		"id": 14,
+		"name": "AI Implement",
+		"path": ".github/workflows/implement.yml",
+		"_workflow_family": "implement",
+		"status": "completed",
+		"conclusion": "failure",
+		"run_attempt": 1,
+	}
+	jobs = [
+		{"conclusion": " Failure "},
+		{"conclusion": "cancelled"},
+		{"conclusion": "FAILURE"},
+		{"conclusion": None},
+	]
+	row = collector.compute_run_metrics(
+		"owner/repo",
+		run,
+		jobs,
+		jobs_fetch_status="failure",
+		diagnostic_failure_reason="first=line\n" + ("x" * 700),
+	)
+
+	assert row["jobs_fetch_status"] == "failure"
+	assert row["observed_job_conclusions"] == ["cancelled", "failure"]
+	reason = row["diagnostic_failure_reason"]
+	assert isinstance(reason, str)
+	assert reason.startswith("jobs: first:line ")
+	assert "\n" not in reason
+	assert "=" not in reason
+	assert len(reason) == collector.DIAGNOSTIC_FAILURE_REASON_MAX_CHARS
+
+	collector._apply_log_download_exception(row, RuntimeError("timeout\nsecond=value" + ("y" * 700)))
+	combined_reason = row["diagnostic_failure_reason"]
+	assert row["log_download_status"] == "transient_failure"
+	assert isinstance(combined_reason, str)
+	assert combined_reason.startswith("jobs: ")
+	assert "; logs: " in combined_reason
+	assert "\n" not in combined_reason
+	assert "=" not in combined_reason
+	assert len(combined_reason) <= collector.DIAGNOSTIC_FAILURE_REASON_MAX_CHARS
+
+
+def test_extract_full_logs_with_diagnostics_distinguishes_empty_zip_and_invalid_archive():
+	empty_buffer = io.BytesIO()
+	with zipfile.ZipFile(empty_buffer, mode="w", compression=zipfile.ZIP_DEFLATED):
+		pass
+
+	empty_run: dict[str, object] = {}
+	assert collector._extract_full_logs_with_diagnostics(empty_run, empty_buffer.getvalue()) == []
+	assert empty_run["log_download_status"] == "empty_archive"
+	assert empty_run["diagnostic_failure_reason"] == "logs: empty_log_archive"
+
+	invalid_run: dict[str, object] = {}
+	try:
+		collector._extract_full_logs_with_diagnostics(invalid_run, b"not-a-zip")
+		raise AssertionError("expected invalid archive failure")
+	except zipfile.BadZipFile:
+		pass
+	assert invalid_run["log_download_status"] == "failure"
+	assert str(invalid_run["diagnostic_failure_reason"]).startswith("logs: ")
 
 
 def test_extract_failure_point_step_precedence_then_job_fallback():
@@ -234,10 +303,14 @@ def test_main_fetches_cancelled_jobs_for_failure_point() -> None:
 		assert rc == 0
 		assert calls == {"jobs": 1}
 		report = json.loads(report_file.read_text(encoding="utf-8"))
-		assert report["runs"][0]["failure_point"] == {
+		cancelled_row = report["runs"][0]
+		assert cancelled_row["failure_point"] == {
 			"job_name": "validate",
 			"step_name": "cancelled_before_first_step",
 		}
+		assert cancelled_row["jobs_fetch_status"] == "success"
+		assert cancelled_row["observed_job_conclusions"] == ["cancelled"]
+		assert cancelled_row["log_download_status"] == "not_selected"
 
 
 def test_main_refetches_cached_cancelled_run_without_failure_point() -> None:
@@ -456,6 +529,8 @@ def test_main_reuses_current_cancelled_cache_row_without_cancellation_clue() -> 
 			"_workflow_family": "validate",
 		}
 		cached_row = collector.compute_run_metrics("owner/repo", cached_run, jobs=[])
+		cached_row["log_download_status"] = "missing_archive"
+		cached_row["diagnostic_failure_reason"] = "logs: archive missing"
 		cache_payload = {
 			"schema_version": "v1",
 			"repositories": {
@@ -524,6 +599,8 @@ def test_main_reuses_current_cancelled_cache_row_without_cancellation_clue() -> 
 			"job_name": None,
 			"step_name": None,
 		}
+		assert report["runs"][0]["log_download_status"] == "missing_archive"
+		assert report["runs"][0]["diagnostic_failure_reason"] == "logs: archive missing"
 
 
 def test_list_runs_for_repo_paginates_and_includes_all_families():
@@ -637,6 +714,14 @@ def test_main_reuses_cached_snapshot_on_304_and_skips_jobs_and_logs() -> None:
 		cached_row = collector.compute_run_metrics("owner/repo", cached_run, jobs=[])
 		cached_row["log_excerpts"] = [{"step_name": "failure", "excerpt": "cached log"}]
 		cached_row["cost_telemetry"] = {"or_total_tokens": 0}
+		for diagnostic_field in (
+			"jobs_fetch_status",
+			"log_download_status",
+			"diagnostic_failure_reason",
+			"observed_job_conclusions",
+			"workflow_validation_annotations_status",
+		):
+			cached_row.pop(diagnostic_field)
 
 		cache_payload = {
 			"schema_version": "v1",
@@ -645,7 +730,7 @@ def test_main_reuses_cached_snapshot_on_304_and_skips_jobs_and_logs() -> None:
 					"runs_etag": "W/\"cached\"",
 					"runs_window_start": "2026-04-01T00:00:00Z",
 					"jobs_seen_set": [501],
-					"logs_seen_set": [501],
+					"logs_seen_set": [],
 					"last_updated": "2026-04-11T00:00:00Z",
 					"runs_snapshot": [cached_run],
 					"rows_snapshot": [cached_row],
@@ -715,7 +800,13 @@ def test_main_reuses_cached_snapshot_on_304_and_skips_jobs_and_logs() -> None:
 		assert report["runs"][0]["run_id"] == 501
 		assert report["runs"][0]["log_excerpts"] == [{"step_name": "failure", "excerpt": "cached log"}]
 		assert report["runs"][0]["cost_telemetry"] == {"or_total_tokens": 0}
+		assert report["runs"][0]["jobs_fetch_status"] == "cached"
+		assert report["runs"][0]["log_download_status"] == "cached"
+		assert report["runs"][0]["diagnostic_failure_reason"] is None
+		assert report["runs"][0]["observed_job_conclusions"] == []
+		assert report["runs"][0]["workflow_validation_annotations_status"] == "unavailable_from_existing_payloads"
 		assert "payload" in persisted
+		assert persisted["payload"]["schema_version"] == "v1"
 
 
 def test_main_refetches_cached_logs_when_cost_telemetry_is_missing() -> None:
@@ -1596,7 +1687,7 @@ def test_fetch_run_log_archive_non_retryable_failure_path():
 	assert "400 Bad Request" in str(cached_error)
 
 
-def test_fetch_run_log_archive_empty_payload_classifies_missing_archive_soft_fail():
+def test_fetch_run_log_archive_empty_payload_is_available_for_empty_archive_classification():
 	orig_gh_api_bytes = collector.gh_api_bytes
 	call_retries: list[int] = []
 	cache: dict[tuple[str, int], bytes | Exception] = {}
@@ -1616,22 +1707,17 @@ def test_fetch_run_log_archive_empty_payload_classifies_missing_archive_soft_fai
 
 	collector.gh_api_bytes = fake_gh_api_bytes
 	try:
-		try:
-			collector._fetch_run_log_archive("owner/repo", 413, token="token", cache=cache)
-			raise AssertionError("expected missing-archive soft-fail")
-		except Exception as exc:  # noqa: BLE001
-			message = str(exc)
-			assert message.startswith("partial_data:missing_log_archive ")
-			assert "repository=owner/repo" in message
-			assert "run_id=413" in message
-			assert "detail=empty_log_archive_payload" in message
+		payload = collector._fetch_run_log_archive("owner/repo", 413, token="token", cache=cache)
 	finally:
 		collector.gh_api_bytes = orig_gh_api_bytes
 
 	assert call_retries == [1]
-	cached_error = cache[("owner/repo", 413)]
-	assert isinstance(cached_error, Exception)
-	assert str(cached_error).startswith("partial_data:missing_log_archive ")
+	assert payload == b""
+	assert cache[("owner/repo", 413)] == b""
+	run = {}
+	assert collector._extract_full_logs_with_diagnostics(run, payload) == []
+	assert run["log_download_status"] == "empty_archive"
+	assert run["diagnostic_failure_reason"] == "logs: empty_log_archive_payload"
 
 
 def test_fetch_run_log_archive_sanitizes_missing_archive_detail_field():
@@ -1698,6 +1784,140 @@ def test_select_notable_runs_success_sampling():
 	selected_zero = collector.select_notable_runs_for_logs(runs, max_log_runs=20, success_sample_rate=0.0)
 	assert all(not item.get("_success_sampled") for item in selected_zero)
 	assert len(selected_zero) == collector.SLOW_RUNS_PER_REPO
+
+
+def test_main_fetches_failed_run_jobs_before_missing_log_and_persists_diagnostics():
+	with tempfile.TemporaryDirectory(prefix="collector-failed-diagnostics-test-") as td:
+		report_file = Path(td) / "report.json"
+		failed_run = {
+			"id": 601,
+			"name": "AI Implement",
+			"path": ".github/workflows/implement.yml",
+			"status": "completed",
+			"conclusion": "failure",
+			"run_attempt": 1,
+			"created_at": "2026-04-10T12:00:00Z",
+			"run_started_at": "2026-04-10T12:00:30Z",
+			"updated_at": "2026-04-10T12:05:30Z",
+			"_workflow_family": "implement",
+		}
+
+		orig_cache_read = collector._cache_read_context
+		orig_cache_write = collector._cache_write_context
+		orig_list_runs = collector.list_runs_for_repo
+		orig_list_jobs = collector.list_jobs_for_run
+		orig_fetch_logs = collector._fetch_run_log_archive
+		call_order: list[str] = []
+		persisted: dict[str, dict] = {}
+
+		def fake_cache_read_context(**_: object):
+			return {"schema_version": "v1", "repositories": {}}, None, None
+
+		def fake_cache_write_context(**kwargs: object):
+			payload = kwargs.get("payload")
+			if isinstance(payload, dict):
+				persisted["payload"] = payload
+			return True
+
+		def fake_list_runs_for_repo(*args: object, **kwargs: object):
+			return [failed_run], False, {"not_modified": False, "etag": None, "status_code": 200}
+
+		def fake_list_jobs_for_run(*args: object, **kwargs: object):
+			call_order.append("jobs")
+			return [
+				{"name": "bootstrap", "conclusion": "cancelled", "steps": []},
+				{"name": "implement", "conclusion": "failure", "steps": []},
+			]
+
+		def fake_fetch_run_log_archive(*args: object, **kwargs: object):
+			call_order.append("logs")
+			raise RuntimeError(
+				"partial_data:missing_log_archive repository=owner/repo run_id=601 detail=HTTP 404 Not Found"
+			)
+
+		collector._cache_read_context = fake_cache_read_context
+		collector._cache_write_context = fake_cache_write_context
+		collector.list_runs_for_repo = fake_list_runs_for_repo
+		collector.list_jobs_for_run = fake_list_jobs_for_run
+		collector._fetch_run_log_archive = fake_fetch_run_log_archive
+		try:
+			rc = collector.main(
+				[
+					"--repo",
+					"owner/repo",
+					"--since",
+					"2026-04-01T00:00:00Z",
+					"--max-log-runs",
+					"1",
+					"--output",
+					str(report_file),
+				]
+			)
+		finally:
+			collector._cache_read_context = orig_cache_read
+			collector._cache_write_context = orig_cache_write
+			collector.list_runs_for_repo = orig_list_runs
+			collector.list_jobs_for_run = orig_list_jobs
+			collector._fetch_run_log_archive = orig_fetch_logs
+
+		assert rc == 0
+		assert call_order == ["jobs", "logs"]
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+		row = report["runs"][0]
+		assert row["jobs_fetch_status"] == "success"
+		assert row["observed_job_conclusions"] == ["cancelled", "failure"]
+		assert row["log_download_status"] == "missing_archive"
+		assert str(row["diagnostic_failure_reason"]).startswith("logs: ")
+		persisted_row = persisted["payload"]["repositories"]["owner/repo"]["rows_snapshot"][0]
+		assert persisted_row["jobs_fetch_status"] == "success"
+		assert persisted_row["log_download_status"] == "missing_archive"
+		assert persisted_row["observed_job_conclusions"] == ["cancelled", "failure"]
+
+
+def test_export_categorized_logs_writes_diagnostic_metadata_when_archive_fails():
+	with tempfile.TemporaryDirectory(prefix="collector-metadata-only-test-") as td:
+		output_dir = Path(td) / "logs"
+		run = {
+			"repository": "owner/repo",
+			"run_id": 602,
+			"run_attempt": 1,
+			"workflow_family": "implement",
+			"conclusion": "failure",
+			"duration_seconds": 10,
+			"created_at": "2026-04-10T12:00:00Z",
+			"jobs_fetch_status": "success",
+			"log_download_status": "not_selected",
+			"diagnostic_failure_reason": None,
+			"observed_job_conclusions": ["failure"],
+			"workflow_validation_annotations_status": "unavailable_from_existing_payloads",
+		}
+		errors: list[dict[str, str]] = []
+		orig_fetch_logs = collector._fetch_run_log_archive
+
+		def fake_fetch_run_log_archive(*args: object, **kwargs: object):
+			raise RuntimeError("connection reset by peer")
+
+		collector._fetch_run_log_archive = fake_fetch_run_log_archive
+		try:
+			collector.export_categorized_logs(
+				output_dir,
+				[run],
+				max_log_runs=1,
+				token="token",
+				errors=errors,
+				log_archive_cache={},
+			)
+		finally:
+			collector._fetch_run_log_archive = orig_fetch_logs
+
+		metadata_path = output_dir / "errors" / "owner_repo" / "implement" / "602" / "metadata.json"
+		metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+		assert metadata["jobs_fetch_status"] == "success"
+		assert metadata["log_download_status"] == "transient_failure"
+		assert metadata["observed_job_conclusions"] == ["failure"]
+		assert str(metadata["diagnostic_failure_reason"]).startswith("logs: connection reset")
+		assert not list(metadata_path.parent.glob("*.log"))
+		assert errors
 
 
 def test_main_partial_jobs_failure_still_emits_report_with_errors():
@@ -1901,9 +2121,22 @@ print(json.dumps({}))
 
 		by_run_id = {item["run_id"]: item for item in report["runs"]}
 		assert by_run_id[101]["log_excerpts"] == [{"step_name": "plan", "excerpt": "plan ok\n"}]
+		assert by_run_id[101]["jobs_fetch_status"] == "not_required"
+		assert by_run_id[101]["log_download_status"] == "success"
 		assert by_run_id[102]["log_excerpts"] == [{"step_name": "failure", "excerpt": "failure details\n"}]
+		assert by_run_id[102]["jobs_fetch_status"] == "failure"
+		assert by_run_id[102]["log_download_status"] == "success"
+		assert str(by_run_id[102]["diagnostic_failure_reason"]).startswith("jobs: ")
+		assert by_run_id[102]["observed_job_conclusions"] == []
 		assert "log_excerpts" not in by_run_id[104]
+		assert by_run_id[104]["log_download_status"] == "missing_archive"
+		assert str(by_run_id[104]["diagnostic_failure_reason"]).startswith("logs: ")
 		assert "log_excerpts" not in by_run_id[103]
+		assert by_run_id[103]["log_download_status"] == "not_selected"
+		assert all(
+			item["workflow_validation_annotations_status"] == "unavailable_from_existing_payloads"
+			for item in report["runs"]
+		)
 
 
 def test_main_log_output_dir_writes_categorized_full_logs_and_dedupes_downloads():
