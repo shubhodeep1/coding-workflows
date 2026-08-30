@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow contract changes commonly require explicit tests for labels, changelog fragments, and downstream job interfaces.",
   "timestamps": {
     "created_at": "2026-08-30T17:58:30Z",
