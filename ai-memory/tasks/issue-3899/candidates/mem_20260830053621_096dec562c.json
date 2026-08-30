@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `Shared shell-block anti-regression checks`\n\nScope-mode justification: Restrict runtime changes to the existing CI guard and add focused contract coverage. This satisfies all diagnostics and ordering requirements without altering sharding, dependencies, workflows, or external interfaces.\n\n## Planning reference\n\n- HEAD: `fbec387b6d8f7d5eba511d943edd0772a4690ec9`\n- Branch: `orchestrator/project-3898`\n- Integration metadata matches the checked-out branch.\n- The auto-answer indicates no unanswered clarification questions.\n\n## Automation wiring\n\n- **Change type:** Modify an existing workflow and add a contract test; no runtime script.\n- **Entry point:** `.github/workflows/ci.yml`, `push` and `pull_request` triggers for `main` and `stable`.\n- **Supervisor:** None.\n- **Database gate:** None.\n- **Removal registry:** Not applicable.\n\n## Files likely to change\n\n1. `.github/workflows/ci.yml`\n   - Move the unchanged-name `Shared shell-block anti-regression checks` step immediately after checkout.\n   - Improve all rejection diagnostics while preserving match patterns and failure conditions.\n   - Wire the focused contract test into the existing CI test sequence.\n2. `tests/test_ci_shared_shell_block_guard.py` \u2014 new test module, not an operational script.\n   - Pin ordering, diagnostic fields, and existing guard semantics.\n\n## Implementation details\n\n- Keep `Checkout repository` first and make the shared guard the immediately following step.\n- Preserve these checks:\n  - Forbidden inline Codex configuration assembly.\n  - Required `codex_config_assemble` call sites.\n  - OpenCode-only review exclusion.\n  - Required `memory_bootstrap` wiring.\n  - Required `tg_send_phase_failure` wiring.\n  - Forbidden inline stall-guard parsers.\n  - Required `watchdog_helpers.sh` wiring.\n- Add a block-local diagnostic reporter producing actionable records such as:\n  - `CI_GUARD_FAILURE`\n  - `guard=<identifier>`\n  - `check=<condition>`\n  - `file=<repo-relative-path>`\n  - `line=<line-number-or-none>`\n  - `expected=<helper-or-policy>`\n  - `scanned_files=<comma-separated-set>`\n- For forbidden-pattern matches, report file and line number without echoing the full source line.\n- Emit one diagnostic per offending match before retaining the existing non-zero exit.\n\n## Data structures affected\n\n- CI step ordering within `jobs.lint.steps`.\n- Structured, parseable shell-guard diagnostic fields.\n- No persisted schemas or application data change.\n\n## API/interface changes\n\nNo external API changes. The only additive interface is the structured CI failure-log contract described above.\n\n## Decisions\n\n### D1 \u2014 Keep the guard inline\n\n- **Chosen:** Move and enhance the existing workflow step in place.\n- **Alternatives considered:** Extract the checks into a new shell script.\n- **Why:** The issue forbids a new operational script, and extraction would broaden scope without changing behavior.\n\n### D2 \u2014 Report locations without source contents\n\n- **Chosen:** Include repo-relative file and line number while omitting matched line text.\n- **Alternatives considered:** Preserve raw `grep` output containing the complete matched line.\n- **Why:** File and line metadata are actionable while minimizing accidental secret or sensitive-value exposure.\n\n### D3 \u2014 Add focused executable contract coverage\n\n- **Chosen:** Add a dedicated Python test following the ordering helpers in `tests/test_ci_inventory_parity_order_contract.py`.\n- **Alternatives considered:** Add loose string assertions to the OpenCode smoke contract.\n- **Why:** A focused test can validate every guard family and avoids coupling unrelated OpenCode tests to the full CI policy block.\n\n## Risks and edge cases\n\n- Preserve `grep` no-match behavior under `set -euo pipefail`; diagnostic capture must not turn successful scans into failures.\n- Preserve detection of multiple forbidden matches before exiting.\n- Ensure each diagnostic\u2019s scanned set matches that check\u2019s actual inputs rather than a global superset.\n- Move rather than duplicate the step.\n- Do not alter `timeout-minutes: 45`, `CI_POLL_TEST_SHARDS`, shard aggregation, or the `CI` check/job name.\n- Conflict: the optimization report says \u201cafter checkout/setup,\u201d while the issue explicitly requires before Python setup. The stricter issue requirement governs.\n- No explicit machine-readable `files_touched` list was supplied; scope is conservatively limited to the CI workflow and its focused contract test.\n\n## Testing considerations\n\n- Assert the guard immediately follows checkout and precedes Python setup, dependency installation, lint, and tests.\n- Extract and execute the shipped guard body in temporary fixture repositories:\n  - Confirm a valid baseline passes.\n  - Trigger each existing rejection independently.\n  - Assert non-zero status and required diagnostic fields.\n  - Assert forbidden-match output contains location metadata but not complete source lines.\n- Run:\n  - `tests/test_ci_shared_shell_block_guard.py`\n  - `tests/test_opencode_live_smoke_workflow.py`\n  - `tests/test_ci_poll_test_sharding.py`\n  - YAML lint for `.github/workflows/ci.yml`\n- Verify the final diff contains no sharding or timeout changes.\n\n## Pre-execution self-check\n\nAll acceptance criteria map to concrete edits and regression coverage. No external inputs, scheduler changes, supervisor, database work, or removal-registry updates are required.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "1fe624f993c574567dbe98c319db285574a27a3f0b29ad3465c67f8afc79fce8",
+  "lineage": {
+    "issue_number": 3899,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33294867498",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33294867498",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3899"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260830053621_096dec562c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3899,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33294867498"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3899",
+  "timestamps": {
+    "created_at": "2026-08-30T05:36:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
