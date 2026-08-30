@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The function accepts head_ref as a parameter without sanitization or validation.\n  WHY: Could lead to command injection or unexpected behavior if malicious input is provided.\n- scripts/orchestrate_poll_process.sh:13061-13071 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Comment incorrectly states that a new dispatch cancels the existing run when using cancel-in-progress concurrency.\n  WHY: Misleading documentation can cause future maintainers to make incorrect assumptions about system behavior.\n- scripts/orchestrate_poll_process.sh:13130-13132 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Comment incorrectly states that a new dispatch cancels the running job when cancel-in-progress=false is used.\n  WHY: Misleading documentation can cause future maintainers to make incorrect assumptions about system behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states \"The guard/status contracts are pinned by `tests/test_conflict_dispatch_active_run_visibility.py` as text contracts on the shipped files,\" implying the tests should verify the exact behavior described in the comments.\n  expected_change_site: tests/test_conflict_dispatch_active_run_visibility.py\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The test file exists but does not contain any test that validates the GitHub API can accept multiple comma-separated status values in a single call.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh\n  Code: _has_active_autofix_run function uses unvalidated user input for head_ref\n  Problem: The function accepts head_ref as a parameter without sanitization or validation\n  Why it fails at runtime: Could lead to command injection or unexpected behavior if malicious input is provided\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- scripts/orchestrate_poll_process.sh:13061-13071\n  Code: Comment claims \"A new dispatch would cancel the existing run\" but the actual behavior is different\n  Problem: Comment incorrectly states that new dispatch cancels existing run when using cancel-in-progress concurrency\n  Why it fails at runtime: Misleading documentation can cause future maintainers to make incorrect assumptions about system behavior\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- scripts/orchestrate_poll_process.sh:13130-13132\n  Code: Comment claims \"A new dispatch would cancel the running job\" but the actual behavior is different\n  Problem: Comment incorrectly states that new dispatch cancels running job when cancel-in-progress=false is used\n  Why it fails at runtime: Misleading documentation can cause future maintainers to make incorrect assumptions about system behavior\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: The PR description states \"The guard/status contracts are pinned by `tests/test_conflict_dispatch_active_run_visibility.py` as text contracts on the shipped files,\" implying the tests should verify the exact behavior described in the comments.\n  Expected change site: tests/test_conflict_dispatch_active_run_visibility.py\n  Evidence of absence: The test file exists but does not contain any test that validates the GitHub API can accept multiple comma-separated status values in a single call.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "c713066880011cb4893d3a9338e49dae88b20ef3f3f78533a25b8e244c4ac981",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3896,
+    "run_id": "33286495851",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33286495851",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260830031126_4c33ecc567",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3896,
+    "run_id": "33286495851"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-30T03:11:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
