@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (115)
+## Processed source docs (117)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -120,6 +120,8 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-08-23.md`
 - `analysis/workflow-optimization-2026-08-24.md`
 - `analysis/workflow-optimization-2026-08-25.md`
+- `analysis/workflow-optimization-2026-08-27.md`
+- `analysis/workflow-optimization-2026-08-29.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -966,6 +968,127 @@ This four-doc batch mixes one narrative workflow-cost memo with three appendix-b
 - `INVALID/non-material`
   - None in the repeated groups; the one-item-loop cleanup was source-qualified to 2026-08-23 `SHELL-002` and classified non-material there.
 
+## Outcome ledger for the 2026-08-27 and 2026-08-29 optimization docs
+The two source docs repeat recommendations across their narrative sections and append cross-reference and summary tables after their named findings. This ledger counts each named finding once under its source-qualified key and groups only the remaining narrative recommendations under stable short labels. On this ref, the two sources resolve to 9 actioned items, 6 already-satisfied items, 66 intentionally deferred items, and 3 invalid or non-material items (84 total).
+
+### `analysis/workflow-optimization-2026-08-27.md`
+- This source resolves to 2 `VALID&SAFE/actioned`, 34 `VALID-BUT-RISKY/deferred`, 3 `STALE-or-already-done`, and 2 `INVALID/non-material` recommendations (41 total: 26 named findings plus 15 deduped narrative groups).
+
+#### Named findings
+- `VALID&SAFE/actioned`
+  - `2026-08-27 :: SEC-002` — `.github/workflows/check_failure_triage.yml` now puts all reusable-workflow inputs in step environment variables, validates IDs/conclusion/SHA before API use, and gates the secret-bearing job behind a credential-minimal same-repository prerequisite; `tests/test_check_failure_triage_workflow_security.py` covers shell metacharacters, forks, malformed inputs, and transient/permanent failures.
+  - `2026-08-27 :: MERGE-001` — `scripts/review_rb_judge.sh` now requests linked issue `body` and complete `labels(first: 100)` data with the existing closing-reference GraphQL query and falls back to REST only for absent, partial, paginated, or failed nodes; `tests/test_review_rb_judge_label_propagation.py` covers complete and fallback payloads.
+- `VALID-BUT-RISKY/deferred`
+  - `2026-08-27 :: BUG-001` — `scripts/label_helpers.sh::set_issue_phase_label_resilient` still uses a label GET followed by whole-list replacement. An atomic selective-mutation rollout needs concurrent-label fixtures because changing this sequence can lose or preserve the wrong phase/control labels.
+  - `2026-08-27 :: BUG-002` — changing the helper's failed-read POST fallback alters phase-exclusivity and retry behavior. It remains deferred until callers can distinguish retryable no-mutation outcomes and reconciliation behavior is covered end to end.
+  - `2026-08-27 :: SEC-001` — replacing credential-bearing Git remotes across clarify, plan, implement, orchestrate, review, validate, and poll workflows changes checkout and push authentication. A header/askpass migration requires dedicated secret-scrubbing and push/fallback coverage.
+  - `2026-08-27 :: API-001` — the adjacent final-PR reads are inside `scripts/orchestrate_poll_process.sh`; collapsing their independent failure defaults could turn a malformed response into an incorrect final-merge decision, so the poller freshness behavior is retained.
+  - `2026-08-27 :: BATCH-001` — standalone phase-label discovery spans aliased search pagination and REST fallback. One-request batching is unsafe without proving `hasNextPage`, partial-alias, and recovery-sweep parity.
+  - `2026-08-27 :: BATCH-002` — post-judge labels are intentionally refreshed after mutations. Replacing those reads with a batch cache needs missing-alias and post-mutation freshness tests before changing reconciliation decisions.
+  - `2026-08-27 :: BATCH-003` — blocker decisions occur inside a nested recovery loop. Precollecting and batching blocker states changes decision timing and stale-state exposure, so the live per-blocker reads remain.
+  - `2026-08-27 :: API-002` — review-run lookup is a stall-recovery gate. Combining active/completed workflow snapshots changes cache conclusiveness, branch filtering, and fail-open fallback semantics.
+  - `2026-08-27 :: API-003` — update-branch handling still relies on a just-in-time head SHA. Reusing list metadata requires pinned-`gh` field compatibility and race coverage for heads that move after listing.
+  - `2026-08-27 :: API-004` — the check-triage prerequisite now validates inputs and classifies permanent versus transient failures, but the source-tagged `RISKY_SKIP` request to replace that bounded loop with shared `gh_retry` remains deferred because helper bootstrap and retry timing are different contracts.
+  - `2026-08-27 :: DUP-001` — centralizing the stall-state parser across watchdog, reviewer, judge, conflict, and validation scripts is a broad sourced-helper migration; each caller's missing-helper fallback must remain available.
+  - `2026-08-27 :: DUP-002` — extracting context-budget warning logic changes a shared review-stage interface and support-staging requirements. The duplicate implementations remain until all callers and bootstrap paths are migrated together.
+  - `2026-08-27 :: DUP-003` — integration-ref bootstrap extraction spans three workflows and authenticated clone/fallback behavior. It needs a dedicated compatibility rollout rather than closeout-time substitution.
+  - `2026-08-27 :: DUP-004` — prompt-path helper extraction touches both assembly and rendering entrypoints, whose fallback search order is a compatibility contract; no shared helper is introduced here.
+  - `2026-08-27 :: EXPR-001` — moving implement support staging into a phase manifest remains a large bootstrap change involving required/optional assets, fallback refs, and expression-limit safeguards.
+  - `2026-08-27 :: EXPR-002` — externalizing the validation support manifest likewise changes required-asset failure behavior and generated workflow support; the current checked workflow body is retained.
+  - `2026-08-27 :: DEAD-001` — removing `CURRENT_FLOOR` would delete an existing sourced-shell identifier, while persisting it would add a ledger contract field. Naming compatibility takes precedence over this cleanup.
+  - `2026-08-27 :: DEAD-002` — the reviewer raw-artifact aliases are preserved because sourced-shell dynamic scope can expose them to external callers; removing existing identifiers is not safe in a documentation closeout.
+  - `2026-08-27 :: DEAD-003` — the branch-rebuild diagnostic variables are preserved for compatibility. Making them operational would introduce a new stable telemetry contract, while removing them would violate identifier immutability.
+  - `2026-08-27 :: MERGE-002` — auto-merge suppression depends on a paginated label endpoint. PR-payload label completeness and fail-closed behavior are not proven, so the source-tagged risky consolidation is retained as deferred.
+  - `2026-08-27 :: MERGE-003` — clarify's bounded prompt comments and paginated semantic-cache history have deliberately different failure and shaping semantics; combining them remains pagination-sensitive.
+  - `2026-08-27 :: MERGE-004` — issue title/body pairs are read inside managed, standalone, and implementation-failed recovery paths. Consolidating them changes independent fallback defaults in race-sensitive poller branches.
+  - `2026-08-27 :: REUSE-001` — carrying linked-issue titles across review workflow steps changes the `LINKED_ISSUES_JSON` contract and output size. Partial GraphQL and cache-miss REST behavior need dedicated tests first.
+- `STALE-or-already-done`
+  - None among the named findings beyond the two actioned items above.
+- `INVALID/non-material`
+  - `2026-08-27 :: SHELL-001` — suppressing ShellCheck for a function-local scalar/array name reuse is style-only; changing or removing the existing `cmd` identifier has no supported operational benefit.
+
+#### Repeated unnumbered recommendation groups (deduped)
+- `VALID&SAFE/actioned`
+  - None beyond the source's named actioned findings.
+- `VALID-BUT-RISKY/deferred`
+  - `2026-08-27 :: reviewer reasoning and coverage policy` — lowering pass-one reasoning or changing reviewer coverage changes quality policy. The live roster, pass count, and reasoning schedule remain operator-controlled.
+  - `2026-08-27 :: editor manifest retry and worktree reuse` — machine-generated manifest skeletons and summary-only retries would change editor validation, retry isolation, and whether edits survive a failed attempt; those semantics require a dedicated review-pipeline rollout.
+  - `2026-08-27 :: same-head review dispatch suppression` — cancelling or suppressing queued work by PR/head changes concurrency ownership and stale-run recovery. Active work remains protected without adding a new cancellation policy.
+  - `2026-08-27 :: implement outlier archival and per-call accounting` — independently archiving top-token runs and adding stable-prefix/per-call fields creates new transcript, privacy, and telemetry contracts; no model downgrade is inferred from the historical outlier.
+  - `2026-08-27 :: reviewer rate-limit state carry-forward` — carrying a pass-one fallback selection into pass two changes provider retry and model-selection policy, so same-run health hints are not introduced here.
+  - `2026-08-27 :: failed-workflow diagnostic capture` — startup annotations, jobs-API fallbacks, and log-download status fields span collector API/error contracts and need fixtures for unavailable and partial GitHub responses.
+  - `2026-08-27 :: MCP and Serena availability/value telemetry` — new Semble/Serena probe, replacement, byte, duration, and file-touch fields require coordinated emitters and parser updates; optional tooling continues to fail open.
+  - `2026-08-27 :: AI-memory selection and push diagnostics` — score ranges, age distributions, duplicate suppression, and push-failure alerts alter cross-workflow memory telemetry and alert policy, so they remain a separate observability project.
+  - `2026-08-27 :: GitHub API accounting and review-call reuse` — route-level `GH_API_CALL`/`GH_API_SUMMARY` events and parent-monitor/check-snapshot reuse cross pagination, rate-limit, freshness, and secret-redaction boundaries.
+  - `2026-08-27 :: prompt-cache prefix layout` — moving volatile prompt sections, changing retry nonce behavior, or adding stable-prefix hashes changes cache identity and generated model context; the current cache-safe ordering is preserved.
+  - `2026-08-27 :: orchestrator phase, queue, and skip telemetry` — `ORCHESTRATOR_QUEUE_STATE`, universal `WORKFLOW_SKIP`, and phase timers would add stable cross-workflow log contracts and parser obligations; they are not mixed into this closeout.
+- `STALE-or-already-done`
+  - `2026-08-27 :: CI sharding, timeout, and poll-test progress` — `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, and `.github/workflows/test-and-mark-stable.yml` use four deterministic shards and 45-minute budgets; `tests/test_ci_poll_test_sharding.py` pins the partition/failure contract, while `tests/test_orchestrate_poll_process.py` emits and tests `TEST_CASE_EVENT` timing, heartbeat, completion, and slowest-test records.
+  - `2026-08-27 :: OpenRouter usage availability` — `scripts/cost_audit.py` distinguishes `usage_available` and `usage_unavailable` calls instead of interpreting unavailable token/cache fields as measured zero; `tests/test_cost_audit_semble_metrics.py` covers both states.
+  - `2026-08-27 :: consolidator trust-path repair` — the source described an obsolete Codex trusted-directory failure. `scripts/review_consolidate.sh` now executes through isolated OpenCode configuration/bootstrap and retains fail-open reviewer-bundle behavior, with review-pipeline and OpenCode integration coverage in `tests/test_review_pipeline_integration.py` and `tests/test_opencode_helpers.py`.
+- `INVALID/non-material`
+  - `2026-08-27 :: window metrics and ranking observations` — sampled run counts, wall-time percentages, absence of `BREAK_GLASS`, and statements that Semble is not a latency target are observations used to prioritize work, not repository-change recommendations.
+
+### `analysis/workflow-optimization-2026-08-29.md`
+- This source resolves to 7 `VALID&SAFE/actioned`, 32 `VALID-BUT-RISKY/deferred`, 3 `STALE-or-already-done`, and 1 `INVALID/non-material` recommendation (43 total: 25 named findings plus 18 deduped narrative groups).
+
+#### Named findings
+- `VALID&SAFE/actioned`
+  - `2026-08-29 :: SEC-001` — `.github/workflows/check_failure_triage.yml` now hashes and validates untrusted inputs in a credential-minimal prerequisite job, verifies same-repository origin before the secret-bearing job, and references quoted environment variables; `tests/test_check_failure_triage_workflow_security.py` covers the security and retry boundaries.
+  - `2026-08-29 :: SEC-002` — the affected validation-refresh, workflow-analysis, release, and validate shell inputs now flow through quoted step environment variables and type/format checks; `tests/test_workflow_untrusted_input_contract.py` pins the hardened workflow contract.
+  - `2026-08-29 :: BUG-002` — `.github/workflows/update_workflows.yml` now includes changelog asset/assembly outputs in both commit and notification predicates and message construction; `tests/test_changelog_fragment_contract.py` covers changelog-only notification behavior.
+  - `2026-08-29 :: DEAD-001` — `.github/workflows/implement.yml` stages required `render_prompt.py` exactly once rather than repeating it as an optional backend; `tests/test_implement_semble_contract.py` pins the support list.
+- `VALID-BUT-RISKY/deferred`
+  - `2026-08-29 :: BUG-001` — serializing update-workflow invocations and refreshing/rebasing before push changes concurrency and generated-change conflict behavior. It needs dedicated overlapping-run tests before altering the push path.
+  - `2026-08-29 :: API-001` — repository-label prefetch changes paginated listing, case/name matching, and 422 create-race fallback behavior in `scripts/ai_labels.py`; a one-snapshot cache is not adopted without those proofs.
+  - `2026-08-29 :: API-002` — the three cited retry loops have different caps, bootstrap availability, and permanent/transient error expectations. Shared retry-policy consolidation requires per-caller compatibility tests.
+  - `2026-08-29 :: BATCH-001` — replacing consumer workflow-content REST reads with GraphQL blobs needs parity for refs, encoding, symlinks, submodules, large files, partial aliases, and per-repository fallback.
+  - `2026-08-29 :: BATCH-002` — current-wave PR classification uses timeline/live PR data as a race defense. Reusing GraphQL cross-reference candidates changes repository identity, freshness, and partial-response semantics.
+  - `2026-08-29 :: BATCH-003` — post-mutation issue labels and blocker states require fresh data. Batch caches need explicit missing-key and mutation-visibility handling before replacing per-item reads.
+  - `2026-08-29 :: BATCH-004` — aliased review-thread mutations must preserve per-thread reply ordering, partial failures, diagnostics, and the rule that failed aliases remain unresolved.
+  - `2026-08-29 :: DUP-001` — integration-ref bootstrap extraction changes authenticated clone, preferred-ref, redaction, and fallback behavior across three workflows; it remains a dedicated migration.
+  - `2026-08-29 :: DUP-002` — moving seven support-staging implementations into shared profiles is a broad required/optional asset and fallback-ref migration, not a closeout-safe refactor.
+  - `2026-08-29 :: DUP-003` — centralizing context-budget warning emission changes support staging and sourced helper interfaces across four review stages; the existing equivalent implementations remain compatible.
+  - `2026-08-29 :: DUP-004` — cached Codex setup extraction spans five jobs and changes cache restoration, package validation, symlink, and version-failure behavior; no composite action is introduced here.
+  - `2026-08-29 :: EXPR-001` — implement support staging remains above the report's advisory threshold, but extracting it is the same broad bootstrap migration as the deferred support-profile recommendation.
+  - `2026-08-29 :: DEAD-002` — `LINKED_PR_NUM`, `IF_BLOCKERS_SOURCE`, and `CURRENT_FLOOR` are preserved as existing identifiers; deleting them risks sourced-shell compatibility, while emitting them would add new telemetry fields.
+  - `2026-08-29 :: SHELL-001` — whether ledger anchors should use only the first line or the full bounded range is ambiguous behavior, not a mechanical unused-variable fix; changing it could alter finding identity and context size.
+  - `2026-08-29 :: MERGE-001` — clarify comment consolidation is source-tagged `RISKY_SKIP` because bounded and paginated reads have distinct prompt-shaping and failure semantics.
+  - `2026-08-29 :: MERGE-002` — final-merge PR reads remain independent because malformed or unavailable poller payloads must leave merge pending rather than collapse state/merged defaults incorrectly.
+  - `2026-08-29 :: MERGE-003` — title/body consolidation across three reissue paths changes race-sensitive recovery defaults and is explicitly retained for manual verification.
+  - `2026-08-29 :: MERGE-004` — the paginated issue-label endpoint remains authoritative for auto-merge suppression until PR-payload completeness and fail-closed behavior are proven.
+  - `2026-08-29 :: REUSE-001` — passing cached labels into the phase helper can amplify its existing read/modify/write race and must preserve `hasNextPage`, partial GraphQL, and concurrent-label behavior.
+  - `2026-08-29 :: REUSE-002` — exporting failure-alert PR text across workflow steps changes failure-path cache validity and fallback ordering; the second live GET remains available until all first-read/file combinations are covered.
+  - `2026-08-29 :: REUSE-003` — a cycle-local default-branch accessor would collapse callers with different empty-versus-`main` fallbacks and initialization order inside the poller, so this source-tagged risky cache is deferred.
+- `STALE-or-already-done`
+  - None among the named findings beyond the four actioned items above.
+- `INVALID/non-material`
+  - None among the named findings; even the range-endpoint item is behaviorally ambiguous and therefore deferred rather than dismissed.
+
+#### Repeated unnumbered recommendation groups (deduped)
+- `VALID&SAFE/actioned`
+  - `2026-08-29 :: early CI policy guards` — `.github/workflows/ci.yml` runs `Shared shell-block anti-regression checks` immediately after checkout and emits secret-safe `CI_GUARD_FAILURE` fields; `tests/test_ci_shared_shell_block_guard.py` pins order and diagnostics.
+  - `2026-08-29 :: phase-wrapper predicate parity` — internal clarify/plan/implement/clarify-response workflows and their consumer templates mirror reusable job predicates; `tests/test_phase_wrapper_predicate_contract.py` covers actor, association, command, issue-kind, and tracker exclusions.
+  - `2026-08-29 :: collector structured-telemetry deduplication` — `scripts/collect_workflow_logs.py` removes parent wrapper copies only when matching child structured events exist while preserving sibling events; `tests/test_collect_workflow_logs.py` covers fresh, cached, malformed, and sibling cases.
+- `VALID-BUT-RISKY/deferred`
+  - `2026-08-29 :: current-head queue cancellation` — suppressing same-head runs or cancelling superseded queued heads changes concurrency ownership and recovery for unknown SHAs; no cancellation is issued from this closeout.
+  - `2026-08-29 :: small-diff reviewer reasoning policy` — canarying medium pass-two reasoning or changing model coverage is a review-quality policy change requiring operator metrics and approval.
+  - `2026-08-29 :: orchestrator phase timing` — state-fetch, reconstruction, stall, judge, write, cleanup, queue-age, and skip events would establish new stable poller telemetry and collector contracts.
+  - `2026-08-29 :: prompt-cache prefix layout and fingerprints` — reordering dynamic prompt sections or changing cache breakpoints/nonce behavior changes model context and cache identity, so it is not treated as logging-only.
+  - `2026-08-29 :: Copilot prompt section deduplication` — removing repeated instructions, checks, or memory excerpts can alter reviewer grounding; section telemetry and behavioral parity are prerequisites.
+  - `2026-08-29 :: reviewer model-value metrics` — `unique_findings`, consensus, and editor-action attribution require stable cross-model identity and privacy-aware aggregation before informing roster changes.
+  - `2026-08-29 :: MCP availability and value attribution` — Semble install/index probes plus candidate/selected/avoided byte fields require coordinated runtime emitters and parser support; optional MCP failure remains fail-open.
+  - `2026-08-29 :: cancellation semantics telemetry` — GitHub does not always expose a definitive cancellation cause. Adding concurrency/manual/closed/superseded classification requires an explicit unknown state and multi-workflow tests.
+  - `2026-08-29 :: AI-memory retry and relevance telemetry` — push causes, empty-learning reasons, score distributions, and operation coverage span the memory schema, emitters, and alert policy.
+  - `2026-08-29 :: GitHub API summaries and sweep metadata` — endpoint-class accounting, retries, rate state, cache hits, and head/run fields must preserve redaction and avoid adding calls; this is a cross-helper telemetry contract.
+  - `2026-08-29 :: prompt preflight before check waits` — moving reviewer prompt hydration ahead of check-run polling changes workflow ordering and when expensive/model-adjacent setup runs; the deterministic placeholder defect is fixed without this broader control-flow change.
+- `STALE-or-already-done`
+  - `2026-08-29 :: untrusted assembled-body reference handling` — `scripts/render_prompt.py` and `scripts/render_prompt.sh` support assembled-body syntax bypass while retaining strict trusted-template validation; `tests/test_render_prompt_foundation.py`, `tests/test_assemble_prompt.py`, and `tests/test_review_autofix_review_pipeline_contract.py` cover unresolved `REFERENCE_*` content and strict templates.
+  - `2026-08-29 :: sharded CI progress monitoring` — the four-way CI and release partitions are pinned by `tests/test_ci_poll_test_sharding.py`, and `tests/test_orchestrate_poll_process.py` already emits per-test timing, heartbeat, completion, and slowest-test diagnostics with sequential fallback.
+  - `2026-08-29 :: provider usage availability` — `scripts/cost_audit.py` counts explicitly available and unavailable OpenRouter usage records separately; unavailable cache/token fields are no longer represented as measured zero in its reports and tests.
+- `INVALID/non-material`
+  - `2026-08-29 :: window metrics and no-change observations` — sampled duration/token tables, the absence of break-glass/context warnings, and conclusions to preserve Semble or avoid model deletion are prioritization evidence, not independent repository edits.
+
 ## Preserved machine-maintained artifacts
 - `analysis/validation-selftest-status.json` (kept unchanged)
 - `analysis/last_collection_timestamp.txt` (kept unchanged)
@@ -984,3 +1107,5 @@ This four-doc batch mixes one narrative workflow-cost memo with three appendix-b
 - `analysis/workflow-optimization-2026-06-23.md` marked `REUSE-001` as `SAFE_TO_MERGE`, but current HEAD still shows `scripts/orchestrate_force_tick.sh` re-fetching `issues/${ISSUE_NUMBER}` after a successful PR lookup when `TRACKING_ISSUE` remains blank, so this closeout records that item as intentionally deferred rather than actioned.
 - `analysis/workflow-optimization-2026-06-25.md` through `analysis/workflow-optimization-2026-06-28.md` are now fully represented in the outcome ledger above, added to `Processed source docs (108)`, and deleted from `analysis/` on this ref.
 - `analysis/workflow-optimization-2026-08-19.md`, `analysis/workflow-optimization-2026-08-23.md`, `analysis/workflow-optimization-2026-08-24.md`, and `analysis/workflow-optimization-2026-08-25.md` are fully represented in the source-qualified ledger above, added to `Processed source docs (115)`, and deleted from `analysis/` on this ref.
+- `analysis/workflow-optimization-2026-08-27.md` and `analysis/workflow-optimization-2026-08-29.md` repeat findings across narrative, summary, cross-reference, and handoff sections; this closeout counts the 26 and 25 named findings once under source-qualified keys, groups only the remaining narrative asks, records 84 internally reconciled outcomes, adds both files to `Processed source docs (117)`, and deletes the source files while preserving their provenance here.
+- The 2026-08-27 Codex trusted-directory consolidator failure is stale on this ref because `scripts/review_consolidate.sh` now uses the isolated OpenCode path. Conversely, partially landed hardening did not override either source's explicit `RISKY_SKIP` tags: pagination, poller freshness, retry-policy consolidation, and cancellation behavior remain deferred.

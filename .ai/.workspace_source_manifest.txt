@@ -153,6 +153,8 @@ changelog.d/3897-resolver-opencode-helpers-fallback.md
 changelog.d/3899-move-ci-policy-guards-first.md
 changelog.d/3900-phase-wrapper-predicate-parity.md
 changelog.d/3901-check-triage-input-hardening.md
+changelog.d/3902-secure-workflow-shell-inputs.md
+changelog.d/3903-changelog-only-notification.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/deploy-activate-digitalocean-steps.md
@@ -602,10 +604,11 @@ tests/test_audit_gate_template_atomicity.py
 tests/test_blocker_check.py
 tests/test_branch_rebuild.py
 tests/test_changelog_fragment_contract.py
+tests/test_check_failure_triage_workflow_security.py
 tests/test_check_integration_pr_readiness.py
-tests/test_ci_shared_shell_block_guard.py
 tests/test_ci_inventory_parity_order_contract.py
 tests/test_ci_poll_test_sharding.py
+tests/test_ci_shared_shell_block_guard.py
 tests/test_clarify_informal_detect.py
 tests/test_codex_heartbeat.py
 tests/test_codex_skip_git_repo_check_contract.py
@@ -792,6 +795,7 @@ tests/test_workflow_overlay_core.py
 tests/test_workflow_overlay_orchestrator.py
 tests/test_workflow_retro.py
 tests/test_workflow_retro_fanout.py
+tests/test_workflow_untrusted_input_contract.py
 tests/test_workspace_cache_maintenance.py
 tests/test_workspace_hooks.py
 tests/test_workspace_init.py
