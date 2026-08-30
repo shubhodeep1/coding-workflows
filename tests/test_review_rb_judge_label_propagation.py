@@ -22,8 +22,9 @@ shubhodeep1/bitsafe.io issues #41/#43/#44.
 
 The fix
 -------
-1. The body-fetch loop now captures parent labels in the same REST
-   GET (no extra API call per CLAUDE.md §15) into FIRST_ISSUE_LABELS_JSON.
+1. The linked-issue GraphQL query captures body and labels alongside
+   issue numbers, with a per-node REST fallback for incomplete data,
+   into FIRST_ISSUE_LABELS_JSON.
 2. The close_and_reissue branch checks FIRST_ISSUE_LABELS_JSON for
    `ai:orchestrator-managed` via `jq -e 'index(...)'`; on hit, it
    appends `--label ai:orchestrator-managed` to the `gh issue create`
@@ -153,6 +154,21 @@ def _extract_body_fetch_loop() -> str:
 	return match.group("loop")
 
 
+def _extract_linked_issue_hydration_block() -> str:
+	"""Pull the GraphQL discovery, fallback, and hydration block."""
+	text = _rb_judge_text()
+	match = re.search(
+		r'(?P<block>RB_LINKED_ISSUES_GRAPHQL_JSON=.*?done <<< "\$\{ISSUE_NUMBERS\}")',
+		text,
+		re.DOTALL,
+	)
+	if not match:
+		raise AssertionError(
+			"could not extract linked-issue hydration block from review_rb_judge.sh"
+		)
+	return match.group("block")
+
+
 def _extract_issue_number_fallback_block() -> str:
 	"""Pull the linked-issue fallback block out of the real script.
 
@@ -185,9 +201,9 @@ def _extract_issue_number_fallback_block() -> str:
 
 
 def test_loop_captures_first_issue_labels_json() -> None:
-	"""The body-fetch loop must populate FIRST_ISSUE_LABELS_JSON from
-	the parent issue's labels.  Static check: a future refactor that
-	drops the labels capture would silently disable the propagation."""
+	"""The hydration loop must populate FIRST_ISSUE_LABELS_JSON from
+	the parent issue's labels. Static check: a future refactor that drops
+	the labels capture would silently disable the propagation."""
 	src = _rb_judge_text()
 
 	assert "FIRST_ISSUE_LABELS_JSON=" in src, (
@@ -195,13 +211,13 @@ def test_loop_captures_first_issue_labels_json() -> None:
 		"close_and_reissue branch reads it to decide whether to "
 		"propagate ai:orchestrator-managed to the reissue."
 	)
-	# The loop must populate it from the same `_safe_gh_jq` call that
-	# fetches the body — adding a separate `gh api` call would violate
-	# CLAUDE.md §15 (GitHub API call hygiene).
+	# Complete GraphQL nodes and REST fallbacks are both normalized into
+	# ISSUE_META_JSON so labels and body can be extracted client-side
+	# without a separate labels request.
 	assert "ISSUE_META_JSON=" in src, (
-		"review_rb_judge.sh body-fetch loop must store the full issue "
-		"JSON so labels and body can be extracted client-side without a "
-		"second API call (§15)."
+		"review_rb_judge.sh hydration loop must normalize issue JSON so "
+		"labels and body can be extracted client-side without a separate "
+		"labels API call."
 	)
 	assert "[(.labels // [])[]?.name]" in src, (
 		"review_rb_judge.sh must extract label names from the parent "
@@ -315,6 +331,11 @@ if args[:1] == ["api"]:
 			path = arg
 			break
 	state.setdefault("api_calls", []).append(args)
+	api_failures = state.get("api_failures", []) or []
+	if any(pattern and pattern in path for pattern in api_failures):
+		save()
+		sys.stderr.write(f"mock gh: simulated API failure for {path}\n")
+		sys.exit(1)
 	api_responses = state.get("api_responses", {}) or {}
 	matched = None
 	for pattern, resp in api_responses.items():
@@ -847,6 +868,7 @@ set -euo pipefail
 _safe_gh_jq() {{ gh api "$@"; }}
 
 ISSUE_NUMBERS="${{ISSUE_NUMBERS_INPUT}}"
+RB_LINKED_ISSUES_GRAPHQL_JSON=""
 
 {loop}
 
@@ -977,6 +999,219 @@ def _matching_api_calls(state: dict, path_fragment: str) -> list[list[str]]:
 		call for call in state.get("api_calls", [])
 		if any(path_fragment in arg for arg in call)
 	]
+
+
+def _run_linked_issue_hydration(
+	*,
+	graphql_response: dict,
+	issue_responses: dict[str, dict] | None = None,
+	fallback_numbers: list[int] | None = None,
+	graphql_failure: bool = False,
+) -> dict:
+	"""Execute the real GraphQL discovery and issue hydration block."""
+	block = _extract_linked_issue_hydration_block()
+
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_graphql_hydration_") as td:
+		tmp_path = Path(td)
+		runtime_dir = tmp_path / "runtime"
+		bin_dir = tmp_path / "bin"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		bin_dir.mkdir(parents=True, exist_ok=True)
+
+		gh_state_file = runtime_dir / "gh_state.json"
+		_install_mock_gh(bin_dir, gh_state_file)
+		api_responses: dict[str, dict] = {"graphql": graphql_response}
+		api_responses.update(issue_responses or {})
+		mock_state: dict[str, object] = {"api_responses": api_responses}
+		if graphql_failure:
+			mock_state["api_failures"] = ["graphql"]
+		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
+
+		capture_file = runtime_dir / "captured.env"
+		harness = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+gh_retry() {{ "$@"; }}
+_safe_gh_jq() {{ gh api "$@"; }}
+extract_repo_scoped_issue_refs_from_text() {{ :; }}
+
+REPOSITORY="owner/repo"
+PR_NUMBER="42"
+_pr_meta='{{}}'
+
+{block}
+
+{{
+  printf 'FIRST_ISSUE=%s\n' "${{FIRST_ISSUE}}"
+  printf 'FIRST_ISSUE_BODY=%s\n' "${{FIRST_ISSUE_BODY}}"
+  printf 'FIRST_ISSUE_LABELS_JSON=%s\n' "${{FIRST_ISSUE_LABELS_JSON}}"
+}} > "${{CAPTURE_FILE}}"
+"""
+		script_path = runtime_dir / "graphql_hydration_harness.sh"
+		script_path.write_text(harness, encoding="utf-8")
+		script_path.chmod(0o755)
+
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"LINKED_ISSUE_FALLBACK_NUMBERS_JSON": json.dumps(fallback_numbers or []),
+			"CAPTURE_FILE": str(capture_file),
+		}
+		proc = subprocess.run(
+			["bash", str(script_path)],
+			cwd=str(tmp_path),
+			env=_sanitized_git_env(env),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode == 0, (
+			f"GraphQL hydration harness exited {proc.returncode}\n"
+			f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		)
+
+		captured = {}
+		for raw in capture_file.read_text(encoding="utf-8").splitlines():
+			if "=" in raw:
+				key, _, value = raw.partition("=")
+				captured[key] = value
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		state["_captured"] = captured
+		state["_stderr"] = proc.stderr
+		return state
+
+
+def _graphql_linked_issues(nodes: list[object]) -> dict:
+	return {
+		"data": {
+			"repository": {
+				"pullRequest": {
+					"closingIssuesReferences": {"nodes": nodes},
+				},
+			},
+		},
+	}
+
+
+def _complete_graphql_issue(number: int, body: str, labels: list[str]) -> dict:
+	return {
+		"number": number,
+		"body": body,
+		"labels": {
+			"nodes": [{"name": label} for label in labels],
+			"pageInfo": {"hasNextPage": False},
+		},
+	}
+
+
+def test_linked_issue_query_requests_complete_pagination_aware_nodes() -> None:
+	src = _rb_judge_text()
+	assert "closingIssuesReferences(first: 50)" in src
+	assert "labels(first: 100)" in src
+	assert "pageInfo { hasNextPage }" in src
+
+
+def test_complete_graphql_node_avoids_issue_rest_read() -> None:
+	state = _run_linked_issue_hydration(
+		graphql_response=_graphql_linked_issues([
+			_complete_graphql_issue(41, "Build feature X.", ["ai:orchestrator-managed", "ai:closed"]),
+		]),
+	)
+
+	assert state["_captured"] == {
+		"FIRST_ISSUE": "41",
+		"FIRST_ISSUE_BODY": "Build feature X.",
+		"FIRST_ISSUE_LABELS_JSON": '["ai:orchestrator-managed","ai:closed"]',
+	}
+	assert len(_matching_api_calls(state, "graphql")) == 1
+	assert _matching_api_calls(state, "issues/41") == []
+
+
+def test_complete_graphql_empty_body_preserves_first_issue_labels() -> None:
+	state = _run_linked_issue_hydration(
+		graphql_response=_graphql_linked_issues([
+			_complete_graphql_issue(41, "", ["ai:orchestrator-managed"]),
+			_complete_graphql_issue(42, "Fallback body", ["bug"]),
+		]),
+	)
+
+	assert state["_captured"]["FIRST_ISSUE"] == "41"
+	assert state["_captured"]["FIRST_ISSUE_BODY"] == "Fallback body"
+	assert json.loads(state["_captured"]["FIRST_ISSUE_LABELS_JSON"]) == ["ai:orchestrator-managed"]
+	assert _matching_api_calls(state, "issues/41") == []
+	assert _matching_api_calls(state, "issues/42") == []
+
+
+def test_partial_graphql_node_falls_back_to_one_issue_rest_read() -> None:
+	state = _run_linked_issue_hydration(
+		graphql_response=_graphql_linked_issues([{
+			"number": 41,
+			"labels": {"nodes": [{"name": "truncated"}], "pageInfo": {"hasNextPage": False}},
+		}]),
+		issue_responses={
+			"issues/41": {"body": "REST body", "labels": [{"name": "ai:orchestrator-managed"}]},
+		},
+	)
+
+	assert state["_captured"]["FIRST_ISSUE_BODY"] == "REST body"
+	assert json.loads(state["_captured"]["FIRST_ISSUE_LABELS_JSON"]) == ["ai:orchestrator-managed"]
+	assert len(_matching_api_calls(state, "issues/41")) == 1
+
+
+def test_paginated_graphql_labels_fall_back_to_one_issue_rest_read() -> None:
+	paginated_node = _complete_graphql_issue(41, "Truncated GraphQL body", ["first-page-label"])
+	paginated_node["labels"]["pageInfo"]["hasNextPage"] = True
+	state = _run_linked_issue_hydration(
+		graphql_response=_graphql_linked_issues([paginated_node]),
+		issue_responses={
+			"issues/41": {"body": "Complete REST body", "labels": [{"name": "complete-label"}]},
+		},
+	)
+
+	assert state["_captured"]["FIRST_ISSUE_BODY"] == "Complete REST body"
+	assert json.loads(state["_captured"]["FIRST_ISSUE_LABELS_JSON"]) == ["complete-label"]
+	assert len(_matching_api_calls(state, "issues/41")) == 1
+
+
+def test_empty_graphql_response_uses_fallback_number_and_rest() -> None:
+	state = _run_linked_issue_hydration(
+		graphql_response=_graphql_linked_issues([]),
+		fallback_numbers=[41],
+		issue_responses={"issues/41": {"body": "Fallback body", "labels": []}},
+	)
+
+	assert state["_captured"]["FIRST_ISSUE"] == "41"
+	assert state["_captured"]["FIRST_ISSUE_BODY"] == "Fallback body"
+	assert len(_matching_api_calls(state, "issues/41")) == 1
+
+
+def test_failed_graphql_request_uses_fallback_number_and_rest() -> None:
+	state = _run_linked_issue_hydration(
+		graphql_response=_graphql_linked_issues([]),
+		graphql_failure=True,
+		fallback_numbers=[41],
+		issue_responses={"issues/41": {"body": "Fallback after failure", "labels": []}},
+	)
+
+	assert state["_captured"]["FIRST_ISSUE_BODY"] == "Fallback after failure"
+	assert len(_matching_api_calls(state, "graphql")) == 1
+	assert len(_matching_api_calls(state, "issues/41")) == 1
+
+
+def test_mixed_graphql_nodes_only_rest_hydrate_incomplete_node() -> None:
+	state = _run_linked_issue_hydration(
+		graphql_response=_graphql_linked_issues([
+			_complete_graphql_issue(41, "", ["ai:orchestrator-managed"]),
+			{"number": 42, "body": "Incomplete GraphQL body", "labels": None},
+		]),
+		issue_responses={"issues/42": {"body": "REST fallback body", "labels": [{"name": "bug"}]}},
+	)
+
+	assert state["_captured"]["FIRST_ISSUE"] == "41"
+	assert state["_captured"]["FIRST_ISSUE_BODY"] == "REST fallback body"
+	assert json.loads(state["_captured"]["FIRST_ISSUE_LABELS_JSON"]) == ["ai:orchestrator-managed"]
+	assert _matching_api_calls(state, "issues/41") == []
+	assert len(_matching_api_calls(state, "issues/42")) == 1
 
 
 def test_loop_jq_filter_extracts_orchestrator_managed_from_realistic_payload() -> None:
