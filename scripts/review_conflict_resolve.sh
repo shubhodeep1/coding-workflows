@@ -48,6 +48,53 @@ WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_
 ORCHESTRATE_FORCE_TICK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_force_tick.sh"
 OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"
+# This script is staged main-primary (stage_workflow_support.sh
+# MAIN_PRIMARY_BOOTSTRAP_SCRIPTS), so it can execute against a support bundle
+# whose staging list predates its opencode dependencies: a consumer repo whose
+# SCRIPT_REF (e.g. stable) carries a stage_workflow_support.sh from before the
+# opencode cutover stages this resolver from main but never stages
+# opencode_helpers.sh / write_opencode_config.sh into SUPPORT_SCRIPTS_DIR
+# (drhyg_ecommerce_automation runs 33278423340 / 33279585316 died here with
+# failure_class=helpers_missing on every conflicted PR). Resolve each missing
+# dependency from the on-disk support checkouts instead — main snapshot first,
+# to match this script's own main-primary source — before the hard guard
+# below. Paths are absolute because OPENCODE_HELPERS_PATH is re-sourced later
+# from a bash -c whose cwd may differ.
+_resolver_dependency_fallback()
+{
+  local dependency_name="$1" dependency_candidate
+  local -a dependency_candidates=(
+    "${GITHUB_WORKSPACE:-${PWD}}/.codex-workflow-src-main/scripts/${dependency_name}"
+    "${GITHUB_WORKSPACE:-${PWD}}/.codex-workflow-src/scripts/${dependency_name}"
+  )
+  # The workspace scripts/ candidate is trusted only on the workflow source
+  # repo itself, where scripts/ is the canonical source. On consumer repos
+  # that path can carry PR-modified code, and sourcing it would break the
+  # "run only staged support helpers" posture — the support checkouts above
+  # are the only acceptable fallbacks there.
+  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+    dependency_candidates+=("${GITHUB_WORKSPACE:-${PWD}}/scripts/${dependency_name}")
+  fi
+  for dependency_candidate in "${dependency_candidates[@]}"; do
+    if [ -f "${dependency_candidate}" ] && [ -r "${dependency_candidate}" ]; then
+      printf '%s\n' "${dependency_candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || [ ! -r "${OPENCODE_HELPERS_PATH}" ]; then
+  if _resolver_fallback_path="$(_resolver_dependency_fallback opencode_helpers.sh)"; then
+    echo "::warning::opencode_helpers.sh not staged in SUPPORT_SCRIPTS_DIR (${SUPPORT_SCRIPTS_DIR:-scripts}); falling back to ${_resolver_fallback_path} (staging list at SCRIPT_REF=${SCRIPT_REF:-unknown} likely predates the opencode cutover)."
+    OPENCODE_HELPERS_PATH="${_resolver_fallback_path}"
+  fi
+fi
+if [ ! -f "${OPENCODE_CONFIG_WRITER_PATH}" ] || [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
+  if _resolver_fallback_path="$(_resolver_dependency_fallback write_opencode_config.sh)"; then
+    echo "::warning::write_opencode_config.sh not staged in SUPPORT_SCRIPTS_DIR (${SUPPORT_SCRIPTS_DIR:-scripts}); falling back to ${_resolver_fallback_path} (staging list at SCRIPT_REF=${SCRIPT_REF:-unknown} likely predates the opencode cutover)."
+    OPENCODE_CONFIG_WRITER_PATH="${_resolver_fallback_path}"
+  fi
+fi
 # shellcheck source=/dev/null
 if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then
   resolver_helpers_missing_alert="opencode_agent_failure phase=review_conflict_resolve role=writer model=${MODEL_EDITOR:-unknown} rc=1 failure_class=helpers_missing"
@@ -61,7 +108,7 @@ if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>
   echo "${resolver_helpers_missing_alert}" >&2
   exit 1
 fi
-if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
+if [ ! -f "${OPENCODE_CONFIG_WRITER_PATH}" ] || [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
   opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing || true
   exit 1
 fi

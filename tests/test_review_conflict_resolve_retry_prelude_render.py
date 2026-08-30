@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-"""Contract tests for outcome-aware retry-prelude rendering in
-scripts/review_conflict_resolve.sh::_build_retry_prompt.
+"""Contract tests for resolver dependency fallback and outcome-aware
+retry-prelude rendering in scripts/review_conflict_resolve.sh.
+
+The dependency-fallback checks exercise main-first checkout selection,
+consumer trust-boundary gating, source-repository workspace fallback, and
+the fail-closed path when no trusted readable helper exists.
 
 The retry-prelude path keeps the next-attempt reflexion prompt
 accurate when the previous attempt was killed by `timeout` (exit
@@ -47,6 +51,8 @@ orchestrator/project-2840 stack, plus run 25629086684 / PR #2865.
 from __future__ import annotations
 
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -59,6 +65,104 @@ TIMEOUT_PRELUDE = PROMPTS_DIR / "integration-sync-conflict-resolver-retry-timeou
 
 def _resolve_script_text() -> str:
 	return RESOLVE_SCRIPT.read_text(encoding="utf-8")
+
+
+def _resolver_dependency_fallback_source() -> str:
+	src = _resolve_script_text()
+	match = re.search(
+		r"^_resolver_dependency_fallback\(\)\n\{\n.*?\n\}\n",
+		src,
+		flags=re.DOTALL | re.MULTILINE,
+	)
+	assert match is not None, "resolver dependency fallback helper is missing"
+	return match.group(0)
+
+
+def _run_resolver_dependency_fallback(
+	workspace_root: Path,
+	*,
+	workflow_source_repo: bool,
+) -> subprocess.CompletedProcess[str]:
+	script = (
+		"set -euo pipefail\n"
+		f"GITHUB_WORKSPACE={str(workspace_root)!r}\n"
+		f"IS_WORKFLOW_SOURCE_REPO={'true' if workflow_source_repo else 'false'}\n"
+		f"{_resolver_dependency_fallback_source()}\n"
+		"_resolver_dependency_fallback opencode_helpers.sh\n"
+	)
+	return subprocess.run(
+		["bash", "-c", script],
+		check=False,
+		capture_output=True,
+		text=True,
+	)
+
+
+def test_dependency_fallback_prefers_main_then_script_ref_checkout() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		workspace_root = Path(tmp)
+		main_helper = workspace_root / ".codex-workflow-src-main/scripts/opencode_helpers.sh"
+		branch_helper = workspace_root / ".codex-workflow-src/scripts/opencode_helpers.sh"
+		main_helper.parent.mkdir(parents=True)
+		branch_helper.parent.mkdir(parents=True)
+		main_helper.write_text(":\n", encoding="utf-8")
+		branch_helper.write_text(":\n", encoding="utf-8")
+		result = _run_resolver_dependency_fallback(
+			workspace_root,
+			workflow_source_repo=False,
+		)
+		assert result.returncode == 0
+		assert result.stdout.strip() == str(main_helper)
+
+	with tempfile.TemporaryDirectory() as tmp:
+		workspace_root = Path(tmp)
+		branch_helper = workspace_root / ".codex-workflow-src/scripts/opencode_helpers.sh"
+		branch_helper.parent.mkdir(parents=True)
+		branch_helper.write_text(":\n", encoding="utf-8")
+		result = _run_resolver_dependency_fallback(
+			workspace_root,
+			workflow_source_repo=False,
+		)
+		assert result.returncode == 0
+		assert result.stdout.strip() == str(branch_helper)
+
+
+def test_dependency_fallback_gates_workspace_scripts_and_fails_closed() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		workspace_root = Path(tmp)
+		workspace_helper = workspace_root / "scripts/opencode_helpers.sh"
+		workspace_helper.parent.mkdir(parents=True)
+		workspace_helper.write_text(":\n", encoding="utf-8")
+
+		consumer_result = _run_resolver_dependency_fallback(
+			workspace_root,
+			workflow_source_repo=False,
+		)
+		assert consumer_result.returncode == 1
+		assert consumer_result.stdout == ""
+
+		source_result = _run_resolver_dependency_fallback(
+			workspace_root,
+			workflow_source_repo=True,
+		)
+		assert source_result.returncode == 0
+		assert source_result.stdout.strip() == str(workspace_helper)
+
+	with tempfile.TemporaryDirectory() as tmp:
+		missing_result = _run_resolver_dependency_fallback(
+			Path(tmp),
+			workflow_source_repo=False,
+		)
+		assert missing_result.returncode == 1
+		assert missing_result.stdout == ""
+
+
+def test_dependency_fallback_wiring_warns_and_updates_helper_paths() -> None:
+	src = _resolve_script_text()
+	assert "opencode_helpers.sh not staged in SUPPORT_SCRIPTS_DIR" in src
+	assert 'OPENCODE_HELPERS_PATH="${_resolver_fallback_path}"' in src
+	assert "write_opencode_config.sh not staged in SUPPORT_SCRIPTS_DIR" in src
+	assert 'OPENCODE_CONFIG_WRITER_PATH="${_resolver_fallback_path}"' in src
 
 
 def _render_retry_template(template_text: str, env: dict[str, str]) -> str:
@@ -387,6 +491,9 @@ def test_reasoning_default_lowered_to_high() -> None:
 
 
 def main() -> int:
+	test_dependency_fallback_prefers_main_then_script_ref_checkout()
+	test_dependency_fallback_gates_workspace_scripts_and_fails_closed()
+	test_dependency_fallback_wiring_warns_and_updates_helper_paths()
 	test_both_prelude_files_exist()
 	test_validation_prelude_carries_violations_framing()
 	test_validation_prelude_optional_resolver_serena_hint_renders_cleanly()

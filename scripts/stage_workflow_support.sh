@@ -58,7 +58,14 @@ REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.
 # resolver-safety rationale above. It stays fail-open: some refs still ship a
 # self-contained render_prompt.sh, so when the backend is absent from both refs
 # bootstrap preserves that ref's bundled bash renderer instead of hard-failing.
-MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh review_conflict_prepare.sh render_prompt.py"
+#
+# opencode_helpers.sh / write_opencode_config.sh are main-primary because
+# review_conflict_resolve.sh (already main-primary above) sources them from
+# SUPPORT_SCRIPTS_DIR and hard-fails with failure_class=helpers_missing when
+# absent. Staging them from the same snapshot as the resolver keeps the
+# resolver and its dependencies in lockstep, so a main-side resolver change
+# can never land in a bundle whose helpers came from an older ref.
+MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh review_conflict_prepare.sh render_prompt.py opencode_helpers.sh write_opencode_config.sh"
 # Optional bootstrap scripts: allowed to be missing from both
 # refs.  The bootstrap emits a warning and continues — callers
 # that depend on these must themselves tolerate absence.  Keep
