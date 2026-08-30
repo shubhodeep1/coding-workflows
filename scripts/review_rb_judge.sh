@@ -884,12 +884,16 @@ ensure_label_exists "ai:closed" "${REPOSITORY}"
 # -----------------------------------------------------------
 # Find linked issues for judge context
 # -----------------------------------------------------------
-ISSUE_NUMBERS="$(gh_retry gh api graphql \
-  -f owner="${REPOSITORY%/*}" \
-  -f name="${REPOSITORY#*/}" \
-  -F number="${PR_NUMBER}" \
-  -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
-  --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+RB_LINKED_ISSUES_GRAPHQL_JSON="$(gh_retry gh api graphql \
+	-f owner="${REPOSITORY%/*}" \
+	-f name="${REPOSITORY#*/}" \
+	-F number="${PR_NUMBER}" \
+	-f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number body labels(first: 100) { nodes { name } pageInfo { hasNextPage } } } } } } }' || true)"
+ISSUE_NUMBERS="$(printf '%s' "${RB_LINKED_ISSUES_GRAPHQL_JSON}" | jq -r '
+	.data.repository.pullRequest.closingIssuesReferences.nodes[]?
+	| select(try ((type == "object") and ((.number | type) == "number")) catch false)
+	| .number
+' 2>/dev/null || true)"
 
 if [ -z "${ISSUE_NUMBERS}" ]; then
   ISSUE_NUMBERS="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
@@ -913,15 +917,43 @@ unset _pr_meta
 
 FIRST_ISSUE=""
 FIRST_ISSUE_BODY=""
-# Labels of the parent (FIRST_ISSUE) issue.  Captured from the same
-# REST GET that already fetches the body so the close_and_reissue
-# branch below can propagate orchestrator-lineage labels without
-# issuing an extra API call (see CLAUDE.md §15 — extend an existing
-# call rather than adding a new one).
+# Labels of the parent (FIRST_ISSUE) issue. Complete GraphQL nodes avoid
+# a redundant REST GET; incomplete nodes retain the existing REST fallback.
 FIRST_ISSUE_LABELS_JSON="[]"
 while IFS= read -r issue_number; do
   [ -n "${issue_number}" ] || continue
-  ISSUE_META_JSON="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" || echo '{}')"
+	RB_LINKED_ISSUE_NODE_JSON="$(printf '%s' "${RB_LINKED_ISSUES_GRAPHQL_JSON}" | jq -c --arg issue_number "${issue_number}" '
+		[.data.repository.pullRequest.closingIssuesReferences.nodes[]?
+		| select(try (
+			(type == "object")
+			and ((.number | type) == "number")
+			and ((.number | tostring) == $issue_number)
+		) catch false)]
+		| first // empty
+	' 2>/dev/null || true)"
+	if printf '%s' "${RB_LINKED_ISSUE_NODE_JSON}" | jq -e '
+		try (
+			(type == "object")
+			and ((.number | type) == "number")
+			and has("body")
+			and ((.body == null) or ((.body | type) == "string"))
+			and ((.labels | type) == "object")
+			and ((.labels.nodes | type) == "array")
+			and all(.labels.nodes[];
+				(type == "object")
+				and has("name")
+				and ((.name | type) == "string")
+			)
+			and ((.labels.pageInfo | type) == "object")
+			and (.labels.pageInfo | has("hasNextPage"))
+			and ((.labels.pageInfo.hasNextPage | type) == "boolean")
+			and (.labels.pageInfo.hasNextPage == false)
+		) catch false
+	' >/dev/null 2>&1; then
+		ISSUE_META_JSON="$(printf '%s' "${RB_LINKED_ISSUE_NODE_JSON}" | jq -c '{body: .body, labels: .labels.nodes}')"
+	else
+		ISSUE_META_JSON="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" || echo '{}')"
+	fi
   BODY="$(printf '%s' "${ISSUE_META_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
   if [ -z "${FIRST_ISSUE}" ]; then
     FIRST_ISSUE="${issue_number}"
