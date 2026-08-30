@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:70 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603]\n  PROBLEM: `_resolver_dependency_fallback()` selects candidates with `-f` (existence-only), so it can return an existing-but-unreadable file as the fallback result.\n  WHY: An unreadable support-checkout file is selected and later sourced or executed, causing the resolver to fail instead of continuing to a readable candidate.\n- scripts/review_conflict_resolve.sh:77 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603]\n  PROBLEM: The helpers fallback trigger uses `-f` (existence-only), so an existing-but-unreadable staged helpers file skips fallback.\n  WHY: The unreadable path reaches the hard guard at line 90, causing `failure_class=helpers_missing` and resolver exit 1; the config-writer trigger at line 83 correctly uses `-r`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add both helpers to MAIN_PRIMARY_BOOTSTRAP_SCRIPTS so once a new stable is tagged, the resolver and its dependencies always come from the same snapshot and cannot skew again\" (PR description, Fix bullet 2).\n  expected_change_site: scripts/stage_workflow_support.sh MAIN_PRIMARY_BOOTSTRAP_SCRIPTS\n  confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The diff hunk at scripts/stage_workflow_support.sh:68 shows `opencode_helpers.sh write_opencode_config.sh` appended to MAIN_PRIMARY_BOOTSTRAP_SCRIPTS; this requirement is satisfied.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_conflict_resolve.sh:70 | severity=MAJOR | confidence=5\n  PROBLEM: `_resolver_dependency_fallback()` selects candidates with `-f` (existence-only), so it returns an existing-but-unreadable file as the fallback result.\n  WHY: If a support-checkout copy of `opencode_helpers.sh` or `write_opencode_config.sh` exists on disk but is unreadable (corrupt checkout, permission issue), the fallback function selects and returns it. The caller then tries to `source` or execute that unreadable file, which fails.\n- scripts/review_conflict_resolve.sh:77 | severity=MAJOR | confidence=5\n  PROBLEM: The helpers fallback trigger uses `-f` (existence-only) to decide whether to invoke `_resolver_dependency_fallback()`.\n  WHY: If the staged `opencode_helpers.sh` exists but is unreadable, `-f` returns true, the fallback is skipped, and the unreadable path reaches the hard guard at line 90.\n- Requirement: \"Add both helpers to MAIN_PRIMARY_BOOTSTRAP_SCRIPTS so once a new stable is tagged, the resolver and its dependencies always come from the same snapshot and cannot skew again\" (PR description, Fix bullet 2).\n  Expected change site: scripts/stage_workflow_support.sh MAIN_PRIMARY_BOOTSTRAP_SCRIPTS\n  Evidence of absence: The diff hunk at scripts/stage_workflow_support.sh:68 shows `opencode_helpers.sh write_opencode_config.sh` appended to MAIN_PRIMARY_BOOTSTRAP_SCRIPTS. This requirement is satisfied.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_conflict_resolve.sh\n  Line or code reference: lines 70, 77\n  Problem: The `_resolver_dependency_fallback()` function and the helpers trigger still use `-f` (existence check) to select candidates and decide fallback, while the config writer trigger at line 83 correctly uses `-r` (readability check).\n  Why it fails at runtime: If a candidate file exists but is unreadable (corrupt checkout, permission issue), `_resolver_dependency_fallback()` selects it with `-f`, but the helpers trigger at line 77 does not invoke fallback because `-f` returns true. The hard guard at line 90 then tries to `source` the unreadable file, fails, and the resolver exits 1 with `failure_class=helpers_missing` instead of continuing to search for a readable candidate.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- scripts/review_conflict_resolve.sh\n  Line or code reference: line 70\n  Problem: The `_resolver_dependency_fallback()` function uses `-f` to test file existence, which can select unreadable files.\n  Why it fails at runtime: Using `-f` allows selection of files that pass existence but fail readability, creating a path where the fallback selects a bad candidate and the resolver later fails when sourcing it.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- scripts/review_conflict_resolve.sh\n  Line or code reference: line 77\n  Problem: The helpers trigger condition uses `-f` to check if fallback should be invoked, which is inconsistent with the config writer trigger at line 83 that uses `-r`.\n  Why it fails at runtime: This inconsistency means the helpers path can attempt to use an unreadable file selected by the fallback, leading to the hard guard failure and `helpers_missing` exit.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "66b6a7ed27c781da9b051c96354ae85bed5028da250f46eb4adbd8fee1158916",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3897,
+    "run_id": "33280792111",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33280792111",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260830003014_222471089d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3897,
+    "run_id": "33280792111"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-30T00:30:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
