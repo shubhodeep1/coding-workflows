@@ -38,6 +38,19 @@ def _read(path: Path) -> str:
 	return path.read_text(encoding="utf-8")
 
 
+def _workflow_step(workflow: str, name: str) -> str:
+	step_parts = workflow.split(f"      - name: {name}", 1)
+	assert len(step_parts) == 2, f"workflow step {name!r} not found"
+	return step_parts[1].split("\n      - name: ", 1)[0]
+
+
+def _normalized_step_predicate(workflow: str, name: str) -> tuple[str, ...]:
+	step = _workflow_step(workflow, name)
+	match = re.search(r"^\s*if:\s*(.+)$", step, flags=re.MULTILINE)
+	assert match is not None, f"{name} has no if predicate"
+	return tuple(part.strip() for part in match.group(1).split("||"))
+
+
 # ──────────────────────────────────────────────────────────────────
 # Repo scaffolding
 # ──────────────────────────────────────────────────────────────────
@@ -221,6 +234,50 @@ def test_consumer_sync_commit_step_stages_and_reports_the_new_categories() -> No
 	# Assembly deletes fragments, so staging must pick up removals.
 	assert "git add -A -- CHANGELOG.md changelog.d" in commit_step
 	assert "Changelog fragment assets:" in commit_step
+
+
+def test_consumer_sync_notification_predicate_matches_commit_predicate() -> None:
+	workflow = _read(UPDATE_WORKFLOWS)
+	commit_predicate = _normalized_step_predicate(workflow, "Commit and push updates")
+	notification_predicate = _normalized_step_predicate(workflow, "Send Telegram notification")
+	assert notification_predicate == commit_predicate
+	assert notification_predicate == (
+		"steps.update.outputs.has_updates == 'true'",
+		"steps.audit_gate.outputs.status == 'applied'",
+		"steps.claude_sync.outputs.claude_has_changes == 'true'",
+		"steps.claude_md_sync.outputs.claude_md_changed == 'true'",
+		"steps.changelog_sync.outputs.changelog_assets_has_changes == 'true'",
+		"steps.changelog_assemble.outputs.changelog_assembled == 'true'",
+	)
+
+
+def test_consumer_sync_notification_reports_changelog_only_updates() -> None:
+	workflow = _read(UPDATE_WORKFLOWS)
+	notification_step = _workflow_step(workflow, "Send Telegram notification")
+	assert "/tmp/changelog_asset_files.txt" in notification_step
+	assert "Changelog fragment assets changed:" in notification_step
+	assert 'if [ -n "$CHANGELOG_ASSET_LIST" ]' in notification_step
+	assert "${{ steps.changelog_assemble.outputs.changelog_fragment_count }}" in notification_step
+	assert "${{ steps.changelog_assemble.outputs.changelog_layout }}" in notification_step
+	assert 'if [ "${CHANGELOG_ASSEMBLED}" = "true" ]' in notification_step
+	assert (
+		"Changelog fragments assembled: ${CHANGELOG_FRAGMENT_COUNT} fragment(s), "
+		"layout ${CHANGELOG_LAYOUT}."
+	) in notification_step
+
+
+def test_consumer_sync_notification_preserves_existing_category_text() -> None:
+	notification_step = _workflow_step(
+		_read(UPDATE_WORKFLOWS), "Send Telegram notification"
+	)
+	for text in (
+		"wrapper(s) updated:",
+		"new wrapper(s) added:",
+		"Audit-gate assets applied:",
+		".claude/ asset(s) synced:",
+		"Top-level CLAUDE.md synced:",
+	):
+		assert text in notification_step
 
 
 def test_sync_step_order_matches_the_documented_categories() -> None:
