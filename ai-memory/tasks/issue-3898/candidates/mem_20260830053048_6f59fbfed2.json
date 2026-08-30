@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Safely apply August 27\u201329 workflow optimization recommendations\",\"issues\":[{\"id\":\"move-ci-policy-guards-first\",\"title\":\"Run deterministic CI policy guards immediately after checkout\",\"priority\":2},{\"id\":\"mirror-phase-wrapper-gates\",\"title\":\"Mirror reusable phase trigger predicates in wrapper workflows\",\"priority\":2},{\"id\":\"secure-check-triage-inputs\",\"title\":\"Harden check-failure triage before secret-bearing execution\",\"priority\":1},{\"id\":\"secure-workflow-shell-inputs\",\"title\":\"Stop interpolating dispatch inputs into workflow shell source\",\"priority\":1},{\"id\":\"fix-changelog-update-notification\",\"title\":\"Notify when workflow updates contain only changelog changes\",\"priority\":4},{\"id\":\"hydrate-rb-linked-issues-graphql\",\"title\":\"Hydrate review-blocked linked issue context in the existing GraphQL query\",\"priority\":3},{\"id\":\"remove-duplicate-implement-render-stage\",\"title\":\"Remove duplicate render_prompt.py staging from implement workflow\",\"priority\":4},{\"id\":\"improve-failed-run-diagnostics\",\"title\":\"Persist actionable diagnostics when workflow log downloads fail\",\"priority\":3},{\"id\":\"closeout-august-recommendations\",\"title\":\"Record final recommendation classifications and retire processed source docs\",\"priority\":10}],\"dependency_edges\":[{\"from\":\"move-ci-policy-guards-first\",\"to\":\"closeout-august-recommendations\"},{\"from\":\"mirror-phase-wrapper-gates\",\"to\":\"closeout-august-recommendations\"},{\"from\":\"secure-check-triage-inputs\",\"to\":\"closeout-august-recommendations\"},{\"from\":\"secure-workflow-shell-inputs\",\"to\":\"closeout-august-recommendations\"},{\"from\":\"fix-changelog-update-notification\",\"to\":\"closeout-august-recommendations\"},{\"from\":\"hydrate-rb-linked-issues-graphql\",\"to\":\"closeout-august-recommendations\"},{\"from\":\"remove-duplicate-implement-render-stage\",\"to\":\"closeout-august-recommendations\"},{\"from\":\"improve-failed-run-diagnostics\",\"to\":\"closeout-august-recommendations\"}]}",
+  "fingerprint": "f3e70eb269aedf76a240380654fafe434b3d84c6537cb7432de88194ccd021e6",
+  "lineage": {
+    "issue_number": 3898,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33294576265",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33294576265",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260830053048_6f59fbfed2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3898,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33294576265"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Safely apply August 27\u201329 workflow optimization recommendations' into 9 issues (tracking #3898)",
+  "timestamps": {
+    "created_at": "2026-08-30T05:30:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
