@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-08-29T20:46:44Z",
+  "tick_at": "2026-08-30T15:30:10Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,7 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 1
+    "tracking_issues": 2
   },
   "tracking_issues": [
     {
@@ -32,6 +32,27 @@
       "status": "in-progress",
       "title": "[Orchestrator] Opencode cutover for review_autofix",
       "total_waves": 0,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 2,
+      "integration_ahead_by": "10",
+      "issue_counts": {
+        "closed": 0,
+        "done": 1,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 2,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 3898,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Safely apply August 27\u201329 workflow optimization recommendations",
+      "total_waves": 2,
       "wave_complete": false
     }
   ]
