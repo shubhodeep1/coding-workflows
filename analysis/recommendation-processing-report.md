@@ -969,10 +969,10 @@ This four-doc batch mixes one narrative workflow-cost memo with three appendix-b
   - None in the repeated groups; the one-item-loop cleanup was source-qualified to 2026-08-23 `SHELL-002` and classified non-material there.
 
 ## Outcome ledger for the 2026-08-27 and 2026-08-29 optimization docs
-The two source docs repeat recommendations across their narrative sections and append cross-reference and summary tables after their named findings. This ledger counts each named finding once under its source-qualified key and groups only the remaining narrative recommendations under stable short labels. On this ref, the two sources resolve to 9 actioned items, 6 already-satisfied items, 66 intentionally deferred items, and 3 invalid or non-material items (84 total).
+The two source docs repeat recommendations across their narrative sections and append cross-reference and summary tables after their named findings. This ledger counts each named finding once under its source-qualified key and groups only the remaining narrative recommendations under stable short labels. On this ref, the two sources resolve to 9 actioned items, 7 already-satisfied items, 65 intentionally deferred items, and 3 invalid or non-material items (84 total).
 
 ### `analysis/workflow-optimization-2026-08-27.md`
-- This source resolves to 2 `VALID&SAFE/actioned`, 34 `VALID-BUT-RISKY/deferred`, 3 `STALE-or-already-done`, and 2 `INVALID/non-material` recommendations (41 total: 26 named findings plus 15 deduped narrative groups).
+- This source resolves to 3 `VALID&SAFE/actioned`, 33 `VALID-BUT-RISKY/deferred`, 3 `STALE-or-already-done`, and 2 `INVALID/non-material` recommendations (41 total: 26 named findings plus 15 deduped narrative groups).
 
 #### Named findings
 - `VALID&SAFE/actioned`
@@ -1009,14 +1009,13 @@ The two source docs repeat recommendations across their narrative sections and a
 
 #### Repeated unnumbered recommendation groups (deduped)
 - `VALID&SAFE/actioned`
-  - None beyond the source's named actioned findings.
+  - `2026-08-27 :: failed-workflow diagnostic capture` — `scripts/collect_workflow_logs.py` records jobs-fetch status, observed job conclusions, bounded diagnostic failure reasons, and log-download outcomes for failed runs; `tests/test_collect_workflow_logs.py` covers unavailable, malformed, missing, transient, cached, and partial-response paths.
 - `VALID-BUT-RISKY/deferred`
   - `2026-08-27 :: reviewer reasoning and coverage policy` — lowering pass-one reasoning or changing reviewer coverage changes quality policy. The live roster, pass count, and reasoning schedule remain operator-controlled.
   - `2026-08-27 :: editor manifest retry and worktree reuse` — machine-generated manifest skeletons and summary-only retries would change editor validation, retry isolation, and whether edits survive a failed attempt; those semantics require a dedicated review-pipeline rollout.
   - `2026-08-27 :: same-head review dispatch suppression` — cancelling or suppressing queued work by PR/head changes concurrency ownership and stale-run recovery. Active work remains protected without adding a new cancellation policy.
   - `2026-08-27 :: implement outlier archival and per-call accounting` — independently archiving top-token runs and adding stable-prefix/per-call fields creates new transcript, privacy, and telemetry contracts; no model downgrade is inferred from the historical outlier.
   - `2026-08-27 :: reviewer rate-limit state carry-forward` — carrying a pass-one fallback selection into pass two changes provider retry and model-selection policy, so same-run health hints are not introduced here.
-  - `2026-08-27 :: failed-workflow diagnostic capture` — startup annotations, jobs-API fallbacks, and log-download status fields span collector API/error contracts and need fixtures for unavailable and partial GitHub responses.
   - `2026-08-27 :: MCP and Serena availability/value telemetry` — new Semble/Serena probe, replacement, byte, duration, and file-touch fields require coordinated emitters and parser updates; optional tooling continues to fail open.
   - `2026-08-27 :: AI-memory selection and push diagnostics` — score ranges, age distributions, duplicate suppression, and push-failure alerts alter cross-workflow memory telemetry and alert policy, so they remain a separate observability project.
   - `2026-08-27 :: GitHub API accounting and review-call reuse` — route-level `GH_API_CALL`/`GH_API_SUMMARY` events and parent-monitor/check-snapshot reuse cross pagination, rate-limit, freshness, and secret-redaction boundaries.
@@ -1030,7 +1029,7 @@ The two source docs repeat recommendations across their narrative sections and a
   - `2026-08-27 :: window metrics and ranking observations` — sampled run counts, wall-time percentages, absence of `BREAK_GLASS`, and statements that Semble is not a latency target are observations used to prioritize work, not repository-change recommendations.
 
 ### `analysis/workflow-optimization-2026-08-29.md`
-- This source resolves to 7 `VALID&SAFE/actioned`, 32 `VALID-BUT-RISKY/deferred`, 3 `STALE-or-already-done`, and 1 `INVALID/non-material` recommendation (43 total: 25 named findings plus 18 deduped narrative groups).
+- This source resolves to 6 `VALID&SAFE/actioned`, 32 `VALID-BUT-RISKY/deferred`, 4 `STALE-or-already-done`, and 1 `INVALID/non-material` recommendation (43 total: 25 named findings plus 18 deduped narrative groups).
 
 #### Named findings
 - `VALID&SAFE/actioned`
@@ -1069,7 +1068,6 @@ The two source docs repeat recommendations across their narrative sections and a
 - `VALID&SAFE/actioned`
   - `2026-08-29 :: early CI policy guards` — `.github/workflows/ci.yml` runs `Shared shell-block anti-regression checks` immediately after checkout and emits secret-safe `CI_GUARD_FAILURE` fields; `tests/test_ci_shared_shell_block_guard.py` pins order and diagnostics.
   - `2026-08-29 :: phase-wrapper predicate parity` — internal clarify/plan/implement/clarify-response workflows and their consumer templates mirror reusable job predicates; `tests/test_phase_wrapper_predicate_contract.py` covers actor, association, command, issue-kind, and tracker exclusions.
-  - `2026-08-29 :: collector structured-telemetry deduplication` — `scripts/collect_workflow_logs.py` removes parent wrapper copies only when matching child structured events exist while preserving sibling events; `tests/test_collect_workflow_logs.py` covers fresh, cached, malformed, and sibling cases.
 - `VALID-BUT-RISKY/deferred`
   - `2026-08-29 :: current-head queue cancellation` — suppressing same-head runs or cancelling superseded queued heads changes concurrency ownership and recovery for unknown SHAs; no cancellation is issued from this closeout.
   - `2026-08-29 :: small-diff reviewer reasoning policy` — canarying medium pass-two reasoning or changing model coverage is a review-quality policy change requiring operator metrics and approval.
@@ -1086,6 +1084,7 @@ The two source docs repeat recommendations across their narrative sections and a
   - `2026-08-29 :: untrusted assembled-body reference handling` — `scripts/render_prompt.py` and `scripts/render_prompt.sh` support assembled-body syntax bypass while retaining strict trusted-template validation; `tests/test_render_prompt_foundation.py`, `tests/test_assemble_prompt.py`, and `tests/test_review_autofix_review_pipeline_contract.py` cover unresolved `REFERENCE_*` content and strict templates.
   - `2026-08-29 :: sharded CI progress monitoring` — the four-way CI and release partitions are pinned by `tests/test_ci_poll_test_sharding.py`, and `tests/test_orchestrate_poll_process.py` already emits per-test timing, heartbeat, completion, and slowest-test diagnostics with sequential fallback.
   - `2026-08-29 :: provider usage availability` — `scripts/cost_audit.py` counts explicitly available and unavailable OpenRouter usage records separately; unavailable cache/token fields are no longer represented as measured zero in its reports and tests.
+  - `2026-08-29 :: collector structured-telemetry deduplication` — `scripts/collect_workflow_logs.py` removes parent wrapper copies only when matching child structured events exist while preserving sibling events; `tests/test_collect_workflow_logs.py` covers fresh, cached, malformed, and sibling cases.
 - `INVALID/non-material`
   - `2026-08-29 :: window metrics and no-change observations` — sampled duration/token tables, the absence of break-glass/context warnings, and conclusions to preserve Semble or avoid model deletion are prioritization evidence, not independent repository edits.
 
