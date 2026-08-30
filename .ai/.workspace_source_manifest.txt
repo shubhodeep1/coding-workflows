@@ -111,7 +111,6 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
-analysis/workflow-optimization-2026-08-27.md
 changelog.d/.gitkeep
 changelog.d/3738-merge-precheck-promisor-recovery.md
 changelog.d/3763-changes-lost-redispatch-get-method.md
@@ -124,6 +123,7 @@ changelog.d/3815-direct-openrouter-usage.md
 changelog.d/3816-ignore-unstructured-mcp-counter-echoes.md
 changelog.d/3816-stall-recovery-linkage-guards.md
 changelog.d/3817-ai-memory-push-retry-budget.md
+changelog.d/3833-finalize-task-fail-open.md
 changelog.d/3837-security-audit-path-diagnostics.md
 changelog.d/3841-resolve-addressed-review-threads.md
 changelog.d/3843-sweep-stale-queued-guard.md
@@ -141,6 +141,18 @@ changelog.d/3870-opencode-bootstrap-stable-alert.md
 changelog.d/3873-cache-read-baseline-forward-only.md
 changelog.d/3873-opencode-parity-telemetry.md
 changelog.d/3875-audit-plans-conflict-gate.md
+changelog.d/3876-drift-audit-cancelled-run-coverage.md
+changelog.d/3878-audit-plans-maintenance.md
+changelog.d/3880-plan-guard-consumer-scripts.md
+changelog.d/3882-render-reference-failopen-untrusted-body.md
+changelog.d/3885-verify-activation-correctness-audit.md
+changelog.d/3895-conflict-dispatch-pending-visibility.md
+changelog.d/3897-resolver-opencode-helpers-fallback.md
+changelog.d/3899-move-ci-policy-guards-first.md
+changelog.d/3900-phase-wrapper-predicate-parity.md
+changelog.d/3901-check-triage-input-hardening.md
+changelog.d/3902-secure-workflow-shell-inputs.md
+changelog.d/3903-changelog-only-notification.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/deploy-activate-digitalocean-steps.md
@@ -187,6 +199,7 @@ docs/plans/learn-claude-code-learnings-plan.md
 docs/plans/open-agents-learnings-plan.md
 docs/plans/opencode-review-autofix-cutover-plan.md
 docs/plans/orchestrator-prerequisite-gate-automation-plan.md
+docs/plans/orchestrator-security-pass-gate-plan.md
 docs/plans/orchestrator-validation-resilience-plan.md
 docs/plans/symphony-inspired-improvements-plan.md
 docs/postmortems/2026-05-18-project-2734-stall.md
@@ -589,9 +602,11 @@ tests/test_audit_gate_template_atomicity.py
 tests/test_blocker_check.py
 tests/test_branch_rebuild.py
 tests/test_changelog_fragment_contract.py
+tests/test_check_failure_triage_workflow_security.py
 tests/test_check_integration_pr_readiness.py
 tests/test_ci_inventory_parity_order_contract.py
 tests/test_ci_poll_test_sharding.py
+tests/test_ci_shared_shell_block_guard.py
 tests/test_clarify_informal_detect.py
 tests/test_codex_heartbeat.py
 tests/test_codex_skip_git_repo_check_contract.py
@@ -600,6 +615,7 @@ tests/test_codex_stall_guard_scripts.py
 tests/test_codex_thread_reuse_core.py
 tests/test_codex_thread_reuse_review.py
 tests/test_collect_workflow_logs.py
+tests/test_conflict_dispatch_active_run_visibility.py
 tests/test_consolidate_soft_error_reports.py
 tests/test_cost_audit_semble_metrics.py
 tests/test_cost_audit_serena_metrics.py
@@ -654,6 +670,7 @@ tests/test_orchestrator_concurrency_caps.py
 tests/test_overlap_validation_fallback.py
 tests/test_phase_prompt_untrusted_context_contract.py
 tests/test_phase_skip_gate_telemetry_contract.py
+tests/test_phase_wrapper_predicate_contract.py
 tests/test_plan_auto_answer_recommended_parser.py
 tests/test_plan_auto_approve_safe_state_fetch.py
 tests/test_plan_clarify_blocked_output.py
@@ -662,6 +679,7 @@ tests/test_plan_codex_step_extraction.py
 tests/test_plan_diagrams_contract.py
 tests/test_plan_reuse_audit_contract.py
 tests/test_plan_scope_mode_contract.py
+tests/test_plan_template_owned_path_guard.py
 tests/test_pr_checks_lib_required_filter.py
 tests/test_pr_merge_status_guard.py
 tests/test_prompt_compaction.py
@@ -775,6 +793,7 @@ tests/test_workflow_overlay_core.py
 tests/test_workflow_overlay_orchestrator.py
 tests/test_workflow_retro.py
 tests/test_workflow_retro_fanout.py
+tests/test_workflow_untrusted_input_contract.py
 tests/test_workspace_cache_maintenance.py
 tests/test_workspace_hooks.py
 tests/test_workspace_init.py

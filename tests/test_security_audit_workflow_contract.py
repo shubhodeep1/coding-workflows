@@ -353,7 +353,9 @@ def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None
 
 def test_internal_clarify_skips_source_repo_tracker_issues() -> None:
 	content = INTERNAL_CLARIFY_PATH.read_text(encoding="utf-8")
-	assert "if: ${{ !contains(github.event.issue.labels.*.name, 'ai:security-audit') && !contains(github.event.issue.labels.*.name, 'ai:retro') }}" in content
+	assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking')" in content
+	assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit')" in content
+	assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:retro')" in content
 
 
 def test_clarify_skips_consumer_tracker_issues() -> None:

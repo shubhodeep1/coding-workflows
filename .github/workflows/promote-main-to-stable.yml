@@ -312,8 +312,28 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           RESOLVED_VERSION: ${{ steps.resolve_version.outputs.version }}
+          TEST_REPO_INPUT: ${{ inputs.test_repo }}
+          SKIP_E2E_INPUT: ${{ inputs.skip_e2e }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+          PHASE_TIMEOUT_INPUT: ${{ inputs.phase_timeout }}
+          REVIEW_TIMEOUT_INPUT: ${{ inputs.review_timeout }}
         run: |
           set -euo pipefail
+          if [ -n "${TEST_REPO_INPUT}" ] && ! [[ "${TEST_REPO_INPUT}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::test_repo must be empty or match owner/repo."
+            exit 1
+          fi
+          for timeout_value in "${PHASE_TIMEOUT_INPUT}" "${REVIEW_TIMEOUT_INPUT}"; do
+            if ! [[ "${timeout_value}" =~ ^[0-9]+$ ]] || [ "${timeout_value}" -lt 1 ]; then
+              echo "::error::phase_timeout and review_timeout must be positive integers."
+              exit 1
+            fi
+          done
+          if [[ "${SKIP_E2E_INPUT}" != "true" && "${SKIP_E2E_INPUT}" != "false" ]] \
+              || [[ "${DRY_RUN_INPUT}" != "true" && "${DRY_RUN_INPUT}" != "false" ]]; then
+            echo "::error::skip_e2e and dry_run must be true or false."
+            exit 1
+          fi
           # test-and-mark-stable.yml hard-rejects any dispatch ref
           # other than `stable`, so we MUST pass `--ref stable` here.
           # The release job tags the just-fast-forwarded commit on
@@ -324,11 +344,11 @@ jobs:
           gh workflow run test-and-mark-stable.yml \
             --ref stable \
             -f version_tag="${RESOLVED_VERSION}" \
-            -f test_repo="${{ inputs.test_repo }}" \
-            -f skip_e2e="${{ inputs.skip_e2e }}" \
-            -f dry_run="${{ inputs.dry_run }}" \
-            -f phase_timeout="${{ inputs.phase_timeout }}" \
-            -f review_timeout="${{ inputs.review_timeout }}"
+            -f test_repo="${TEST_REPO_INPUT}" \
+            -f skip_e2e="${SKIP_E2E_INPUT}" \
+            -f dry_run="${DRY_RUN_INPUT}" \
+            -f phase_timeout="${PHASE_TIMEOUT_INPUT}" \
+            -f review_timeout="${REVIEW_TIMEOUT_INPUT}"
           echo "Dispatched test-and-mark-stable.yml on stable branch with version=${RESOLVED_VERSION}."
           echo "View runs: https://github.com/${GITHUB_REPOSITORY}/actions/workflows/test-and-mark-stable.yml"
 

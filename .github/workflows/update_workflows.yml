@@ -552,7 +552,7 @@ jobs:
           git push
 
       - name: Send Telegram notification
-        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true'
+        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -606,6 +606,13 @@ jobs:
           if [ -f /tmp/claude_md_changed_file.txt ] && [ -s /tmp/claude_md_changed_file.txt ]; then
             CLAUDE_MD_CHANGED_LIST=$(cat /tmp/claude_md_changed_file.txt)
           fi
+          CHANGELOG_ASSET_LIST=""
+          if [ -f /tmp/changelog_asset_files.txt ] && [ -s /tmp/changelog_asset_files.txt ]; then
+            CHANGELOG_ASSET_LIST=$(cat /tmp/changelog_asset_files.txt)
+          fi
+          CHANGELOG_ASSEMBLED="${{ steps.changelog_assemble.outputs.changelog_assembled }}"
+          CHANGELOG_FRAGMENT_COUNT="${{ steps.changelog_assemble.outputs.changelog_fragment_count }}"
+          CHANGELOG_LAYOUT="${{ steps.changelog_assemble.outputs.changelog_layout }}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           MSG="Workflow wrappers updated in ${REPO}
@@ -634,6 +641,15 @@ jobs:
             MSG="${MSG}
           Top-level CLAUDE.md synced:
           ${CLAUDE_MD_CHANGED_LIST}"
+          fi
+          if [ -n "$CHANGELOG_ASSET_LIST" ]; then
+            MSG="${MSG}
+          Changelog fragment assets changed:
+          ${CHANGELOG_ASSET_LIST}"
+          fi
+          if [ "${CHANGELOG_ASSEMBLED}" = "true" ]; then
+            MSG="${MSG}
+          Changelog fragments assembled: ${CHANGELOG_FRAGMENT_COUNT} fragment(s), layout ${CHANGELOG_LAYOUT}."
           fi
           MSG="${MSG}
           Source: coding-workflows@stable

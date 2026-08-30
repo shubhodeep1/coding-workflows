@@ -66,6 +66,14 @@ Selective Expansion when the marginal completeness cost is small, and editors /
 reviewers must then stay surgical inside that approved scope rather than
 shrinking it ad hoc.
 
+CI guard contract: `.github/workflows/ci.yml` runs the `Shared shell-block
+anti-regression checks` step immediately after checkout, before Python setup,
+dependency installation, lint, and tests. Rejections emit the secret-safe
+`CI_GUARD_FAILURE` diagnostic with `guard`, `check`, `file`, `line`,
+`expected`, and `scanned_files` fields, and the guard deliberately uses
+ubiquitous `grep` instead of `rg` so runner images without ripgrep still fail
+only on real policy drift.
+
 Plan prompt note: `PLAN_DIAGRAMS_OPTIONAL` defaults to `true`, so plan outputs
 may include `Data flow:`, `State machines:`, and `Failure modes:` only when
 they materially help. Trivial plans should omit them, and `State machines:` is
@@ -914,3 +922,7 @@ workflow-templates/review_rb_judge_dispatch.yml
 - GC path: the existing `internal-orchestrate-poll.yml` `*/5` cadence reaches `scripts/worktree_gc.sh` through the reusable `.github/workflows/orchestrate_poll.yml` job, so stale registry/worktree cleanup rides the poller's existing schedule instead of adding a new cron surface.
 - Active-run safety: GC first reuses `${RUNTIME_DIR}/state_snapshot_actions_runs.json`, then the cached `scripts/ai_memory.py actions-runs-cache get --repo <owner/repo>` payload, and treats `queued` plus `in_progress` owner runs as live.
 - Fail-open logging: invalid names emit `WORKTREE_REGISTER_INVALID_NAME`; registry rebuilds emit `WORKTREE_REGISTRY_REBUILD`; register/deregister I/O failures emit `WORKTREE_REGISTER_FAIL` / `WORKTREE_DEREGISTER_FAIL`; successful lifecycle events emit `WORKTREE_REGISTER`, `WORKTREE_DEREGISTER`, and `WORKTREE_GC`.
+
+## Phase wrapper predicate parity
+
+- Internal `internal-{clarify,plan,implement,orchestrate-clarify-respond}.yml` callers and their `workflow-templates/ai-*.yml` consumer counterparts mirror the complete job-level `if` predicate from the reusable workflow they invoke. Reusable predicates are canonical; `tests/test_phase_wrapper_predicate_contract.py` prevents actor, association, command-marker, issue-kind, and tracker-exclusion drift.
