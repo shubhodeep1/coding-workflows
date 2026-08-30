@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow security is enforced through repository-specific contract tests for untrusted inputs and shared shell blocks.",
   "timestamps": {
     "created_at": "2026-08-30T17:54:35Z",
