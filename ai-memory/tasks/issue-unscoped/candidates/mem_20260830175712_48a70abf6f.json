@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Most recent implementation PRs included updates to this manifest, even when the substantive change was in workflows, scripts, or analysis documents. Planning changes should verify whether the workspace-source manifest is generated or expected to change and include it when repository conventions require it.",
+  "fingerprint": "7cccb18079e76e5fe136bdcf529878babbf67b6961b06c1f42e2a15c47679e90",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33326431783",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33326431783",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3900",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3901",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3916",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3918",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3919",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3909",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3912",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3917",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3920",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3921"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260830175712_48a70abf6f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "The repository tracks source-workspace provenance through .ai/.workspace_source_manifest.txt in many implementation changes.",
+  "timestamps": {
+    "created_at": "2026-08-30T17:57:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
