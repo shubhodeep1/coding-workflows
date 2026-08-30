@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`  \nScope-mode justification: The request is fully specified and limited to one existing fixture. The safest complete implementation is an exact whole-file replacement with no broader changes.\n\n## Automation impact\n\n- Extends existing code only; no new script.\n- Scheduler/PR-push entry point: none required.\n- Long-running supervisor: not required.\n- Database gate: not applicable.\n- Future-removal registry: not applicable.\n\n## Planning ref\n\n- Branch: `main`\n- HEAD: `fbec387b6d8f7d5eba511d943edd0772a4690ec9`\n- Integration metadata is absent; no conflicting integration branch was identified.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt` \u2014 replace the current `run_id` value while preserving the required three-line format and final newline.\n\n## Functions or modules to implement\n\n- None. Perform a complete overwrite of the existing text fixture.\n\n## Data structures affected\n\n- Three-line plain-text canary record:\n  - `status: ok`\n  - `run_id: 33325623845`\n  - `updated-by: ai-pipeline`\n\n## API/interface changes\n\n- None.\n\n## Decisions\n\n### D1 \u2014 Replace the complete file contents\n\n- **Chosen:** Overwrite the file with the exact requested bytes, including the trailing newline.\n- **Alternatives considered:** Edit only the existing `run_id` line.\n- **Why:** Whole-file replacement directly enforces the no-extra-content requirement and avoids preserving unexpected content.\n\n## Risks and edge cases\n\n- Avoid modifying any file other than `tests/e2e_smoke_canary.txt`.\n- Preserve exactly three lines with no blank line or comments.\n- Ensure the final line ends with one newline.\n- Codebase inspection confirms the file exists and currently has the same structure but a different `run_id`.\n\n## Testing considerations\n\n- Verify `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n- Compare the file byte-for-byte against:\n  `status: ok\\nrun_id: 33325623845\\nupdated-by: ai-pipeline\\n`\n- Confirm the file has exactly three lines and a trailing newline.\n- No broader test suite is necessary for this fixture-only update.\n\n## Pre-execution self-check\n\n- Requirements are complete and internally consistent.\n- The target exists on the stated planning ref.\n- The plan introduces no unrelated files, interfaces, automation, or dependencies.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "658026a1300173beb46ed82447c8231ffe2144d33f1961eccc2f3dcfab6a6ade",
+  "lineage": {
+    "issue_number": 3927,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33326023970",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33326023970",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3927"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260830174650_02f3db9805",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3927,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33326023970"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3927",
+  "timestamps": {
+    "created_at": "2026-08-30T17:46:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
