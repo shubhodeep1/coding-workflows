@@ -451,3 +451,121 @@ No genuine TODO/FIXME/HACK markers were found. Confirmed ShellCheck warnings are
 | Code modularization | 12 | Large |
 | Expression size reduction | 2 | Medium |
 | Medium/Low fixes | 9 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-08-30)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is directly implementable; `NEEDS_VERIFICATION` requires stated checks; `RISKY_SKIP` is race-, retry-, pagination-, or recovery-sensitive and must not be automated.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — Batch auto-close lint label lookups
+
+- **ID:** `MERGE-001`
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files:** `scripts/lint_pr_body_auto_close.py:128-163,218-267`
+- **Current call count:** `U` logical calls, one per unique successful `(repo, issue)` lookup; repeated failures may exceed `U`.
+- **Proposed call count:** `Σ ceil(U_repo / 25)` GraphQL batches, plus per-item fallbacks for missing/error aliases.
+- **Endpoints:** Current GraphQL-backed `gh issue view --json labels`; proposed POST `/graphql` using aliased `repository.issueOrPullRequest`.
+- **Evidence:**
+  ```python
+  for source, line_no, line, keyword, referenced_repo, issue in candidate_matches:
+      ...
+      labels = label_lookup(lookup_repo, issue)
+  ```
+  Distinct references are cached but still fetched individually.
+- **Proposed fix:** Add `_fetch_issue_labels_graphql_batch`, group candidate references by repository, and prepopulate `issue_label_cache`. Follow `_fetch_candidate_issue_details_graphql`’s 25-alias chunking pattern. Retain `_fetch_issue_labels_gh` for unresolved aliases and injected-test lookup behavior.
+- **Safety rationale:** Fields and auth scopes overlap, but batching changes partial-failure behavior and the intentional retry of repeated references after an initial failure.
+- **Downstream signal:** Verify cross-repository grouping, batches over 25 issues, partial GraphQL errors, and the existing “first lookup fails, later reference succeeds” behavior before implementation.
+
+#### MERGE-002 — Batch plan-archival issue hydration
+
+- **ID:** `MERGE-002`
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files:** `scripts/lint_plan_archival_completeness.py:85-107,153-219`
+- **Current call count:** `N` logical calls, one per referenced issue.
+- **Proposed call count:** `ceil(N / 25)` GraphQL calls, plus per-item fallbacks for unresolved nodes.
+- **Endpoints:** Current GraphQL-backed `gh issue view --json labels,body`; proposed POST `/graphql` with aliased issue selectors.
+- **Evidence:**
+  ```python
+  for issue_num in referenced_issues:
+      issue = issue_fetcher(repo, issue_num)
+  ```
+- **Proposed fix:** Add `_fetch_issues_via_graphql_batch(numbers)` returning `{number: {labels, body}}`, then have `lint()` consume that map. Use `_fetch_candidate_issue_details_graphql`’s alias/chunk pattern and preserve `_fetch_issue_via_gh` as the fallback.
+- **Safety rationale:** All reads use identical repository/auth scope, but per-node lookup-error and fail-open/fail-closed semantics must remain unchanged.
+- **Downstream signal:** Test mixed valid/missing issues, partial GraphQL errors, more than 25 references, and both `fail_open_on_lookup_error` modes.
+
+#### MERGE-003 — Collapse paired title/body reads in poller reissue paths
+
+- **ID:** `MERGE-003`
+- **Safety tag:** `RISKY_SKIP`
+- **Files:** `scripts/orchestrate_poll_process.sh:10144-10146` (`execute_stall_recovery_action`), `12483-12491` (`run_standalone_stall_recovery`), `16832-16834` (implementation-failed sweep)
+- **Current call count:** 6
+- **Proposed call count:** 3
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence:**
+  ```bash
+  orig_title="$(gh_retry _safe_gh_jq ... --jq '.title ...')"
+  orig_body="$(gh_retry _safe_gh_jq ... --jq '.body ...')"
+  ```
+- **Proposed fix:** Fetch one issue JSON at each site and derive both `.title` and `.body` locally.
+- **Safety rationale:** Although each pair is adjacent with no intervening mutation, all sites are in `orchestrate_poll_process.sh`, including explicit stall-recovery paths.
+- **Downstream signal:** Do not auto-implement; manually inject API failures and run close/reissue plus implementation-failed regression tests to confirm unchanged fail-open behavior and logs.
+
+#### MERGE-004 — Use one final-PR snapshot for state and merged status
+
+- **ID:** `MERGE-004`
+- **Safety tag:** `RISKY_SKIP`
+- **Files:** `scripts/orchestrate_poll_process.sh:7361-7367` (`finalize_integration_merge_if_needed`); existing pattern at `scripts/orchestrate_poll_process.sh:1250-1254`
+- **Current call count:** 2
+- **Proposed call count:** 1
+- **Endpoint:** `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+- **Evidence:**
+  ```bash
+  existing_pr_state="$(gh_retry _safe_gh_jq ... --jq '.state' ...)"
+  existing_pr_merged="$(gh_retry _safe_gh_jq ... --jq '.merged_at != null' ...)"
+  ```
+- **Proposed fix:** Call `_fetch_pr_json "${final_pr}"` once and extract both fields with `_jq_field`. This matches the single-snapshot contract pinned at `tests/test_orchestrate_poll_process.py:13936-13940`.
+- **Safety rationale:** This is a final-merge race-defense path inside `orchestrate_poll_process.sh`, requiring mandatory manual review.
+- **Downstream signal:** Do not auto-implement; add a one-GET assertion covering closed-and-merged, closed-unmerged, and API-error cases.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — Check-failure triage discards and re-fetches full PR metadata
+
+- **ID:** `REUSE-001`
+- **Safety tag:** `RISKY_SKIP`
+- **Files:** `.github/workflows/check_failure_triage.yml:117-147`; `scripts/check_failure_triage.sh:149-178`
+- **Current call count:** 2 logical calls
+- **Proposed call count:** 1 steady-state call, retaining a fallback for stale, missing, or corrupt snapshots.
+- **Endpoint:** `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+- **Evidence:** The fork guard downloads the complete PR payload but deletes it at step exit; the later script fetches the same payload again for state, ref, title, URL, repository, and body.
+- **Proposed fix:** Persist the guard payload under `${RUNNER_TEMP}`, expose its path as a step output, and let `check_failure_triage.sh` validate and reuse it before invoking `gh_api_json_to_file`.
+- **Safety rationale:** The first call is inside an explicit retry loop, and PR state/title/body may change during intervening checkout/setup steps.
+- **Downstream signal:** Do not auto-implement; manually define an acceptable freshness policy and verify that PR closure or edits during setup remain observable.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- BATCH-001: RISKY_SKIP — Poller batching and linked-PR reconciliation defend against upstream races.
+- BATCH-002: RISKY_SKIP — Content reads execute inside an explicit retry/backoff loop.
+- API-001: RISKY_SKIP — The proposed cache affects multiple `orchestrate_poll_process.sh` recovery paths.
+- API-002: RISKY_SKIP — Paginated, status-transition-sensitive dispatch polling.
+- API-003: RISKY_SKIP — Distinct fail-open/fail-closed semantics and contractual dispatch logs must be preserved.
+- API-004: RISKY_SKIP — Consolidation changes paginated-fetch and semantic-cache failure behavior.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | MERGE-001, MERGE-002 |
+| RISKY_SKIP | 9 | MERGE-003, MERGE-004, REUSE-001, BATCH-001, BATCH-002, API-001, API-002, API-003, API-004 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
