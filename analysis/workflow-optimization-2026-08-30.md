@@ -266,3 +266,188 @@ The four phase families generated **751 skipped runs out of 762 (98.6%)**. These
 | Serena, target not emitted | 0 | 0 | 0 | 0 | 0 | 0 |
 
 Detailed Semble target coverage was available for 8/10 calls: five reviewer-context, two overflow-file, and one conflict-resolver query. No other MCP servers were observed. Serena probe coverage is insufficient to distinguish disabled from unavailable outside the review workflow.
+
+## Deep Audit — Workflows & Scripts (2026-08-30)
+
+### Section 1: Bug & Correctness Sweep
+
+Audit scope: 46 workflows, 77 shell scripts, and 55 Python scripts. YAML lint, `bash -n`, and Python AST parsing passed.
+
+#### SEC-001 — Fixed delimiter permits GitHub environment injection
+
+- **File:** `.github/workflows/implement.yml:1380-1418`
+- **Severity:** High
+- **Category:** `security`
+- **Description:** User-controlled issue body and title values are written to `$GITHUB_ENV` with the fixed delimiter `EOF`. An issue body containing a standalone `EOF` can terminate the value and inject subsequent environment assignments into privileged implementation steps. The trust-boundary comment at lines 1402-1404 incorrectly describes this as safe.
+- **Recommended fix:** Keep issue content in `${ISSUE_BODY_FILE}`, or generate a collision-checked random delimiter. Reuse the `write_multiline_env` pattern from `.github/workflows/plan.yml:735-745`.
+
+#### SEC-002 — Check-run fields are interpolated directly into shell source
+
+- **File:** `.github/workflows/check_failure_triage.yml:110-145,288-295`; `.github/workflows/internal-check-failure-triage.yml:20-27`
+- **Severity:** High
+- **Category:** `security`
+- **Description:** String inputs such as `check_name` and `pr_number` are inserted directly into `run:` source. GitHub expands expressions before Bash parses the script, so a check name containing command substitution syntax can execute commands. The internal wrapper forwards the external check-run name unchanged.
+- **Recommended fix:** Bind every input through step `env`, reference only quoted shell variables, and validate `PR_NUMBER` with `^[0-9]+$` before constructing API paths.
+
+#### SEC-003 — Release input is validated after unsafe interpolation
+
+- **File:** `.github/workflows/mark-stable.yml:4-13,71-85`; `.github/workflows/test-and-mark-stable.yml:4-13,176-190`
+- **Severity:** Medium
+- **Category:** `security`
+- **Description:** `version_tag` is a string input assigned through `INPUT_VERSION="${{ inputs.version_tag }}"`. Shell substitutions embedded in the input execute before the subsequent semantic-version regex runs. Exploitation requires access to dispatch or control a trusted caller. [NEEDS VERIFICATION]
+- **Recommended fix:** Set `INPUT_VERSION` in the step’s `env:` mapping and retain the existing regex validation against `"${INPUT_VERSION}"`.
+
+#### BUG-001 — Paginated plan data is not merged into one JSON array
+
+- **File:** `.github/workflows/plan.yml:473-480,545-573,711-785,830-849`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** `gh api --paginate` writes one JSON array per page into `ISSUE_COMMENTS_FILE`. Scalar `jq` consumers then emit one result per page, making `LATEST_ANSWER_COMMENT_ID`, answer text, and question selection multiline on issues exceeding 100 comments. The timeline count at lines 546-554 has the same defect and can produce a non-numeric multiline value.
+- **Recommended fix:** Merge pages with `--slurp` and `jq 'add // []'`, matching `.github/workflows/implement.yml:1501-1506`. Aggregate the timeline before computing its length.
+
+#### BUG-002 — Review judge phase list has drifted from the label contract
+
+- **File:** `scripts/review_rb_judge.sh:782-814,1628-1637,1702-1710,2302-2314`; `.github/ai/label_contract.v1.json:189-211`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** `_rps_phases` omits seven canonical issue phases: validation states, `ai:needs-human`, and `ai:blocked`. Judge transitions can therefore preserve an omitted phase alongside `ai:ready-to-merge` or `ai:closed`, violating phase exclusivity.
+- **Recommended fix:** Resolve additions/removals from `label_contract.v1.json` through `scripts/ai_labels.py`, following `scripts/orchestrate_poll_process.sh:2429-2485`.
+
+#### BUG-003 — Full-label replacement can lose concurrent labels
+
+- **File:** `scripts/label_helpers.sh:166-216`; `scripts/review_rb_judge.sh:782-814`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** Both helpers read all labels, modify the snapshot, then replace the complete label set with `PUT /labels`. A concurrent label added between GET and PUT—such as `force-review` or an operational marker—is silently removed.
+- **Recommended fix:** Mutate only contract-selected phase labels with one `gh issue edit` containing explicit `--remove-label` and `--add-label` arguments, as implemented in `scripts/validate_process.sh:1218-1252`.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### BATCH-001 — Poller discards its batch result and re-fetches linked PRs per issue
+
+- **File:** `scripts/orchestrate_poll_process.sh:10853-11019,14722-14799`
+- **Severity:** High
+- **Category:** `api-batching`
+- **Description:** After `_fetch_candidate_issue_details_graphql` batches current-wave data, reconciliation still performs one timeline request per issue and one REST PR request per cross-reference candidate. Current additional calls are `N + P`; proposed additional calls are `0`, retaining only the existing `ceil(N/25)` batch calls.
+- **Recommended fix:** Extend `_fetch_candidate_issue_details_graphql` with `linked_pr_candidates[]` containing PR body, head, state, and merge fields, then perform implementation-PR selection locally. Preserve per-issue REST only for batch misses.
+
+#### BATCH-002 — Consumer drift audit can issue 221 logical content requests
+
+- **File:** `scripts/audit_consumer_drift.py:397-484`; `.github/workflows/audit_consumer_drift.yml:34-55`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** Each of 13 consumers receives one directory request plus up to 16 individual workflow-content requests: up to 221 logical calls before retries. Proposed count is 13 calls—one aliased GraphQL query per repository.
+- **Recommended fix:** Add `fetch_workflow_contents_batch(repository, filenames)` using aliased `object(expression: "HEAD:.github/workflows/<file>")` fields. Extend the alias/chunking pattern used by `_fetch_candidate_issue_details_graphql`.
+
+#### API-001 — Default branch metadata is repeatedly re-fetched
+
+- **File:** `scripts/orchestrate_poll_process.sh:2250-2256,3741-3754,8275-8290,13635-13670,14066-14069,17414-17417,17700-17705,18296-18310`
+- **Severity:** Medium
+- **Category:** `api-redundancy`
+- **Description:** Nine call sites independently fetch `GET /repos/${GITHUB_REPOSITORY}` solely for `.default_branch`; several occur inside per-project paths. Current count is up to nine possible calls per process; proposed count is one.
+- **Recommended fix:** Populate a validated `REPO_DEFAULT_BRANCH` once at startup and reuse it throughout the tick, following the poller’s existing cycle-local cache model.
+
+#### API-002 — Review sweep duplicates status snapshots per workflow
+
+- **File:** `.github/workflows/review_autofix_sweep.yml:123-224`
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:** Two workflows are queried separately for each of three statuses, producing six active-run requests plus one PR request per tick. Fetching each status repository-wide would reduce the active-run calls from 6 to 3 and total calls from 7 to 4.
+- **Recommended fix:** Query repository Actions runs once per status and filter `.path` locally. Extend `_load_actions_runs_cached` from `scripts/orchestrate_poll_process.sh` to include `pending`.
+
+#### API-003 — Editor-changes-lost performs two identical run-list requests
+
+- **File:** `scripts/gh_helpers.sh:1175-1206,1300-1332`; `.github/workflows/review_autofix.yml:6294-6313`
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:** On the no-peer path, two back-to-back helpers query the same branch-scoped Actions-runs endpoint. Current count is 2; proposed count is 1.
+- **Recommended fix:** Fetch one run snapshot and pass it to separate peer and retry-budget evaluators, preserving their distinct fail-open and fail-closed semantics.
+
+#### API-004 — Clarify fetches the same comments twice when caching is enabled
+
+- **File:** `.github/workflows/clarify.yml:455-482`
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:** The workflow fetches 50 comments for prompt context, then fetches the complete paginated thread for semantic caching. Current count is 2 logical requests; proposed count is 1.
+- **Recommended fix:** Fetch and merge the full thread once, derive `ISSUE_COMMENTS_FILE` with `.[0:50]`, and render `THREAD_HISTORY_FILE` from the same snapshot.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Integration-ref bootstrap is copied across three workflows
+
+- **File:** `.github/workflows/clarify.yml:61-130`; `.github/workflows/implement.yml:323-392`; `.github/workflows/orchestrate_clarify_respond.yml:115-184`
+- **Severity:** Medium
+- **Category:** `duplication`
+- **Description:** These workflows contain byte-identical 3,583-character bootstrap blocks for cloning, authenticating, locating, and invoking `resolve_integration_ref.sh`.
+- **Recommended fix:** Create a shared composite action backed by `scripts/resolve_integration_ref.sh`, with inputs `(issue_number, repository, source_ref, token)` and output `ref`. Replace all three inline blocks.
+
+#### DUP-002 — ISO-8601 parser is duplicated four times
+
+- **File:** `scripts/analyze_workflow_logs.py:40-52`; `scripts/collect_workflow_logs.py:93-105`; `scripts/cost_audit.py:283-295`; `scripts/workflow_retro.py:50-62`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** AST comparison found four identical `_parse_iso8601` implementations.
+- **Recommended fix:** Add `scripts/time_utils.py::parse_iso8601_utc(value: str | None) -> datetime | None` and import it from all four callers.
+
+#### DUP-003 — Prompt path-resolution functions are duplicated
+
+- **File:** `scripts/assemble_prompt.sh:12-93`; `scripts/render_prompt.sh:12-41,95-159`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** `resolve_prompt_file`, `resolve_render_prompt_py`, and `resolve_assembly_source_path` have identical implementations in both scripts.
+- **Recommended fix:** Move them to `scripts/prompt_path_helpers.sh` as `prompt_resolve_file`, `prompt_resolve_renderer`, and `prompt_resolve_assembly_source`; source that module from both callers.
+
+No workflow pair exceeded the requested 70% near-duplicate threshold by step-name structure.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — Implement support-staging expression exceeds the medium-risk threshold
+
+- **File:** `.github/workflows/implement.yml:851-1153`
+- **Severity:** Medium
+- **Category:** `expression-limit`
+- **Description:** The interpolated `Stage workflow support files` block is approximately 16,339 characters, or 77.8% of the 21,000-character limit. Estimated headroom is 4,661 characters.
+- **Recommended fix:** Move the block into `scripts/stage_workflow_support.sh` under an `implement` mode and leave only environment setup plus one script invocation in YAML.
+
+No workflow exceeds 800 KB. The largest is `.github/workflows/review_autofix.yml` at approximately 453,485 characters.
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001 — Assigned state and telemetry variables are never consumed
+
+- **File:** `scripts/orchestrate_poll_process.sh:6311-6391`; `scripts/review_issue_ledger.sh:862-918`; `scripts/review_run_reviewers.sh:753-761,3533-3548,4120-4128`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** Repository-wide reference analysis found assignments without reads, including `BRANCH_REBUILD_SKIP_REASON`, `BRANCH_REBUILD_LAST_REBUILD_AT`, `CURRENT_FLOOR`, `RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE`, `RAW_REVIEWER_SYMBOL_DIFF_SUMMARY_FILE`, `REVIEWER_HEALTH_LAST_OPEN_UNTIL_EPOCH`, and `REVIEWER_ATTEMPT_WD_REASON`.
+- **Recommended fix:** Remove unused aliases/maps, or wire operationally useful values such as branch-rebuild skip reason and reviewer open-until time into existing structured summaries.
+
+#### CONSIST-001 — Operator-facing repository variables are undocumented
+
+- **File:** `.github/workflows/review_autofix.yml:1304,1349-1356`; `.github/workflows/workflow-log-analysis.yml:826-858`
+- **Severity:** Low
+- **Category:** `consistency`
+- **Description:** Repository variables including `JUDGE_INTERIM_*`, `BEHAVIOURAL_SMOKE_*`, `CONSOLIDATOR_REJECT_SCHEMA_ENABLED`, and `WORKFLOW_LOG_SUMMARY_*` have runtime defaults but no entries in `README.md`, `agents.md`, or `CLAUDE.md`.
+- **Recommended fix:** Add variable-table entries documenting defaults, accepted values, consumers, failure behavior, and rollout status. If they are intentionally internal, replace `vars.*` exposure with constants.
+
+No genuine TODO/FIXME/HACK markers were found. Confirmed ShellCheck warnings are represented by the dead-code and correctness findings above; remaining warnings were intentional dynamic exports, glob comparisons, output-variable assignments, or source indirection.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | SEC-001, SEC-002, BATCH-001 |
+| Medium | 8 | SEC-003, BUG-001, BUG-002, BUG-003, BATCH-002, API-001, DUP-001, EXPR-001 |
+| Low | 7 | API-002, API-003, API-004, DUP-002, DUP-003, DEAD-001, CONSIST-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2 | Medium |
+| API call optimization | 6 | Large |
+| Code modularization | 12 | Large |
+| Expression size reduction | 2 | Medium |
+| Medium/Low fixes | 9 | Medium |
