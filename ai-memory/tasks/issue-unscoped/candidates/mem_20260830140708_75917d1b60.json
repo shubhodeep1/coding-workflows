@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The linked issue requires that \"Internal and consumer wrapper predicates remain aligned with their reusable workflow counterparts through contract tests.\"\n  expected_change_site: tests/test_security_audit_workflow_contract.py:test_internal_clarify_skips_source_repo_tracker_issues\n  confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The PR added `tests/test_phase_wrapper_predicate_contract.py` which verifies predicate alignment for all four canonical predicates, but `test_internal_clarify_skips_source_repo_tracker_issues` in `tests/test_security_audit_workflow_contract.py` does not use this contract test approach and only checks string assertions for two of three tracker exclusions.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- TASK_GAP\n  Requirement:\n  The linked issue requires that \"Internal and consumer wrapper predicates remain aligned with their reusable workflow counterparts through contract tests.\"\n\n  Expected change site:\n  The test suite should include a contract test that verifies the internal and consumer wrapper predicates match their canonical reusable workflow predicates.\n\n  Evidence of absence:\n  The PR added `tests/test_phase_wrapper_predicate_contract.py` which does verify predicate alignment for all four canonical predicates (clarify, plan, implement, respond). However, the existing `test_internal_clarify_skips_source_repo_tracker_issues` test in `tests/test_security_audit_workflow_contract.py` does not use this contract test approach and only checks string assertions for two of three tracker exclusions.\n\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "08b8f057fa34b477121bd2c2108d5b88edc5f7a1bb1603f80266e0753bf06e33",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3909,
+    "run_id": "33312603057",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33312603057",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260830140708_75917d1b60",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3909,
+    "run_id": "33312603057"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-30T14:07:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
