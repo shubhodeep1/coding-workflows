@@ -27,7 +27,7 @@ CONSOLIDATOR_ALIAS_SENTINEL = (
 	"Reviewer-side `BLOCKER` maps to `blocker`; `MAJOR` maps to `high`; `NIT` maps to `med`."
 )
 JUDGE_SEVERITY_SENTINEL = "SEVERITY: BLOCKER|MAJOR|NIT"
-CONSOLIDATOR_LENS_ORDER = (
+CONSOLIDATOR_FIRST_SEVEN_LENSES = (
 	"1. SECURITY & INPUT VALIDATION",
 	"2. CORRECTNESS & LOGIC",
 	"3. CONCURRENCY / RACES / IDEMPOTENCY",
@@ -35,7 +35,26 @@ CONSOLIDATOR_LENS_ORDER = (
 	"5. PERFORMANCE & RESOURCE USE",
 	"6. INDEX-CONTRACT / DB RULES",
 	"7. NAMING / BACKWARD COMPATIBILITY",
+)
+CONSOLIDATOR_LENS_ORDER = CONSOLIDATOR_FIRST_SEVEN_LENSES + (
 	"8. DOCS COVERAGE (DIATAXIS)",
+	"9. IMPLICIT-EXECUTION & TRUST-BOUNDARY RISKS",
+)
+JUDGE_EXISTING_CRITERIA = (
+	"1. Does the merged code match what the issue descriptions specified?",
+	"2. Are there regressions, conflicts, or integration gaps between merged PRs?",
+	"3. Does CI pass on the current branch state?",
+	"4. Is the project spec fully satisfied, or are there remaining gaps?",
+	"5. Are there new issues that emerged from the implementation (missing error\n   handling, incomplete migrations, broken cross-references)?",
+	"6. Did any merged change introduce implicit execution on workflow YAML,\n   `.claude/*`, MCP config, `scripts/*` entry points, env-var defaults, or\n   subprocess / watcher registration without the corresponding gate, kill\n   switch, or invocation guard?",
+	"7. Do the merged changes stay within their declared effective scope, or is\n   there declared-vs-effective capability drift across those same surfaces?",
+)
+JUDGE_APPLICATION_SECURITY_CRITERION = (
+	"8. Does the merged code introduce application-security defects, including\n"
+	"   injection, authorization gaps, secret leakage, or unsafe deserialization?"
+)
+IMPLICIT_EXECUTION_SCOPE_SENTINEL = (
+	"Review this lens only for workflow YAML, `.claude/*`, MCP config, `scripts/*`"
 )
 DIATAXIS_ADVISORY_SENTINEL = (
 	"This lens is advisory only: use `SEVERITY: low` and normally `CLASSIFICATION: nice-to-have`."
@@ -190,6 +209,19 @@ def test_judge_prompts_render_under_current_contracts() -> None:
 	assert "{{SEMBLE_PREFETCH}}" not in mode_judge_stall.stdout
 
 
+def test_judge_application_security_criterion_is_additive() -> None:
+	for prompt_path in (
+		PROMPTS_DIR / "mode-judge.txt",
+		PROMPTS_DIR / "_templates" / "mode-judge.txt",
+	):
+		proc = _run_render(prompt_path)
+		_assert_success(proc)
+		positions = [proc.stdout.index(criterion) for criterion in JUDGE_EXISTING_CRITERIA]
+		assert positions == sorted(positions)
+		security_position = proc.stdout.index(JUDGE_APPLICATION_SECURITY_CRITERION)
+		assert security_position > positions[-1]
+
+
 def test_shell_wrapper_renders_review_blocked_judge_under_current_contracts() -> None:
 	review_blocked_prefetch = "=== SEMBLE: Review-Blocked Judge Context ===\nchunk"
 	proc = _run_render_sh(
@@ -244,6 +276,8 @@ def test_review_consolidator_renders_additive_diataxis_lens_contract() -> None:
 	assert AGENTS_MD_MATERIALITY_HIGH_SENTINEL in rendered
 	assert AGENTS_MD_MATERIALITY_ADVISORY_SENTINEL in rendered
 	assert AGENTS_MD_MATERIALITY_LENS_SENTINEL in rendered
+	assert IMPLICIT_EXECUTION_SCOPE_SENTINEL in rendered
+	assert "without a documented gate, kill switch, or invocation guard" in rendered
 
 
 def test_conflict_resolver_renders_required_values_and_optional_hints(
@@ -360,6 +394,7 @@ def main() -> int:
 	"""
 	test_contract_files_exist()
 	test_judge_prompts_render_under_current_contracts()
+	test_judge_application_security_criterion_is_additive()
 	test_shell_wrapper_renders_review_blocked_judge_under_current_contracts()
 	test_reference_backed_review_and_judge_prompts_render_shared_blocks()
 	test_review_consolidator_renders_additive_diataxis_lens_contract()

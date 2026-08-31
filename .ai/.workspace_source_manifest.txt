@@ -111,6 +111,7 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
+analysis/workflow-optimization-2026-08-30.md
 changelog.d/.gitkeep
 changelog.d/3738-merge-precheck-promisor-recovery.md
 changelog.d/3763-changes-lost-redispatch-get-method.md
@@ -148,6 +149,7 @@ changelog.d/3882-render-reference-failopen-untrusted-body.md
 changelog.d/3885-verify-activation-correctness-audit.md
 changelog.d/3895-conflict-dispatch-pending-visibility.md
 changelog.d/3897-resolver-opencode-helpers-fallback.md
+changelog.d/3898-startup-failure-diagnostics.md
 changelog.d/3899-move-ci-policy-guards-first.md
 changelog.d/3900-phase-wrapper-predicate-parity.md
 changelog.d/3901-check-triage-input-hardening.md
@@ -173,12 +175,14 @@ docs/changelog-style.md
 docs/codex-model-reference.md
 docs/completed/ai-code-review-learnings-plan.md
 docs/completed/apply-ai-tools-learnings-plan.md
+docs/completed/awesome-claude-code-learnings-plan.md
 docs/completed/complete-squad-improvements-plan.md
 docs/completed/gsd-inspired-improvements-plan.md
 docs/completed/gstack-learnings-plan.md
 docs/completed/integration-sync-resolver-self-heal-plan.md
 docs/completed/integration-sync-resolver-self-heal.md
 docs/completed/judge-loop-and-reissue-plan.md
+docs/completed/learn-claude-code-learnings-plan.md
 docs/completed/mcp-usage-monitoring-plan.md
 docs/completed/open-agents-learnings-plan.md
 docs/completed/orchestrator-validation-resilience-plan.md
@@ -189,13 +193,11 @@ docs/gsd-future-improvements.md
 docs/hardenaireviewprompt.md
 docs/how-it-works.md
 docs/plans/apply-ai-tools-learnings-plan.md
-docs/plans/awesome-claude-code-learnings-plan.md
 docs/plans/claude-code-tooling-learnings-plan.md
 docs/plans/complete-squad-improvements-plan.md
 docs/plans/gsd-inspired-improvements-plan.md
 docs/plans/gstack-learnings-plan.md
 docs/plans/integration-sync-resolver-self-heal-plan.md
-docs/plans/learn-claude-code-learnings-plan.md
 docs/plans/open-agents-learnings-plan.md
 docs/plans/opencode-review-autofix-cutover-plan.md
 docs/plans/orchestrator-prerequisite-gate-automation-plan.md

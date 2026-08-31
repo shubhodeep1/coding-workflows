@@ -212,6 +212,16 @@ than reverting them.
 5. Performance
 6. Speed
 
+### Security and money-handling interpretation
+
+Security priority includes validating every trust boundary, enforcing
+authorization on each exposed surface, preventing injection and unsafe
+deserialization, excluding secrets and credentials from code and logs, and
+failing closed on security-sensitive errors. Money-handling correctness also
+requires unique-index-backed idempotency, atomic balance mutations, decimal or
+integer minor-unit amounts instead of binary floating point, TOCTOU-safe debit
+flows, and replay protection for payment and webhook processing.
+
 ---
 
 ## §7. Production Code Assumptions

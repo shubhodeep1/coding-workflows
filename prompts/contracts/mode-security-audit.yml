@@ -1,6 +1,7 @@
 required_vars: []
 optional_vars:
   REFERENCE_OUTPUT_CONTRACT: ""
+  REFERENCE_SECURITY_MONEY_LENS: ""
 forbidden_vars:
   - WORKFLOW_EDIT_RESTRICTION
   - SEMBLE_PREFETCH

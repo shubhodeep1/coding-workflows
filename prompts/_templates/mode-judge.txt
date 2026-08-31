@@ -21,6 +21,8 @@ Evaluation criteria:
    switch, or invocation guard?
 7. Do the merged changes stay within their declared effective scope, or is
    there declared-vs-effective capability drift across those same surfaces?
+8. Does the merged code introduce application-security defects, including
+   injection, authorization gaps, secret leakage, or unsafe deserialization?
 
 Rules:
 - Cite specific files, functions, and line numbers inline next to each claim.
