@@ -76,7 +76,7 @@ AGENTS.md materiality helper input:
 - Use it only when the helper says the change is operator-visible (`materiality: high` or `materiality: medium`), `advisory_required` is true, and root `agents.md` is unchanged.
 - In that case, Lens 7 (`NAMING / BACKWARD COMPATIBILITY`) may emit an `AGENTS.md materiality: ...` finding with `SEVERITY: high` by default, even when the helper says `materiality: medium`.
 - If equivalent operator-facing documentation already exists elsewhere in the touched docs (for example `README.md`, `docs/plans/*`, or a relevant runbook), downgrade that finding to advisory (`SEVERITY: low`, normally `CLASSIFICATION: nice-to-have`) or omit it instead of duplicating the same docs gap.
-- Do not use this helper input to create a ninth lens, rename a lens, or reorder the existing eight-lens list.
+- Do not use this helper input to create a tenth lens, rename a lens, or reorder the existing nine-lens list.
 
 Diataxis docs-coverage lens:
 - Keep the first seven lens names byte-for-byte and in the same order.
@@ -93,7 +93,18 @@ Diataxis docs-coverage lens:
 - Do not enumerate categories that already look covered in the diff.
 - If the relevant docs are already touched, omit the issue or say `Docs coverage: complete` in `NOTES` instead of fabricating a docs gap.
 
-Use these eight lenses exactly:
+Implicit-execution and trust-boundary lens:
+- Review this lens only for workflow YAML, `.claude/*`, MCP config, `scripts/*`
+  entry points, env-var defaults, and subprocess or watcher registration
+  touched by the diff.
+- Flag only concrete cases where changed code introduces implicit execution
+  without a documented gate, kill switch, or invocation guard; expands
+  effective state or capability scope beyond what the change declares; or
+  creates a declared-vs-effective capability gap across those surfaces.
+- Omit the issue when the diff does not touch those surfaces or when the
+  touched surfaces are already properly gated and scoped.
+
+Use these nine lenses exactly:
 1. SECURITY & INPUT VALIDATION
 2. CORRECTNESS & LOGIC
 3. CONCURRENCY / RACES / IDEMPOTENCY
@@ -102,6 +113,7 @@ Use these eight lenses exactly:
 6. INDEX-CONTRACT / DB RULES
 7. NAMING / BACKWARD COMPATIBILITY
 8. DOCS COVERAGE (DIATAXIS)
+9. IMPLICIT-EXECUTION & TRUST-BOUNDARY RISKS
 
 Lens 7 extension — AGENTS.md materiality:
 - Keep the lens name exactly `NAMING / BACKWARD COMPATIBILITY`.
@@ -153,7 +165,7 @@ NOTES:
 === END ISSUE NNN ===
 
 Allowed values:
-- LENS: one of the eight lenses above. The first seven stay byte-for-byte stable; the eighth is the additive Diataxis advisory lens.
+- LENS: one of the nine lenses above. The first seven stay byte-for-byte stable; the eighth is the additive Diataxis advisory lens; the ninth covers implicit-execution and trust-boundary risks.
 - SEVERITY: blocker | high | med | low. Reviewer-side `BLOCKER` maps to `blocker`; `MAJOR` maps to `high`; `NIT` maps to `med`. `low` is reserved for advisory-only consolidator output (including `DOCS COVERAGE (DIATAXIS)`) and is never emitted by reviewers.
 - CLASSIFICATION: must-fix | nice-to-have | unclassified | duplicate-of:<issue_id> | non-actionable.
 - `non-actionable` must include a NOTES justification plus exactly one of:
