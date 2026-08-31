@@ -163,6 +163,7 @@ changelog.d/digitalocean-token-access.md
 changelog.d/github-token-access.md
 changelog.d/investigate-issue-attached-upstream-autochain.md
 changelog.d/merged-pr-commit-guard.md
+changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md
 changelog.d/review-autofix-per-slot-attempt-prompts.md
 changelog.d/reviewer-model-refresh-2026-08.md
 changelog.d/seed-repo-command.md
@@ -331,6 +332,7 @@ prompts/overlays/gemini.txt
 prompts/overlays/gpt.txt
 prompts/overlays/other.txt
 prompts/references/output-contract.txt
+prompts/references/security-money-lens.txt
 prompts/references/severity-classification.txt
 prompts/references/validate-output-contract.txt
 prompts/references/verification-loop.txt
