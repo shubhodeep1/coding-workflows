@@ -155,6 +155,8 @@ changelog.d/3900-phase-wrapper-predicate-parity.md
 changelog.d/3901-check-triage-input-hardening.md
 changelog.d/3902-secure-workflow-shell-inputs.md
 changelog.d/3903-changelog-only-notification.md
+changelog.d/3909-deterministic-manifest-conflict-resolution.md
+changelog.d/3939-plan-parser-blockquote-support.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/deploy-activate-digitalocean-steps.md
@@ -164,6 +166,7 @@ changelog.d/github-token-access.md
 changelog.d/investigate-issue-attached-upstream-autochain.md
 changelog.d/merged-pr-commit-guard.md
 changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md
+changelog.d/orchestrator-security-pass-phase-2-audit-engine.md
 changelog.d/review-autofix-per-slot-attempt-prompts.md
 changelog.d/reviewer-model-refresh-2026-08.md
 changelog.d/seed-repo-command.md
@@ -621,6 +624,7 @@ tests/test_codex_thread_reuse_core.py
 tests/test_codex_thread_reuse_review.py
 tests/test_collect_workflow_logs.py
 tests/test_conflict_dispatch_active_run_visibility.py
+tests/test_conflict_manifest_union_contract.py
 tests/test_consolidate_soft_error_reports.py
 tests/test_cost_audit_semble_metrics.py
 tests/test_cost_audit_serena_metrics.py

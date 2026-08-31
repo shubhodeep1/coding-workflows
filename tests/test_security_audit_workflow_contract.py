@@ -377,6 +377,24 @@ def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None
 	assert 'marker_regex = re.compile(re.escape(followup_marker_prefix) + r"([^>]+) -->")' in content
 
 
+def test_security_audit_uses_workflow_editor_model_with_stable_fallback() -> None:
+	content = SCRIPT_PATH.read_text(encoding="utf-8")
+	assert '--model "${WORKFLOW_EDITOR_MODEL:-openai/gpt-5.6-sol}"' in content
+	with tempfile.TemporaryDirectory(prefix="security-audit-model-") as td:
+		output_path = Path(td) / "findings.json"
+		proc, final_state = _run_security_audit(
+			{},
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"WORKFLOW_EDITOR_MODEL": "openai/security-pass-test",
+			},
+		)
+	assert proc.returncode == 0, proc.stderr
+	codex_args = final_state["codex_calls"][0]
+	assert codex_args[codex_args.index("--model") + 1] == "openai/security-pass-test"
+
+
 def test_internal_clarify_skips_source_repo_tracker_issues() -> None:
 	content = INTERNAL_CLARIFY_PATH.read_text(encoding="utf-8")
 	assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking')" in content

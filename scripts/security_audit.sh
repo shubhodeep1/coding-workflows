@@ -514,7 +514,7 @@ if codex --ask-for-approval never \
 		-c include_apply_patch_tool=true \
 		exec \
 		--skip-git-repo-check \
-		--model "openai/gpt-5.6-sol" \
+		--model "${WORKFLOW_EDITOR_MODEL:-openai/gpt-5.6-sol}" \
 		--sandbox read-only < "${RENDERED_PROMPT_FILE}" \
 		> "${CODEX_OUTPUT_FILE}" 2> "${CODEX_ERROR_FILE}"; then
 	:

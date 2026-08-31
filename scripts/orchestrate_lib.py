@@ -1088,6 +1088,10 @@ def build_tracking_state(
 		"recovery_count": 0,
 		"recovery_attempted": False,
 		"review_blocked_retries": {},
+		"security_pass_cycle": 0,
+		"security_pass_status": "pending",
+		"security_pass_active_fix_issues": [],
+		"security_pass_head_sha": "",
 		"status": "in_progress",
 		"waves": wave_list,
 		"dependency_edges": data.get("dependency_edges", []),
@@ -1299,7 +1303,42 @@ def render_tracking_issue_body_from_state(
 			f"missing ids: {preview}"
 		)
 
+	security_pass_status = str(state.get("security_pass_status", "pending") or "pending")
+	security_pass_cycle = state.get("security_pass_cycle", 0)
+	if not isinstance(security_pass_cycle, int) or isinstance(security_pass_cycle, bool) or security_pass_cycle < 0:
+		security_pass_cycle = 0
+	security_pass_head_sha = str(state.get("security_pass_head_sha", "") or "")
+	security_pass_active_fix_issues = state.get("security_pass_active_fix_issues", [])
+	if not isinstance(security_pass_active_fix_issues, list):
+		security_pass_active_fix_issues = []
+	security_pass_fix_display = ", ".join(
+		f"#{issue_number}"
+		for issue_number in security_pass_active_fix_issues
+		if isinstance(issue_number, int) and not isinstance(issue_number, bool) and issue_number > 0
+	) or "none"
+	security_pass_block = "\n".join(
+		[
+			"<!-- orchestrator:security-pass -->",
+			"### Security pass",
+			f"- Status: `{security_pass_status}`",
+			f"- Completed fix cycles: {security_pass_cycle}",
+			f"- Audited integration SHA: `{security_pass_head_sha or 'none'}`",
+			f"- Active fix issue: {security_pass_fix_display}",
+			"<!-- /orchestrator:security-pass -->",
+		]
+	)
 	rendered = "\n".join(rendered_lines)
+	rendered = re.sub(
+		r"\n*<!-- orchestrator:security-pass -->.*?<!-- /orchestrator:security-pass -->\n*",
+		"\n",
+		rendered,
+		flags=re.DOTALL,
+	).rstrip()
+	footer_marker = "\n---\n*This issue is managed by the AI orchestrator. Do not edit manually.*"
+	if footer_marker in rendered:
+		rendered = rendered.replace(footer_marker, f"\n\n{security_pass_block}{footer_marker}", 1)
+	else:
+		rendered = f"{rendered}\n\n{security_pass_block}"
 	if body_template.endswith("\n"):
 		rendered += "\n"
 	return rendered
@@ -1316,6 +1355,25 @@ def format_wave_status_comment(state: dict[str, Any], wave_idx: int) -> str:
 		status = issue.get("status", "unknown")
 		marker = "x" if status == "merged" else " "
 		lines.append(f"- [{marker}] #{gh_num} — `{issue['id']}` — {status}")
+	lines.append("")
+	security_pass_status = str(state.get("security_pass_status", "pending") or "pending")
+	security_pass_cycle = state.get("security_pass_cycle", 0)
+	security_pass_head_sha = str(state.get("security_pass_head_sha", "") or "")
+	security_pass_active_fix_issues = state.get("security_pass_active_fix_issues", [])
+	if not isinstance(security_pass_cycle, int) or isinstance(security_pass_cycle, bool) or security_pass_cycle < 0:
+		security_pass_cycle = 0
+	if not isinstance(security_pass_active_fix_issues, list):
+		security_pass_active_fix_issues = []
+	security_pass_fix_display = ", ".join(
+		f"#{issue_number}"
+		for issue_number in security_pass_active_fix_issues
+		if isinstance(issue_number, int) and not isinstance(issue_number, bool) and issue_number > 0
+	) or "none"
+	lines.append("### Security pass")
+	lines.append(f"- Status: `{security_pass_status}`")
+	lines.append(f"- Completed fix cycles: {security_pass_cycle}")
+	lines.append(f"- Audited integration SHA: `{security_pass_head_sha or 'none'}`")
+	lines.append(f"- Active fix issue: {security_pass_fix_display}")
 	lines.append("")
 	return "\n".join(lines)
 
@@ -1339,6 +1397,9 @@ PHASE_LABELS_PRIORITY: list[str] = [
 	"ai:integration-judge-failed",
 	"ai:log-analysis-failed",
 	"ai:memory-maintenance-failed",
+	"ai:security-pass-failed",
+	"ai:security-pass-fixing",
+	"ai:security-pass",
 	"ai:ready-to-merge",
 	"ai:review-blocked",
 	"ai:implementation-failed",
@@ -1368,6 +1429,7 @@ TERMINAL_PHASES: set[str] = {
 	"ai:integration-judge-failed",
 	"ai:log-analysis-failed",
 	"ai:memory-maintenance-failed",
+	"ai:security-pass-failed",
 }
 VALIDATION_DISPATCH_BLOCKING_TERMINAL_PHASES: set[str] = TERMINAL_PHASES - {"ai:closed"}
 VALIDATION_DISPATCH_BLOCKING_FAILURE_LABELS: set[str] = (
@@ -1389,7 +1451,15 @@ BLOCKER_TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_
 # dispatches review_rb_judge_dispatch.yml (which runs review_autofix.yml
 # with force_rb_judge=true) past the per-phase stall threshold.  See
 # STALL_RECOVERY_ACTIONS["ai:review-blocked"] below.
-DEDICATED_HANDLER_PHASES: set[str] = {"ai:needs-human", "ai:blocked", "ai:implementation-failed", "ai:validating", "ai:validation-fixing"}
+DEDICATED_HANDLER_PHASES: set[str] = {
+	"ai:needs-human",
+	"ai:blocked",
+	"ai:implementation-failed",
+	"ai:validating",
+	"ai:validation-fixing",
+	"ai:security-pass",
+	"ai:security-pass-fixing",
+}
 
 # Escalating recovery actions per detected phase.
 # The poller indexes into this list using the per-issue stall_recovery_count.
@@ -2824,6 +2894,10 @@ def rebuild_tracking_state(
 		"recovery_count": 0,
 		"recovery_attempted": False,
 		"review_blocked_retries": {},
+		"security_pass_cycle": 0,
+		"security_pass_status": "pending",
+		"security_pass_active_fix_issues": [],
+		"security_pass_head_sha": "",
 		"status": "in_progress",
 		"waves": wave_list,
 		"dependency_edges": parsed["dependency_edges"],
