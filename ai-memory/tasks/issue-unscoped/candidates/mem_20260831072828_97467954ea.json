@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_prepare.sh:271-276 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The early-commit branch's `git commit -m \"[ai-merge-resolve] resolve merge conflicts\"` does not provide structured handling when the commit fails.\n  WHY: Under `set -euo pipefail`, a hook rejection, pre-commit guard, or GPG signing failure aborts before stash restoration and the `CONFLICT_RESOLVED=true` signal; the source labels this NIT severity.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When `CONFLICT_MANIFEST_UNION_ENABLED` (default `true`) is set, the prepare step resolves the manifest deterministically and short-circuits the Codex resolver.\"\n  expected_change_site: agents.md, in the review-pipeline variable contract table or resolver behavior documentation\n  confidence=4\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3]\n  EVIDENCE: No hunk in agents.md for this PR; grep confirms zero `CONFLICT_MANIFEST_UNION_ENABLED` matches in agents.md; README.md documents the variable fully; the AI Materiality Advisory comment on the PR explicitly flagged root agents.md as unchanged; the variable contract table in agents.md has no row for `CONFLICT_MANIFEST_UNION_ENABLED` and no hunk describes the deterministic manifest union-merge.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_conflict_prepare.sh: line 271 (git commit) followed by lines 272-276 (RESOLVE_STASH restore loop) | severity=NIT | confidence=3\n  PROBLEM: The early-commit branch's `git commit -m \"[ai-merge-resolve] resolve merge conflicts\"` (line 271) does not check the commit's return status.\n  WHY: Under `set -euo pipefail`, a commit failure triggers an immediate non-zero exit before stash restoration or the `CONFLICT_RESOLVED=true` signal fires, leaving the merge state and staged manifest without structured diagnostics.\n\n- Requirement: \"When `CONFLICT_MANIFEST_UNION_ENABLED` (default `true`) is set, the prepare step resolves the manifest deterministically and short-circuits the Codex resolver\"\n  Expected change site: agents.md, in a new section or row documenting `CONFLICT_MANIFEST_UNION_ENABLED` as a workflow integration variable\n  Evidence of absence: No hunk in agents.md for this PR; grep confirms zero `CONFLICT_MANIFEST_UNION_ENABLED` matches in agents.md; the AI Materiality Advisory comment on this PR (issue comment id 5473918316) explicitly flagged root `agents.md` as unchanged for a high-materiality workflow change. The CLAUDE.md \u00a77 rule \"If behavior changes: update `README.md` / `agents.md` with env vars\" applies here \u2014 the repo-var contract is split across two operator-facing docs with no cross-reference in agents.md.\n  ISSUE_CONFIDENCE: 4\n  SEVERITY: NIT\n\n- HARDENING_SUGGESTION: Wrap the commit in an `if git commit -m \"...\"; then ...; else echo \"::warning::Manifest-only early-commit failed; leaving merge state intact for resolver retry\"; exit 0; fi` pattern (or similar) so the resolver retry loop still gets a chance. Estimated lines changed: 5.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- Requirement: the PR adds a new review-pipeline repo var (`CONFLICT_MANIFEST_UNION_ENABLED`) and changes resolver behavior in review_autofix.yml \u2014 the class of operator-visible change the repo's deterministic AGENTS.md materiality helper flags as high when root agents.md is unchanged.\n  Expected change site: agents.md \u2014 e.g. the variable contract table under \"Review pipeline consolidator + ledger contract\" (which enumerates review_autofix contract variables) and/or the resolver behavior bullets.\n  Evidence of absence: PR CHANGED FILES lists README.md but not agents.md; the variable contract table in agents.md has no CONFLICT_MANIFEST_UNION_ENABLED row, and no agents.md hunk describes the deterministic manifest union-merge. README.md documents the var fully, and the materiality advisory comment on the PR (entry[1]) is explicit that other-doc coverage suffices \u2014 so this is a docs-consistency nit only, left to the editor to accept or reject.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "2346db031b48a5e4107f4dd09570e90c377216e04ed29581ce036b87e4635b88",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3931,
+    "run_id": "33360196127",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33360196127",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260831072828_97467954ea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3931,
+    "run_id": "33360196127"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-31T07:28:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
