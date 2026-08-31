@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3934,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3934\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3936\",\"pr_number\":3936,\"branch\":\"ai/issue-3934\",\"run_id\":\"33356539298\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/33356539298\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md\",\"prompts/_templates/mode-implement.txt\",\"prompts/_templates/mode-judge.txt\",\"prompts/_templates/mode-plan.txt\",\"prompts/contracts/mode-implement.yml\",\"prompts/contracts/mode-plan.yml\",\"prompts/contracts/mode-security-audit.yml\",\"prompts/mode-implement.txt\",\"prompts/mode-judge.txt\",\"prompts/mode-plan.txt\",\"prompts/references/security-money-lens.txt\",\"prompts/review-consolidator.txt\",\"tests/test_render_prompt_foundation.py\",\"tests/test_render_prompt_review_judge_modes.py\",\"unattended_system_instructions.md\"]}",
+  "fingerprint": "e4e1ed393dc02fecb704f014fdf1d7e2a05ec6e049d5b8c223cd8e94d09f4628",
+  "lineage": {
+    "issue_number": 3934,
+    "parent_ids": [],
+    "pr_number": 3936,
+    "run_id": "33356539298",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33356539298",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3936"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260831042638_08ca677131",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3934,
+    "level": "run",
+    "pr_number": 3936,
+    "run_id": "33356539298"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3934: https://github.com/shubhodeep1/coding-workflows/pull/3936",
+  "timestamps": {
+    "created_at": "2026-08-31T04:26:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
