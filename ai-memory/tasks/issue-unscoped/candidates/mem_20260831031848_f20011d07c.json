@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_prepare.sh: union-merge block, the `cp -a \"${RESOLVE_STASH}/${d}/.\" \"${d}/\" 2>/dev/null || cp -a \"${RESOLVE_STASH}/${d}\" \"${d}\"` fallback pattern after the early-commit | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The early-commit branch can abort after a successful merge commit if `RESOLVE_STASH` is unset under `set -u`.\n  WHY: The resulting non-zero exit leaves the manifest-only resolver commit stranded in a half-resolved state; contract tests do not verify the runtime prerequisites.\n- scripts/review_conflict_prepare.sh: line 266, `git commit -m \"[ai-merge-resolve] resolve merge conflicts\"` in the new manifest-only early-commit branch | severity=high | confidence=4\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The manifest-only early commit occurs before the protected-path index reset and can include auto-staged protected-path changes.\n  WHY: On consumer repositories with leaked tracked workflow-helper copies, the commit can either trip the downstream commit gate or silently ship protected-path modifications that the pipeline explicitly refuses to carry.\n- scripts/review_conflict_prepare.sh: lines 251-277, the `_resolver_allowlist_count -eq 0` early-commit branch | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The early-commit branch does not handle `git commit` failure with structured diagnostics.\n  WHY: A commit failure leaves `MERGE_HEAD` in place and emits only raw Git stderr, so failure-triage, Telegram surfaces, retry-state, and fingerprint machinery receive no structured reason.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: the deterministic manifest union-merge is a new resolver behavior of the same class documented in agents.md's \"Review pipeline consolidator + ledger contract\" / resolver sections\n  expected_change_site: agents.md, in the resolver / review-pipeline behavior section near the `scripts/review_conflict_resolve.sh` entries\n  confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  EVIDENCE: the PR touches `.github/workflows/review_autofix.yml` and `scripts/review_conflict_prepare.sh` but contains no agents.md hunk; no existing agents.md entry mentions `CONFLICT_MANIFEST_UNION_ENABLED` or the deterministic manifest resolution, and the `CONFLICT_MANIFEST_UNION_ENABLED` variable is absent from the agents.md variable contract table while the README documents it.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_conflict_prepare.sh: union-merge block, the `cp -a \"${RESOLVE_STASH}/${d}/.\" \"${d}/\" 2>/dev/null || cp -a \"${RESOLVE_STASH}/${d}\" \"${d}\"` fallback pattern after the early-commit | severity=NIT | confidence=2\n  PROBLEM: The early-commit branch copies protected paths back from `RESOLVE_STASH` after the merge commit and can abort if `RESOLVE_STASH` is unset under `set -u`.\n  WHY: The script can exit non-zero after a successful merge commit, leaving the repository in a half-resolved state with the resolver commit already on the integration branch.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/review_conflict_prepare.sh: line 266, `git commit -m \"[ai-merge-resolve] resolve merge conflicts\"` in the new manifest-only early-commit branch | severity=MAJOR | confidence=4\n  PROBLEM: The early commit runs before the protected-path index reset at lines 368-371.\n  WHY: Auto-merged protected-path changes can be carried into the `[ai-merge-resolve]` commit, causing the downstream commit gate to fail or silently shipping changes the pipeline refuses to carry.\n- scripts/review_conflict_prepare.sh: lines 251-277, the `_resolver_allowlist_count -eq 0` early-commit branch | severity=NIT | confidence=2\n  PROBLEM: This branch does not handle `git commit` failure.\n  WHY: Under `set -euo pipefail`, a failure aborts the step with `MERGE_HEAD` still in place and no structured diagnostic annotation.\n- agents.md: resolver / review-pipeline behavior section near the `scripts/review_conflict_resolve.sh` entries | severity=NIT | confidence=3\n  PROBLEM: The deterministic manifest union-merge behavior and `CONFLICT_MANIFEST_UNION_ENABLED` contract are not documented in `agents.md`.\n  WHY: The PR changes `.github/workflows/review_autofix.yml` and `scripts/review_conflict_prepare.sh`, but contains no `agents.md` hunk while README documents the new variable.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "93de05625a523872f209cefc2148e28e82d3b996c14047c30d0a6f925b403cd4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33350204812",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33350204812",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260831031848_f20011d07c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33350204812"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-31T03:18:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
