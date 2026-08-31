@@ -1886,11 +1886,8 @@ Summary text stays the same.
 	assert "- [x] **issue-2**: Second task (priority 2)" in rendered
 	assert "- [x] **issue-3**: Third task (priority 3)" in rendered
 	assert "- [ ] **issue-4**: Fourth task (priority 4)" in rendered
-	assert "### Security pass" in rendered
-	assert "- Status: `pending`" in rendered
-	assert "- Completed fix cycles: 0" in rendered
-	assert "- Audited integration SHA: `none`" in rendered
-	assert "- Active fix issue: none" in rendered
+	assert "### Security pass" not in rendered
+	assert "### Security pass" not in orchestrate_lib.format_wave_status_comment(state, 0)
 
 
 def test_security_pass_status_rendering_includes_active_fix_issue() -> None:

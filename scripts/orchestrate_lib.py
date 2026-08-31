@@ -1311,6 +1311,13 @@ def render_tracking_issue_body_from_state(
 	security_pass_active_fix_issues = state.get("security_pass_active_fix_issues", [])
 	if not isinstance(security_pass_active_fix_issues, list):
 		security_pass_active_fix_issues = []
+	security_pass_visible = (
+		str(state.get("status", "") or "") in {"security-pass", "security-pass-fixing"}
+		or security_pass_status != "pending"
+		or security_pass_cycle > 0
+		or bool(security_pass_head_sha)
+		or bool(security_pass_active_fix_issues)
+	)
 	security_pass_fix_display = ", ".join(
 		f"#{issue_number}"
 		for issue_number in security_pass_active_fix_issues
@@ -1334,11 +1341,12 @@ def render_tracking_issue_body_from_state(
 		rendered,
 		flags=re.DOTALL,
 	).rstrip()
-	footer_marker = "\n---\n*This issue is managed by the AI orchestrator. Do not edit manually.*"
-	if footer_marker in rendered:
-		rendered = rendered.replace(footer_marker, f"\n\n{security_pass_block}{footer_marker}", 1)
-	else:
-		rendered = f"{rendered}\n\n{security_pass_block}"
+	if security_pass_visible:
+		footer_marker = "\n---\n*This issue is managed by the AI orchestrator. Do not edit manually.*"
+		if footer_marker in rendered:
+			rendered = rendered.replace(footer_marker, f"\n\n{security_pass_block}{footer_marker}", 1)
+		else:
+			rendered = f"{rendered}\n\n{security_pass_block}"
 	if body_template.endswith("\n"):
 		rendered += "\n"
 	return rendered
@@ -1364,17 +1372,25 @@ def format_wave_status_comment(state: dict[str, Any], wave_idx: int) -> str:
 		security_pass_cycle = 0
 	if not isinstance(security_pass_active_fix_issues, list):
 		security_pass_active_fix_issues = []
+	security_pass_visible = (
+		str(state.get("status", "") or "") in {"security-pass", "security-pass-fixing"}
+		or security_pass_status != "pending"
+		or security_pass_cycle > 0
+		or bool(security_pass_head_sha)
+		or bool(security_pass_active_fix_issues)
+	)
 	security_pass_fix_display = ", ".join(
 		f"#{issue_number}"
 		for issue_number in security_pass_active_fix_issues
 		if isinstance(issue_number, int) and not isinstance(issue_number, bool) and issue_number > 0
 	) or "none"
-	lines.append("### Security pass")
-	lines.append(f"- Status: `{security_pass_status}`")
-	lines.append(f"- Completed fix cycles: {security_pass_cycle}")
-	lines.append(f"- Audited integration SHA: `{security_pass_head_sha or 'none'}`")
-	lines.append(f"- Active fix issue: {security_pass_fix_display}")
-	lines.append("")
+	if security_pass_visible:
+		lines.append("### Security pass")
+		lines.append(f"- Status: `{security_pass_status}`")
+		lines.append(f"- Completed fix cycles: {security_pass_cycle}")
+		lines.append(f"- Audited integration SHA: `{security_pass_head_sha or 'none'}`")
+		lines.append(f"- Active fix issue: {security_pass_fix_display}")
+		lines.append("")
 	return "\n".join(lines)
 
 

@@ -2944,6 +2944,41 @@ def test_security_pass_flag_off_preserves_legacy_completion_route() -> None:
 	assert "SECURITY_PASS_STARTED" not in result["stdout"] + result["stderr"]
 
 
+def test_security_pass_flag_off_releases_security_owned_states() -> None:
+	for stranded_status, security_label, active_fix_issues in (
+		("security-pass", "ai:security-pass", []),
+		("security-pass-fixing", "ai:security-pass-fixing", [900]),
+		("failed", "ai:security-pass-failed", []),
+	):
+		state = _base_state(status=stranded_status)
+		state.update(
+			{
+				"integration_branch": "orchestrator/project-192",
+				"security_pass_cycle": 2,
+				"security_pass_status": "failed" if stranded_status == "failed" else "blocked",
+				"security_pass_active_fix_issues": active_fix_issues,
+				"security_pass_head_sha": "stale-head",
+			}
+		)
+		result = _run_poller(
+			state=state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			enable_security_pass="false",
+			security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+			tracking_labels=[security_label],
+			issue_labels={10: ["ai:merged"], 900: ["ai:clarification"]},
+			existing_branches=["main", "orchestrator/project-192"],
+		)
+
+		assert result["latest_state"]["status"] == "complete"
+		assert result["latest_state"]["security_pass_status"] == "pending"
+		assert result["latest_state"]["security_pass_active_fix_issues"] == []
+		assert result["latest_state"]["security_pass_head_sha"] == ""
+		assert result["security_audit_capture"] is None
+		assert security_label not in result["tracking_labels"]
+
+
 def test_security_pass_clean_result_is_sha_bound_and_allows_completion() -> None:
 	state = _base_state()
 	state["integration_branch"] = "orchestrator/project-192"
@@ -3127,6 +3162,181 @@ def test_security_pass_invalid_engine_output_fails_closed() -> None:
 	assert result["latest_state"]["security_pass_head_sha"] == ""
 	assert result["tracking_labels"] == ["ai:security-pass"]
 	assert "SECURITY_PASS_FAILED reason=engine_unavailable" in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_closed_fix_without_merged_pr_terminalizes_recoverably() -> None:
+	state = _base_state(status="security-pass-fixing")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 1,
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [900],
+			"security_pass_head_sha": "audited-head",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={10: ["ai:merged"], 900: ["ai:closed"]},
+		issue_closed={900: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["security_pass_status"] == "failed"
+	assert result["latest_state"]["security_pass_active_fix_issues"] == []
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	assert result["security_audit_capture"] is None
+	assert "SECURITY_PASS_FAILED reason=fix_issue_closed_without_merged_pr" in result["stdout"] + result["stderr"]
+	assert any("/re-security-pass" in comment["body"] for comment in result["issues"]["192"]["comments"])
+
+
+def test_security_pass_judge_validation_route_blocks_then_clean_pass_dispatches() -> None:
+	blocked_state = _base_state()
+	blocked_state["integration_branch"] = "orchestrator/project-192"
+	blocked = _run_poller(
+		state=blocked_state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert blocked["latest_state"]["status"] == "security-pass-fixing"
+	assert blocked["validation_dispatches"] == []
+
+	clean_state = _base_state()
+	clean_state["integration_branch"] = "orchestrator/project-192"
+	clean = _run_poller(
+		state=clean_state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert clean["latest_state"]["status"] == "validating"
+	assert clean["latest_state"]["security_pass_status"] == "passed"
+	assert len(clean["validation_dispatches"]) == 1
+
+
+def test_security_pass_external_finalize_route_blocks_then_clean_pass_completes() -> None:
+	final_pr = {
+		"number": 395,
+		"state": "closed",
+		"merged": True,
+		"baseRefName": "main",
+		"headRefName": "orchestrator/project-192",
+		"mergeable": None,
+		"mergeable_state": "unknown",
+	}
+	for findings, expected_status in (([_security_pass_test_finding()], "security-pass-fixing"), ([], "complete")):
+		state = _base_state()
+		state.update(
+			{
+				"integration_branch": "orchestrator/project-192",
+				"final_merge_pr": 395,
+				"final_merge_status": "pending",
+			}
+		)
+		result = _run_poller(
+			state=state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			enable_security_pass="true",
+			security_audit_payload=_security_audit_findings_payload(findings),
+			issue_labels={10: ["ai:merged"]},
+			prs=[final_pr],
+			existing_branches=["main", "orchestrator/project-192"],
+		)
+		assert result["latest_state"]["status"] == expected_status
+		if findings:
+			assert result["latest_state"]["final_merge_status"] == "pending"
+		else:
+			assert result["latest_state"]["security_pass_status"] == "passed"
+			assert result["latest_state"]["final_merge_status"] == "merged"
+
+
+def test_security_pass_merge_conflict_route_blocks_then_clean_pass_completes() -> None:
+	final_pr = {
+		"number": 396,
+		"state": "closed",
+		"merged": True,
+		"baseRefName": "main",
+		"headRefName": "orchestrator/project-192",
+		"mergeable": None,
+		"mergeable_state": "unknown",
+	}
+	for findings, expected_status in (([_security_pass_test_finding()], "security-pass-fixing"), ([], "complete")):
+		state = _base_state(status="merge_conflict")
+		state.update(
+			{
+				"integration_branch": "orchestrator/project-192",
+				"final_merge_pr": 396,
+				"final_merge_status": "conflict",
+			}
+		)
+		result = _run_poller(
+			state=state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			enable_security_pass="true",
+			security_audit_payload=_security_audit_findings_payload(findings),
+			issue_labels={10: ["ai:merged"]},
+			prs=[final_pr],
+			existing_branches=["main", "orchestrator/project-192"],
+		)
+		assert result["latest_state"]["status"] == expected_status
+		if findings:
+			assert result["latest_state"]["final_merge_status"] == "conflict"
+		else:
+			assert result["latest_state"]["security_pass_status"] == "passed"
+			assert result["latest_state"]["final_merge_status"] == "merged"
+
+
+def test_security_pass_validation_complete_route_blocks_then_clean_pass_completes() -> None:
+	final_pr = {
+		"number": 397,
+		"state": "closed",
+		"merged": True,
+		"baseRefName": "main",
+		"headRefName": "orchestrator/project-192",
+		"mergeable": None,
+		"mergeable_state": "unknown",
+	}
+	for findings, expected_status in (([_security_pass_test_finding()], "security-pass-fixing"), ([], "complete")):
+		state = _base_state(status="validating")
+		state.update(
+			{
+				"integration_branch": "orchestrator/project-192",
+				"validation_cycle": 2,
+				"final_merge_pr": 397,
+				"final_merge_status": "pending",
+			}
+		)
+		result = _run_poller(
+			state=state,
+			enable_validation="true",
+			max_validate_cycles="3",
+			enable_security_pass="true",
+			security_audit_payload=_security_audit_findings_payload(findings),
+			tracking_labels=["ai:validated"],
+			issue_labels={10: ["ai:merged"]},
+			prs=[final_pr],
+			existing_branches=["main", "orchestrator/project-192"],
+		)
+		assert result["latest_state"]["status"] == expected_status
+		if findings:
+			assert result["latest_state"]["final_merge_status"] == "pending"
+		else:
+			assert result["latest_state"]["security_pass_status"] == "passed"
+			assert result["latest_state"]["final_merge_status"] == "merged"
+			assert result["latest_state"]["validation_completed_cycle"] == 2
 
 
 def test_security_pass_gate_is_present_on_every_completion_route() -> None:
@@ -3367,6 +3577,7 @@ def test_complete_verdict_enters_validation_mode_when_enabled():
 	assert result["merge_calls"]
 	assert result["merge_calls"][0]["base"] == "orchestrator/project-192"
 	assert result["merge_calls"][0]["head"] == "main"
+	assert result["security_audit_capture"] is None
 
 
 def test_complete_verdict_dispatches_validation_with_closed_wave_issue_no_pr():
@@ -6285,6 +6496,7 @@ def test_merge_conflict_state_completes_when_final_pr_already_merged_and_branch_
 	assert result["latest_state"]["final_merge_pr"] == 354
 	assert result["latest_state"]["final_merge_status"] == "merged"
 	assert result["release_dispatches"] == []
+	assert result["security_audit_capture"] is None
 
 
 def test_external_finalize_detect_leaves_merge_conflict_validation_path_intact():
@@ -6352,6 +6564,7 @@ def test_external_finalize_detect_leaves_validation_completion_path_intact():
 	assert result["latest_state"]["validation_completed_cycle"] == 2
 	assert "ai:validated" in result["tracking_labels"]
 	assert "ai:merged" not in result["tracking_labels"]
+	assert result["security_audit_capture"] is None
 
 
 def test_validation_completion_preempts_sync_branch_missing_failure_when_final_pr_already_merged():
@@ -6455,6 +6668,7 @@ def test_external_finalize_detect_skips_terminal_fallthrough():
 	assert result["latest_state"]["final_merge_pr"] == 355
 	assert result["latest_state"]["final_merge_status"] == "merged"
 	assert "Project already complete, skipping." not in result["stdout"]
+	assert result["security_audit_capture"] is None
 
 
 def test_external_finalize_detect_preempts_sync_branch_missing_failure():

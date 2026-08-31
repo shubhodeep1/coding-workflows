@@ -4269,6 +4269,26 @@ Manual intervention is required. After addressing the findings, comment \`/re-se
   tg_notify "Project #${TRACKING_NUM} security pass FAILED after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} fix cycles with ${finding_count} finding(s) remaining. Manual intervention required." "CRITICAL"
 }
 
+security_pass_closed_fix_failure() {
+  local issue_number="$1"
+
+  echo "SECURITY_PASS_FAILED reason=fix_issue_closed_without_merged_pr tracking_issue=${TRACKING_NUM} issue=${issue_number}"
+  jq '
+    .status = "failed"
+    | .security_pass_status = "failed"
+    | .security_pass_head_sha = ""
+    | .security_pass_active_fix_issues = []
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment || true
+  set_tracking_phase_label "ai:security-pass-failed"
+  post_tracking_comment "## ❌ Project security-pass fix did not merge
+
+Security-pass fix issue #${issue_number} closed without merged-PR evidence. Completion remains gated; use \`/re-security-pass\` after correcting or replacing the fix."
+  set_failed_completion_status_comment \
+    "Security-pass fix issue #${issue_number} closed without merged-PR evidence. Completion remains gated; use \`/re-security-pass\` after correcting or replacing the fix."
+  tg_notify "Project #${TRACKING_NUM} security-pass fix issue #${issue_number} closed without a merged PR. Manual correction and /re-security-pass are required." "CRITICAL"
+}
+
 create_security_pass_fix_issue() {
   local findings_file="$1"
   local completed_cycles="$2"
@@ -13961,6 +13981,18 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
   DEFAULT_BRANCH_TRACKING=""
   INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
+	if [ "${ENABLE_SECURITY_PASS}" != "true" ] \
+		&& { [ "${PROJECT_STATUS}" = "security-pass" ] \
+			|| [ "${PROJECT_STATUS}" = "security-pass-fixing" ] \
+			|| has_label "${TRACKING_LABELS}" "ai:security-pass-failed"; }; then
+		echo "SECURITY_PASS_SKIPPED_DISABLED tracking_issue=${TRACKING_NUM} releasing_state=${PROJECT_STATUS}"
+		jq '.status = "in_progress" | .security_pass_status = "pending" | .security_pass_active_fix_issues = [] | .security_pass_head_sha = ""' \
+			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+		post_state_comment || true
+		set_tracking_phase_label "ai:done"
+		PROJECT_STATUS="in_progress"
+		TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
+	fi
 	if [ "${PROJECT_STATUS}" = "security-pass" ] || [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
 		DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
 	fi
@@ -14001,13 +14033,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
         PROJECT_STATUS="security-pass"
       elif [ "${SECURITY_FIX_STATE}" = "closed" ]; then
         echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} reason=fix_issue_closed_without_merged_pr issue=${SECURITY_FIX_ISSUE}"
-        COMPLETION_STATUS_STATE_CHANGED="false"
-        update_completion_status_comment "waiting" \
-          "## Completion status"$'\n\n'"**State:** \`security-pass-fixing\`"$'\n\n'"Security-pass fix issue #${SECURITY_FIX_ISSUE} closed without merged-PR evidence. Completion remains gated pending operator correction." \
-          || true
-        if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
-          post_state_comment || true
-        fi
+        security_pass_closed_fix_failure "${SECURITY_FIX_ISSUE}"
         continue
       else
         echo "Security-pass fix issue #${SECURITY_FIX_ISSUE} remains in progress."
