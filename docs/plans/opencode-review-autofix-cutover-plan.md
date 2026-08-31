@@ -382,16 +382,47 @@ the reviewer phase are excluded.
   `cache_read_input_tokens=na` for every reviewer slot, and the Codex-era
   ledger contains no cache-read field; zero must not be substituted.
 
-Post-cutover evidence remains pending real production runs:
+Post-cutover evidence, recorded 2026-08-31 from the run logs of every real
+production run on 2026-08-30 UTC (all nine ran the opencode pipeline —
+`Install OpenCode CLI` present and green in each). A tenth run,
+[`33330475575`](https://github.com/shubhodeep1/coding-workflows/actions/runs/33330475575),
+exited cleanly when its PR merged mid-review and is excluded, matching the
+baseline's exclusion of runs whose reviewer phase did not fully execute:
 
 | Consecutive run | Run ID | Reviewers | New failure classes | Reviewer latency | Cache-read telemetry | Result |
 |---|---|---:|---|---:|---|---|
-| 1 | pending | pending | pending | pending | pending | pending |
-| 2 | pending | pending | pending | pending | pending | pending |
-| 3 | pending | pending | pending | pending | pending | pending |
+| 1 | [`33298105874`](https://github.com/shubhodeep1/coding-workflows/actions/runs/33298105874) | 6/6 | none (1 `non_retryable` deepseek slot, recovered in-run) | 3,501 s (in band) | 2,469,500 (12 numeric / 0 na) | pass |
+| 2 | [`33298314768`](https://github.com/shubhodeep1/coding-workflows/actions/runs/33298314768) | 6/6 | none | 4,957 s (+31%, above band) | 2,928,050 (14 / 0) | latency miss |
+| 3 | [`33298515312`](https://github.com/shubhodeep1/coding-workflows/actions/runs/33298515312) | 6/6 | none | 5,259 s (+39%, above band) | 4,989,286 (12 / 3 na) | latency miss |
+| 4 | [`33298934878`](https://github.com/shubhodeep1/coding-workflows/actions/runs/33298934878) | 5/6 | none (pass-2 dropped one slot without an alert; cause not in logs) | 4,239 s (in band) | 3,953,217 (12 / 0) | reviewer miss |
+| 5 | [`33299579391`](https://github.com/shubhodeep1/coding-workflows/actions/runs/33299579391) | 6/6 | none | 3,902 s (in band) | 2,067,253 (12 / 0) | pass |
+| 6 | [`33300218911`](https://github.com/shubhodeep1/coding-workflows/actions/runs/33300218911) | 6/6 | none | 4,185 s (in band) | 1,060,667 (12 / 0) | pass |
+| 7 | [`33300999483`](https://github.com/shubhodeep1/coding-workflows/actions/runs/33300999483) | 6/6 | none | 4,782 s (+26%, above band) | 1,249,578 (13 / 1 na) | latency miss |
+| 8 | [`33312603057`](https://github.com/shubhodeep1/coding-workflows/actions/runs/33312603057) | 6/6 | none (1 `non_retryable` deepseek slot, recovered in pass 2) | 4,255 s (in band) | 3,378,928 (12 / 1 na) | pass |
+| 9 | [`33328474242`](https://github.com/shubhodeep1/coding-workflows/actions/runs/33328474242) | 5/6 | none (mistral slot: context-window overflow, ~273k tokens vs the model's 262k limit — a model capacity limit, not an opencode regression) | 3,146 s (in band) | 2,538,024 (14 / 0) | reviewer miss |
 
-`@stable` remains held until all three rows satisfy the amended production
-criterion above.
+Criterion outcome, recorded 2026-08-31:
+
+- **Strict Q3:A verdict: not met.** No window of 3 chronologically
+  consecutive runs has all three at `REVIEWERS_SUCCESSFUL=6/6` with
+  reviewer latency inside the 3,026–4,539 s band. Closest: runs 5–6 are
+  green on every leg, but run 4 (5/6) precedes them and run 7 (4,782 s)
+  follows.
+- **Aggregate picture is healthy.** 7 of 9 runs at 6/6; mean reviewer
+  latency 4,247 s = +12.3% vs the 3,782 s Codex baseline (inside ~20% in
+  aggregate); numeric cache-read telemetry present in every run (the
+  Codex era recorded none), confirming cache reuse functioning; no new
+  failure-class strings in any log — both 5/6 runs surfaced as the
+  existing `non_retryable` class.
+- **The hold was lifted before this evidence was recorded.** `@stable`
+  was tagged at `fbec387` on 2026-08-30 19:30 UTC by release run
+  [`33325623845`](https://github.com/shubhodeep1/coding-workflows/actions/runs/33325623845)
+  (owner-dispatched; its own e2e gate was green, including a full
+  opencode review with the editor-bait phase), and the consumer-repo
+  `repository_dispatch` fan-out succeeded the same minute. This section
+  now serves as the audit-trail record of that decision rather than as a
+  live gate. Rollback, if the aggregate picture degrades, remains the
+  phase revert / re-tag path in Rollout step 7.
 
 ## Risks & Mitigations
 
