@@ -34,6 +34,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+CLARIFY_WF = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
 PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 POLL_PROCESS = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 PROMPT_PLAN = REPO_ROOT / "prompts" / "mode-plan.txt"
@@ -134,6 +135,16 @@ def _run_poll_parser(input_text: str) -> str:
 		check=True,
 	)
 	return proc.stdout
+
+
+def _extract_clarify_q_count_patterns() -> list[str]:
+	wf = _read(CLARIFY_WF)
+	patterns = re.findall(
+		r"Q_COUNT=\"\$\(grep -cE '([^']+)' \"\$\{(?:CODEX_OUTPUT_FILE|QUESTIONS_FILE)\}\" \|\| true\)\"",
+		wf,
+	)
+	assert len(patterns) == 2, patterns
+	return patterns
 
 
 _TEMPLATE_FORM = (
@@ -419,6 +430,26 @@ def test_structured_block_detector_accepts_blockquoted_template_form() -> None:
 
 def test_structured_block_detector_accepts_blockquoted_multi_question_form() -> None:
 	assert _run_structured_block_detector(_BLOCKQUOTE_MULTI_QUESTION_FORM)
+
+
+def test_clarify_q_count_patterns_stay_consistent_for_blockquotes() -> None:
+	patterns = _extract_clarify_q_count_patterns()
+	assert patterns[0] == patterns[1]
+	body = (
+		_BLOCKQUOTE_MULTI_QUESTION_FORM
+		+ "> **Q3**: split-bold question\n"
+		+ "Q4: unquoted question\n"
+		+ "> Reply: `Q5: A`\n"
+	)
+	for pattern in patterns:
+		proc = subprocess.run(
+			["grep", "-cE", pattern],
+			input=body,
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+		assert proc.stdout.strip() == "4", proc.stdout
 
 
 def test_structured_block_detector_rejects_input_with_no_qid() -> None:
