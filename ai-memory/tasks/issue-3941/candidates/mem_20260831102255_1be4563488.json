@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3941,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3941\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3942\",\"pr_number\":3942,\"branch\":\"ai/issue-3941\",\"run_id\":\"33380847889\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/33380847889\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"changelog.d/orchestrator-security-pass-phase-2-audit-engine.md\",\"scripts/security_audit.sh\",\"tests/test_security_audit_workflow_contract.py\"]}",
+  "fingerprint": "65c018125796ee81f63bd0d6e8dc97bc4181683003a4f58c62587c5a58720d5a",
+  "lineage": {
+    "issue_number": 3941,
+    "parent_ids": [],
+    "pr_number": 3942,
+    "run_id": "33380847889",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33380847889",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3942"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260831102255_1be4563488",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3941,
+    "level": "run",
+    "pr_number": 3942,
+    "run_id": "33380847889"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3941: https://github.com/shubhodeep1/coding-workflows/pull/3942",
+  "timestamps": {
+    "created_at": "2026-08-31T10:22:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
