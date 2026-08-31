@@ -115,6 +115,7 @@ from pathlib import Path
 state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
 state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
 state.setdefault("codex_calls", []).append(sys.argv[1:])
+state.setdefault("codex_stdin", []).append(sys.stdin.read())
 state_path.write_text(json.dumps(state), encoding="utf-8")
 sys.stdout.write(os.environ.get("MOCK_CODEX_OUTPUT", "[]"))
 sys.stderr.write(os.environ.get("MOCK_CODEX_STDERR", ""))
@@ -159,6 +160,7 @@ def _run_security_audit(
 	extra_env: dict | None = None,
 	cwd: Path | None = None,
 	support_failure_mode: str | None = None,
+	script_args: tuple[str, ...] = (),
 ) -> tuple[subprocess.CompletedProcess[str], dict]:
 	with tempfile.TemporaryDirectory(prefix="security-audit-test-") as td:
 		tmp_path = Path(td)
@@ -203,7 +205,7 @@ def _run_security_audit(
 			)
 		env.update(extra_env or {})
 		proc = subprocess.run(
-			["bash", "--noprofile", "--norc", str(SCRIPT_PATH)],
+			["bash", "--noprofile", "--norc", str(SCRIPT_PATH), *script_args],
 			cwd=run_cwd,
 			env=env,
 			capture_output=True,
@@ -211,6 +213,9 @@ def _run_security_audit(
 			encoding="utf-8",
 		)
 		final_state = json.loads(state_file.read_text(encoding="utf-8"))
+		findings_output_path = Path(env.get("SECURITY_AUDIT_FINDINGS_OUT", ""))
+		if findings_output_path.is_file():
+			final_state["security_audit_findings_output"] = findings_output_path.read_text(encoding="utf-8")
 		return proc, final_state
 
 
@@ -274,6 +279,27 @@ def _security_audit_tracker_state() -> dict:
 				}
 			]
 		]
+	}
+
+
+def _finding_payload(
+	finding_id: str,
+	*,
+	file_path: str = "scripts/security_audit.sh",
+	severity: str = "high",
+	confidence: int = 9,
+	category: str = "A05:2021-Security Misconfiguration",
+	exploit_scenario: str = "A concrete trust-boundary weakness can be exploited.",
+) -> dict:
+	return {
+		"finding_id": finding_id,
+		"owasp_or_stride_category": category,
+		"severity": severity,
+		"confidence": confidence,
+		"file": file_path,
+		"line": 1,
+		"exploit_scenario": exploit_scenario,
+		"recommendation": "Enforce the relevant trust-boundary invariant.",
 	}
 
 
@@ -461,6 +487,8 @@ def test_security_audit_incremental_scope_drops_out_of_scope_findings() -> None:
 	assert proc.returncode == 0, proc.stderr
 	assert "scope=incremental" in proc.stdout
 	assert "tracker=#9000 findings=1 followups_created=1" in proc.stdout
+	assert "on the default branch." in final_state["codex_stdin"][0]
+	assert "Files changed since the last audited commit" in final_state["codex_stdin"][0]
 	comment_bodies = "\n".join(final_state.get("issue_comment_bodies", []))
 	assert "Audit scope: incremental" in comment_bodies
 	assert f"`{first_sha}`..`{head_sha}`" in comment_bodies
@@ -589,6 +617,8 @@ def test_security_audit_success_path_retains_codex_and_tracker_behavior() -> Non
 	assert proc.stderr == ""
 	assert "tracker=#9000 findings=0 followups_created=0" in proc.stdout
 	assert len(final_state.get("codex_calls", [])) == 1
+	assert "Audit scope: repository checkout at default-branch HEAD." in final_state["codex_stdin"][0]
+	assert "Represent money amounts with decimal or integer minor-unit types" not in final_state["codex_stdin"][0]
 	assert len(final_state.get("issue_comment_args", [])) == 1
 	assert len(final_state.get("issue_edit_args", [])) >= 2
 
@@ -691,6 +721,256 @@ def test_security_audit_filters_findings_and_caps_followups() -> None:
 	assert "invalid-path" not in "\n".join(final_state.get("issue_comment_bodies", []))
 	assert any("high-finding-one" in body for body in final_state.get("issue_create_bodies", []))
 	assert not any("high-finding-two" in body for body in final_state.get("issue_create_bodies", [])[1:])
+
+
+def test_security_audit_findings_json_filters_without_github_side_effects() -> None:
+	findings = [
+		_finding_payload("low-survivor", severity="low"),
+		_finding_payload("high-survivor", file_path="scripts/label_helpers.sh"),
+		_finding_payload("low-confidence", confidence=7),
+		_finding_payload(
+			"excluded",
+			file_path="scripts/gh_helpers.sh",
+			category="A03:2021-Injection",
+			exploit_scenario="A crafted gh api invocation becomes rce.",
+		),
+		_finding_payload("invalid", file_path="missing/security.py"),
+	]
+	project_spec = "Refs #3933\nLiteral {{REFERENCE_SECURITY_MONEY_LENS}} token stays unrendered.\n"
+	with tempfile.TemporaryDirectory(prefix="security-audit-json-") as td:
+		tmp_path = Path(td)
+		output_path = tmp_path / "findings.json"
+		project_spec_path = tmp_path / "project.md"
+		project_spec_path.write_text(project_spec, encoding="utf-8")
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps(findings),
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+			},
+			script_args=(str(project_spec_path),),
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert final_state.get("calls", []) == []
+	assert final_state.get("label_create_args", []) == []
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert payload["schema_version"] == "security_audit_findings.v1"
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["high-survivor", "low-survivor"]
+	assert payload["counts"] == {
+		"kept": 2,
+		"suppressed_excluded": 1,
+		"suppressed_invalid": 1,
+		"suppressed_low_confidence": 1,
+		"suppressed_out_of_scope": 0,
+	}
+	prompt = final_state["codex_stdin"][0]
+	assert "Audit scope override: repository checkout at HEAD" in prompt
+	assert "do not assume the checked-out branch is the default branch" in prompt
+	assert "Represent money amounts with decimal or integer minor-unit types" in prompt
+	assert "=== BEGIN UNTRUSTED PROJECT SPECIFICATION ===" in prompt
+	assert "=== END UNTRUSTED PROJECT SPECIFICATION ===" in prompt
+	project_spec_context = prompt.split("=== BEGIN UNTRUSTED PROJECT SPECIFICATION ===\n", 1)[1]
+	assert project_spec_context.split("\n=== END UNTRUSTED PROJECT SPECIFICATION ===", 1)[0] == project_spec
+
+
+def test_security_audit_explicit_diff_scope_filters_changed_files() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-explicit-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, first_sha, head_sha = _git_fixture_repo(tmp_path)
+		output_path = tmp_path / "findings.json"
+		findings = [
+			_finding_payload("changed", file_path="file_b.py"),
+			_finding_payload("unchanged", file_path="file_a.py"),
+		]
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps(findings),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_DIFF_BASE": first_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["changed"]
+	assert payload["counts"]["suppressed_out_of_scope"] == 1
+	prompt = final_state["codex_stdin"][0]
+	assert f"explicit diff range {first_sha}..{head_sha}" in prompt
+	assert "Files changed in the explicit range" in prompt
+	assert "checked-out HEAD may be a non-default branch" in prompt
+	assert "on the default branch" not in prompt
+
+
+def test_security_audit_explicit_diff_range_precedes_tracker_marker() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-precedence-") as fixture_td:
+		repo_dir, first_sha, head_sha = _git_fixture_repo(Path(fixture_td))
+		state = {
+			"issue_list_responses": [
+				[
+					{
+						"number": 9000,
+						"title": "AI Security Audit Tracker",
+						"body": f"<!-- ai:security-audit-tracker:v1 -->\n<!-- ai:security-audit-last-sha:{head_sha} -->\n",
+						"state": "OPEN",
+						"url": "https://github.com/owner/repo/issues/9000",
+					}
+				],
+				[],
+			],
+		}
+		proc, final_state = _run_security_audit(
+			state,
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_DIFF_BASE": first_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert "unchanged since last audit" not in proc.stdout
+	assert len(final_state.get("codex_calls", [])) == 1
+	assert f"explicit diff range {first_sha}..{head_sha}" in final_state["codex_stdin"][0]
+
+
+def test_security_audit_findings_json_empty_explicit_range_stays_narrow() -> None:
+	head_sha = subprocess.run(
+		["git", "rev-parse", "HEAD"],
+		cwd=REPO_ROOT,
+		check=True,
+		capture_output=True,
+		text=True,
+		encoding="utf-8",
+	).stdout.strip()
+	with tempfile.TemporaryDirectory(prefix="security-audit-empty-range-") as td:
+		output_path = Path(td) / "findings.json"
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([_finding_payload("must-be-out-of-scope")]),
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"SECURITY_AUDIT_DIFF_BASE": head_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert payload["findings"] == []
+	assert payload["counts"]["suppressed_out_of_scope"] == 1
+
+
+def test_security_audit_findings_json_preflight_failures_are_side_effect_free() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-preflight-") as td:
+		tmp_path = Path(td)
+		failure_envs = [
+			{"SECURITY_AUDIT_OUTPUT_MODE": "findings-json"},
+			{
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path),
+			},
+			{
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": "/sys/security-audit-findings.json",
+			},
+			{
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+				"SECURITY_AUDIT_DIFF_BASE": "HEAD",
+			},
+		]
+		for failure_env in failure_envs:
+			proc, final_state = _run_security_audit({}, extra_env=failure_env)
+			assert proc.returncode != 0
+			assert final_state.get("calls", []) == []
+			assert final_state.get("codex_calls", []) == []
+
+		proc, final_state = _run_security_audit(
+			{},
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+			},
+			script_args=(str(tmp_path / "missing-project.md"),),
+		)
+		assert proc.returncode != 0
+		assert final_state.get("calls", []) == []
+		assert final_state.get("codex_calls", []) == []
+
+
+def test_security_audit_invalid_explicit_refs_fail_closed() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-invalid-ref-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, first_sha, head_sha = _git_fixture_repo(tmp_path)
+		git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+		git_env.update(
+			{
+				"GIT_AUTHOR_NAME": "t",
+				"GIT_AUTHOR_EMAIL": "t@example.invalid",
+				"GIT_COMMITTER_NAME": "t",
+				"GIT_COMMITTER_EMAIL": "t@example.invalid",
+			}
+		)
+		subprocess.run(["git", "checkout", "-q", "-b", "sibling", first_sha], cwd=repo_dir, env=git_env, check=True)
+		(repo_dir / "file_c.py").write_text("VALUE_C = 3\n", encoding="utf-8")
+		subprocess.run(["git", "add", "file_c.py"], cwd=repo_dir, env=git_env, check=True)
+		subprocess.run(["git", "commit", "-q", "-m", "sibling commit"], cwd=repo_dir, env=git_env, check=True)
+		sibling_sha = subprocess.run(
+			["git", "rev-parse", "HEAD"],
+			cwd=repo_dir,
+			env=git_env,
+			check=True,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+		).stdout.strip()
+		subprocess.run(["git", "checkout", "-q", "--detach", head_sha], cwd=repo_dir, env=git_env, check=True)
+		base_env = {
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+			"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+		}
+		ref_pairs = [("not-a-ref", head_sha), (first_sha, first_sha), (sibling_sha, head_sha)]
+		for diff_base, diff_head in ref_pairs:
+			proc, final_state = _run_security_audit(
+				{},
+				cwd=repo_dir,
+				extra_env={
+					**base_env,
+					"SECURITY_AUDIT_DIFF_BASE": diff_base,
+					"SECURITY_AUDIT_DIFF_HEAD": diff_head,
+				},
+			)
+			assert proc.returncode != 0
+			assert final_state.get("calls", []) == []
+			assert final_state.get("codex_calls", []) == []
+
+
+def test_security_audit_invalid_engine_output_preserves_existing_findings_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-invalid-engine-") as td:
+		output_path = Path(td) / "findings.json"
+		for invalid_output in ("{", "{}"):
+			output_path.write_text("sentinel\n", encoding="utf-8")
+			proc, final_state = _run_security_audit(
+				{},
+				codex_output=invalid_output,
+				extra_env={
+					"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+					"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				},
+			)
+			assert proc.returncode != 0
+			assert final_state["security_audit_findings_output"] == "sentinel\n"
+			assert final_state.get("calls", []) == []
 
 
 def main() -> int:

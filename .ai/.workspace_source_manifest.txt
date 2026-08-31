@@ -200,6 +200,7 @@ docs/plans/gsd-inspired-improvements-plan.md
 docs/plans/gstack-learnings-plan.md
 docs/plans/integration-sync-resolver-self-heal-plan.md
 docs/plans/open-agents-learnings-plan.md
+docs/plans/opencode-clarify-cutover-plan.md
 docs/plans/opencode-review-autofix-cutover-plan.md
 docs/plans/orchestrator-prerequisite-gate-automation-plan.md
 docs/plans/orchestrator-security-pass-gate-plan.md
