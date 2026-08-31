@@ -439,7 +439,8 @@ def test_clarify_q_count_patterns_stay_consistent_for_blockquotes() -> None:
 		_BLOCKQUOTE_MULTI_QUESTION_FORM
 		+ "> **Q3**: split-bold question\n"
 		+ "Q4: unquoted question\n"
-		+ "> Reply: `Q5: A`\n"
+		+ "  > Q5: indented blockquoted unbolded question\n"
+		+ "> Reply: `Q6: A`\n"
 	)
 	for pattern in patterns:
 		proc = subprocess.run(
@@ -449,7 +450,7 @@ def test_clarify_q_count_patterns_stay_consistent_for_blockquotes() -> None:
 			text=True,
 			check=True,
 		)
-		assert proc.stdout.strip() == "4", proc.stdout
+		assert proc.stdout.strip() == "5", proc.stdout
 
 
 def test_structured_block_detector_rejects_input_with_no_qid() -> None:
