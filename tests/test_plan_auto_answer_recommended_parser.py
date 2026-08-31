@@ -191,7 +191,7 @@ _NO_BULLET_PAREN_FORM = (
 # with `> `. The pre-fix regexes anchored on `^\s*` never matched that
 # prefix and produced a false "Auto-answer parser failed … No Q-ID
 # blocks detected" alert (fun-token-multi-chain#434, run 33355986371).
-# The `> Reply: `Q1: A`` line rides along to pin that it neither
+# The "> Reply: Q1: A" line rides along to pin that it neither
 # registers as a duplicate Q-ID nor as an option bullet.
 _BLOCKQUOTE_TEMPLATE_FORM = (
 	"> **Q1: Which baseline?**\n"

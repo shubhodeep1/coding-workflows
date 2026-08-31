@@ -12736,7 +12736,7 @@ extract_recommended_answers() {
   # accepted as well as "- **A** — text (RECOMMENDED)").
   # Both regexes additionally accept an optional markdown blockquote
   # prefix ("> ", possibly nested) before the Q-ID or bullet, because
-  # prompts/mode-plan.txt and mode-clarify.txt render the canonical
+  # prompts/mode-plan.txt and prompts/mode-clarify.txt render the canonical
   # template inside a blockquote ("> **Q1: <question>**" … "> Reply:"),
   # and a comment carrying that template verbatim previously extracted
   # nothing (fun-token-multi-chain#434; same fix as plan.yml, PR #3939).
