@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml: lines 1029-1030, 1076-1077 | severity=MAJOR | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The two Q_COUNT assignments use inconsistent regex patterns for recognizing question headings.\n  WHY: Different regex patterns for counting the same logical construct can produce different results, although the corrected `|| true` plus `${Q_COUNT:-0}` logic properly handles zero matches.\n- .github/workflows/plan.yml: lines 1210-1212 | severity=MAJOR | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The recommended-options regex does not accept the optional blockquote prefix supported by the other structured clarification block regexes.\n  WHY: The detector may fail to recognize structured clarification blocks whose recommended options use the blockquoted format.\n- scripts/orchestrate_poll_process.sh: line 12740 | severity=NIT | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The comment references `mode-clarify.txt` but the actual path is `prompts/mode-clarify.txt`.\n  WHY: This reduces traceability when grepping for related prompt/template changes.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The changelog should accurately reflect the number of regexes widened in plan.yml\n  expected_change_site: changelog.d/3939-plan-parser-blockquote-support.md line 8\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The changelog text states \"Regexes widened in `plan.yml` | 5\" but the PR description and diff show that 5 regexes were indeed widened (3 in structured-block detector + 2 in auto-answer parser), so this is actually correct. However, the consensus findings indicate this was flagged as an issue by reviewers who thought it was incorrect.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/clarify.yml\n  Line or code reference: lines 1029-1030, 1076-1077\n  Problem: The Q_COUNT variable assignment uses `grep -cE ... || true` followed by `${Q_COUNT:-0}`; the corrected logic properly handles zero matches, but the regex patterns differ in their handling of bold asterisks and colon spacing.\n  Why it fails at runtime: Different regex patterns for counting the same logical construct can produce different results, causing inconsistent behavior in the step-summary table.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- .github/workflows/plan.yml\n  Line or code reference: lines 1210-1212\n  Problem: The structured clarification block detector uses regexes that accept an optional `(?:>\\s*)*` blockquote prefix, but the recommended-options regex does not.\n  Why it fails at runtime: The detector may fail to recognize structured clarification blocks that contain recommended options because one required pattern does not match the blockquoted format.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- scripts/orchestrate_poll_process.sh\n  Line or code reference: line 12740\n  Problem: The comment references `mode-clarify.txt` but the actual path is `prompts/mode-clarify.txt`.\n  Why it fails at runtime: This reduces traceability when grepping for related prompt/template changes.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- .github/workflows/clarify.yml\n  Line or code reference: lines 1029-1030, 1076-1077\n  Problem: The corrected `grep -c` handling uses `|| true` plus `${Q_COUNT:-0}`, which properly handles zero matches and prevents the `\"0\\n0\"` corruption issue.\n  Why it fails at runtime: The corrected logic does not fail at runtime; it is described as a verified correction.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- Requirement: The changelog should accurately reflect the number of regexes widened in plan.yml\n  Expected change site: changelog.d/3939-plan-parser-blockquote-support.md line 8\n  Evidence of absence: The changelog text states \"Regexes widened in `plan.yml` | 5\" but the PR description and diff show that 5 regexes were indeed widened (3 in structured-block detector + 2 in auto-answer parser), so this is actually correct. However, the consensus findings indicate this was flagged as an issue by reviewers who thought it was incorrect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "f91f8c112223b451058f78a9d9ade8d727eb184a6ffd2ef51b05fbb1b5fa2cf4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3939,
+    "run_id": "33383176937",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33383176937",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260831121112_770295cec1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3939,
+    "run_id": "33383176937"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-31T12:11:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
