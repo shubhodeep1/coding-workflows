@@ -222,6 +222,13 @@ _BLOCKQUOTE_MULTI_QUESTION_FORM = (
 )
 
 
+def test_clarify_summary_count_accepts_blockquoted_unbolded_qid() -> None:
+	summary_pattern_match = re.search(r'''Q_COUNT="\$\(grep -cE '([^']+)' "\$\{CODEX_OUTPUT_FILE\}" \|\| true\)''', _read(REPO_ROOT / ".github" / "workflows" / "clarify.yml"))
+	assert summary_pattern_match
+	summary_count_proc = subprocess.run(["grep", "-cE", summary_pattern_match.group(1)], input="  > Q1: Which baseline?\n", capture_output=True, text=True)
+	assert summary_count_proc.stdout.strip() == "1", summary_count_proc
+
+
 def test_plan_parser_accepts_template_form() -> None:
 	r = _run_plan_parser(_TEMPLATE_FORM)
 	assert r.get("status") == "ok", r
