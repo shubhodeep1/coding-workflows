@@ -98,12 +98,21 @@ security_audit_append_prompt_context() {
 	echo || return 1
 	echo "Current UTC date: $(date -u +%F)" || return 1
 	if [ "${AUDIT_SCOPE_MODE}" = "incremental" ]; then
-		echo "Audit scope: INCREMENTAL — commits ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA} on the default branch." || return 1
-		echo "Files changed since the last audited commit (every finding MUST cite one of these files):" || return 1
+		if [ -n "${SECURITY_AUDIT_DIFF_BASE}" ]; then
+			echo "Audit scope override: INCREMENTAL — explicit diff range ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA}; the checked-out HEAD may be a non-default branch." || return 1
+			echo "Files changed in the explicit range (every finding MUST cite one of these files):" || return 1
+		else
+			echo "Audit scope: INCREMENTAL — commits ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA} on the default branch." || return 1
+			echo "Files changed since the last audited commit (every finding MUST cite one of these files):" || return 1
+		fi
 		sed 's/^/- /' "${CHANGED_FILES_FILE}" || return 1
 		echo "You may read any file in the repository to trace cross-file impact (callers, configuration, trust boundaries), but only emit findings whose cited file appears in the changed list above; findings citing unchanged files are dropped by the post-filter." || return 1
 	else
-		echo "Audit scope: repository checkout at default-branch HEAD." || return 1
+		if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
+			echo "Audit scope override: repository checkout at HEAD; do not assume the checked-out branch is the default branch." || return 1
+		else
+			echo "Audit scope: repository checkout at default-branch HEAD." || return 1
+		fi
 	fi
 	if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 		echo || return 1

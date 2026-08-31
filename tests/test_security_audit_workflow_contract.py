@@ -487,6 +487,8 @@ def test_security_audit_incremental_scope_drops_out_of_scope_findings() -> None:
 	assert proc.returncode == 0, proc.stderr
 	assert "scope=incremental" in proc.stdout
 	assert "tracker=#9000 findings=1 followups_created=1" in proc.stdout
+	assert "on the default branch." in final_state["codex_stdin"][0]
+	assert "Files changed since the last audited commit" in final_state["codex_stdin"][0]
 	comment_bodies = "\n".join(final_state.get("issue_comment_bodies", []))
 	assert "Audit scope: incremental" in comment_bodies
 	assert f"`{first_sha}`..`{head_sha}`" in comment_bodies
@@ -615,6 +617,7 @@ def test_security_audit_success_path_retains_codex_and_tracker_behavior() -> Non
 	assert proc.stderr == ""
 	assert "tracker=#9000 findings=0 followups_created=0" in proc.stdout
 	assert len(final_state.get("codex_calls", [])) == 1
+	assert "Audit scope: repository checkout at default-branch HEAD." in final_state["codex_stdin"][0]
 	assert "Represent money amounts with decimal or integer minor-unit types" not in final_state["codex_stdin"][0]
 	assert len(final_state.get("issue_comment_args", [])) == 1
 	assert len(final_state.get("issue_edit_args", [])) >= 2
@@ -763,6 +766,8 @@ def test_security_audit_findings_json_filters_without_github_side_effects() -> N
 		"suppressed_out_of_scope": 0,
 	}
 	prompt = final_state["codex_stdin"][0]
+	assert "Audit scope override: repository checkout at HEAD" in prompt
+	assert "do not assume the checked-out branch is the default branch" in prompt
 	assert "Represent money amounts with decimal or integer minor-unit types" in prompt
 	assert "=== BEGIN UNTRUSTED PROJECT SPECIFICATION ===" in prompt
 	assert "=== END UNTRUSTED PROJECT SPECIFICATION ===" in prompt
@@ -796,7 +801,11 @@ def test_security_audit_explicit_diff_scope_filters_changed_files() -> None:
 	payload = json.loads(final_state["security_audit_findings_output"])
 	assert [finding["finding_id"] for finding in payload["findings"]] == ["changed"]
 	assert payload["counts"]["suppressed_out_of_scope"] == 1
-	assert f"commits {first_sha}..{head_sha}" in final_state["codex_stdin"][0]
+	prompt = final_state["codex_stdin"][0]
+	assert f"explicit diff range {first_sha}..{head_sha}" in prompt
+	assert "Files changed in the explicit range" in prompt
+	assert "checked-out HEAD may be a non-default branch" in prompt
+	assert "on the default branch" not in prompt
 
 
 def test_security_audit_explicit_diff_range_precedes_tracker_marker() -> None:
@@ -829,7 +838,7 @@ def test_security_audit_explicit_diff_range_precedes_tracker_marker() -> None:
 	assert proc.returncode == 0, proc.stderr
 	assert "unchanged since last audit" not in proc.stdout
 	assert len(final_state.get("codex_calls", [])) == 1
-	assert f"commits {first_sha}..{head_sha}" in final_state["codex_stdin"][0]
+	assert f"explicit diff range {first_sha}..{head_sha}" in final_state["codex_stdin"][0]
 
 
 def test_security_audit_findings_json_empty_explicit_range_stays_narrow() -> None:
