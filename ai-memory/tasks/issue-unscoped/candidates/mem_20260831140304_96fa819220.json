@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh: lines 100-104, security_audit_append_prompt_context() | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: When the scope comes from explicit `SECURITY_AUDIT_DIFF_BASE`/`SECURITY_AUDIT_DIFF_HEAD` inputs, the prompt still claims the range is \"on the default branch\" and \"since the last audited commit\".\n  WHY: The deterministic post-filter enforces the correct changed-file list, but the model-facing scope statement contradicts the explicit range's provenance and may mislead the audit model.\n\n- README.md:1431-1445 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The `SECURITY_AUDIT_DIFF_HEAD` documentation does not explicitly state that the value must equal the checked-out `HEAD`.\n  WHY: The script enforces this constraint at lines 397-399, but the reference documentation does not fully describe the enforced contract.\n\n- README.md:1431-1445 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The documentation inaccurately claims that the `findings-json` mode audits the full checkout when no explicit diff pair is provided.\n  WHY: The documentation may mislead future maintainers about the actual scope and inert tracker behavior of the `findings-json` mode.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: README.md (last-run diff addition at lines 1431-1445)\n  Location: Security audit engine modes documentation section\n  Issue: The table's `SECURITY_AUDIT_DIFF_BASE` and `SECURITY_AUDIT_DIFF_HEAD` rows document the required-in-pair and ancestor constraints, but do not explicitly state that `SECURITY_AUDIT_DIFF_HEAD` must match the checked-out `HEAD` (a validation the script enforces at lines 397-399 of `scripts/security_audit.sh`). The script's own error message is clear, but the reference doc could be more precise.\n  Suggested minimal fix: In the `SECURITY_AUDIT_DIFF_HEAD` table cell, add after \"resolve to a commit\" the clause \"and equal the checked-out `HEAD`\" to match the contract already enforced by the script.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- README.md:1431-1445\n  Problem: The documentation inaccurately claims that the `findings-json` mode audits the full checkout when no explicit diff pair is provided. In reality, the `findings-json` mode deliberately performs no tracker reads and audits the full checkout because it has no marker-derived incremental behavior in that mode.\n  Why it fails at runtime: The documentation misrepresents the behavior of the `findings-json` mode, which is designed to be inert and not perform any GitHub-side mutations or tracker reads. This could mislead future maintainers about the actual scope of the audit in `findings-json` mode.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/security_audit.sh\n  Line or code reference: lines 100-104, security_audit_append_prompt_context() \u2014 the incremental branch always emits \"Audit scope: INCREMENTAL \u2014 commits ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA} on the default branch.\" and \"Files changed since the last audited commit (...)\"\n  Problem: when the incremental scope comes from the explicit SECURITY_AUDIT_DIFF_BASE/SECURITY_AUDIT_DIFF_HEAD inputs (lines 382-413 \u2014 the intended findings-json project-pass invocation, also reachable in issues mode per the pinned precedence test), no tracker marker was consulted and the head is only required to equal the checked-out HEAD, which may be an integration branch rather than the default branch. The prompt text contradicts the actual scope provenance in exactly that case.\n  Why it fails at runtime: findings are not mis-scoped \u2014 the deterministic post-filter (lines 753-755) enforces the explicit CHANGED_FILES_FILE list \u2014 but the model-facing scope statement misinforms the audit model about what was compared and where, for precisely the caller this phase introduces. Fix is small: branch the two scope lines on whether the explicit diff inputs were used (e.g. emit \"explicit diff range\" wording when SECURITY_AUDIT_DIFF_BASE is set).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/security_audit.sh\n  Line or code reference: lines 101-102, `security_audit_append_prompt_context()`\n  Problem: When the scope comes from explicit `SECURITY_AUDIT_DIFF_BASE`/`SECURITY_AUDIT_DIFF_HEAD` inputs (the findings-json project-pass invocation), the prompt text still claims the range is \"on the default branch\" and \"since the last audited commit\", although no tracker marker was consulted and the range may cover a non-default integration branch.\n  Why it fails at runtime: The deterministic post-filter still enforces the correct changed-file list, so findings are not mis-scoped. However, the model-facing scope statement contradicts the actual inputs and can mislead the audit model about provenance and attribution for exactly the caller this phase exists for. The prompt says \"Files changed since the last audited commit\" when in fact the files come from an explicit caller-provided range with no tracker involvement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "d63bfebdee7160fb495fea05e2e92ce944645023a4eeb162634a8791b1c7e021",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3942,
+    "run_id": "33392196910",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33392196910",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260831140304_96fa819220",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3942,
+    "run_id": "33392196910"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-31T14:03:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
