@@ -4791,6 +4791,12 @@ jobs:
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Kill switch for the deterministic union-merge of the generated
+          # .ai/.workspace_source_manifest.txt (see the "Deterministic
+          # union-merge" block in scripts/review_conflict_prepare.sh).
+          # Default true; set the repo var to 'false' to route manifest
+          # conflicts back through the Codex resolver.
+          CONFLICT_MANIFEST_UNION_ENABLED: ${{ vars.CONFLICT_MANIFEST_UNION_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh"

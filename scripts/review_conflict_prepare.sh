@@ -186,6 +186,104 @@ if [ "${_resolver_allowlist_count}" -gt 0 ]; then
   sed 's/^/ - /' "${RESOLVER_ALLOWLIST_FILE}" || true
 fi
 
+# Deterministic union-merge for the generated workspace manifest.
+# .ai/.workspace_source_manifest.txt is a sorted, unique-line file
+# inventory written by workspace_init.sh's materialize_source_tree();
+# every AI PR that adds files appends lines to it, so any two
+# concurrently-open sibling PRs merging into a shared base conflict on
+# adjacent insertions with near-certainty (observed on PR #3909: three
+# resolver invocations in one day, each with the manifest as the ONLY
+# conflicted path).  For a sorted set-of-lines file the exact 3-way
+# resolution is pure set algebra — (ours ∩ theirs) ∪ (ours − base)
+# ∪ (theirs − base) — which keeps both sides' additions and honours
+# either side's deletions, so burning a Codex resolver attempt on it
+# is wasted budget.  Resolve it here, before the empty-allowlist
+# check: when it was the only conflicted path the merge is committed
+# below without any model invocation, and when other conflicts remain
+# the manifest is already staged in the merge index and drops out of
+# the resolver prompt/allowlist/snapshot naturally.
+#
+# Guards:
+#   - CONFLICT_MANIFEST_UNION_ENABLED (default true) is the kill
+#     switch.
+#   - Integration-sync branches (orchestrator/project-*) are excluded:
+#     their fingerprint-violation expansion below can widen the
+#     resolver working set after this point, so the early-commit
+#     decision here would be premature; the intent-aware resolver
+#     keeps full custody of those runs.
+#   - Only a two-sided content conflict (index stages 2 AND 3 both
+#     present) is handled; base stage 1 absent is the add/add case,
+#     where the set algebra degenerates to plain union.  Delete/modify
+#     shapes fall through to the Codex resolver untouched.
+# LC_ALL=C for sort/comm matches Python's str sort in
+# materialize_source_tree() (bytewise over UTF-8 == code-point order),
+# so the merged file satisfies the manifest-sorting contract.
+MANIFEST_UNION_PATH=".ai/.workspace_source_manifest.txt"
+if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" = "true" ] \
+   && [ "${_resolver_allowlist_count}" -gt 0 ] \
+   && grep -Fxq "${MANIFEST_UNION_PATH}" "${RESOLVER_ALLOWLIST_FILE}"; then
+  case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
+    orchestrator/project-*)
+      echo "Manifest union-merge: skipped on integration-sync branch (fingerprint expansion may widen the resolver working set; Codex resolver keeps custody)."
+      ;;
+    *)
+      _mu_stages="$(git ls-files -u -- "${MANIFEST_UNION_PATH}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
+      case " ${_mu_stages}" in
+        *' 2 '*' 3 '*)
+          _mu_dir="$(mktemp -d)"
+          git show ":1:${MANIFEST_UNION_PATH}" > "${_mu_dir}/base" 2>/dev/null || : > "${_mu_dir}/base"
+          git show ":2:${MANIFEST_UNION_PATH}" > "${_mu_dir}/ours"
+          git show ":3:${MANIFEST_UNION_PATH}" > "${_mu_dir}/theirs"
+          LC_ALL=C sort -u -o "${_mu_dir}/base"   "${_mu_dir}/base"
+          LC_ALL=C sort -u -o "${_mu_dir}/ours"   "${_mu_dir}/ours"
+          LC_ALL=C sort -u -o "${_mu_dir}/theirs" "${_mu_dir}/theirs"
+          {
+            LC_ALL=C comm -12 "${_mu_dir}/ours" "${_mu_dir}/theirs"
+            LC_ALL=C comm -13 "${_mu_dir}/base" "${_mu_dir}/ours"
+            LC_ALL=C comm -13 "${_mu_dir}/base" "${_mu_dir}/theirs"
+          } | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u > "${_mu_dir}/merged"
+          cp "${_mu_dir}/merged" "${MANIFEST_UNION_PATH}"
+          rm -rf "${_mu_dir}"
+          git add -- "${MANIFEST_UNION_PATH}"
+          git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
+          _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
+          echo "Manifest union-merge: resolved ${MANIFEST_UNION_PATH} deterministically (set-merge of base/ours/theirs); ${_resolver_allowlist_count} unmerged path(s) remain."
+          if [ "${_resolver_allowlist_count}" -eq 0 ]; then
+            # The manifest was the only conflict.  Commit the merge NOW,
+            # while MERGE_HEAD is still in place, so this is a real
+            # two-parent merge commit (same requirement as the resolver's
+            # commit tail — see the PR #908 note in
+            # review_conflict_resolve.sh) and the merge index's
+            # auto-merged base content flows through unchanged.  Mirror
+            # the resolver's end state exactly: CONFLICT_RESOLVED=true
+            # (push + Telegram + legacy re-dispatch fire as usual) and
+            # MERGE_CONFLICT left at true (the ready-to-merge gate must
+            # keep treating this run as a resolver run so the resolver
+            # commit still gets reviewed before merge).  The resolver
+            # step's if: gate still passes, so
+            # review_conflict_resolve.sh short-circuits on
+            # CONFLICT_RESOLVED=true before any model invocation.
+            git commit -m "[ai-merge-resolve] resolve merge conflicts"
+            for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+              if [ -d "${RESOLVE_STASH}/${d}" ]; then
+                cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
+              fi
+            done
+            rm -rf "${RESOLVE_STASH}"
+            rm -f "${_merge_stderr_file}"
+            echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
+            echo "Manifest union-merge: no other unmerged paths — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."
+            exit 0
+          fi
+          ;;
+        *)
+          echo "Manifest union-merge: ${MANIFEST_UNION_PATH} conflict is not a two-sided content conflict (index stages: ${_mu_stages:-none}); leaving it to the Codex resolver."
+          ;;
+      esac
+      ;;
+  esac
+fi
+
 # When the allowlist is empty there is nothing for Codex to
 # resolve.  Running Codex against an empty conflict set is how
 # past runs have produced hallucinated edits to placeholder

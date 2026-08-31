@@ -41,6 +41,22 @@
 
 set -euo pipefail
 
+# Deterministic-resolution short-circuit: review_conflict_prepare.sh
+# commits the [ai-merge-resolve] merge itself when every unmerged path
+# was deterministically resolvable (currently: the
+# .ai/.workspace_source_manifest.txt union-merge) and signals that by
+# writing CONFLICT_RESOLVED=true to $GITHUB_ENV.  The workflow step
+# gating (MERGE_CONFLICT == 'true') is deliberately unchanged, so this
+# second half still runs — exit before any model invocation.  Running
+# Codex against an empty conflict set is the known hallucination
+# hazard documented in review_conflict_prepare.sh.  In every other
+# path CONFLICT_RESOLVED enters this step as "false" (initialised by
+# the "Detect merge conflicts" step) and this guard is a no-op.
+if [ "${CONFLICT_RESOLVED:-false}" = "true" ]; then
+  echo "CONFLICT_RESOLVED=true was already set by review_conflict_prepare.sh (deterministic resolution committed, push deferred); skipping Codex resolver."
+  exit 0
+fi
+
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
