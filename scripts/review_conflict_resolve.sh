@@ -48,12 +48,12 @@ set -euo pipefail
 # writing CONFLICT_RESOLVED=true to $GITHUB_ENV.  The workflow step
 # gating (MERGE_CONFLICT == 'true') is deliberately unchanged, so this
 # second half still runs — exit before any model invocation.  Running
-# Codex against an empty conflict set is the known hallucination
+# OpenCode against an empty conflict set is the known hallucination
 # hazard documented in review_conflict_prepare.sh.  In every other
 # path CONFLICT_RESOLVED enters this step as "false" (initialised by
 # the "Detect merge conflicts" step) and this guard is a no-op.
 if [ "${CONFLICT_RESOLVED:-false}" = "true" ]; then
-  echo "CONFLICT_RESOLVED=true was already set by review_conflict_prepare.sh (deterministic resolution committed, push deferred); skipping Codex resolver."
+  echo "CONFLICT_RESOLVED=true was already set by review_conflict_prepare.sh (deterministic resolution committed, push deferred); skipping OpenCode resolver."
   exit 0
 fi
 
