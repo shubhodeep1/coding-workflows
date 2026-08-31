@@ -1026,7 +1026,7 @@ jobs:
               echo "| Result | ${STATUS} |"
               # Count questions if clarification was needed
               if echo "${STATUS}" | grep -qi 'NEEDS_CLARIFICATION'; then
-                Q_COUNT="$(grep -cE '^[[:space:]]*(>[[:space:]]*)*\*?\*?Q[0-9]+:' "${CODEX_OUTPUT_FILE}" || true)"
+                Q_COUNT="$(grep -cE '^[[:space:]]*(>[[:space:]]*)*\*?\*?Q[0-9]+' "${CODEX_OUTPUT_FILE}" || true)"
                 Q_COUNT="${Q_COUNT:-0}"
                 echo "| Questions | ${Q_COUNT} |"
               fi

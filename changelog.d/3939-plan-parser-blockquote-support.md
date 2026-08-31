@@ -8,7 +8,7 @@
 | Regexes widened in `plan.yml` | 5 |
 | `Q_COUNT` greps widened in `clarify.yml` | 2 |
 | Regexes widened in `orchestrate_poll_process.sh` | 2 |
-| New parser tests | 8 (52 total passing) |
+| New parser/Q_COUNT tests | 8 (52 total passing) |
 | Triggering incident | shubhodeep1/fun-token-multi-chain#434, run 33355986371 |
 
 What this means for operators: orchestrator-managed plan runs whose clarification questions follow the canonical blockquoted template are auto-answered as designed instead of stalling on a false "No Q-ID blocks detected" alert awaiting a human `/answer`, and stall recovery no longer falls back to "No recommended answers could be extracted" on such comments.
