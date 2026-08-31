@@ -2972,10 +2972,12 @@ def test_security_pass_flag_off_releases_security_owned_states() -> None:
 		)
 
 		assert result["latest_state"]["status"] == "complete"
+		assert result["latest_state"]["security_pass_cycle"] == 0
 		assert result["latest_state"]["security_pass_status"] == "pending"
 		assert result["latest_state"]["security_pass_active_fix_issues"] == []
 		assert result["latest_state"]["security_pass_head_sha"] == ""
 		assert result["security_audit_capture"] is None
+		assert "### Security pass" not in result["issues"]["192"]["body"]
 		assert security_label not in result["tracking_labels"]
 
 

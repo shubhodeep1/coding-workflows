@@ -13986,7 +13986,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 			|| [ "${PROJECT_STATUS}" = "security-pass-fixing" ] \
 			|| has_label "${TRACKING_LABELS}" "ai:security-pass-failed"; }; then
 		echo "SECURITY_PASS_SKIPPED_DISABLED tracking_issue=${TRACKING_NUM} releasing_state=${PROJECT_STATUS}"
-		jq '.status = "in_progress" | .security_pass_status = "pending" | .security_pass_active_fix_issues = [] | .security_pass_head_sha = ""' \
+		jq '.status = "in_progress" | .security_pass_cycle = 0 | .security_pass_status = "pending" | .security_pass_active_fix_issues = [] | .security_pass_head_sha = ""' \
 			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 		post_state_comment || true
 		set_tracking_phase_label "ai:done"
