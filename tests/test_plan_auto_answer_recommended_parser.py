@@ -184,6 +184,43 @@ _NO_BULLET_PAREN_FORM = (
 	"B) second option\n"
 )
 
+# Blockquoted canonical form: prompts/mode-plan.txt and
+# prompts/mode-clarify.txt render the mandatory question template inside
+# a markdown blockquote (`> **Q1: <question>**` … `> Reply: ...`), so a
+# Codex emission that follows the prompt verbatim prefixes every line
+# with `> `. The pre-fix regexes anchored on `^\s*` never matched that
+# prefix and produced a false "Auto-answer parser failed … No Q-ID
+# blocks detected" alert (fun-token-multi-chain#434, run 33355986371).
+# The `> Reply: `Q1: A`` line rides along to pin that it neither
+# registers as a duplicate Q-ID nor as an option bullet.
+_BLOCKQUOTE_TEMPLATE_FORM = (
+	"> **Q1: Which baseline?**\n"
+	">\n"
+	"> Choices:\n"
+	"> - **A** — first option (RECOMMENDED)\n"
+	"> - **B** — second option\n"
+	">\n"
+	"> Reply: `Q1: A`\n"
+)
+
+_BLOCKQUOTE_MULTI_QUESTION_FORM = (
+	"> **Q1: Which baseline?**\n"
+	">\n"
+	"> Choices:\n"
+	"> - **A** — first option (RECOMMENDED)\n"
+	"> - **B** — second option\n"
+	">\n"
+	"> Reply: `Q1: A`\n"
+	"\n"
+	"> **Q2: Which rollout order?**\n"
+	">\n"
+	"> Choices:\n"
+	"> - **A** — stable first\n"
+	"> - **B** — main first (RECOMMENDED)\n"
+	">\n"
+	"> Reply: `Q2: B`\n"
+)
+
 
 def test_plan_parser_accepts_template_form() -> None:
 	r = _run_plan_parser(_TEMPLATE_FORM)
@@ -226,6 +263,20 @@ def test_plan_parser_accepts_no_bullet_paren_form() -> None:
 	r = _run_plan_parser(_NO_BULLET_PAREN_FORM)
 	assert r.get("status") == "ok", r
 	assert r.get("mapping") == "Q1->A", r
+
+
+def test_plan_parser_accepts_blockquoted_template_form() -> None:
+	r = _run_plan_parser(_BLOCKQUOTE_TEMPLATE_FORM)
+	assert r.get("status") == "ok", r
+	assert r.get("mapping") == "Q1->A", r
+	assert r.get("answer") == "Q1: A", r
+
+
+def test_plan_parser_accepts_blockquoted_multi_question_form() -> None:
+	r = _run_plan_parser(_BLOCKQUOTE_MULTI_QUESTION_FORM)
+	assert r.get("status") == "ok", r
+	assert r.get("mapping") == "Q1->A, Q2->B", r
+	assert r.get("answer") == "Q1: A, Q2: B", r
 
 
 def test_plan_parser_handles_real_codex_output_from_issue_3754() -> None:
@@ -360,6 +411,14 @@ def test_structured_block_detector_accepts_dash_no_bold_form() -> None:
 	assert _run_structured_block_detector(
 		"Q1: Pick one\n- A — text (Recommended)\n"
 	)
+
+
+def test_structured_block_detector_accepts_blockquoted_template_form() -> None:
+	assert _run_structured_block_detector(_BLOCKQUOTE_TEMPLATE_FORM)
+
+
+def test_structured_block_detector_accepts_blockquoted_multi_question_form() -> None:
+	assert _run_structured_block_detector(_BLOCKQUOTE_MULTI_QUESTION_FORM)
 
 
 def test_structured_block_detector_rejects_input_with_no_qid() -> None:
