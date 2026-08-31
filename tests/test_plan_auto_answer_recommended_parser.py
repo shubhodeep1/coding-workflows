@@ -34,6 +34,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+CLARIFY_WF = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
 PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 POLL_PROCESS = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 PROMPT_PLAN = REPO_ROOT / "prompts" / "mode-plan.txt"
@@ -136,6 +137,16 @@ def _run_poll_parser(input_text: str) -> str:
 	return proc.stdout
 
 
+def _extract_clarify_q_count_patterns() -> list[str]:
+	wf = _read(CLARIFY_WF)
+	patterns = re.findall(
+		r"Q_COUNT=\"\$\(grep -cE '([^']+)' \"\$\{(?:CODEX_OUTPUT_FILE|QUESTIONS_FILE)\}\" \|\| true\)\"",
+		wf,
+	)
+	assert len(patterns) == 2, patterns
+	return patterns
+
+
 _TEMPLATE_FORM = (
 	"Q1: Which baseline?\n"
 	"- **A** — first option (RECOMMENDED)\n"
@@ -184,6 +195,43 @@ _NO_BULLET_PAREN_FORM = (
 	"B) second option\n"
 )
 
+# Blockquoted canonical form: prompts/mode-plan.txt and
+# prompts/mode-clarify.txt render the mandatory question template inside
+# a markdown blockquote (`> **Q1: <question>**` … `> Reply: ...`), so a
+# Codex emission that follows the prompt verbatim prefixes every line
+# with `> `. The pre-fix regexes anchored on `^\s*` never matched that
+# prefix and produced a false "Auto-answer parser failed … No Q-ID
+# blocks detected" alert (fun-token-multi-chain#434, run 33355986371).
+# The "> Reply: Q1: A" line rides along to pin that it neither
+# registers as a duplicate Q-ID nor as an option bullet.
+_BLOCKQUOTE_TEMPLATE_FORM = (
+	"> **Q1: Which baseline?**\n"
+	">\n"
+	"> Choices:\n"
+	"> - **A** — first option (RECOMMENDED)\n"
+	"> - **B** — second option\n"
+	">\n"
+	"> Reply: `Q1: A`\n"
+)
+
+_BLOCKQUOTE_MULTI_QUESTION_FORM = (
+	"> **Q1: Which baseline?**\n"
+	">\n"
+	"> Choices:\n"
+	"> - **A** — first option (RECOMMENDED)\n"
+	"> - **B** — second option\n"
+	">\n"
+	"> Reply: `Q1: A`\n"
+	"\n"
+	"> **Q2: Which rollout order?**\n"
+	">\n"
+	"> Choices:\n"
+	"> - **A** — stable first\n"
+	"> - **B** — main first (RECOMMENDED)\n"
+	">\n"
+	"> Reply: `Q2: B`\n"
+)
+
 
 def test_plan_parser_accepts_template_form() -> None:
 	r = _run_plan_parser(_TEMPLATE_FORM)
@@ -226,6 +274,20 @@ def test_plan_parser_accepts_no_bullet_paren_form() -> None:
 	r = _run_plan_parser(_NO_BULLET_PAREN_FORM)
 	assert r.get("status") == "ok", r
 	assert r.get("mapping") == "Q1->A", r
+
+
+def test_plan_parser_accepts_blockquoted_template_form() -> None:
+	r = _run_plan_parser(_BLOCKQUOTE_TEMPLATE_FORM)
+	assert r.get("status") == "ok", r
+	assert r.get("mapping") == "Q1->A", r
+	assert r.get("answer") == "Q1: A", r
+
+
+def test_plan_parser_accepts_blockquoted_multi_question_form() -> None:
+	r = _run_plan_parser(_BLOCKQUOTE_MULTI_QUESTION_FORM)
+	assert r.get("status") == "ok", r
+	assert r.get("mapping") == "Q1->A, Q2->B", r
+	assert r.get("answer") == "Q1: A, Q2: B", r
 
 
 def test_plan_parser_handles_real_codex_output_from_issue_3754() -> None:
@@ -362,6 +424,35 @@ def test_structured_block_detector_accepts_dash_no_bold_form() -> None:
 	)
 
 
+def test_structured_block_detector_accepts_blockquoted_template_form() -> None:
+	assert _run_structured_block_detector(_BLOCKQUOTE_TEMPLATE_FORM)
+
+
+def test_structured_block_detector_accepts_blockquoted_multi_question_form() -> None:
+	assert _run_structured_block_detector(_BLOCKQUOTE_MULTI_QUESTION_FORM)
+
+
+def test_clarify_q_count_patterns_stay_consistent_for_blockquotes() -> None:
+	patterns = _extract_clarify_q_count_patterns()
+	assert patterns[0] == patterns[1]
+	body = (
+		_BLOCKQUOTE_MULTI_QUESTION_FORM
+		+ "> **Q3**: split-bold question\n"
+		+ "Q4: unquoted question\n"
+		+ "  > Q5: indented blockquoted unbolded question\n"
+		+ "> Reply: `Q6: A`\n"
+	)
+	for pattern in patterns:
+		proc = subprocess.run(
+			["grep", "-cE", pattern],
+			input=body,
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+		assert proc.stdout.strip() == "5", proc.stdout
+
+
 def test_structured_block_detector_rejects_input_with_no_qid() -> None:
 	assert not _run_structured_block_detector(
 		"Some prose without a Q-ID.\n- A — looks like a bullet (Recommended)\n"
@@ -462,6 +553,16 @@ def test_poll_parser_accepts_no_bullet_period_form() -> None:
 def test_poll_parser_accepts_no_bullet_paren_form() -> None:
 	out = _run_poll_parser(_NO_BULLET_PAREN_FORM)
 	assert out.strip() == "Q1: A", out
+
+
+def test_poll_parser_accepts_blockquoted_template_form() -> None:
+	out = _run_poll_parser(_BLOCKQUOTE_TEMPLATE_FORM)
+	assert out.strip() == "Q1: A", out
+
+
+def test_poll_parser_accepts_blockquoted_multi_question_form() -> None:
+	out = _run_poll_parser(_BLOCKQUOTE_MULTI_QUESTION_FORM)
+	assert out.splitlines() == ["Q1: A", "Q2: B"], out
 
 
 def test_poll_parser_ignores_no_bullet_prose_without_marker() -> None:
@@ -637,6 +738,29 @@ def test_extract_recommended_answers_rejects_spoofed_marker_from_untrusted_autho
 	)
 	out = _run_extract_recommended_answers(comments)
 	assert out.strip() == "", out
+
+
+def test_extract_recommended_answers_accepts_blockquoted_comment() -> None:
+	# A clarification comment carrying the prompt's canonical blockquoted
+	# template verbatim previously extracted nothing — the Q-ID and bullet
+	# regexes never matched the "> " prefix — so stall recovery fell back
+	# to "No recommended answers could be extracted"
+	# (fun-token-multi-chain#434; same gap as plan.yml, fixed by #3939).
+	comments = json.dumps(
+		[
+			{
+				"id": 4,
+				"created_at": "2026-08-31T09:00:00Z",
+				"user": {"login": "shubhodeep1"},
+				"author_association": "OWNER",
+				"body": (
+					"<!-- ai:clarification-questions -->\n" + _BLOCKQUOTE_MULTI_QUESTION_FORM
+				),
+			}
+		]
+	)
+	out = _run_extract_recommended_answers(comments)
+	assert out.splitlines() == ["Q1: A", "Q2: B"], out
 
 
 def test_extract_recommended_answers_ignores_unmarked_comments() -> None:

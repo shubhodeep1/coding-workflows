@@ -1026,7 +1026,8 @@ jobs:
               echo "| Result | ${STATUS} |"
               # Count questions if clarification was needed
               if echo "${STATUS}" | grep -qi 'NEEDS_CLARIFICATION'; then
-                Q_COUNT="$(grep -cE '^\*\*Q[0-9]+:' "${CODEX_OUTPUT_FILE}" || echo "0")"
+                Q_COUNT="$(grep -cE '^[[:space:]]*(>[[:space:]]*)*\*?\*?Q[0-9]+' "${CODEX_OUTPUT_FILE}" || true)"
+                Q_COUNT="${Q_COUNT:-0}"
                 echo "| Questions | ${Q_COUNT} |"
               fi
             fi
@@ -1072,7 +1073,8 @@ jobs:
             awk 'BEGIN{IGNORECASE=1} /QUESTIONS:/{f=1; next} f{if (/^[[:space:]]*$/ && NF==0) next; print}' "${CODEX_OUTPUT_FILE}" | sed '/^[[:space:]]*$/d' > "${QUESTIONS_FILE}"
 
             # Primary signal: count actual Q<N> formatted questions (most reliable)
-            Q_COUNT="$(grep -cE '^\*?\*?Q[0-9]+' "${QUESTIONS_FILE}" || echo "0")"
+            Q_COUNT="$(grep -cE '^[[:space:]]*(>[[:space:]]*)*\*?\*?Q[0-9]+' "${QUESTIONS_FILE}" || true)"
+            Q_COUNT="${Q_COUNT:-0}"
 
             if [ "${Q_COUNT}" -gt 0 ]; then
               echo "needs_clarification=true" >> "$GITHUB_OUTPUT"

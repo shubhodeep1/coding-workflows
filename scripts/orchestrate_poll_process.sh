@@ -12734,16 +12734,22 @@ extract_recommended_answers() {
   # "A. text (Recommended)" — the bullet-less drift from
   # tele-funtoken-msg-scoring#3754 — and "- A) text (Recommended)" are
   # accepted as well as "- **A** — text (RECOMMENDED)").
+  # Both regexes additionally accept an optional markdown blockquote
+  # prefix ("> ", possibly nested) before the Q-ID or bullet, because
+  # prompts/mode-plan.txt and prompts/mode-clarify.txt render the canonical
+  # template inside a blockquote ("> **Q1: <question>**" … "> Reply:"),
+  # and a comment carrying that template verbatim previously extracted
+  # nothing (fun-token-multi-chain#434; same fix as plan.yml, PR #3939).
   printf '%s' "${clarify_body}" | perl -ne '
     BEGIN { @order = (); %rec = (); $qid = undef; }
-    if (/^\s*\*?\*?Q(\d+)/i) {
+    if (/^\s*(?:>\s*)*\*?\*?Q(\d+)/i) {
       # New question block — flush previous if it had recommendations
       if (defined $qid && exists $rec{$qid}) {
         push @order, $qid unless grep { $_ eq $qid } @order;
       }
       $qid = $1;
     }
-    if (defined $qid && /^\s*(?:[-*]\s*)?(?:\*\*)?([A-Za-z](?:\+[A-Za-z])*)(?:\*\*)?\s*(?:—|–|[-)\.:]).*\(RECOMMENDED\)/i) {
+    if (defined $qid && /^\s*(?:>\s*)*(?:[-*]\s*)?(?:\*\*)?([A-Za-z](?:\+[A-Za-z])*)(?:\*\*)?\s*(?:—|–|[-)\.:]).*\(RECOMMENDED\)/i) {
       push @{$rec{$qid}}, uc($1);
     }
     END {
