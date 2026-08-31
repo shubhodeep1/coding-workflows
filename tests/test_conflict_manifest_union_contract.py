@@ -42,6 +42,7 @@ These tests pin the load-bearing pieces of that contract:
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import tempfile
@@ -75,6 +76,28 @@ def test_prepare_names_the_manifest_and_kill_switch() -> None:
 	assert 'CONFLICT_MANIFEST_UNION_ENABLED:-true' in block, (
 		"union-merge must be gated on CONFLICT_MANIFEST_UNION_ENABLED with a true default"
 	)
+	workflow_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(
+		encoding="utf-8"
+	)
+	prepare_step = workflow_text.split(
+		"- name: Prepare merge-conflict resolver prompt and pre-snapshot", 1
+	)[1].split("- name: Run Codex resolver, validate, stage, commit", 1)[0]
+	assert "CONFLICT_MANIFEST_UNION_ENABLED: ${{ vars.CONFLICT_MANIFEST_UNION_ENABLED || 'true' }}" in prepare_step, (
+		"review_autofix.yml must forward the documented kill switch with a true default"
+	)
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh"' in prepare_step
+
+
+def test_workflows_register_manifest_union_contract_test() -> None:
+	expected_invocation = "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_manifest_union_contract.py"
+	for workflow_path in (
+		REPO_ROOT / ".github" / "workflows" / "ci.yml",
+		REPO_ROOT / ".github" / "workflows" / "mark-stable.yml",
+		REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml",
+	):
+		assert expected_invocation in workflow_path.read_text(encoding="utf-8"), (
+			f"{workflow_path} must run the manifest union contract test"
+		)
 
 
 def test_prepare_excludes_integration_sync_branches() -> None:
@@ -100,6 +123,14 @@ def test_prepare_requires_two_sided_content_conflict() -> None:
 
 def test_prepare_early_commit_branch_contract() -> None:
 	block = _union_block(_prepare_text())
+	commit_index = block.index(f'git commit -m "{MERGE_RESOLVE_COMMIT_MESSAGE}"')
+	for hygiene_command in (
+		"git rm -r --cached --ignore-unmatch -- node_modules",
+		"git reset -q HEAD -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory'",
+	):
+		assert block.index(hygiene_command) < commit_index, (
+			f"consumer-repo hygiene must run before the manifest-only commit: {hygiene_command}"
+		)
 	assert f'git commit -m "{MERGE_RESOLVE_COMMIT_MESSAGE}"' in block, (
 		"manifest-only resolutions must commit with the exact [ai-merge-resolve] "
 		"message downstream tooling matches on"
@@ -165,10 +196,16 @@ def test_union_merge_pipeline_functional() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		repo = Path(tmp) / "repo"
 		repo.mkdir()
+		scratch_git_env = {
+			env_name: env_value
+			for env_name, env_value in os.environ.items()
+			if not env_name.startswith("GIT_") and env_name != "BASH_ENV"
+		}
 
 		def git(*args: str) -> None:
 			subprocess.run(
 				["git", *args], cwd=repo, check=True,
+				env=scratch_git_env,
 				stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
 			)
 
@@ -190,12 +227,13 @@ def test_union_merge_pipeline_functional() -> None:
 		git("checkout", "-q", "ours")
 		merge = subprocess.run(
 			["git", "merge", "--no-commit", "--no-ff", "theirs"],
-			cwd=repo, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			cwd=repo, env=scratch_git_env,
+			stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
 		)
 		assert merge.returncode != 0, "fixture must produce a manifest conflict"
 
 		script = f'set -euo pipefail\nMANIFEST_UNION_PATH="{MANIFEST_PATH}"\n{snippet}\n'
-		subprocess.run(["bash", "-c", script], cwd=repo, check=True)
+		subprocess.run(["bash", "-c", script], cwd=repo, env=scratch_git_env, check=True)
 
 		got = manifest.read_text(encoding="utf-8")
 		assert got == "a.py\nb.py\nc.py\nd.py\nz.py\n", (

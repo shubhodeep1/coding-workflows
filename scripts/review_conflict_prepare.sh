@@ -263,6 +263,11 @@ if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" = "true" ] \
             # step's if: gate still passes, so
             # review_conflict_resolve.sh short-circuits on
             # CONFLICT_RESOLVED=true before any model invocation.
+            git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
+            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
+              git reset -q HEAD -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+              git checkout -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
+            fi
             git commit -m "[ai-merge-resolve] resolve merge conflicts"
             for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
               if [ -d "${RESOLVE_STASH}/${d}" ]; then
