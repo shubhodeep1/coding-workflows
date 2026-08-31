@@ -523,6 +523,16 @@ def test_poll_parser_accepts_no_bullet_paren_form() -> None:
 	assert out.strip() == "Q1: A", out
 
 
+def test_poll_parser_accepts_blockquoted_template_form() -> None:
+	out = _run_poll_parser(_BLOCKQUOTE_TEMPLATE_FORM)
+	assert out.strip() == "Q1: A", out
+
+
+def test_poll_parser_accepts_blockquoted_multi_question_form() -> None:
+	out = _run_poll_parser(_BLOCKQUOTE_MULTI_QUESTION_FORM)
+	assert out.splitlines() == ["Q1: A", "Q2: B"], out
+
+
 def test_poll_parser_ignores_no_bullet_prose_without_marker() -> None:
 	body = "Q1: Pick one\nA. first option\nB. second option\n"
 	out = _run_poll_parser(body)
@@ -696,6 +706,29 @@ def test_extract_recommended_answers_rejects_spoofed_marker_from_untrusted_autho
 	)
 	out = _run_extract_recommended_answers(comments)
 	assert out.strip() == "", out
+
+
+def test_extract_recommended_answers_accepts_blockquoted_comment() -> None:
+	# A clarification comment carrying the prompt's canonical blockquoted
+	# template verbatim previously extracted nothing — the Q-ID and bullet
+	# regexes never matched the "> " prefix — so stall recovery fell back
+	# to "No recommended answers could be extracted"
+	# (fun-token-multi-chain#434; same gap as plan.yml, fixed by #3939).
+	comments = json.dumps(
+		[
+			{
+				"id": 4,
+				"created_at": "2026-08-31T09:00:00Z",
+				"user": {"login": "shubhodeep1"},
+				"author_association": "OWNER",
+				"body": (
+					"<!-- ai:clarification-questions -->\n" + _BLOCKQUOTE_MULTI_QUESTION_FORM
+				),
+			}
+		]
+	)
+	out = _run_extract_recommended_answers(comments)
+	assert out.splitlines() == ["Q1: A", "Q2: B"], out
 
 
 def test_extract_recommended_answers_ignores_unmarked_comments() -> None:
