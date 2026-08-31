@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:1029 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The Q_COUNT regex at line 1029 uses `^[[:space:]]*(>[[:space:]]*)*\\*?\\*?Q[0-9]+:` which requires the blockquote marker `>` to appear immediately after optional whitespace. It does not allow for leading indentation before the blockquote prefix, causing it to miss blockquoted Q-IDs that have indentation (e.g., `  > Q1:`).\n  WHY: The regex will return 0 for indented blockquoted Q-IDs, causing the workflow to display a divergent question count even though the behavioral parser accepts the same input.\n- .github/workflows/clarify.yml:1076 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The Q_COUNT regex at line 1076 uses `^[[:space:]]*(>[[:space:]]*)*\\*?\\*?Q[0-9]+` which has the same issue as line 1029\u2014it doesn't allow for leading indentation before the blockquote prefix.\n  WHY: The regex will undercount questions when they are indented blockquoted Q-IDs, leading to inconsistent behavior between the summary counter and the behavioral parser.\n- tests/test_plan_auto_answer_recommended_parser.py:225-229 | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The test `test_clarify_summary_count_accepts_blockquoted_unbolded_qid` uses the workflow's actual Q_COUNT regex to validate behavior, but the regex it tests against is the same one that has the leading-indentation bug.\n  WHY: The test will pass even though the regex is incorrect, giving false confidence in the implementation.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/clarify.yml\n  Line: 1029\n  Problem: The Q_COUNT regex at line 1029 uses `^[[:space:]]*(>[[:space:]]*)*\\*?\\*?Q[0-9]+:` which requires the blockquote marker `>` to appear immediately after optional whitespace. It does not allow for leading indentation before the blockquote prefix, causing it to miss blockquoted Q-IDs that have indentation (e.g., `  > Q1:`).\n  Why it fails at runtime: The regex will return 0 for indented blockquoted Q-IDs, causing the workflow to display a divergent question count even though the behavioral parser accepts the same input.\n  ISSUE_CONFIDENCE: 4\n- .github/workflows/clarify.yml\n  Line: 1076\n  Problem: The Q_COUNT regex at line 1076 uses `^[[:space:]]*(>[[:space:]]*)*\\*?\\*?Q[0-9]+` which has the same issue as line 1029\u2014it doesn't allow for leading indentation before the blockquote prefix.\n  Why it fails at runtime: The regex will undercount questions when they are indented blockquoted Q-IDs, leading to inconsistent behavior between the summary counter and the behavioral parser.\n  ISSUE_CONFIDENCE: 4\n- tests/test_plan_auto_answer_recommended_parser.py\n  Line: 225-229\n  Problem: The test `test_clarify_summary_count_accepts_blockquoted_unbolded_qid` uses the workflow's actual Q_COUNT regex to validate behavior, but the regex it tests against is the same one that has the leading-indentation bug.\n  Why it fails at runtime: The test will pass even though the regex is incorrect, giving false confidence in the implementation.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "4715e63c410a269e73d2c2e370880207a45a02b1ba4993cf336d45332742f882",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3940,
+    "run_id": "33390693019",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33390693019",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260831135141_605b35b0e5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3940,
+    "run_id": "33390693019"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-31T13:51:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
