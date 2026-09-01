@@ -336,7 +336,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh worktree_registry.sh worktree_gc.sh; do
+          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh worktree_registry.sh worktree_gc.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -442,7 +442,19 @@ jobs:
             install -m 0644 "${src}" "prompts/${pf}"
           done
 
-          for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-orchestrate-poll-judge.txt; do
+          for security_prompt in mode-security-audit.txt; do
+            src=".codex-workflow-src/prompts/${security_prompt}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/${security_prompt}" ]; then
+              src=".codex-workflow-src-main/prompts/${security_prompt}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Missing required support file prompts/${security_prompt}"
+              exit 1
+            fi
+            install -m 0644 "${src}" "prompts/${security_prompt}"
+          done
+
+          for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-orchestrate-poll-judge.txt _templates/mode-security-audit.txt references/security-money-lens.txt; do
             asset_src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
             if [ ! -f "${asset_src}" ] && [ -f ".codex-workflow-src-main/prompts/${prompt_assembly_asset}" ]; then
               asset_src=".codex-workflow-src-main/prompts/${prompt_assembly_asset}"
@@ -454,6 +466,16 @@ jobs:
             mkdir -p "$(dirname -- "prompts/${prompt_assembly_asset}")"
             install -m 0644 "${asset_src}" "prompts/${prompt_assembly_asset}"
           done
+
+          security_exclusions_src=".codex-workflow-src/scripts/security_audit_fp_exclusions.json"
+          if [ ! -f "${security_exclusions_src}" ] && [ -f ".codex-workflow-src-main/scripts/security_audit_fp_exclusions.json" ]; then
+            security_exclusions_src=".codex-workflow-src-main/scripts/security_audit_fp_exclusions.json"
+          fi
+          if [ ! -f "${security_exclusions_src}" ]; then
+            echo "::error::Missing required support file scripts/security_audit_fp_exclusions.json"
+            exit 1
+          fi
+          install -m 0644 "${security_exclusions_src}" scripts/security_audit_fp_exclusions.json
 
           nag_prompt_src=".codex-workflow-src/prompts/_nag_reminders.txt"
           if [ ! -f "${nag_prompt_src}" ] && [ -f ".codex-workflow-src-main/prompts/_nag_reminders.txt" ]; then
@@ -619,6 +641,9 @@ jobs:
           UNATTENDED_NAG_SILENT_ROUNDS: ${{ vars.UNATTENDED_NAG_SILENT_ROUNDS || '3' }}
           RUNTIME_BLOCKER_CHECK_ENABLED: ${{ vars.RUNTIME_BLOCKER_CHECK_ENABLED || 'true' }}
           ENABLE_VALIDATION: ${{ vars.ENABLE_VALIDATION || 'true' }}
+          ENABLE_SECURITY_PASS: ${{ vars.ENABLE_SECURITY_PASS || 'true' }}
+          MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '3' }}
+          SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
           VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
           MAX_JUDGE_CYCLES: ${{ vars.MAX_JUDGE_CYCLES || '25' }}
@@ -698,6 +723,7 @@ jobs:
           # the repo variable to a positive integer (e.g. 6) to re-enable.
           ORCH_INTEGRATION_STALE_ALERT_HOURS: ${{ vars.ORCH_INTEGRATION_STALE_ALERT_HOURS || '0' }}
           MODEL_CONFLICT_RESOLVER: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
           # Default lowered from 'xhigh' to 'high' in lockstep with
           # review_autofix.yml's CONFLICT_RESOLVER_REASONING_EFFORT (see the
           # comment block there for the full rationale — runs 25627236793 /

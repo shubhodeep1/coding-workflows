@@ -247,6 +247,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 ## Prompt references
 
 - `prompts/references/output-contract.txt` — Shared terminal-output contract instructions referenced by prompt templates.
+- `prompts/references/security-money-lens.txt` — Shared security and money-handling checklist referenced by prompt templates.
 - `prompts/references/severity-classification.txt` — Shared severity-calibration guidance referenced by prompt templates.
 - `prompts/references/validate-output-contract.txt` — Validate-generate JSON output schema appended to the shared output contract.
 - `prompts/references/verification-loop.txt` — Shared verification-loop instructions referenced by prompt templates.

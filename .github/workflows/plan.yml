@@ -409,6 +409,19 @@ jobs:
             install -m 0644 "${src}" prompts/_identity_recall.txt
           fi
 
+          if [ ! -f prompts/references/security-money-lens.txt ]; then
+            mkdir -p prompts/references
+            src=".codex-workflow-src/prompts/references/security-money-lens.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/references/security-money-lens.txt" ]; then
+              src=".codex-workflow-src-main/prompts/references/security-money-lens.txt"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Failed to stage required file prompts/references/security-money-lens.txt"
+              exit 1
+            fi
+            install -m 0644 "${src}" prompts/references/security-money-lens.txt
+          fi
+
           rm -rf .codex-workflow-src-main
 
       - name: Create runtime workspace

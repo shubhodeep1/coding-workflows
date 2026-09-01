@@ -279,6 +279,30 @@ def test_additive_labels_are_present_and_non_phase():
 			assert label != group.get("fallback")
 
 
+def test_security_pass_labels_are_mutually_exclusive_issue_phases() -> None:
+	contract = ai_labels.load_label_contract(CONTRACT_PATH)
+	issue_phase = next(group for group in contract["phase_groups"] if group["name"] == "issue_phase")
+	security_labels = {
+		"ai:security-pass",
+		"ai:security-pass-fixing",
+		"ai:security-pass-failed",
+	}
+	assert security_labels <= set(issue_phase["members"])
+	for security_label in security_labels:
+		output_lines: list[dict] = []
+		original_print_json = ai_labels._print_json
+		try:
+			ai_labels._print_json = lambda payload: output_lines.append(payload)
+			rc = ai_labels.cmd_resolve_phase(
+				argparse.Namespace(contract_file=str(CONTRACT_PATH), phase=security_label)
+			)
+		finally:
+			ai_labels._print_json = original_print_json
+		assert rc == 0
+		assert output_lines[0]["add"] == [security_label]
+		assert security_labels - {security_label} <= set(output_lines[0]["remove"])
+
+
 def test_additive_labels_survive_repair_alongside_phase_label():
 	for label in ADDITIVE_LABELS:
 		payload = _repair(f"ai:planning,{label}")

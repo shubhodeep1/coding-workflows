@@ -129,6 +129,20 @@ If clarification context is incomplete: apply the safest minimal
 interpretation, encode the assumption as a code comment in the file you're
 editing, and proceed.
 
+## Pre-commit security checklist
+
+- Validate external input at every trust boundary.
+- Use parameterized queries instead of constructing queries from input.
+- Enforce authorization on every new endpoint or money-touching surface.
+- Never include secrets, credentials, signing material, or sensitive values in
+  code, generated output, logs, or error messages.
+- Fail closed on security-sensitive authentication, authorization, validation,
+  and mutation errors.
+
+Apply this shared money-handling lens when the change reads or mutates money:
+
+{{REFERENCE_SECURITY_MONEY_LENS}}
+
 ## Commit discipline
 
 - One logical change = one commit. Treat the approved task as one atomic,

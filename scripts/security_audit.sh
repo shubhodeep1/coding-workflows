@@ -98,12 +98,33 @@ security_audit_append_prompt_context() {
 	echo || return 1
 	echo "Current UTC date: $(date -u +%F)" || return 1
 	if [ "${AUDIT_SCOPE_MODE}" = "incremental" ]; then
-		echo "Audit scope: INCREMENTAL — commits ${LAST_AUDITED_SHA}..${HEAD_SHA} on the default branch." || return 1
-		echo "Files changed since the last audited commit (every finding MUST cite one of these files):" || return 1
+		if [ -n "${SECURITY_AUDIT_DIFF_BASE}" ]; then
+			echo "Audit scope override: INCREMENTAL — explicit diff range ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA}; the checked-out HEAD may be a non-default branch." || return 1
+			echo "Files changed in the explicit range (every finding MUST cite one of these files):" || return 1
+		else
+			echo "Audit scope: INCREMENTAL — commits ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA} on the default branch." || return 1
+			echo "Files changed since the last audited commit (every finding MUST cite one of these files):" || return 1
+		fi
 		sed 's/^/- /' "${CHANGED_FILES_FILE}" || return 1
 		echo "You may read any file in the repository to trace cross-file impact (callers, configuration, trust boundaries), but only emit findings whose cited file appears in the changed list above; findings citing unchanged files are dropped by the post-filter." || return 1
 	else
-		echo "Audit scope: repository checkout at default-branch HEAD." || return 1
+		if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
+			echo "Audit scope override: repository checkout at HEAD; do not assume the checked-out branch is the default branch." || return 1
+		else
+			echo "Audit scope: repository checkout at default-branch HEAD." || return 1
+		fi
+	fi
+	if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
+		echo || return 1
+		echo "Project-pass security and money-handling lens:" || return 1
+		cat "${SECURITY_AUDIT_MONEY_LENS_FILE}" || return 1
+		if [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
+			echo || return 1
+			echo "=== BEGIN UNTRUSTED PROJECT SPECIFICATION ===" || return 1
+			cat "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" || return 1
+			echo || return 1
+			echo "=== END UNTRUSTED PROJECT SPECIFICATION ===" || return 1
+		fi
 	fi
 }
 
@@ -113,6 +134,35 @@ if ! security_audit_flag_enabled "${SECURITY_AUDIT_ENABLED}"; then
 	exit 0
 fi
 
+SECURITY_AUDIT_OUTPUT_MODE="${SECURITY_AUDIT_OUTPUT_MODE:-issues}"
+case "${SECURITY_AUDIT_OUTPUT_MODE}" in
+	issues|findings-json)
+		;;
+	*)
+		echo "SECURITY_AUDIT_OUTPUT_MODE must be issues or findings-json" >&2
+		exit 1
+		;;
+esac
+
+if [ "$#" -gt 1 ]; then
+	echo "security_audit.sh accepts at most one project-spec file" >&2
+	exit 1
+fi
+SECURITY_AUDIT_PROJECT_SPEC_PATH="${1:-}"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
+	echo "the project-spec file is only valid in findings-json mode" >&2
+	exit 1
+fi
+
+SECURITY_AUDIT_FINDINGS_OUT="${SECURITY_AUDIT_FINDINGS_OUT:-}"
+SECURITY_AUDIT_DIFF_BASE="${SECURITY_AUDIT_DIFF_BASE:-}"
+SECURITY_AUDIT_DIFF_HEAD="${SECURITY_AUDIT_DIFF_HEAD:-}"
+if { [ -n "${SECURITY_AUDIT_DIFF_BASE}" ] && [ -z "${SECURITY_AUDIT_DIFF_HEAD}" ]; } \
+		|| { [ -z "${SECURITY_AUDIT_DIFF_BASE}" ] && [ -n "${SECURITY_AUDIT_DIFF_HEAD}" ]; }; then
+	echo "SECURITY_AUDIT_DIFF_BASE and SECURITY_AUDIT_DIFF_HEAD must be supplied together" >&2
+	exit 1
+fi
+
 # Skip the whole audit when HEAD matches the last audited commit recorded on
 # the tracker issue (log-only skip; no issue comment).
 SECURITY_AUDIT_SKIP_IF_UNCHANGED="${SECURITY_AUDIT_SKIP_IF_UNCHANGED:-true}"
@@ -120,14 +170,16 @@ SECURITY_AUDIT_SKIP_IF_UNCHANGED="${SECURITY_AUDIT_SKIP_IF_UNCHANGED:-true}"
 # first runs and history rewrites fail open to the full default-branch scope.
 SECURITY_AUDIT_INCREMENTAL="${SECURITY_AUDIT_INCREMENTAL:-true}"
 
-: "${GH_TOKEN:?GH_TOKEN is required}"
-: "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 : "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"
 
-[[ "${GITHUB_REPOSITORY}" =~ ^[^/]+/[^/]+$ ]] || {
-	echo "GITHUB_REPOSITORY must be in owner/repo format" >&2
-	exit 1
-}
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ]; then
+	: "${GH_TOKEN:?GH_TOKEN is required}"
+	: "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+	[[ "${GITHUB_REPOSITORY}" =~ ^[^/]+/[^/]+$ ]] || {
+		echo "GITHUB_REPOSITORY must be in owner/repo format" >&2
+		exit 1
+	}
+fi
 
 SECURITY_AUDIT_CONFIDENCE_GATE="${SECURITY_AUDIT_CONFIDENCE_GATE:-8}"
 if ! [[ "${SECURITY_AUDIT_CONFIDENCE_GATE}" =~ ^[0-9]+$ ]] \
@@ -166,28 +218,30 @@ fi
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
 
 security_audit_require_cmd bash
-security_audit_require_cmd gh
 security_audit_require_cmd python3
 
-[ -f "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/label_helpers.sh" ] || {
-	echo "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/label_helpers.sh is required" >&2
-	exit 1
-}
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ]; then
+	security_audit_require_cmd gh
+	[ -f "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/label_helpers.sh" ] || {
+		echo "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/label_helpers.sh is required" >&2
+		exit 1
+	}
 
-# shellcheck disable=SC1091
-source "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/label_helpers.sh"
-
-# label_helpers.sh only finds gh_helpers.sh relative to the current working
-# directory; consumer-called runs execute from the audited checkout, so
-# re-source the staged gh_helpers.sh to restore the real gh_retry wrapper
-# (re-sourcing is a no-op redefinition on source-repo runs).
-if [ -f "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/gh_helpers.sh" ]; then
 	# shellcheck disable=SC1091
-	source "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/gh_helpers.sh"
-fi
+	source "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/label_helpers.sh"
 
-ensure_label_exists "ai:security-audit" "${GITHUB_REPOSITORY}"
-ensure_label_exists "ai:security" "${GITHUB_REPOSITORY}"
+	# label_helpers.sh only finds gh_helpers.sh relative to the current working
+	# directory; consumer-called runs execute from the audited checkout, so
+	# re-source the staged gh_helpers.sh to restore the real gh_retry wrapper
+	# (re-sourcing is a no-op redefinition on source-repo runs).
+	if [ -f "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/gh_helpers.sh" ]; then
+		# shellcheck disable=SC1091
+		source "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/gh_helpers.sh"
+	fi
+
+	ensure_label_exists "ai:security-audit" "${GITHUB_REPOSITORY}"
+	ensure_label_exists "ai:security" "${GITHUB_REPOSITORY}"
+fi
 
 TRACKER_TITLE="AI Security Audit Tracker"
 TRACKER_MARKER="<!-- ai:security-audit-tracker:v1 -->"
@@ -217,7 +271,26 @@ FOLLOWUP_SUMMARY_ENV="${SECURITY_AUDIT_RUNTIME_DIR}/followup-summary.env"
 FOLLOWUP_BODY_DIR="${SECURITY_AUDIT_RUNTIME_DIR}/followups"
 CHANGED_FILES_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/changed-files.txt"
 TRACKER_BODY_WITH_SHA_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-issue-body-with-sha.md"
+SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/security-money-lens.txt"
+SECURITY_AUDIT_MONEY_LENS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/rendered-security-money-lens.txt"
+FINDINGS_PACKAGE_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/findings-package-error.txt"
 
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
+	if [ -z "${SECURITY_AUDIT_FINDINGS_OUT}" ]; then
+		security_audit_emit_failure "findings-output-preflight" "(unset)" "SECURITY_AUDIT_FINDINGS_OUT is required in findings-json mode"
+		exit 1
+	fi
+	security_audit_require_writable_destination "findings-output-preflight" "${SECURITY_AUDIT_FINDINGS_OUT}"
+	if [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
+		security_audit_require_file "project-spec-preflight" "${SECURITY_AUDIT_PROJECT_SPEC_PATH}"
+	fi
+fi
+
+LAST_AUDITED_SHA=""
+TRACKER_NUMBER=""
+TRACKER_STATE=""
+
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ]; then
 cat > "${TRACKER_BODY_FILE}" <<EOF
 ${TRACKER_MARKER}
 # ${TRACKER_TITLE}
@@ -302,6 +375,7 @@ else
 	fi
 	gh_retry gh issue edit "${TRACKER_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:security-audit"
 fi
+fi
 
 # --- Scope resolution: skip-if-unchanged + incremental diff scope ---------
 # HEAD_SHA is empty when the checkout is not a git repository; both gates
@@ -310,9 +384,43 @@ HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
 
 AUDIT_SCOPE_MODE="full"
 AUDIT_SCOPE_REASON="no last-audited commit recorded on the tracker"
+AUDIT_SCOPE_BASE_SHA=""
+AUDIT_SCOPE_HEAD_SHA="${HEAD_SHA}"
 : > "${CHANGED_FILES_FILE}"
 
-if [ -z "${HEAD_SHA}" ]; then
+if [ -n "${SECURITY_AUDIT_DIFF_BASE}" ]; then
+	if [ -z "${HEAD_SHA}" ]; then
+		security_audit_emit_failure "diff-scope" "${REPO_ROOT}" "checkout is not a git repository"
+		exit 1
+	fi
+	if ! AUDIT_SCOPE_BASE_SHA="$(git rev-parse --verify --end-of-options "${SECURITY_AUDIT_DIFF_BASE}^{commit}" 2>/dev/null)"; then
+		security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_BASE}" "SECURITY_AUDIT_DIFF_BASE does not resolve to a commit"
+		exit 1
+	fi
+	if ! AUDIT_SCOPE_HEAD_SHA="$(git rev-parse --verify --end-of-options "${SECURITY_AUDIT_DIFF_HEAD}^{commit}" 2>/dev/null)"; then
+		security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_HEAD}" "SECURITY_AUDIT_DIFF_HEAD does not resolve to a commit"
+		exit 1
+	fi
+	if [ "${AUDIT_SCOPE_HEAD_SHA}" != "${HEAD_SHA}" ]; then
+		security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_HEAD}" "explicit diff head does not match the checked-out HEAD"
+		exit 1
+	fi
+	if ! git merge-base --is-ancestor "${AUDIT_SCOPE_BASE_SHA}" "${AUDIT_SCOPE_HEAD_SHA}" 2>/dev/null; then
+		security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_BASE}..${SECURITY_AUDIT_DIFF_HEAD}" "explicit diff base is not an ancestor of the diff head"
+		exit 1
+	fi
+	if ! git diff --name-only "${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA}" -- > "${CHANGED_FILES_FILE}"; then
+		security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_BASE}..${SECURITY_AUDIT_DIFF_HEAD}" "unable to derive explicit changed-file scope"
+		exit 1
+	fi
+	CHANGED_FILE_COUNT="$(grep -c . "${CHANGED_FILES_FILE}" 2>/dev/null || true)"
+	if ! [[ "${CHANGED_FILE_COUNT}" =~ ^[0-9]+$ ]]; then
+		security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_BASE}..${SECURITY_AUDIT_DIFF_HEAD}" "could not count explicitly changed files"
+		exit 1
+	fi
+	AUDIT_SCOPE_MODE="incremental"
+	AUDIT_SCOPE_REASON="${CHANGED_FILE_COUNT} files in explicit range ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA}"
+elif [ -z "${HEAD_SHA}" ]; then
 	AUDIT_SCOPE_REASON="checkout is not a git repository; scope gates fail open to a full audit"
 elif [ -n "${LAST_AUDITED_SHA}" ]; then
 	if [ "${LAST_AUDITED_SHA}" = "${HEAD_SHA}" ]; then
@@ -339,6 +447,8 @@ elif [ -n "${LAST_AUDITED_SHA}" ]; then
 			else
 				AUDIT_SCOPE_MODE="incremental"
 				AUDIT_SCOPE_REASON="${CHANGED_FILE_COUNT} files changed since last audited commit ${LAST_AUDITED_SHA}"
+				AUDIT_SCOPE_BASE_SHA="${LAST_AUDITED_SHA}"
+				AUDIT_SCOPE_HEAD_SHA="${HEAD_SHA}"
 			fi
 		else
 			AUDIT_SCOPE_REASON="last audited commit ${LAST_AUDITED_SHA} is missing or not an ancestor of HEAD (history rewrite?); falling back to a full audit"
@@ -367,6 +477,19 @@ else
 	exit "${RENDER_PROMPT_STATUS}"
 fi
 
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
+	printf '%s\n' '{{REFERENCE_SECURITY_MONEY_LENS}}' > "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}"
+	if bash "${SECURITY_AUDIT_RENDER_HELPER}" "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}" \
+			> "${SECURITY_AUDIT_MONEY_LENS_FILE}" 2> "${RENDER_PROMPT_ERROR_FILE}"; then
+		:
+	else
+		MONEY_LENS_RENDER_STATUS=$?
+		security_audit_emit_path_diagnostic "${RENDER_PROMPT_ERROR_FILE}"
+		security_audit_emit_failure "prompt-render" "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}" "security money lens renderer exited nonzero"
+		exit "${MONEY_LENS_RENDER_STATUS}"
+	fi
+fi
+
 if security_audit_append_prompt_context >> "${RENDERED_PROMPT_FILE}"; then
 	:
 else
@@ -391,7 +514,7 @@ if codex --ask-for-approval never \
 		-c include_apply_patch_tool=true \
 		exec \
 		--skip-git-repo-check \
-		--model "openai/gpt-5.6-sol" \
+		--model "${WORKFLOW_EDITOR_MODEL:-openai/gpt-5.6-sol}" \
 		--sandbox read-only < "${RENDERED_PROMPT_FILE}" \
 		> "${CODEX_OUTPUT_FILE}" 2> "${CODEX_ERROR_FILE}"; then
 	:
@@ -684,6 +807,94 @@ summary_path.write_text(
 )
 PY
 
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
+	if python3 - \
+		"${FILTERED_FINDINGS_FILE}" \
+		"${FILTER_SUMMARY_FILE}" \
+		"${SECURITY_AUDIT_FINDINGS_OUT}" 2> "${FINDINGS_PACKAGE_ERROR_FILE}" <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+findings_path = Path(sys.argv[1])
+summary_path = Path(sys.argv[2])
+output_path = Path(sys.argv[3])
+count_keys = (
+	"kept",
+	"suppressed_excluded",
+	"suppressed_invalid",
+	"suppressed_low_confidence",
+	"suppressed_out_of_scope",
+)
+
+
+def load_json(path: Path, *, label: str):
+	try:
+		return json.loads(path.read_text(encoding="utf-8"))
+	except (OSError, json.JSONDecodeError) as exc:
+		raise SystemExit(f"unable to load {label}: {exc}")
+
+
+findings = load_json(findings_path, label="filtered findings")
+summary = load_json(summary_path, label="filter summary")
+if not isinstance(findings, list) or not isinstance(summary, dict):
+	raise SystemExit("security-audit findings packaging received invalid JSON payloads")
+
+counts: dict[str, int] = {}
+for count_key in count_keys:
+	count_value = summary.get(count_key)
+	if isinstance(count_value, bool) or not isinstance(count_value, int) or count_value < 0:
+		raise SystemExit(f"security-audit findings packaging received invalid count: {count_key}")
+	counts[count_key] = count_value
+if counts["kept"] != len(findings):
+	raise SystemExit("security-audit findings packaging received a mismatched kept count")
+
+payload = {
+	"schema_version": "security_audit_findings.v1",
+	"findings": findings,
+	"counts": counts,
+}
+
+temporary_path: Path | None = None
+try:
+	with tempfile.NamedTemporaryFile(
+		mode="w",
+		encoding="utf-8",
+		dir=output_path.parent,
+		prefix=f".{output_path.name}.",
+		suffix=".tmp",
+		delete=False,
+	) as temporary_file:
+		temporary_path = Path(temporary_file.name)
+		json.dump(payload, temporary_file, ensure_ascii=True, indent=2, sort_keys=True)
+		temporary_file.write("\n")
+		temporary_file.flush()
+		os.fsync(temporary_file.fileno())
+	os.replace(temporary_path, output_path)
+except OSError as exc:
+	if temporary_path is not None:
+		try:
+			temporary_path.unlink(missing_ok=True)
+		except OSError:
+			pass
+	raise SystemExit(f"unable to publish security-audit findings: {exc}")
+PY
+	then
+		:
+	else
+		FINDINGS_PACKAGE_STATUS=$?
+		security_audit_emit_path_diagnostic "${FINDINGS_PACKAGE_ERROR_FILE}"
+		security_audit_emit_failure "findings-output" "${SECURITY_AUDIT_FINDINGS_OUT}" "findings packaging exited nonzero"
+		exit "${FINDINGS_PACKAGE_STATUS}"
+	fi
+	echo "security-audit: findings-json output written"
+	exit 0
+fi
+
 # Standalone workflow: no cycle-local issue cache exists here. Fetch existing
 # follow-up issues once and reuse the result for weekly-cap accounting + dedupe.
 gh_retry gh issue list \
@@ -707,8 +918,8 @@ python3 - \
 	"${FOLLOWUP_MARKER_PREFIX}" \
 	"${MAX_FOLLOWUP_ISSUES_PER_WEEK}" \
 	"${AUDIT_SCOPE_MODE}" \
-	"${HEAD_SHA}" \
-	"${LAST_AUDITED_SHA}" <<'PY'
+	"${AUDIT_SCOPE_HEAD_SHA}" \
+	"${AUDIT_SCOPE_BASE_SHA}" <<'PY'
 from __future__ import annotations
 
 import json

@@ -37,6 +37,18 @@
       "color": "e3a21a",
       "description": "Validation failed — judge re-evaluating before retry"
     },
+    "ai:security-pass": {
+      "color": "1d76db",
+      "description": "Project security pass in progress"
+    },
+    "ai:security-pass-fixing": {
+      "color": "d93f0b",
+      "description": "Security-pass fix-up issue in pipeline"
+    },
+    "ai:security-pass-failed": {
+      "color": "e11d48",
+      "description": "Project security pass exhausted its fix-cycle budget"
+    },
     "ai:clarify-failed": {
       "color": "e11d48",
       "description": "Clarify workflow failed before producing a valid response"
@@ -200,6 +212,9 @@
         "ai:validation-failed",
         "ai:validation-fixing",
         "ai:validation-recovery",
+        "ai:security-pass",
+        "ai:security-pass-fixing",
+        "ai:security-pass-failed",
         "ai:done",
         "ai:ready-to-merge",
         "ai:needs-human",

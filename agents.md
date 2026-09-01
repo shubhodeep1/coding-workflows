@@ -38,7 +38,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `integration-sync-conflict-resolver.txt`) — merge-conflict resolution
    inside autofix.
 9. **orchestrate** (`orchestrate.yml`, `orchestrate_poll.yml`) — issue
-   decomposition + judge polling.
+   decomposition + judge polling, including the default-on, current-head
+   project security-pass gate before validation/finalization.
 10. **judge** (`mode-judge.txt`, `mode-orchestrate-poll-judge.txt`,
     `mode-judge-review-blocked.txt`, `mode-judge-stall-recovery.txt`) —
     JSON-emitting evaluation of wave state.
@@ -363,6 +364,25 @@ dashboard without producing a fresh comment per tick.
 | `<!-- ORCHESTRATOR_STATE_V2 part=N/N manifest=<sha> -->` … `<!-- ORCHESTRATOR_STATE_V2 -->` | `post_state_comment` / `_post_state_comment_v2_chunk` | Canonical machine-readable orchestrator state snapshot. Multi-chunk so it can carry state blobs >65 KiB. Reader: `extract_latest_valid_orchestrator_state`. Reader falls back to the legacy V1 marker `<!-- ORCHESTRATOR_STATE_V1 -->` for issues that have not yet been re-written. |
 | `<!-- orchestrator:completion-status -->` | `update_completion_status_comment` | Human-readable "what is blocking completion" summary. Second-line tag `<!-- status:<token> -->` exposes the canonical status token (`in-progress` \| `waiting` \| `ready` \| `validated` \| `failed`) for grep-friendly downstream parsing. Idempotent — skips the API call when the rendered body already matches, and persists `.completion_status_comment_id` + `.completion_status_comment_body_hash` in the state file so edit-in-place fallback survives the next cron invocation. |
 
+When `ENABLE_SECURITY_PASS=true` (default `true`), every completion route
+enters `security-pass` before validation or finalization. A pass is valid only
+when `security_pass_status == "passed"` and `security_pass_head_sha` exactly
+matches the current integration head. Findings enter `security-pass-fixing`
+through one consolidated `ai:orchestrator-managed` issue; a merged fix advances
+`security_pass_cycle`, clears the recorded SHA, and re-runs the pass. Persistent
+findings after `MAX_SECURITY_PASS_CYCLES` (default `3`) terminalize as
+`ai:security-pass-failed`; `/re-security-pass` resets the bounded loop.
+Setting `ENABLE_SECURITY_PASS=false` remains the immediate operator kill switch.
+If an externally merged final PR has already deleted its integration branch,
+the only permitted analysis fallback is that PR's verified immutable head SHA;
+an unavailable or mismatched PR head fails closed and never substitutes the
+default-branch HEAD. If that audit returns findings, the poller recreates the
+still-absent integration branch at exactly the verified PR-head SHA, accepts a
+create race only when the authoritative branch SHA matches, and clears stale
+final-delivery state before creating the fix issue. The repair then advances
+the branch that the next security pass audits, and the existing finalizer opens
+a replacement delivery PR; unknown or mismatched branch state fails closed.
+
 The completion-status comment is updated from three call sites:
 
 1. The cycle-level wave-status decision block (every poll tick — derives
@@ -378,6 +398,10 @@ The completion-status comment is updated from three call sites:
    validation recovery, and to `failed` on both terminal branches (the
    deterministic-class short-circuit and the recovery-budget-exhausted
    path).
+
+The security-pass helpers update the same pinned comment to `waiting` while
+the audit engine or consolidated fix issue gates completion, and to `failed`
+when the bounded fix-cycle budget is exhausted.
 
 The same change also adds a defensive preflight inside
 `dispatch_validation_if_needed`: when the current wave's PRs are not all
@@ -501,6 +525,12 @@ and shipped:
 - `DRIFT_SCAN_DIFF`
 - `DRIFT_SCAN_OK`
 - `DRIFT_SCAN_ERROR`
+- `SECURITY_PASS_STARTED`
+- `SECURITY_PASS_CLEAN`
+- `SECURITY_PASS_BLOCKED`
+- `SECURITY_PASS_FIX_ISSUE_CREATED`
+- `SECURITY_PASS_FAILED`
+- `SECURITY_PASS_SKIPPED_DISABLED`
 
 - `SEMBLE_QUERY`
 - `SEMBLE_FALLBACK`
@@ -609,6 +639,12 @@ LOG_PREFIX.name=DRIFT_SCAN_RETRY
 LOG_PREFIX.name=DRIFT_SCAN_DIFF
 LOG_PREFIX.name=DRIFT_SCAN_OK
 LOG_PREFIX.name=DRIFT_SCAN_ERROR
+LOG_PREFIX.name=SECURITY_PASS_STARTED
+LOG_PREFIX.name=SECURITY_PASS_CLEAN
+LOG_PREFIX.name=SECURITY_PASS_BLOCKED
+LOG_PREFIX.name=SECURITY_PASS_FIX_ISSUE_CREATED
+LOG_PREFIX.name=SECURITY_PASS_FAILED
+LOG_PREFIX.name=SECURITY_PASS_SKIPPED_DISABLED
 LOG_PREFIX.name=SEMBLE_QUERY
 LOG_PREFIX.name=SEMBLE_FALLBACK
 LOG_PREFIX.name=SERENA_QUERY
@@ -787,6 +823,9 @@ depend on it.
 | `CODEX_HEARTBEAT_INTERVAL_SECS` | `30` | Silence interval (seconds) between emitted `CODEX_HEARTBEAT` lines. |
 | `REVIEW_DIATAXIS_LENS_ENABLED` | `true` | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined only (no separate workflow toggle yet): keep it `low` severity and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
+| `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-integration-head security gate before validation or finalization. Set to `false` for the immediate operator kill switch and legacy completion behavior. |
+| `MAX_SECURITY_PASS_CYCLES` | `3` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. |
+| `SECURITY_PASS_CONFIDENCE_GATE` | `8` | Minimum 1-10 confidence score for findings that block the project security pass. |
 
 ## Integration-sync verifier + bootstrap contract
 
@@ -795,6 +834,7 @@ depend on it.
 - `scripts/review_conflict_resolve.sh` persists one `AUTOFIX_RESOLVER_RETRY_STATE_V1` PR-body block per final PR/head SHA, keyed by normalized fingerprint failure signature. `RESOLVER_ESCAPE_THRESHOLD_N` is the per-tier same-head, same-signature step size: multiples advance `strict` → `ratio` → `count_only` → `warn_only`, emit `FINGERPRINT_TIER_DOWNGRADED_V1`, and after the next multiple the script labels the **final PR issue** `ai:resolver-escalated` and records `escalated_at` for poller-side suppression / branch-rebuild gating.
 - `scripts/verify_integration_fingerprints.py` uses `FINGERPRINT_QUARANTINE_RUNS_M` to move stable unchanged drift into ai-memory quarantine and emits `FINGERPRINT_QUARANTINED_V1` markers when the skip path activates. `.github/workflows/drift-audit.yml` (cron `0 3 * * *`, gated by `DRIFT_AUDIT_ENABLED`) scans `PRE_EXISTING_FINGERPRINT_DRIFT_V1` / `FINGERPRINT_QUARANTINED_V1` markers and maintains tracker issues for persistent clusters. The audit skips any cluster whose fingerprint path is absent from the repository checkout, so markers echoed from test fixtures or PR diffs (synthetic paths such as `scripts/example.py`) do not open tracker issues. Completed runs concluded `cancelled` / `skipped` routinely upload no logs (concurrency-superseded review runs); a failed log fetch for them is classified `unscannable` rather than missing, keeping coverage `full` so the per-run Telegram summary stays at DEBUG instead of firing a daily partial-coverage WARNING; their logs are still scanned when present. Every enabled run posts a Telegram run summary (`tg_send_msg`, gated by `TG_BOT_SECRET` / `TG_ADMIN_CHAT_ID`) linking to the run and writes a GitHub Actions job summary.
 - `.github/workflows/security-audit.yml` (weekly `0 8 * * 0` plus `workflow_dispatch` plus `workflow_call`, gated by `SECURITY_AUDIT_ENABLED`, default `true`) is a default-branch maintenance audit that runs on the source repo and, via the synced `workflow-templates/ai-security-audit.yml` wrapper, on every consumer repo against its own default branch (consumer runs stage this repo's `scripts/` + `prompts/` from a `@stable` support checkout into `SECURITY_AUDIT_SUPPORT_DIR` and need `OPENROUTER_API_KEY`, optionally `GH_PAT`). It runs `scripts/security_audit.sh` with `prompts/mode-security-audit.txt`, appends dated findings sections to the stable `AI Security Audit Tracker` issue (`ai:security-audit`, marker `<!-- ai:security-audit-tracker:v1 -->`), and opens up to 3 weekly `ai:security` follow-up issues after confidence-gate + false-positive-exclusion filtering. Each completed run records the audited HEAD on the tracker body (marker `<!-- ai:security-audit-last-sha:… -->`); the next run skips entirely when HEAD is unchanged (`SECURITY_AUDIT_SKIP_IF_UNCHANGED=true`, log-only skip) and otherwise diff-scopes the audit to the commits since that SHA (`SECURITY_AUDIT_INCREMENTAL=true`; the post-filter drops findings citing unchanged files as `suppressed_out_of_scope`; first runs, history rewrites, and >200-file diffs fall back to the full scope). `.github/workflows/internal-clarify.yml` skips `ai:security-audit` issues so tracker bookkeeping never recurses into the normal clarify/plan pipeline.
+- `scripts/security_audit.sh` exposes `SECURITY_AUDIT_OUTPUT_MODE=findings-json` for the default-on orchestrator project security pass. It accepts an optional project-spec file, supports a fail-closed explicit `SECURITY_AUDIT_DIFF_BASE`/`SECURITY_AUDIT_DIFF_HEAD` range, applies the existing validation/exclusion/confidence/scope filters, and atomically publishes `security_audit_findings.v1` to `SECURITY_AUDIT_FINDINGS_OUT`. This mode performs no GitHub tracker, label, follow-up, last-SHA, or notification side effects; the default `issues` path remains the production weekly mode.
 - `.github/workflows/workflow-log-analysis.yml` now also has a source-repo-only weekly retro path (cron `0 9 * * 1`, gated by `WORKFLOW_RETRO_ENABLED`, default `true`). `WORKFLOW_RETRO_CRON` defaults to the same cron string and must stay in sync with the trigger because GitHub does not interpolate vars into `on.schedule`. The workflow builds retro context with `scripts/workflow_retro.py`, renders the narrative through `prompts/mode-workflow-analysis.txt` in retro mode using `WORKFLOW_RETRO_MODEL` / `WORKFLOW_RETRO_REASONING` (defaults `openai/gpt-5.6-luna` / `medium`), and posts into the stable `AI Workflow Weekly Retro` tracker issue (`ai:retro`, marker `<!-- ai:retro-tracker:v1 -->`). Zero-activity windows (no workflow runs and no merged PRs; `has_activity: false` in the `workflow_retro.v1` JSON) skip the LLM pass and the tracker comment when `WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY=true` (default), leaving only a `WORKFLOW_RETRO_SKIP_V1:` line in the run log and no Telegram alert. After the source-repo retro, the `Consumer retro fan-out` step (gated by `WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED`, default `true`) runs `scripts/workflow_retro_fanout.sh`: for each repo in `.github/ai/consumer_repos.json` (source repo excluded) it builds a per-repo retro from the same collect-logs artifact, honors the consumer's own `WORKFLOW_RETRO_ENABLED` repo var (one fail-open `gh api` GET per consumer per week), applies the same no-activity skip, and upserts the week-marked comment on that consumer's `AI Workflow Weekly Retro` tracker via `GH_PAT` (§14 repo scope). Per-repo outcomes are logged as `WORKFLOW_RETRO_FANOUT_V1: repo=… status=posted|refreshed|up_to_date|skipped_no_activity|skipped_disabled|failed`; individual failures fail open and the step errors only when every attempted consumer fails. Both `.github/workflows/internal-clarify.yml` (source repo) and the consumer-facing gate in `.github/workflows/clarify.yml` skip `ai:retro` / `ai:security-audit` issues so tracker upkeep never recurses into the clarify/plan pipeline.
 - `scripts/orchestrate_poll_process.sh` gates last-resort `orchestrator/project-*` branch rebuilds behind `BRANCH_REBUILD_ENABLED`, `BRANCH_REBUILD_THRESHOLD_HOURS`, and `BRANCH_REBUILD_COOLDOWN_HOURS`. Audit snapshots are persisted as `BranchRebuildAuditV1` in `ai-memory/schemas/branch_rebuild_audit.v1.json` (this shipped artifact supersedes the old plan placeholder name `BRANCH_REBUILD_AUDIT_V1`; there is no literal runtime marker with that string).
 

@@ -1275,6 +1275,26 @@ if is_truthy "${ENABLE_VALIDATION_RAW}"; then
   ENABLE_VALIDATION="true"
 fi
 
+ENABLE_SECURITY_PASS_RAW="${ENABLE_SECURITY_PASS:-true}"
+ENABLE_SECURITY_PASS="false"
+if is_truthy "${ENABLE_SECURITY_PASS_RAW}"; then
+  ENABLE_SECURITY_PASS="true"
+fi
+
+MAX_SECURITY_PASS_CYCLES="${MAX_SECURITY_PASS_CYCLES:-3}"
+if ! [[ "${MAX_SECURITY_PASS_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_SECURITY_PASS_CYCLES}" -lt 1 ]; then
+  echo "::warning::MAX_SECURITY_PASS_CYCLES must be a positive integer; defaulting to 3"
+  MAX_SECURITY_PASS_CYCLES="3"
+fi
+
+SECURITY_PASS_CONFIDENCE_GATE="${SECURITY_PASS_CONFIDENCE_GATE:-8}"
+if ! [[ "${SECURITY_PASS_CONFIDENCE_GATE}" =~ ^[0-9]+$ ]] \
+  || [ "${SECURITY_PASS_CONFIDENCE_GATE}" -lt 1 ] \
+  || [ "${SECURITY_PASS_CONFIDENCE_GATE}" -gt 10 ]; then
+  echo "::warning::SECURITY_PASS_CONFIDENCE_GATE must be an integer from 1 to 10; defaulting to 8"
+  SECURITY_PASS_CONFIDENCE_GATE="8"
+fi
+
 if is_truthy "${ALLOW_WORKFLOW_EDITS:-true}"; then
   ALLOW_WORKFLOW_EDITS="true"
 else
@@ -4088,25 +4108,51 @@ resolve_branch_analysis_ref() {
 prepare_tracking_judge_checkout() {
   local integration_branch="$1"
   local default_branch="$2"
+  local checkout_mode="${3:-api-verified}"
+  local target_ref_override="${4:-}"
   local target_branch="${default_branch:-main}"
   local target_ref=""
+  local checkout_succeeded="false"
 
   JUDGE_EXECUTION_SOURCE="default_branch"
   JUDGE_EXECUTION_REF=""
   JUDGE_CONTEXT_SENTINEL_PRESENT="false"
   JUDGE_CONTEXT_SENTINEL_VALUE=""
 
-  if [ -n "${integration_branch}" ]; then
+  if [ -n "${target_ref_override}" ]; then
+    JUDGE_EXECUTION_SOURCE="verified_final_pr_head"
+    target_ref="${target_ref_override}"
+  elif [ -n "${integration_branch}" ]; then
     JUDGE_EXECUTION_SOURCE="integration_branch"
     target_branch="${integration_branch}"
-    if ! integration_branch_exists "${integration_branch}"; then
+    if [ "${checkout_mode}" != "local-only" ] && ! integration_branch_exists "${integration_branch}"; then
       mark_integration_branch_missing_failed "${integration_branch}"
       return 1
     fi
   fi
 
-  if target_ref="$(resolve_branch_analysis_ref "${target_branch}")"; then
-    if ! git checkout -q "${target_branch}" >/dev/null 2>&1 && ! git checkout -q "${target_ref}" >/dev/null 2>&1; then
+  if [ -n "${target_ref_override}" ]; then
+    if git rev-parse --verify -q "${target_ref}^{commit}" >/dev/null 2>&1 \
+      && git checkout --detach -q "${target_ref}" >/dev/null 2>&1; then
+      checkout_succeeded="true"
+    fi
+  elif target_ref="$(resolve_branch_analysis_ref "${target_branch}")"; then
+    # Prefer the resolved ref because a successful fetch can advance the
+    # remote-tracking integration head while a same-named local branch remains
+    # stale. Fall back to the branch name only when no detached checkout works.
+    if git checkout -q "${target_ref}" >/dev/null 2>&1 || git checkout -q "${target_branch}" >/dev/null 2>&1; then
+      checkout_succeeded="true"
+    fi
+  else
+    if [ -n "${integration_branch}" ]; then
+      echo "::error::Integration branch '${integration_branch}' exists but its analysis ref could not be resolved for judge context." >&2
+    else
+      echo "::error::Default branch '${target_branch}' could not be resolved for judge context." >&2
+    fi
+    return 1
+  fi
+
+  if [ "${checkout_succeeded}" != "true" ]; then
       # Workflow support files (scripts/, prompts/, .github/ai/) installed
       # from coding-workflows are untracked and can block checkout when the
       # target branch has overlapping paths.  Back them up, force-checkout,
@@ -4118,7 +4164,7 @@ prepare_tracking_judge_checkout() {
       done
       [ -d ".github/ai" ] && { mkdir -p "${_wf_backup}/github_ai"; cp -a ".github/ai/." "${_wf_backup}/github_ai/" 2>/dev/null || true; }
 
-      if git checkout -f -q "${target_ref}" >/dev/null 2>&1; then
+      if git checkout --detach -f -q "${target_ref}" >/dev/null 2>&1; then
         # Force checkout succeeded — restore workflow support files
         for _d in scripts prompts; do
           [ -d "${_wf_backup}/${_d}" ] && { mkdir -p "${_d}"; cp -a "${_wf_backup}/${_d}/." "${_d}/" 2>/dev/null || true; }
@@ -4127,21 +4173,15 @@ prepare_tracking_judge_checkout() {
         rm -rf "${_wf_backup}"
       else
         rm -rf "${_wf_backup}"
-        if [ -n "${integration_branch}" ]; then
+        if [ -n "${target_ref_override}" ]; then
+          echo "::error::Verified final-PR analysis ref '${target_ref}' could not be checked out for security-pass context." >&2
+        elif [ -n "${integration_branch}" ]; then
           echo "::error::Integration branch '${integration_branch}' exists but could not be checked out for judge context (resolved ref '${target_ref}')." >&2
         else
           echo "::error::Default branch '${target_branch}' could not be checked out for judge context (resolved ref '${target_ref}')." >&2
         fi
         return 1
       fi
-    fi
-  else
-    if [ -n "${integration_branch}" ]; then
-      echo "::error::Integration branch '${integration_branch}' exists but its analysis ref could not be resolved for judge context." >&2
-    else
-      echo "::error::Default branch '${target_branch}' could not be resolved for judge context." >&2
-    fi
-    return 1
   fi
 
   JUDGE_EXECUTION_REF="$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
@@ -4155,6 +4195,639 @@ prepare_tracking_judge_checkout() {
     echo "  Judge context sentinel for tracking #${TRACKING_NUM}: ${JUDGE_CONTEXT_SENTINEL_VALUE}"
   fi
   return 0
+}
+
+prepare_security_pass_final_pr_head() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local final_pr_json="$3"
+  local expected_final_pr
+  local metadata_pr_number metadata_pr_state metadata_merged_at metadata_head_sha metadata_head_ref metadata_base_ref
+  local fetched_pr_ref resolved_pr_head_sha
+
+  SECURITY_PASS_VERIFIED_PR_REF=""
+  SECURITY_PASS_VERIFIED_PR_SHA=""
+  SECURITY_PASS_VERIFIED_PR_RECHECK_REFSPEC=""
+
+  expected_final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+  metadata_pr_number="$(_jq_field "${final_pr_json}" '.number' '[0-9]+')"
+  metadata_pr_state="$(_jq_field "${final_pr_json}" '.state' 'closed')"
+  metadata_merged_at="$(_jq_field "${final_pr_json}" '.merged_at')"
+  metadata_head_sha="$(_jq_field "${final_pr_json}" '.head.sha' '[0-9a-fA-F]{40}')"
+  metadata_head_ref="$(_jq_field "${final_pr_json}" '.head.ref')"
+  metadata_base_ref="$(_jq_field "${final_pr_json}" '.base.ref')"
+
+  if ! [[ "${expected_final_pr}" =~ ^[0-9]+$ ]] \
+    || [ "${metadata_pr_number}" != "${expected_final_pr}" ] \
+    || [ "${metadata_pr_state}" != "closed" ] \
+    || [ -z "${metadata_merged_at}" ] \
+    || [ "${metadata_head_ref}" != "${integration_branch}" ] \
+    || [ "${metadata_base_ref}" != "${default_branch}" ] \
+    || [ -z "${metadata_head_sha}" ]; then
+    return 1
+  fi
+
+  fetched_pr_ref="refs/orchestrator/security-pass/pr-${expected_final_pr}-head"
+  if git fetch --no-tags origin "+refs/pull/${expected_final_pr}/head:${fetched_pr_ref}" >/dev/null 2>&1; then
+    resolved_pr_head_sha="$(git rev-parse --verify "${fetched_pr_ref}^{commit}" 2>/dev/null || true)"
+    if [ "${resolved_pr_head_sha}" != "${metadata_head_sha}" ]; then
+      return 1
+    fi
+    SECURITY_PASS_VERIFIED_PR_REF="${fetched_pr_ref}"
+    SECURITY_PASS_VERIFIED_PR_RECHECK_REFSPEC="+refs/pull/${expected_final_pr}/head:${fetched_pr_ref}"
+  else
+    resolved_pr_head_sha="$(git rev-parse --verify "${metadata_head_sha}^{commit}" 2>/dev/null || true)"
+    if [ "${resolved_pr_head_sha}" != "${metadata_head_sha}" ]; then
+      return 1
+    fi
+    SECURITY_PASS_VERIFIED_PR_REF="${metadata_head_sha}"
+  fi
+  SECURITY_PASS_VERIFIED_PR_SHA="${metadata_head_sha}"
+  return 0
+}
+
+ensure_security_pass_repair_branch() {
+  local integration_branch="$1"
+  local expected_head_sha="$2"
+  local create_error=""
+  local verified_branch_sha=""
+
+  [ -n "${integration_branch}" ] || return 1
+  [[ "${expected_head_sha}" =~ ^[0-9A-Fa-f]{40}$ ]] || return 1
+
+  # The branch-rebuild POST path was audited, but it is destructive and targets
+  # the default head. This recovery needs a separate create-only call at the
+  # verified immutable PR head; _branch_head_sha provides the shared GET check.
+  if ! create_error="$(gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+    -f ref="refs/heads/${integration_branch}" \
+    -f sha="${expected_head_sha}" 2>&1 >/dev/null)"; then
+    echo "  [security-pass] Integration branch create returned an error; verifying whether an exact-SHA race winner exists." >&2
+  fi
+
+  verified_branch_sha="$(_branch_head_sha "${integration_branch}" || true)"
+  if [ "${verified_branch_sha}" != "${expected_head_sha}" ]; then
+    if [ -n "${create_error}" ]; then
+      echo "::warning::Security-pass repair branch '${integration_branch}' was not verified at the audited head after create failed: ${create_error}" >&2
+    else
+      echo "::warning::Security-pass repair branch '${integration_branch}' did not resolve to the audited head after creation." >&2
+    fi
+    return 1
+  fi
+
+  if ! jq '
+    .final_merge_pr = null
+    | .final_merge_status = "pending"
+    | .final_merge_attempt_count = 0
+    | .final_merge_error = ""
+    | .final_merge_ineligible_blocked_at_sha = ""
+    | .final_merge_ineligible_first_blocked_at_utc = 0
+    | .final_merge_ineligible_alert_sent_for_sha = ""
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    return 1
+  fi
+  echo "  [security-pass] Recreated integration branch '${integration_branch}' at verified final-PR head ${expected_head_sha}; stale final-delivery state cleared."
+  return 0
+}
+
+ensure_security_pass_state_fields() {
+  [ -f "${STATE_FILE}" ] || return 1
+  jq '
+    .security_pass_cycle = (
+      if (.security_pass_cycle | type) == "number"
+        and (.security_pass_cycle | floor) == .security_pass_cycle
+        and .security_pass_cycle >= 0
+      then .security_pass_cycle else 0 end
+    )
+    | .security_pass_status as $security_pass_status
+    | .security_pass_status = (
+      if ($security_pass_status | type) == "string"
+        and (["pending", "running", "blocked", "passed", "failed"] | index($security_pass_status)) != null
+      then $security_pass_status else "pending" end
+    )
+    | .security_pass_active_fix_issues = (
+      if (.security_pass_active_fix_issues | type) == "array"
+        and (.security_pass_active_fix_issues | length) <= 1
+        and all(.security_pass_active_fix_issues[]; (type == "number") and (floor == .) and . > 0)
+      then .security_pass_active_fix_issues else [] end
+    )
+    | .security_pass_head_sha = (
+      if (.security_pass_head_sha | type) == "string" then .security_pass_head_sha else "" end
+    )' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+}
+
+security_pass_current_head_is_valid() {
+  local integration_head_sha="$1"
+  [ -n "${integration_head_sha}" ] || return 1
+  jq -e --arg head_sha "${integration_head_sha}" '
+    .security_pass_status == "passed"
+    and .security_pass_head_sha == $head_sha
+  ' "${STATE_FILE}" >/dev/null 2>&1
+}
+
+security_pass_fail_closed() {
+  local failure_reason="$1"
+  local failure_detail="$2"
+  local prior_security_status="${3:-pending}"
+
+  echo "SECURITY_PASS_FAILED reason=${failure_reason} tracking_issue=${TRACKING_NUM}"
+  jq '
+    .status = "security-pass"
+    | .security_pass_status = "failed"
+    | .security_pass_head_sha = ""
+    | .security_pass_active_fix_issues = []
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment || true
+  set_tracking_phase_label "ai:security-pass"
+  COMPLETION_STATUS_STATE_CHANGED="false"
+  update_completion_status_comment "waiting" \
+    "## Completion status"$'\n\n'"**State:** \`security-pass\`"$'\n\n'"The mandatory project security pass failed closed: ${failure_detail}. Completion remains gated and the poller will retry." \
+    || true
+  if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+    post_state_comment || true
+  fi
+  if [ "${prior_security_status}" != "failed" ]; then
+    post_tracking_comment "## ❌ Project security pass unavailable
+
+${failure_detail}
+
+Completion remains gated. The scheduled poller will retry automatically."
+    tg_notify "Project #${TRACKING_NUM} security pass failed closed (${failure_reason}). Completion remains gated; the poller will retry." "CRITICAL"
+  fi
+}
+
+security_pass_terminal_failure() {
+  local integration_head_sha="$1"
+  local finding_count="$2"
+  local completed_cycles="$3"
+
+  echo "SECURITY_PASS_FAILED reason=cycle_exhausted tracking_issue=${TRACKING_NUM} cycles=${completed_cycles} findings=${finding_count}"
+  jq --arg head_sha "${integration_head_sha}" '
+    .status = "failed"
+    | .security_pass_status = "failed"
+    | .security_pass_head_sha = $head_sha
+    | .security_pass_active_fix_issues = []
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment || true
+  set_tracking_phase_label "ai:security-pass-failed"
+  post_tracking_comment "## ❌ Project security pass exhausted
+
+The security pass still reports ${finding_count} blocking finding(s) after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} completed fix cycle(s).
+
+Manual intervention is required. After addressing the findings, comment \`/re-security-pass\` to reset the bounded fix loop."
+  set_failed_completion_status_comment \
+    "The project security pass still reports ${finding_count} blocking finding(s) after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} completed fix cycle(s). Manual intervention is required; use \`/re-security-pass\` after addressing the findings."
+  tg_notify "Project #${TRACKING_NUM} security pass FAILED after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} fix cycles with ${finding_count} finding(s) remaining. Manual intervention required." "CRITICAL"
+}
+
+security_pass_closed_fix_failure() {
+  local issue_number="$1"
+
+  echo "SECURITY_PASS_FAILED reason=fix_issue_closed_without_merged_pr tracking_issue=${TRACKING_NUM} issue=${issue_number}"
+  jq '
+    .status = "failed"
+    | .security_pass_status = "failed"
+    | .security_pass_head_sha = ""
+    | .security_pass_active_fix_issues = []
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment || true
+  set_tracking_phase_label "ai:security-pass-failed"
+  post_tracking_comment "## ❌ Project security-pass fix did not merge
+
+Security-pass fix issue #${issue_number} closed without merged-PR evidence. Completion remains gated; use \`/re-security-pass\` after correcting or replacing the fix."
+  set_failed_completion_status_comment \
+    "Security-pass fix issue #${issue_number} closed without merged-PR evidence. Completion remains gated; use \`/re-security-pass\` after correcting or replacing the fix."
+  tg_notify "Project #${TRACKING_NUM} security-pass fix issue #${issue_number} closed without a merged PR. Manual correction and /re-security-pass are required." "CRITICAL"
+}
+
+create_security_pass_fix_issue() {
+  local findings_file="$1"
+  local completed_cycles="$2"
+  local integration_branch="$3"
+  local issue_body_file issue_url issue_number local_id security_pass_fix_action
+  local security_pass_managed_issues_pages_file security_pass_managed_issues_jq_error_file
+
+  issue_body_file="${RUNTIME_DIR}/security_pass_fix_${TRACKING_NUM}_${completed_cycles}.md"
+  local_id="security-pass-fix-cycle-$((completed_cycles + 1))"
+  if ! python3 - "${findings_file}" "${issue_body_file}" "${TRACKING_NUM}" "${integration_branch}" "${local_id}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+findings_path = Path(sys.argv[1])
+body_path = Path(sys.argv[2])
+tracking_issue = sys.argv[3]
+integration_branch = sys.argv[4]
+local_id = sys.argv[5]
+
+payload = json.loads(findings_path.read_text(encoding="utf-8"))
+findings = payload["findings"]
+
+
+def cell(value: object) -> str:
+	return " ".join(str(value).replace("|", "\\|").split())
+
+
+lines = [
+	f"Refs #{tracking_issue}",
+	"",
+	"The mandatory project security pass found the following blocking issues. Address every row through the normal clarify, plan, implement, and review pipeline.",
+	"",
+	"| ID | Category | Severity | Confidence | Location | Exploit scenario | Recommendation |",
+	"|---|---|---|---:|---|---|---|",
+]
+for finding in findings:
+	lines.append(
+		"| "
+		+ " | ".join(
+			[
+				cell(finding["finding_id"]),
+				cell(finding["owasp_or_stride_category"]),
+				cell(finding["severity"]),
+				cell(finding["confidence"]),
+				cell(f"{finding['file']}:{finding['line']}"),
+				cell(finding["exploit_scenario"]),
+				cell(finding["recommendation"]),
+			]
+		)
+		+ " |"
+	)
+lines.extend(
+	[
+		"",
+		"---",
+		"**Orchestrator metadata** (do not edit)",
+		f"- Tracking issue: #{tracking_issue}",
+		f"- Integration branch: `{integration_branch or '(default branch)'}`",
+		f"- Local ID: `{local_id}`",
+		"- Priority: 1",
+		"- Managed by: AI Orchestrator",
+	]
+)
+body_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+  then
+    return 1
+  fi
+
+  # No cycle-local cache can recover an issue omitted by a failed state checkpoint:
+  # ACTIVE_WORKFLOW_ISSUES only has workflow-active numbers, _candidate_details_json
+  # only has known candidates, and STALL_MANAGED_LINKED_PR_CACHE only has state-known
+  # stalled issues. Search by the durable body markers before creating a replacement.
+  security_pass_managed_issues_pages_file="${RUNTIME_DIR}/security_pass_managed_issues_${TRACKING_NUM}_${completed_cycles}.json"
+  rm -f "${security_pass_managed_issues_pages_file}"
+  if ! gh_retry_to_file "${security_pass_managed_issues_pages_file}" gh api --paginate --method GET \
+    "repos/${GITHUB_REPOSITORY}/issues" \
+    -f state=open \
+    -f labels="ai:orchestrator-managed" \
+    -f per_page=100; then
+    rm -f "${security_pass_managed_issues_pages_file}"
+    echo "::warning::Could not verify whether security-pass fix issue ${local_id} already exists (managed-issue lookup failed); skipping creation to avoid a duplicate. Will retry next poll."
+    return 1
+  fi
+  if [ ! -s "${security_pass_managed_issues_pages_file}" ]; then
+    rm -f "${security_pass_managed_issues_pages_file}"
+    echo "::warning::Could not verify whether security-pass fix issue ${local_id} already exists (managed-issue lookup returned no page data); skipping creation to avoid a duplicate. Will retry next poll."
+    return 1
+  fi
+  security_pass_managed_issues_jq_error_file="${RUNTIME_DIR}/security_pass_managed_issues_${TRACKING_NUM}_${completed_cycles}.jq.err"
+  rm -f "${security_pass_managed_issues_jq_error_file}"
+  if ! issue_number="$(jq -sr \
+    --arg tracking_marker "- Tracking issue: #${TRACKING_NUM}" \
+    --arg local_id_marker "- Local ID: \`${local_id}\`" '
+      if length == 0 or (all(.[]; type == "array") | not) then
+        error("managed-issue pagination output must contain JSON arrays")
+      else
+        [
+          .[][]
+          | select(.pull_request | not)
+          | select(
+              (((.body // "") | split("\n") | index($tracking_marker)) != null)
+              and (((.body // "") | split("\n") | index($local_id_marker)) != null)
+            )
+          | .number
+          | select(type == "number" and . > 0)
+        ][0] // empty
+      end
+    ' "${security_pass_managed_issues_pages_file}" 2>"${security_pass_managed_issues_jq_error_file}")"; then
+    rm -f "${security_pass_managed_issues_pages_file}"
+    echo "::warning::Could not verify whether security-pass fix issue ${local_id} already exists (managed-issue pagination output was invalid: $(head -n1 "${security_pass_managed_issues_jq_error_file}" 2>/dev/null || true)); skipping creation to avoid a duplicate. Will retry next poll."
+    rm -f "${security_pass_managed_issues_jq_error_file}"
+    return 1
+  fi
+  rm -f "${security_pass_managed_issues_pages_file}" "${security_pass_managed_issues_jq_error_file}"
+  if [[ "${issue_number}" =~ ^[0-9]+$ ]]; then
+    security_pass_fix_action="reused existing consolidated fix issue"
+    echo "Security-pass fix issue #${issue_number} already exists for cycle $((completed_cycles + 1)); reusing it"
+  else
+    ensure_label_exists "ai:clarification"
+    ensure_label_exists "ai:orchestrator-managed"
+    issue_url="$(gh_retry gh issue create \
+      --repo "${GITHUB_REPOSITORY}" \
+      --title "[security-pass] Project #${TRACKING_NUM} fix cycle $((completed_cycles + 1))" \
+      --body-file "${issue_body_file}" \
+      --label "ai:clarification" \
+      --label "ai:orchestrator-managed" 2>/dev/null || true)"
+    issue_number="$(printf '%s\n' "${issue_url}" | grep -oE '/issues/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
+    security_pass_fix_action="created consolidated fix issue"
+  fi
+  if ! [[ "${issue_number}" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+
+  jq --argjson issue_number "${issue_number}" '
+    .status = "security-pass-fixing"
+    | .security_pass_status = "blocked"
+    | .security_pass_active_fix_issues = [$issue_number]
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment || true
+  set_tracking_phase_label "ai:security-pass-fixing"
+  if [[ "${security_pass_fix_action}" = "created consolidated fix issue" ]]; then
+    echo "SECURITY_PASS_FIX_ISSUE_CREATED tracking_issue=${TRACKING_NUM} issue=${issue_number} cycle=$((completed_cycles + 1))"
+  fi
+  post_tracking_comment "## 🔒 Project security pass blocked
+
+The security pass found blocking issues and ${security_pass_fix_action} #${issue_number} for cycle $((completed_cycles + 1))/${MAX_SECURITY_PASS_CYCLES}. Completion will resume only after its PR merges and a clean re-audit passes."
+  COMPLETION_STATUS_STATE_CHANGED="false"
+  update_completion_status_comment "waiting" \
+    "## Completion status"$'\n\n'"**State:** \`security-pass-fixing\`"$'\n\n'"Security-pass fix issue #${issue_number} is in the normal delivery pipeline. Completion remains gated until it merges and a clean current-head re-audit passes." \
+    || true
+  if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+    post_state_comment || true
+  fi
+  return 0
+}
+
+run_security_pass_inline() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local verified_analysis_ref="${3:-}"
+  local verified_analysis_sha="${4:-}"
+  local verified_recheck_refspec="${5:-}"
+  local prior_security_status current_integration_ref current_head_sha current_default_ref merge_base_sha
+  local context_file findings_file audit_error_file finding_count completed_cycles effective_security_model
+  local required_security_asset
+
+  prior_security_status="$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
+  if [ -z "${integration_branch}" ]; then
+    security_pass_fail_closed "engine_unavailable" "The project has no integration branch to audit." "${prior_security_status}"
+    return 1
+  fi
+  current_integration_ref="${verified_analysis_ref}"
+  current_head_sha="${verified_analysis_sha}"
+  if [ -n "${verified_analysis_ref}" ] || [ -n "${verified_analysis_sha}" ]; then
+    if [ -z "${verified_analysis_ref}" ] || [ -z "${verified_analysis_sha}" ] \
+      || [ "$(git rev-parse --verify "${verified_analysis_ref}^{commit}" 2>/dev/null || true)" != "${verified_analysis_sha}" ]; then
+      security_pass_fail_closed "engine_unavailable" "The verified final-PR head is unavailable or does not match its expected SHA." "${prior_security_status}"
+      return 1
+    fi
+  elif [ -n "${integration_branch}" ]; then
+    if ! git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+      security_pass_fail_closed "engine_unavailable" "The integration head could not be refreshed before read-only analysis." "${prior_security_status}"
+      return 1
+    fi
+    current_integration_ref="$(resolve_branch_analysis_ref "${integration_branch}" || true)"
+    current_head_sha="$(git rev-parse --verify "${current_integration_ref}^{commit}" 2>/dev/null || true)"
+  fi
+  if [ -z "${current_integration_ref}" ]; then
+    security_pass_fail_closed "engine_unavailable" "The integration head could not be resolved for read-only analysis." "${prior_security_status}"
+    return 1
+  fi
+  if [ -z "${current_head_sha}" ]; then
+    security_pass_fail_closed "engine_unavailable" "The integration head commit could not be resolved for read-only analysis." "${prior_security_status}"
+    return 1
+  fi
+  if security_pass_current_head_is_valid "${current_head_sha}"; then
+    return 0
+  fi
+
+  for required_security_asset in \
+    scripts/security_audit.sh \
+    scripts/codex_heartbeat.sh \
+    scripts/security_audit_fp_exclusions.json \
+    scripts/write_codex_config.sh \
+    prompts/mode-security-audit.txt \
+    prompts/_templates/mode-security-audit.txt \
+    prompts/references/security-money-lens.txt; do
+    if [ ! -f "${required_security_asset}" ]; then
+      security_pass_fail_closed "engine_unavailable" "Required security-pass asset ${required_security_asset} is unavailable." "${prior_security_status}"
+      return 1
+    fi
+  done
+
+  if [ -n "${verified_analysis_ref}" ]; then
+    if ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "${verified_analysis_ref}"; then
+      security_pass_fail_closed "engine_unavailable" "The verified final-PR checkout could not be prepared for read-only analysis." "${prior_security_status}"
+      return 1
+    fi
+  elif ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only"; then
+    security_pass_fail_closed "engine_unavailable" "The composed project checkout could not be prepared for read-only analysis." "${prior_security_status}"
+    return 1
+  fi
+  current_head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+  if ! git fetch --no-tags origin "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1; then
+    security_pass_fail_closed "engine_unavailable" "The default branch could not be refreshed for security-pass analysis." "${prior_security_status}"
+    return 1
+  fi
+  current_default_ref="$(resolve_branch_analysis_ref "${default_branch}" || true)"
+  if [ -z "${current_head_sha}" ] || [ -z "${current_default_ref}" ]; then
+    security_pass_fail_closed "engine_unavailable" "The default/integration refs could not be resolved for security-pass analysis." "${prior_security_status}"
+    return 1
+  fi
+  if [ "$(git rev-parse --verify "${current_integration_ref}^{commit}" 2>/dev/null || true)" != "${current_head_sha}" ]; then
+    security_pass_fail_closed "engine_unavailable" "The prepared checkout does not match the refreshed integration head." "${prior_security_status}"
+    return 1
+  fi
+  merge_base_sha="$(git merge-base "${current_default_ref}" "${current_head_sha}" 2>/dev/null || true)"
+  if [ -z "${merge_base_sha}" ]; then
+    security_pass_fail_closed "engine_unavailable" "No merge base exists between the default branch and integration head." "${prior_security_status}"
+    return 1
+  fi
+
+  context_file="${RUNTIME_DIR}/security_pass_project_${TRACKING_NUM}.txt"
+  findings_file="${RUNTIME_DIR}/security_pass_findings_${TRACKING_NUM}.json"
+  audit_error_file="${RUNTIME_DIR}/security_pass_audit_${TRACKING_NUM}.err"
+  {
+    echo "=== BEGIN UNTRUSTED TRACKING ISSUE SNAPSHOT ==="
+    jq -r '.project_body_snapshot // ""' "${STATE_FILE}"
+    echo "=== END UNTRUSTED TRACKING ISSUE SNAPSHOT ==="
+  } > "${context_file}"
+
+  jq '
+    .status = "security-pass"
+    | .security_pass_status = "running"
+    | .security_pass_head_sha = ""
+    | .security_pass_active_fix_issues = []
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment || true
+  set_tracking_phase_label "ai:security-pass"
+  echo "SECURITY_PASS_STARTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} base_sha=${merge_base_sha}"
+
+  effective_security_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-5.6-sol}}"
+  if ! bash scripts/write_codex_config.sh --model "${effective_security_model}" --reasoning xhigh >/dev/null 2>"${audit_error_file}"; then
+    security_pass_fail_closed "engine_unavailable" "The security-pass model configuration could not be prepared." "${prior_security_status}"
+    return 1
+  fi
+
+  if ! SECURITY_AUDIT_OUTPUT_MODE="findings-json" \
+    SECURITY_AUDIT_FINDINGS_OUT="${findings_file}" \
+    SECURITY_AUDIT_DIFF_BASE="${merge_base_sha}" \
+    SECURITY_AUDIT_DIFF_HEAD="${current_head_sha}" \
+    SECURITY_AUDIT_CONFIDENCE_GATE="${SECURITY_PASS_CONFIDENCE_GATE}" \
+    SECURITY_AUDIT_SKIP_IF_UNCHANGED="false" \
+    SECURITY_AUDIT_INCREMENTAL="true" \
+    WORKFLOW_EDITOR_MODEL="${effective_security_model}" \
+    bash scripts/codex_heartbeat.sh \
+      --phase "orchestrate-security-pass" \
+      --stderr-file "${audit_error_file}" \
+      -- bash scripts/security_audit.sh "${context_file}"; then
+    security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited without a usable result." "${prior_security_status}"
+    return 1
+  fi
+
+  if ! jq -e '
+    .schema_version == "security_audit_findings.v1"
+    and (.findings | type) == "array"
+    and (.counts | type) == "object"
+    and (.counts.kept | type) == "number"
+    and (.counts.kept | floor) == .counts.kept
+    and .counts.kept >= 0
+    and .counts.kept == (.findings | length)
+    and all([
+      .counts.suppressed_excluded,
+      .counts.suppressed_invalid,
+      .counts.suppressed_low_confidence,
+      .counts.suppressed_out_of_scope
+    ][]; (type == "number") and (floor == .) and . >= 0)
+    and all(.findings[];
+      (.finding_id | type) == "string" and (.finding_id | length) > 0
+      and (.owasp_or_stride_category | type) == "string" and (.owasp_or_stride_category | length) > 0
+      and (.severity == "critical" or .severity == "high" or .severity == "medium" or .severity == "low")
+      and (.confidence | type) == "number"
+      and (.confidence | floor) == .confidence and .confidence >= 1 and .confidence <= 10
+      and (.file | type) == "string" and (.file | length) > 0
+      and (.line | type) == "number" and (.line | floor) == .line and .line > 0
+      and (.exploit_scenario | type) == "string" and (.exploit_scenario | length) > 0
+      and (.recommendation | type) == "string" and (.recommendation | length) > 0)
+  ' "${findings_file}" >/dev/null 2>&1; then
+    security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit output was missing or invalid." "${prior_security_status}"
+    return 1
+  fi
+
+  if [ -n "${verified_analysis_ref}" ]; then
+    if [ -n "${verified_recheck_refspec}" ] \
+      && ! git fetch --no-tags origin "${verified_recheck_refspec}" >/dev/null 2>&1; then
+      security_pass_fail_closed "head_recheck_failed" "The final-PR head could not be refreshed after the security audit." "${prior_security_status}"
+      return 1
+    fi
+  elif [ -n "${integration_branch}" ]; then
+    if ! git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+      security_pass_fail_closed "head_recheck_failed" "The integration head could not be refreshed after the security audit." "${prior_security_status}"
+      return 1
+    fi
+    current_integration_ref="refs/remotes/origin/${integration_branch}"
+  fi
+  if [ "$(git rev-parse --verify "${current_integration_ref}^{commit}" 2>/dev/null || true)" != "${current_head_sha}" ]; then
+    jq '
+      .status = "security-pass"
+      | .security_pass_status = "pending"
+      | .security_pass_head_sha = ""
+      | .security_pass_active_fix_issues = []
+    ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} reason=head_changed_during_audit"
+    return 1
+  fi
+
+  finding_count="$(jq -r '.findings | length' "${findings_file}")"
+  completed_cycles="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}")"
+  jq --arg head_sha "${current_head_sha}" --argjson findings_count "${finding_count}" '
+    .security_pass_head_sha = $head_sha
+    | .security_pass_status = (if $findings_count == 0 then "passed" else "blocked" end)
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+  if [ "${finding_count}" -eq 0 ]; then
+    jq '.status = "in_progress" | .security_pass_active_fix_issues = []' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    echo "SECURITY_PASS_CLEAN tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha}"
+    return 0
+  fi
+
+  echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} findings=${finding_count} cycle=${completed_cycles}"
+  if [ "${completed_cycles}" -ge "${MAX_SECURITY_PASS_CYCLES}" ]; then
+    security_pass_terminal_failure "${current_head_sha}" "${finding_count}" "${completed_cycles}"
+    return 1
+  fi
+  if [ -n "${verified_analysis_ref}" ] \
+    && ! ensure_security_pass_repair_branch "${integration_branch}" "${current_head_sha}"; then
+    security_pass_fail_closed "repair_branch_recreate_failed" "The deleted integration branch could not be recreated and verified at the audited final-PR head." "${prior_security_status}"
+    return 1
+  fi
+  if ! create_security_pass_fix_issue "${findings_file}" "${completed_cycles}" "${integration_branch}"; then
+    security_pass_fail_closed "fix_issue_create_failed" "The consolidated security-pass fix issue could not be created." "${prior_security_status}"
+    return 1
+  fi
+  return 1
+}
+
+ensure_security_pass_before_completion() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local final_pr_json="${3:-}"
+  local final_pr_number=""
+  local current_integration_ref current_head_sha
+
+  if [ "${ENABLE_SECURITY_PASS}" != "true" ]; then
+    echo "SECURITY_PASS_SKIPPED_DISABLED tracking_issue=${TRACKING_NUM}"
+    return 0
+  fi
+  SECURITY_PASS_VERIFIED_PR_REF=""
+  SECURITY_PASS_VERIFIED_PR_SHA=""
+  SECURITY_PASS_VERIFIED_PR_RECHECK_REFSPEC=""
+  ensure_security_pass_state_fields || return 1
+  if [ -z "${integration_branch}" ]; then
+    security_pass_fail_closed "engine_unavailable" "The project has no integration branch to audit." "$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
+    return 1
+  fi
+  current_integration_ref=""
+  if [ -n "${integration_branch}" ]; then
+    if ! git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+      if integration_branch_exists "${integration_branch}"; then
+        security_pass_fail_closed "engine_unavailable" "The integration head could not be refreshed before checking pass validity." "$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
+        return 1
+      fi
+      if [ -z "${final_pr_json}" ]; then
+        final_pr_number="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+        if [[ "${final_pr_number}" =~ ^[0-9]+$ ]]; then
+          final_pr_json="$(_fetch_pr_json "${final_pr_number}")"
+        fi
+      fi
+      if ! prepare_security_pass_final_pr_head "${integration_branch}" "${default_branch}" "${final_pr_json}"; then
+        security_pass_fail_closed "engine_unavailable" "The integration branch is unavailable and the merged final-PR head could not be verified." "$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
+        return 1
+      fi
+      current_integration_ref="${SECURITY_PASS_VERIFIED_PR_REF}"
+      current_head_sha="${SECURITY_PASS_VERIFIED_PR_SHA}"
+    else
+      current_integration_ref="$(resolve_branch_analysis_ref "${integration_branch}" || true)"
+      current_head_sha="$(git rev-parse --verify "${current_integration_ref}^{commit}" 2>/dev/null || true)"
+    fi
+  fi
+  if [ -z "${current_integration_ref}" ] || [ -z "${current_head_sha}" ]; then
+    security_pass_fail_closed "engine_unavailable" "The integration or verified final-PR head could not be resolved before checking pass validity." "$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
+    return 1
+  fi
+  if security_pass_current_head_is_valid "${current_head_sha}"; then
+    return 0
+  fi
+  run_security_pass_inline \
+    "${integration_branch}" \
+    "${default_branch}" \
+    "${SECURITY_PASS_VERIFIED_PR_REF:-}" \
+    "${SECURITY_PASS_VERIFIED_PR_SHA:-}" \
+    "${SECURITY_PASS_VERIFIED_PR_RECHECK_REFSPEC:-}"
 }
 
 merge_tree_conflict_paths_json() {
@@ -7284,6 +7957,7 @@ finalize_integration_merge_if_needed() {
   local integration_branch="$1"
   local default_branch="$2"
   local project_title="$3"
+  local final_pr_json_snapshot="${4:-}"
   local final_pr
 	local validation_history_gate_json='{}'
 	local validation_history_gate_reason=""
@@ -7362,8 +8036,15 @@ finalize_integration_merge_if_needed() {
   if [ -n "${final_pr}" ] && [ "${final_pr}" != "null" ]; then
     local existing_pr_state
     local existing_pr_merged
-    existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
-    existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+    local existing_pr_json_number
+    existing_pr_json_number="$(_jq_field "${final_pr_json_snapshot}" '.number' '[0-9]+')"
+    if [ "${existing_pr_json_number}" = "${final_pr}" ]; then
+      existing_pr_state="$(_jq_field "${final_pr_json_snapshot}" '.state' 'open|closed|merged')"
+      existing_pr_merged="$(_jq_field "${final_pr_json_snapshot}" '.merged_at != null' 'true|false')"
+    else
+      existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+      existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+    fi
     if [ "${existing_pr_state}" = "closed" ] && [ "${existing_pr_merged}" = "true" ]; then
       # Re-check ahead_by here too: even though the recorded final PR is
       # closed+merged, additional wave PRs could have landed on the integration
@@ -8280,6 +8961,7 @@ mark_validation_complete() {
   local _tracking_labels
   local merge_attempt_count
   local _final_pr
+  local _security_final_pr_json=""
   local _final_status
   local _final_err
   local validation_history_raw_status="${LAST_VAL_RAW_STATUS:-}"
@@ -8288,9 +8970,16 @@ mark_validation_complete() {
   integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
   default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
   project_title="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
+  _final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+  if [ "${ENABLE_SECURITY_PASS}" = "true" ] && [[ "${_final_pr}" =~ ^[0-9]+$ ]]; then
+    _security_final_pr_json="$(_fetch_pr_json "${_final_pr}")"
+  fi
 
   # Seed final_merge_attempt_count on legacy state blobs that predate this field.
   ensure_integration_conflict_state_fields
+	if ! ensure_security_pass_before_completion "${integration_branch}" "${default_branch}" "${_security_final_pr_json}"; then
+		return 0
+	fi
 	if [ -z "${validation_history_raw_status}" ] || [ "${validation_history_raw_status}" = "null" ]; then
 		validation_history_raw_status="pass"
 	fi
@@ -8305,7 +8994,7 @@ mark_validation_complete() {
 		"validation passed" \
 		"orchestrate_poll.mark_validation_complete"
 
-  if ! finalize_integration_merge_if_needed "${integration_branch}" "${default_branch}" "${project_title}"; then
+  if ! finalize_integration_merge_if_needed "${integration_branch}" "${default_branch}" "${project_title}" "${_security_final_pr_json}"; then
     # Budget-ineligible final-merge deferrals/failures should return without
     # consuming the bounded retry budget. Layer 2: check whether the
     # deferral has persisted long enough on the same head SHA to warrant
@@ -13502,10 +14191,114 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
 
   echo "${STATE_JSON}" > "${STATE_FILE}"
+  SECURITY_PASS_STATE_HASH_BEFORE="$(sha256sum "${STATE_FILE}" 2>/dev/null | awk '{print $1}' || true)"
+  ensure_security_pass_state_fields || {
+    echo "::warning::Unable to normalize security-pass state for tracking issue #${TRACKING_NUM}; skipping this cycle."
+    continue
+  }
+  SECURITY_PASS_STATE_HASH_AFTER="$(sha256sum "${STATE_FILE}" 2>/dev/null | awk '{print $1}' || true)"
+  if [ "${ENABLE_SECURITY_PASS}" = "true" ] \
+    && [ "${SECURITY_PASS_STATE_HASH_BEFORE}" != "${SECURITY_PASS_STATE_HASH_AFTER}" ]; then
+    post_state_comment || true
+  fi
+  unset SECURITY_PASS_STATE_HASH_BEFORE SECURITY_PASS_STATE_HASH_AFTER
   unset PROJECT_COMPLETE WAVE_COMPLETE ANY_FAILED WAVE_STATUS VALIDATION_DISPATCH_SAFE_DESPITE_FAILURES
   COMPLETION_STATUS_STATE_CHANGED="false"
   PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
   TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
+  DEFAULT_BRANCH_TRACKING=""
+  INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
+	if [ "${ENABLE_SECURITY_PASS}" != "true" ] \
+		&& { [ "${PROJECT_STATUS}" = "security-pass" ] \
+			|| [ "${PROJECT_STATUS}" = "security-pass-fixing" ] \
+			|| has_label "${TRACKING_LABELS}" "ai:security-pass-failed"; }; then
+		echo "SECURITY_PASS_SKIPPED_DISABLED tracking_issue=${TRACKING_NUM} releasing_state=${PROJECT_STATUS}"
+		jq '.status = "in_progress" | .security_pass_cycle = 0 | .security_pass_status = "pending" | .security_pass_active_fix_issues = [] | .security_pass_head_sha = ""' \
+			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+		post_state_comment || true
+		set_tracking_phase_label "ai:done"
+		PROJECT_STATUS="in_progress"
+		TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
+	fi
+	if [ "${PROJECT_STATUS}" = "security-pass" ] || [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
+		DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+	fi
+
+  if [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
+    SECURITY_FIX_ISSUES_JSON="$(jq -c '.security_pass_active_fix_issues // []' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+    SECURITY_FIX_ISSUE="$(printf '%s' "${SECURITY_FIX_ISSUES_JSON}" | jq -r '.[0] // empty' 2>/dev/null || echo '')"
+    if ! [[ "${SECURITY_FIX_ISSUE}" =~ ^[0-9]+$ ]]; then
+      echo "::warning::Security pass is in fixing state without a valid active fix issue; retrying the pass."
+      jq '.status = "security-pass" | .security_pass_status = "pending" | .security_pass_active_fix_issues = [] | .security_pass_head_sha = ""' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      PROJECT_STATUS="security-pass"
+    else
+      SECURITY_FIX_DETAILS_JSON="$(_fetch_candidate_issue_details_graphql "[${SECURITY_FIX_ISSUE}]")"
+      if ! printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -e --arg issue "${SECURITY_FIX_ISSUE}" 'has($issue)' >/dev/null 2>&1; then
+        echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE} status is unavailable from the cycle-local GraphQL batch; falling back to a direct issue lookup."
+        SECURITY_FIX_FALLBACK_JSON="$(get_issue_state_labels_json "${SECURITY_FIX_ISSUE}")"
+        if ! printf '%s' "${SECURITY_FIX_FALLBACK_JSON}" | jq -e '
+          (type == "object")
+          and (.state == "open" or .state == "closed")
+          and ((.labels | type) == "array")
+        ' >/dev/null 2>&1; then
+          echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE} direct status lookup was invalid; retaining fixing state."
+          continue
+        fi
+        SECURITY_FIX_STATE="$(printf '%s' "${SECURITY_FIX_FALLBACK_JSON}" | jq -r '.state')"
+        SECURITY_FIX_LABELS="$(printf '%s' "${SECURITY_FIX_FALLBACK_JSON}" | jq -c '.labels')"
+        SECURITY_FIX_PR_MERGED="false"
+        if [ "${SECURITY_FIX_STATE}" = "closed" ] && ! has_label "${SECURITY_FIX_LABELS}" "ai:merged"; then
+          if validation_fix_issue_has_merged_pr_evidence "${SECURITY_FIX_ISSUE}"; then
+            SECURITY_FIX_PR_MERGED="true"
+          else
+            SECURITY_FIX_MERGED_EVIDENCE_RC=$?
+            if [ "${SECURITY_FIX_MERGED_EVIDENCE_RC}" -eq 2 ]; then
+              echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE} merged-PR evidence lookup failed; retaining fixing state."
+              continue
+            fi
+          fi
+        fi
+      else
+        SECURITY_FIX_STATE="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].state // "open"')"
+        SECURITY_FIX_LABELS="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -c --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].labels // []')"
+        SECURITY_FIX_PR_MERGED="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].linked_pr.merged // false')"
+      fi
+      if [ "${SECURITY_FIX_STATE}" = "closed" ] \
+        && { [ "${SECURITY_FIX_PR_MERGED}" = "true" ] || has_label "${SECURITY_FIX_LABELS}" "ai:merged"; }; then
+        SECURITY_PASS_COMPLETED_CYCLES="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+        if ! [[ "${SECURITY_PASS_COMPLETED_CYCLES}" =~ ^[0-9]+$ ]]; then
+          SECURITY_PASS_COMPLETED_CYCLES=0
+        fi
+        SECURITY_PASS_COMPLETED_CYCLES=$((SECURITY_PASS_COMPLETED_CYCLES + 1))
+        jq --argjson cycle "${SECURITY_PASS_COMPLETED_CYCLES}" '
+          .status = "security-pass"
+          | .security_pass_cycle = $cycle
+          | .security_pass_status = "pending"
+          | .security_pass_active_fix_issues = []
+          | .security_pass_head_sha = ""
+        ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment || true
+        set_tracking_phase_label "ai:security-pass"
+        PROJECT_STATUS="security-pass"
+      elif [ "${SECURITY_FIX_STATE}" = "closed" ]; then
+        echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} reason=fix_issue_closed_without_merged_pr issue=${SECURITY_FIX_ISSUE}"
+        security_pass_closed_fix_failure "${SECURITY_FIX_ISSUE}"
+        continue
+      else
+        echo "Security-pass fix issue #${SECURITY_FIX_ISSUE} remains in progress."
+        continue
+      fi
+    fi
+  fi
+
+  if [ "${PROJECT_STATUS}" = "security-pass" ]; then
+    if ! ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
+      continue
+    fi
+    PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+    TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
+  fi
 
   # ---------------------------------------------------------------
   # External-finalize detect: if the orchestrator previously recorded
@@ -13542,7 +14335,9 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     && [ "${PROJECT_STATUS}" != "validation-failed" ] \
     && [ "${PROJECT_STATUS}" != "merge_conflict" ] \
     && [ "${PROJECT_STATUS}" != "validating" ] \
-    && [ "${PROJECT_STATUS}" != "validation-fixing" ]; then
+    && [ "${PROJECT_STATUS}" != "validation-fixing" ] \
+    && [ "${PROJECT_STATUS}" != "security-pass" ] \
+    && [ "${PROJECT_STATUS}" != "security-pass-fixing" ]; then
     _orch_extfin_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
     _orch_extfin_status="$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")"
     if [ -n "${_orch_extfin_pr}" ] && [ "${_orch_extfin_pr}" != "null" ] \
@@ -13606,6 +14401,12 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
             fi
             continue
           fi
+          if [ "${ENABLE_SECURITY_PASS}" = "true" ] && [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
+            DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+          fi
+          if ! ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" "${_orch_extfin_pr_json}"; then
+            continue
+          fi
           echo "  [external-finalize] PR #${_orch_extfin_pr} merged outside the wave-by-wave flow; transitioning project to complete."
           if ! jq --argjson final_pr "${_orch_extfin_pr}" \
             '.final_merge_pr = $final_pr
@@ -13641,14 +14442,17 @@ The orchestrator detected that the integration PR was squash-merged outside the 
   # Validation-owned states must bypass sync so mark_validation_complete
   # can own externally merged/deleted final-PR completion without the
   # integration-branch missing/conflict path preempting it.
-  DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
-  INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
+  if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
+    DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  fi
   if [ -n "${INTEGRATION_BRANCH_TRACKING}" ] \
     && [ "${PROJECT_STATUS}" != "complete" ] \
     && [ "${PROJECT_STATUS}" != "failed" ] \
     && [ "${PROJECT_STATUS}" != "merge_conflict" ] \
     && [ "${PROJECT_STATUS}" != "validating" ] \
     && [ "${PROJECT_STATUS}" != "validation-fixing" ] \
+    && [ "${PROJECT_STATUS}" != "security-pass" ] \
+    && [ "${PROJECT_STATUS}" != "security-pass-fixing" ] \
     && [ "${PROJECT_STATUS}" != "validation-failed" ]; then
     if ! sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
       continue
@@ -13671,6 +14475,10 @@ The orchestrator detected that the integration PR was squash-merged outside the 
       if [ "${TRACKING_BODY_SYNC_STATE_CHANGED:-false}" = "true" ]; then
         post_state_comment || true
       fi
+    fi
+
+    if ! ensure_security_pass_before_completion "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}"; then
+      continue
     fi
 
     if ! finalize_integration_merge_if_needed "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" "${FINAL_PROJECT_TITLE}"; then
@@ -14002,6 +14810,51 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
       mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} for cycle ${NEXT_VALIDATION_CYCLE}. Ensure consumer wrapper workflow exists and GH token has actions:write. Error: ${VALIDATION_DISPATCH_ERROR:-unknown}"
     fi
     continue
+  fi
+
+  # ---------------------------------------------------------------
+  # /re-security-pass — manual reset from security-pass exhaustion
+  # ---------------------------------------------------------------
+  if [ "${PROJECT_STATUS}" = "failed" ] && has_label "${TRACKING_LABELS}" "ai:security-pass-failed"; then
+    RE_SECURITY_PASS_COMMENT_JSON="$(echo "${COMMENTS}" | jq -c '
+      (to_entries
+        | map(select((.value.body // "") | (
+            startswith("<!-- ORCHESTRATOR_STATE_V1")
+            or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")
+            or startswith("<!-- re-security-pass-dedup:")
+        )))
+        | last
+        | .key // -1) as $last_security_pass_boundary_idx |
+      [to_entries[]
+        | select(.key > $last_security_pass_boundary_idx and ((.value.body // "") | test("^\\s*/re-security-pass(\\s|$)"; "m")))
+        | .value
+      ]
+      | last // empty
+    ')"
+    if [ -n "${RE_SECURITY_PASS_COMMENT_JSON}" ] && [ "${RE_SECURITY_PASS_COMMENT_JSON}" != "null" ]; then
+      RE_SECURITY_PASS_COMMENT_ID="$(printf '%s' "${RE_SECURITY_PASS_COMMENT_JSON}" | jq -r '.id // 0' 2>/dev/null || echo 0)"
+      echo "  /re-security-pass requested for project #${TRACKING_NUM}. Resetting security-pass state."
+      jq '
+        .status = "security-pass"
+        | .security_pass_cycle = 0
+        | .security_pass_status = "pending"
+        | .security_pass_active_fix_issues = []
+        | .security_pass_head_sha = ""
+      ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment || true
+      set_tracking_phase_label "ai:security-pass"
+      post_tracking_comment "<!-- re-security-pass-dedup:${RE_SECURITY_PASS_COMMENT_ID} -->
+
+## 🔁 Project security pass reset
+
+The bounded security-pass fix loop was reset by \`/re-security-pass\`. Re-running the mandatory current-head audit."
+      tg_notify "/re-security-pass: project #${TRACKING_NUM} security-pass state reset; re-running the audit." "WARNING"
+      if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
+        DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+      fi
+      ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" || true
+      continue
+    fi
   fi
 
   # ---------------------------------------------------------------
@@ -17703,9 +18556,12 @@ PRs to revert: ${REVERT_COUNT}"
   # ---------------------------------------------------------------
   case "${JUDGE_STATUS}" in
     complete)
+      FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
+      FINAL_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")}"
+      if ! ensure_security_pass_before_completion "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}"; then
+        continue
+      fi
       if [ "${ENABLE_VALIDATION}" != "true" ]; then
-        FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
-        FINAL_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
         FINAL_PROJECT_TITLE="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
 
         if ! finalize_integration_merge_if_needed "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" "${FINAL_PROJECT_TITLE}"; then
