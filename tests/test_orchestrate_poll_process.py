@@ -757,6 +757,8 @@ def _run_poller(
 	enable_security_pass: str = "false",
 	security_audit_payload: dict | None = None,
 	security_audit_exit_code: int = 0,
+	fail_security_pass_managed_issue_lookup: bool = False,
+	security_pass_managed_issue_pages_raw: str | None = None,
 	env_overrides: dict[str, str] | None = None,
 ) -> dict:
 	tracking_num = 192
@@ -1028,6 +1030,8 @@ def _run_poller(
 			"mock_revalidate_events_payload": mock_revalidate_events_payload,
 			"mock_pr_create_race_pr": mock_pr_create_race_pr,
 			"mock_pr_ready_exit_code": mock_pr_ready_exit_code,
+			"fail_security_pass_managed_issue_lookup": bool(fail_security_pass_managed_issue_lookup),
+			"security_pass_managed_issue_pages_raw": security_pass_managed_issue_pages_raw,
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -1731,9 +1735,19 @@ if args[0] == 'api':
 			'paginate': '--paginate' in args,
 		})
 		save()
+		if store.get('fail_security_pass_managed_issue_lookup'):
+			print('forced managed-issue lookup failure', file=sys.stderr)
+			sys.exit(1)
+		managed_issue_pages_raw = store.get('security_pass_managed_issue_pages_raw')
+		if isinstance(managed_issue_pages_raw, str):
+			print(managed_issue_pages_raw, end='')
+			sys.exit(0)
 		if '--paginate' in args:
-			for managed_issue_offset in range(0, len(managed_issue_items), managed_issue_page_size):
-				print(json.dumps(managed_issue_items[managed_issue_offset:managed_issue_offset + managed_issue_page_size]))
+			if managed_issue_items:
+				for managed_issue_offset in range(0, len(managed_issue_items), managed_issue_page_size):
+					print(json.dumps(managed_issue_items[managed_issue_offset:managed_issue_offset + managed_issue_page_size]))
+			else:
+				print('[]')
 		else:
 			print(json.dumps(managed_issue_items[:managed_issue_page_size]))
 		sys.exit(0)
@@ -3146,6 +3160,60 @@ def test_security_pass_findings_create_one_consolidated_managed_fix_issue() -> N
 	assert "Local ID: `security-pass-fix-cycle-1`" in fix_body
 	assert not re.search(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#192\b", fix_body)
 	assert "SECURITY_PASS_FIX_ISSUE_CREATED" in result["stdout"] + result["stderr"]
+	assert result.get("managed_issue_api_calls", []) == [
+		{
+			"state": "open",
+			"labels": "ai:orchestrator-managed",
+			"per_page": 100,
+			"paginate": True,
+		}
+	]
+
+
+def test_security_pass_managed_issue_api_failure_defers_creation() -> None:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		fail_security_pass_managed_issue_lookup=True,
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result.get("created_issues", []) == []
+	assert result["latest_state"]["status"] == "security-pass"
+	assert result["latest_state"]["security_pass_status"] == "failed"
+	assert result["latest_state"]["security_pass_active_fix_issues"] == []
+	combined_log = result["stdout"] + result["stderr"]
+	assert "managed-issue lookup failed" in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED" not in combined_log
+
+
+def test_security_pass_malformed_managed_issue_pages_defer_creation() -> None:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		security_pass_managed_issue_pages_raw='{"not": "an array page"}\n',
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result.get("created_issues", []) == []
+	assert result["latest_state"]["status"] == "security-pass"
+	assert result["latest_state"]["security_pass_status"] == "failed"
+	assert result["latest_state"]["security_pass_active_fix_issues"] == []
+	combined_log = result["stdout"] + result["stderr"]
+	assert "managed-issue pagination output was invalid" in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED" not in combined_log
 
 
 def test_security_pass_reuses_matching_open_fix_issue_after_stale_checkpoint() -> None:
