@@ -82,7 +82,7 @@ def test_task_state_helper_and_flag_are_wired_into_poller_workflow() -> None:
 
 def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
-	assert "ENABLE_SECURITY_PASS: ${{ vars.ENABLE_SECURITY_PASS || 'false' }}" in wf
+	assert "ENABLE_SECURITY_PASS: ${{ vars.ENABLE_SECURITY_PASS || 'true' }}" in wf
 	assert "MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '3' }}" in wf
 	assert "SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}" in wf
 	assert "WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}" in wf
