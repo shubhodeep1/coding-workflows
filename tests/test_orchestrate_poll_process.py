@@ -757,6 +757,7 @@ def _run_poller(
 	enable_security_pass: str = "false",
 	security_audit_payload: dict | None = None,
 	security_audit_exit_code: int = 0,
+	capture_telegram_calls: bool = False,
 	env_overrides: dict[str, str] | None = None,
 ) -> dict:
 	tracking_num = 192
@@ -871,9 +872,18 @@ def _run_poller(
 			for pr_number, raw_shas in pull_ref_sha_sequences.items()
 		}
 		security_audit_capture = runtime_dir / "security_audit_capture.json"
+		telegram_cleanup_capture = runtime_dir / "telegram_cleanup_calls.log"
+		telegram_notification_capture = runtime_dir / "telegram_notifications.jsonl"
 		bin_dir.mkdir(parents=True)
 		home_dir.mkdir(parents=True)
 		runtime_dir.mkdir(parents=True)
+		if capture_telegram_calls:
+			with (sandbox / "scripts" / "tg_helpers.sh").open("a", encoding="utf-8") as telegram_helpers_file:
+				telegram_helpers_file.write(
+					'\ntg_cleanup_msgs() { printf \'%s\\n\' "$1" >> "${TG_CLEANUP_CAPTURE}"; }\n'
+					'tg_send_tracked() { jq -cn --arg issue "$1" --arg message "$2" --arg level "$3" '
+					"'{issue: $issue, message: $message, level: $level}' >> \"${TG_NOTIFICATION_CAPTURE}\"; }\n"
+				)
 		if security_audit_payload is not None or security_audit_exit_code != 0:
 			mock_security_audit = sandbox / "scripts" / "security_audit.sh"
 			mock_security_audit.write_text(
@@ -2958,6 +2968,8 @@ sys.exit(proc.returncode)
 				"MAX_SECURITY_PASS_CYCLES": "3",
 				"SECURITY_PASS_CONFIDENCE_GATE": "8",
 				"SECURITY_AUDIT_CAPTURE": str(security_audit_capture),
+				"TG_CLEANUP_CAPTURE": str(telegram_cleanup_capture),
+				"TG_NOTIFICATION_CAPTURE": str(telegram_notification_capture),
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
 				"BRANCH_REBUILD_ENABLED": branch_rebuild_enabled,
 				"BRANCH_REBUILD_THRESHOLD_HOURS": branch_rebuild_threshold_hours,
@@ -3025,6 +3037,19 @@ sys.exit(proc.returncode)
 			json.loads(security_audit_capture.read_text(encoding="utf-8"))
 			if security_audit_capture.exists()
 			else None
+		)
+		result["telegram_cleanup_calls"] = (
+			telegram_cleanup_capture.read_text(encoding="utf-8").splitlines()
+			if telegram_cleanup_capture.exists()
+			else []
+		)
+		result["telegram_notifications"] = (
+			[
+				json.loads(notification_line)
+				for notification_line in telegram_notification_capture.read_text(encoding="utf-8").splitlines()
+			]
+			if telegram_notification_capture.exists()
+			else []
 		)
 		result["actions_runs_fetch_count"] = int(result.get("actions_runs_fetch_count", 0))
 		result["actions_runs_if_none_match_count"] = int(result.get("actions_runs_if_none_match_count", 0))
@@ -3259,6 +3284,7 @@ def test_security_pass_merged_fix_advances_cycle_invalidates_sha_and_reaudits() 
 
 
 def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
+	prior_alert_marker = "<!-- tg_cleanup:501,502 -->"
 	state = _base_state(status="security-pass")
 	state.update(
 		{
@@ -3275,6 +3301,8 @@ def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
 		max_validate_cycles="3",
 		enable_security_pass="true",
 		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		capture_telegram_calls=True,
+		tracking_comments=[prior_alert_marker],
 		issue_labels={10: ["ai:merged"]},
 		existing_branches=["main", "orchestrator/project-192"],
 	)
@@ -3285,6 +3313,13 @@ def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
 	assert result["tracking_labels"] == ["ai:security-pass-failed"]
 	assert result.get("created_issues", []) == []
 	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" in result["stdout"] + result["stderr"]
+	assert result["telegram_cleanup_calls"] == []
+	assert any(prior_alert_marker in comment["body"] for comment in result["issues"]["192"]["comments"])
+	assert any(
+		notification["level"] == "CRITICAL"
+		and "security pass FAILED" in notification["message"]
+		for notification in result["telegram_notifications"]
+	)
 
 
 def test_re_security_pass_resets_terminal_state_and_reaudits() -> None:
