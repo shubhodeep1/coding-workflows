@@ -4109,15 +4109,20 @@ prepare_tracking_judge_checkout() {
   local integration_branch="$1"
   local default_branch="$2"
   local checkout_mode="${3:-api-verified}"
+  local target_ref_override="${4:-}"
   local target_branch="${default_branch:-main}"
   local target_ref=""
+  local checkout_succeeded="false"
 
   JUDGE_EXECUTION_SOURCE="default_branch"
   JUDGE_EXECUTION_REF=""
   JUDGE_CONTEXT_SENTINEL_PRESENT="false"
   JUDGE_CONTEXT_SENTINEL_VALUE=""
 
-  if [ -n "${integration_branch}" ]; then
+  if [ -n "${target_ref_override}" ]; then
+    JUDGE_EXECUTION_SOURCE="verified_final_pr_head"
+    target_ref="${target_ref_override}"
+  elif [ -n "${integration_branch}" ]; then
     JUDGE_EXECUTION_SOURCE="integration_branch"
     target_branch="${integration_branch}"
     if [ "${checkout_mode}" != "local-only" ] && ! integration_branch_exists "${integration_branch}"; then
@@ -4126,8 +4131,25 @@ prepare_tracking_judge_checkout() {
     fi
   fi
 
-  if target_ref="$(resolve_branch_analysis_ref "${target_branch}")"; then
-    if ! git checkout -q "${target_branch}" >/dev/null 2>&1 && ! git checkout -q "${target_ref}" >/dev/null 2>&1; then
+  if [ -n "${target_ref_override}" ]; then
+    if git rev-parse --verify -q "${target_ref}^{commit}" >/dev/null 2>&1 \
+      && git checkout --detach -q "${target_ref}" >/dev/null 2>&1; then
+      checkout_succeeded="true"
+    fi
+  elif target_ref="$(resolve_branch_analysis_ref "${target_branch}")"; then
+    if git checkout -q "${target_branch}" >/dev/null 2>&1 || git checkout -q "${target_ref}" >/dev/null 2>&1; then
+      checkout_succeeded="true"
+    fi
+  else
+    if [ -n "${integration_branch}" ]; then
+      echo "::error::Integration branch '${integration_branch}' exists but its analysis ref could not be resolved for judge context." >&2
+    else
+      echo "::error::Default branch '${target_branch}' could not be resolved for judge context." >&2
+    fi
+    return 1
+  fi
+
+  if [ "${checkout_succeeded}" != "true" ]; then
       # Workflow support files (scripts/, prompts/, .github/ai/) installed
       # from coding-workflows are untracked and can block checkout when the
       # target branch has overlapping paths.  Back them up, force-checkout,
@@ -4139,7 +4161,7 @@ prepare_tracking_judge_checkout() {
       done
       [ -d ".github/ai" ] && { mkdir -p "${_wf_backup}/github_ai"; cp -a ".github/ai/." "${_wf_backup}/github_ai/" 2>/dev/null || true; }
 
-      if git checkout -f -q "${target_ref}" >/dev/null 2>&1; then
+      if git checkout --detach -f -q "${target_ref}" >/dev/null 2>&1; then
         # Force checkout succeeded — restore workflow support files
         for _d in scripts prompts; do
           [ -d "${_wf_backup}/${_d}" ] && { mkdir -p "${_d}"; cp -a "${_wf_backup}/${_d}/." "${_d}/" 2>/dev/null || true; }
@@ -4148,21 +4170,15 @@ prepare_tracking_judge_checkout() {
         rm -rf "${_wf_backup}"
       else
         rm -rf "${_wf_backup}"
-        if [ -n "${integration_branch}" ]; then
+        if [ -n "${target_ref_override}" ]; then
+          echo "::error::Verified final-PR analysis ref '${target_ref}' could not be checked out for security-pass context." >&2
+        elif [ -n "${integration_branch}" ]; then
           echo "::error::Integration branch '${integration_branch}' exists but could not be checked out for judge context (resolved ref '${target_ref}')." >&2
         else
           echo "::error::Default branch '${target_branch}' could not be checked out for judge context (resolved ref '${target_ref}')." >&2
         fi
         return 1
       fi
-    fi
-  else
-    if [ -n "${integration_branch}" ]; then
-      echo "::error::Integration branch '${integration_branch}' exists but its analysis ref could not be resolved for judge context." >&2
-    else
-      echo "::error::Default branch '${target_branch}' could not be resolved for judge context." >&2
-    fi
-    return 1
   fi
 
   JUDGE_EXECUTION_REF="$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
@@ -4175,6 +4191,55 @@ prepare_tracking_judge_checkout() {
   if [ "${JUDGE_CONTEXT_SENTINEL_PRESENT}" = "true" ] && [ -n "${JUDGE_CONTEXT_SENTINEL_VALUE}" ]; then
     echo "  Judge context sentinel for tracking #${TRACKING_NUM}: ${JUDGE_CONTEXT_SENTINEL_VALUE}"
   fi
+  return 0
+}
+
+prepare_security_pass_final_pr_head() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local final_pr_json="$3"
+  local expected_final_pr
+  local metadata_pr_number metadata_pr_state metadata_merged_at metadata_head_sha metadata_head_ref metadata_base_ref
+  local fetched_pr_ref resolved_pr_head_sha
+
+  SECURITY_PASS_VERIFIED_PR_REF=""
+  SECURITY_PASS_VERIFIED_PR_SHA=""
+  SECURITY_PASS_VERIFIED_PR_RECHECK_REFSPEC=""
+
+  expected_final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+  metadata_pr_number="$(_jq_field "${final_pr_json}" '.number' '[0-9]+')"
+  metadata_pr_state="$(_jq_field "${final_pr_json}" '.state' 'closed')"
+  metadata_merged_at="$(_jq_field "${final_pr_json}" '.merged_at')"
+  metadata_head_sha="$(_jq_field "${final_pr_json}" '.head.sha' '[0-9a-fA-F]{40}')"
+  metadata_head_ref="$(_jq_field "${final_pr_json}" '.head.ref')"
+  metadata_base_ref="$(_jq_field "${final_pr_json}" '.base.ref')"
+
+  if ! [[ "${expected_final_pr}" =~ ^[0-9]+$ ]] \
+    || [ "${metadata_pr_number}" != "${expected_final_pr}" ] \
+    || [ "${metadata_pr_state}" != "closed" ] \
+    || [ -z "${metadata_merged_at}" ] \
+    || [ "${metadata_head_ref}" != "${integration_branch}" ] \
+    || [ "${metadata_base_ref}" != "${default_branch}" ] \
+    || [ -z "${metadata_head_sha}" ]; then
+    return 1
+  fi
+
+  fetched_pr_ref="refs/orchestrator/security-pass/pr-${expected_final_pr}-head"
+  if git fetch --no-tags origin "+refs/pull/${expected_final_pr}/head:${fetched_pr_ref}" >/dev/null 2>&1; then
+    resolved_pr_head_sha="$(git rev-parse --verify "${fetched_pr_ref}^{commit}" 2>/dev/null || true)"
+    if [ "${resolved_pr_head_sha}" != "${metadata_head_sha}" ]; then
+      return 1
+    fi
+    SECURITY_PASS_VERIFIED_PR_REF="${fetched_pr_ref}"
+    SECURITY_PASS_VERIFIED_PR_RECHECK_REFSPEC="+refs/pull/${expected_final_pr}/head:${fetched_pr_ref}"
+  else
+    resolved_pr_head_sha="$(git rev-parse --verify "${metadata_head_sha}^{commit}" 2>/dev/null || true)"
+    if [ "${resolved_pr_head_sha}" != "${metadata_head_sha}" ]; then
+      return 1
+    fi
+    SECURITY_PASS_VERIFIED_PR_REF="${metadata_head_sha}"
+  fi
+  SECURITY_PASS_VERIFIED_PR_SHA="${metadata_head_sha}"
   return 0
 }
 
@@ -4397,6 +4462,9 @@ The security pass found blocking issues and created consolidated fix issue #${is
 run_security_pass_inline() {
   local integration_branch="$1"
   local default_branch="$2"
+  local verified_analysis_ref="${3:-}"
+  local verified_analysis_sha="${4:-}"
+  local verified_recheck_refspec="${5:-}"
   local prior_security_status current_integration_ref current_head_sha current_default_ref merge_base_sha
   local context_file findings_file audit_error_file finding_count completed_cycles effective_security_model
   local required_security_asset
@@ -4406,22 +4474,26 @@ run_security_pass_inline() {
     security_pass_fail_closed "engine_unavailable" "The project has no integration branch to audit." "${prior_security_status}"
     return 1
   fi
-  current_integration_ref=""
-  if [ -n "${integration_branch}" ]; then
+  current_integration_ref="${verified_analysis_ref}"
+  current_head_sha="${verified_analysis_sha}"
+  if [ -n "${verified_analysis_ref}" ] || [ -n "${verified_analysis_sha}" ]; then
+    if [ -z "${verified_analysis_ref}" ] || [ -z "${verified_analysis_sha}" ] \
+      || [ "$(git rev-parse --verify "${verified_analysis_ref}^{commit}" 2>/dev/null || true)" != "${verified_analysis_sha}" ]; then
+      security_pass_fail_closed "engine_unavailable" "The verified final-PR head is unavailable or does not match its expected SHA." "${prior_security_status}"
+      return 1
+    fi
+  elif [ -n "${integration_branch}" ]; then
     if ! git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
       security_pass_fail_closed "engine_unavailable" "The integration head could not be refreshed before read-only analysis." "${prior_security_status}"
       return 1
     fi
     current_integration_ref="$(resolve_branch_analysis_ref "${integration_branch}" || true)"
-  fi
-  if [ -z "${current_integration_ref}" ]; then
-    current_integration_ref="$(resolve_branch_analysis_ref "${default_branch}" || true)"
+    current_head_sha="$(git rev-parse --verify "${current_integration_ref}^{commit}" 2>/dev/null || true)"
   fi
   if [ -z "${current_integration_ref}" ]; then
     security_pass_fail_closed "engine_unavailable" "The integration head could not be resolved for read-only analysis." "${prior_security_status}"
     return 1
   fi
-  current_head_sha="$(git rev-parse --verify "${current_integration_ref}^{commit}" 2>/dev/null || true)"
   if [ -z "${current_head_sha}" ]; then
     security_pass_fail_closed "engine_unavailable" "The integration head commit could not be resolved for read-only analysis." "${prior_security_status}"
     return 1
@@ -4444,7 +4516,12 @@ run_security_pass_inline() {
     fi
   done
 
-  if ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only"; then
+  if [ -n "${verified_analysis_ref}" ]; then
+    if ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only" "${verified_analysis_ref}"; then
+      security_pass_fail_closed "engine_unavailable" "The verified final-PR checkout could not be prepared for read-only analysis." "${prior_security_status}"
+      return 1
+    fi
+  elif ! prepare_tracking_judge_checkout "${integration_branch}" "${default_branch}" "local-only"; then
     security_pass_fail_closed "engine_unavailable" "The composed project checkout could not be prepared for read-only analysis." "${prior_security_status}"
     return 1
   fi
@@ -4538,7 +4615,13 @@ run_security_pass_inline() {
     return 1
   fi
 
-  if [ -n "${integration_branch}" ]; then
+  if [ -n "${verified_analysis_ref}" ]; then
+    if [ -n "${verified_recheck_refspec}" ] \
+      && ! git fetch --no-tags origin "${verified_recheck_refspec}" >/dev/null 2>&1; then
+      security_pass_fail_closed "head_recheck_failed" "The final-PR head could not be refreshed after the security audit." "${prior_security_status}"
+      return 1
+    fi
+  elif [ -n "${integration_branch}" ]; then
     if ! git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
       security_pass_fail_closed "head_recheck_failed" "The integration head could not be refreshed after the security audit." "${prior_security_status}"
       return 1
@@ -4587,12 +4670,17 @@ run_security_pass_inline() {
 ensure_security_pass_before_completion() {
   local integration_branch="$1"
   local default_branch="$2"
+  local final_pr_json="${3:-}"
+  local final_pr_number=""
   local current_integration_ref current_head_sha
 
   if [ "${ENABLE_SECURITY_PASS}" != "true" ]; then
     echo "SECURITY_PASS_SKIPPED_DISABLED tracking_issue=${TRACKING_NUM}"
     return 0
   fi
+  SECURITY_PASS_VERIFIED_PR_REF=""
+  SECURITY_PASS_VERIFIED_PR_SHA=""
+  SECURITY_PASS_VERIFIED_PR_RECHECK_REFSPEC=""
   ensure_security_pass_state_fields || return 1
   if [ -z "${integration_branch}" ]; then
     security_pass_fail_closed "engine_unavailable" "The project has no integration branch to audit." "$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
@@ -4601,19 +4689,36 @@ ensure_security_pass_before_completion() {
   current_integration_ref=""
   if [ -n "${integration_branch}" ]; then
     if ! git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
-      security_pass_fail_closed "engine_unavailable" "The integration head could not be refreshed before checking pass validity." "$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
-      return 1
+      if [ -z "${final_pr_json}" ]; then
+        final_pr_number="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+        if [[ "${final_pr_number}" =~ ^[0-9]+$ ]]; then
+          final_pr_json="$(_fetch_pr_json "${final_pr_number}")"
+        fi
+      fi
+      if ! prepare_security_pass_final_pr_head "${integration_branch}" "${default_branch}" "${final_pr_json}"; then
+        security_pass_fail_closed "engine_unavailable" "The integration branch is unavailable and the merged final-PR head could not be verified." "$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
+        return 1
+      fi
+      current_integration_ref="${SECURITY_PASS_VERIFIED_PR_REF}"
+      current_head_sha="${SECURITY_PASS_VERIFIED_PR_SHA}"
+    else
+      current_integration_ref="$(resolve_branch_analysis_ref "${integration_branch}" || true)"
+      current_head_sha="$(git rev-parse --verify "${current_integration_ref}^{commit}" 2>/dev/null || true)"
     fi
-    current_integration_ref="$(resolve_branch_analysis_ref "${integration_branch}" || true)"
   fi
-  if [ -z "${current_integration_ref}" ]; then
-    current_integration_ref="$(resolve_branch_analysis_ref "${default_branch}" || true)"
+  if [ -z "${current_integration_ref}" ] || [ -z "${current_head_sha}" ]; then
+    security_pass_fail_closed "engine_unavailable" "The integration or verified final-PR head could not be resolved before checking pass validity." "$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
+    return 1
   fi
-  current_head_sha="$(git rev-parse --verify "${current_integration_ref}^{commit}" 2>/dev/null || true)"
   if security_pass_current_head_is_valid "${current_head_sha}"; then
     return 0
   fi
-  run_security_pass_inline "${integration_branch}" "${default_branch}"
+  run_security_pass_inline \
+    "${integration_branch}" \
+    "${default_branch}" \
+    "${SECURITY_PASS_VERIFIED_PR_REF:-}" \
+    "${SECURITY_PASS_VERIFIED_PR_SHA:-}" \
+    "${SECURITY_PASS_VERIFIED_PR_RECHECK_REFSPEC:-}"
 }
 
 merge_tree_conflict_paths_json() {
@@ -7743,6 +7848,7 @@ finalize_integration_merge_if_needed() {
   local integration_branch="$1"
   local default_branch="$2"
   local project_title="$3"
+  local final_pr_json_snapshot="${4:-}"
   local final_pr
 	local validation_history_gate_json='{}'
 	local validation_history_gate_reason=""
@@ -7821,8 +7927,15 @@ finalize_integration_merge_if_needed() {
   if [ -n "${final_pr}" ] && [ "${final_pr}" != "null" ]; then
     local existing_pr_state
     local existing_pr_merged
-    existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
-    existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+    local existing_pr_json_number
+    existing_pr_json_number="$(_jq_field "${final_pr_json_snapshot}" '.number' '[0-9]+')"
+    if [ "${existing_pr_json_number}" = "${final_pr}" ]; then
+      existing_pr_state="$(_jq_field "${final_pr_json_snapshot}" '.state' 'open|closed|merged')"
+      existing_pr_merged="$(_jq_field "${final_pr_json_snapshot}" '.merged_at != null' 'true|false')"
+    else
+      existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+      existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+    fi
     if [ "${existing_pr_state}" = "closed" ] && [ "${existing_pr_merged}" = "true" ]; then
       # Re-check ahead_by here too: even though the recorded final PR is
       # closed+merged, additional wave PRs could have landed on the integration
@@ -8739,6 +8852,7 @@ mark_validation_complete() {
   local _tracking_labels
   local merge_attempt_count
   local _final_pr
+  local _security_final_pr_json=""
   local _final_status
   local _final_err
   local validation_history_raw_status="${LAST_VAL_RAW_STATUS:-}"
@@ -8747,10 +8861,14 @@ mark_validation_complete() {
   integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
   default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
   project_title="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
+  _final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+  if [ "${ENABLE_SECURITY_PASS}" = "true" ] && [[ "${_final_pr}" =~ ^[0-9]+$ ]]; then
+    _security_final_pr_json="$(_fetch_pr_json "${_final_pr}")"
+  fi
 
   # Seed final_merge_attempt_count on legacy state blobs that predate this field.
   ensure_integration_conflict_state_fields
-	if ! ensure_security_pass_before_completion "${integration_branch}" "${default_branch}"; then
+	if ! ensure_security_pass_before_completion "${integration_branch}" "${default_branch}" "${_security_final_pr_json}"; then
 		return 0
 	fi
 	if [ -z "${validation_history_raw_status}" ] || [ "${validation_history_raw_status}" = "null" ]; then
@@ -8767,7 +8885,7 @@ mark_validation_complete() {
 		"validation passed" \
 		"orchestrate_poll.mark_validation_complete"
 
-  if ! finalize_integration_merge_if_needed "${integration_branch}" "${default_branch}" "${project_title}"; then
+  if ! finalize_integration_merge_if_needed "${integration_branch}" "${default_branch}" "${project_title}" "${_security_final_pr_json}"; then
     # Budget-ineligible final-merge deferrals/failures should return without
     # consuming the bounded retry budget. Layer 2: check whether the
     # deferral has persisted long enough on the same head SHA to warrant
@@ -14154,7 +14272,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
           if [ "${ENABLE_SECURITY_PASS}" = "true" ] && [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
             DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
           fi
-          if ! ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
+          if ! ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" "${_orch_extfin_pr_json}"; then
             continue
           fi
           echo "  [external-finalize] PR #${_orch_extfin_pr} merged outside the wave-by-wave flow; transitioning project to complete."
