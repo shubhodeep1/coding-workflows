@@ -921,7 +921,7 @@ not delete wrappers that are already present in `.github/workflows/`.
 Create a new issue describing a feature or bug fix. The pipeline kicks off automatically:
 
 1. **Clarify** evaluates whether the issue has enough detail. If not, it comments with clarification questions. If required input is external and non-synthesizable (for example branch/SHA/credential/external URL), it emits a `BLOCKED: <reason>` handoff that labels the issue `ai:blocked` and pauses auto-answer loops until a human supplies the missing input.
-2. Once the issue is clear, comment `/answer` to trigger **Plan** generation.
+2. Once the issue is clear, comment `/answer` to trigger **Plan** generation. A plan whose pre-execution self-check reports `PLAN_SELF_CHECK: BLOCKER:` with `STATUS: NOT_CLEAR` and no Q-ID clarification block takes the same `ai:blocked` handoff as a `BLOCKED:` line — the issue is labeled `ai:blocked`, a "Planning blocked: human input required" comment names the first blocker line, and auto-answer/stall-recovery loops pause until a human resolves the blocker and replies `/answer`. Plans that pose Q-ID questions (or carry a `NEEDS_CLARIFICATION` status) alongside blockers reopen clarification as before.
 3. Review the plan, then comment `/approved` to start **Implementation** — a PR is created for you.
 
 ## Usage
