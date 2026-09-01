@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:line 13989 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The jq filter that resets security-pass state when the flag is off is missing `.security_pass_cycle = 0`.\n  WHY: With ENABLE_SECURITY_PASS=false, a stranded security-pass state retains its cycle and stale security-pass status continues rendering in the tracking issue body.\n- tests/test_orchestrate_poll_process.py:line 2980 inside test_security_pass_flag_off_releases_security_owned_states | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The regression test lacks the assertion that disables the security pass and removes stale security-pass rendering from the tracking issue body.\n  WHY: Without the assertion, the test does not detect a future regression that causes stale rendering.\n- .ai/.workspace_source_manifest.txt:between line 169 (`changelog.d/orchestrator-security-pass-phase-2-audit-engine.md`) and line 170 (`changelog.d/review-autofix-per-slot-attempts.md`) | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The Phase 3 changelog fragment `changelog.d/orchestrator-security-pass-phase-3-dark-launch.md` is missing from the sorted manifest inventory.\n  WHY: The missing manifest entry can silently drop the fragment from staged consumer-repo workspaces.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:line 13989\n  severity=MAJOR\n  ISSUE_CONFIDENCE: 5\n  PROBLEM: The jq filter that resets security-pass state when the flag is off is missing `.security_pass_cycle = 0`.\n  WHY: With ENABLE_SECURITY_PASS=false, a stranded security-pass state at cycle 2 retains that cycle, causing stale security-pass status to render in the tracking issue body.\n- tests/test_orchestrate_poll_process.py:line 2980 inside test_security_pass_flag_off_releases_security_owned_states\n  severity=MAJOR\n  ISSUE_CONFIDENCE: 5\n  PROBLEM: The regression test lacks the assertion that disables the security pass and removes stale security-pass rendering from the tracking issue body.\n  WHY: Without this assertion, the test only checks JSON state fields and does not verify the human-visible tracking issue body.\n- .ai/.workspace_source_manifest.txt:between line 169 (`changelog.d/orchestrator-security-pass-phase-2-audit-engine.md`) and line 170 (`changelog.d/review-autofix-per-slot-attempts.md`)\n  severity=MAJOR\n  ISSUE_CONFIDENCE: 5\n  PROBLEM: The Phase 3 changelog fragment `changelog.d/orchestrator-security-pass-phase-3-dark-launch.md` is missing from the sorted manifest inventory.\n  WHY: Missing entries silently drop the fragment from the staged workspace in consumer repos with a `.ai/.workspace_source_manifest.txt` lockfile.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "841d755f1d63046382860047d817f798a6e51c28eab8d689d038fd0102b4fb95",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3944,
+    "run_id": "33431976676",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33431976676",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260901001044_85809671ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3944,
+    "run_id": "33431976676"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-01T00:10:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
