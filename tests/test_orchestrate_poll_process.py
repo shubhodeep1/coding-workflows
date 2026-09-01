@@ -3597,7 +3597,10 @@ def test_security_pass_deleted_branch_rejects_inconsistent_final_pr_metadata() -
 	)
 
 	assert result["latest_state"]["status"] == "security-pass"
+	assert result["latest_state"]["security_pass_status"] == "failed"
+	assert result["latest_state"]["final_merge_status"] == "pending"
 	assert result["security_audit_capture"] is None
+	assert "SECURITY_PASS_FAILED reason=engine_unavailable" in result["stdout"] + result["stderr"]
 
 
 def test_security_pass_deleted_branch_rechecks_verified_pr_head_after_audit() -> None:
