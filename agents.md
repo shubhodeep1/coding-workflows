@@ -373,6 +373,10 @@ through one consolidated `ai:orchestrator-managed` issue; a merged fix advances
 findings after `MAX_SECURITY_PASS_CYCLES` (default `3`) terminalize as
 `ai:security-pass-failed`; `/re-security-pass` resets the bounded loop.
 Setting `ENABLE_SECURITY_PASS=false` remains the immediate operator kill switch.
+If an externally merged final PR has already deleted its integration branch,
+the only permitted analysis fallback is that PR's verified immutable head SHA;
+an unavailable or mismatched PR head fails closed and never substitutes the
+default-branch HEAD.
 
 The completion-status comment is updated from three call sites:
 
