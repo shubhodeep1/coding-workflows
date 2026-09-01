@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/INVENTORY.md: lines 247-252 (\"Prompt references\" section) | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k3, x-ai_grok-4_6]\n  PROBLEM: The PR adds `prompts/references/security-money-lens.txt` but does not register it in the \"## Prompt references\" section of `docs/INVENTORY.md`.\n  WHY: `tests/inventory_parity.py:264-267` detects the undocumented tracked reference and causes the lint CI check to fail with `FAIL: docs/INVENTORY.md: Prompt references: missing prompts/references/security-money-lens.txt`, blocking the PR from merging.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Every shipped `prompts/references/*.txt` file must be enumerated in the \"Prompt references\" section of `docs/INVENTORY.md`; `tests/inventory_parity.py` enforces that on every lint run.\n  expected_change_site: `docs/INVENTORY.md`, lines 247-252 (\"## Prompt references\" section)\n  confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  EVIDENCE: The CI lint check at commit `af0b4531a31e1a8d1feeb6be1f9cb64dd91d0e8c` failed with `FAIL: docs/INVENTORY.md: Prompt references: missing prompts/references/security-money-lens.txt`, the PR adds `prompts/references/security-money-lens.txt` and it appears in `.ai/.workspace_source_manifest.txt`, neither the original PR diff nor the LAST RUN DIFF modifies `docs/INVENTORY.md`, and no diff hunk adds the corresponding inventory entry.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- docs/INVENTORY.md: lines 247-252 (\"Prompt references\" section) | severity=critical | confidence=5\n  PROBLEM: The PR adds `prompts/references/security-money-lens.txt` as a new prompt-reference file but does not register it in the \"## Prompt references\" section of `docs/INVENTORY.md`.\n  WHY: `tests/inventory_parity.py` at line 264-267 detects the undocumented reference file, emits `FAIL: docs/INVENTORY.md: Prompt references: missing prompts/references/security-money-lens.txt`, and exits non-zero, so every subsequent CI run on this branch will fail until the entry is added.\n- docs/INVENTORY.md, lines 247-252 (\"## Prompt references\" section) | severity=critical | confidence=5\n  PROBLEM: Every shipped prompt reference file must be enumerated in `docs/INVENTORY.md` under the \"Prompt references\" section.\n  WHY: The CI lint check at commit `af0b4531a31e1a8d1feeb6be1f9cb64dd91d0e8c` failed with `FAIL: docs/INVENTORY.md: Prompt references: missing prompts/references/security-money-lens.txt`, and no diff hunk adds the corresponding inventory entry.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/INVENTORY.md \"## Prompt references\" section (currently lines 247-252 list only output-contract.txt, severity-classification.txt, validate-output-contract.txt, verification-loop.txt) | severity=critical | confidence=5\n  PROBLEM: The CI lint check classifies every `prompts/references/*.txt` file into the \"Prompt references\" section, but the PR ships `prompts/references/security-money-lens.txt` without enumerating it.\n  WHY: The current lint CI run on commit `af0b4531a31e1a8d1feeb6be1f9cb64dd91d0e8c` failed with `FAIL: docs/INVENTORY.md: Prompt references: missing prompts/references/security-money-lens.txt`, so every CI run on this PR's head SHA fails the lint step.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- docs/INVENTORY.md: lines 247-252 (the \"## Prompt references\" section lists output-contract.txt, severity-classification.txt, validate-output-contract.txt, verification-loop.txt only) | severity=critical | confidence=5\n  PROBLEM: The PR adds the new tracked prompt-reference file prompts/references/security-money-lens.txt but never registers it in docs/INVENTORY.md.\n  WHY: The CI `lint` job (ci.yml:825) runs `python3 tests/inventory_parity.py`, which fails when an expected tracked path is undocumented; the check-run on the current head af0b4531 emitted exactly `FAIL: docs/INVENTORY.md: Prompt references: missing prompts/references/security-money-lens.txt` and exited 1.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Lines 247-252 (## Prompt references section) | severity=critical | confidence=5\n  PROBLEM: The new prompt reference file `prompts/references/security-money-lens.txt` is missing from the inventory documentation.\n  WHY: The lint CI check runs `tests/inventory_parity.py`, which compares tracked prompt reference files against the inventory, detects the missing entry, and fails with exit code 1, blocking the PR from merging.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- docs/INVENTORY.md: 247-252 Prompt references section lists output-contract.txt, severity-classification.txt, validate-output-contract.txt, and verification-loop.txt only | severity=critical | confidence=5\n  PROBLEM: The PR ships prompts/references/security-money-lens.txt but docs/INVENTORY.md never registers it.\n  WHY: tests/inventory_parity.py:264-267 compares filesystem globs against that section and exits 1; the lint check-run on af0b453 failed with FAIL: docs/INVENTORY.md: Prompt references: missing prompts/references/security-money-lens.txt, so CI stays red until the inventory row is added.\n- docs/INVENTORY.md under Prompt references, adding prompts/references/security-money-lens.txt | severity=critical | confidence=5\n  PROBLEM: Every shipped prompts/references/*.txt file must be enumerated in the Prompt references section of docs/INVENTORY.md.\n  WHY: The file exists and is staged by last-run workflow/test edits, but neither the original PR diff nor last-run diff touches docs/INVENTORY.md; the live lint job already failed on that missing row.\n\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "ef3f9933c0cfa4597b72466c4d5c37ac8fd95f8228928fdc9c06f4c36bb9b084",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3937,
+    "run_id": "33547668551",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33547668551",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260901210035_88ca3c1daa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3937,
+    "run_id": "33547668551"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-01T21:00:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
