@@ -256,9 +256,13 @@ def test_unterminated_fence_reopens_clarification_for_self_check_blocker() -> No
 	assert summary_enabled["observation"] == "none"
 	assert summary_enabled["reopen"] is True
 	assert summary_disabled["reopen"] is False
-	# A blocker with no answerable Q-ID block routes to the blocked path,
-	# not to clarification (which would loop: orchestrator auto-answer
-	# finds no Q-ID blocks and stall recovery re-answers forever).
+	# The self-check gate itself still reports reopen=True — that flag
+	# (plan_self_check_reopen_clarification) is what this test's name
+	# refers to, and it is asserted above. The workflow-level routing,
+	# however, now sends a blocker with no answerable Q-ID block to the
+	# blocked path instead of reopening clarification (which would loop:
+	# orchestrator auto-answer finds no Q-ID blocks and stall recovery
+	# re-answers forever).
 	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
 	assert _needs_clarification(parsed_output, self_check_gate_enabled=False) is False
 	assert _self_check_blocker_routes_to_blocked(parsed_output, self_check_gate_enabled=True) is True
