@@ -5,13 +5,25 @@
   "entry_id": "processed_command_3953_5492115812_approved",
   "issue_number": 3953,
   "metadata": {
+    "branch": "ai/issue-3953",
+    "changed_files": [
+      "changelog.d/3933-security-pass-preserve-failure-alert-history.md",
+      "scripts/label_helpers.sh",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_orchestrate_poll_process.py"
+    ],
+    "issue_number": 3953,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3953",
+    "pr_number": 3955,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3955",
+    "run_attempt": "1",
+    "run_id": "33494084879",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/33494084879"
   },
   "run_attempt": 1,
   "run_id": "33494084879",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-09-01T09:49:41Z",
+  "status": "completed",
+  "timestamp": "2026-09-01T10:03:29Z",
   "workflow": "implement"
 }
