@@ -880,9 +880,48 @@ def _run_poller(
 		if capture_telegram_calls:
 			with (sandbox / "scripts" / "tg_helpers.sh").open("a", encoding="utf-8") as telegram_helpers_file:
 				telegram_helpers_file.write(
-					'\ntg_cleanup_msgs() { printf \'%s\\n\' "$1" >> "${TG_CLEANUP_CAPTURE}"; }\n'
-					'tg_send_tracked() { jq -cn --arg issue "$1" --arg message "$2" --arg level "$3" '
-					"'{issue: $issue, message: $message, level: $level}' >> \"${TG_NOTIFICATION_CAPTURE}\"; }\n"
+					'\ntg_cleanup_msgs() {\n'
+					'\tprintf \'%s\\n\' "$1" >> "${TG_CLEANUP_CAPTURE}"\n'
+					'\t"${REAL_PYTHON_BIN}" - "${GH_MOCK_STORE}" "$1" <<\'PY\'\n'
+					'import json\n'
+					'import sys\n'
+					'from pathlib import Path\n'
+					'telegram_store_path = Path(sys.argv[1])\n'
+					'telegram_store = json.loads(telegram_store_path.read_text(encoding="utf-8"))\n'
+					'telegram_issue = telegram_store["issues"][sys.argv[2]]\n'
+					'telegram_issue["comments"] = [\n'
+					'\ttelegram_comment for telegram_comment in telegram_issue["comments"]\n'
+					'\tif "<!-- tg_cleanup:" not in telegram_comment.get("body", "")\n'
+					'\tand "<!-- tg_phase:" not in telegram_comment.get("body", "")\n'
+					']\n'
+					'telegram_store_path.write_text(json.dumps(telegram_store), encoding="utf-8")\n'
+					'PY\n'
+					'}\n'
+					'tg_send_tracked() {\n'
+					'\tlocal tracked_issue_num="$1"\n'
+					'\tlocal tracked_message_text="$2"\n'
+					'\tlocal tracked_level="${3:-CRITICAL}"\n'
+					'\tjq -cn --arg issue "${tracked_issue_num}" --arg message "${tracked_message_text}" --arg level "${tracked_level}" '
+					"'{issue: $issue, message: $message, level: $level}' >> \"${TG_NOTIFICATION_CAPTURE}\"\n"
+					'\t"${REAL_PYTHON_BIN}" - "${GH_MOCK_STORE}" "${tracked_issue_num}" <<\'PY\'\n'
+					'import json\n'
+					'import sys\n'
+					'from pathlib import Path\n'
+					'tracked_store_path = Path(sys.argv[1])\n'
+					'tracked_store = json.loads(tracked_store_path.read_text(encoding="utf-8"))\n'
+					'tracked_issue = tracked_store["issues"][sys.argv[2]]\n'
+					'tracked_comment_id = int(tracked_store.get("next_comment_id", 1))\n'
+					'tracked_issue["comments"].append({\n'
+					'\t"id": tracked_comment_id,\n'
+					'\t"body": f"<!-- tg_cleanup:{tracked_comment_id} -->",\n'
+					'\t"created_at": "2026-01-01T00:00:00Z",\n'
+					'\t"html_url": f"https://github.com/owner/repo/issues/{sys.argv[2]}#issuecomment-{tracked_comment_id}",\n'
+					'\t"user": {"login": "github-actions[bot]"},\n'
+					'})\n'
+					'tracked_store["next_comment_id"] = tracked_comment_id + 1\n'
+					'tracked_store_path.write_text(json.dumps(tracked_store), encoding="utf-8")\n'
+					'PY\n'
+					'}\n'
 				)
 		if security_audit_payload is not None or security_audit_exit_code != 0:
 			mock_security_audit = sandbox / "scripts" / "security_audit.sh"
@@ -3112,6 +3151,7 @@ def test_security_pass_flag_off_releases_security_owned_states() -> None:
 
 
 def test_security_pass_clean_result_is_sha_bound_and_allows_completion() -> None:
+	prior_alert_marker = "<!-- tg_cleanup:501,502 -->"
 	state = _base_state()
 	state["integration_branch"] = "orchestrator/project-192"
 	state["project_body_snapshot"] = "untrusted project snapshot"
@@ -3121,6 +3161,8 @@ def test_security_pass_clean_result_is_sha_bound_and_allows_completion() -> None
 		max_validate_cycles="3",
 		enable_security_pass="true",
 		security_audit_payload=_security_audit_findings_payload(),
+		capture_telegram_calls=True,
+		tracking_comments=[prior_alert_marker],
 		issue_labels={10: ["ai:merged"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		env_overrides={"WORKFLOW_EDITOR_MODEL": "openai/security-test-model"},
@@ -3138,6 +3180,8 @@ def test_security_pass_clean_result_is_sha_bound_and_allows_completion() -> None
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_STARTED" in combined_log
 	assert "SECURITY_PASS_CLEAN" in combined_log
+	assert result["telegram_cleanup_calls"] == ["192"]
+	assert not any(prior_alert_marker in comment["body"] for comment in result["issues"]["192"]["comments"])
 
 
 def test_security_pass_findings_create_one_consolidated_managed_fix_issue() -> None:
@@ -3314,9 +3358,15 @@ def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
 	assert result.get("created_issues", []) == []
 	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" in result["stdout"] + result["stderr"]
 	assert result["telegram_cleanup_calls"] == []
-	assert any(prior_alert_marker in comment["body"] for comment in result["issues"]["192"]["comments"])
+	tracking_comment_bodies = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	assert prior_alert_marker in tracking_comment_bodies
 	assert any(
-		notification["level"] == "CRITICAL"
+		comment_body.startswith("<!-- tg_cleanup:") and comment_body != prior_alert_marker
+		for comment_body in tracking_comment_bodies
+	)
+	assert any(
+		notification["issue"] == "192"
+		and notification["level"] == "CRITICAL"
 		and "security pass FAILED" in notification["message"]
 		for notification in result["telegram_notifications"]
 	)
