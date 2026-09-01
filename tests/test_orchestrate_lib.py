@@ -14,8 +14,6 @@ from pathlib import Path
 # Add scripts/ to path so we can import orchestrate_lib
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-import pytest
-
 import orchestrate_lib
 
 
@@ -1318,13 +1316,21 @@ def test_detect_stalls_skips_needs_human_label():
 	assert stalls == []
 
 
-@pytest.mark.parametrize("latch_label", ["ai:destructive-blocked", "ai:scope-blocked"])
-def test_detect_stalls_skips_human_gated_latch_labels(latch_label):
+def test_detect_stalls_skips_human_gated_latch_labels():
 	"""Regression for issue #3906 (shubhodeep1/tele-funtoken-msg-scoring):
 	an ai:awaiting-approval issue latched with ai:destructive-blocked was
 	re-approved by stall recovery once per poll cycle even though
 	implement.yml refuses to redispatch it until a human removes the
-	latch.  The latch must pause stall detection like ai:needs-human."""
+	latch.  The latch must pause stall detection like ai:needs-human.
+
+	Plain loop rather than pytest.mark.parametrize: CI also runs this
+	module directly via ``python3 tests/test_orchestrate_lib.py``.
+	"""
+	for latch_label in ("ai:destructive-blocked", "ai:scope-blocked"):
+		_assert_detect_stalls_skips_latch_label(latch_label)
+
+
+def _assert_detect_stalls_skips_latch_label(latch_label: str) -> None:
 	state = _make_state()
 	state["waves"][0]["issues"][0]["status"] = "in_progress"
 	state["waves"][0]["issues"][0]["status_since_ts"] = 1
