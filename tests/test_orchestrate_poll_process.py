@@ -972,7 +972,12 @@ def _run_poller(
 				"}), encoding='utf-8')\n"
 				"PY\n"
 				f"if [ {int(security_audit_exit_code)} -ne 0 ]; then exit {int(security_audit_exit_code)}; fi\n"
-				f"printf '%s\\n' {json.dumps(json.dumps(security_audit_payload or {}))} > \"${{SECURITY_AUDIT_FINDINGS_OUT}}\"\n",
+				"python3 - \"${SECURITY_AUDIT_FINDINGS_OUT}\" <<'PY'\n"
+				"import json, sys\n"
+				"from pathlib import Path\n"
+				f"payload = {repr(security_audit_payload or {})}\n"
+				"Path(sys.argv[1]).write_text(json.dumps(payload), encoding='utf-8')\n"
+				"PY\n",
 				encoding="utf-8",
 			)
 			mock_security_audit.chmod(0o755)
@@ -3446,6 +3451,34 @@ def test_security_pass_merged_fix_advances_cycle_invalidates_sha_and_reaudits() 
 	assert "repos/owner/repo/issues/900" not in result["api_calls"]
 
 
+def test_security_pass_merged_fix_falls_back_to_rest_when_graphql_is_unavailable() -> None:
+	state = _base_state(status="security-pass-fixing")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 0,
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [900],
+			"security_pass_head_sha": "stale-head",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		gql_mode="error",
+		issue_labels={10: ["ai:merged"], 900: ["ai:merged"]},
+		issue_closed={900: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result["latest_state"]["security_pass_cycle"] == 1
+	assert result["latest_state"]["security_pass_status"] == "passed"
+	assert "falling back to a direct issue lookup" in result["stdout"] + result["stderr"]
+
+
 def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
 	prior_alert_marker = "<!-- tg_cleanup:501,502 -->"
 	state = _base_state(status="security-pass")
@@ -3520,6 +3553,7 @@ def test_re_security_pass_resets_terminal_state_and_reaudits() -> None:
 	assert latest_state["security_pass_head_sha"] != "old-head"
 	assert "ai:security-pass-failed" not in result["tracking_labels"]
 	assert any("re-security-pass-dedup:" in comment["body"] for comment in result["issues"]["192"]["comments"])
+	assert result["git_fetch_calls"]["refs/heads/main:refs/remotes/origin/main"] >= 1
 
 
 def test_security_pass_invalid_engine_output_fails_closed() -> None:
@@ -4140,6 +4174,7 @@ def test_security_pass_deleted_branch_rechecks_verified_pr_head_after_audit() ->
 
 def test_security_pass_gate_is_present_on_every_completion_route() -> None:
 	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'ENABLE_SECURITY_PASS_RAW="${ENABLE_SECURITY_PASS:-true}"' in poller
 	assert poller.count("ensure_security_pass_before_completion") >= 5
 	assert 'JUDGE_JUSTIFICATION="clean_project_completion_skip"' in poller
 	security_runner = poller.split("run_security_pass_inline() {", 1)[1].split("\n}", 1)[0]

@@ -81,6 +81,7 @@ def test_task_state_helper_and_flag_are_wired_into_poller_workflow() -> None:
 
 
 def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
+	# The historical test name spans the rollout; the current contract is default-on.
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	assert "ENABLE_SECURITY_PASS: ${{ vars.ENABLE_SECURITY_PASS || 'true' }}" in wf
 	assert "MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '3' }}" in wf

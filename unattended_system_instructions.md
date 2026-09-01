@@ -217,10 +217,16 @@ than reverting them.
 Security priority includes validating every trust boundary, enforcing
 authorization on each exposed surface, preventing injection and unsafe
 deserialization, excluding secrets and credentials from code and logs, and
-failing closed on security-sensitive errors. Money-handling correctness also
-requires unique-index-backed idempotency, atomic balance mutations, decimal or
-integer minor-unit amounts instead of binary floating point, TOCTOU-safe debit
-flows, and replay protection for payment and webhook processing.
+failing closed on security-sensitive errors.
+
+Security and money-handling checks:
+- Require unique-index-backed idempotency keys for every money mutation so retries cannot apply the same debit, credit, refund, or payout twice.
+- Use atomic balance updates and account for concurrent writers; reject read-modify-write sequences that can lose updates.
+- Represent money amounts with decimal or integer minor-unit types, never binary floating point.
+- Avoid TOCTOU check-then-debit flows; combine eligibility checks and balance mutations atomically or inside the smallest safe transaction.
+- Protect payment and webhook endpoints against replay with authenticated signatures, bounded freshness, and durable event deduplication.
+- Enforce authorization on every endpoint, worker, and internal surface that can read or mutate money state.
+- Never place secrets, credentials, signing material, or sensitive payment data in source code, generated output, logs, or error messages.
 
 ---
 

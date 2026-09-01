@@ -14,10 +14,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"8975d0d700693d1125170ee5ba76c5193370992207056236f86f7c61b27d80f6"
+	"e485baf382cf22d27a9d0e14778cfad7a9a39470871b3fde550b79c237aa6d68"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 13_107
-PRE_EXTRACTION_PROMPT_LINES = 205
+PRE_EXTRACTION_PROMPT_BYTES = 13_451
+PRE_EXTRACTION_PROMPT_LINES = 213
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:

@@ -258,6 +258,7 @@ def test_shared_prelude_path_injects_and_cleans_temp_files() -> None:
 			"prompts/_templates/mode-plan.txt",
 			"prompts/contracts/mode-plan.yml",
 			"prompts/references/output-contract.txt",
+			"prompts/references/security-money-lens.txt",
 		):
 			_copy(REPO_ROOT / relative, root / relative)
 		render_prompt_sh.chmod(0o755)

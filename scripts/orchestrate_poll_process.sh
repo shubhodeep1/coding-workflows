@@ -1275,7 +1275,7 @@ if is_truthy "${ENABLE_VALIDATION_RAW}"; then
   ENABLE_VALIDATION="true"
 fi
 
-ENABLE_SECURITY_PASS_RAW="${ENABLE_SECURITY_PASS:-false}"
+ENABLE_SECURITY_PASS_RAW="${ENABLE_SECURITY_PASS:-true}"
 ENABLE_SECURITY_PASS="false"
 if is_truthy "${ENABLE_SECURITY_PASS_RAW}"; then
   ENABLE_SECURITY_PASS="true"
@@ -14235,12 +14235,35 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     else
       SECURITY_FIX_DETAILS_JSON="$(_fetch_candidate_issue_details_graphql "[${SECURITY_FIX_ISSUE}]")"
       if ! printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -e --arg issue "${SECURITY_FIX_ISSUE}" 'has($issue)' >/dev/null 2>&1; then
-        echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE} status is unavailable from the cycle-local GraphQL batch; retaining fixing state."
-        continue
+        echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE} status is unavailable from the cycle-local GraphQL batch; falling back to a direct issue lookup."
+        SECURITY_FIX_FALLBACK_JSON="$(get_issue_state_labels_json "${SECURITY_FIX_ISSUE}")"
+        if ! printf '%s' "${SECURITY_FIX_FALLBACK_JSON}" | jq -e '
+          (type == "object")
+          and (.state == "open" or .state == "closed")
+          and ((.labels | type) == "array")
+        ' >/dev/null 2>&1; then
+          echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE} direct status lookup was invalid; retaining fixing state."
+          continue
+        fi
+        SECURITY_FIX_STATE="$(printf '%s' "${SECURITY_FIX_FALLBACK_JSON}" | jq -r '.state')"
+        SECURITY_FIX_LABELS="$(printf '%s' "${SECURITY_FIX_FALLBACK_JSON}" | jq -c '.labels')"
+        SECURITY_FIX_PR_MERGED="false"
+        if [ "${SECURITY_FIX_STATE}" = "closed" ] && ! has_label "${SECURITY_FIX_LABELS}" "ai:merged"; then
+          if validation_fix_issue_has_merged_pr_evidence "${SECURITY_FIX_ISSUE}"; then
+            SECURITY_FIX_PR_MERGED="true"
+          else
+            SECURITY_FIX_MERGED_EVIDENCE_RC=$?
+            if [ "${SECURITY_FIX_MERGED_EVIDENCE_RC}" -eq 2 ]; then
+              echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE} merged-PR evidence lookup failed; retaining fixing state."
+              continue
+            fi
+          fi
+        fi
+      else
+        SECURITY_FIX_STATE="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].state // "open"')"
+        SECURITY_FIX_LABELS="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -c --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].labels // []')"
+        SECURITY_FIX_PR_MERGED="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].linked_pr.merged // false')"
       fi
-      SECURITY_FIX_STATE="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].state // "open"')"
-      SECURITY_FIX_LABELS="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -c --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].labels // []')"
-      SECURITY_FIX_PR_MERGED="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].linked_pr.merged // false')"
       if [ "${SECURITY_FIX_STATE}" = "closed" ] \
         && { [ "${SECURITY_FIX_PR_MERGED}" = "true" ] || has_label "${SECURITY_FIX_LABELS}" "ai:merged"; }; then
         SECURITY_PASS_COMPLETED_CYCLES="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
@@ -14826,6 +14849,9 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
 
 The bounded security-pass fix loop was reset by \`/re-security-pass\`. Re-running the mandatory current-head audit."
       tg_notify "/re-security-pass: project #${TRACKING_NUM} security-pass state reset; re-running the audit." "WARNING"
+      if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
+        DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+      fi
       ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" || true
       continue
     fi

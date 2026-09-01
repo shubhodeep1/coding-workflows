@@ -567,10 +567,7 @@ def test_render_prompt_py_reports_unknown_placeholder_contract_violation() -> No
 
 def test_render_prompt_py_renders_security_audit_mode_contract() -> None:
 	prompt_file = REPO_ROOT / "prompts" / "mode-security-audit.txt"
-	proc = _run_render_prompt_py(
-		prompt_file,
-		variables={"REFERENCE_SECURITY_MONEY_LENS": "reserved for project-pass mode"},
-	)
+	proc = _run_render_prompt_py(prompt_file)
 
 	assert proc.returncode == 0, proc.stderr
 	assert proc.stderr == ""
@@ -602,6 +599,16 @@ def test_security_money_lens_renders_in_plan_and_implement_prompts() -> None:
 			assert "## Pre-commit security checklist" in proc.stdout
 			assert "Use parameterized queries" in proc.stdout
 			assert "Fail closed on security-sensitive" in proc.stdout
+
+	plan_runner_text = (REPO_ROOT / "scripts" / "run_plan_codex.sh").read_text(encoding="utf-8")
+	plan_workflow_text = (REPO_ROOT / ".github" / "workflows" / "plan.yml").read_text(encoding="utf-8")
+	implement_workflow_text = (REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8")
+	assert "4b. `## Security considerations`" in plan_runner_text
+	assert "## Pre-commit security checklist" in implement_workflow_text
+	for production_prompt_text in (plan_runner_text, implement_workflow_text):
+		assert "{{REFERENCE_SECURITY_MONEY_LENS}}" in production_prompt_text
+	for production_workflow_text in (plan_workflow_text, implement_workflow_text):
+		assert "references/security-money-lens.txt" in production_workflow_text
 
 
 def test_render_prompt_py_rejects_unsupported_placeholder_expression() -> None:

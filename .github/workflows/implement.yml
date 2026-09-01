@@ -1107,7 +1107,7 @@ jobs:
             fi
           done
 
-          for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_serena.txt _prelude_output_contract.txt _templates/mode-implement-diagnose.txt _templates/mode-implement-diagnose-continuation.txt _templates/mode-implement-repair.txt _templates/mode-implement-repair-continuation.txt _templates/mode-validate-self-heal-continuation.txt; do
+          for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_serena.txt _prelude_output_contract.txt _templates/mode-implement-diagnose.txt _templates/mode-implement-diagnose-continuation.txt _templates/mode-implement-repair.txt _templates/mode-implement-repair-continuation.txt _templates/mode-validate-self-heal-continuation.txt references/security-money-lens.txt; do
             if [ -f "prompts/${prompt_assembly_asset}" ]; then
               continue
             fi
@@ -1922,6 +1922,18 @@ jobs:
           codebase (function name mismatch, file path absent, API signature
           differs), proceed with the codebase truth and note the conflict in
           your output.
+
+          ## Pre-commit security checklist
+
+          - Validate external input at every trust boundary.
+          - Use parameterized queries instead of constructing queries from input.
+          - Enforce authorization on every new endpoint or money-touching surface.
+          - Never include secrets, credentials, signing material, or sensitive values in code, generated output, logs, or error messages.
+          - Fail closed on security-sensitive authentication, authorization, validation, and mutation errors.
+
+          Apply this shared money-handling lens when the change reads or mutates money:
+
+          {{REFERENCE_SECURITY_MONEY_LENS}}
 
           Test verification:
           - If `pytest` is not installed, install it via `pip install pytest`.

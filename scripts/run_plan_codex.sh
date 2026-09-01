@@ -72,6 +72,9 @@ Create a structured implementation plan that includes:
 3. Data structures affected
 4. API or interface changes
 4a. `## Decisions` — include a markdown section named exactly `## Decisions` with at least one decision record using the exact heading shape `### D<n> — <title>`. Each decision record must include non-empty bullets for `Chosen`, `Alternatives considered`, and `Why`. Add this section additively; do not rename or remove any existing required sections.
+4b. `## Security considerations` — include trust boundaries touched,
+    authorization for every new endpoint or surface, external-input validation,
+    and concrete abuse cases alongside the edge-case analysis.
 5. Potential risks or edge cases
 6. Testing considerations
 7. A pre-execution self-check result
@@ -105,6 +108,11 @@ Create a structured implementation plan that includes:
    `ai:implementing` → `ai:done` → `ai:ready-to-merge` → `ai:merged`), the
    `State machines:` field is required, not optional. When the current render is
    `false`, do not emit `Data flow:`, `State machines:`, or `Failure modes:`.
+
+Use the following shared security and money-handling lens when planning any
+affected surface:
+
+{{REFERENCE_SECURITY_MONEY_LENS}}
 
 Rules:
 
