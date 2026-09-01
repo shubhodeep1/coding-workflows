@@ -1413,11 +1413,13 @@ STALL_RECOVERY_LATCH_LABELS: tuple[str, ...] = (
 )
 
 
-def stall_recovery_latch_label(labels: list[str]) -> str | None:
+def stall_recovery_latch_label(labels: Any) -> str | None:
 	"""Return the first STALL_RECOVERY_LATCH_LABELS entry present in *labels*.
 
-	``None`` means the issue carries no human-gated latch and stall
-	recovery may act on it.  Non-list inputs fail open to ``None``.
+	*labels* is normally the issue's label-name list, but the argument is
+	typed ``Any`` on purpose: label payloads come from GitHub API JSON and
+	the poller's caches, so ``None`` or a non-list value must fail open
+	to ``None`` (no latch, stall recovery may act) instead of raising.
 	"""
 	if not isinstance(labels, (list, tuple, set, frozenset)):
 		return None

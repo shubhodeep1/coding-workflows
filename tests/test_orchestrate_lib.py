@@ -1371,7 +1371,8 @@ def _assert_detect_stalls_skips_latch_label(latch_label: str) -> None:
 def test_stall_recovery_latch_label_helper():
 	assert orchestrate_lib.stall_recovery_latch_label(["ai:awaiting-approval"]) is None
 	assert orchestrate_lib.stall_recovery_latch_label([]) is None
-	assert orchestrate_lib.stall_recovery_latch_label(None) is None  # type: ignore[arg-type]
+	assert orchestrate_lib.stall_recovery_latch_label(None) is None
+	assert orchestrate_lib.stall_recovery_latch_label("ai:destructive-blocked") is None
 	assert (
 		orchestrate_lib.stall_recovery_latch_label(["ai:awaiting-approval", "ai:destructive-blocked"])
 		== "ai:destructive-blocked"
