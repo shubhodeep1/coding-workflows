@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Preserve tracked Telegram diagnostics when security-pass cycles are exhausted\"\n  expected_change_site: scripts/label_helpers.sh label catalog entries for ai:security-pass*\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Original PR diff removed security-pass labels from label_helpers.sh helper catalog, breaking label creation and phase transitions. Last run restored ai:security-pass, ai:security-pass-fixing, and ai:security-pass-failed entries to _AI_LABEL_COLORS, _AI_LABEL_DESCS, and _AI_PHASE_LABELS.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: \"Preserve tracked Telegram diagnostics when security-pass cycles are exhausted\"\n  Expected change site: scripts/label_helpers.sh label catalog entries for ai:security-pass*\n  Evidence of absence: Original PR diff removed security-pass labels from label_helpers.sh helper catalog, breaking label creation and phase transitions. Last run restored ai:security-pass, ai:security-pass-fixing, and ai:security-pass-failed entries to _AI_LABEL_COLORS, _AI_LABEL_DESCS, and _AI_PHASE_LABELS.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "beca63db64d2389bb2d31b7fe22c716b7678211a0829d6aae319402332884482",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3955,
+    "run_id": "33503078647",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33503078647",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260901124528_2c67049da0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3955,
+    "run_id": "33503078647"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-01T12:45:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
