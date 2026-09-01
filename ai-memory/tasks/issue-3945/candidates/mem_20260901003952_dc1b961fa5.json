@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3945,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3945\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3946\",\"pr_number\":3946,\"branch\":\"ai/issue-3945\",\"run_id\":\"33455045747\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/33455045747\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\"README.md\",\"agents.md\",\"changelog.d/orchestrator-security-pass-phase-4-default-on.md\",\"scripts/label_helpers.sh\",\"tests/test_orchestrate_poll_workflow_contract.py\"]}",
+  "fingerprint": "772f2ccc28544c085437dffe5c34a2908340999c5cf2081e00fa9060886de6dc",
+  "lineage": {
+    "issue_number": 3945,
+    "parent_ids": [],
+    "pr_number": 3946,
+    "run_id": "33455045747",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33455045747",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3946"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260901003952_dc1b961fa5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3945,
+    "level": "run",
+    "pr_number": 3946,
+    "run_id": "33455045747"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3945: https://github.com/shubhodeep1/coding-workflows/pull/3946",
+  "timestamps": {
+    "created_at": "2026-09-01T00:39:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
