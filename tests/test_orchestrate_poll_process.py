@@ -1151,16 +1151,14 @@ if args[0] == 'python3' and len(args) >= 4 and args[1] == 'scripts/ai_memory.py'
 		sys.exit(0)
 
 if args[0] == 'issue' and len(args) >= 3 and args[1] == 'list':
-	# Minimal `gh issue list` filter for the close_merged_issues_sweep
-	# path. Gated by store['mock_gh_issue_list_label_filter'] so existing
-	# tests that don't exercise the sweep keep their legacy `[]` return
-	# value and unchanged closed_issues / label-call expectations. Only
-	# new sweep regression tests opt in via the kwarg below; everyone
-	# else continues to see no issues from the listing.
+	# Minimal `gh issue list` filter for opt-in poller paths. Tests that do
+	# not exercise listing retain the legacy `[]` response and unchanged
+	# closed_issues / label-call expectations.
 	if store.get('mock_gh_issue_list_label_filter') is True:
 		il_state = None
 		il_label = None
 		il_json = False
+		il_json_fields = None
 		il_idx = 2
 		while il_idx < len(args):
 			il_arg = args[il_idx]
@@ -1174,9 +1172,16 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'list':
 				continue
 			if il_arg == '--json' and il_idx + 1 < len(args):
 				il_json = True
+				il_json_fields = args[il_idx + 1]
 				il_idx += 2
 				continue
 			il_idx += 1
+		store.setdefault('issue_list_calls', []).append({
+			'state': il_state,
+			'label': il_label,
+			'json': il_json_fields,
+		})
+		save()
 		if il_state == 'open' and il_label is not None and il_json:
 			out = []
 			for inum, idata in store.get('issues', {}).items():
@@ -1189,6 +1194,7 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'list':
 					out.append({
 						'number': int(inum),
 						'labels': [{'name': l} for l in labels],
+						'body': idata.get('body', ''),
 					})
 				except (TypeError, ValueError):
 					continue
@@ -3041,6 +3047,57 @@ def test_security_pass_findings_create_one_consolidated_managed_fix_issue() -> N
 	assert "Local ID: `security-pass-fix-cycle-1`" in fix_body
 	assert not re.search(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#192\b", fix_body)
 	assert "SECURITY_PASS_FIX_ISSUE_CREATED" in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_reuses_matching_open_fix_issue_after_stale_checkpoint() -> None:
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 0,
+			"security_pass_status": "pending",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "",
+		}
+	)
+	existing_fix_body = """Refs #192
+
+---
+**Orchestrator metadata** (do not edit)
+- Tracking issue: #192
+- Local ID: `security-pass-fix-cycle-1`
+- Managed by: AI Orchestrator
+"""
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"], 901: ["ai:orchestrator-managed"]},
+		issue_bodies={901: existing_fix_body},
+		mock_gh_issue_list_label_filter=True,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result.get("created_issues", []) == []
+	for persisted_state in (result["state_on_disk"], result["latest_state"]):
+		assert persisted_state["status"] == "security-pass-fixing"
+		assert persisted_state["security_pass_status"] == "blocked"
+		assert persisted_state["security_pass_active_fix_issues"] == [901]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "already exists for cycle 1; reusing it" in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED" not in combined_log
+	security_fix_lookups = [
+		call
+		for call in result.get("issue_list_calls", [])
+		if call == {
+			"state": "open",
+			"label": "ai:orchestrator-managed",
+			"json": "number,body",
+		}
+	]
+	assert len(security_fix_lookups) == 1
 
 
 def test_security_pass_merged_fix_advances_cycle_invalidates_sha_and_reaudits() -> None:
