@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/label_helpers.sh:lines 32-34, 81-83, 126 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The three active security-pass phase labels (`ai:security-pass`, `ai:security-pass-fixing`, `ai:security-pass-failed`) were removed from the hardcoded color catalog in `scripts/label_helpers.sh`.\n  WHY: `ensure_label_exists` will create these labels with fallback metadata instead of the contract-defined colors and descriptions, causing color/display inconsistencies and failing contract tests.\n- scripts/label_helpers.sh:line 126 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `_AI_PHASE_LABELS` array no longer includes the three security-pass phase labels (`ai:security-pass`, `ai:security-pass-fixing`, `ai:security-pass-failed`).\n  WHY: Code that iterates `_AI_PHASE_LABELS` to validate phase membership will exclude valid security-pass states, causing incorrect behavior in label reconciliation and state tracking logic.\n- scripts/orchestrate_poll_process.sh:lines 4263-4264 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `gh api` call intended to capture the create error uses `2>&1 >/dev/null`, which due to left-to-right redirection will typically not capture stderr into `create_error` and may still print the error to logs.\n  WHY: The `create_error` variable will frequently be empty even when branch creation failed, causing the warning message to incorrectly suggest verification succeeded and hiding the actual error from diagnostics.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/label_helpers.sh: lines 32-34, 81-83, 126\n  PROBLEM: The three active security-pass phase labels (`ai:security-pass`, `ai:security-pass-fixing`, `ai:security-pass-failed`) were removed from the hardcoded color catalog in `scripts/label_helpers.sh`, breaking contract tests that assert the helper color catalog matches the contract values.\n  WHY: The `ensure_label_exists` function will create these labels with fallback metadata instead of the contract-defined colors and descriptions, causing color/display inconsistencies and failing tests like `tests/test_ai_labels.py::test_contract_labels_match_helper_color_and_description_catalogs`.\n  ISSUE_CONFIDENCE: 5\n- scripts/label_helpers.sh: line 126\n  PROBLEM: The `_AI_PHASE_LABELS` array no longer includes the three security-pass phase labels (`ai:security-pass`, `ai:security-pass-fixing`, `ai:security-pass-failed`), breaking phase membership tracking for the new security-pass workflow states.\n  WHY: Any code that iterates `_AI_PHASE_LABELS` to validate phase membership will exclude valid security-pass states, causing incorrect behavior in label reconciliation and state tracking logic.\n  ISSUE_CONFIDENCE: 5\n- scripts/orchestrate_poll_process.sh: lines 4263-4264\n  PROBLEM: The `gh api` call intended to capture the create error uses `2>&1 >/dev/null`, which due to left-to-right redirection will typically NOT capture stderr into `create_error` and may still print the error to logs.\n  WHY: The `create_error` variable will frequently be empty even when the branch creation failed, causing the warning message to incorrectly suggest verification succeeded and hiding the actual error from diagnostics.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "85adff0fe8f1e6a8c0c9fa98a9de5931240a41e15a498b272862f5f37e54f3e3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3956,
+    "run_id": "33503935184",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33503935184",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260901131548_aa976efbbc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3956,
+    "run_id": "33503935184"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-01T13:15:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
