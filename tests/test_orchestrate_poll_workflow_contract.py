@@ -80,6 +80,23 @@ def test_task_state_helper_and_flag_are_wired_into_poller_workflow() -> None:
 	assert "ORCH_TASK_FILES_ENABLED: ${{ vars.ORCH_TASK_FILES_ENABLED || 'false' }}" in wf
 
 
+def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	assert "ENABLE_SECURITY_PASS: ${{ vars.ENABLE_SECURITY_PASS || 'false' }}" in wf
+	assert "MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '3' }}" in wf
+	assert "SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}" in wf
+	assert "WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}" in wf
+	for asset in (
+		"codex_heartbeat.sh",
+		"security_audit.sh",
+		"security_audit_fp_exclusions.json",
+		"mode-security-audit.txt",
+		"_templates/mode-security-audit.txt",
+		"references/security-money-lens.txt",
+	):
+		assert asset in wf
+
+
 def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	assert "worktree_registry.sh" in wf
@@ -98,6 +115,7 @@ def main() -> int:
 	test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_nag_reminder_assets_and_judge_wiring_are_present()
 	test_task_state_helper_and_flag_are_wired_into_poller_workflow()
+	test_security_pass_dark_launch_env_and_assets_are_wired()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
 	return 0
 

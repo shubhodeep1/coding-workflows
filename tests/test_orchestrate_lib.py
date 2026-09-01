@@ -1715,6 +1715,10 @@ def test_build_tracking_state_schema():
 	assert state["final_merge_strategy"] == "squash"
 	assert state["final_merge_pr"] is None
 	assert state["final_merge_status"] == "pending"
+	assert state["security_pass_cycle"] == 0
+	assert state["security_pass_status"] == "pending"
+	assert state["security_pass_active_fix_issues"] == []
+	assert state["security_pass_head_sha"] == ""
 	# issue-2 should be in pending_issue_defs (not in issue_map)
 	assert "issue-2" in state["pending_issue_defs"]
 
@@ -1760,6 +1764,10 @@ Summary
 	assert state["final_merge_strategy"] == "squash"
 	assert state["final_merge_pr"] is None
 	assert state["final_merge_status"] == "pending"
+	assert state["security_pass_cycle"] == 0
+	assert state["security_pass_status"] == "pending"
+	assert state["security_pass_active_fix_issues"] == []
+	assert state["security_pass_head_sha"] == ""
 
 
 def test_parse_tracking_body_captures_completion_marks():
@@ -1878,6 +1886,34 @@ Summary text stays the same.
 	assert "- [x] **issue-2**: Second task (priority 2)" in rendered
 	assert "- [x] **issue-3**: Third task (priority 3)" in rendered
 	assert "- [ ] **issue-4**: Fourth task (priority 4)" in rendered
+	assert "### Security pass" not in rendered
+	assert "### Security pass" not in orchestrate_lib.format_wave_status_comment(state, 0)
+
+
+def test_security_pass_status_rendering_includes_active_fix_issue() -> None:
+	state = _make_state()
+	state.update(
+		{
+			"security_pass_cycle": 2,
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [321],
+			"security_pass_head_sha": "a" * 40,
+		}
+	)
+	state["project_body_snapshot"] = (
+		"## Project: Test Project\n\n"
+		"### Wave 1\n\n"
+		"- [ ] **issue-1**: First task (priority 1)\n"
+		"- [ ] **issue-2**: Second task (priority 2)\n"
+	)
+
+	rendered_body = orchestrate_lib.render_tracking_issue_body_from_state(state)
+	rendered_wave = orchestrate_lib.format_wave_status_comment(state, 0)
+	for rendered in (rendered_body, rendered_wave):
+		assert "- Status: `blocked`" in rendered
+		assert "- Completed fix cycles: 2" in rendered
+		assert f"- Audited integration SHA: `{'a' * 40}`" in rendered
+		assert "- Active fix issue: #321" in rendered
 
 
 def test_render_tracking_issue_body_from_state_inserts_missing_issue_rows_into_existing_wave():

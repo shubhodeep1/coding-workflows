@@ -44,7 +44,15 @@ def test_ensure_label_exists_backward_compatible_contract() -> None:
 	assert "return 1" in body
 
 
+def test_security_pass_labels_are_in_the_resilient_phase_set() -> None:
+	text = _script_text()
+	for label in ("ai:security-pass", "ai:security-pass-fixing", "ai:security-pass-failed"):
+		assert f'"{label}"' in text
+		assert f'["{label}"]=' in text
+
+
 if __name__ == "__main__":
 	test_set_issue_phase_label_resilient_contract()
 	test_ensure_label_exists_backward_compatible_contract()
+	test_security_pass_labels_are_in_the_resilient_phase_set()
 	print("PASS")
