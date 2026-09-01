@@ -1655,6 +1655,41 @@ if args[0] == 'api':
 		print(json.dumps({'data': {'repository': repo}}))
 		sys.exit(0)
 
+	if re.fullmatch(r'repos/[^/]+/[^/]+/issues', path) and method == 'GET':
+		managed_issue_params = {}
+		for managed_issue_field in fields:
+			if '=' in managed_issue_field:
+				managed_issue_key, managed_issue_value = managed_issue_field.split('=', 1)
+				managed_issue_params[managed_issue_key] = managed_issue_value
+		managed_issue_items = []
+		for managed_issue_num, managed_issue_data in store.get('issues', {}).items():
+			if managed_issue_params.get('state') == 'open' and managed_issue_data.get('closed'):
+				continue
+			managed_issue_label = managed_issue_params.get('labels')
+			if managed_issue_label and managed_issue_label not in (managed_issue_data.get('labels', []) or []):
+				continue
+			managed_issue_payload = {
+				'number': int(managed_issue_num),
+				'body': managed_issue_data.get('body', ''),
+			}
+			if managed_issue_data.get('pull_request'):
+				managed_issue_payload['pull_request'] = managed_issue_data['pull_request']
+			managed_issue_items.append(managed_issue_payload)
+		managed_issue_page_size = int(managed_issue_params.get('per_page', '30'))
+		store.setdefault('managed_issue_api_calls', []).append({
+			'state': managed_issue_params.get('state'),
+			'labels': managed_issue_params.get('labels'),
+			'per_page': managed_issue_page_size,
+			'paginate': '--paginate' in args,
+		})
+		save()
+		if '--paginate' in args:
+			for managed_issue_offset in range(0, len(managed_issue_items), managed_issue_page_size):
+				print(json.dumps(managed_issue_items[managed_issue_offset:managed_issue_offset + managed_issue_page_size]))
+		else:
+			print(json.dumps(managed_issue_items[:managed_issue_page_size]))
+		sys.exit(0)
+
 	if path == 'search/issues':
 		# Minimal child-issue search: return issues whose stored body contains
 		# the queried `Tracking issue: #N` reference (mirrors the real
@@ -3068,15 +3103,34 @@ def test_security_pass_reuses_matching_open_fix_issue_after_stale_checkpoint() -
 - Local ID: `security-pass-fix-cycle-1`
 - Managed by: AI Orchestrator
 """
+	prefix_collision_body = """Refs #1920
+
+---
+**Orchestrator metadata** (do not edit)
+- Tracking issue: #1920
+- Local ID: `security-pass-fix-cycle-1`
+- Managed by: AI Orchestrator
+"""
+	prefix_collision_issues = {
+		issue_number: ["ai:orchestrator-managed"]
+		for issue_number in range(1000, 1201)
+	}
+	prefix_collision_bodies = {
+		issue_number: prefix_collision_body
+		for issue_number in prefix_collision_issues
+	}
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
 		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
-		issue_labels={10: ["ai:merged"], 901: ["ai:orchestrator-managed"]},
-		issue_bodies={901: existing_fix_body},
-		mock_gh_issue_list_label_filter=True,
+		issue_labels={
+			10: ["ai:merged"],
+			**prefix_collision_issues,
+			901: ["ai:orchestrator-managed"],
+		},
+		issue_bodies={**prefix_collision_bodies, 901: existing_fix_body},
 		existing_branches=["main", "orchestrator/project-192"],
 	)
 
@@ -3088,16 +3142,14 @@ def test_security_pass_reuses_matching_open_fix_issue_after_stale_checkpoint() -
 	combined_log = result["stdout"] + result["stderr"]
 	assert "already exists for cycle 1; reusing it" in combined_log
 	assert "SECURITY_PASS_FIX_ISSUE_CREATED" not in combined_log
-	security_fix_lookups = [
-		call
-		for call in result.get("issue_list_calls", [])
-		if call == {
+	assert result.get("managed_issue_api_calls", []) == [
+		{
 			"state": "open",
-			"label": "ai:orchestrator-managed",
-			"json": "number,body",
+			"labels": "ai:orchestrator-managed",
+			"per_page": 100,
+			"paginate": True,
 		}
 	]
-	assert len(security_fix_lookups) == 1
 
 
 def test_security_pass_merged_fix_advances_cycle_invalidates_sha_and_reaudits() -> None:

@@ -4364,19 +4364,20 @@ PY
   # ACTIVE_WORKFLOW_ISSUES only has workflow-active numbers, _candidate_details_json
   # only has known candidates, and STALL_MANAGED_LINKED_PR_CACHE only has state-known
   # stalled issues. Search by the durable body markers before creating a replacement.
-  issue_number="$(gh_retry gh issue list \
-    --repo "${GITHUB_REPOSITORY}" \
-    --state open \
-    --label "ai:orchestrator-managed" \
-    --json number,body \
-    --limit 200 2>/dev/null \
-    | jq -r \
-      --arg tracking_marker "Tracking issue: #${TRACKING_NUM}" \
-      --arg local_id_marker "Local ID: \`security-pass-fix-cycle-$((completed_cycles + 1))\`" '
-        .[]
+  issue_number="$(gh_retry gh api --paginate --method GET \
+    "repos/${GITHUB_REPOSITORY}/issues" \
+    -f state=open \
+    -f labels="ai:orchestrator-managed" \
+    -f per_page=100 2>/dev/null \
+    | jq -sr \
+      --arg tracking_marker "- Tracking issue: #${TRACKING_NUM}" \
+      --arg local_id_marker "- Local ID: \`${local_id}\`" '
+        add // []
+        | .[]
+        | select(.pull_request | not)
         | select(
-            ((.body // "") | contains($tracking_marker))
-            and ((.body // "") | contains($local_id_marker))
+            (((.body // "") | split("\n") | index($tracking_marker)) != null)
+            and (((.body // "") | split("\n") | index($local_id_marker)) != null)
           )
         | .number
         | select(type == "number" and . > 0)
