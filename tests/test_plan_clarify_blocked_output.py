@@ -116,15 +116,36 @@ def _has_structured_clarification_block(parsed_output: str) -> bool:
 	return False
 
 
-def _needs_clarification(parsed_output: str, *, self_check_gate_enabled: bool) -> bool:
+def _has_answerable_clarification(parsed_output: str) -> bool:
 	has_status_needs_clarification = any(
 		STATUS_NEEDS_CLARIFICATION_RE.search(line) for line in parsed_output.splitlines()
 	)
+	return has_status_needs_clarification or _has_structured_clarification_block(parsed_output)
+
+
+def _needs_clarification(parsed_output: str, *, self_check_gate_enabled: bool) -> bool:
+	# Mirrors the plan.yml routing: needs_clarification is true only when
+	# something answerable exists. A self-check BLOCKER without answerable
+	# questions routes to the blocked path instead (see
+	# _self_check_blocker_routes_to_blocked).
+	del self_check_gate_enabled
+	return _has_answerable_clarification(parsed_output)
+
+
+def _self_check_blocker_routes_to_blocked(parsed_output: str, *, self_check_gate_enabled: bool) -> bool:
 	self_check_reopen = _self_check_summary(
 		parsed_output,
 		self_check_gate_enabled=self_check_gate_enabled,
 	)["reopen"]
-	return has_status_needs_clarification or _has_structured_clarification_block(parsed_output) or self_check_reopen
+	return bool(self_check_reopen) and not _has_answerable_clarification(parsed_output)
+
+
+def _first_self_check_blocker_reason(parsed_output: str) -> str:
+	for line in parsed_output.splitlines():
+		match = SELF_CHECK_BLOCKER_RE.match(line)
+		if match:
+			return match.group(1)
+	return ""
 
 
 def test_prompt_contract_includes_blocked_rule() -> None:
@@ -180,7 +201,9 @@ def test_plan_workflow_detects_blocked_before_needs_clarification() -> None:
 	assert "--remove-label 'ai:blocked'" in wf
 	assert "--status \"blocked\"" in wf
 	assert '[ "${PLAN_SELF_CHECK_GATE_ENABLED}" = "true" ] && [ "${SELF_CHECK_BLOCKER_COUNT}" -gt 0 ]' in wf
-	assert '[ "${HAS_STATUS_NEEDS_CLARIFICATION}" = "true" ] || [ "${HAS_STRUCTURED_CLARIFICATION_BLOCK}" = "true" ] || [ "${SELF_CHECK_REOPEN_CLARIFICATION}" = "true" ]' in wf
+	assert '[ "${HAS_STATUS_NEEDS_CLARIFICATION}" = "true" ] || [ "${HAS_STRUCTURED_CLARIFICATION_BLOCK}" = "true" ]' in wf
+	assert 'elif [ "${SELF_CHECK_REOPEN_CLARIFICATION}" = "true" ]; then' in wf
+	assert "SELF_CHECK_BLOCKED_REASON" in wf
 	assert "steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'" in wf
 
 
@@ -233,8 +256,45 @@ def test_unterminated_fence_reopens_clarification_for_self_check_blocker() -> No
 	assert summary_enabled["observation"] == "none"
 	assert summary_enabled["reopen"] is True
 	assert summary_disabled["reopen"] is False
-	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is True
+	# A blocker with no answerable Q-ID block routes to the blocked path,
+	# not to clarification (which would loop: orchestrator auto-answer
+	# finds no Q-ID blocks and stall recovery re-answers forever).
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
 	assert _needs_clarification(parsed_output, self_check_gate_enabled=False) is False
+	assert _self_check_blocker_routes_to_blocked(parsed_output, self_check_gate_enabled=True) is True
+	assert _self_check_blocker_routes_to_blocked(parsed_output, self_check_gate_enabled=False) is False
+	assert _first_self_check_blocker_reason(parsed_output) == "missing files_touched list"
+
+
+def test_self_check_blocker_with_q_id_block_still_reopens_clarification() -> None:
+	parsed_output = _sanitize_plan_output(
+		"Implementation Plan\n"
+		"PLAN_SELF_CHECK: BLOCKER: destructive guard is active\n"
+		"STATUS: NOT_CLEAR\n"
+		"Q1: Should the guard be cleared before implementation?\n"
+		"Choices:\n"
+		"- A - clear the guard and proceed (RECOMMENDED)\n"
+	)
+
+	assert _has_structured_clarification_block(parsed_output) is True
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is True
+	assert _self_check_blocker_routes_to_blocked(parsed_output, self_check_gate_enabled=True) is False
+
+
+def test_self_check_blocker_without_questions_routes_to_blocked() -> None:
+	parsed_output = _sanitize_plan_output(
+		"Implementation Plan\n"
+		"PLAN_SELF_CHECK: BLOCKER: Issue retains ai:destructive-blocked and ALLOW_BULK_DELETE is not configured\n"
+		"STATUS: NOT_CLEAR\n"
+	)
+
+	assert _has_structured_clarification_block(parsed_output) is False
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
+	assert _self_check_blocker_routes_to_blocked(parsed_output, self_check_gate_enabled=True) is True
+	assert (
+		_first_self_check_blocker_reason(parsed_output)
+		== "Issue retains ai:destructive-blocked and ALLOW_BULK_DELETE is not configured"
+	)
 
 
 def test_pass_self_check_stays_clear() -> None:

@@ -1215,9 +1215,41 @@ jobs:
             HAS_STRUCTURED_CLARIFICATION_BLOCK="true"
           fi
 
-          if [ "${HAS_STATUS_NEEDS_CLARIFICATION}" = "true" ] || [ "${HAS_STRUCTURED_CLARIFICATION_BLOCK}" = "true" ] || [ "${SELF_CHECK_REOPEN_CLARIFICATION}" = "true" ]; then
+          if [ "${HAS_STATUS_NEEDS_CLARIFICATION}" = "true" ] || [ "${HAS_STRUCTURED_CLARIFICATION_BLOCK}" = "true" ]; then
             echo "needs_clarification=true" >> "$GITHUB_OUTPUT"
             echo "NEEDS_CLARIFICATION=true" >> "$GITHUB_ENV"
+          elif [ "${SELF_CHECK_REOPEN_CLARIFICATION}" = "true" ]; then
+            # PLAN_SELF_CHECK: BLOCKER with no Q-ID block and no
+            # NEEDS_CLARIFICATION status: there is nothing answerable, so
+            # reopening clarification cannot converge — the orchestrator
+            # auto-answer parser fails with "No Q-ID blocks detected" and
+            # stall recovery re-answers into the same blocked plan forever.
+            # Route to the blocked path instead (ai:blocked, human paged
+            # once, stall recovery skips the issue). Later same-key writes
+            # override the blocked=false defaults above in both
+            # GITHUB_OUTPUT and GITHUB_ENV.
+            SELF_CHECK_BLOCKED_REASON="$(perl -ne '
+              if (/^\s*PLAN_SELF_CHECK:\s*BLOCKER:\s*(.*\S)\s*$/i) { print $1; exit; }
+            ' "${CODEX_OUTPUT_PARSE_FILE}")"
+            if [ -z "${SELF_CHECK_BLOCKED_REASON}" ]; then
+              SELF_CHECK_BLOCKED_REASON="plan self-check reported blockers with no answerable clarification questions"
+            fi
+            SELF_CHECK_BLOCKED_OUTPUT_DELIM="SELF_CHECK_BLOCKED_OUTPUT_${GITHUB_RUN_ID:-0}_${GITHUB_RUN_ATTEMPT:-0}_$$"
+            SELF_CHECK_BLOCKED_ENV_DELIM="SELF_CHECK_BLOCKED_ENV_${GITHUB_RUN_ID:-0}_${GITHUB_RUN_ATTEMPT:-0}_$$"
+            echo "blocked=true" >> "$GITHUB_OUTPUT"
+            {
+              printf 'blocked_reason<<%s\n' "${SELF_CHECK_BLOCKED_OUTPUT_DELIM}"
+              printf '%s\n' "${SELF_CHECK_BLOCKED_REASON}"
+              printf '%s\n' "${SELF_CHECK_BLOCKED_OUTPUT_DELIM}"
+            } >> "$GITHUB_OUTPUT"
+            echo "BLOCKED=true" >> "$GITHUB_ENV"
+            {
+              printf 'BLOCKED_REASON<<%s\n' "${SELF_CHECK_BLOCKED_ENV_DELIM}"
+              printf '%s\n' "${SELF_CHECK_BLOCKED_REASON}"
+              printf '%s\n' "${SELF_CHECK_BLOCKED_ENV_DELIM}"
+            } >> "$GITHUB_ENV"
+            echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
+            echo "NEEDS_CLARIFICATION=false" >> "$GITHUB_ENV"
           else
             echo "needs_clarification=false" >> "$GITHUB_OUTPUT"
             echo "NEEDS_CLARIFICATION=false" >> "$GITHUB_ENV"
