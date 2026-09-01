@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Prompt-related changes span files under prompts/_templates, prompts/contracts, and prompts/*.txt, with rendering tests validating the resulting foundation and review behavior. Plans that alter implement, plan, judge, or security-audit guidance should account for both the source template/contract and its rendered prompt plus regression tests.",
+  "fingerprint": "2cf6bbd7d0d0f466c5d4fd7ec1bb51b8df7d5ed0b64df383d950cf149954894d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33464701838",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33464701838",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3918",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3919",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3934",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3941",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3943",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3920",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3921",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3936",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3942",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3944"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260901030358_5cf801a825",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "The AI workflow prompt system separates shared mode templates, rendered prompts, and mode contracts.",
+  "timestamps": {
+    "created_at": "2026-09-01T03:03:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
