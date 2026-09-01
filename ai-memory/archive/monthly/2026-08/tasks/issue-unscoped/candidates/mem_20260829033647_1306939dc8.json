@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/audit-plans.md (mirror: workflow-templates/.claude/commands/audit-plans.md): line 31, the \"Build the in-flight footprint\" bullet, clause (b) | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: Clause (b) provides no fallback when an orchestrator tracking issue originated from a plain issue rather than a `docs/plans/*.md` source plan.\n  WHY: The executor may build an incomplete footprint, allowing an UNSCREENED-in-practice pick to be reported as conflict-free.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .claude/commands/audit-plans.md (mirror: workflow-templates/.claude/commands/audit-plans.md)\n  Line or code reference: line 31, the \"Build the in-flight footprint\" bullet, clause (b)\n  Problem: Clause (b) instructs the executor to build the footprint of un-dispatched waves from \"the project's source plan \u2014 read that plan doc (the tracking issue names it)\". For orchestrator tracking issues that were created from a plain issue rather than from a `docs/plans/*.md` document (the orchestrator accepts any issue as project input), no source plan doc exists, and the command defines no fallback for how to footprint such a project.\n  Why it fails at runtime: The executor either wastes effort hunting for a nonexistent plan doc, or silently builds an incomplete footprint; since rules line 90\u201391 make the gate a hard gate and demand evidence-based screening, an under-specified footprint path lets an UNSCREENED-in-practice pick be reported as conflict-free. A one-clause fallback (e.g., \"if no source plan doc exists, use the tracking issue body and its wave-issue scopes\") closes the gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "ccf22623da42f369d8326afd31a35c959deba1aca8f2d5c19e88e0908275e824",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33230724735",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33230724735",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260829033647_1306939dc8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33230724735"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-29T03:36:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

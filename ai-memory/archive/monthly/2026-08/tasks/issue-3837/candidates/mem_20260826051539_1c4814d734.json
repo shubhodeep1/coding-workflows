@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3837,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3837\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3840\",\"pr_number\":3840,\"branch\":\"ai/issue-3837\",\"run_id\":\"32932565017\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/32932565017\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"analysis/recommendation-processing-report.md\",\"changelog.d/3837-security-audit-path-diagnostics.md\",\"scripts/openrouter_prompt_cache.py\",\"scripts/security_audit.sh\",\"tests/test_security_audit_workflow_contract.py\"]}",
+  "fingerprint": "82632b9398bdcf39e82367e5b01a416ab7de9ee8d6c04e68e3ab1f8c4a8a8028",
+  "lineage": {
+    "issue_number": 3837,
+    "parent_ids": [],
+    "pr_number": 3840,
+    "run_id": "32932565017",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32932565017",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3840"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260826051539_1c4814d734",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3837,
+    "level": "run",
+    "pr_number": 3840,
+    "run_id": "32932565017"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3837: https://github.com/shubhodeep1/coding-workflows/pull/3840",
+  "timestamps": {
+    "created_at": "2026-08-26T05:15:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

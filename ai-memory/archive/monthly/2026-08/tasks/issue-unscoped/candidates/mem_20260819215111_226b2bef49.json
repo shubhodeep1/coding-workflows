@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:3786-3792 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5]\n  PROBLEM: `rm -f \"${reviewer_attempt_prompt_file}\"` can expand to `rm -f \"\"` when the earlier `cp` fails and the variable is empty.\n  WHY: This is a cosmetic cleanup issue that may emit a spurious stderr diagnostic on some `rm` implementations, but the function still fails safely and returns 0.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_run_reviewers.sh:3786-3792 | severity=low | confidence=2\n  PROBLEM: The `rm -f ... \"${reviewer_attempt_prompt_file}\"` cleanup can expand to `rm -f \"\"` on some non-GNU implementations when `reviewer_attempt_prompt_file` is empty.\n  WHY: This is a theoretical cosmetic edge with no runtime failure path, and `-f` suppresses errors for nonexistent files.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_run_reviewers.sh:3786-3792 | severity=low | confidence=4\n  PROBLEM: The `rm -f ... \"${reviewer_attempt_prompt_file}\"` cleanup can expand to `rm -f \"\"` when the earlier `cp` failed and `reviewer_attempt_prompt_file` is empty.\n  WHY: While this is only cosmetic (the guard already tolerates cleanup failures and returns 0 after setting `REVIEWER_ATTEMPT_OUTCOME=\"failed\"`), it may emit a spurious stderr diagnostic on some `rm` implementations.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_run_reviewers.sh:3786 | severity=low | confidence=2\n  PROBLEM: When the earlier `cp` at line 3666 fails, `reviewer_attempt_prompt_file` remains set to the empty string. The cleanup command `rm -f \"${reviewer_attempt_prompt_file}\"` then expands to `rm -f \"\"`, which on some non-GNU `rm` implementations may emit a diagnostic to stderr before exiting zero.\n  WHY: While this is cosmetic (the `-f` flag is present and the function tolerates cleanup failures), it could produce spurious stderr output that might confuse log parsing or monitoring.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "c0c7b55582801036ed5c6612f4c509a535046d8465a7942885c77eb3c593f9aa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3776,
+    "run_id": "32299821202",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32299821202",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260819215111_226b2bef49",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3776,
+    "run_id": "32299821202"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-19T21:51:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

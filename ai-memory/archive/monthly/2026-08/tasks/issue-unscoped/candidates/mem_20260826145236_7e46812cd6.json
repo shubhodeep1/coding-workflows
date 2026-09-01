@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_resolve_review_threads.py:~95 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: No test covers the `len(tail) > REASON_MAX_CHARS` truncation branch introduced at scripts/review_resolve_review_threads_plan.py:134-136.\n  WHY: A regression could silently exceed the 500-character cap or omit the \"...\" marker without failing the test suite.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states that the implementation should properly truncate long rationale text with an ellipsis when it exceeds the 500-character limit, rather than just slicing it which could cut off mid-word or mid-sentence.\n  expected_change_site: scripts/review_resolve_review_threads_plan.py in the extract_reason() function\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The original code at line 134 was `return tail[:REASON_MAX_CHARS]` which could truncate mid-word. The fixed code now properly checks the length and appends \"...\" when needed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_resolve_review_threads.py: No test covers the truncation path introduced at scripts/review_resolve_review_threads_plan.py:134-135 | severity=low | confidence=3\n  PROBLEM: The test suite has no case with a reason string exceeding 500 characters.\n  WHY: If the truncation logic regresses, a reason reply posted into an \"ignored\" thread could silently exceed the 500-character cap or omit the \"...\" marker.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_resolve_review_threads_plan.py: extract_reason at lines 134-136 | severity=low | confidence=4\n  PROBLEM: The new truncation-with-ellipsis branch is not covered by any of the 24 tests in tests/test_review_resolve_review_threads.py.\n  WHY: A future edit to `extract_reason` could silently drop the ellipsis marker, restore `return tail[:REASON_MAX_CHARS]`, or change the `-3` slice bound without any test failing.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- tests/test_review_resolve_review_threads.py (line ~95, next to test_ignored_entry_is_resolved_and_carries_its_reason): scripts/review_resolve_review_threads_plan.py:134-136 | severity=low | confidence=3\n  PROBLEM: The new truncation-with-ellipsis branch has no test coverage.\n  WHY: A future edit to extract_reason could regress the 500-character cap or silently drop the \"...\" marker with nothing catching it.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_resolve_review_threads.py: After `test_ignored_entry_is_resolves_and_carries_its_reason` (around line 115) | severity=low | confidence=4\n  PROBLEM: No test exercises the `len(tail) > REASON_MAX_CHARS` branch in extract_reason at scripts/review_resolve_review_threads_plan.py:134-136.\n  WHY: A regression could silently drop the \"...\" marker or exceed the 500-character cap.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "a55eb33d05c7ebedddff5c91b70557f944523a325a1efc773a25bd27b2df5c8f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3841,
+    "run_id": "32975464942",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32975464942",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260826145236_7e46812cd6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3841,
+    "run_id": "32975464942"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-26T14:52:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

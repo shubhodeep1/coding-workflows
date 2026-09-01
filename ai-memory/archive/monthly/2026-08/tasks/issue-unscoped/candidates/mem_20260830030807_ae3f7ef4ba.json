@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:69, 70-71, 83 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `_resolver_dependency_fallback()` function uses `${PWD}` in candidate path construction and does not properly validate that returned candidates are regular files before sourcing them.\n  WHY: If the working directory differs from `GITHUB_WORKSPACE`, paths resolve incorrectly. The `-f` test can match directories/special files, causing sourcing to fail with a hard `helpers_missing` guard despite a valid helper existing.\n- scripts/review_conflict_resolve.sh:99-114 | severity=high | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Fallback logic updates `OPENCODE_HELPERS_PATH`/`OPENCODE_CONFIG_WRITER_PATH` but does not re-validate readability before proceeding, creating a TOCTOU race.\n  WHY: A file readable at check time could become unreadable/corrupted before sourcing, causing the resolver to fail with `helpers_missing`.\n- scripts/review_conflict_resolve.sh:107-114 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Warning messages use `SCRIPT_REF` which may be unset or unknown, making diagnostics less actionable.\n  WHY: Operators cannot identify which staging list version caused the issue from the warning.\n- agents.md: line 785 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Documentation inconsistency between the canonical inventory and the changelog wording about which helpers are staged.\n  WHY: Misleading documentation could cause maintainers to misunderstand the exact set of staged helpers.\n- changelog.d/3897-resolver-opencode-helpers-fallback.md: line 4 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Changelog wording could be misinterpreted as allowing consumer repos to use workspace scripts fallback, contradicting the trust-boundary gating in the code.\n  WHY: Confusing changelog text could lead to incorrect assumptions about security boundaries.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_conflict_resolve.sh:69, 70-71, 83 | severity=MAJOR | confidence=4\n  PROBLEM: The `_resolver_dependency_fallback()` function uses `${PWD}` in candidate path construction and does not properly validate that returned candidates are regular files before sourcing them.\n  WHY: If the working directory differs from `GITHUB_WORKSPACE`, paths resolve incorrectly. The `-f` test can match directories/special files, causing sourcing to fail with a hard `helpers_missing` guard despite a valid helper existing.\n- scripts/review_conflict_resolve.sh:99-114 | severity=MAJOR | confidence=3\n  PROBLEM: Fallback logic updates `OPENCODE_HELPERS_PATH`/`OPENCODE_CONFIG_WRITER_PATH` but does not re-validate readability before proceeding, creating a TOCTOU race.\n  WHY: A file readable at check time could become unreadable/corrupted before sourcing, causing the resolver to fail with `helpers_missing`.\n- scripts/review_conflict_resolve.sh:107-114 | severity=NIT | confidence=3\n  PROBLEM: Warning messages use `SCRIPT_REF` which may be unset or unknown, making diagnostics less actionable.\n  WHY: Operators cannot identify which staging list version caused the issue from the warning.\n- agents.md: line 785 | severity=NIT | confidence=3\n  PROBLEM: Documentation inconsistency between the canonical inventory and the changelog wording about which helpers are staged.\n  WHY: Misleading documentation could cause maintainers to misunderstand the exact set of staged helpers.\n- changelog.d/3897-resolver-opencode-helpers-fallback.md: line 4 | severity=NIT | confidence=3\n  PROBLEM: Changelog wording could be misinterpreted as allowing consumer repos to use workspace scripts fallback, contradicting the trust-boundary gating in the code.\n  WHY: Confusing changelog text could lead to incorrect assumptions about security boundaries.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/review_conflict_resolve.sh: line 94\n  PROBLEM: The config-writer fallback warning omits the `SCRIPT_REF=${SCRIPT_REF:-unknown}` diagnostic hint that the opencode_helpers.sh warning at line 88 carries, so the two warnings for the same root cause carry asymmetric debugging context.\n  WHY: Advisory only; the fallback behavior itself is correct either way.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "652d8b4c82be297d9b64c3cddc0b5faf42b63b0e18bbec47af673c7c79c32628",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3897,
+    "run_id": "33286313202",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33286313202",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260830030807_ae3f7ef4ba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3897,
+    "run_id": "33286313202"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-30T03:08:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

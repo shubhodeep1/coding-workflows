@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:3641-3656 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The attempt prompt path construction does not guarantee uniqueness across reviewer slots when `safe_name` is empty or collides.\n  WHY: If `safe_name` is empty or two slots map to the same filesystem-safe name, the attempt path could alias multiple reviewer workers onto the same mutable prompt file, reintroducing the shared-file race condition.\n- scripts/review_run_reviewers.sh:3761-3784 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The pre-launch guard can still fall back to an empty base prompt and launch codex with empty stdin.\n  WHY: If the base prompt itself is empty or smaller than the truncated attempt, the guard can switch `reviewer_effective_prompt_file` and still launch codex with an invalid prompt, causing the reviewer pass to fail.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The pre-launch guard must ensure the effective prompt is non-empty before launching codex, regardless of whether the attempt copy was restored from the base prompt.\n  expected_change_site: scripts/review_run_reviewers.sh in the pre-launch guard block (lines 3761-3784)\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The guard restores a truncated prompt or falls back to the base prompt but does not re-check that the resulting `reviewer_effective_prompt_file` is non-empty before the codex launch redirect\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_run_reviewers.sh:3641-3656 | confidence=4\n  PROBLEM: The attempt prompt path construction does not guarantee uniqueness across reviewer slots when `safe_name` is empty or collides.\n  WHY: If `safe_name` is empty or two slots map to the same filesystem-safe name, the attempt path could alias multiple reviewer workers onto the same mutable prompt file, reintroducing the shared-file race condition.\n- scripts/review_run_reviewers.sh:3761-3784 | confidence=4\n  PROBLEM: The pre-launch guard for truncated attempt prompts does not verify that the restored base prompt is non-empty before falling back.\n  WHY: If the base prompt itself is empty (e.g., due to a prior corruption or misconfiguration), the guard will switch to it and still launch codex with an empty stdin, causing the same \"No prompt provided via stdin\" failure.\n- scripts/review_run_reviewers.sh:3761-3784 | confidence=4\n  PROBLEM: The fallback logic for restoring a truncated attempt prompt does not validate the base prompt size before switching `reviewer_effective_prompt_file`.\n  WHY: If the base prompt is empty or smaller than the truncated attempt, the slot will still launch codex with an invalid prompt, failing the reviewer pass.\n- Requirement: The pre-launch guard must ensure the effective prompt is non-empty before launching codex, regardless of whether the attempt copy was restored from the base prompt\n  Expected change site: scripts/review_run_reviewers.sh in the pre-launch guard block (lines 3761-3784)\n  Evidence of absence: The guard restores a truncated prompt or falls back to the base prompt but does not re-check that the resulting `reviewer_effective_prompt_file` is non-empty before the codex launch redirect\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "a76cecde14c596110908462cac5f920b076107da123cc15ed4dee869d28a0491",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3776,
+    "run_id": "32293913170",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32293913170",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260819203358_890133c8e6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3776,
+    "run_id": "32293913170"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-19T20:33:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:lines 3-4 | severity=high | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: A command-style `entry` whose path-like argument is a directory rather than a file (for example `pytest tests/`) makes the healthcheck report unhealthy even though the command target is valid.\n  WHY: `-f` returns false for a directory, so `pytest tests/` sets `_repo_check_health_path_seen=1` but never hits the `exit 0` branch; the final gate then requires `_repo_check_health_path_seen -eq 0`, fails, and the container stays unhealthy.\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:lines 4-7 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The healthcheck tokenization loop does not properly strip quotes from quoted arguments in command-style entries, causing the container to remain unhealthy even when the referenced script exists.\n  WHY: The healthcheck checks for a path with literal quotes (e.g., `/workspace/\"scripts/run_validation_repo_checks.sh\"`), which will never match an actual file, leaving the app container unhealthy and validation aborting as `harness_error`.\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:lines 4-7 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: For multi-token entries like `scripts/run_validation_repo-checks.sh --flag`, the healthcheck only checks `test -d /workspace` and does not verify that the referenced script file exists under `/workspace`.\n  WHY: Multi-token entries with script+args will pass the healthcheck even when the script doesn't exist, allowing validation to proceed with a missing script, contrary to the PR description's stated intent to gate on script presence.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:lines 3-4 | severity=MAJOR | confidence=3\n  PROBLEM: A command-style `entry` whose path-like argument is a directory rather than a file (for example `pytest tests/`) makes the healthcheck report unhealthy even though the command target is valid.\n  WHY: `-f` returns false for a directory, so `pytest tests/` sets `_repo_check_health_path_seen=1` but never hits the `exit 0` branch; the final gate then requires `_repo_check_health_path_seen -eq 0`, fails, and the container stays unhealthy.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:lines 4-7 | confidence=5\n  PROBLEM: The healthcheck tokenization loop does not properly strip quotes from quoted arguments in command-style entries, causing the container to remain unhealthy even when the referenced script exists.\n  WHY: The healthcheck checks for a path with literal quotes (e.g., `/workspace/\"scripts/run_validation_repo_checks.sh\"`), which will never match an actual file, leaving the app container unhealthy and validation aborting as `harness_error`.\n- workflow-templates/validation-harness/python-repo-checks/docker-compose.test.yml.j2:lines 4-7 | confidence=5\n  PROBLEM: For multi-token entries like `scripts/run_validation_repo-checks.sh --flag`, the healthcheck only checks `test -d /workspace` and does not verify that the referenced script file exists under `/workspace`.\n  WHY: Multi-token entries with script+args will pass the healthcheck even when the script doesn't exist, allowing validation to proceed with a missing script, contrary to the PR description's stated intent to gate on script presence.\n\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "1e8219c69088238233764ae5284f38274f73aebcf20501c6ca119d7896ad53e6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3862,
+    "run_id": "33151038439",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33151038439",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260828084243_aac1c62076",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3862,
+    "run_id": "33151038439"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-28T08:42:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

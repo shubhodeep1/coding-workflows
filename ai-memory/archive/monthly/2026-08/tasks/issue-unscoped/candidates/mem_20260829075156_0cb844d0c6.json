@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:line 1470 (EXCLUDED_RE) and line 1516 (perl extraction alternation) | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: The guard fails to match bare directory tokens `.github/prompts`, `.github/scripts`, and `scripts` because its regex, perl extractor, and case handling require a trailing slash.\n  WHY: Such plans pass the guard even though implement.yml blanket-excludes `.github/prompts/` and `.github/scripts/`, producing the silent no-op PR this guard is intended to prevent; severity was MAJOR for the excluded directories and NIT/lower for bare `scripts`.\n- tests/test_plan_template_owned_path_guard.py:lines 125-145 (parametrize list for `test_template_owned_paths_are_rejected`) and lines 167-170 (`test_bare_scripts_directory_reference_is_rejected`) | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: Tests do not cover bare-directory tokens without trailing slashes.\n  WHY: `.github/prompts`, `.github/scripts`, and `scripts` would currently return exit code 0 instead of being rejected, leaving the regex gap unprotected.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/plan.yml: line 1470 (EXCLUDED_RE) and line 1516 (perl extraction loop) \u2014 both use the alternation `scripts/|\\.github/prompts/|\\.github/scripts/` with a mandatory trailing slash before the path component\n  severity=MAJOR | confidence=4\n  PROBLEM: Bare `.github/prompts`, `.github/scripts`, or `scripts` tokens are never captured and pass the guard.\n  WHY: implement.yml blanket-excludes `.github/prompts/` and `.github/scripts/`, so the plan becomes a silent no-op PR.\n- .github/workflows/plan.yml: lines 1525-1529 (case statement)\n  severity=NIT | confidence=3\n  PROBLEM: `.github/prompts/*` and `.github/scripts/*` do not explicitly match bare directory tokens.\n  WHY: Once extraction is fixed, bare directory forms should be handled explicitly.\n- tests/test_plan_template_owned_path_guard.py: lines 125-145 (parametrize list for `test_template_owned_paths_are_rejected`) and lines 167-170 (`test_bare_scripts_directory_reference_is_rejected`)\n  severity=MAJOR | confidence=4\n  PROBLEM: Tests omit directory tokens without trailing slashes.\n  WHY: The guard currently accepts those inputs.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml: line 1470 (EXCLUDED_RE) and line 1516 (perl extraction alternation `scripts/|\\.github/prompts/|\\.github/scripts/` with mandatory trailing slash)\n  severity=MAJOR | confidence=4\n  PROBLEM: Bare `.github/prompts` and `.github/scripts` do not match the guard.\n  WHY: The plan can proceed despite implement.yml excluding those trees, creating a silent no-op PR.\n- .github/workflows/plan.yml: line 1470 (EXCLUDED_RE) and line 1516 (perl extraction)\n  severity=NIT | confidence=4\n  PROBLEM: Bare `scripts` is likewise not matched.\n  WHY: It contradicts the intended conservative rejection of bare `scripts/` references.\n- tests/test_plan_template_owned_path_guard.py: lines 125-145 (`test_template_owned_paths_are_rejected`) and lines 167-170 (`test_bare_scripts_directory_reference_is_rejected`)\n  severity=MAJOR | confidence=4\n  PROBLEM: Bare-directory forms are not tested.\n  WHY: The guard accepts the omitted cases.\n- No task gaps reported.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/plan.yml: line 1470 (EXCLUDED_RE pattern) and line 1516 (perl extraction pattern)\n  confidence=5\n  PROBLEM: Regex patterns require trailing slashes and miss bare directory tokens.\n  WHY: Bare excluded-directory targets can slip through the guard.\n- .github/workflows/plan.yml: line 1528-1533 (case statement)\n  confidence=5\n  PROBLEM: The case statement only matches directory patterns with trailing slashes.\n  WHY: Bare directory tokens are not caught.\n- tests/test_plan_template_owned_path_guard.py: lines 125-145 (test_template_owned_paths_are_rejected) and lines 167-170 (test_bare_scripts_directory_reference_is_rejected)\n  confidence=5\n  PROBLEM: Tests do not cover directory tokens without trailing slashes.\n  WHY: The suite falsely advertises full coverage.\n- No task gaps reported.\n\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/plan.yml: the EXCLUDED_RE pre-filter and the identical alternation in the perl candidate-extractor (around lines 1470 and 1516): `(scripts/|\\.github/prompts/|\\.github/scripts/)`\n  severity=MAJOR | confidence=4\n  PROBLEM: Bare directory tokens, including `./`-prefixed forms, produce no match.\n  WHY: Such plans pass the guard despite implement.yml blanket-excluding the affected directories.\n- tests/test_plan_template_owned_path_guard.py: the parametrized list in test_template_owned_paths_are_rejected (around lines 125-145) and test_bare_scripts_directory_reference_is_rejected (around lines 167-170)\n  severity=MAJOR | confidence=4\n  PROBLEM: Tests omit bare `.github/prompts`, `.github/scripts`, and `scripts`.\n  WHY: The exact regex gap remains untested.\n- No task gaps reported.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/plan.yml: line 1470 (EXCLUDED_RE) and line 1516 (perl candidate extraction)\n  severity=MAJOR | confidence=5\n  PROBLEM: Bare `.github/prompts` and `.github/scripts` produce zero matches and are allowed through; bare `scripts` has the same gap.\n  WHY: implement.yml drops files under the excluded directories, yielding the no-op PR the guard should prevent.\n- tests/test_plan_template_owned_path_guard.py: lines 125-142 (test_template_owned_paths_are_rejected parametrize list)\n  severity=MAJOR | confidence=5\n  PROBLEM: Bare excluded-directory tokens are absent from the parametrized rejection list.\n  WHY: The current guard returns 0 for those inputs, giving false confidence.\n- No task gaps reported.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- .github/workflows/plan.yml: EXCLUDED_RE at line 1470 and the perl extractor at line 1516\n  PROBLEM: Bare `.github/prompts` or `.github/scripts` tokens are never extracted.\n  WHY: implement.yml still blanket-excludes those directories, so the uncommon plan shape can become a no-op.\n- No task gaps reported.\n\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "444e46f6d33ece92ef48b342bc9ef8975f6af96e77421bbcfee65316562c45a5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3880,
+    "run_id": "33239029962",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33239029962",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260829075156_0cb844d0c6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3880,
+    "run_id": "33239029962"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-29T07:51:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

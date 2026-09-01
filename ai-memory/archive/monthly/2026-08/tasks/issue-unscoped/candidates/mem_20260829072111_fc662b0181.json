@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh: aggregate_step_finish_usage function, line 446 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Missing reasoning tokens are passed through `nonnegative_int` without a zero default, causing `None` to reach aggregation.\n  WHY: A missing reasoning field causes a TypeError when `None` is evaluated by the numeric validation logic.\n- scripts/review_run_reviewers.sh: reviewer_cache_read_input_tokens function, line 7436 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k3]\n  PROBLEM: Attempt-count fallback is computed after cache telemetry availability, so availability is incorrectly false when logs contain usage rows but lack attempt markers.\n  WHY: A single usage row with `usage_available=true` is not recognized for the `model_three` slot, producing incorrect telemetry reporting.\n- scripts/review_run_reviewers.sh: reviewer_strip_opencode_output_file call, line 4022 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `reviewer_strip_opencode_output_file \"${tmp_stderr}\"` call has stray leading whitespace.\n  WHY: The indentation inconsistency may trip whitespace-sensitive checks and is easy to miss in future edits.\n- docs/plans/opencode-review-autofix-cutover-plan.md: lines 366-380, section \"Production parity evidence\" \u2014 the claim \"The last three successful pre-P2 runs where `Run reviewer models` actually executed establish the Codex latency baseline\" and the table rows `33177800142` / `33160867375` / `32907158075`; also the amended criterion at lines 342-344 (\"Baseline: the last 3 real Codex-reviewer review_autofix runs before the cutover\"). | severity=high | confidence=4\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The recorded selection is not the last three Codex-reviewer runs under its own stated rule.\n  WHY: Run 33167154516 is a more recent eligible Codex-reviewer run than two recorded rows, so the baseline mean, range, and median are incorrect unless branch scoping is explicitly documented.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: scripts/review_run_reviewers.sh\n  Line or code reference: aggregate_step_finish_usage function, line 446\n  Problem: reasoning tokens default omitted in nonnegative_int call, causing None to be returned for missing field, which would crash the aggregation.\n  Why it fails at runtime: The function would raise TypeError when None is compared in the `None in (...)` check.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- File: scripts/review_run_reviewers.sh\n  Line or code reference: reviewer_cache_read_input_tokens function, line 7436\n  Problem: attempt_count fallback is computed after cache telemetry availability, so availability is incorrectly false when logs exist but lack attempt markers.\n  Why it fails at runtime: Availability will be marked unavailable even when there is exactly one usage row, leading to incorrect telemetry reporting.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- File: scripts/review_run_reviewers.sh\n  Line or code reference: reviewer_strip_opencode_output_file call, line 4022\n  Problem: stray leading whitespace before reviewer_strip_opencode_output_file \"${tmp_stderr}\"\n  Why it fails at runtime: Indentation inconsistency; may trip whitespace-sensitive checks and is easy to miss in future edits.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- File: docs/plans/opencode-review-autofix-cutover-plan.md\n  Line or code reference: lines 366-380, section \"Production parity evidence\" \u2014 the claim \"The last three successful pre-P2 runs where `Run reviewer models` actually executed establish the Codex latency baseline\" and the table rows `33177800142` / `33160867375` / `32907158075`; also the amended criterion at lines 342-344 (\"Baseline: the last 3 real Codex-reviewer review_autofix runs before the cutover\").\n  Problem: The recorded selection is not the last three Codex-reviewer runs under its own stated rule.\n  Why it fails at runtime: The @stable parity gate compares post-cutover runs against this baseline, and issue #3873 requirement 6 mandates an auditable evidence-based reconstruction (\"Do not invent values\"). With the wrong third row, the recorded mean 3,900s / range 3,120\u20134,680s / median 3,889s are wrong; the correct figures are mean \u2248 3,782s (63m 02s), \u00b120% \u2248 3,026\u20134,539s, median 3,536s. (The three recorded durations themselves are accurate \u2014 I verified each against the Actions API: 57m03s=3,423s, 73m08s=4,388s, 64m49s=3,889s.) Either the table must include 33167154516 and drop 32907158075, or the selection text must explicitly document the branch scoping that justifies excluding non-`main` runs (the omitted run is on `claude/pr-autofix-failure-u8ok5e`; the recorded rows are all on `main`) \u2014 noting that the post-cutover comparison runs will themselves be PR-branch runs, so a silent main-only baseline is not comparable anyway.\n- File: scripts/review_run_reviewers.sh\n  Line or code reference: lines 4023-4028 (materialize failure forces `cmd_rc=1`) interacting with lines 4081-4091 (the `cmd_rc == 0` && empty `tmp_output` \"produced empty output\" branch) and the summary classifier at .github/workflows/review_autofix.yml:7399-7400.\n  Problem: `reviewer_materialize_opencode_json_text` exits 1 whenever OpenCode stdout contains no text events (including the genuinely-empty-output case), and lines 4025-4027 then force `cmd_rc=1`.\n  Why it fails at runtime: The pre-existing \"produced empty output on attempt\" branch becomes unreachable for the reviewer path, causing the run summary to classify the outcome as `non_retryable` instead of `empty_output`; this is reporting-only because retry/failback behavior and the failed outcome are unchanged.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "681c3d638d6f9a20f3fee4e4110d06cb084f81cf69434fd959ed539039b12031",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3877,
+    "run_id": "33237089115",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33237089115",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260829072111_fc662b0181",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3877,
+    "run_id": "33237089115"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-29T07:21:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

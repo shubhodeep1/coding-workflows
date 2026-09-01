@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3754,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3754\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3755\",\"pr_number\":3755,\"branch\":\"ai/issue-3754\",\"run_id\":\"31766358605\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/31766358605\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/issue_pr_status.yml\",\"tests/test_issue_pr_status_payload_fallback_contract.py\"]}",
+  "fingerprint": "9eb46eb4deed1da9feca0838a652179da632113bf0754c87675c39fa5dc74fb0",
+  "lineage": {
+    "issue_number": 3754,
+    "parent_ids": [],
+    "pr_number": 3755,
+    "run_id": "31766358605",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31766358605",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3755"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260814032605_48a61cadf1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3754,
+    "level": "run",
+    "pr_number": 3755,
+    "run_id": "31766358605"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3754: https://github.com/shubhodeep1/coding-workflows/pull/3755",
+  "timestamps": {
+    "created_at": "2026-08-14T03:26:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_commit_changes.sh:175-192 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `case` pattern `changelog.d/*.md` matches nested paths like `changelog.d/nested/stray.md` because Bash `case` patterns are not pathname globs and `*` matches `/`.\n  WHY: The consumer staging pass will stage these nested files, leaving stray fragments that are never assembled into CHANGELOG.md, violating the cleanup contract.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Restrict the `changelog.d/*.md` exemption to top-level fragments only (no nested paths).\n  expected_change_site: scripts/review_commit_changes.sh line 175-192\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The current code uses `changelog.d/*.md` which matches nested paths; no guard restricts it to direct children.\n- requirement: Restrict the changelog.d exemption to top-level fragments only (no nested paths) and update tests to cover the nested case.\n  expected_change_site: scripts/review_commit_changes.sh:175-192 (the case pattern and inner if) and the test_consumer_cleanup_still_removes_non_fragment_files_in_changelog_dir test\n  confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The current implementation uses `changelog.d/*.md` (which Bash `case` treats as matching any `/` after the directory) and the nested-path guard `if [[ \"${created_file#changelog.d/}\" != */* ]]` was added in the last-run diff; however, the test still only exercises `notes.txt` and one nested `.md` file without asserting that a nested Markdown fragment is correctly removed, and the changelog fragment doc still contains wording that could be misread as allowing any `.md` under the directory.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: scripts/review_commit_changes.sh\nLine or code reference: lines 175-192 (the `changelog.d/*.md) ... fi ;;` case arm)\nProblem: The `case` pattern `changelog.d/*.md` matches nested paths like `changelog.d/nested/stray.md` because Bash `case` patterns are not pathname globs and `*` matches `/`.\nWhy it fails at runtime: The consumer staging pass will stage these nested files, leaving stray fragments that are never assembled into CHANGELOG.md, violating the cleanup contract.\nISSUE_CONFIDENCE: 5\n- Requirement: Restrict the `changelog.d/*.md` exemption to top-level fragments only (no nested paths).\nExpected change site: scripts/review_commit_changes.sh line 175-192\nEvidence of absence: The current code uses `changelog.d/*.md` which matches nested paths; no guard restricts it to direct children.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Restrict the changelog.d exemption to top-level fragments only (no nested paths) and update tests to cover the nested case.\nExpected change site: scripts/review_commit_changes.sh:175-192 (the case pattern and inner if) and the test_consumer_cleanup_still_removes_non_fragment_files_in_changelog_dir test.\nEvidence of absence: The current implementation uses `changelog.d/*.md` (which Bash `case` treats as matching any `/` after the directory) and the nested-path guard `if [[ \"${created_file#changelog.d/}\" != */* ]]` was added in the last-run diff; however, the test still only exercises `notes.txt` and one nested `.md` file without asserting that a nested Markdown fragment is correctly removed, and the changelog fragment doc still contains wording that could be misread as allowing any `.md` under the directory.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "b2228da80311d33a7e4be8c89cbcee037347a7e85a7cc0e64c2284b520f6279e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3797,
+    "run_id": "32814410068",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32814410068",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260825064036_d2a66646f5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3797,
+    "run_id": "32814410068"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-25T06:40:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1325-1334 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m2_5, mistralai_mistral-small-2603]\n  PROBLEM: REVIEW_STEP_TIMEOUT accepts arbitrarily large numeric values without an upper bound.\n  WHY: A misconfigured value like 99999 can defer stall detection for days, effectively masking hung review runs.\n- .github/workflows/test-and-mark-stable.yml:1578-1591 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m2_5, mistralai_mistral-small-2603]\n  PROBLEM: The bounded jq regex may miss future wrapper job-name variants, so the selector can fall back to jobs[0].\n  WHY: If the intended codex-agent job is not matched, the wait loop watches the completed gate job instead of the long-running review step and can time out on healthy runs.\n- .github/workflows/test-and-mark-stable.yml:1773-1786 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m2_5, mistralai_mistral-small-2603]\n  PROBLEM: The same bounded jq regex is reused in the LOG_SIZE job selector, so a miss there leaves the activity probe on the wrong job.\n  WHY: If LOG_SIZE tracks the gate job instead of codex-agent, the live-log shortcut and stall-activity signal stay inert and the wait loop can time out on a successful review run.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: .github/workflows/test-and-mark-stable.yml\n  Line or code reference: lines 1325-1334\n  Problem: `REVIEW_STEP_TIMEOUT` accepts arbitrarily large numeric values without an upper bound.\n  Why it fails at runtime: The shell arithmetic check (`[[ \"$REVIEW_STEP_TIMEOUT\" =~ ^[0-9]+$ ]] && [ \"$REVIEW_STEP_TIMEOUT\" -gt 0 ]`) validates that the value is a positive integer but does not enforce a maximum. An operator (or misconfigured repo variable) setting `REVIEW_STEP_TIMEOUT=99999` would cause the wait loop to defer stall decisions for ~69 days, effectively disabling stall detection entirely and masking genuinely hung review runs. This is a configuration guardrail gap \u2014 not an external attacker vector \u2014 but the same class of operator error that the run's own comment warns about (\"a 30 here would override the downstream 40 default and re-introduce the wait-review false-timeout\").\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n- File: .github/workflows/test-and-mark-stable.yml\n  Line or code reference: lines 1578-1591, 1773-1786 (three sites)\n  Problem: The jq `test(\"...\")` function performs case-sensitive matching. The literal `claude-branch-review` in the pattern requires the job name to contain exactly that lowercase string. If a future variant of the wrapper workflow or GitHub Actions generates a job name with a different casing \u2014 e.g. `(Claude-branch-review)` with capital C, or a future `(pr-reviewer-pass-2)` suffix not present in the current pattern \u2014 the selector chain falls through to `jobs[0]` and the original bug (wrong job selected) resurfaces silently.\n  Why it fails at runtime: In wrapper runs, `jobs[0]` is the completed gate job (~4s) whose log never grows during reviewer/editor work. The activity signal (`log_sz`) and early-exit shortcuts (`editor-noop`, `reviewer-majority`) would remain inert, and if the stall timer fires, the wait loop would still give up on a healthy long reviewer step \u2014 the exact regression this PR was supposed to prevent.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n- File: .github/workflows/test-and-mark-stable.yml\n  Line or code reference: lines 1578-1591\n  Problem: The jq regex pattern for selecting the codex-agent job uses a bounded suffix pattern that may not match all wrapper workflow job-name variations.\n  Why it fails at runtime: If the regex fails to match the intended job due to an unanticipated job name variation, both the live-log shortcut and the activity signal would remain inert, causing the wait loop to time out even though the review run completed successfully.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: .github/workflows/test-and-mark-stable.yml\n  Line or code reference: 1578-1591\n  Problem: The jq regex pattern for selecting the codex-agent job uses a bounded suffix pattern that may not match all wrapper workflow job-name variations.\n  Why it fails at runtime: If the regex fails to match the intended job due to an unanticipated job name variation, both the live-log shortcut and the activity signal would remain inert, causing the wait loop to time out even though the review run completed successfully.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- File: .github/workflows/test-and-mark-stable.yml\n  Line or code reference: 1773-1786\n  Problem: The same bounded suffix regex pattern is used in the LOG_SIZE job selection logic, creating a potential single point of failure.\n  Why it fails at runtime: If that selector misses the intended job, both the live-log shortcut and the activity probe stay inert and the wait loop can time out despite a successful review run.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- File: .github/workflows/test-and-mark-stable.yml\n  Line or code reference: 1325-1334\n  Problem: The fallback logic sets REVIEW_STEP_TIMEOUT=75 when the env is unset/non-numeric, but the shell arithmetic check does not validate an upper bound.\n  Why it fails at runtime: If REVIEW_STEP_TIMEOUT is set to an extremely large value (e.g., 9999), the wait loop would defer stall decisions for an impractically long time, potentially masking genuine hangs.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "7a005794fc99569ac35fed473978925cc6792d8589511a740d8aa6023e46d5f3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3806,
+    "run_id": "32838094926",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32838094926",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260825112804_e6a7c4af0c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3806,
+    "run_id": "32838094926"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-25T11:28:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

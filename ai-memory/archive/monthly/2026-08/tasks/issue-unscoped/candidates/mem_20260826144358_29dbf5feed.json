@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/memory_maintenance_extract_learnings.py:190-200 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3]\n  PROBLEM: On render failure, `result.stderr` is discarded and only a static prompt-render failure is surfaced.\n  WHY: Renderer diagnostics are absent from workflow logs, forcing manual reproduction to identify the root cause.\n- tests/test_security_audit_workflow_contract.py:~line535 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The assertion `assert \"os\\\\ error\\\\ 2\" in proc.stderr` expects backslashes that the emitted diagnostic does not contain.\n  WHY: The test fails because sanitization preserves literal spaces, so CI becomes red.\n- (CI runtime, no code site in diff): check-run `lint` | severity=low | confidence=5\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The `ci.yml` `lint` job was cancelled mid-run.\n  WHY: The cancellation is runner/concurrency preemption rather than a code defect; safe to close after a subsequent successful run.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/memory_maintenance_extract_learnings.py\n  Line or code reference: render_extraction_prompt (lines 190-198)\n  severity=low\n  confidence=4\n  PROBLEM: On a render failure, `result.stderr` is discarded.\n  WHY: The renderer's diagnostic text is never logged, forcing a manual re-run to diagnose the failure.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_security_audit_workflow_contract.py\n  Line or code reference: ~line535 (the new assertion inside `test_security_audit_codex_failure_preserves_status_and_reports_context`, after the existing path_suffix assertion in the LAST RUN DIFF hunk that follows the multi-line `MOCK_CODEX_STDERR` rewrite): `assert \"os\\\\ error\\\\ 2\" in proc.stderr`\n  severity=high\n  confidence=5\n  PROBLEM: The assertion expects `os\\ error\\ 2`, but `proc.stderr` contains `os error 2`.\n  WHY: This test fails when run, breaking the workflow-contract CI suite.\n- scripts/memory_maintenance_extract_learnings.py\n  Line or code reference: `render_extraction_prompt` (LAST RUN DIFF context \u2014 function body immediately above the `if result.returncode != 0` branch).\n  severity=low\n  confidence=4\n  PROBLEM: Renderer stderr captured by `capture_output=True` is silently discarded.\n  WHY: Operators see only the static warning marker and not the underlying renderer diagnostic.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- (CI runtime, no code site in diff)\n  Line or code reference: check-run `lint` concluded `cancelled` on head SHA dd6c59d\n  severity=low\n  confidence=5\n  PROBLEM: the `ci.yml` `lint` job was cancelled mid-run per `pr_check_runs_context` (failed_count=1)\n  WHY: it does not \u2014 the captured log tail shows a continuous sequence of PASS results until `The operation was canceled.`; the job was terminated by runner/concurrency preemption, not by a failing test, so there is no defect mapped to any diff hunk.\n- scripts/memory_maintenance_extract_learnings.py\n  Line or code reference: render_extraction_prompt, lines 190-200 (`subprocess.run(..., capture_output=True)`; `if result.returncode != 0: raise PromptRenderFailure(\"prompt render failed\")`)\n  severity=low\n  confidence=4\n  PROBLEM: On non-zero renderer exit, captured `result.stderr` is discarded.\n  WHY: The Actions log shows only the static warning, while the prior inline YAML exposed the renderer diagnostic.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "91fb76d67257459e72e3a383618aaf3ff1796f52da906d95d3473093ef7dea73",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3827,
+    "run_id": "32966534459",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32966534459",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260826144358_29dbf5feed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3827,
+    "run_id": "32966534459"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-26T14:43:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

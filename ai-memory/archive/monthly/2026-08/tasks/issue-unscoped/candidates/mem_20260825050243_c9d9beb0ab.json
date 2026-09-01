@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_gh_helpers_list_runs_method.py:70-81 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, qwen_qwen3_6-plus]\n  PROBLEM: `re.search(r\"-X GET|--method GET\", body)` can match the inline explanatory comment in the extracted function body instead of the actual `gh api` invocation, so the canary can false-pass if `-X GET` is removed from the command.\n  WHY: Multiple reviewers independently reported the same false-pass risk; x-ai_grok-4_20 disputed it as already satisfied, but the comment text is inside the searched body.\n- tests/test_gh_helpers_list_runs_method.py:132-142 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The `_RUNNER` `gh()` stub returns a 404 for a malformed `gh api ... -X` invocation instead of surfacing the real CLI's missing-argument error.\n  WHY: This is a stub-fidelity gap only, but it means the test harness does not emulate malformed `gh` invocations accurately.\n- tests/test_gh_helpers_list_runs_method.py:135-142 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m2_5, mistralai_mistral-small-2603]\n  PROBLEM: The `_RUNNER` `gh()` stub's `-X` / `--method` handling was reported as fragile and potentially incorrect for future invocation patterns.\n  WHY: Two reviewers reported the method parsing as incorrect or fragile; qwen_qwen3_6-plus later disputed it as correct for the current `-X GET` form.\n- scripts/gh_helpers.sh:1206-1208 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The explanatory comment references `tele-funtoken-msg-scoring#3763` and `review run 32732281452` as plain text without hyperlinks or clickable references.\n  WHY: This affects readability only and does not change runtime behavior.\n- scripts/gh_helpers.sh:1326-1328 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The explanatory comment references `tele-funtoken-msg-scoring#3763` and `review run 32732281452` as plain text without hyperlinks or clickable references.\n  WHY: This affects readability only and does not change runtime behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_gh_helpers_list_runs_method.py:70-77 | severity=MAJOR | confidence=5\n  PROBLEM: The static assertion `re.search(r\"-X GET|--method GET\", body)` can match the explanatory comment in the function body instead of the actual `gh api` invocation, so a future removal of `-X GET` can false-pass the canary.\n  WHY: If the flag is deleted from the command but the comment remains, the regex still matches and the regression guard no longer proves the probe is pinned to GET.\n- tests/test_gh_helpers_list_runs_method.py:132-142 | severity=NIT | confidence=2\n  PROBLEM: The `_RUNNER` `gh()` stub returns a 404 for a malformed `gh api ... -X` invocation instead of the real CLI's missing-argument error.\n  WHY: This is only a stub-fidelity gap, but it means malformed invocations are not emulated accurately.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_gh_helpers_list_runs_method.py:74 | severity=MAJOR | confidence=4\n  PROBLEM: The static assertion `re.search(r\"-X GET|--method GET\", body)` searches the whole function body, so the `-X GET` text in the comment can satisfy the test even if the actual command loses the flag.\n  WHY: That turns the intended canary into a false-pass check for the regression.\n- tests/test_gh_helpers_list_runs_method.py:135-142 | severity=NIT | confidence=3\n  PROBLEM: The `_RUNNER` `gh()` stub's `-X` / `--method` handling is fragile and could silently mis-handle different flag formats.\n  WHY: It works for the current spaced `-X GET` invocation, but would not be robust if the invocation style changed.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_gh_helpers_list_runs_method.py:74 | severity=MAJOR | confidence=5\n  PROBLEM: The static assertion regex `re.search(r\"-X GET|--method GET\", body)` can match the explanatory comment instead of the actual `gh api` call, creating a false-pass if `-X GET` is removed.\n  WHY: The canary would no longer independently guarantee the regression stays fixed.\n- tests/test_gh_helpers_list_runs_method.py:135-142 | severity=MAJOR | confidence=5\n  PROBLEM: The `_RUNNER` `gh` stub's method parsing logic overwrites the sentinel with the following argument and can detect the wrong HTTP method.\n  WHY: That could allow non-GET requests to slip through the functional tests.\n- scripts/gh_helpers.sh:1206-1208 | severity=low | confidence=3\n  PROBLEM: The explanatory comment references `tele-funtoken-msg-scoring#3763` and `review run 32732281452` as plain text without hyperlinks or clickable references.\n  WHY: This reduces the usefulness of the comment for future readers, though it doesn't affect runtime behavior.\n- scripts/gh_helpers.sh:1326-1328 | severity=low | confidence=3\n  PROBLEM: The explanatory comment references `tele-funtoken-msg-scoring#3763` and `review run 32732281452` as plain text without hyperlinks or clickable references.\n  WHY: This reduces the usefulness of the comment for future readers, though it doesn't affect runtime behavior.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_gh_helpers_list_runs_method.py:70-81 | severity=MAJOR | confidence=5\n  PROBLEM: The static assertion `re.search(r\"-X GET|--method GET\", body)` searches the whole extracted function body, which includes an inline comment containing `-X GET`, so the test can false-pass if the actual command loses the flag.\n  WHY: A future cleanup that removes `-X GET` from the `gh api` invocation but leaves the comment intact would still satisfy the regex and let the regression return.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5a71df70de487c2204fd3af60f73de391a348907a1995d1e8b099e974bf46789",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3796,
+    "run_id": "32807381395",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32807381395",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260825050243_c9d9beb0ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3796,
+    "run_id": "32807381395"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-25T05:02:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

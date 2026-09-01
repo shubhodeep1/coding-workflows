@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pr_merge_status_guard.py:323-347 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The test fixture still contains dead mock entries for `git rev-parse --verify refs/remotes/origin/main` and `git rev-parse --verify refs/remotes/origin/master` even though `default_branch()` no longer issues those commands.\n  WHY: The stale entries do not fail the test, but they misrepresent the current call sequence and can mislead future readers; all reviewers that flagged it rated it NIT/low.\n- .claude/hooks/pr_merge_status_guard.py (and mirrored copy in workflow-templates/.claude/hooks/pr_merge_status_guard.py):_shell_segments() | severity=high | confidence=[4]\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `shlex.shlex(..., punctuation_chars=...)` is reported to raise on Python 3.13, which would make shell segmentation fail and let merged-branch Bash commands with operators bypass the guard.\n  WHY: qwen flagged a MAJOR runtime failure risk; deepseek explicitly rejected the same claim on Python 3.12.3, so the issue is disputed but still reported.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_pr_merge_status_guard.py:327-328 | severity=low | confidence=[5]\n  PROBLEM: Two mock entries for `git rev-parse --verify refs/remotes/origin/main` and `git rev-parse --verify refs/remotes/origin/master` are dead and no longer match `default_branch()`.\n  WHY: The production code no longer issues those commands, so the fixture is misleading even though the test still passes.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_pr_merge_status_guard.py:323\u2013347 | severity=low | confidence=[4]\n  PROBLEM: The `_fake_run` lookup dictionary still contains dead entries for `git rev-parse --verify refs/remotes/origin/main` and `git rev-parse --verify refs/remotes/origin/master`.\n  WHY: The production `default_branch()` no longer calls those argv tuples, so the mocks are stale and misleading.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_pr_merge_status_guard.py:327-328 | severity=low | confidence=[5]\n  PROBLEM: The test still has stale mock entries for `git rev-parse --verify refs/remotes/origin/main` and `git rev-parse --verify refs/remotes/origin/master`.\n  WHY: Those commands are no longer issued by `default_branch()`, so the fixture is out of sync with the code it documents.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .claude/hooks/pr_merge_status_guard.py (and mirrored copy in workflow-templates/.claude/hooks/pr_merge_status_guard.py): _shell_segments() \u2014 the shlex.shlex(command, posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS) call | severity=high | confidence=[4]\n  PROBLEM: The punctuation_chars argument to shlex.shlex is claimed to be removed in Python 3.13, so shell segmentation can fail and let merged-branch Bash commands with operators bypass the guard.\n  WHY: The reviewer reported a MAJOR runtime failure risk for Python 3.13; deepseek rejected the same claim on the current Python 3.12.3 runner.\n- tests/test_pr_merge_status_guard.py:327-328 | severity=low | confidence=[5]\n  PROBLEM: The `_fake_run` lookup dictionary still contains dead entries for `git rev-parse --verify refs/remotes/origin/main` and `git rev-parse --verify refs/remotes/origin/master`.\n  WHY: Those git rev-parse calls are no longer made by `default_branch()`, so the test fixture is stale and misleading.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "a55f6388c099033d80a2d5515a93179aad4b39071d9dc6f7a9a7162871fa0a56",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3735,
+    "run_id": "31154718583",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31154718583",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260807072400_947a407311",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3735,
+    "run_id": "31154718583"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-07T07:24:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

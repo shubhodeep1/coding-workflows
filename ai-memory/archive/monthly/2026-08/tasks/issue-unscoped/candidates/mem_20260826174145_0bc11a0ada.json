@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:lines 11285-11315 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: A permanently-unfetchable cross-reference can cause indefinite retry loops without consuming recovery budget.\n  WHY: When every candidate fetch fails with no rejections, the resolver returns `pr_fetch_failed`, which callers treat as transient and retry on every poll.\n- scripts/orchestrate_poll_process.sh:lines 2848-2851 | severity=high | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Removing the fail-open guard from `_linked_prs_by_branch_name` leaves the close-merged-issues sweep vulnerable to poller termination on API failure.\n  WHY: Under `set -euo pipefail`, the unguarded pipeline at approximately line 14736 can terminate the poller when the helper and downstream `grep` both fail.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:lines 11285-11315 | severity=NIT | confidence=2\n  PROBLEM: A permanently-unfetchable cross-reference can cause indefinite retry loops without consuming recovery budget.\n  WHY: When every candidate fetch fails with no rejections, the resolver returns `pr_fetch_failed`, which callers treat as transient and retry on every poll.\n- scripts/orchestrate_poll_process.sh:lines 2848-2851 | severity=MAJOR | confidence=3\n  PROBLEM: Removing the fail-open guard from `_linked_prs_by_branch_name` leaves the close-merged-issues sweep vulnerable to poller termination on API failure. (3 related items)\n  WHY: Under `set -euo pipefail`, the unguarded pipeline at approximately line 14736 can terminate the poller when the helper and downstream `grep` both fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "fa409ea00c4d4c8dd4b6e11024e2926a57a9ef0ecd57b7dcda5fa4491a996736",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3834,
+    "run_id": "32987735882",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32987735882",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260826174145_0bc11a0ada",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3834,
+    "run_id": "32987735882"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-26T17:41:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

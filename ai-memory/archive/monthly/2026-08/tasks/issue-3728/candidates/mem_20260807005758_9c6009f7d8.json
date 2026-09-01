@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `f1667f4b3a76ddce7934ce477fba566aecf82382` on branch `main`\n\nClarification mapping:\n- No `Q<ID>` items were asked in clarify.\n- `/answer [auto-answered-by-clarify]` confirms the task is fully specified with no missing inputs.\n\nScope-mode: Hold Scope\nReuse-audit: extends existing smoke-canary overwrite pattern\nScope-mode justification: The issue is narrowly and fully specified: overwrite one existing plain-text fixture with exact bytes and no collateral edits. The safest plan is to hold scope to `tests/e2e_smoke_canary.txt` only. There is no need for helper, workflow, prompt, or test changes because the requested outcome matches the repo\u2019s existing smoke-canary contract and existing helper/test language already expects exact 3-line restoration behavior. Per \u00a76 priorities, the smallest exact overwrite best preserves correctness, backward compatibility, and operational safety.\n\nFiles likely to change:\n- `tests/e2e_smoke_canary.txt`\n\nFunctions or modules to implement:\n- No function/module changes.\n- Perform a full-file overwrite of `tests/e2e_smoke_canary.txt` so its contents are exactly:\n  - `status: ok`\n  - `run_id: 31136089928`\n  - `updated-by: ai-pipeline`\n- Preserve a trailing newline after the final line.\n\nData structures affected:\n- One repository text fixture file used by smoke/canary coverage.\n- No schema, API payload, or code data structure changes.\n\nAPI/interface changes:\n- None.\n\n## Decisions\n\n### D1 \u2014 Use a direct one-file overwrite\n- Chosen\n  - Replace the entire contents of `tests/e2e_smoke_canary.txt` in one atomic edit, with no partial patching of individual lines.\n- Alternatives considered\n  - Editing only mismatched lines.\n  - Broadening scope to update scripts/tests/docs that reference the canary file.\n- Why\n  - The issue requires an exact byte-for-byte 3-line result and forbids touching any other file. A full overwrite is the lowest-risk way to satisfy that contract and avoid residual stray content.\n\n### D2 \u2014 Keep validation scoped to file content and diff\n- Chosen\n  - Verify the target file exists, then confirm the resulting file content and trailing newline via file inspection and `git diff --stat`.\n- Alternatives considered\n  - Running broader test suites or workflow-level validation.\n- Why\n  - This task changes no executable logic. Broad validation would add cost and scope without improving confidence beyond confirming the file bytes and single-file diff.\n\nRisks and edge cases:\n- The only meaningful failure mode is leaving extra content, missing the final newline, or using the wrong `run_id`.\n- Strict scope guard: any edit outside `tests/e2e_smoke_canary.txt` would violate the issue contract.\n- Repo context note: multiple scripts/tests reference this file as an exact smoke-canary fixture, so byte-exact replacement matters.\n- Conflict check: no codebase conflict found; the file exists on the planning ref.\n\nTesting considerations:\n- Confirm `tests/e2e_smoke_canary.txt` exists before editing.\n- After edit, verify the file has exactly 3 lines and ends with a newline.\n- Verify `git diff --stat` shows only `tests/e2e_smoke_canary.txt` changed.\n- No broader typecheck/lint/test/build run is required for this content-only fixture overwrite.\n\nPre-execution self-check:\n- Requirement coverage: yes \u2014 exact content, existing file, overwrite-only, single-file scope.\n- Reuse audit: yes \u2014 aligns with existing smoke-canary overwrite contract already referenced in helper/test coverage.\n- Safety: yes \u2014 no destructive git operations, no new files, no interface changes.\n- Ambiguity: none.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "327633a67414d7463bc72e045de5b54f8c8747963ec1e0a11806e646be3158b6",
+  "lineage": {
+    "issue_number": 3728,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "31136265444",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31136265444",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3728"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260807005758_9c6009f7d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3728,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "31136265444"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3728",
+  "timestamps": {
+    "created_at": "2026-08-07T00:57:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

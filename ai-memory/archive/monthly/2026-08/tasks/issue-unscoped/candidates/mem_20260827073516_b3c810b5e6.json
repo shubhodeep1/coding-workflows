@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description \"Files changed\" table says \"`tests/test_review_autofix_sweep_stale_queued.py` \u2014 new \u2014 **10 tests**\"\n  expected_change_site: PR description\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The test file `tests/test_review_autofix_sweep_stale_queued.py` contains 11 test methods, while the PR description verification table says \"10\".\n- requirement: PR description \"Files changed\" table states \"tests/test_review_autofix_sweep_stale_queued.py \u2014 new \u2014 10 tests\"\n  expected_change_site: tests/test_review_autofix_sweep_stale_queued.py\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The test file contains 11 test methods; the changelog fragment correctly says \"11\", but the PR description verification table says \"10\".\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: PR description \"Files changed\" table says \"`tests/test_review_autofix_sweep_stale_queued.py` \u2014 new \u2014 **10 tests**\"\n  Expected change site: PR description (not the code)\n  Evidence of absence: The test file `tests/test_review_autofix_sweep_stale_queued.py` contains **11** test methods: 8 in `SweepStaleQueuedGuardTest` (`test_wedged_queued_run_stops_suppressing_dispatch`, `test_recently_queued_run_still_suppresses`, `test_long_running_in_progress_is_never_discounted`, `test_unparseable_or_missing_created_at_fails_safe`, `test_zero_cutoff_restores_previous_always_suppress_behaviour`, `test_duplicate_run_ids_are_counted_once`, `test_transitioned_run_prefers_in_progress_snapshot`, `test_runs_without_a_head_branch_are_ignored`) + 3 in `SweepWorkflowContractTest` (`test_cutoff_is_configurable_with_a_default`, `test_stale_runs_are_logged_not_silently_discounted`, `test_header_records_why_the_cutoff_exists`). The changelog fragment correctly says \"11\", but the PR description verification table says \"10\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: PR description \"Files changed\" table states \"tests/test_review_autofix_sweep_stale_queued.py \u2014 new \u2014 10 tests\"\n  Expected change site: tests/test_review_autofix_sweep_stale_queued.py\n  Evidence of absence: The test file contains 11 test methods (8 in SweepStaleQueuedGuardTest + 3 in SweepWorkflowContractTest). The changelog fragment (changelog.d/3843-sweep-stale-queued-guard.md) correctly says \"11\". The PR description verification table says \"10\". The PR description text is inconsistent with the actual deliverable and with the changelog.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "7882c6268c014af481d955338d4f4be1c0e3d9ef74c8a812b1e53c102c95a785",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3843,
+    "run_id": "33045040523",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33045040523",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260827073516_b3c810b5e6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3843,
+    "run_id": "33045040523"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-27T07:35:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

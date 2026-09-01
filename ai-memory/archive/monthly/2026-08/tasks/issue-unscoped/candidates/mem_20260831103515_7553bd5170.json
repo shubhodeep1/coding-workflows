@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:56 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The comment and log message refer to \"Codex\" instead of \"OpenCode\", which is inconsistent with the file header and runtime implementation.\n  WHY: Creates internal documentation inconsistency that could confuse developers debugging resolver runs.\n- scripts/review_conflict_resolve.sh:51-56 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The fallback pattern `cp -a \"${RESOLVE_STASH}/${d}/.\" \"${d}/\" 2>/dev/null || cp -a \"${RESOLVE_STASH}/${d}\" \"${d}\"` can abort under `set -u` if `RESOLVE_STASH` is unset.\n  WHY: The early-commit branch can exit non-zero after a successful merge commit, leaving the manifest-only resolver commit stranded in a half-resolved state.\n- scripts/review_conflict_prepare.sh:266-270 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The fallback pattern `cp -a \"${RESOLVE_STASH}/${d}/.\" \"${d}/\" 2>/dev/null || cp -a \"${RESOLVE_STASH}/${d}\" \"${d}\"` can abort under `set -u` if `RESOLVE_STASH` is unset.\n  WHY: The early-commit branch can exit non-zero after a successful merge commit, leaving the manifest-only resolver commit stranded in a half-resolved state.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The deterministic manifest union-merge behavior and `CONFLICT_MANIFEST_UNION_ENABLED` contract should be documented in `agents.md`'s resolver / review-pipeline behavior section.\n  expected_change_site: agents.md near the `scripts/review_conflict_resolve.sh` entries\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The PR changes `.github/workflows/review_autofix.yml` and `scripts/review_conflict_prepare.sh`, but contains no `agents.md` hunk while README documents the new variable.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_conflict_resolve.sh:56 | severity=low | confidence=4\n  PROBLEM: The comment and log message refer to \"Codex\" instead of \"OpenCode\", which is inconsistent with the file header and runtime implementation.\n  WHY: Creates internal documentation inconsistency that could confuse developers debugging resolver runs.\n- scripts/review_conflict_resolve.sh:51-56 | severity=high | confidence=4\n  PROBLEM: The fallback pattern `cp -a \"${RESOLVE_STASH}/${d}/.\" \"${d}/\" 2>/dev/null || cp -a \"${RESOLVE_STASH}/${d}\" \"${d}\"` can abort under `set -u` if `RESOLVE_STASH` is unset.\n  WHY: The early-commit branch can exit non-zero after a successful merge commit, leaving the manifest-only resolver commit stranded in a half-resolved state.\n- scripts/review_conflict_prepare.sh:266-270 | severity=high | confidence=4\n  PROBLEM: The fallback pattern `cp -a \"${RESOLVE_STASH}/${d}/.\" \"${d}/\" 2>/dev/null || cp -a \"${RESOLVE_STASH}/${d}\" \"${d}\"` can abort under `set -u` if `RESOLVE_STASH` is unset.\n  WHY: The early-commit branch can exit non-zero after a successful merge commit, leaving the manifest-only resolver commit stranded in a half-resolved state.\n- Requirement: The deterministic manifest union-merge behavior and `CONFLICT_MANIFEST_UNION_ENABLED` contract should be documented in `agents.md`'s resolver / review-pipeline behavior section.\n  Expected change site: agents.md near the `scripts/review_conflict_resolve.sh` entries\n  Evidence of absence: The PR changes `.github/workflows/review_autofix.yml` and `scripts/review_conflict_prepare.sh`, but contains no `agents.md` hunk while README documents the new variable.\n  SEVERITY: low\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "8ee597c4dbeeb318bda8e60110c11242cd02008709bf17ad89787a7078d5d819",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3931,
+    "run_id": "33376193524",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33376193524",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260831103515_7553bd5170",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3931,
+    "run_id": "33376193524"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-31T10:35:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-3810` at `6ef32f196668e059d15008934336f4b26b02d3ba`  \nIntegration branch: `orchestrator/project-3810` \u2014 matches checkout.\n\nScope-mode: Hold Scope  \nReuse-audit: extends existing orchestrate-poll REST fallback paths and `tests/test_orchestrate_poll_process.py` contract harness  \nScope-mode justification: Apply the complete fix to all four literal REST invocations across the three named paths. This costs only four method flags and focused test coverage, satisfying the Boil the Lake rule and \u00a76\u2019s Correctness & safety priority without broadening scope.\n\n## Automation wiring\n\n- Modify an existing script and test only; introduce no new script.\n- Existing entry point remains `.github/workflows/internal-orchestrate-poll.yml` (`*/5 * * * *` and `workflow_dispatch`) through `.github/workflows/orchestrate_poll.yml`, which runs `scripts/orchestrate_poll_process.sh`.\n- No workflow wiring change, supervisor, database gate, or removal-registry entry is required.\n\n## Clarification interpretation\n\nNo clarification questions were required. The orchestrator\u2019s `/answer [auto-answered-by-orchestrator]` confirms continuation with the issue\u2019s stated scope.\n\n## Files likely to change\n\n1. `scripts/orchestrate_poll_process.sh`\n   - Add explicit GET methods to the targeted parameterized `search/issues` commands.\n2. `tests/test_orchestrate_poll_process.py`\n   - Add focused source-contract coverage using the module\u2019s existing automatically discovered test harness.\n\n## Functions or modules to implement\n\n- `_fetch_standalone_marker_issues_graphql`\n  - Add `--method GET` to both paginated REST fallback commands: `marker_state` and `marker_clarify`.\n  - Preserve GraphQL-first execution, pagination, queries, `jq` aggregation, redirections, and empty-array fallback.\n- Main tracking-state reconstruction block\n  - Add `--method GET` to the child-issue search without changing its query, response filter, or fail-open default.\n- Deferred child-creation duplicate backstop\n  - Add `--method GET` without changing the `is:issue` query, lazy one-call-per-cycle behavior, map construction, or fail-closed behavior.\n- Add a uniquely named test such as `test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths`.\n  - Extract the four parameterized `search/issues` commands.\n  - Assert each declares GET.\n  - Assert their query, pagination, filtering, and fallback signatures remain unchanged.\n  - Assert explicit GET was not added to unrelated poller API commands.\n\n## Data structures affected\n\nNone. Search response shapes, issue maps, state snapshots, and deferred-creation state remain unchanged.\n\n## API/interface changes\n\nNo public interface changes. The only behavioral change is forcing the existing parameterized GitHub searches to use HTTP GET. GitHub CLI officially documents that supplying `-f`/`-F` changes the inferred method to POST unless `--method GET` is specified; with GET, fields become query parameters. ([cli.github.com](https://cli.github.com/manual/gh_api?utm_source=openai))\n\n## Decisions\n\n### D1 \u2014 Pin GET on every literal invocation in the named paths\n\n- **Chosen:** Add `--method GET` to all four commands across the three logical paths.\n- **Alternatives considered:** Modify only three commands based on the issue\u2019s numerical wording; introduce a wrapper helper.\n- **Why:** The marker fallback contains two independent searches, and leaving either unmodified preserves the defect. A helper would add unnecessary abstraction and alter more code.\n\n### D2 \u2014 Extend the existing poller test module\n\n- **Chosen:** Add focused static contract coverage to `tests/test_orchestrate_poll_process.py`.\n- **Alternatives considered:** Create a standalone test file and modify CI wiring; overhaul the runtime `gh` stub.\n- **Why:** The existing module is automatically split and executed by CI, and source-contract assertions directly prove the exact command-method invariant with minimal scope.\n\n## Risks and edge cases\n\n- The issue says \u201cthree searches,\u201d while the source contains four literal REST invocations across three named paths. The plan treats the paths as authoritative and updates both marker fallback searches.\n- Method placement must remain inside each `gh api` command without changing pipeline or command-substitution precedence.\n- The test must distinguish `search/issues` REST calls from the GraphQL request and unrelated POST/PATCH/PUT calls.\n- No query normalization or addition of `is:issue` should occur outside the existing deferred lookup.\n\n## Testing considerations\n\nRun in order:\n\n1. Focused new method-contract test.\n2. Existing reconstruction tests:\n   - `test_all_invalid_state_comments_trigger_reconstruction_path_without_heal`\n   - `test_reconstruction_refused_when_body_has_completed_unmapped_issue`\n3. Existing deferred-creation adoption and lookup-failure tests.\n4. Full `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py`.\n5. `shellcheck --severity=error scripts/orchestrate_poll_process.sh`.\n\n## Assumptions and missing context\n\n- No explicit standalone `files_touched` array was supplied; the plan constrains implementation to the two directly implicated files.\n- No documentation or changelog update is planned because no configuration or operator-facing interface changes.\n\n## Pre-execution self-check\n\n- Branch metadata matches the checked-out ref.\n- Requirements map to concrete source locations and existing tests.\n- No external scalar, credential, dependency, or workflow change is needed.\n- Expected implementation remains within the stated 25-minute estimate.\n\nPLAN_SELF_CHECK: WARNING: The issue describes three searches, but the source has four literal REST commands across the three named paths; all four must declare GET for complete coverage.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ae3a468b4f0e300ef74a86d5100b63583f89200e8bd9e8126493d5b38644d368",
+  "lineage": {
+    "issue_number": 3811,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32849750737",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32849750737",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3811"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260825125539_e834a64e53",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3811,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "32849750737"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3811",
+  "timestamps": {
+    "created_at": "2026-08-25T12:55:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

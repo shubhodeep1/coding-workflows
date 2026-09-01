@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `389848cc5e61133d4edd010ce8264130cfd480d3`  \nBranch: `orchestrator/project-3810`  \nIntegration branch matches: yes\n\nClarification interpretation: No Q-ID questions were required; the orchestrator auto-answer confirms continuation with the stated scope.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `resolve_active_orchestrator_context_for_issue`  \nScope-mode justification: Apply the complete normalization, validation, sorting, and regression-test solution rather than only quoting the existing expansion. The additional work is small and follows \u00a76 priorities\u2014correctness and safety take precedence over speed\u2014while remaining confined to the judge-context issue-number path.\n\n## Automation and lifecycle\n\n- Extend the existing poller; introduce no production script.\n- Existing scheduler remains `.github/workflows/internal-orchestrate-poll.yml` (`*/5 * * * *`), which invokes `.github/workflows/orchestrate_poll.yml`.\n- Existing CI automatically runs `tests/test_orchestrate_poll_process.py` on pull requests and pushes to `main`/`stable`; no new workflow wiring is needed.\n- No supervisor, database gate, migration, or removal-registry entry is required.\n\n## Files likely to change\n\n1. `scripts/orchestrate_poll_process.sh`\n   - Harden the judge-context issue-number normalization near the current `_sorted_issue_nums` assignment.\n2. `tests/test_orchestrate_poll_process.py`\n   - Add focused executable regression coverage for the production normalization block.\n\n## Implementation plan\n\n1. Replace the unquoted `${ISSUE_NUMS}` expansion with a quoted stream that:\n   - Converts deliberate whitespace boundaries to newline-separated tokens.\n   - Removes blank and non-decimal tokens using full-token numeric validation.\n   - Deduplicates and sorts with the existing numeric ascending semantics.\n   - Handles an empty/no-match stream safely under `set -euo pipefail`.\n2. Replace the unquoted `for inum in ${_sorted_issue_nums}` iteration with line-oriented `while IFS= read -r inum`.\n3. Preserve the existing identifiers `_sorted_issue_nums` and `inum`, the valid-input ordering, and the downstream `_issue_cross_ref_pr_number_last` call.\n4. Do not partially extract digits from malformed tokens; values such as `12x`, `*`, and `[0-9]` must be discarded before lookup.\n5. Follow the representative pattern in `resolve_active_orchestrator_context_for_issue`: quoted input, `grep -E '^[0-9]+$'`, and line-oriented iteration.\n\n## Data structures affected\n\n- `ISSUE_NUMS`: remains the existing raw whitespace-delimited shell scalar.\n- `_sorted_issue_nums`: remains an ephemeral scalar, now containing only unique ascending decimal lines.\n- No persisted state, schema, cache, label, or JSON structure changes.\n\n## API/interface changes\n\n- No external interface or API shape changes.\n- Valid inputs retain the same linked-PR lookup order and call count.\n- Invalid tokens no longer reach `_issue_cross_ref_pr_number_last` or become GitHub API paths.\n\nData flow:\n\n```text\nISSUE_NUMS\n  -> quoted output\n  -> whitespace-to-lines normalization\n  -> full-token decimal filter\n  -> numeric deduplication and sorting\n  -> line-oriented iteration\n  -> linked-PR lookup\n```\n\nFailure modes:\n\n- Empty/all-invalid input: produce no lookups and continue judge processing.\n- Glob-like input: remain literal and fail numeric validation, regardless of worktree filenames.\n- Duplicate valid numbers: collapse to one lookup in ascending order.\n- No-match filter status: explicitly handled so `pipefail` does not terminate the poller.\n\n## Decisions\n\n### D1 \u2014 Use inline stream normalization\n\n- **Chosen:** Harden the existing `_sorted_issue_nums` block using quoted streaming, numeric filtering, `sort -un`, and `while read`.\n- **Alternatives considered:** Add a new shared helper or convert the value into a Bash array.\n- **Why:** The established same-script pattern fully satisfies the requirement without adding another shared interface or broadening scope.\n\n### D2 \u2014 Test the production shell block directly\n\n- **Chosen:** Add a focused test to the existing executable poller test module that extracts and runs the production block with a stubbed linked-PR lookup.\n- **Alternatives considered:** Add only static source assertions or introduce a new standalone test module and CI step.\n- **Why:** Executing the real block detects shell expansion regressions while reusing the existing CI entry point.\n\n## Risks and edge cases\n\n- Preserve `sort -un` behavior, including numeric ordering, rather than introducing lexical sorting.\n- Do not tighten accepted decimal values beyond the requested full-token numeric validation.\n- The test directory should contain numeric filenames so `*` or `[0-9]` would expose accidental glob expansion.\n- Avoid touching the pre-existing modification in `scripts/openrouter_prompt_cache.py`.\n\n## Testing considerations\n\nAdd cases covering:\n\n- Mixed spaces and newlines.\n- Duplicate numbers and ascending output.\n- Empty and whitespace-only input.\n- Glob-like garbage with matching numeric worktree filenames.\n- Malformed tokens being absent from the stubbed linked-PR lookup log.\n\nVerification order:\n\n1. `bash -n scripts/orchestrate_poll_process.sh`\n2. `shellcheck --severity=error scripts/orchestrate_poll_process.sh`\n3. Run the new targeted test by name through `tests/test_orchestrate_poll_process.py`.\n4. Run the complete executable poller test module.\n\n## Assumptions and missing context\n\n- No explicit machine-readable `files_touched` list was included; this plan limits changes to the two inferred files above.\n- The prerequisite explicit-GET fix is present on the planning ref.\n- No documentation change is necessary because behavior and public interfaces remain unchanged.\n\nPLAN_SELF_CHECK: WARNING: The issue references a declared files_touched list, but none was included in the supplied context; scope is conservatively limited to the poller and its existing test module.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d1da5b106c5e7cf1ca1f8d7fdf9504ac062580ffb914d7f4fb8d12b2185c87c7",
+  "lineage": {
+    "issue_number": 3830,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32910969079",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32910969079",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3830"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260825233514_36c5d9dbd1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3830,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "32910969079"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3830",
+  "timestamps": {
+    "created_at": "2026-08-25T23:35:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

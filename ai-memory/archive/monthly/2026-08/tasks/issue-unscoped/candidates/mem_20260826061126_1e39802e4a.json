@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:12213-12217, 12298-12300, 12520-12523 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: When `_resolve_issue_implementation_pr` fails in standalone `retrigger_review`, the skip path leaves `took_action` and `STALL_RECOVERY_SHOULD_INCREMENT` unset, so no state update or recovery increment occurs.\n  WHY: Standalone `ai:done` issues with only mention-only PRs loop forever without notification or escalation.\n- scripts/orchestrate_poll_process.sh:12198-12307 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When no implementation PR is resolved, the standalone fallback posts `/approved` on every poll cycle even though non-orchestrated issues have no AI pipeline to re-trigger.\n  WHY: This creates repeated comment spam and no forward progress before the recovery ladder advances.\n- scripts/orchestrate_poll_process.sh:11249 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_6]\n  PROBLEM: After `_fetch_pr_json` returns an empty or `{}` payload, the conventional-branch path still calls `_pr_json_is_issue_implementation_pr` before falling through to the cross-reference walk.\n  WHY: The safe fall-through depends on the predicate's current internal behavior rather than explicit intent.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:12214-12216 (the `else` branch that sets `STALL_RECOVERY_EFFECTIVE_ACTION=\"retrigger_review_skipped_wrong_pr\"` and clears `head_ref`), 12296-12299 (the increment-exclusion `elif`), and 12520 (the outer `if [ \"${took_action}\" = \"true\" ]` state-write gate) | severity=MAJOR | confidence=4\n  PROBLEM: When `run_standalone_stall_recovery` handles `retrigger_review` and `_resolve_issue_implementation_pr` fails, the skip branch sets `STALL_RECOVERY_EFFECTIVE_ACTION=\"retrigger_review_skipped_wrong_pr\"` and `head_ref=\"\"` but never sets `took_action=\"true\"` or `STALL_RECOVERY_SHOULD_INCREMENT=\"true\"`.\n  WHY: A standalone issue stuck in `ai:done` whose only cross-references are mention-only PRs loops forever with zero progress.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: lines 12198-12307 (standalone `retrigger_review` implementation-PR gate + `/approved` fallback) | severity=MAJOR | confidence=4\n  PROBLEM: When `_resolve_issue_implementation_pr` cannot resolve an implementation PR for a standalone non-orchestrated issue, the `elif [ \"${pr_lookup_ok}\" = \"true\" ]; then` branch at line 12302 posts a `/approved` comment and sets `STALL_RECOVERY_SHOULD_INCREMENT=\"true\"`.\n  WHY: The `/approved` command has no effect on standalone issues with no AI pipeline, creating comment spam before `close_and_reissue` finally advances the ladder.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh: _resolve_issue_implementation_pr conventional-branch path (around line 11249) | severity=NIT | confidence=4\n  PROBLEM: When `_fetch_pr_json` returns an empty or `{}` payload for the conventional-branch PR candidate, the code logs `STALL_LINKED_PR_REJECTED ... reason=pr_fetch_failed` and then still calls `_pr_json_is_issue_implementation_pr` with the empty/`{}` payload before falling through to the cross-ref walk.\n  WHY: The code path is safe today, but future changes to `_pr_json_is_issue_implementation_pr` could break the fall-through behavior.\n- scripts/orchestrate_poll_process.sh: standalone skip branch (lines 12213\u201312217) and increment exclusion (lines 12298\u201312300) | severity=MAJOR | confidence=4\n  PROBLEM: When `_resolve_issue_implementation_pr` fails for a standalone (non-orchestrator) issue, the `run_standalone_stall_recovery` `retrigger_review` action sets `STALL_RECOVERY_EFFECTIVE_ACTION=\"retrigger_review_skipped_wrong_pr\"`, clears `head_ref`, and the post-push accounting explicitly excludes this value from increment.\n  WHY: A standalone issue stuck in `ai:done` whose cross-references are all mention-only and which has no implementation PR becomes a permanent silent no-op loop.\n\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh: lines 12198-12302 (standalone retrigger_review implementation-PR gate and post-push accounting) | severity=MAJOR | confidence=4\n  PROBLEM: When _resolve_issue_implementation_pr fails in the standalone stall recovery retrigger_review path, head_ref is cleared to \"\" and STALL_RECOVERY_EFFECTIVE_ACTION is set to \"retrigger_review_skipped_wrong_pr\".\n  WHY: A standalone (non-orchestrator) issue stuck in ai:done whose cross-references are all mention-only PRs and which has no open ai/issue-<n> PR will loop forever on retrigger_review every poll cycle.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- scripts/orchestrate_poll_process.sh: run_standalone_stall_recovery retrigger_review skip at 12213-12217; increment exclusion at 12298-12300; took_action gate at 12520-12523 | severity=MAJOR | confidence=4\n  PROBLEM: When a standalone ai:done issue has a numeric mention-only linked PR and _resolve_issue_implementation_pr fails, the skip path sets STALL_RECOVERY_EFFECTIVE_ACTION=retrigger_review_skipped_wrong_pr, clears head_ref, leaves pr_num numeric, and never sets took_action or STALL_RECOVERY_SHOULD_INCREMENT.\n  WHY: The issue never reaches escalate_human, logs the same skip on every later poll tick, sends no Telegram, and never reaches close_and_reissue or skip.\n- scripts/orchestrate_poll_process.sh: _resolve_issue_implementation_pr conventional-branch fetch at 11251-11257 | severity=low | confidence=1\n  PROBLEM: After logging reason=pr_fetch_failed the helper still calls _pr_json_is_issue_implementation_pr on empty/{}. \n  WHY: That predicate currently returns 1, so fall-through is safe, but the skip depends on that internal contract.\n\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "ce79968b345fcf0b460469ee6fd1fe843cb86821f47e5c567c4043fd68889ddd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3834,
+    "run_id": "32930746553",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32930746553",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260826061126_1e39802e4a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3834,
+    "run_id": "32930746553"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-26T06:11:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

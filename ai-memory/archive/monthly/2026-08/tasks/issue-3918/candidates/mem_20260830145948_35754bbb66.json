@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3918,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3918\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3921\",\"pr_number\":3921,\"branch\":\"ai/issue-3918\",\"run_id\":\"33317961660\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/33317961660\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"changelog.d/3898-startup-failure-diagnostics.md\",\"scripts/collect_workflow_logs.py\",\"tests/test_collect_workflow_logs.py\"]}",
+  "fingerprint": "a7da264ec720830d2d4fc52019510bbf9afcd041dd84af45f63e737e67624458",
+  "lineage": {
+    "issue_number": 3918,
+    "parent_ids": [],
+    "pr_number": 3921,
+    "run_id": "33317961660",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33317961660",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3921"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260830145948_35754bbb66",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3918,
+    "level": "run",
+    "pr_number": 3921,
+    "run_id": "33317961660"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3918: https://github.com/shubhodeep1/coding-workflows/pull/3921",
+  "timestamps": {
+    "created_at": "2026-08-30T14:59:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

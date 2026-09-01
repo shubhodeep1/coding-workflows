@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:lines 1490-1525 (guard logic) | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The guard logic treats any untracked `scripts/` path as template-owned and rejects the plan, which would also reject legitimate plans that *create* a new consumer-owned `scripts/...` file (untracked until added)\n  WHY: New consumer-owned scripts files are untracked by definition, so the guard would reject legitimate plans before implementation; deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, and qwen_qwen3_7-plus reported that the current `[ -e ]` guard resolves this concern.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The guard needs to distinguish 'runtime-fetched untracked helper' from 'new file to be created' (or mirror implement.yml's full fetched manifest instead of using trackedness as a proxy)\"\n  expected_change_site: .github/workflows/plan.yml around lines 1490-1525\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The current guard logic uses `git ls-files --error-unmatch` to detect untracked files and rejects them, but this also blocks legitimate new consumer-owned scripts files that should be allowed\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/plan.yml:lines 1490-1525 (guard logic) | confidence=5\n  PROBLEM: The guard logic treats any untracked `scripts/` path as template-owned and rejects the plan, which would also reject legitimate plans that *create* a new consumer-owned `scripts/...` file (untracked until added)\n  WHY: The commit step (`scripts/implement_commit_changes.sh`) will commit untracked additions under `scripts/` as long as they're not listed in `scripts/.gitignore`, but the guard would reject these plans before they reach implementation\n- .github/workflows/plan.yml:lines 1490-1525 (guard logic) | confidence=5\n  PROBLEM: The condition `elif [ -e \"${plan_scripts_path}\" ] && ! git ls-files --error-unmatch -- \"${plan_scripts_path}\" >/dev/null 2>&1` rejects existing untracked files, but this also catches new files that should be allowed\n  WHY: New consumer-owned scripts files are untracked by definition, so this condition incorrectly rejects legitimate new file creation plans\n- .github/workflows/plan.yml:lines 1490-1525 (guard logic) | confidence=5\n  PROBLEM: The guard doesn't distinguish between \"runtime-fetched untracked helper\" and \"new file to be created\" - both fall into the same rejection bucket\n  WHY: Consumer plans to create new tracked scripts files are incorrectly blocked, while they should proceed to implementation\n- TASK_GAP\n  Requirement: \"The guard needs to distinguish 'runtime-fetched untracked helper' from 'new file to be created' (or mirror implement.yml's full fetched manifest instead of using trackedness as a proxy)\"\n  Expected change site: .github/workflows/plan.yml around lines 1490-1525\n  Evidence of absence: The current guard logic uses `git ls-files --error-unmatch` to detect untracked files and rejects them, but this also blocks legitimate new consumer-owned scripts files that should be allowed\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "ac047e5d6f59d085a8c25d24bdf96d2498599004d82c4f49f1d106d05d17e734",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3883,
+    "run_id": "33252225228",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33252225228",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260829134153_0ddc1e8e69",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3883,
+    "run_id": "33252225228"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-29T13:41:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

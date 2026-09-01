@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml (CI check-run context, not a diff hunk) | severity=low | confidence=1\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The PR check-run snapshot reports one failed (cancelled) codex-agent run on the head SHA that cannot be mapped to any diff hunk.\n  WHY: Evidence points away from a code defect: failed[0].summary is empty and failed[0].log_tail is 0 chars, the cancelled run and the currently in-progress run target the identical head SHA, and the run names differ (codex-agent vs review / codex-agent, i.e. two distinct workflow runs), which is consistent with concurrency-group supersession of the older run when the newer dispatch started, not with a step failure caused by this diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"byte-identical to the hunks PR #3864 applied on the integration branch, so the eventual integration merge is a no-op for these hunks\"\n  expected_change_site: .github/workflows/review_autofix.yml, Install OpenCode CLI step, lines 1631-1635.\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: the current file contains continue-on-error: true at line 1632 immediately before the uses: line; The LAST RUN DIFF inserts continue-on-error: true immediately before the uses: line of the install step; The last run diff inserts continue-on-error: true at line 1632, which is not present in the integration branch's original hunk.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: add the OPENCODE_VERSION env var and the Install OpenCode CLI step byte-identical to the hunks PR #3864 applied on the integration branch, so the eventual integration merge is a no-op for these hunks.\n  Expected change site: .github/workflows/review_autofix.yml, Install OpenCode CLI step, lines 1631-1635.\n  Evidence of absence: the current file contains continue-on-error: true at line 1632 immediately before the uses: line. The prior commit 8bfc565 and the described PR #3864 hunk have no continue-on-error line at that position. The last-run diff introduced this line, so the hunk is no longer byte-identical and the stated no-op merge property for this hunk is not satisfied.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"byte-identical to the hunks PR #3864 applied on the integration branch, so the eventual integration merge is a no-op for these hunks\" (PR Description, Change section, `.github/workflows/review_autofix.yml` bullet).\n  Expected change site: `.github/workflows/review_autofix.yml`, the `Install OpenCode CLI` step around lines 1631-1635.\n  Evidence of absence: The LAST RUN DIFF inserts `continue-on-error: true` immediately before the `uses:` line of the install step. The integration branch (PR #3864) carries the same install step without that line, so the hunks are no longer byte-identical.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/review_autofix.yml (CI check-run context, not a diff hunk) | severity=NIT | confidence=1\n  PROBLEM: The PR check-run snapshot reports one failed (cancelled) codex-agent run on the head SHA that cannot be mapped to any diff hunk; surfaced per the unmappable-failed-check-run rule so the editor can confirm.\n  WHY: Evidence points away from a code defect: failed[0].summary is empty and failed[0].log_tail is 0 chars, the cancelled run and the currently in-progress run target the identical head SHA, and the run names differ (codex-agent vs review / codex-agent, i.e. two distinct workflow runs), which is consistent with concurrency-group supersession of the older run when the newer dispatch started, not with a step failure caused by this diff.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: The PR description states the OpenCode install hunk should be \"byte-identical to the hunks PR #3864 applied on the integration branch, so the eventual integration merge is a no-op for these hunks.\"\n  Expected change site: `.github/workflows/review_autofix.yml`, the Install OpenCode CLI step around lines 1631-1635.\n  Evidence of absence: The last run diff inserts `continue-on-error: true` at line 1632, which is not present in the integration branch's original hunk.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "956a96f52d07a2766880e219f80e363a71d690dea75f3ac7798565de2762bbdf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3868,
+    "run_id": "33167154516",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33167154516",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260828123432_88d8b0467f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3868,
+    "run_id": "33167154516"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-28T12:34:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

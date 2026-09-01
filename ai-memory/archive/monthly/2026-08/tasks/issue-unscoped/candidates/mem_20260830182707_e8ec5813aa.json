@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_untrusted_input_contract.py:55-69 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: `_run_step_prefix()` copies `os.environ` without removing `BASH_ENV` or `ENV` before invoking `bash -c` on workflow snippets.\n  WHY: Non-interactive bash sources `BASH_ENV` before executing the command, allowing caller-controlled files to execute during security contract tests and make results environment-dependent.\n- scripts/collect_workflow_logs.py:798 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: `_sanitize_missing_log_archive_detail()` hard-codes the `512`-character truncation limit instead of using `DIAGNOSTIC_FAILURE_REASON_MAX_CHARS`.\n  WHY: If the constant changes, this path silently retains the old limit and produces inconsistent diagnostic truncation; severity was reported as NIT by minimax_minimax-m3 and MAJOR by qwen_qwen3_7-plus, so the highest severity is used.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_workflow_untrusted_input_contract.py:55-69 | severity=MAJOR | confidence=4\n  PROBLEM: `_run_step_prefix()` copies `os.environ` with `env = os.environ.copy()` and never strips `BASH_ENV` or `ENV` before invoking `subprocess.run([\"bash\", \"-c\", prefix], \u2026)`.\n  WHY: Non-interactive `bash -c` sources the file named by `$BASH_ENV` before running the command, allowing unexpected code execution, environment mutation, or false positives in the security contract test.\n- scripts/collect_workflow_logs.py:798 | severity=NIT | confidence=4\n  PROBLEM: `_sanitize_missing_log_archive_detail()` truncates with the literal `512` instead of referencing the module-level `DIAGNOSTIC_FAILURE_REASON_MAX_CHARS = 512` constant.\n  WHY: Future changes to `DIAGNOSTIC_FAILURE_REASON_MAX_CHARS` would leave this path using the old hardcoded cap and produce inconsistent truncation.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_workflow_untrusted_input_contract.py:57 | severity=MAJOR | confidence=4\n  PROBLEM: `_run_step_prefix()` copies `os.environ` without removing `BASH_ENV` or `ENV` before running `bash -c` with workflow snippets.\n  WHY: If `BASH_ENV` is set, non-interactive bash sources arbitrary files before each snippet, breaking test isolation and making results non-deterministic.\n- scripts/collect_workflow_logs.py:798 | severity=MAJOR | confidence=4\n  PROBLEM: `_sanitize_missing_log_archive_detail()` hard-codes the 512-character truncation limit instead of using `DIAGNOSTIC_FAILURE_REASON_MAX_CHARS`.\n  WHY: If the constant changes, this path silently retains the old limit and produces inconsistent truncation compared to other diagnostic paths.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- tests/test_workflow_untrusted_input_contract.py:_run_step_prefix lines 57-60 | severity=MAJOR | confidence=4\n  PROBLEM: The helper copies `os.environ` and runs `bash -c` on workflow snippets without removing `BASH_ENV` or `ENV`.\n  WHY: A caller-set `BASH_ENV` file executes during these security contract tests, so the tests no longer isolate untrusted input from extra shell and can fail or pass based on the parent environment.\n- scripts/collect_workflow_logs.py:line 798\n  PROBLEM: Truncation uses a literal 512 instead of `DIAGNOSTIC_FAILURE_REASON_MAX_CHARS` from line 72.\n  WHY: Slicing with `DIAGNOSTIC_FAILURE_REASON_MAX_CHARS` keeps missing-archive details on the same cap as other diagnostic reasons.\n\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "691ac929d5d0c8ed13f6189918a7442ad27fe019fec17a50a78b08f8e719658f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3915,
+    "run_id": "33322435830",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33322435830",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260830182707_e8ec5813aa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3915,
+    "run_id": "33322435830"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-30T18:27:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

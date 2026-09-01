@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `6ef32f196668e059d15008934336f4b26b02d3ba` on `orchestrator/project-3810`; integration metadata matches.\n\nClarification interpretation: no clarification questions were issued. The orchestrator auto-answer authorizes planning from the stated scope.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `review_conflict_resolve.sh` workflow-to-script extraction pattern  \nScope-mode justification: Perform only the requested behavior-preserving extraction. Preserve the complete prompt and retry contract rather than substituting `prompts/mode-plan.txt`, following \u00a76 priorities: correctness and backward compatibility take precedence over implementation speed.\n\n## Automation wiring\n\n- Introduce `scripts/run_plan_codex.sh` as a short-lived, automatically invoked workflow helper\u2014not a manual script.\n- Entry point remains `.github/workflows/plan.yml`, reached by `workflow-templates/ai-plan.yml` on `/answer` issue comments.\n- No new scheduler, supervisor, database gate, dependency, or external interface.\n- No pending-removal registry entry is required because this is a permanent per-run helper, not single-use or long-running automation.\n\n## Files likely to change\n\n1. `.github/workflows/plan.yml`\n   - Add `run_plan_codex.sh` to the required support-script staging loop.\n   - Reduce `Run Codex planning` to its existing environment bindings and one helper invocation.\n2. `scripts/run_plan_codex.sh` \u2014 new file\n   - Hold the extracted orchestration and exact inline prompt payload.\n3. `tests/test_plan_codex_step_extraction.py` \u2014 new focused contract test.\n4. `.github/workflows/ci.yml`\n   - Register the new contract test in the existing plan-test group.\n\nNo changes are expected to `prompts/mode-plan.txt` or `workflow-templates/ai-plan.yml`.\n\n## Functions or modules to implement\n\n- Implement the helper as a direct extraction of the current step:\n  - Source `gh_helpers.sh` and retain the `gh_retry` fallback.\n  - Write `${RUNTIME_DIR}/mode-plan-inline.txt` with byte-identical content.\n  - Assemble `CODEX_PROMPT_FILE` in the existing static-context, budget, rendered-template, repository-learnings, memory-context, planning-context order.\n  - Preserve prompt sanitization.\n  - Preserve three attempts, 10/20-second backoff, empty-output handling, final-attempt fallback model, logs, and exit codes.\n  - Replace inline `${{ github.repository }}` usage with the equivalent standard `GITHUB_REPOSITORY` environment value inside the script.\n\n## Data structures affected\n\n- Existing files remain unchanged in shape:\n  - `mode-plan-inline.txt`\n  - `codex_prompt.txt`\n  - `codex_output.txt`\n  - `codex_log.txt`\n- Preserve environment inputs including `RUNTIME_DIR`, `PLANNING_CONTEXT_FILE`, `CODEX_PROMPT_FILE`, `CODEX_OUTPUT_FILE`, `TOOL_CALL_BUDGET`, `MODEL_EDITOR`, `MODEL_EDITOR_FALLBACK`, and `PLAN_PROGRESS_COMMENT_ID`.\n- No schema or persisted-state changes.\n\n## API/interface changes\n\n- New internal shell interface: `bash scripts/run_plan_codex.sh`, configured entirely through existing environment variables.\n- Preserve both GitHub comment PATCH endpoints and their exact progress-comment bodies.\n- No workflow-call inputs, secrets, outputs, consumer wrapper interfaces, or Codex CLI arguments change.\n\nData flow:\n\n1. `ai-plan.yml` consumer wrapper invokes reusable `plan.yml`.\n2. Support staging installs `scripts/run_plan_codex.sh`.\n3. `Run Codex planning` exports existing secrets/settings and invokes the helper.\n4. Helper assembles the identical prompt and updates the progress comment.\n5. Helper runs Codex with the existing retry/fallback policy.\n6. Existing write-guard and output-parsing steps consume the same files.\n\nFailure modes:\n\n- Missing staged helper: workflow fails before model invocation; contract test verifies required staging.\n- Primary-model failure or empty output: preserve warnings, comment refresh, backoff, and retry.\n- Final attempt: preserve fallback-model selection when configured.\n- Retry exhaustion: preserve the existing error message and exit code `1`.\n- Optional progress update failure: remain fail-open.\n\n## Decisions\n\n### D1 \u2014 Preserve the inline prompt in the helper\n\n- **Chosen:** Move the current heredoc unchanged into `scripts/run_plan_codex.sh`.\n- **Alternatives considered:** Replace it with `prompts/mode-plan.txt` or refactor prompt assembly.\n- **Why:** The canonical prompt is not byte-equivalent, and either alternative would violate the explicit no-contract-change requirement.\n\n### D2 \u2014 Pin both bytes and behavior\n\n- **Chosen:** Add a focused test with a pre-extraction prompt-byte/hash baseline plus mocked `gh`, `codex`, and `sleep` behavior.\n- **Alternatives considered:** Test only that the workflow invokes the helper, or snapshot only the YAML.\n- **Why:** Static wiring alone would not protect prompt ordering, retries, fallback selection, progress bodies, outputs, or exit semantics.\n\n## Risks and edge cases\n\n- The current raw workflow step measures approximately 19,945 bytes and contains five GitHub expressions, consistent with the issue\u2019s reported limit risk.\n- Heredoc indentation or newline changes could alter prompt bytes.\n- Script extraction must not accidentally change pipeline/subshell exit behavior.\n- The issue references a declared `files_touched` list, but none appears in the supplied context; the plan assumes the four files above are the intended minimal allowlist.\n\n## Testing considerations\n\n- Parse `plan.yml` and assert the step retains its existing `if` and environment bindings, invokes only the staged helper, and remains well below 21,000 bytes.\n- Assert the staging loop installs `run_plan_codex.sh`.\n- Compare the extracted helper prompt against the pre-extraction byte/hash baseline.\n- Execute the helper with mocks to verify:\n  - prompt bytes and section ordering;\n  - successful primary-model invocation;\n  - empty/non-zero retries and 10/20-second backoff;\n  - exact progress-comment bodies;\n  - final-attempt fallback model;\n  - output/log paths and exhaustion exit code.\n- Run `bash -n`, ShellCheck, focused plan prompt/render tests, actionlint on `plan.yml`, YAML parsing, and `scripts/check_workflow_script_refs.py`.\n\nPLAN_SELF_CHECK: WARNING: The issue mentions a files_touched allowlist but does not include it; the minimal required four-file scope was derived from the acceptance criteria.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d38506cca6a5a271a865658819abfaacce418b792f6a969b28badf491c3ea276",
+  "lineage": {
+    "issue_number": 3813,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32849745609",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32849745609",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3813"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260825125440_45cc192f7d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3813,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "32849745609"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3813",
+  "timestamps": {
+    "created_at": "2026-08-25T12:54:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

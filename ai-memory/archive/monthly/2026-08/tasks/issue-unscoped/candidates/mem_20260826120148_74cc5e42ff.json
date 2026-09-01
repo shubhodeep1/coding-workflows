@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_resolve_review_threads.sh:lines 196-232 | severity=major | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The thread-query path does not validate top-level GraphQL errors in the response, so an HTTP-200 errors[] payload can silently become an empty or partial thread list.\n  WHY: The script reports zero threads and exits 0 without warning, leaving audited threads unresolved and indistinguishable from a genuinely empty PR; severity disagreement was MAJOR versus NIT, so the highest severity is used.\n- scripts/review_resolve_review_threads.sh:lines 286-296 | severity=blocker | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The resolve-mutation success path previously accepted an HTTP-200 GraphQL errors[] payload as success and incremented resolved_count while the thread remained open.\n  WHY: gh api graphql can exit 0 with an errors[] response, causing the resolved counter to be inflated and the thread to remain unresolved silently.\n\n- scripts/review_resolve_review_threads_plan.py:lines 237-249 | severity=blocker | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The parse_diff_hunks function is imported but not defined in the visible code snippet, suggesting it might be missing or incorrectly referenced.\n  WHY: If this function is not properly defined or imported, the plan building process would fail, preventing thread resolution from occurring.\n- tests/test_review_resolve_review_threads.py:lines 556-602 | severity=major | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The test test_driver_fails_open_when_the_thread_query_fails creates a failing stub but does not properly verify that the driver handles the failure correctly in all scenarios.\n  WHY: The test may pass even when the actual driver behavior is incorrect, giving false confidence in the fail-open behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_resolve_review_threads.sh:lines 198-218 | severity=MAJOR | confidence=3\n  PROBLEM: The thread-query path does not validate GraphQL errors[] payloads.\n  WHY: An HTTP-200 errors[] response can be treated as zero or partial threads, silently leaving audited threads unresolved.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_resolve_review_threads.sh:lines 205-219 | severity=MAJOR | confidence=4\n  PROBLEM: The thread-query path does not validate top-level GraphQL errors[] on the slurped response.\n  WHY: The transform silently collapses errored or null data to an empty list, producing an unwarninged fail-open result indistinguishable from a PR with no review threads.\n- scripts/review_resolve_review_threads.sh:lines 204-232 | severity=MAJOR | confidence=4\n  PROBLEM: The query-path error handling conflates transport failure, GraphQL errors[], and a genuinely threadless PR.\n  WHY: An errored response can produce resolved=0 replied=0 skipped=0 with no warning or descriptive log.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_resolve_review_threads.sh:lines 286-296 | severity=BLOCKER | confidence=5\n  PROBLEM: The resolve-mutation success path previously checked only gh_retry ... > \"${resolve_response}\" \u2014 when GitHub returned HTTP 200 with a GraphQL errors[] payload, the shell && would pass and resolved_count would be incremented while the thread remained open on GitHub's side.\n  WHY: A GraphQL endpoint can return errors[] while gh api graphql exits 0, inflating the resolved counter and leaving the thread open silently.\n- scripts/review_resolve_review_threads.sh:lines 206-218 | severity=MAJOR | confidence=5\n  PROBLEM: The thread-query path validates nothing about top-level GraphQL errors.\n  WHY: An errors[] response can silently yield an empty or partial thread list, causing the script to report zero threads or resolve from an incomplete set.\n- scripts/review_resolve_review_threads_plan.py:lines 237-249 | severity=BLOCKER | confidence=4\n  PROBLEM: The parse_diff_hunks function is imported but not defined in the visible code snippet, suggesting it might be missing or incorrectly referenced.\n  WHY: If this function is not properly defined or imported, the plan building process would fail, preventing thread resolution from occurring.\n- tests/test_review_resolve_review_threads.py:lines 556-602 | severity=MAJOR | confidence=4\n  PROBLEM: The test test_driver_fails_open_when_the_thread_query_fails creates a failing stub but doesn't properly verify that the driver handles the failure correctly in all scenarios.\n  WHY: The test may pass even when the actual driver behavior is incorrect, giving false confidence in the fail-open behavior.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/review_resolve_review_threads.sh:lines 206-215 \u2014 the jq -s transform of THREADS_RAW into THREADS_JSON,\n  `jq -s '[.[].data.repository.pullRequest.reviewThreads.nodes[]?] | map(...)'`\n  | severity=NIT | confidence=3\n  PROBLEM: The review-thread query path still does not check for a top-level GraphQL errors[] payload.\n  WHY: The transform suppresses the error and yields an empty list, making the run indistinguishable from a PR with no threads while audited threads remain unresolved.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_resolve_review_threads.sh:lines 196-218 | severity=NIT | confidence=3\n  PROBLEM: The thread-query path does not validate GraphQL errors in the response.\n  WHY: An errors[] payload can silently produce an empty or partial thread list, causing the script to report zero threads and hide the observability failure.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "e53eb158274bd4380096a95935f2aaf96612b2155117d1529a26e61177f6a544",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3841,
+    "run_id": "32960574844",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32960574844",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260826120148_74cc5e42ff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3841,
+    "run_id": "32960574844"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-26T12:01:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

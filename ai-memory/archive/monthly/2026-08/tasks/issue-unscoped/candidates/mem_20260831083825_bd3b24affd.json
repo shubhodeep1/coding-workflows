@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .ai/.workspace_source_manifest.txt:lines 111-117, 149-155, and 333-336 (changelog.d alphabetized range) | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The committed workspace manifest omits `prompts/references/security-money-lens.txt` and `changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md`, despite the PR creating both files.\n  WHY: Tooling that compares the manifest with the staged path set will see an internally inconsistent tree; impact is bounded because the manifest is regenerated and CI is green.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .ai/.workspace_source_manifest.txt\n  Line or code reference: lines 111-117, 149-155 (changelog.d alphabetized range), and lines 333-336 (prompts/references block)\n  Problem: The committed workspace manifest was updated with unrelated integration-branch drift entries (new `analysis/workflow-optimization-2026-08-30.md`, `changelog.d/3898-...`, `docs/completed/awesome-claude-code-learnings-plan.md`, `docs/completed/learn-claude-code-learnings-plan.md`, and renames of two `docs/plans/*.md` to `docs/completed/*.md`) but still does NOT include the two new files this PR itself introduces: `prompts/references/security-money-lens.txt` and `changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md`.\n  Why it fails at runtime: Any tooling that diffs the manifest against the staged path set to detect unlisted or ghost paths will see `prompts/references/security-money-lens.txt` and `changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md` as unlisted even though they are part of this PR. CI on the head SHA is green and no consumer of the manifest breaks today, but the artifact is internally inconsistent relative to the work the PR purports to deliver, and the manifest churn also obscures the missing-new-file signal under unrelated drift. Phases 2+ of the orchestrator-security-pass-gate plan (audit-engine + project-pass mode) will read this same manifest; leaving the new Phase 1 reference file unlisted now will make later audits falsely flag it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: \"Create prompts/references/security-money-lens.txt as the single source of truth for money-handling security\" and requirement 7: \"Use the renderer's existing generic REFERENCE_* hydration; do not introduce a competing reference mechanism.\"\n  Expected change site: prompts/mode-plan.txt, prompts/_templates/mode-plan.txt, prompts/mode-implement.txt, prompts/_templates/mode-implement.txt should contain `{{REFERENCE_SECURITY_MONEY_LENS}}` placeholders that the renderer hydrates from prompts/references/security-money-lens.txt, matching the existing pattern used by `{{REFERENCE_OUTPUT_CONTRACT}}` and `{{REFERENCE_VERIFICATION_LOOP}}`.\n  Evidence of absence: All four prompt bodies inline the seven money-handling bullet points verbatim instead of using the `{{REFERENCE_SECURITY_MONEY_LENS}}` placeholder. The test `test_security_money_lens_renders_in_plan_and_implement_prompts` confirms this: it calls `_run_render_prompt_py(prompt_path)` without passing `REFERENCE_SECURITY_MONEY_LENS` as a variable and still asserts the reference text appears in stdout. The reference file exists and the contracts declare the optional var, but no prompt body consumes the placeholder, so the reference file is orphaned and the text is duplicated five times (reference file + four prompt bodies). Future edits to the reference file will not propagate to the prompts.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .ai/.workspace_source_manifest.txt\n  Line or code reference: prompts/references block, lines 333-336 (lists output-contract.txt, severity-classification.txt, validate-output-contract.txt, verification-loop.txt) and the alphabetized changelog.d/ range\n  Problem: The manifest omits both files this PR creates: prompts/references/security-money-lens.txt (missing between lines 335 and 337) and changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md. The PR edited this manifest with four hunks of integration-branch drift but never added its own new files.\n  Why it fails at runtime: Impact is bounded and verified: the file is gitignored but tracked (.gitignore:27) and is rewritten by scripts/workspace_init.sh::materialize_source_tree (line 270) on every workflow run, so the stale committed copy self-heals; the only test consumer (tests/test_phase_skip_gate_telemetry_contract.py:154) asserts a single script entry, so CI stays green. The defect is an internal inconsistency in a file the PR itself touched: tooling/tests reading the committed manifest see a tree without the PR's two new files.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .ai/.workspace_source_manifest.txt\n  Line or code reference: lines 333-336 (prompts/references/ section) and the changelog.d/ alphabetized range\n  Problem: The manifest omits both files this PR creates: `prompts/references/security-money-lens.txt` (should appear between `severity-classification.txt` and `validate-output-contract.txt`) and `changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md` (should appear in the changelog.d/ alphabetized range).\n  Why it fails at runtime: The manifest is a committed artifact that workspace tooling uses to represent the staged path set. Tooling that validates or generates path sets against this manifest will see an inconsistent tree. The impact is bounded - the manifest is regenerated by `scripts/workspace_init.sh::materialize_source_tree` and CI on the head SHA is green - but the committed artifact is stale.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "14ae3a7f7466632388054f2f196d1162373d0f7c88710af86e907cdb539358f3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3936,
+    "run_id": "33364404748",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33364404748",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260831083825_bd3b24affd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3936,
+    "run_id": "33364404748"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-31T08:38:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

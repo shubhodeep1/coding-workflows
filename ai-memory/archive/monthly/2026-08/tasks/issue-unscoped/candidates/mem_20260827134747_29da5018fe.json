@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml: ci.yml line ~635; docs/INVENTORY.md \"## Workflows\" (line 40) and \"## Scripts\" (line 88) | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The new tracked workflow and scripts are missing from docs/INVENTORY.md.\n  WHY: The Inventory parity CI step fails because .github/workflows/opencode-live-smoke.yml, scripts/opencode_helpers.sh, and scripts/write_opencode_config.sh are undocumented.\n- .github/workflows/ci.yml: lines 196-228 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k3]\n  PROBLEM: The three new contract test files are not wired into ci.yml.\n  WHY: tests/test_opencode_live_smoke_workflow.py::test_focused_tests_are_wired_into_ci fails deterministically, and the tests never execute in CI.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Wire both into ci.yml's existing test step list.\" | expected_change_site: .github/workflows/ci.yml, the existing hardcoded test-step run list (lines ~196-228) | confidence=5\n  flagged_by: [moonshotai_kimi-k3]\n  EVIDENCE: ci.yml contains no invocation of tests/test_write_opencode_config.py, tests/test_opencode_helpers.py, or tests/test_opencode_live_smoke_workflow.py (zero grep matches), and .github/workflows/ci.yml is not in the PR changed-files list.\n- requirement: Phase 1 step 6 (docs/plans/opencode-review-autofix-cutover-plan.md:229-237): \"Docs: README env-var rows (OPENCODE_VERSION; note that CODEX_VERSION remains for the other workflows), agents.md \u2014 models section note, stable log prefix opencode_agent_failure registered in the 'Stable log prefixes' section, docs/scripts-pending-removal.md entries\" | expected_change_site: README.md (the Variables table), agents.md (## Stable log prefixes section), docs/scripts-pending-removal.md | confidence=5\n  flagged_by: [moonshotai_kimi-k3]\n  EVIDENCE: README.md contains no OPENCODE_VERSION reference; agents.md contains no opencode_agent_failure (or opencode_agent_start, the second new prefix emitted by scripts/opencode_helpers.sh) registration; docs/scripts-pending-removal.md contains no opencode entries.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/ci.yml, docs/INVENTORY.md: ci.yml line ~635 (Inventory parity step calling tests/inventory_parity.py); and absence of entries in docs/INVENTORY.md \"## Workflows\" (line 40) and \"## Scripts\" (line 88) | severity=critical | confidence=5\n  PROBLEM: The new tracked files .github/workflows/opencode-live-smoke.yml, scripts/opencode_helpers.sh, and scripts/write_opencode_config.sh are not registered in docs/INVENTORY.md.\n  WHY: The Inventory parity CI step fails with FAIL: docs/INVENTORY.md: Workflows: missing .github/workflows/opencode-live-smoke.yml, FAIL: docs/INVENTORY.md: Scripts: missing scripts/opencode_helpers.sh, FAIL: docs/INVENTORY.md: Scripts: missing scripts/write_opencode_config.sh.\n- .github/workflows/ci.yml: absence of entries for tests/test_write_opencode_config.py, tests/test_opencode_helpers.py, tests/test_opencode_live_smoke_workflow.py anywhere in ci.yml; and tests/test_opencode_live_smoke_workflow.py lines 107-115, test_focused_tests_are_wired_into_ci() | severity=high | confidence=5\n  PROBLEM: The three new contract test files are not wired into ci.yml.\n  WHY: The contract assertion fails and the tests never execute in CI.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- tests/test_opencode_live_smoke_workflow.py: test_focused_tests_are_wired_into_ci (lines 105-113) | severity=critical | confidence=5\n  PROBLEM: The test asserts that .github/workflows/ci.yml contains the literal strings PYTHONDONTWRITEBYTECODE=1 python3 tests/test_write_opencode_config.py, tests/test_opencode_helpers.py, and tests/test_opencode_live_smoke_workflow.py, but ci.yml contains none.\n  WHY: Running this test file fails deterministically, and none of the three new test files execute in CI.\n- Requirement: \"Wire both into ci.yml's existing test step list.\" \u2014 docs/plans/opencode-review-autofix-cutover-plan.md:224-227 (Phase 1, step 5)\n  Expected change site: .github/workflows/ci.yml, the existing hardcoded test-step run list (lines ~196-228)\n  Evidence of absence: ci.yml contains no invocation of tests/test_write_opencode_config.py, tests/test_opencode_helpers.py, or tests/test_opencode_live_smoke_workflow.py (zero grep matches), and .github/workflows/ci.yml is not in the PR changed-files list.\n  severity=critical | confidence=5\n- Requirement: Phase 1 step 6 (docs/plans/opencode-review-autofix-cutover-plan.md:229-237): \"Docs: README env-var rows (OPENCODE_VERSION; note that CODEX_VERSION remains for the other workflows), agents.md \u2014 models section note, stable log prefix opencode_agent_failure registered in the 'Stable log prefixes' section, docs/scripts-pending-removal.md entries\"; \u00a718.F (plan lines 400-403) states the registry entries are \"added in P1, live in docs/scripts-pending-removal.md\" (opencode-live-smoke.yml type long-running; opencode_helpers.sh and write_opencode_config.sh with zero-invocation-site preflight).\n  Expected change site: README.md (the Variables table), agents.md (## Stable log prefixes section), docs/scripts-pending-removal.md\n  Evidence of absence: README.md contains no OPENCODE_VERSION reference; agents.md contains no opencode_agent_failure (or opencode_agent_start, the second new prefix emitted by scripts/opencode_helpers.sh) registration; docs/scripts-pending-removal.md contains no opencode entries.\n  severity=high | confidence=5\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "b9f23ccbaef3f1590e39148d7b3495b388cd9dd964c2c6d9ad1288defaa30992",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33076560139",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33076560139",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260827134747_29da5018fe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33076560139"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-27T13:47:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

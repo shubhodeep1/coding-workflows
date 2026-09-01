@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:51, 56, 58 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, mistralai_mistral-small-2603]\n  PROBLEM: Comment and log message refer to \"Codex\" instead of \"OpenCode\" in the new CONFLICT_RESOLVED short-circuit block.\n  WHY: Creates internal inconsistency and potential confusion during resolver debugging; both reviewers reported NIT severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Document the deterministic manifest conflict resolution behavior in agents.md under the resolver / review-pipeline behavior section near scripts/review_conflict_resolve.sh entries\n  expected_change_site: agents.md resolver / review-pipeline behavior section\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: No diff hunk in agents.md introduces resolver behavior entry for CONFLICT_MANIFEST_UNION_ENABLED; only variable contract row exists\n- requirement: Document the resolver short-circuit for CONFLICT_RESOLVED=true in agents.md\n  expected_change_site: agents.md resolver / review-pipeline behavior section\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: No diff hunk in agents.md documents CONFLICT_RESOLVED short-circuit behavior introduced in scripts/review_conflict_resolve.sh\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_conflict_resolve.sh: lines 51, 56 | severity=NIT | confidence=5\n  PROBLEM: The new CONFLICT_RESOLVED short-circuit comment (line 51: \"Running Codex against an empty conflict set is the known hallucination hazard\u2026\") and the log message (line 56: \"skipping Codex resolver\") both call the script \"Codex\", but the file header (lines 1-3) and the surrounding code (`OPENCODE_HELPERS_PATH`, `OPENCODE_CONFIG_WRITER_PATH`, \"run the OpenCode resolver\") explicitly identify it as the OpenCode-based resolver.\n  WHY: No runtime failure \u2014 this is purely a documentation/logging inconsistency. But it matters: (a) operator-facing log lines in the workflow output will name the wrong resolver when the manifest short-circuit fires, defeating the log-as-documentation invariant the script already follows elsewhere; (b) a developer grepping for \"Codex resolver\" to find this script will not find it; (c) the consistency invariant holds for every other mention of the resolver in this file (header, env-var names, helper paths). Single-line fix: replace \"Codex\" with \"the resolver\" (or \"the OpenCode resolver\") on both lines so the comment and log line match the rest of the file.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_conflict_resolve.sh:58 | severity=NIT | confidence=5\n  PROBLEM: Comment and log message refer to \"Codex\" instead of \"OpenCode\" in the new CONFLICT_RESOLVED short-circuit block\n  WHY: Creates internal inconsistency and potential confusion during resolver debugging\n- agents.md:748 | severity=MAJOR | confidence=5\n  PROBLEM: agents.md entry for CONFLICT_MANIFEST_UNION_ENABLED is inconsistent with actual behavior and README.md entry; omits key details (set algebra, kill switch behavior, exclusions) and misstates resolver identity\n  WHY: Operators relying on agents.md may miss critical operational nuances and misconfigure the feature\n- TASK_GAP\n  Requirement: Document the deterministic manifest conflict resolution behavior in agents.md under the resolver / review-pipeline behavior section near scripts/review_conflict_resolve.sh entries\n  Expected change site: agents.md resolver / review-pipeline behavior section\n  Evidence of absence: No diff hunk in agents.md introduces resolver behavior entry for CONFLICT_MANIFEST_UNION_ENABLED; only variable contract row exists\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: Document the resolver short-circuit for CONFLICT_RESOLVED=true in agents.md\n  Expected change site: agents.md resolver / review-pipeline behavior section\n  Evidence of absence: No diff hunk in agents.md documents CONFLICT_RESOLVED short-circuit behavior introduced in scripts/review_conflict_resolve.sh\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "c737c7a254d2533b6aed02e26fa3713ebb5a55265e004bc240c76db576acb07a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3931,
+    "run_id": "33369072356",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33369072356",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260831090112_74b3a2ac06",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3931,
+    "run_id": "33369072356"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-31T09:01:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

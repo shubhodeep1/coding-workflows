@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:1549-1552 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The normalization removes the leading \"scripts/\" prefix, causing paths like \"scripts/./render_prompt.sh\" to fail comparison with the fetched helper list.\n  WHY: The guard will incorrectly allow a fetched helper through because the normalized name does not match the ignore entry.\n- .github/workflows/plan.yml:1549-1552 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The guard falls back to blanket rejection of all scripts/ paths when the fetched helpers manifest is empty, but it does not emit a warning in this case.\n  WHY: Operators cannot tell whether a rejection is due to template ownership or a bootstrap failure.\n- tests/test_plan_template_owned_path_guard.py:unspecified | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The test only checks that bare \"scripts\" and \"scripts/\" are rejected, but it does not verify that the guard emits the expected error message or that the rejection is due to template ownership rather than a bootstrap failure.\n  WHY: The test does not validate the guard's behavior for this edge case.\n- tests/test_plan_template_owned_path_guard.py:lines 246-250\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Test asserts only return code 1 but does not verify the guard's output contains the path that triggered rejection.\n  WHY: The test could pass on a bootstrap-failure fallback, which also exits 1, rather than an actual \"bare scripts reference\" rejection.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_plan_template_owned_path_guard.py\n  Location: test_bare_scripts_directory_reference_is_rejected (lines 246-250)\n  Issue: Test asserts only return code 1 but does not verify the guard's output contains the path that triggered rejection, making it possible for the test to pass on a bootstrap-failure fallback (which also exits 1) rather than an actual \"bare scripts reference\" rejection.\n  Suggested minimal fix: Add an output assertion that the blocked file list or error message references the bare `scripts` or `scripts/` token.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/plan.yml:1549-1552\n  Code:\n  fetched_script_name=\"${normalized_template_path_candidate#scripts/}\"\n  Problem: The normalization removes the leading \"scripts/\" prefix, but the fetched helper list contains entries without the \"scripts/\" prefix (e.g., \"render_prompt.sh\"), so the comparison fails for paths like \"scripts/./render_prompt.sh\" which normalize to \"render_prompt.sh\" but are not in the ignore list.\n  Why it fails at runtime: The guard will incorrectly allow a fetched helper through because the normalized name does not match the ignore entry.\n  ISSUE_CONFIDENCE: 5\n- .github/workflows/plan.yml:1549-1552\n  Code:\n  fetched_script_name=\"${normalized_template_path_candidate#scripts/}\"\n  Problem: The guard falls back to blanket rejection of all scripts/ paths when the fetched helpers manifest is empty, but it does not emit a warning in this case, making it indistinguishable from a successful template-owned rejection.\n  Why it fails at runtime: Operators cannot tell whether a rejection is due to template ownership or a bootstrap failure.\n  ISSUE_CONFIDENCE: 4\n- tests/test_plan_template_owned_path_guard.py:unspecified\n  Code:\n  test_bare_scripts_directory_reference_is_rejected\n  Problem: The test only checks that bare \"scripts\" and \"scripts/\" are rejected, but it does not verify that the guard emits the expected error message or that the rejection is due to template ownership rather than a bootstrap failure.\n  Why it fails at runtime: The test does not validate the guard's behavior for this edge case.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "8a4fef8adc753b0c638c2566360d321a0c908391c3d2755ec7697a11e0faf039",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3880,
+    "run_id": "33263155741",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33263155741",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260829183438_27f00916fe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3880,
+    "run_id": "33263155741"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-29T18:34:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

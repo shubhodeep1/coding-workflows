@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:lines 94-105 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: The live-size guard counts all 317 top-level `test_*` functions instead of the 307-test post-fast-fail subset that CI actually shards.\n  WHY: `assert_partition(len(names), 4)` passes for any count, so drift in the `test_implementation_failed_*` exclusion filter goes undetected; severity was reported as both NIT and MAJOR, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"tests/test_ci_poll_test_sharding.py extracts that expression from the workflow rather than restating it, then proves it is a true partition across shard counts 1, 2, 3, 4, 5, and 8 and against the module's live test count\"\n  expected_change_site: tests/test_ci_poll_test_sharding.py, `test_partition_holds_for_the_real_module_size`\n  confidence=5\n  flagged_by: [minimax_minimax-m3, mistralai_mistral-small-2603, qwen_qwen3_7-plus]\n  EVIDENCE: tests/test_ci_poll_test_sharding.py walks `module.body` and filters `node.name.startswith(\"test_\")`, yielding 317 names; `.github/workflows/ci.yml` lines 52-57 exclude `test_implementation_failed_*`, producing the 307-test sharded subset; no matching exclusion filter is introduced in the test.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_ci_poll_test_sharding.py:lines 94-105 | severity=NIT | confidence=4\n  PROBLEM: The contract test counts every top-level `test_*` function in `tests/test_orchestrate_poll_process.py`, which is 317 functions, while CI shards the 307-test post-fast-fail subset.\n  WHY: The partition assertion holds for any line count and cannot detect drift between the fast-fail exclusion filter (`.github/workflows/ci.yml` line 52) and the set that the awk split actually receives.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_poll_test_sharding.py, `test_partition_holds_for_the_real_module_size` (lines 96\u2013109) | severity=MAJOR | confidence=5\n  PROBLEM: The test counts 317 names from the full module instead of the 307-test post-fast-fail sharded subset.\n  WHY: The workflow removes every `test_implementation_failed_*` test before splitting, so the guard does not catch drift in the fast-fail exclusion filter.\n- Requirement: \"tests/test_ci_poll_test_sharding.py extracts that expression from the workflow rather than restating it, then proves it is a true partition across shard counts 1, 2, 3, 4, 5, and 8 and against the module's live test count\"\n  Expected change site: tests/test_ci_poll_test_sharding.py, `test_partition_holds_for_the_real_module_size` (lines 96\u2013109)\n  Evidence of absence: The test walks `module.body` and filters `node.name.startswith(\"test_\")`, yielding 317 names from the full module; the actual sharded subset is 307 tests.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: \"The sharding contract test must guard the exact subset of tests that CI actually shards (the post-fast-fail remaining subset), not the full module count.\"\n  Expected change site: tests/test_ci_poll_test_sharding.py in test_partition_holds_for_the_real_module_size\n  Evidence of absence: The test currently counts all top-level test_* functions in tests/test_orchestrate_poll_process.py (317), but the workflow shards only the post-fast-fail remaining subset (307 tests), excluding the 10 test_implementation_failed_* functions filtered out at ci.yml lines 52-57.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- tests/test_ci_poll_test_sharding.py:lines 94-105 (test_partition_holds_for_the_real_module_size; the AST list at 97-104 and the assert_partition(len(names), 4) call at line 105) | severity=NIT | confidence=4\n  PROBLEM: The guard counts every top-level test_* FunctionDef (317 functions) with no exclusion, while CI shards the 307-test post-fast-fail remaining subset.\n  WHY: The `NR % total == n` partition is valid for any input count, so drift in the fast-fail exclusion filter cannot fail this test; the impact is guard accuracy, not a shard partition bug.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_ci_poll_test_sharding.py:lines 95-105, `test_partition_holds_for_the_real_module_size` | severity=MAJOR | confidence=5\n  PROBLEM: The test counts every top-level `test_*` FunctionDef (currently 317) instead of the 307 post-fast-fail subset that CI shards.\n  WHY: The partition property holds for any input count, so changes to the fast-fail filter silently diverge from what the contract test guards.\n- Requirement: \"tests/test_ci_poll_test_sharding.py extracts that expression from the workflow rather than restating it, then proves it is a true partition across shard counts 1, 2, 3, 4, 5, and 8 and against the module's live test count\" (changelog.d/3844-ci-poll-test-sharding.md, For contributors paragraph; PR description restates the same contract).\n  Expected change site: tests/test_ci_poll_test_sharding.py, `test_partition_holds_for_the_real_module_size` (lines 95-105).\n  Evidence of absence: The implementation yields 317 names, while the workflow's actual sharded subset is 307 (produced by excluding `test_implementation_failed_*` at ci.yml lines 52-57); no diff hunk introduces the same exclusion filter in the test.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- tests/test_ci_poll_test_sharding.py:ShardPartitionTest.test_partition_holds_for_the_real_module_size (lines 94-105) | severity=NIT | confidence=4\n  PROBLEM: The live-size guard walks every top-level test_* FunctionDef, listing 317 names, while CI shards only the remaining 307 names after dropping the 10 test_implementation_failed_* names.\n  WHY: `assert_partition(len(names), 4)` is a count-only mathematical check that stays green on 317, so a later change to the remaining-test filter cannot fail this contract test.\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "66c0aa034965a19c614c4aeb29ffef552a04196642b03c862be80a305d3eef80",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3844,
+    "run_id": "33060427641",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33060427641",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260827110003_2be05941c8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3844,
+    "run_id": "33060427641"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-27T11:00:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

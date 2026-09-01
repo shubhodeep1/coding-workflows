@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:14400-14451 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: The contract test requires a heartbeat during a 30 ms synthetic test while the heartbeat interval is 5 ms, but real-time thread scheduling does not guarantee that the daemon worker emits one before the test stops it.\n  WHY: On loaded CI runners the assertion can fail intermittently despite correct production behavior; severity differs across reviewers (NIT versus MAJOR), so the highest severity is used.\n\n- tests/test_orchestrate_poll_process.py:14290-14296 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The heartbeat worker thread is created as a daemon thread, which means it can be abruptly terminated by the Python interpreter when the main thread exits.\n  WHY: Daemon threads do not participate in Python's shutdown protocol and can be killed without running cleanup handlers, potentially masking cleanup issues.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Ensure heartbeat machinery is cleaned up after every test and cannot change test result handling or keep the process alive.\"\n  expected_change_site: tests/test_orchestrate_poll_process.py in the _run_selected_tests and _test_heartbeat_worker functions\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The implementation correctly cleans up heartbeat threads in finally blocks and uses daemon threads, but the synthetic test timing is too tight to reliably validate this behavior under load.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_orchestrate_poll_process.py:14402, 14411, 14449-14451 | severity=MAJOR | confidence=4\n  PROBLEM: The contract test hard-asserts that at least one heartbeat event fires for synthetic_slow, but synthetic_slow only sleeps for 30 ms while the heartbeat worker is configured with a 5 ms interval.\n  WHY: On a loaded CI runner the heartbeat thread can be starved for the entire 30 ms sleep, causing the assertion to fail intermittently even though the production runner code is correct.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:14402, 14411, 14449\u201314452 | severity=NIT | confidence=5\n  PROBLEM: The contract test depends on the daemon heartbeat thread being scheduled and firing at least once within a 30ms window on a 5ms heartbeat interval.\n  WHY: On a loaded CI runner the Python GIL and thread scheduler can starve the heartbeat thread, causing any(...) to return False and the assertion to fail despite correct production machinery.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_orchestrate_poll_process.py:14290-14296 | severity=NIT | confidence=3\n  PROBLEM: The heartbeat worker thread is created as a daemon thread, which means it can be abruptly terminated by the Python interpreter when the main thread exits.\n  WHY: Daemon threads do not participate in Python's shutdown protocol and can be killed without running cleanup handlers, potentially masking cleanup issues.\n\n- requirement: \"Ensure heartbeat machinery is cleaned up after every test and cannot change test result handling or keep the process alive.\"\n  expected_change_site: tests/test_orchestrate_poll_process.py in the _run_selected_tests and _test_heartbeat_worker functions\n  ISSUE_CONFIDENCE: 4\n  EVIDENCE OF ABSENCE: The implementation correctly cleans up heartbeat threads in finally blocks and uses daemon threads, but the synthetic test timing is too tight to reliably validate this behavior under load.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- tests/test_orchestrate_poll_process.py:14400-14402, 14411, 14449-14451 | severity=MAJOR | confidence=4\n  PROBLEM: The contract test's heartbeat assertion depends on real-time scheduling of the daemon heartbeat thread inside a fixed 30 ms window.\n  WHY: On a loaded CI runner the heartbeat thread can be starved past the 30 ms sleep, so the hard assertion fails even though the production heartbeat machinery is correct.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_orchestrate_poll_process.py:14400-14402, 14411, 14449-14451 | severity=MAJOR | confidence=5\n  PROBLEM: The contract test requires at least one heartbeat event to fire during a 30ms sleep window with a 5ms heartbeat interval.\n  WHY: On loaded CI runners, thread scheduling delays can prevent the heartbeat thread from executing before the main thread completes the sleep and sets the stop event, making the test flaky.\n\n- tests/test_orchestrate_poll_process.py:14400-14411 and 14449-14451 | severity=MAJOR | confidence=5\n  PROBLEM: The contract test depends on real-time thread scheduling between the main thread and the daemon heartbeat thread, with no synchronization guarantee that the worker executes its loop within the 30ms window.\n  WHY: The heartbeat thread can be preempted for the entire window, producing zero heartbeat events and causing the assertion to fail.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- tests/test_orchestrate_poll_process.py:test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics, synthetic_slow at line 14402, _run_selected_tests call at line 14411, heartbeat assertion at lines 14449-14451 | severity=MAJOR | confidence=4\n  PROBLEM: The contract test requires at least one heartbeat event for synthetic_slow, but the worker only emits after Event.wait(0.005) returns False.\n  WHY: If the daemon worker is not scheduled in time to finish that wait before stop is set, no heartbeat is written and the assertion fails even though production uses a 60s interval and the runner logic is correct.\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "4202ce0f071fd9fe29d525b6fb2fed8e952a87652fdbe66b9a93a050080252ac",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3826,
+    "run_id": "32875567147",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32875567147",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260825182710_70ecb2daf3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3826,
+    "run_id": "32875567147"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-25T18:27:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

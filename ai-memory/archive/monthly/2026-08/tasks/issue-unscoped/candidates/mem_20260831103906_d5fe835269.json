@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml: lines 1029 and 1075 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: The Q_COUNT grep patterns anchor blockquote markers to column 0 and do not allow leading whitespace before `>`.\n  WHY: Indented blockquoted clarification questions are not counted, causing a false \"NEEDS_CLARIFICATION with no actual questions\" fallback and skipping downstream processing.\n- changelog.d/3939-plan-parser-blockquote-support.md: lines 4 and 8 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: The changelog states that four regexes were modified in `plan.yml`, but the PR diff modifies five distinct regexes.\n  WHY: This is a documentation inaccuracy with no runtime impact.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/clarify.yml: lines 1029 and 1075 | severity=critical | confidence=5\n  PROBLEM: The Q_COUNT grep patterns `^(>[[:space:]]*)*` anchor the blockquote marker to column 0. If the Codex clarifies output indents blockquoted question lines (e.g., `  > **Q1:**`), neither grep matches, Q_COUNT stays zero, and the workflow triggers the false \"NEEDS_CLARIFICATION with no actual questions\" fallback despite real questions being present.\n  WHY: The clarify workflow emits a false-negative NEEDS_CLARIFICATION status with zero detected questions (the operator sees \"Questions | 0\" in the step summary even when blockquoted questions exist). On the second Q_COUNT path (line 1075), Q_COUNT=0 causes `needs_clarification` to be set false, skipping the downstream plan/resolve path entirely. The plan.yml perl regexes at lines 1210-1212, 1349, 1362 correctly use `^\\s*(?:>\\s*)*` \u2014 the same `^\\s*` tolerance should apply to the ERE patterns here. The last commit on this branch (cd07e1b) claims to fix this but the patterns on disk do not reflect the fix.\n- changelog.d/3939-plan-parser-blockquote-support.md: lines 4 and 8 | severity=low | confidence=5\n  PROBLEM: The changelog fragment says \"four regexes\" in the body prose and the table row reports \"Regexes widened in plan.yml | 4\", but the PR diff modifies five distinct regexes in plan.yml (lines 1210, 1211, 1212, 1349, 1362).\n  WHY: This is a documentation inaccuracy with no runtime impact.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/clarify.yml: lines 1029 and 1075 | severity=critical | confidence=5\n  PROBLEM: The Q_COUNT grep patterns `^(>[[:space:]]*)*\\*\\*Q[0-9]+:` and `^(>[[:space:]]*)*\\*?\\*?Q[0-9]+` anchor the blockquote marker at column 0 with no allowance for leading whitespace before the `>`.\n  WHY: If the Codex clarification output indents the blockquote (e.g. `  > **Q1:**`), the grep returns zero matches, Q_COUNT stays at 0, and the workflow enters the false \"NEEDS_CLARIFICATION with no actual questions\" fallback path. This is inconsistent with the plan.yml perl regexes which use `^\\s*(?:>\\s*)*` and correctly allow leading whitespace.\n- changelog.d/3939-plan-parser-blockquote-support.md: lines 4 and 8 | severity=low | confidence=5\n  PROBLEM: The changelog fragment states \"The four regexes now take an optional `(?:>\\s*)*` blockquote prefix\" and the table reports \"Regexes widened in `plan.yml` | 4\", but the PR diff modifies five regexes in plan.yml (lines 1210, 1211, 1212, 1349, 1362).\n  WHY: No runtime failure; this is a documentation inaccuracy that misrepresents the scope of the change.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "d69824acef3167e02540dbfb786b9090d354398ed34a60bd0a9f5f10a3494f46",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3940,
+    "run_id": "33378215837",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33378215837",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260831103906_d5fe835269",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3940,
+    "run_id": "33378215837"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-31T10:39:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:lines 56-83 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The bare assert guarding shard-split awk-expression extraction is stripped under Python optimization, degrading the intended diagnostic to a generic AttributeError.\n  WHY: The test still fails rather than silently passing, but severity differs: mistralai_mistral-small-2603 rated this MAJOR while the other reviewers rated it NIT.\n\n- tests/test_ci_poll_test_sharding.py:ShardPartitionTest.shard() method at lines 87-96 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The method uses check=True in subprocess.run(), which raises CalledProcessError when the awk expression fails.\n  WHY: This produces an exception rather than a clearer contract-specific failure message.\n\n- .github/workflows/ci.yml:Orchestrate poll process unit tests step at line 829 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The workflow invokes tests/test_ci_poll_test_sharding.py without checking its exit code before proceeding with sharding.\n  WHY: A failed contract test could allow sharding logic to continue.\n\n- .github/workflows/ci.yml:Shard loop at lines 833-865 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The shard loop uses set +e inside the subshell but does not reset it back to set -e after test execution.\n  WHY: Subsequent errors in the subshell could continue without errexit and potentially be masked.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_ci_poll_test_sharding.py:line 56 `assert match is not None, \"could not locate the shard-split awk expression in ci.yml\"` followed by line 57 `return match.group(\"expr\").strip()` | severity=NIT | confidence=4\n  PROBLEM: The contract guard uses a bare assert for the load-bearing regex extraction.\n  WHY: Under `python3 -O` or `PYTHONOPTIMIZE`, the intended diagnostic is replaced by an AttributeError.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_poll_test_sharding.py:lines 56-58, `shard_awk_expression()` \u2014 `assert match is not None, \"could not locate the shard-split awk expression in ci.yml\"` | severity=NIT | confidence=4\n  PROBLEM: The contract guard's diagnostic degrades when Python runs with optimizations.\n  WHY: Under `-O` / `PYTHONOPTIMIZE`, `match.group(\"expr\")` raises a generic AttributeError instead of the clear contract message.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_ci_poll_test_sharding.py:shard_awk_expression() function at lines 77-83 | severity=MAJOR | confidence=5\n  PROBLEM: The function uses a bare assert statement which can be stripped when Python runs with optimizations (`-O` / `PYTHONOPTIMIZE`).\n  WHY: Under `-O`, a failed regex lookup reaches `match.group(\"expr\")` without the guard.\n\n- tests/test_ci_poll_test_sharding.py:ShardPartitionTest.shard() method at lines 87-96 | severity=MAJOR | confidence=4\n  PROBLEM: The method uses `check=True` in the `subprocess.run()` call.\n  WHY: A failed awk expression raises CalledProcessError instead of providing a clear error message.\n\n- .github/workflows/ci.yml:Orchestrate poll process unit tests step at line 829 | severity=MAJOR | confidence=4\n  PROBLEM: The workflow invokes `tests/test_ci_poll_test_sharding.py` but does not check its exit code before proceeding with the sharding logic.\n  WHY: A failed test could allow sharding logic to proceed.\n\n- .github/workflows/ci.yml:Shard loop at lines 833-865 | severity=NIT | confidence=4\n  PROBLEM: The shard loop uses `set +e` inside the subshell but does not reset it back to `set -e` after test execution.\n  WHY: Subsequent errors in the subshell could continue without errexit and potentially be masked.\n\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- tests/test_ci_poll_test_sharding.py:shard_awk_expression() at line 56: assert match is not None, \"could not locate the shard-split awk expression in ci.yml\" | severity=NIT | confidence=4\n  PROBLEM: The bare assert is stripped when Python runs with -O / PYTHONOPTIMIZE.\n  WHY: A missing awk expression degrades from the intended clear-message failure to match.group(\"expr\") raising AttributeError on None.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_ci_poll_test_sharding.py:line 56, `assert match is not None, \"could not locate the shard-split awk expression in ci.yml\"` | severity=NIT | confidence=4\n  PROBLEM: The bare assert is stripped when Python runs with `-O` / `PYTHONOPTIMIZE`.\n  WHY: Under optimization, a failed regex match raises a generic `AttributeError: 'NoneType' object has no attribute 'group'` instead of the clear diagnostic.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "17ced3d38a62aba8439968cb0193af1f74758f78b9c35a25158a77abab3adb20",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3844,
+    "run_id": "33042920017",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33042920017",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260827063603_17ff473eca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3844,
+    "run_id": "33042920017"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-27T06:36:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:lines 58 (emit_validation_failure_summary_bootstrap) vs lines 130, 209, 297 | severity=low | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The bootstrap emitter references variables that are initialized later, so bootstrap telemetry can fall back to default values and under-report context.\n  WHY: Because the emitter runs before TRACKING_ISSUE_RAW, VALIDATION_CYCLE, and SELF_HEAL_ATTEMPT/MAX_SELF_HEAL_ATTEMPTS are set, those fields may be emitted with defaults on the bootstrap path.\n- scripts/validation_refresh_runner.py:line 780 (_emit_summary_line) | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: _emit_summary_line returns without emitting VALIDATION_SUMMARY when summary.get(\"totals\") is not a dict.\n  WHY: The guard is defensive and currently unreachable, but if summarize_results() ever changes shape the new telemetry line would be skipped entirely.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: scripts/validate_process.sh\n  Line or code reference: lines 58 (emit_validation_failure_summary_bootstrap) vs lines 130, 209, 297\n  Problem: The bootstrap emitter at line 58 references TRACKING_ISSUE_RAW, VALIDATION_CYCLE, SELF_HEAL_ATTEMPT, and MAX_SELF_HEAL_ATTEMPTS with :- defaults, but TRACKING_ISSUE_RAW is not initialized until line 130, VALIDATION_CYCLE until line 209, and SELF_HEAL_ATTEMPT/MAX_SELF_HEAL_ATTEMPTS until line 297.\n  Why it fails at runtime: The bootstrap emitters fire on lines 73\u2013102, which is before any of those variables are set, so the telemetry will under-report context on the bootstrap path.\n  ISSUE_CONFIDENCE: 3\n  SEVERITY: NIT\n- File: scripts/validation_refresh_runner.py\n  Line or code reference: line 780 (_emit_summary_line)\n  Problem: The function returns silently when summary.get(\"totals\") is not a dict, so a VALIDATION_SUMMARY line is not emitted in that case.\n  Why it fails at runtime: This is defensive and currently unreachable, but if summarize_results() ever changes its return shape, the new telemetry line would be skipped.\n  ISSUE_CONFIDENCE: 2\n  SEVERITY: NIT\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "2b46b44c46b0daac2293fb13ec88f5cceda413cc3a4947b7f32346003f86758d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3759,
+    "run_id": "31777598669",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31777598669",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260814075252_f5c8c83b25",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3759,
+    "run_id": "31777598669"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-14T07:52:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

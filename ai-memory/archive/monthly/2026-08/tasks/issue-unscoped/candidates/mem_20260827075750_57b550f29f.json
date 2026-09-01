@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_resolve_review_threads_plan.py:line 251 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603, moonshotai_kimi-k3]\n  PROBLEM: The diagnostic labels the number of mapped comment IDs as the number of review threads.\n  WHY: Multi-comment threads cause the logged thread count to be inflated and mislead operators triaging resolution logs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_resolve_review_threads_plan.py:line 251 | severity=NIT | confidence=4\n  PROBLEM: The note diagnostic reports len(threads_by_comment) as a thread count, but threads_by_comment is keyed by individual comment id (built at lines 241-247 by iterating every comment_ids entry). It therefore counts mapped comment ids, not distinct review threads.\n  WHY: When a review thread contains an anchor plus replies, the log emits an inflated \"thread(s) keyed by comment id\" value, which misleads operators triaging resolution logs.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_resolve_review_threads_plan.py:line 251, `note(f\"{len(audit_entries)} audited entry/entries, {len(threads_by_comment)} thread(s) keyed by comment id\")` | severity=NIT | confidence=4\n  PROBLEM: `threads_by_comment` is built by iterating every `comment_ids` entry across every thread (lines 241-247), so its length is the total number of mapped comment IDs, not the number of distinct threads. The trailing \"keyed by comment id\" suffix does not correct the misread: a single thread whose anchor plus three replies contributes four keys, but the operator reading the log sees \"4 thread(s)\" and concludes the PR has four open review threads.\n  WHY: when the operator triages a failed run, the diagnostic message inflates thread counts and can hide a real-world case where one heavily-replied thread dominates the queue. This is the only spot in the script that exposes a thread/comment-id count, so the wrong number is what propagates to incident reports and the resolution log.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_resolve_review_threads_plan.py:line 251 | confidence=4\n  PROBLEM: Diagnostic message is misleading - `threads_by_comment` is keyed by comment id, so the value logged is the number of mapped comment ids, not the number of threads\n  WHY: When a thread contains multiple comments (anchor plus replies), the resolver's log emits an inflated \"thread(s)\" count, which misleads operators triaging resolution logs during debugging\n- scripts/review_resolve_review_threads_plan.py:line 251 | confidence=4\n  PROBLEM: `note(f\"{len(audit_entries)} audited entry/entries, {len(threads_by_comment)} thread(s) keyed by comment id\")`\n  WHY: The variable name `threads_by_comment` suggests it contains thread objects, but it's actually keyed by comment id and contains the count of mapped comment ids rather than thread count\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/review_resolve_review_threads_plan.py:line 251, in build_plan(): note(f\"{len(audit_entries)} audited entry/entries, {len(threads_by_comment)} thread(s) keyed by comment id\") | severity=NIT | confidence=4\n  PROBLEM: threads_by_comment is built at lines 241-247 with exactly one dict entry per comment id (every anchor and every reply in every thread). Therefore len(threads_by_comment) is a count of comment ids, not threads, but the log line labels it \"thread(s)\". Whenever a thread contains more than one comment, the emitted count is inflated.\n  WHY: This pipeline itself appends rationale replies to ignored threads, so multi-comment threads are the steady-state case, not an edge case. The run log then prints e.g. \"7 thread(s) keyed by comment id\" for 4 actual threads, misleading anyone triaging resolution behavior. Minimal fix (1 line): reword to \"comment id(s) keyed for thread lookup\" or count distinct thread_id values. Matches the unaddressed Copilot comment entry[14] at plan.py:252.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "fd7e9ba1021ee66bfed882234081057c36840a11fc5f31fc54849feab6370447",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3841,
+    "run_id": "33041351113",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33041351113",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260827075750_57b550f29f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3841,
+    "run_id": "33041351113"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-27T07:57:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

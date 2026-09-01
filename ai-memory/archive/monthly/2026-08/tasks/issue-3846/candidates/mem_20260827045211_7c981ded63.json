@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3846,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3846\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3847\",\"pr_number\":3847,\"branch\":\"ai/issue-3846\",\"run_id\":\"33039973788\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/33039973788\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/actions/install-opencode/action.yml\",\".github/workflows/ci.yml\",\".github/workflows/opencode-live-smoke.yml\",\"README.md\",\"agents.md\",\"changelog.d/3845-opencode-plumbing.md\",\"docs/scripts-pending-removal.md\",\"scripts/opencode_helpers.sh\",\"scripts/write_opencode_config.sh\",\"tests/test_opencode_helpers.py\",\"tests/test_opencode_live_smoke_workflow.py\",\"tests/test_write_opencode_config.py\"]}",
+  "fingerprint": "b4b9c6e4cefc9d9a5ccdd8bb3cb7173d0b6d4121a842b3c8f4e350d07c05f2b4",
+  "lineage": {
+    "issue_number": 3846,
+    "parent_ids": [],
+    "pr_number": 3847,
+    "run_id": "33039973788",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33039973788",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3847"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260827045211_7c981ded63",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3846,
+    "level": "run",
+    "pr_number": 3847,
+    "run_id": "33039973788"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3846: https://github.com/shubhodeep1/coding-workflows/pull/3847",
+  "timestamps": {
+    "created_at": "2026-08-27T04:52:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

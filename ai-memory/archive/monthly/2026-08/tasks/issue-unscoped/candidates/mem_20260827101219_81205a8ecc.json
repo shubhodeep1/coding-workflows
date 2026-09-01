@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"If reasoning-effort delivery is not honored, correct the provider options in the P1 configuration writer before allowing cutover work.\"\n  expected_change_site: .github/workflows/opencode-live-smoke.yml run_smoke_call model evidence gate (lines 135-142), plus the matching assertion in tests/test_opencode_live_smoke_workflow.py test_smoke_runs_identical_calls_and_aggregates_failures\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603, qwen_qwen3_7-plus]\n  EVIDENCE: The awk evidence condition matches only provider/model and agent/mode tokens and never matches a variant, reasoning, or effort token; the jq preflight validates only .variants.xhigh.reasoning.effort == \"xhigh\" in the generated config, not runtime delivery; the job-summary column is labeled \"Model/variant evidence\" but no variant or effort is asserted.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: The issue #3846 rollout gate requires reasoning-effort delivery to be verified before cutover: \"If reasoning-effort delivery is not honored, correct the provider options in the P1 configuration writer before allowing cutover work.\"\n  Expected change site: .github/workflows/opencode-live-smoke.yml run_smoke_call model evidence gate at lines 135-138, plus the matching assertion in tests/test_opencode_live_smoke_workflow.py test_smoke_runs_identical_calls_and_aggregates_failures.\n  Evidence of absence: The awk condition at lines 135-138 matches only \"message=stream providerID=openrouter modelID=<slug> \" and \" small=false agent=<role> mode=primary\"; it never references variant, reasoning, or effort. The jq preflight at lines 170-175 only validates that the generated config file contains .variants.xhigh.reasoning.effort == \"xhigh\", which proves the config shape, not that OpenRouter actually honored the requested xhigh reasoning effort at runtime. The job-summary column is labeled \"Model/variant evidence\" at line 211, but no variant is asserted, so the smoke can report PASS and unblock cutover even when xhigh delivery is silently ignored.\n  severity=MAJOR\n  confidence=[4]\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"If reasoning-effort delivery is not honored, correct the provider options in the P1 configuration writer before allowing cutover work.\"\n  Expected change site: .github/workflows/opencode-live-smoke.yml `run_smoke_call` evidence gate (the awk block around line 135-142) and `jq -e` preflight around line 174. The matching assertion in tests/test_opencode_live_smoke_workflow.py (`test_smoke_runs_identical_calls_and_aggregates_failures`) must also be tightened.\n  Evidence of absence: The awk gate at .github/workflows/opencode-live-smoke.yml:135-142 matches only `\"message=stream providerID=openrouter modelID=\" expected_stream_model \" \"` and `\" small=false agent=\" expected_stream_role \" mode=primary\"`; it never matches a variant, reasoning, or effort token. The jq preflight at .github/workflows/opencode-live-smoke.yml:174-178 only proves the on-disk config shape (`.variants.xhigh.reasoning.effort == \"xhigh\"`); it does not prove OpenRouter actually honored the requested xhigh reasoning effort at runtime. The job-summary table column header at line 211 is labelled \"Model/variant evidence\", but no variant is asserted, so the smoke can report PASS and unblock cutover even if xhigh reasoning delivery is silently ignored \u2014 exactly the failure mode the rollout gate was written to prevent.\n  severity=MAJOR\n  confidence=[4]\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: The rollout gate requires reasoning-effort delivery to be verified before cutover: \"If reasoning-effort delivery is not honored, correct the provider options in the P1 configuration writer before allowing cutover work.\"\n  Expected change site: .github/workflows/opencode-live-smoke.yml run_smoke_call model evidence gate (lines 135\u2013142), plus the corresponding assertion in tests/test_opencode_live_smoke_workflow.py\n  Evidence of absence: The awk evidence condition on lines 136\u2013139 matches only \"message=stream providerID=openrouter modelID=<slug> \" and \" small=false agent=<role> mode=primary\". It never matches a variant, reasoning, or effort token. The jq preflight on line 174 validates only that the generated config contains .variants.xhigh.reasoning.effort == \"xhigh\", which proves the config file shape, not that OpenRouter actually honored the requested reasoning effort at runtime. The job-summary column is labeled \"Model/variant evidence\" (line 211) but no variant is asserted, so the smoke can report PASS and unblock cutover even if xhigh reasoning delivery is silently ignored.\n  severity=BLOCKER\n  confidence=[4]\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"If reasoning-effort delivery is not honored, correct the provider options in the P1 configuration writer before allowing cutover work.\" The rollout gate requires the live smoke to verify that the requested reasoning effort is actually delivered at runtime, not just present in the config file.\n  Expected change site: `.github/workflows/opencode-live-smoke.yml` `run_smoke_call` awk evidence gate (lines 135-142), which should also match a variant/effort token from OpenCode's stream log.\n  Evidence of absence: The awk evidence condition on lines 136-138 matches only `message=stream providerID=openrouter modelID=<slug>` and `small=false agent=<role> mode=primary`. It never matches a variant, reasoning, or effort token. The jq preflight on line 174 validates only that the generated config file contains `.variants.xhigh.reasoning.effort == \"xhigh\"`, which proves config shape, not that OpenRouter actually honored the requested reasoning effort at runtime. The job-summary column on line 211 is labeled \"Model/variant evidence\" but no variant or effort is asserted, so the smoke can report PASS and unblock cutover even if xhigh reasoning delivery is silently ignored.\n  severity=MAJOR\n  confidence=[4]\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "42b3e56729b96d3b133e960865915ace784e46fae42638ea13e5e53bec45d58c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3847,
+    "run_id": "33056159542",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33056159542",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260827101219_81205a8ecc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3847,
+    "run_id": "33056159542"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-27T10:12:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:14276-14280 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The heartbeat thread and test body can write concurrently to the same stdout stream, allowing partial test output to corrupt machine-readable TEST_CASE_EVENT lines.\n  WHY: A long test printing partial output can cause diagnostic text and JSON to be interleaved or glued; severity disagreement (MAJOR versus NIT) uses the highest severity.\n- tests/test_orchestrate_poll_process.py:14310 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603]\n  PROBLEM: The runner captures sys.stdout once at entry, so mid-execution reassignment of sys.stdout sends output to the stale stream.\n  WHY: Redirecting sys.stdout during a test could make heartbeat and completion output unavailable on the newly assigned stream, though reviewers found no practical current-call-path failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_orchestrate_poll_process.py: _emit_test_runner_event at lines 14276-14280; called from _test_heartbeat_worker (daemon thread) at line 14292; the main thread writes PASS/FAIL and summary lines to the same runner_output stream (sys.stdout) at lines 14368, 14371, 14382 | severity=NIT | confidence=3\n  PROBLEM: The heartbeat daemon thread and the main thread both write to sys.stdout through the same TextIOWrapper with no explicit synchronization.\n  WHY: A concurrent write could interleave bytes within a TEST_CASE_EVENT JSON line, producing unparseable output.\n- tests/test_orchestrate_poll_process.py: line 14310, runner_output = sys.stdout | severity=NIT | confidence=2\n  PROBLEM: The function captures sys.stdout once at entry and uses the captured reference for all heartbeat and completion output.\n  WHY: If a test function reassigns sys.stdout, output would be written to the original stream rather than the new one, though no practical current failure exists.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_orchestrate_poll_process.py: _emit_test_runner_event function and concurrent writes to sys.stdout | severity=MAJOR | confidence=5\n  PROBLEM: The heartbeat thread and test body write concurrently to the same stdout stream without synchronization.\n  WHY: Machine-readable event lines can be interleaved with test output and corrupt JSON diagnostics.\n- tests/test_orchestrate_poll_process.py: _run_selected_tests function, runner_output = sys.stdout | severity=NIT | confidence=3\n  PROBLEM: The function captures sys.stdout once at function entry rather than reading sys.stdout on each use.\n  WHY: If sys.stdout were redirected mid-execution, heartbeat and completion output would write to a stale reference, although there is no practical failure in the current call path.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- tests/test_orchestrate_poll_process.py: _emit_test_runner_event print at lines 14277-14280, invoked concurrently from _test_heartbeat_worker (lines 14283-14296) while the running test body writes to the same stream; verified in-test partial-line writes at lines 1539 and 1677 (print(p.stdout, end='')) | severity=NIT | confidence=2\n  PROBLEM: A test that prints subprocess output without a trailing newline can leave the stream mid-line, causing a heartbeat event to be glued onto partial output.\n  WHY: The resulting machine-readable diagnostic line is corrupted for strict line-start parsers, without changing test results.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_orchestrate_poll_process.py: _emit_test_runner_event (line ~14276) called from _test_heartbeat_worker (daemon thread at line ~14293) and _run_selected_tests main loop (line ~14368), both writing to the same output_stream without synchronization | severity=NIT | confidence=2\n  PROBLEM: The heartbeat daemon thread and main runner thread share one output stream without locking.\n  WHY: Concurrent test output could interleave with TEST_CASE_EVENT lines if a future long-running test prints during a heartbeat.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "4314da72101cc2bf1160a6e514b200b8bbca7e07805cf9e16666514eeca54067",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3826,
+    "run_id": "32853629267",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32853629267",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260825150025_b355c6b2da",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3826,
+    "run_id": "32853629267"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-25T15:00:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

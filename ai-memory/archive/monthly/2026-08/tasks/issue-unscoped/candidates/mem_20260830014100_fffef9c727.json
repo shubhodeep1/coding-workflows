@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix_sweep.yml:19-24 and .github/workflows/review_autofix_sweep.yml:249-252 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The header and preflight comments describe the active-run guard as checking only `in_progress` or `queued` runs, omitting `pending` runs and the no-stale-cutoff behavior implemented by the runtime filter.\n  WHY: The comments contradict the code and `agents.md` contract, potentially leading future maintainers to remove `pending` coverage and reintroduce the PR #3895 visibility regression; the source severity was MAJOR.\n- CI YAML test wiring in the working tree | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The CI test step was reported missing from the working tree despite the commit claiming to add it.\n  WHY: This finding is disputed: qwen_qwen3_7-plus reports that `.github/workflows/ci.yml:661-665` contains the test step.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- The sweep YAML still has `in_progress or queued` language.\n- The CI test wiring appears absent from the working tree despite the commit claiming to add it.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix_sweep.yml:19-21 (header comment) and lines 249-252 (preflight inline comment) | severity=MAJOR | confidence=4\n  PROBLEM: Both comments still describe the active-run guard as \"if any in_progress or queued run already exists, skip the dispatch\" \u2014 they omit `pending` runs and the no-stale-cutoff behaviour that the new code at line 159 (`for status in queued in_progress pending; do`) and the agents.md:718 contract implement.\n  WHY: No immediate runtime defect, but these comments contradict the runtime filter and can cause a future maintainer to remove `pending` coverage and silently reintroduce the PR #3895 visibility blind spot.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix_sweep.yml:19-24 \u2014 The header \"Concurrency safety\" comment still says \"if any in_progress or queued run already exists on internal-review.yml / review_autofix.yml for the PR's head ref, skip the dispatch.\" It omits pending runs and their no-stale-cutoff behavior, contradicting the actual snapshot loop at line 159 (which fetches queued/in_progress/pending) and the agents.md:718 contract.\n  WHY: The editor summary claims this was fixed (\"edited .github/workflows/review_autofix_sweep.yml:20-22,249-252 to document pending runs as active\") but no diff hunk touches those lines \u2014 the edit did not land.\n- .github/workflows/review_autofix_sweep.yml:249-252 \u2014 The preflight comment still says \"Skip when a review run is already in_progress or queued for this branch on either workflow.\" Same omission, same contradiction.\n  WHY: Also not actually edited despite the editor summary claiming it was.\n- .github/workflows/ci.yml:661-665 \u2014 The CI YAML test wiring finding from deepseek_deepseek-v4-pro is incorrect.\n  WHY: The CI step IS present in the diff at `.github/workflows/ci.yml:661-665` (\"Conflict-dispatch active-run visibility contract tests\" step running the new test suite).\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "f751c0c75f90742d26a6ab42baa9ac1f659ebfd134788fe70db59ae4352be75d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3896,
+    "run_id": "33283264427",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33283264427",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260830014100_fffef9c727",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3896,
+    "run_id": "33283264427"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-30T01:41:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

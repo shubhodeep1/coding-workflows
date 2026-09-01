@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Triaged safe workflow-optimization fixes from the 2026-07-19, 2026-08-07, and 2026-08-14 audits\",\"issues\":[{\"id\":\"review-autofix-linked-issue-read-hardening\",\"title\":\"Harden review_autofix linked-issue reads and skip obviously empty post-merge validate-dispatch runs\",\"priority\":1},{\"id\":\"validation-structured-outcome-telemetry\",\"title\":\"Add structured validation outcome telemetry for validate and validation_refresh\",\"priority\":2},{\"id\":\"release-gh-api-helper-rate-limit-retry\",\"title\":\"Replay rate-limited gh api calls inside comprehensive_test_and_release_gh_api.sh\",\"priority\":3},{\"id\":\"workflow-log-partial-coverage-observability\",\"title\":\"Make cancelled runs and drift-audit coverage loss explicit in workflow-log tooling\",\"priority\":4},{\"id\":\"issue-pr-status-memory-noop-telemetry\",\"title\":\"Emit AI-memory telemetry for issue_pr_status lineage-finalization no-op paths\",\"priority\":5},{\"id\":\"closeout-workflow-optimization-source-docs-2026-07-19-to-2026-08-14\",\"title\":\"Fold the 2026-07-19/08-07/08-14 workflow-optimization triage into the processing report and delete the source docs\",\"priority\":6}],\"dependency_edges\":[{\"from\":\"review-autofix-linked-issue-read-hardening\",\"to\":\"closeout-workflow-optimization-source-docs-2026-07-19-to-2026-08-14\"},{\"from\":\"validation-structured-outcome-telemetry\",\"to\":\"closeout-workflow-optimization-source-docs-2026-07-19-to-2026-08-14\"},{\"from\":\"release-gh-api-helper-rate-limit-retry\",\"to\":\"closeout-workflow-optimization-source-docs-2026-07-19-to-2026-08-14\"},{\"from\":\"workflow-log-partial-coverage-observability\",\"to\":\"closeout-workflow-optimization-source-docs-2026-07-19-to-2026-08-14\"},{\"from\":\"issue-pr-status-memory-noop-telemetry\",\"to\":\"closeout-workflow-optimization-source-docs-2026-07-19-to-2026-08-14\"}]}",
+  "fingerprint": "63451902c0c03dc59f61a795583431111038f49ab9293810006db45b099fc822",
+  "lineage": {
+    "issue_number": 3749,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "31765493168",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31765493168",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260814031104_60064d0dc5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3749,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "31765493168"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Triaged safe workflow-optimization fixes from the 2026-07-19, 2026-08-07, and 2026-08-14 audits' into 6 issues (tracking #3749)",
+  "timestamps": {
+    "created_at": "2026-08-14T03:11:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `f8d6fb4451c5629cae057988bca19a6d8cd6284d` on `orchestrator/project-3898`; integration metadata matches.\n\n## Automation impact\n- Change type: modify existing documentation only.\n- Scheduler/PR-push entry point: none required.\n- New supervisor: no.\n- Database work: none.\n- Removal registry entry: not applicable.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `analysis/recommendation-processing-report.md` outcome ledger  \nScope-mode justification: Make only the requested classification and arithmetic corrections. No runtime implementation, new interface, or broader report restructuring is needed.\n\n## Clarification interpretation\nThe orchestrator\u2019s automatic `/answer` confirms the issue is sufficiently specified and should proceed without additional clarification.\n\n## Files likely to change\n- `analysis/recommendation-processing-report.md`\n  - Update the combined August outcome summary.\n  - Update the August 27 and August 29 source summaries.\n  - Move the two recommendations between existing classification buckets.\n\nNo source documents, collector code, tests, changelog fragments, or machine-maintained artifacts should change.\n\n## Functions or modules to implement\nNo implementation changes. Use the existing collector behavior as evidence:\n- `compute_run_metrics`\n- `_set_diagnostic_failure_reason`\n- `_ensure_run_diagnostics`\n- `_apply_log_download_exception`\n- `_extract_full_logs_with_diagnostics`\n- `_dedupe_structured_cost_telemetry_full_logs`\n\n## Data structures affected\nThe Markdown outcome ledger changes to:\n\n- August 27: **3 actioned, 33 deferred, 3 already satisfied, 2 invalid**.\n- August 29: **6 actioned, 32 deferred, 4 already satisfied, 1 invalid**.\n- Combined: **9 actioned, 7 already satisfied, 65 deferred, 3 invalid, 84 total**.\n\n## API/interface changes\nNone.\n\n## Decisions\n\n### D1 \u2014 Treat current collector behavior as landed evidence\n- **Chosen:** Classify failed-workflow diagnostic capture as actioned using `scripts/collect_workflow_logs.py` and `tests/test_collect_workflow_logs.py` as evidence.\n- **Alternatives considered:** Keep it deferred until further collector work or workflow annotations are added.\n- **Why:** Current code records jobs-fetch status, observed job conclusions, bounded diagnostic reasons, and log-download outcomes, with unavailable, malformed, missing, transient, cached, and partial-response coverage.\n\n### D2 \u2014 Reclassify telemetry deduplication without changing its evidence\n- **Chosen:** Move collector structured-telemetry deduplication from actioned to `STALE-or-already-done`.\n- **Alternatives considered:** Leave it actioned because the implementation is present.\n- **Why:** The implementation predates this closeout action and therefore satisfies the report\u2019s already-satisfied classification requirement.\n\n## Implementation steps\n1. Change the combined summary at the start of the August outcome ledger to `9 actioned`, `7 already-satisfied`, `65 deferred`, and `3 invalid`, retaining `84 total`.\n2. Change the August 27 summary from `2/34/3/2` to `3/33/3/2`.\n3. Move `2026-08-27 :: failed-workflow diagnostic capture` from deferred to actioned and replace its deferral explanation with concise implementation-and-test evidence.\n4. Change the August 29 summary from `7/32/3/1` to `6/32/4/1`.\n5. Move `2026-08-29 :: collector structured-telemetry deduplication` unchanged, or with equivalent evidence wording, from actioned to `STALE-or-already-done`.\n6. Preserve every recommendation exactly once and leave all unrelated classifications untouched.\n\n## Risks and edge cases\n- Moving rather than copying entries is necessary to avoid changing the 84-item total.\n- Both per-document subtotals must remain 41 and 43.\n- Do not recreate the deleted August source documents; their paths remain only as provenance.\n- Keep `analysis/validation-selftest-status.json` and `analysis/last_collection_timestamp.txt` byte-for-byte unchanged.\n- The prerequisite local ID is not present literally, but its collector behavior and regression tests are present on the planning ref.\n\n## Testing considerations\n- Verify each moved recommendation appears exactly once.\n- Recalculate all August 27, August 29, and combined totals.\n- Confirm the classification headings contain the intended entries.\n- Run `git diff --check`.\n- Confirm the diff contains only `analysis/recommendation-processing-report.md`.\n- Confirm the protected artifact hashes remain unchanged.\n\n## Pre-execution self-check\nThe integration branch matches, the prerequisite implementation is present, all requested counts reconcile arithmetically, and no external input is missing.\n\nAssumptions: Current repository state is authoritative, consistent with the report\u2019s grounding note.  \nMissing context: None.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f085fab2253b470811a2845eebb6541cde4aef06dde2cf2753e213941a446de0",
+  "lineage": {
+    "issue_number": 3919,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33317665686",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33317665686",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3919"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260830144834_1e1c95de45",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3919,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33317665686"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3919",
+  "timestamps": {
+    "created_at": "2026-08-30T14:48:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

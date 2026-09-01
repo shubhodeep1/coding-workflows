@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.py: lines 765-793 | severity=major | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: In strict=False mode, the broad except PromptLoadError handler swallows I/O failures and missing mode-specific append references in addition to intended missing-reference cases, leaving placeholders unhydrated.\n  WHY: Reviewer severity ranged from NIT to MAJOR; using the highest, real checkout or append failures can produce incomplete prompts while emitting a misleading missing-file warning.\n\n- scripts/render_prompt.py: lines 1365-1380 | severity=nit | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The main function passes strict=not args.skip_syntax_validation without additional validation that the flag is used correctly.\n  WHY: An incorrectly set args.skip_syntax_validation value could trigger fail-open behavior in unintended contexts.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/render_prompt.py: lines 774-790 (except PromptLoadError block inside hydrate_reference_placeholders) | severity=NIT | confidence=3\n  PROBLEM: In strict=False mode, the handler catches every PromptLoadError subclass, not only the \"reference file not found\" case.\n  WHY: An I/O-error case would silently drop a core reference block with a misleading warning label instead of failing loudly.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/render_prompt.py: lines 765-793, the except PromptLoadError handler inside hydrate_reference_placeholders | severity=MAJOR | confidence=4\n  PROBLEM: In strict=False mode the except PromptLoadError branch swallows every PromptLoadError raised by _load_reference_placeholder_value, not only the missing-reference-file case.\n  WHY: A real file I/O fault or missing mode-specific append can leave a literal token in the prompt while the warning reports no reference file found.\n\n- scripts/render_prompt.py: lines 765-793, the except PromptLoadError handler inside hydrate_reference_placeholders | severity=MAJOR | confidence=4\n  PROBLEM: The handler conflates embedded untrusted tokens, existing-but-unreadable references, and missing mode-specific-append files.\n  WHY: The shared warning and dropped exception context prevent operators from distinguishing benign embedded tokens from checkout or append-file failures.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/render_prompt.py: lines 774-793 (the `except PromptLoadError` block inside `hydrate_reference_placeholders`) | severity=MAJOR | confidence=4\n  PROBLEM: The handler catches all PromptLoadError exceptions, including I/O errors and missing mode-specific append references, rather than only missing reference files.\n  WHY: Real repository problems can be silently converted into incomplete reviewer/editor prompts with misleading warnings.\n\n- scripts/render_prompt.py: lines 786-791 (the warning message in the except block) | severity=MAJOR | confidence=4\n  PROBLEM: The warning message always says \"no reference file found for it\" even for I/O errors or missing mode-specific append references.\n  WHY: Operators cannot distinguish expected embedded tokens from genuine repository problems.\n\n- scripts/render_prompt.py: lines 1365-1380 (main function's call to hydrate_reference_placeholders) | severity=NIT | confidence=3\n  PROBLEM: The strict parameter is passed as strict=not args.skip_syntax_validation without additional validation to ensure the flag is being used correctly.\n  WHY: If args.skip_syntax_validation is set incorrectly, fail-open behavior could be triggered in unintended contexts.\n\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/render_prompt.py: lines 774-790, the `except PromptLoadError` handler inside `hydrate_reference_placeholders` | severity=NIT | confidence=4\n  PROBLEM: In strict=False mode the handler swallows every PromptLoadError, not only the intended \"reference file missing\" case.\n  WHY: Unreadable references or missing mode-specific append files remain unhydrated and emit a misleading no-reference-file warning.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/render_prompt.py: lines 774-791, the `except PromptLoadError` handler inside `hydrate_reference_placeholders` | severity=MAJOR | confidence=4\n  PROBLEM: The broad handler catches unsupported placeholders, missing files, I/O errors, and missing mode-specific append references.\n  WHY: In strict=False mode failures are silently swallowed, required prompt blocks can be omitted, and the warning misidentifies the cause.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- scripts/render_prompt.py: hydrate_reference_placeholders except PromptLoadError at lines 768-791 | severity=NIT | confidence=4\n  PROBLEM: In strict=False, every PromptLoadError from _load_reference_placeholder_value is swallowed, including failures reading discovered files and missing mode-specific append references.\n  WHY: Reviewer and editor runs can continue with literal REFERENCE_* tokens and a missing-file warning that hides the original I/O or append error.\n\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "e8df3c7563bf1ce1d0b6f51c74871d38ee20bb2956f2893957896e65aecc9e4f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3882,
+    "run_id": "33247351260",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33247351260",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260829112639_c64e37ace2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3882,
+    "run_id": "33247351260"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-29T11:26:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-3729` @ `f1667f4b3a76ddce7934ce477fba566aecf82382` (matches integration branch metadata `orchestrator/project-3729`).\n\nClarification mapping:\n- No `Q1`/`Q2` clarification questions were issued in clarify.\n- The auto-posted `/answer [auto-answered-by-orchestrator]` therefore maps to \u201cproceed with the issue as written; no extra constraints were added.\u201d\n\nActions taken:\n- Inspected `tests/e2e_smoke_canary.txt` (current target file contents).\n- Inspected `tests/e2e_smoke_canary_spec.txt` (current canonical smoke template).\n- Inspected one representative restore path in `scripts/review_apply_fixes.sh`.\n- Inspected sibling fixture `tests/e2e_smoke_canary_b.txt` as the closest existing `decompose-run` precedent.\n\nAssumptions:\n- `files_touched` effectively contains only `tests/e2e_smoke_canary.txt`, inferred from the issue\u2019s explicit single-file instruction.\n- The requested third line should remain `updated-by: ai-pipeline`, because the issue only instructs replacing the first two lines and the current file already has the expected third line.\n\nMissing-context notes:\n- No explicit machine-readable `files_touched` allowlist was included in the planning context; scope is inferred from the issue text.\n\nAutomation/wiring impact:\n- Change type: modify one existing plaintext fixture file only.\n- Scheduler / PR-push entry point: none; no workflow wiring change.\n- Long-running supervisor: none.\n- DB gate pattern: none.\n- `docs/scripts-pending-removal.md` impact: none.\n\nScope-mode: Hold Scope\nReuse-audit: extends existing smoke-canary fixture in `tests/e2e_smoke_canary.txt`\nScope-mode justification:\nThis is a surgical content edit with an explicit \u201cdo not edit any other file\u201d constraint, so the plan should stay inside the single-file allowlist. Although a broader consistency fix would likely be small, the issue explicitly forbids widening scope; the safest plan is to make the literal file update, preserve unrelated content, and surface any repo-contract drift as a follow-up risk instead of silently broadening the change.\n\nFiles likely to change:\n- `tests/e2e_smoke_canary.txt` \u2014 set line 1 to `status: ok`, set line 2 to `decompose-run: 31136089928`, preserve line 3 as `updated-by: ai-pipeline`, and keep the file at exactly 3 lines with a trailing newline.\n\nFunctions or modules to implement:\n- None. This is a direct fixture-file content update, not a code-path change.\n\nData structures affected:\n- The 3-line plaintext canary record in `tests/e2e_smoke_canary.txt`:\n  - line 1: status field, unchanged value `ok`\n  - line 2: identifier field changes from `run_id: 26151428977` to `decompose-run: 31136089928`\n  - line 3: updater marker remains `updated-by: ai-pipeline`\n\nAPI or interface changes:\n- No external API changes.\n- No workflow input/output contract changes.\n- Internal fixture shape changes for this file only: line 2 uses `decompose-run` instead of `run_id`.\n\n## Decisions\n\n### D1 \u2014 Keep the implementation to the named canary file\n- Chosen:\n  - Edit only `tests/e2e_smoke_canary.txt`.\n  - Apply the exact requested first two lines.\n  - Preserve the existing third line and final newline.\n- Alternatives considered:\n  - Expanding to `tests/e2e_smoke_canary_spec.txt` and related smoke helpers/tests so the repo-wide canary contract also moves from `run_id` to `decompose-run`.\n  - Rebuilding the file from sibling precedent such as `tests/e2e_smoke_canary_b.txt`.\n- Why:\n  - The issue explicitly requires staying within `files_touched` and forbids editing any other file, so a single-file edit is the approved scope even though broader consistency work may be warranted later.\n\nRisks and edge cases:\n- Conflict: `tests/e2e_smoke_canary_spec.txt` still defines the canonical smoke template as `run_id: __RUN_ID__`.\n- Conflict: `scripts/review_apply_fixes.sh` still instructs the smoke restore path to rewrite `tests/e2e_smoke_canary.txt` with `run_id`.\n- Because of those existing contracts, future smoke-specific tests or restore flows may reject or overwrite the requested `decompose-run` line until a separate follow-up aligns the spec/helpers.\n- Formatting must remain exact: no extra lines, no removed third line, no missing trailing newline.\n\nTesting considerations:\n- Verify the final file is exactly:\n  - `status: ok`\n  - `decompose-run: 31136089928`\n  - `updated-by: ai-pipeline`\n- Verify only `tests/e2e_smoke_canary.txt` appears in the diff.\n- If smoke-contract tests are run, interpret failures tied to `tests/e2e_smoke_canary_spec.txt` or `run_id`-based restore expectations as pre-existing contract drift relative to this issue\u2019s constrained scope, not as a typo in the target file edit.\n\nPre-execution self-check result:\n- Ref check passed: checked-out branch matches integration metadata.\n- Scope check passed: target file exists and currently has exactly 3 lines, so a surgical edit is feasible.\n- Reuse check passed: the change extends an existing fixture rather than adding new code or infrastructure.\n\nPLAN_SELF_CHECK: WARNING: The requested single-file change conflicts with the current canonical smoke spec and representative restore helper, both of which still use `run_id`.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "be6dc75acd65c9e4fa946c8d75d58f44488a22960e5bd9f436768e8b2e6889ae",
+  "lineage": {
+    "issue_number": 3730,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "31136357822",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31136357822",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3730"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260807010050_8ee62af1b6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3730,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "31136357822"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3730",
+  "timestamps": {
+    "created_at": "2026-08-07T01:00:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

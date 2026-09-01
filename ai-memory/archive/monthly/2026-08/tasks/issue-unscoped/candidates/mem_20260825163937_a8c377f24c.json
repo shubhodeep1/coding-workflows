@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:around lines 14287-14301\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3, x-ai_grok-4_6]\n  PROBLEM: A non-positive `heartbeat_interval_sec` causes `Event.wait(<=0)` to return immediately, busy-looping the heartbeat worker and flooding runner output.\n  WHY: This is reachable if a caller overrides the positive default with a non-positive interval, though current callers use positive values.\n- tests/test_orchestrate_poll_process.py:around lines 14362-14378\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3, x-ai_grok-4_6]\n  PROBLEM: A negative `slowest_limit` uses Python negative-stop slice semantics and drops trailing results instead of producing an empty summary.\n  WHY: `_run_selected_tests` exposes this keyword and would silently invert the intended bounded-summary behavior for negative input.\n- tests/test_orchestrate_poll_process.py:around lines 14410-14425\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test hard-codes `\"TEST_CASE_EVENT: \"` in three places despite `_TEST_RUNNER_EVENT_PREFIX` already being defined.\n  WHY: A future prefix rename would require updating multiple literals in the same test.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: tests/test_orchestrate_poll_process.py\n  Location: `_test_heartbeat_worker` (around lines 14287-14297), the `while not stop_event.wait(heartbeat_interval_sec):` loop.\n  Issue: `threading.Event.wait(0)` and `wait(<0)` both return immediately, so a non-positive `heartbeat_interval_sec` would make the worker spin as fast as the GIL allows, flooding `_TEST_CASE_EVENT: heartbeat` lines into the runner output and pinning a CPU until the test ends.\n  Suggested minimal fix: clamp at the top of `_run_selected_tests`, e.g. `heartbeat_interval_sec = heartbeat_interval_sec if heartbeat_interval_sec > 0 else _TEST_RUNNER_HEARTBEAT_INTERVAL_SEC`.\n  HARDENING_RISK_SCORE: 2\n- File: tests/test_orchestrate_poll_process.py\n  Location: slowest-tests summary loop (around lines 14362-14370), `sorted(results, key=...)[:slowest_limit]`.\n  Issue: Python slice with a negative stop drops the trailing N items instead of producing an empty list, so a negative `slowest_limit` would silently invert the summary semantics rather than emit nothing. No current caller does this, but `_run_selected_tests` is keyword-only and the keyword is exposed.\n  Suggested minimal fix: clamp `slowest_limit = max(0, int(slowest_limit))` before the slice.\n  HARDENING_RISK_SCORE: 1\n- File: tests/test_orchestrate_poll_process.py\n  Location: `test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics` (around lines 14410-14425).\n  Issue: The literal `\"TEST_CASE_EVENT: \"` is hard-coded three times in the new test while `_TEST_RUNNER_EVENT_PREFIX` is already defined at module scope.\n  Suggested minimal fix: replace the three literals with `_TEST_RUNNER_EVENT_PREFIX`.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- file: tests/test_orchestrate_poll_process.py\n  location: `_test_heartbeat_worker` (lines ~14290-14301)\n  issue: a non-positive `heartbeat_interval_sec` would make `stop_event.wait(<=0)` return immediately, spinning the worker and flooding CI logs with heartbeat events. Only reachable if a future caller overrides the default 60.0 with `<= 0`.\n  suggested minimal fix: `if heartbeat_interval_sec <= 0: return` as the first statement of the worker.\n  HARDENING_RISK_SCORE (0-5): 1\n- file: tests/test_orchestrate_poll_process.py\n  location: `_run_selected_tests` slowest-summary slice (line ~14378 in original numbering)\n  issue: a negative `slowest_limit` would use negative-stop slice semantics instead of \"no summary\". Default is 10 and synthetic tests pass 1/2; unreachable for current callers.\n  suggested minimal fix: clamp via `max(0, slowest_limit)` before slicing, or guard with `if slowest_limit > 0`.\n  HARDENING_RISK_SCORE (0-5): 1\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- file: tests/test_orchestrate_poll_process.py\n  location: _test_heartbeat_worker around line 14292\n  issue: Event.wait(<=0) returns immediately, so a non-positive heartbeat_interval_sec override would busy-loop and flood logs. Production main() uses the 60s default and the focused test uses 0.005, so this is not a live CI path.\n  suggested minimal fix: return immediately when heartbeat_interval_sec is not greater than 0\n  HARDENING_RISK_SCORE: 1\n- file: tests/test_orchestrate_poll_process.py\n  location: _run_selected_tests slowest slice around line 14376\n  issue: a negative slowest_limit uses Python negative-stop slicing and drops the last N results instead of emitting an empty summary. Callers currently pass 10, 2, or 1.\n  suggested minimal fix: clamp slowest_limit with max(0, slowest_limit) before slicing\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "a8cf5feca229122642bf05fcc876cafeaad86ace4a143f7a7079295c212a8bae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3826,
+    "run_id": "32865402077",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32865402077",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260825163937_a8c377f24c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3826,
+    "run_id": "32865402077"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-25T16:39:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

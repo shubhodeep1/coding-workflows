@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:1145-1147 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The new \u00a723.E hard rule conflicts with the existing `.claude/hooks/session-start.sh` hook, which reads `GH_TOKEN` and `GITHUB_TOKEN` from the session environment.\n  WHY: A session obeying \u00a723.E literally may treat the current SessionStart hook as non-compliant and refuse to create or maintain the interactive hook flow that this PR depends on.\n- CLAUDE.md:1173-1175 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The \u00a723.G note says the `GITHUB_TOKEN` fallback remains in session tooling that checks both, but after this PR the `.claude/commands/*` Tool Access blocks no longer contain that fallback check and defer to \u00a723.D.\n  WHY: The parenthetical points readers to the wrong place for the fallback check, so they may conclude `GITHUB_TOKEN` is no longer accepted in command files.\n- changelog.d/github-token-access.md:filename (new file) | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The new changelog fragment filename omits the required issue-or-pr prefix and uses only the bare slug `github-token-access.md`.\n  WHY: Without the PR-specific prefix required by CLAUDE.md \u00a720.B, the fragment can be reused by another PR and reintroduce the changelog merge-conflict class the convention is meant to prevent.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- CLAUDE.md:1145-1147 | severity=MAJOR | confidence=4\n  PROBLEM: The new \u00a723.E hard rule states \"Never commit a workflow, script, or hook that reads GH_TOKEN from the session environment.\" The repository already ships `.claude/hooks/session-start.sh`, which reads both GH_TOKEN and GITHUB_TOKEN from the session environment at lines 131-132, and this PR's README row and changelog entry both depend on that hook being present.\n  WHY: A session obeying \u00a723.E literally will classify the existing SessionStart hook as non-compliant and may refuse to create or maintain interactive session hooks that read GH_TOKEN, which breaks the GitHub token transport this change is introducing.\n- CLAUDE.md:1173-1175 | severity=NIT | confidence=3\n  PROBLEM: \u00a723.G states GITHUB_TOKEN remains the accepted fallback in session tooling that already checks both, citing `.claude/hooks/session-start.sh` and the `.claude/commands/*` Tool Access blocks. After this PR, the Tool Access blocks in `.claude/commands/*` no longer contain any GITHUB_TOKEN or nounset-safe auth check; they defer to \u00a723.D. Only the hook still checks both.\n  WHY: The parenthetical misdescribes where the fallback check lives. A reader or future session looking at the command files for the GITHUB_TOKEN fallback check will not find it there and may conclude GITHUB_TOKEN is no longer accepted.\n- changelog.d/github-token-access.md:filename (new file) | severity=NIT | confidence=4\n  PROBLEM: The fragment filename is github-token-access.md, missing the issue-or-pr prefix required by CLAUDE.md \u00a720.B at line 725, which specifies changelog.d/<issue-or-pr>-<slug>.md.\n  WHY: The fragment mechanism's guarantee depends on each PR having a unique path. A bare slug such as github-token-access.md can be reused by another PR and recreate the changelog merge-conflict class \u00a720 was introduced to prevent.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "380ce6bdda6397d758eeb1c78fdc5f7d0ab051c429991afd66e3fce76610675d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32097799991",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32097799991",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260818042820_36751a8cbd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "32097799991"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-18T04:28:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

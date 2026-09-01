@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Reviewer materializer must distinguish malformed JSONL (rc=1), valid no-text output (rc=2), and success (rc=0) to handle all OpenCode reviewer output cases.\n  expected_change_site: scripts/review_run_reviewers.sh:reviewer_materialize_opencode_json_text function\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Function exits with 1 for both malformed JSONL and valid no-text output, making tri-state behavior impossible.\n- requirement: Arithmetic mean in production parity evidence must correctly reflect the three listed runs (33177800142: 3423s, 33167154516: 3536s, 33160867375: 4388s).\n  expected_change_site: docs/plans/opencode-review-autofix-cutover-plan.md:production parity evidence section\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Table shows median (3536s) labeled as mean and mean (3782s) without clear derivation from the three runs.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: Reviewer materializer must distinguish malformed JSONL (rc=1), valid no-text output (rc=2), and success (rc=0) to handle all OpenCode reviewer output cases.\n  Expected change site: scripts/review_run_reviewers.sh:reviewer_materialize_opencode_json_text function\n  Evidence of absence: Function exits with 1 for both malformed JSONL and valid no-text output, making tri-state behavior impossible.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: Arithmetic mean in production parity evidence must correctly reflect the three listed runs (33177800142: 3423s, 33167154516: 3536s, 33160867375: 4388s).\n  Expected change site: docs/plans/opencode-review-autofix-cutover-plan.md:production parity evidence section\n  Evidence of absence: Table shows median (3536s) labeled as mean and mean (3782s) without clear derivation from the three runs.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "088378c94cad1c474b118f84ac150a0a8b19966611e24fad9bd00fcab8f62372",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3877,
+    "run_id": "33240977452",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33240977452",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260829091826_767606fdad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3877,
+    "run_id": "33240977452"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-29T09:18:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

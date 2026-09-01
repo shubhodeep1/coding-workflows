@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:3297-3310 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The pre-review merge-topology gate snapshots `_merge_classifier_stderr_oneline` too late, after `_merge_stderr_oneline` may have been mutated by appending the initial promisor stderr.\n  WHY: The sentinel check can miss `<git merge produced no stderr>` on an exit-128 retry, sending the flow down the hard error path instead of the intended fail-open warning.\n- .github/workflows/review_autofix.yml:4625-4647 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The late detect-conflicts step has the same promisor classifier ordering bug: `_merge_classifier_stderr_oneline` is derived after `_merge_stderr_oneline` may already have been mutated.\n  WHY: When the retry merge exits 128 with empty stderr, the classifier can fail to recognize the no-stderr sentinel and trigger the hard error path instead of the intended warning.\n- tests/test_review_autofix_merge_precheck.py:480 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The assertion hard-codes the exact total number of merge probes across the entire workflow.\n  WHY: Adding any other legitimate merge probe will break the test even if that new probe also carries promisor recovery.\n- .github/workflows/review_autofix.yml:4538 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The name `merge_promisor_retry_stderr_matches` suggests a broader retry-state meaning than the variable actually has within its single shell scope.\n  WHY: The logic is safe, but the name is confusing because it is reset per scope and only reflects one probe.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: tests/test_review_autofix_merge_precheck.py is not currently invoked by any workflow \u2014 it is one of ~48 of the 190 files in tests/ that no CI step names.\n  expected_change_site: .github/workflows/ci.yml (or equivalent test runner)\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: No diff hunk in the PR DIFF, LAST RUN DIFF, or last_run_changed_files.txt touches any CI workflow or test invocation list; the new 7 tests plus the pre-existing test module remain unexecuted by CI.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\nFile: .github/workflows/review_autofix.yml\nLine or code reference: Lines 3297-3310\nProblem: The exit-128 promisor classifier in the pre-review merge-topology gate uses `_merge_classifier_stderr_oneline` which is set from `_merge_stderr_oneline` after it may have been mutated by appending the initial promisor stderr.\nWhy it fails at runtime: This means the sentinel check `[\"${_merge_classifier_stderr_oneline}\" = \"<git merge produced no stderr>\"]` can fail even when the retry produced no stderr, causing the hard error path to trigger instead of the intended fail-open warning.\nISSUE_CONFIDENCE: 5\n\nFile: .github/workflows/review_autofix.yml\nLine or code reference: Lines 4625-4647\nProblem: Same classifier bug as above \u2014 the exit-128 promisor classifier in the late detect-conflicts step uses `_merge_classifier_stderr_oneline` which is set from `_merge_stderr_oneline` after it may have been mutated by appending the initial promisor stderr.\nWhy it fails at runtime: The retry merge exits 128 with empty stderr, the annotation mutates `_merge_stderr_oneline`, then `_merge_classifier_stderr_oneline` is set from the mutated value. The classifier fails to recognize the \"no stderr\" sentinel, triggering the hard error path instead of the intended fail-open warning.\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\nFile: tests/test_review_autofix_merge_precheck.py:480\nCode: `assert wf.count('git merge --no-commit --no-ff \"origin/${BASE_BRANCH}\"') == 4`\nProblem: The assertion hard-codes the exact total number of merge probes across the entire workflow.\nWhy it fails at runtime: Adding any other legitimate merge probe (e.g. in a new step or in a future hardening change) will break this test even if that new probe also carries the promisor recovery.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n\nFile: .github/workflows/review_autofix.yml:4538 (and mirrored in pre-review gate)\nNew variable: `merge_promisor_retry_stderr_matches`\nProblem: The name implies the variable tracks whether any retry matched the signature. In reality it is reset to false before each retry and only set from the late-detect retry (or the pre-review retry).\nWhy it fails at runtime: The name is confusing for readers, though the behavior is safe.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n\nRequirement: `tests/test_review_autofix_merge_precheck.py is not currently invoked by any workflow \u2014 it is one of ~48 of the 190 files in tests/ that no CI step names. That is pre-existing and out of scope here; wiring it up would need pytest in ci.yml, which is a separate change.`\nExpected change site: .github/workflows/ci.yml (or equivalent test runner)\nEvidence of absence: No diff hunk in the PR DIFF, LAST RUN DIFF, or last_run_changed_files.txt touches any CI workflow or test invocation list.\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "d0e798cf6df30c1ac925853aaad2b00863c2ab0511767202d348f8016440ed73",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3738,
+    "run_id": "31353723052",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31353723052",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260810044547_e5ef209388",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3738,
+    "run_id": "31353723052"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-10T04:45:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

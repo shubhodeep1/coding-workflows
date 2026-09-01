@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:lines 111-123 and 2083 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: Config-generation and bootstrap failures inside `run_editor_codex_attempt` return 1 to the editor retry loop instead of hard-failing immediately, causing deterministic failures to be retried up to `editor_max_attempts` and emitting duplicate Telegram ERROR alerts.\n  WHY: Missing or mis-installed OpenCode, version mismatch, broken `write_opencode_config.sh`, or invalid configuration fails identically on every retry, delaying the required stable hard failure and producing multiple alerts for one root cause; severity was reported as MAJOR by all reviewers.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_apply_fixes.sh:lines 110-122 (config generation + bootstrap inside run_editor_codex_attempt), interacting with line 2083 | severity=high | confidence=4\n  PROBLEM: Non-transient OpenCode bootstrap/config failures in the editor path are retried up to editor_max_attempts and emit duplicate Telegram ERROR alerts per attempt, instead of hard-failing on the first failure.\n  WHY: A missing or mis-versioned opencode binary, or a broken write_opencode_config.sh, fails identically on every retry; the editor has no equivalent pre-loop hard-fail.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_apply_fixes.sh:lines 111-123 (inside run_editor_codex_attempt) and line 2083 (main retry loop gate) | severity=high | confidence=4\n  PROBLEM: The config-generation and bootstrap paths return 1 into the editor retry loop, which treats bootstrap failure as retryable instead of a hard-fail signal.\n  WHY: Non-transient bootstrap failures retry up to editor_max_attempts and emit one config_generation alert per attempt plus one final attempt_failed alert, contradicting the requirement for immediate hard failure and a stable single ERROR alert.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_apply_fixes.sh:Location: lines 111-123 | HARDENING_RISK_SCORE: 3\n  PROBLEM: Config-generation and bootstrap failures inside run_editor_codex_attempt are retried up to editor_max_attempts and emit duplicate failure alerts instead of hard-failing immediately.\n  WHY: The suggested fix is to move the opencode_emit_failure_alert call outside the retry loop or track whether bootstrap has already failed to prevent duplicate alerts.\n\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/review_apply_fixes.sh:run_editor_codex_attempt config-generation/bootstrap guards (lines 111-125, the `return 1` paths after `opencode_emit_failure_alert ... config_generation` and `opencode_require_bootstrap`) interacting with the retry-loop bottom (`attempt=$((attempt + 1)); sleep 2`, ~line 2410) and the last-run-added final-attempt alert gate (~line 2083) | severity=high | confidence=4\n  PROBLEM: Config-generation and bootstrap failures are deterministic environment defects, yet they return 1 into the editor retry loop, which retries them up to editor_max_attempts and emits class-specific failure alerts on each retry followed by a final attempt_failed alert.\n  WHY: A missing or misinstalled OpenCode CLI or broken config writer cannot succeed through retries; the editor path is inconsistent with the sibling paths that hard-exit immediately, violating the linked issue constraint.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_apply_fixes.sh:lines 111-123 (run_editor_codex_attempt config-generation and bootstrap paths) and line 2083 (terminal alert gate) | severity=high | confidence=4\n  PROBLEM: Config-generation and bootstrap failures return 1 to the editor retry loop instead of hard-failing immediately, so each retry emits another config_generation alert.\n  WHY: Missing or mis-installed OpenCode CLI or a broken write_opencode_config.sh fails identically on every retry, delaying the stable ERROR alert and emitting multiple alerts for the same root cause.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "17fca9825f710085a6fd001f1d467d9d827892d1ce790465afc4c5d6cfe90ac7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3867,
+    "run_id": "33166483027",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33166483027",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260828125839_041ab8e385",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3867,
+    "run_id": "33166483027"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-28T12:58:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

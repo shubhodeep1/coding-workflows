@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/verify-activation.md: line 95 | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The follow-up remediation guidance names a `/code-review` slash command, but no `code-review` command exists in `.claude/commands/` or `workflow-templates/.claude/commands/`.\n  WHY: An operator following the new remediation guidance in this repo's interactive Claude session will invoke a command that does not exist in the synced command set.\n- changelog.d/3885-verify-activation-correctness-audit.md: line 20 | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The changelog repeats a dangling `/code-review --fix` command reference.\n  WHY: The referenced command does not exist in the synced command set, so the documented remediation cannot be executed as written.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .claude/commands/verify-activation.md\n  Line or code reference: line 95 (Rules, \"Read-only.\" bullet) \u2014 remediation list includes `/code-review --fix`\n  Problem: The follow-up remediation guidance names a `/code-review` slash command, but no `code-review` command exists in `.claude/commands/` or `workflow-templates/.claude/commands/`, and `git log --all` on those paths confirms it has never existed.\n  Why it fails at runtime: An operator following the new remediation guidance in this repo's interactive Claude session will invoke a command that does not exist in the synced command set, so the guidance cannot be executed as written; the other named commands (`/investigate-issue`, `/implement-plan-claude`, `/implement-plan-ai`, `/validate-consumer-issue`) all resolve.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "5fa882531fedc41e333acae2cbbe47681d3fa15a6a4d019b53d7df436ef629c2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33250162109",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33250162109",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260829115526_8563f08a8a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33250162109"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-29T11:55:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

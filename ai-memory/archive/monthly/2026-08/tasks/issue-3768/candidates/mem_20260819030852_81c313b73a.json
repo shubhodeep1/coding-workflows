@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `main` @ `2d7a58efbcb0d03a39035b25c3594e6366636eaf`\n\nScope-mode: Hold Scope\nReuse-audit: extends existing `tests/e2e_smoke_canary.txt` smoke-fixture contract\nScope-mode justification: The issue is fully specified, limits edits to one existing fixture file, and does not require any workflow, helper, or test logic changes. The minimum safe plan is to overwrite the existing file in place and preserve every surrounding contract unchanged. Under \u00a76 priorities, correctness and backward compatibility are best served by a single-file content replacement rather than broadening scope into workflow/test updates.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt` \u2014 overwrite the entire file so its contents are exactly:\n  - `status: ok`\n  - `run_id: 32210706261`\n  - `updated-by: ai-pipeline`\n  - with one trailing newline after the final line.\n\n## Functions or modules to implement\n- None. This is a fixture-content update only; no script, workflow, or helper logic should change.\n\n## Data structures affected\n- Plain-text smoke canary fixture content only.\n- Existing 3-line key/value shape remains unchanged; only the `run_id` value changes from the current `26151428977` to `32210706261`.\n\n## API or interface changes\n- None.\n- External behavior remains the same: consumers/tests that read `tests/e2e_smoke_canary.txt` continue to receive the same three keys in the same order and format.\n\n## Decisions\n### D1 \u2014 Keep the change to a single in-place fixture overwrite\n- Chosen\n  - Edit only `tests/e2e_smoke_canary.txt` and replace its full contents.\n- Alternatives considered\n  - Updating any workflow/test files that reference the canary path.\n  - Recreating the file via delete/add instead of a direct overwrite.\n- Why\n  - The issue explicitly restricts scope to one existing file, and repo references already target this exact path and format. A direct overwrite is the smallest safe change.\n\n### D2 \u2014 Preserve the existing file format exactly\n- Chosen\n  - Keep the file as exactly three lines plus a final trailing newline.\n- Alternatives considered\n  - Adding explanatory comments or metadata.\n  - Omitting the trailing newline.\n- Why\n  - The issue requires exact byte-level content shape, and smoke-fixture tests in this repo rely on deterministic canary content and path handling.\n\n## Risks and edge cases\n- The file already exists and currently contains the same three-line structure with a different `run_id`; the implementation must replace the old value completely rather than append or partially edit.\n- Do not introduce extra whitespace, blank lines, or missing trailing newline.\n- Do not touch any of the many tests that reference this path; the issue explicitly forbids other file edits.\n- No codebase conflict found: the requested path exists on the planning ref.\n\n## Testing considerations\n- Verify the file content exactly matches the requested three lines in order.\n- Verify the file ends with a trailing newline.\n- Verify `git diff --stat` shows only `tests/e2e_smoke_canary.txt` changed.\n- No broader test suite run is necessary for planning; this is a deterministic fixture update with no logic change.\n\n## Pre-execution self-check\n- The plan stays within the issue\u2019s explicit one-file scope.\n- The target file exists on the planning ref.\n- Existing repo references confirm this path is an established smoke canary fixture, so preserving format and path is the correct reuse path.\n- No missing inputs or ambiguous requirements remain.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "75e49c5c06b43396b0a8b1b5f96257616a6e40cf9ae319b4a880c8562c92e3ef",
+  "lineage": {
+    "issue_number": 3768,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32210914143",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32210914143",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3768"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260819030852_81c313b73a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3768,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "32210914143"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3768",
+  "timestamps": {
+    "created_at": "2026-08-19T03:08:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

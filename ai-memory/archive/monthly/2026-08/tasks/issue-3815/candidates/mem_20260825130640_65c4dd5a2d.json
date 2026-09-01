@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3815,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3815\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3820\",\"pr_number\":3820,\"branch\":\"ai/issue-3815\",\"run_id\":\"32850404351\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/32850404351\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"scripts/analyze_soft_errors.py\",\"scripts/cost_audit.py\",\"scripts/openrouter_prompt_cache.py\",\"scripts/summarize_unselected_runs.py\",\"tests/test_cost_audit_semble_metrics.py\"]}",
+  "fingerprint": "b6af4b74e2af976098217fe330bb7db713ab153a46be391136388c055773d61d",
+  "lineage": {
+    "issue_number": 3815,
+    "parent_ids": [],
+    "pr_number": 3820,
+    "run_id": "32850404351",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32850404351",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3820"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260825130640_65c4dd5a2d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3815,
+    "level": "run",
+    "pr_number": 3820,
+    "run_id": "32850404351"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3815: https://github.com/shubhodeep1/coding-workflows/pull/3820",
+  "timestamps": {
+    "created_at": "2026-08-25T13:06:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

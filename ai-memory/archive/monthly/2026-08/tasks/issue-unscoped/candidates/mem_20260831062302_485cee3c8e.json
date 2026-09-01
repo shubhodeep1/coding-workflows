@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md:line 2 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: The fragment body line \"Hardened planning, implementation, judging, and review prompts with shared application-security and money-handling checks.\" is missing the required \"- \" bullet prefix.\n  WHY: scripts/assemble_changelog.py copies the body verbatim with no bullet normalization, so at the next release assembly this entry lands as a bare non-bulleted line inside the bulleted Keep-a-Changelog list.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md:line 2 | severity=low | confidence=5\n  PROBLEM: The fragment body line \"Hardened planning, implementation, judging, and review prompts with shared application-security and money-handling checks.\" is missing the required \"- \" bullet prefix.\n  WHY: scripts/assemble_changelog.py parse_fragment copies the body verbatim into CHANGELOG.md under \"### Changed\", so at the next release assembly this entry lands as a bare non-bulleted line inside a bulleted Keep-a-Changelog list.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md:line 2 \u2014 body \"Hardened planning, implementation, judging, and review prompts with shared application-security and money-handling checks.\" | severity=low | confidence=4\n  PROBLEM: Fragment body lacks the `- ` bullet prefix required by the CLAUDE.md \u00a720.G template.\n  WHY: scripts/assemble_changelog.py parse_fragment copies the body verbatim with no bullet normalization, so at the next release the entry lands as a bare non-bulleted line inside the bulleted Keep-a-Changelog \"### Changed\" list.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md:line 2 \u2014 body line \"Hardened planning, implementation, judging, and review prompts with shared application-security and money-handling checks.\" | severity=low | confidence=4\n  PROBLEM: The fragment body does not start with the \"- \" bullet prefix that the CLAUDE.md \u00a720.G template prescribes (\"- <Headline sentence.>\").\n  WHY: scripts/assemble_changelog.py parse_fragment (lines 140-166) returns the body lines verbatim and _apply_insertions (lines 222-239) splices them verbatim into CHANGELOG.md under the \"### Changed\" subsection with no bullet normalization.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md:line 2 | severity=low | confidence=5\n  PROBLEM: The fragment body is a bare sentence instead of a Keep-a-Changelog bullet.\n  WHY: The assembler at scripts/assemble_changelog.py:161 copies the body verbatim with no bullet normalization, so at the next release assembly this entry lands as a bare non-bulleted line inside a bulleted Keep-a-Changelog list under `### Changed`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md:line 2 (body after the category marker) | severity=low | confidence=4\n  PROBLEM: The fragment body is a bare sentence instead of a Keep-a-Changelog bullet.\n  WHY: scripts/assemble_changelog.py parse_fragment (lines 140-166) and _plan_keep_a_changelog (lines 295-299) copy fragment body lines verbatim into CHANGELOG.md under ### Changed with no bullet normalization.\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "6f13b261ec262170062c4bde20c88ec590b5d13b3ed451b1af0131dd77f11060",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3936,
+    "run_id": "33357074303",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33357074303",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260831062302_485cee3c8e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3936,
+    "run_id": "33357074303"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-31T06:23:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

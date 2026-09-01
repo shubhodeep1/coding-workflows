@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_security_audit_workflow_contract.py:354-358 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The test assertion only checks for two tracker exclusions (`ai:security-audit` and `ai:retro`) but does not verify the third exclusion (`ai:orchestrator-tracking`) that was added to the workflow predicate.\n  WHY: This creates a silent drift risk where the workflow excludes three tracker classes but the contract test only validates two, potentially allowing unwanted workflow runs on orchestrator-tracking issues.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: tests/test_security_audit_workflow_contract.py\n  Line or code reference: 354-358\n  Problem: The test assertion only checks for two tracker exclusions (`ai:security-audit` and `ai:retro`) but does not verify the third exclusion (`ai:orchestrator-tracking`) that was added to the workflow predicate.\n  Why it fails at runtime: This creates a silent drift risk where the workflow excludes three tracker classes but the contract test only validates two, potentially allowing unwanted workflow runs on orchestrator-tracking issues.\n  ISSUE_CONFIDENCE: 5\n  SEVERITY: BLOCKER\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "af4736eb02281da379abc708f0ac0de513b064438005a97b75368ab277cc3287",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3909,
+    "run_id": "33309383819",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33309383819",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260830124056_7de0e6cc26",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3909,
+    "run_id": "33309383819"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-30T12:40:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- (no code site \u2014 unmappable CI check-run signal): PR head SHA 593a9e57dea6399606a2427d7b72871d02ea1b07, check-run \"codex-agent\" concluded \"cancelled\" | severity=low | confidence=1\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The cancelled check-run has no collected log evidence tying it to changed code.\n  WHY: It is consistent with pr-autofix concurrency-group supersession and cannot be mapped to a PR hunk.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- File: (no code site \u2014 unmappable CI check-run signal)\n  Line or code reference: PR head SHA 593a9e57dea6399606a2427d7b72871d02ea1b07, check-run \"codex-agent\" concluded \"cancelled\" in run 33260224170 (job 99120782488); collection_status: timeout\n  Problem: failed_count=1 with empty summary and empty log_tail; cancellation cannot be mapped to any hunk in the PR diff or LAST RUN DIFF, and no log was collected.\n  Why it fails at runtime: no evidence ties the cancellation to the changed code; it is consistent with pr-autofix concurrency-group supersession (a sibling review run on the same head SHA \u2014 run 33260212945 \u2014 is currently in_progress, i.e. this pass). Surfaced per the check-run guidance only so the editor can dismiss it explicitly.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n- file: scripts/render_prompt.sh\n  location: comment block above the RENDER_PROMPT_INPUT_ALREADY_ASSEMBLED case (~lines 260-277)\n  issue: the guidance says callers embedding untrusted content \"may need this flag, RENDER_PROMPT_SKIP_SYNTAX_VALIDATION, or both, depending on which failure mode they need to suppress\", but it never mentions that the reference-hydration fail-open added by this PR activates ONLY when both env opt-ins are set; an operator enabling just RENDER_PROMPT_SKIP_SYNTAX_VALIDATION still gets strict reference hydration for REFERENCE_* tokens.\n  suggested minimal fix: append one sentence clarifying that reference-placeholder fail-open requires the combined opt-in.\n  estimated lines changed: 2\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "2797a0921e54dfa7949ad88c0642e8c49bed41adfa7bca3a5d9818269129651d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3882,
+    "run_id": "33260212945",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33260212945",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260829162837_72d5d0ee5c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3882,
+    "run_id": "33260212945"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-29T16:28:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

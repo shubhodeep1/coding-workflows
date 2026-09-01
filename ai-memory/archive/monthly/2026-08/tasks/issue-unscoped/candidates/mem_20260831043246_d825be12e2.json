@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/opencode-review-autofix-cutover-plan.md:lines 415-416 | severity=high | confidence=4\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The aggregate bullet claims both 5/6 runs surfaced as the existing `non_retryable` class, but the per-run table identifies an unknown-cause run-4 pass-2 miss and a run-9 mistral context-window overflow.\n  WHY: Mischaracterizing these failures overstates what the run logs showed and undermines the audit trail for the \u201cno new failure classes\u201d gate.\n- docs/plans/opencode-review-autofix-cutover-plan.md:lines 57, 80, 458-459, 470-472 | severity=high | confidence=4\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The new evidence records that the `@stable` hold was lifted on 2026-08-30 before the Q3:A criterion was met, while the decision, risk, and rollout sections still present the hold as the live unconditional rule.\n  WHY: The plan internally documents mutually exclusive states of the same gate, so readers and future orchestrator/reviewer consumers receive a rule contradicted by the audit trail.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- docs/plans/opencode-review-autofix-cutover-plan.md:lines 415-416 | severity=high | confidence=4\n  PROBLEM: The aggregate bullet claims \"both 5/6 runs surfaced as the existing `non_retryable` class\", but the diff's own table contradicts this. Run 4 (line 397, 33298934878) records \"pass-2 dropped one slot without an alert; cause not in logs\" \u2014 the cause is explicitly unknown, not the `non_retryable` class. Run 9 (line 402, 33328474242) records a context-window overflow on the mistral slot, which is a different failure signature from the deepseek `non_retryable` rows (lines 394, 401).\n  WHY: This section is the audit-trail record of the \"no new failure classes\" gate leg. Mischaracterizing an unknown-cause reviewer miss and a context-window overflow as the known `non_retryable` class overstates what the run logs actually showed and undermines the forward audit trail this section now serves as.\n- docs/plans/opencode-review-autofix-cutover-plan.md:lines 8-9, 57, 80, 458-459, 470-481 | severity=high | confidence=4\n  PROBLEM: The new evidence section records that the `@stable` hold was lifted on 2026-08-30 before the Q3:A criterion was met, but every other statement of that gating rule in the same file is left unamended. Line 57 (\"`@stable` ... tagged only after the parity criterion passes\"), line 80 (same), line 458-459 (\"gated by F2:A: `@stable` is tagged only after the production criterion passes\"), and Rollout step 5 (\"Hold `@stable`: do not run the mark-stable/release flow until the Q3:A criterion passes\", lines 470-472) all still present the hold as the live, unconditional rule. Only the evidence section notes the deviation.\n  WHY: A reader (or a future orchestrator/reviewer consuming this plan as a contract) reading the Decision table, Risks, or Rollout sections gets a rule the recorded audit trail directly contradicts, with no pointer to the deviation. The plan internally documents two mutually exclusive states of the same gate.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "dd398a3617cce1757fe7ccb4e10c0bafb2667ad83f37ca67cfd05420165b6f4f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33356063592",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33356063592",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260831043246_d825be12e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33356063592"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-31T04:32:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

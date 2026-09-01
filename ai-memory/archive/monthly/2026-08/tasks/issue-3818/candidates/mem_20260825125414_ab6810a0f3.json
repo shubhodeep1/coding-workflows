@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `scripts/validate_process.sh::tg_notify` and the strict-mode shell harness pattern in `tests/test_validate_process_template_mode.py`.\n\nScope-mode justification: Implement the complete fail-open behavior and focused coverage without changing interfaces, dependencies, or workflow structure. This follows Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Planning ref\n\n- Branch: `orchestrator/project-3810`\n- HEAD: `6ef32f196668e059d15008934336f4b26b02d3ba`\n- Integration metadata matches the checkout.\n\n## Automation and lifecycle\n\n- Extend the existing validation script; introduce no new script.\n- Existing automatic path remains: `scripts/orchestrate_poll_process.sh::dispatch_validation_if_needed` \u2192 validation wrapper `workflow_dispatch` \u2192 `.github/workflows/validate.yml` `workflow_call` \u2192 `bash scripts/validate_process.sh`.\n- No scheduler, supervisor, database gate, or removal-registry changes.\n\n## Files likely to change\n\n1. `scripts/validate_process.sh`\n   - Correct suffix status handling in `tg_notify`.\n2. `tests/test_validate_process_template_mode.py`\n   - Add focused, already-CI-wired contract coverage using its extracted-function shell harness pattern.\n\n## Functions or modules to implement\n\n### `tg_notify`\n\n- Declare `msg` separately from command substitution to remove SC2155.\n- Capture `_tg_link_suffix` into a distinct local variable inside an explicit conditional.\n- On success, append the suffix exactly as before.\n- On failure:\n  - emit a GitHub Actions `::warning::` diagnostic;\n  - discard any partial suffix output;\n  - construct `msg` from the original alert text only;\n  - continue into the existing tracked/untracked send branch.\n- Preserve `level=\"${2:-CRITICAL}\"`, `tg_send_tracked`, and `tg_send_msg` behavior.\n\nNo new production helper is required.\n\n## Data structures affected\n\n- Local shell scalars only: message, level, and captured suffix.\n- No persisted state, schemas, workflow inputs, or environment variables change.\n\n## Decisions\n\n### D1 \u2014 Capture suffix status explicitly\n\n- **Chosen:** Assign `_tg_link_suffix` output in an `if` condition, clear it after failure, then assemble the message.\n- **Alternatives considered:** Keep combined declaration; append directly with `|| true`; let validation terminate.\n- **Why:** This exposes the real status under `set -euo pipefail` while preserving fail-open alert delivery and preventing partial suffix leakage.\n\n### D2 \u2014 Extend an existing CI-wired test module\n\n- **Chosen:** Add the focused shell contract cases to `tests/test_validate_process_template_mode.py`.\n- **Alternatives considered:** Create a new test module plus CI/inventory wiring; rely only on ShellCheck.\n- **Why:** The existing module already extracts functions from `validate_process.sh`, runs strict-mode Bash harnesses, and is executed by CI and `run_validation_repo_checks.sh`.\n\n## API/interface changes\n\n- None.\n- `tg_notify MESSAGE [LEVEL]`, `_tg_link_suffix`, and both Telegram send-helper signatures remain unchanged.\n- Successful message bytes remain unchanged.\n\n## Failure modes\n\n- **Suffix generation returns nonzero:** warning appears; original message is sent without a suffix.\n- **Suffix emits partial output before failing:** captured output is cleared and never sent.\n- **Telegram send fails:** existing send-helper fail-open behavior remains authoritative.\n- **Tracked versus standalone run:** existing `TRACKING_ISSUE_NUM` routing remains unchanged.\n\n## Risks and edge cases\n\n- Ensure the failure branch does not return the suffix\u2019s nonzero status and trigger `set -e`.\n- Preserve embedded newlines in successful Issue/Run suffixes.\n- Avoid testing only source text; execute the extracted functions under strict Bash mode.\n- No codebase conflict was found with the issue description.\n\n## Testing considerations\n\n- Successful tracked case:\n  - verify exact original message plus Issue/Run suffix;\n  - verify tracked issue argument and default `CRITICAL` level.\n- Simulated suffix-failure standalone case:\n  - override `_tg_link_suffix` to emit partial text and return nonzero;\n  - verify process success, observable warning, untracked routing, explicit level, and original unsuffixed message.\n- Run:\n  - `bash -n scripts/validate_process.sh`\n  - `shellcheck --severity=error scripts/validate_process.sh`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_template_mode.py`\n\n## Assumptions and missing context\n\n- The rendered issue references a `files_touched` allowlist but does not enumerate it; the implementation should confirm the two paths above are permitted before editing.\n\nPLAN_SELF_CHECK: WARNING: The explicit files_touched allowlist was not included in the planning context; the planned change is otherwise implementation-ready.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3b0771a98beff926c90b570a1b9dd17194c06741cd46fbc7eb2839620a91cc81",
+  "lineage": {
+    "issue_number": 3818,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32849762919",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32849762919",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3818"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260825125414_ab6810a0f3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3818,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "32849762919"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3818",
+  "timestamps": {
+    "created_at": "2026-08-25T12:54:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

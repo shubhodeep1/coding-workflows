@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/opencode-live-smoke.yml:lines 124-165 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: When the awk model-evidence gate fails, the per-call result label remains PASS while the evidence columns show FAIL.\n  WHY: The aggregate gate still fails correctly, but the operator-facing summary table is internally contradictory.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/opencode-live-smoke.yml:lines 124-158 | severity=NIT | confidence=4\n  PROBLEM: The per-call `result` label is never downgraded when the model-evidence gate fails.\n  WHY: The summary table can show `First call=PASS` while `Model evidence=FAIL` and/or `Reasoning evidence=FAIL`; the aggregate smoke gate still fails correctly.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/opencode-live-smoke.yml:run_smoke_call function, the awk model-evidence gate (lines ~138-150) and the jq reasoning gate (lines ~152-160) inside the LAST RUN DIFF | severity=NIT | confidence=4\n  PROBLEM: When the awk model-evidence gate fails it sets `call_rc=1` and `model_evidence=FAIL` but does not overwrite `result`.\n  WHY: The per-slug job-summary row renders First call / Repeated call as PASS while Model evidence / Reasoning evidence are FAIL, even though the aggregate success gate is unaffected.\n- TASK_GAP: The pass-1 cross-pollination summary carried a TASK_GAP alleging that permission roles, catalog limits, and bootstrap failures are not exercised by either test file; independent re-reading confirms this gap claim is inaccurate and no deliverable gap remains.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/opencode-live-smoke.yml:run_smoke_call, lines 141-160 (awk model-evidence gate at lines 141-151; jq reasoning-usage gate at lines 153-160) | severity=NIT | confidence=4\n  PROBLEM: When the awk model-evidence gate fails, it sets `model_evidence=FAIL` and `call_rc=1` but never rewrites the result label.\n  WHY: The published per-slug job-summary row renders First call / Repeated call as PASS while Model evidence and Reasoning evidence render FAIL; the aggregate gate still fails correctly.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/opencode-live-smoke.yml:run_smoke_call function, lines 124-165 (specifically the interaction between the awk model-evidence gate at lines 141-150 and the jq reasoning gate at lines 153-160) | severity=NIT | confidence=4\n  PROBLEM: When the awk model-evidence gate fails on an otherwise successful call, it sets `call_rc=1` but does not update the result label.\n  WHY: The per-call result column shows PASS while both evidence columns show FAIL, although the aggregate gate still fails correctly.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "8b82f46937d97c7a16783a62195a2c5e25fab32fd8536233f4bb321c73e7a2c3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3847,
+    "run_id": "33063951159",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33063951159",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260827114421_b4a6291086",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3847,
+    "run_id": "33063951159"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-27T11:44:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/codex_stall_guard.sh:409-410 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_budget_suffix_for_now()` was removed, breaking the stall-guard heartbeat contract that expects `budget_elapsed_secs` and `budget_remaining_secs` fields on every `CODEX_HEARTBEAT` line.\n  WHY: Without those fields, the stall-guard watchdog cannot enforce its timeout and may allow idle Codex child processes to run indefinitely.\n- scripts/watchdog_helpers.sh:5-184 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The shared run-budget helpers (`normalize_review_soft_deadline_minutes`, `codex_run_budget_export`, `codex_run_budget_summary`, and related accessors) were removed, breaking callers that probe for them.\n  WHY: Review/autofix workflows depend on these helpers to normalize and export budget configuration; without them, budget handling can silently stop working.\n- README.md:1025 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `REVIEW_MAX_RESUME_ROUNDS` variable was inserted mid-table, violating the documented append-only ordering rule for Required Variables.\n  WHY: This creates merge-conflict risk for downstream consumers, and the rule exists specifically to prevent that.\n- scripts/review_run_reviewers.sh:4252 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `reviewer_resume_can_skip_pass1()` checks `reviewer_resume_completed_scope_contains \"reviewers_pass1\"` and `\"reviewers_pass1_consensus\"`, but the completed_scope CSV writer only ever emits `\"reviewers\"`, so the pass-1 resume branch is dead code.\n  WHY: On resume after a partial finalize, the pass-1 skip check will not match and the pass-1 loop will redundantly re-run instead of skipping already cached reviewer outputs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/codex_stall_guard.sh:409-410 | severity=critical | confidence=5\n  PROBLEM: The `_budget_suffix_for_now()` function was removed, breaking the stall-guard heartbeat contract that expects `budget_elapsed_secs` and `budget_remaining_secs` fields on every `CODEX_HEARTBEAT` line.\n  WHY: The stall-guard watchdog relies on parsing these fields to determine when to kill an idle Codex child process; without them, timeout enforcement breaks.\n- scripts/watchdog_helpers.sh:5-184 | severity=critical | confidence=5\n  PROBLEM: The shared run-budget helpers (`normalize_review_soft_deadline_minutes`, `codex_run_budget_export`, `codex_run_budget_summary`, and related accessors) were removed, breaking callers that probe for them.\n  WHY: Review/autofix workflows normalize soft-deadline budgets via these helpers; their absence causes budget normalization/export to silently stop working.\n- README.md:1025 | severity=low | confidence=4\n  PROBLEM: The new `REVIEW_MAX_RESUME_ROUNDS` variable was inserted mid-table, violating the documented append-only ordering rule for Required Variables.\n  WHY: This creates a merge-conflict risk for downstream consumers who append new variables to the bottom of the table.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_run_reviewers.sh:4252 | severity=low | confidence=4\n  PROBLEM: `reviewer_resume_can_skip_pass1()` checks `reviewer_resume_completed_scope_contains \"reviewers_pass1\"` and `\"reviewers_pass1_consensus\"`, but the completed_scope CSV writer only ever emits `\"reviewers\"`, so the pass-1 resume branch is dead code.\n  WHY: On resume after a partial finalize, the pass-1 skip check will not match and the pass-1 loop will redundantly re-run instead of skipping already cached reviewer outputs.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "45fe35ee510d2c0b191fbd9118c503166e841c009af7cf435a0a9c06ffa2b6b8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3718,
+    "run_id": "30720871637",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "30720871637",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260801230529_19b5408833",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3718,
+    "run_id": "30720871637"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-01T23:05:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

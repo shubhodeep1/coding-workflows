@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:958 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The comment text is duplicated/wrapped awkwardly, producing the phrase \u201cthe legacy the legacy\u201d and making the sentence unclear.\n  WHY: This is a comment-only issue with no runtime impact, but it degrades maintainability and was explicitly called out by the reviewer.\n- scripts/review_consolidate.sh:415 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The comment describing the consolidator model tier still references the old gpt-5.4 tier while the surrounding default has been updated to gpt-5.5.\n  WHY: This is a documentation inconsistency with no runtime impact, but it can mislead future edits or debugging.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_apply_fixes.sh:958 | severity=low | confidence=5\n  PROBLEM: The comment lines are wrapped incorrectly, creating a grammatically incorrect sentence that reads as \"lower than the legacy the legacy editor default\" due to the line break and duplication of \"the legacy\".\n  WHY: This is a documentation/comment issue that doesn't affect runtime behavior, but it creates confusion for future maintainers and violates basic grammar standards.\n- scripts/review_consolidate.sh:415 | severity=low | confidence=5\n  PROBLEM: The comment describing the consolidator model tier still references gpt-5.4, but the default set just below is now openai/gpt-5.5.\n  WHY: This is a documentation issue that could mislead future edits or debugging of the consolidator default.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "a23a871d5aac64f99c5dcce2173756d79a5c40bf1a2e3bc15c513ad808702e7a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3775,
+    "run_id": "32225628078",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32225628078",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260819075908_8c39e16ac8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3775,
+    "run_id": "32225628078"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-19T07:59:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:1560-1567 | confidence=5\n  flagged_by: [minimax_minimax-m3, mistralai_mistral-small-2603]\n  PROBLEM: The guard's case statement treats a bare `.github` path as blocked, although `.github/` is not blanket template-owned and only `.github/prompts/` and `.github/scripts/` should be blocked.\n  WHY: This incorrectly rejects plans that legitimately target consumer-owned `.github/*` files or a directory-level `.github` mention; the guard should distinguish bare `.github` references from the specific blocked subdirectories.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The guard should only block `.github/prompts/` and `.github/scripts/` subdirectories, not all `.github` paths\n  expected_change_site: .github/workflows/plan.yml around line 1560-1567 in the case statement handling `.github` paths\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The current case statement treats `.github` as blocked when it should only block specific subdirectories\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml\n  Line or code reference: Second `case` statement in the \"Guard plans targeting template-owned paths\" step body (Copilot review comment cites line 1560).\n  Problem: The guard rejects any candidate that normalizes to bare `.github` (a list entry such as `- .github` or `- .github/`\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/plan.yml\n  Line or code reference: 1560-1567 (case statement handling `.github` paths)\n  Problem: The guard's case statement treats a bare `.github` path as blocked (it matches the `.github|.github/prompts|...` case), but `.github/` is not blanket template-owned\u2014only `.github/prompts/` and `.github/scripts/` are.\n  Why it fails at runtime: This incorrectly rejects plans that legitimately target consumer-owned `.github/*` files (or a directory-level `.github` mention), while the error message claims only the prompts/scripts subdirs are blocked.\n  ISSUE_CONFIDENCE: 5\n\n- .github/workflows/plan.yml\n  Line or code reference: 1560-1567 (case statement handling `.github` paths)\n  Problem: The normalization logic fails to distinguish between a bare `.github` directory reference and the specific subdirectories that should be blocked.\n  Why it fails at runtime: A plan mentioning `.github/workflows/custom.yml` would be incorrectly rejected because the path normalizes to `.github` which matches the blanket-rejection case.\n  ISSUE_CONFIDENCE: 5\n\n- Requirement: The guard should only block `.github/prompts/` and `.github/scripts/` subdirectories, not all `.github` paths\n  Expected change site: .github/workflows/plan.yml around line 1560-1567 in the case statement handling `.github` paths\n  Evidence of absence: The current case statement treats `.github` as blocked when it should only block specific subdirectories\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "a82e3a3fd698698b771d4721bd041c992e081b29b0118671dcefd13a3ffc29e8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3895,
+    "run_id": "33287153804",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33287153804",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260830032647_eae6250e1e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3895,
+    "run_id": "33287153804"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-30T03:26:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/write_opencode_config.sh | Location: reviewer_permission dictionary, approximately lines 105-118\n  Issue: The reviewer permission map explicitly denies edit, task, webfetch, websearch, and question, but omits write, patch, and apply_patch.\n  Suggested minimal fix: Add \"write\": \"deny\", \"patch\": \"deny\", and \"apply_patch\": \"deny\" to the reviewer_permission dictionary so both redundant maps deny writes.\n- scripts/opencode_helpers.sh | Location: opencode_run_cmd, approximately lines 64-93\n  Issue: The shared command helper executes the opencode binary without first checking command -v opencode.\n  Suggested minimal fix: Before building the argv, add: command -v opencode >/dev/null 2>&1 || { _opencode_error \"opencode binary not found\"; return 127; }\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/opencode-live-smoke.yml | location: run_smoke_call() invocation of opencode_run_cmd (around lines 116-120)\n  Issue: a single hung OpenCode call burns the entire 90-minute job timeout and the run then dies without the per-model summary table, degrading the rollout-gate signal to a bare timeout\n  Suggested minimal fix: wrap the opencode_run_cmd invocation with timeout --kill-after=10s <budget> (e.g. timeout 600) so a hung model yields a classified FAIL(rc=124) row instead of eating the whole job budget\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "d82eed7ff57a8719e800328deab44d54724419eb7f3c9a5b3b8d52bdc8d9e71f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33081217889",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33081217889",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260827145335_b11be0f970",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33081217889"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-27T14:53:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

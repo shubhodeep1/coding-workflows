@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:1029-1075 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The Q_COUNT regex patterns do not match blockquoted Q-IDs that have leading indentation before the blockquote marker.\n  WHY: An emission like `  > **Q1: question**` would not be counted, causing the Questions summary to show 0 even though clarification was detected.\n- .github/workflows/clarify.yml:1029 | severity=NIT | confidence=2\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The Q_COUNT regex still requires the bold `\\*\\*` prefix while the sibling detection regex accepts unbolded Q-IDs.\n  WHY: A drifted blockquoted-unbolded emission can be detected for behavior but under-counted in the display-only summary.\n- scripts/orchestrate_poll_process.sh:12745-12755 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The recommended-answer regex patterns do not allow optional leading whitespace before the blockquote prefix.\n  WHY: A clarification comment like `  > **Q1: ...` would not be parsed, causing stall recovery to fail with \"No recommended answers could be extracted\".\n- scripts/orchestrate_poll_process.sh:4368 and 4403 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Slop-scan reports Python heredoc parsing errors at lines 4368 and 4403.\n  WHY: The reported heredoc syntax errors could cause the script to fail when executed; other reviewers determined these are scanner false positives and the embedded Python is valid.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states \"Both workflow files pass YAML validation; `bash -n` passes on `orchestrate_poll_process.sh`\"\n  expected_change_site: scripts/orchestrate_poll_process.sh\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Slop-scan findings show parsing errors at lines 4368 and 4403 that were not addressed in the diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: \"Both workflow files pass YAML validation; bash -n passes on orchestrate_poll_process.sh\" (PR description)\n  Expected change site: scripts/orchestrate_poll_process.sh\n  Evidence of absence: The slop-scan findings at lines 4368 and 4403 of orchestrate_poll_process.sh are false positives \u2014 the slop-scan heuristic misidentified bash code (`local retry_state_body=\"\"` at line 4368, `RAW_TEXT=\"${raw_text}\" python3 - <<'PY'` at line 4403) as Python heredocs and reported parse failures on non-Python syntax. The lines are outside the PR's changed region (~12734-12755), are valid bash, and `bash -n` correctly reports no syntax error on this file. Python heredoc indentation errors inside a shell script are invisible to `bash -n` (the heredoc body is literal text to the shell parser), but the two cited lines are not even Python \u2014 they are shell variable assignments. The slop-scan is advisory and prone to false positives by its own contract. No gap exists; the PR description's verification claims are truthful for the scope of changes.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: .github/workflows/clarify.yml\n  Code: Q_COUNT regex at lines 1029 and 1075\n  Problem: The regex patterns `'^[[:space:]]*(>[[:space:]]*)*\\*\\*Q[0-9]+:'` and `'^[[:space:]]*(>[[:space:]]*)*\\*?\\*?Q[0-9]+'` do not match blockquoted Q-IDs that have leading indentation before the blockquote marker\n  Why it fails at runtime: A Codex emission like `  > **Q1: question**` would not be counted, causing the Questions column in the step summary to show 0 even though clarification was detected\n  ISSUE_CONFIDENCE: 4\n- File: scripts/orchestrate_poll_process.sh\n  Code: extract_recommended_answers function at lines 12745-12755\n  Problem: The regex patterns `/^\\s*(?:>\\s*)*\\*?\\*?Q(\\d+)/i` and `/^\\s*(?:>\\s*)*(?:[-*]\\s*)?(?:\\*\\*)?([A-Za-z](?:\\+[A-Za-z])*)(?:\\*\\*)?\\s*(?:\u2014|\u2013|[-)\\.:]).*\\(RECOMMENDED\\)/i` do not allow optional leading whitespace before the blockquote prefix\n  Why it fails at runtime: A clarification comment with indentation like `  > **Q1: ...` would not be parsed, causing stall recovery to fail with \"No recommended answers could be extracted\"\n  ISSUE_CONFIDENCE: 4\n- File: scripts/orchestrate_poll_process.sh\n  Code: Python heredoc parsing errors at lines 4368 and 4403\n  Problem: Slop-scan reports \"failed to parse python_heredoc: unexpected indent\" for heredocs in the script\n  Why it fails at runtime: The heredocs contain syntax errors that could cause the script to fail when executed\n  ISSUE_CONFIDENCE: 5\n- File: .github/workflows/clarify.yml\n  Code: Q_COUNT handling at lines 1029-1033 and 1073-1077\n  Problem: Using `|| true` with `${Q_COUNT:-0}` is correct but the fallback logic could be clearer and more defensive\n  Why it fails at runtime: If grep exits with unexpected error codes, the fallback might not work as intended\n  ISSUE_CONFIDENCE: 3\n- Requirement: The PR description states \"Both workflow files pass YAML validation; `bash -n` passes on `orchestrate_poll_process.sh`\"\n  Expected change site: scripts/orchestrate_poll_process.sh\n  Evidence of absence: The slop-scan findings show parsing errors at lines 4368 and 4403 that were not addressed in the diff\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- File: .github/workflows/clarify.yml\n  Line or code reference: line 1029 \u2014 grep -cE '^[[:space:]]*(>[[:space:]]*)*\\*\\*Q[0-9]+:'\n  Problem: this Q_COUNT regex still requires the bold \\*\\* prefix, while the sibling count at line 1076 (^[[:space:]]*(>[[:space:]]*)*\\*?\\*?Q[0-9]+) accepts unbolded Q-IDs. A drifted blockquoted-unbolded emission (> Q1: ...) is counted by line 1076 (driving needs_clarification=true) but under-counted in the step-summary \"| Questions | N |\" row fed by line 1029.\n  Why it fails at runtime: display-only divergence \u2014 the summary table can show a lower question count than what the parser actually detected and posted. The canonical prompt-mandated form (**Q1: ...**) is bold, so prompt-conformant output is counted correctly; only drifted emissions diverge. Pre-existing strictness (the PR only prepended the blockquote tolerance), flagged here because the PR already edits this exact regex.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "9018a8cdced208a58968334eb73f797ef12eda854a7e55f609854b13fa4ceaa7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3940,
+    "run_id": "33383189495",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33383189495",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260831120438_37d510a82d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3940,
+    "run_id": "33383189495"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-31T12:04:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

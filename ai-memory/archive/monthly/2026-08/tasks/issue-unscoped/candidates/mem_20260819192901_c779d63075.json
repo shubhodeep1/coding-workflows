@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:3602-3609, 3648-3656, 3748-3780 | confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The size-comparison guard can behave incorrectly because it compares byte-count variables that may still contain whitespace from `wc -c` output.\n  WHY: The reviewer reported the `-lt` check may fail or silently mis-evaluate when the captured counts are not clean numeric strings.\n- scripts/review_run_reviewers.sh:3760-3780 | confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The pre-launch empty-prompt guard can still launch codex even when restoring the effective prompt from the base prompt fails.\n  WHY: The reviewer reported the code only warns on failed restoration but does not stop or skip the slot, leaving the empty-stdin failure mode reachable.\n- scripts/review_run_reviewers.sh:shrinkage guard block (~lines 3764-3777 in the current file, the `elif` branch after the empty-prompt guard) | severity=NIT | confidence=[3]\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The warning path relies on `safe_name:-unset`, which can mask missing caller context if `execute_reviewer_attempt` is ever invoked outside `run_reviewer`.\n  WHY: The reviewer said the code works today via dynamic scoping, but the fallback hides whether `safe_name` is truly unavailable versus legitimately unset.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The attempt path now embeds the per-slot `safe_name`, and a pre-launch guard restores an unexpectedly empty effective prompt from the base prompt with a `::warning::` instead of failing the slot silently.\"\n  expected_change_site: scripts/review_run_reviewers.sh lines 3760-3780\n  confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The code does embed the per-slot `safe_name` and does have a pre-launch guard that restores empty prompts, but it doesn't prevent the codex launch when restoration fails, which could still lead to the empty stdin failure.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_run_reviewers.sh:3602-3609, 3648-3656, 3748-3780 | ISSUE_CONFIDENCE: 4\n  PROBLEM: The changes introduce a race condition fix for reviewer attempt prompt files, but there's a subtle issue with the `${reviewer_effective_prompt_bytes}` variable usage in the size comparison guard.\n  WHY: The guard at line 3769-3770 compares `${reviewer_effective_prompt_bytes}` against `${reviewer_base_prompt_bytes}` using arithmetic comparison `-lt`, but the variables are strings that may contain whitespace from the `wc -c` output. The arithmetic context `2>/dev/null` applies to the entire command, not just the comparison, which could lead to silent failures or incorrect behavior when the variables contain non-numeric values.\n- scripts/review_run_reviewers.sh:3760-3780 | ISSUE_CONFIDENCE: 4\n  PROBLEM: The pre-launch guard for empty effective prompt files has inconsistent error handling. When the effective prompt file is empty and cannot be restored from the base prompt, the code emits a warning but doesn't prevent the codex launch. This could still result in the empty stdin failure mode.\n  WHY: The guard logs a warning but continues execution to the codex launch redirect. If the restoration fails, codex will still read an empty file and fail with \"No prompt provided via stdin\".\n- Requirement: The PR description states \"The attempt path now embeds the per-slot `safe_name`, and a pre-launch guard restores an unexpectedly empty effective prompt from the base prompt with a `::warning::` instead of failing the slot silently.\"\n  Expected change site: scripts/review_run_reviewers.sh lines 3760-3780\n  Evidence of absence: The code does embed the per-slot `safe_name` and does have a pre-launch guard that restores empty prompts, but it doesn't prevent the codex launch when restoration fails, which could still lead to the empty stdin failure.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_run_reviewers.sh:shrinkage guard block (~lines 3764-3777 in the current file, the `elif` branch after the empty-prompt guard) | severity=NIT | confidence=[3]\n  PROBLEM: The restore-path warning uses `safe_name:-unset`, which can hide missing caller context if `execute_reviewer_attempt` is called outside `run_reviewer`.\n  WHY: The reviewer noted the code currently works via dynamic scoping, but the fallback makes it impossible to tell whether `safe_name` is genuinely unset or just unavailable in a future call path.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "755488fb9cdbbee632d58aa4e5d604464dc444bf43556db3d810d88b43325e31",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3776,
+    "run_id": "32287259570",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32287259570",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260819192901_c779d63075",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3776,
+    "run_id": "32287259570"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-19T19:29:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

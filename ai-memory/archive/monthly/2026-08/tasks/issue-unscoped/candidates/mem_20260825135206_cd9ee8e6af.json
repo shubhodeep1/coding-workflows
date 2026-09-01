@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_workflow_logs.py:lines 1483-1485 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3]\n  PROBLEM: The embedded AI_MEMORY_PUSH_RETRIES fallback remains 8 instead of 16.\n  WHY: Its workflow-log cache writes use the same contended ai-memory push loop, so this caller can exhaust retries during dispatch bursts while other callers survive.\n- changelog.d/3817-ai-memory-push-retry-budget.md:line 4 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The changelog incorrectly describes only four fallback-embedding callers and omits scripts/collect_workflow_logs.py.\n  WHY: The documentation makes the retry-default update appear complete even though a fifth active caller remains unchanged.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Double the default AI_MEMORY_PUSH_RETRIES to 16 in ai_memory.py and the four shell callers that embed the same fallback, stretching the jittered retry loop to ~3 minutes so it outlasts a burst of that shape.\"\n  expected_change_site: scripts/collect_workflow_logs.py line 1485\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: PR DIFF contains no hunk for scripts/collect_workflow_logs.py; scripts/collect_workflow_logs.py still reads `push_retries = _to_int(os.getenv(\"AI_MEMORY_PUSH_RETRIES\", \"8\"), 8)`.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/collect_workflow_logs.py:line 1485 | severity=high | confidence=5\n  PROBLEM: The hardcoded default for AI_MEMORY_PUSH_RETRIES remains 8 while every other site was raised to 16.\n  WHY: When unset, collect_workflow_logs.py uses 8 attempts for shared ai-memory writes and can fail approximately 80 seconds sooner during dispatch contention.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/collect_workflow_logs.py:1485 \u2014 `push_retries = _to_int(os.getenv(\"AI_MEMORY_PUSH_RETRIES\", \"8\"), 8)` | severity=high | confidence=5\n  PROBLEM: This PR raised the default AI_MEMORY_PUSH_RETRIES from 8 to 16 elsewhere, but the same env var still has a hard-coded fallback of `\"8\"` here.\n  WHY: This active shared ai-memory write path still aborts after 8 attempts during the burst the PR is intended to outlast.\n- changelog.d/3817-ai-memory-push-retry-budget.md:line 4 \u2014 \"The default `AI_MEMORY_PUSH_RETRIES` is now 16 in `scripts/ai_memory.py` and in the four shell callers that embed the same fallback (`review_rb_judge.sh`, `orchestrate_poll_process.sh`, `review_consolidate.sh`, `review_apply_fixes.sh`)\" | severity=high | confidence=4\n  PROBLEM: The changelog omits scripts/collect_workflow_logs.py as a fifth AI_MEMORY_PUSH_RETRIES resolver.\n  WHY: Readers auditing the contract may conclude the update is complete and miss the remaining vulnerable caller.\n- scripts/collect_workflow_logs.py:1485 (`_to_int(os.getenv(\"AI_MEMORY_PUSH_RETRIES\", \"8\"), 8)`) | severity=high | confidence=5\n  PROBLEM: The `_to_int` fallback remains 8 when the environment variable is unset or unparseable.\n  WHY: The same burst can still produce `MemoryGitError`, after which `_cache_write_context` downgrades the failure to a warning and loses the cache write for that tick.\n- Requirement: \"Double the default AI_MEMORY_PUSH_RETRIES to 16 in ai_memory.py and the four shell callers that embed the same fallback, stretching the jittered retry loop to ~3 minutes so it outlasts a burst of that shape.\"\n  Expected change site: `scripts/collect_workflow_logs.py` line 1485 \u2014 the `os.getenv(\"AI_MEMORY_PUSH_RETRIES\", \"8\")` literal and the trailing `8` default to `_to_int` must both change to `\"16\"` / `16` (matching the four shell callers and `scripts/ai_memory.py:124`).\n  Evidence of absence: PR DIFF contains no hunk for `scripts/collect_workflow_logs.py`; the file on HEAD (verified at the working-tree copy during this review) still reads `push_retries = _to_int(os.getenv(\"AI_MEMORY_PUSH_RETRIES\", \"8\"), 8)`.\n  ISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/collect_workflow_logs.py:lines 1483-1485 | severity=high | confidence=5\n  PROBLEM: The PR raises the embedded default to 16 elsewhere, but this fifth embedded fallback remains at 8.\n  WHY: Its value feeds persist_memory_operation, so the workflow-log-analysis cache writer still exhausts the old retry budget during the targeted dispatch burst and skips the cache write.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "a40cdd79ab1cf514e5eb9b36db2e7aa6ba1353cbae99d53445bf2cb6cae7a756",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32853391470",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32853391470",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260825135206_cd9ee8e6af",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "32853391470"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-25T13:52:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- HEAD: `2d7a58efbcb0d03a39035b25c3594e6366636eaf`\n- Checked-out ref: `orchestrator/project-3769`\n- Integration branch metadata: `orchestrator/project-3769`\n- Integration branch mismatch: `false`\n\nClarification mapping\n- No `Q1`/`Q2` clarification batch was issued in clarify. The `/answer [auto-answered-by-orchestrator]` comment therefore maps to \u201cissue remains fully specified; proceed without additional branching assumptions.\u201d\n\nAutomation/wiring\n- Change type: modify one existing fixture file only.\n- Scheduler / PR-push entry point: none; no workflow wiring change is needed.\n- Long-running supervisor: none.\n- DB gate pattern: not applicable.\n- `docs/scripts-pending-removal.md` entry: not applicable.\n\nScope-mode: Hold Scope\nReuse-audit: extends existing tests/e2e_smoke_canary_b.txt smoke-canary fixture\nScope-mode justification:\nThis issue is already fully specified and hard-scoped to one path in the `files_touched` allowlist. The complete fix and the minimal fix are the same: keep the existing file, preserve the already-correct `status: ok` line, and update the stale `decompose-run` value to `32210706261` without touching any sibling smoke files or workflow code. Per \u00a76 priorities, the safest plan is the smallest exact edit that satisfies correctness and backward compatibility.\n\nFiles likely to change\n- `tests/e2e_smoke_canary_b.txt` \u2014 current contents show line 1 already as `status: ok` and line 2 as stale `decompose-run: 25567947079`; update to the required two-line content for this issue.\n\nFunctions or modules to implement\n- None. This is a direct text-fixture edit, not a code-path change.\n\nData structures affected\n- The two-line text fixture in `tests/e2e_smoke_canary_b.txt`.\n- No schemas, contracts, env vars, or workflow state structures change.\n\nAPI/interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Keep the fix file-local and literal\n- Chosen: Edit only `tests/e2e_smoke_canary_b.txt` and ensure its first two lines exactly match the requested literals.\n- Alternatives considered: Touching `tests/e2e_smoke_canary.txt`, widening to other smoke fixtures, or adding helper/workflow changes.\n- Why: The issue explicitly forbids broader edits, and no reusable helper or workflow mechanism is needed for a one-file fixture correction.\n\nRisks and edge cases\n- Accidental edits to `tests/e2e_smoke_canary.txt` or any non-allowlisted file would violate scope.\n- Extra whitespace, reordered lines, or newline churn could fail the exact-line acceptance check.\n- Rewriting more content than necessary would create avoidable diff churn.\n- No factual issue/codebase conflict was found: the target file exists on the stated integration branch.\n\nTesting considerations\n- Verify `tests/e2e_smoke_canary_b.txt` line 1 is exactly `status: ok`.\n- Verify line 2 is exactly `decompose-run: 32210706261`.\n- Verify no other files changed (`git diff --stat` should show only `tests/e2e_smoke_canary_b.txt`).\n- No typecheck/lint/build step is needed; exact file-content verification is the authoritative acceptance check here.\n\nPre-execution self-check\n- Implementation-ready: scope is unambiguous, the target file exists, the branch matches integration metadata, and no external inputs or docs are required.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ed6f99afa3c1e5ccd522078ed862ea5db0f3eec708734e890b1be9239824893a",
+  "lineage": {
+    "issue_number": 3771,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32211019539",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32211019539",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3771"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260819031125_36b51a6d1f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3771,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "32211019539"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3771",
+  "timestamps": {
+    "created_at": "2026-08-19T03:11:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

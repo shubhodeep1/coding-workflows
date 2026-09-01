@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `collect_workflow_logs` selection and categorized-export pipeline  \nScope-mode justification: Implement both requested selectors and metadata regression coverage. This complete option is only marginally larger than changing one predicate and follows \u00a76 priorities: correctness and safety outweigh speed.\n\n## Planning ref\n\n- Branch: `orchestrator/project-3898`\n- HEAD: `f8d6fb4451c5629cae057988bca19a6d8cd6284d`\n- Integration metadata matches the checkout.\n- Clarification required no additional answers; the orchestrator auto-answer confirms continuation.\n\n## Automation integration\n\n- Extend existing code; no new script.\n- Existing entry point: `.github/workflows/workflow-log-analysis.yml`, scheduled Mondays at `0 9 * * 1` and manually dispatchable.\n- No workflow wiring, supervisor, database gate, or removal-registry entry is required.\n\n## Files likely to change\n\n- `scripts/collect_workflow_logs.py`\n- `tests/test_collect_workflow_logs.py`\n- `changelog.d/3898-startup-failure-diagnostics.md`\n\n## Functions/modules to implement\n\n- Define a narrowly scoped diagnostic-failure conclusion collection containing `failure` and `startup_failure`.\n- Update `select_notable_runs_for_logs` to prioritize both conclusions before retried and slow runs.\n- Update `select_runs_for_log_export_categories` to place both conclusions in `errors`.\n- Leave `export_categorized_logs` behavior unchanged; exercise its existing metadata-only failure path.\n\n## Data structures affected\n\n- Run dictionaries: `conclusion == \"startup_failure\"` becomes eligible for diagnostic failure selection.\n- Categorized export: startup failures appear under `errors/`.\n- Existing metadata fields remain unchanged:\n  - `log_download_status`\n  - `diagnostic_failure_reason`\n  - `workflow_validation_annotations_status`\n- Preserve `workflow_log_collector.v2`, cache schema `v1`, ordering, limits, and cache payload shape.\n\n## API/interface changes\n\n- No new API endpoint or external request.\n- Behavioral change only: the two existing selectors recognize `startup_failure`.\n- Do not broaden summary failure counts, job-fetch eligibility, or unrelated conclusion handling.\n\nData flow:\n\n1. Collector creates a zero-duration startup-failure row.\n2. Notable selection prioritizes it within the existing limit.\n3. Archive retrieval may fail through the existing fail-open path.\n4. Categorized selection places the row under `errors/`.\n5. Exporter writes diagnostic metadata even without log files.\n\nFailure modes:\n\n- Missing/unavailable startup archive: write metadata-only output with classified download status and diagnostic reason.\n- Constrained selection limit: startup failure must win over a newer or slower successful run.\n- Cached or ordinary failure rows: retain existing ordering and compatibility.\n\n## Decisions\n\n### D1 \u2014 Limit failure semantics to diagnostic selection\n\n- **Chosen:** Recognize `failure` and `startup_failure` only in the notable-log and `errors` selectors.\n- **Alternatives considered:** Reclassify summary counts or job-fetch behavior globally.\n- **Why:** The issue explicitly scopes the defect to diagnostic log selection; broader changes risk schema and behavioral drift.\n\n### D2 \u2014 Reuse the existing exporter failure path\n\n- **Chosen:** Add regression coverage around `export_categorized_logs` rather than changing its implementation.\n- **Alternatives considered:** Add a special startup-failure metadata writer or a broad end-to-end collector refactor.\n- **Why:** The exporter already preserves the required fields and fails open correctly once the run is selected.\n\n## Risks and edge cases\n\n- A zero duration must not prevent failure prioritization.\n- Category-local limits must remain independent and deterministic.\n- Deduplication across categories must continue preventing duplicate archive downloads.\n- Preserve case-normalization behavior.\n- Conflict note: the issue cites exporter lines `1471-1541`; on this ref, `export_categorized_logs` begins around line 1493. The referenced behavior still exists.\n\n## Testing considerations\n\n- Add a notable-selection regression with:\n  - zero-duration `startup_failure`;\n  - competing newer/longer successful run;\n  - `max_log_runs=1`;\n  - assertion that startup failure is selected.\n- Add or extend categorized-export coverage to assert:\n  - startup failure is under `errors/`;\n  - constrained limit is honored;\n  - archive failure produces metadata without log files;\n  - all three diagnostic fields remain present and correctly populated.\n- Retain existing ordinary-failure ordering tests.\n- Verify in CI order:\n  1. `python3 -m py_compile scripts/collect_workflow_logs.py`\n  2. `ruff check --select E,F --ignore E501 scripts/*.py`\n  3. `python3 -m coverage run tests/test_collect_workflow_logs.py`\n  4. `python3 -m coverage report --include='scripts/collect_workflow_logs.py' --fail-under=45`\n\n## Assumptions and missing context\n\n- No README update is needed because no public configuration, schema, or API changes.\n- No required context is missing.\n\n## Pre-execution self-check\n\n- Required behavior, affected functions, regression scenarios, compatibility constraints, and automation entry point are covered.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "04a2bb7eec88f2f24c654c9d018b1034d3fbdaf1cf6ce23fbce4782b9a4bc7c0",
+  "lineage": {
+    "issue_number": 3918,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33317659414",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33317659414",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3918"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260830144927_c96ce4f490",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3918,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33317659414"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3918",
+  "timestamps": {
+    "created_at": "2026-08-30T14:49:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

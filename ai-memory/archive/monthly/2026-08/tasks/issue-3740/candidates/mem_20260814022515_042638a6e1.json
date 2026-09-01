@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. Which part of this repository should change?\nChoices:\nA. Clarify/plan pipeline behavior (`clarify*`, `plan*`, prompt/rendering pieces)\nB. Implement/review pipeline behavior (`implement*`, `review_autofix*`, related scripts)\nC. Orchestrator/validation/runtime automation (`orchestrate*`, `validate*`, judge/poller helpers)\nD. Documentation/templates only (`README.md`, `docs/**`, `workflow-templates/**`)\nE. Specify the exact workflow(s), script(s), or file path(s) to change (RECOMMENDED)\nQ2. What concrete improvement should this issue target?\nChoices:\nA. Bug/regression: give the current behavior, expected behavior, and affected workflow/script (RECOMMENDED)\nB. Failed or stalled automation run: give the run/PR/issue number and the exact failing step or symptom (RECOMMENDED)\nC. Docs/template problem: name the file/section and what is unclear or wrong\nD. Performance/cost problem: name the phase plus the current pain and the target outcome",
+  "fingerprint": "36f94420910f67dffb1d6081ae16533e8e1d3c1560dafbc4f989baef908a1379",
+  "lineage": {
+    "issue_number": 3740,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "31763528089",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "31763528089",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260814022515_042638a6e1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3740,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "31763528089"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #3740 needs clarification",
+  "timestamps": {
+    "created_at": "2026-08-14T02:25:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

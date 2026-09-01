@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_workflow_logs.py:93, 1137-1141, 1224-1228 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The constant DIAGNOSTIC_FAILURE_CONCLUSIONS is defined at line 93 but is not used in the filtering logic for select_runs_for_log_export_categories (lines 1224-1228)\n  WHY: The constant exists but is only referenced in select_notable_runs_for_logs, making it dead code in the export categories function and reducing maintainability\n- scripts/collect_workflow_logs.py:93, 1137-1141 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The list comprehension in select_notable_runs_for_logs filters runs where conclusion.lower() is in DIAGNOSTIC_FAILURE_CONCLUSIONS, but the constant includes both \"failure\" and \"startup_failure\"\n  WHY: The logic is correct but the constant definition at line 93 uses frozenset which is immutable and may cause confusion in maintenance; a regular set would be more conventional for this use case\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Treat startup_failure as a failed diagnostic conclusion in notable-log selection and the categorized errors bucket\"\n  expected_change_site: scripts/collect_workflow_logs.py functions select_notable_runs_for_logs and select_runs_for_log_export_categories\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Both functions now use the constant in their filtering logic, so this requirement is satisfied\n- requirement: \"Preserve existing selection limits, ordering, schema version, cache compatibility, and fail-open behavior\"\n  expected_change_site: scripts/collect_workflow_logs.py functions select_notable_runs_for_logs and select_runs_for_log_export_categories\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Both functions now use the constant in their filtering logic, so this requirement is satisfied\n- requirement: \"Ensure unavailable startup logs still produce metadata containing log_download_status, diagnostic_failure_reason, and workflow_validation_annotations_status through the existing exporter\"\n  expected_change_site: scripts/collect_workflow_logs.py export_categorized_logs function\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The export_categorized_logs function already handles metadata generation for all runs including those with startup_failure (as shown in test_export_categorized_logs_keeps_startup_failure_metadata_when_archive_fails), so this requirement is satisfied\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/collect_workflow_logs.py\n  Code: lines 93, 1137-1141, 1224-1228\n  Problem: The constant DIAGNOSTIC_FAILURE_CONCLUSIONS is defined at line 93 but is not used in the filtering logic for select_runs_for_log_export_categories (lines 1224-1228)\n  Why it fails at runtime: The constant exists but is only referenced in select_notable_runs_for_logs, making it dead code in the export categories function and reducing maintainability\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- scripts/collect_workflow_logs.py\n  Code: lines 1137-1141\n  Problem: The list comprehension in select_notable_runs_for_logs filters runs where conclusion.lower() is in DIAGNOSTIC_FAILURE_CONCLUSIONS, but the constant includes both \"failure\" and \"startup_failure\"\n  Why it fails at runtime: The logic is correct but the constant definition at line 93 uses frozenset which is immutable and may cause confusion in maintenance; a regular set would be more conventional for this use case\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Treat startup_failure as a failed diagnostic conclusion in notable-log selection and the categorized errors bucket\"\n  Expected change site: scripts/collect_workflow_logs.py functions select_notable_runs_for_logs and select_runs_for_log_export_categories\n  Evidence of absence: Both functions now use the constant in their filtering logic, so this requirement is satisfied\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Preserve existing selection limits, ordering, schema version, cache compatibility, and fail-open behavior\"\n  Expected change site: scripts/collect_workflow_logs.py functions select_notable_runs_for_logs and select_runs_for_log_export_categories\n  Evidence of absence: Both functions now use the constant in their filtering logic, so this requirement is satisfied\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Ensure unavailable startup logs still produce metadata containing log_download_status, diagnostic_failure_reason, and workflow_validation_annotations_status through the existing exporter\"\n  Expected change site: scripts/collect_workflow_logs.py export_categorized_logs function\n  Evidence of absence: The export_categorized_logs function already handles metadata generation for all runs including those with startup_failure (as shown in test_export_categorized_logs_keeps_startup_failure_metadata_when_archive_fails), so this requirement is satisfied\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "8bb3ee0917a10329bed6ed050eb4c8b84fb2d6a75907a1db40506a1733920928",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3921,
+    "run_id": "33318358708",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33318358708",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260830155911_aceeca7c98",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3921,
+    "run_id": "33318358708"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-30T15:59:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:_api_write_requires_confirmation function body and URL token check | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The guard treats URLs containing shell glob metacharacters as safe.\n  WHY: Bash can expand these before curl runs, allowing multiple transfers without an extra confirmation prompt.\n- .claude/hooks/pr_merge_status_guard.py:_api_write_requires_confirmation function body and URL token check | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: shlex default commenters=\"#\" hides URL-fragment trailing options.\n  WHY: A fragment can cause shlex to discard trailing options while Bash passes them to curl.\n- .claude/hooks/pr_merge_status_guard.py:_api_write_requires_confirmation function body | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The function returns False on shlex.ValueError for allowlisted API writes.\n  WHY: Unparseable commands can bypass the extra confirmation.\n- tests/test_pr_merge_status_guard.py:test_canonical_api_writes_do_not_request_extra_confirmation parameter list | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Canonical API-write tests include URLs with glob metacharacters.\n  WHY: Canonical tests should not include glob characters that the guard rejects.\n- tests/test_pr_merge_status_guard.py:test_noncanonical_api_writes_request_confirmation parameter list | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: There is no regression test covering the shlex.ValueError path for allowlisted API writes.\n  WHY: Missing coverage could allow unparseable commands to bypass confirmation.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The allowlist is described in the changelog as method-gated \u2014 'DELETE is deliberately not allowlisted: destroys keep the interactive prompt as a second gate' \u2014 but it is implemented as command-prefix matches on a positional curl flag.\n  expected_change_site: Hook logic and tests\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Hook logic still allows commands like `curl -q -sS -X PUT https://api.digitalocean.com/v2/droplets/id -X DELETE` to match the allowlist prefix and proceed without confirmation.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .claude/hooks/pr_merge_status_guard.py\n  Line or code reference: _api_write_requires_confirmation function body and URL token check\n  Problem: The guard treats URLs containing shell glob metacharacters (e.g., `*`, `?`, `[...]`, `~`) as safe, but Bash can expand these before curl runs. Because the harness allowlist is a prefix match on the raw command, a crafted glob expansion can rewrite the actual URL while still matching the allowlisted prefix.\n  Why it fails at runtime: Allowlisted write like `https://api.digitalocean.com/v2/apps/[1-10]` could expand into multiple transfers without triggering the extra confirmation prompt.\n  ISSUE_CONFIDENCE: 4\n- .claude/hooks/pr_merge_status_guard.py\n  Line or code reference: _api_write_requires_confirmation function body and URL token check\n  Problem: shlex default commenters=\"#\" hides URL-fragment trailing options. A command like `curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id#frag -X DELETE` previously hid `-X DELETE` from the guard while curl executed it.\n  Why it fails at runtime: Fragment causes shlex to discard trailing options as a comment, while Bash passes them to curl.\n  ISSUE_CONFIDENCE: 4\n- .claude/hooks/pr_merge_status_guard.py\n  Line or code reference: _api_write_requires_confirmation function body\n  Problem: The function returns False on shlex.ValueError for allowlisted API writes, which can let an unparseable (and potentially non-canonical) allowlisted API write bypass the extra confirmation.\n  Why it fails at runtime: Parse failures previously returned no confirmation, allowing unparseable commands to proceed without the restored harness prompt.\n  ISSUE_CONFIDENCE: 4\n- tests/test_pr_merge_status_guard.py\n  Line or code reference: test_canonical_api_writes_do_not_request_extra_confirmation parameter list\n  Problem: The \u201ccanonical API write\u201d tests include URLs with glob metacharacters (e.g., `?fields[]=...` and `*`). If the guard treats URL globbing as non-canonical (to avoid Bash rewriting the URL via glob expansion), these should move out of the canonical allowlist tests.\n  Why it fails at runtime: Canonical tests should not include glob characters that the guard now rejects.\n  ISSUE_CONFIDENCE: 4\n- tests/test_pr_merge_status_guard.py\n  Line or code reference: test_noncanonical_api_writes_request_confirmation parameter list\n  Problem: There\u2019s no regression test covering the shlex.ValueError path (e.g., unbalanced quotes) for allowlisted API writes.\n  Why it fails at runtime: Missing coverage could allow unparseable commands to bypass confirmation.\n  ISSUE_CONFIDENCE: 4\n- Requirement: The PR description states: \u201cThe allowlist is described in the changelog as method-gated \u2014 'DELETE is deliberately not allowlisted: destroys keep the interactive prompt as a second gate' \u2014 but it is implemented as command-prefix matches on a positional curl flag.\u201d\n  Expected change site: Hook logic and tests should ensure DELETE cannot be bypassed via command-prefix matching.\n  Evidence of absence: Hook logic still allows commands like `curl -q -sS -X PUT https://api.digitalocean.com/v2/droplets/id -X DELETE` to match the allowlist prefix and proceed without confirmation.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "db51126a91b42b72240ac2af0630615927b3db11c24c7a48a50472b1fb87a476",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3842,
+    "run_id": "33015375913",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33015375913",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260826223946_49480712af",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3842,
+    "run_id": "33015375913"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-26T22:39:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

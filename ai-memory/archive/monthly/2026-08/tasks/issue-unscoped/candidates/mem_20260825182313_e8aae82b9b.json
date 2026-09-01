@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:14528-14544 | severity=high | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The implementation-PR gate evaluates only the last cross-referenced PR, so a later mention-only PR can prevent adoption of an earlier genuine implementation PR.\n  WHY: If the genuine implementation PR is not the most recent cross-reference, PR_MERGED stays \"false\" and can stall project completion.\n- scripts/orchestrate_poll_process.sh:3173, 13588, 13661 | severity=high | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: validation_fix_issue_has_merged_pr_evidence() returns merged evidence for any merged cross-referenced PR without verifying that it is the issue's implementation PR, causing backfill_validation_fix_issue_merged_label() to apply ai:merged incorrectly.\n  WHY: A mention-only merged PR can flip FIX_IS_MERGED=true, leave a stale ai:merged label, and trigger recurring stale-label alerts.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:14528-14544 (label reconciliation), together with 2828-2840 (_issue_cross_ref_pr_number_last) | severity=MAJOR | confidence=3\n  PROBLEM: The new implementation-PR gate is applied only to the single PR returned by _issue_cross_ref_pr_number_last, which is the LAST cross-referenced PR of any kind.\n  WHY: If an issue's genuine implementation PR is not the most recent cross-reference, PR_MERGED stays \"false\" and that \"merged=false\" value flows into check-wave-status via --pr-states-json (line 14582), which can stall the project.\n  HARDENING_SUGGESTION: Reuse the sweep's all-candidates approach in the reconciliation path.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/orchestrate_poll_process.sh: validation_fix_issue_has_merged_pr_evidence() (defined line 3173), adopted by backfill_validation_fix_issue_merged_label() at the two validation fix-up call sites (lines 13588 and 13661) | severity=MAJOR | confidence=3\n  PROBLEM: This helper is a third consumer of the same untrusted cross-reference signal the PR's incident (issue #3817 / PR #3825) exposed.\n  WHY: Its jq filter at lines 3186-3197 selects on (.source.issue.merged == true) only, so a \"Refs #N\" mention-only merged PR can flip FIX_IS_MERGED=true and backfill ai:merged.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "f49b62939777c8fe148f0c9a2261063bbab658c8d0dfbd1de3bfde9a6ac699dc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32879542324",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32879542324",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260825182313_e8aae82b9b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "32879542324"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-25T18:23:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

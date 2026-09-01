@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_plan_auto_answer_recommended_parser.py:lines 432-451 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The assertion expects grep -c to produce \"4\", but the regex extracted from .github/workflows/clarify.yml:1029/1076 matches 7 lines because it does not exclude `> Reply:` lines.\n  WHY: `assert proc.stdout.strip() == \"4\"` fails at runtime, leaving the test count and `changelog.d/3939-plan-parser-blockquote-support.md:11` claim inaccurate.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_plan_auto_answer_recommended_parser.py:lines 432-451 | severity=MAJOR | confidence=5\n  PROBLEM: The assertion expects grep -c to produce \"4\" against the constructed body, but the regex `'^[[:space:]]*(>[[:space:]]*)*\\*?\\*?Q[0-9]+'` matches 7 lines, not 4.\n  WHY: The Q_COUNT regex has no Reply-line guard, so every `> Reply: \\`Q<N>: \u2026\\`` line matches and `assert proc.stdout.strip() == \"4\"` fails at runtime; `.github/workflows/clarify.yml:1029/1076` and `changelog.d/3939-plan-parser-blockquote-support.md:11` are implicated.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "0ccce7e7d05e5f7394ac13f73c706567c76a4e9958f9a59ab383de3a42ee269a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3939,
+    "run_id": "33392352095",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33392352095",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260831144529_5327a94e26",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3939,
+    "run_id": "33392352095"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-31T14:45:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

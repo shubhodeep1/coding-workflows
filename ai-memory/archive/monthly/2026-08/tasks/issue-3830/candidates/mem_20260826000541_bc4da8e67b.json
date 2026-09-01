@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3830,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3830\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3832\",\"pr_number\":3832,\"branch\":\"ai/issue-3830\",\"run_id\":\"32911489603\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/32911489603\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"scripts/openrouter_prompt_cache.py\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_orchestrate_poll_process.py\"]}",
+  "fingerprint": "7f02fcea1e93eed5744513426b4747e1023d5f1603ee6700a00e29f012ef88e3",
+  "lineage": {
+    "issue_number": 3830,
+    "parent_ids": [],
+    "pr_number": 3832,
+    "run_id": "32911489603",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32911489603",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3832"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260826000541_bc4da8e67b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3830,
+    "level": "run",
+    "pr_number": 3832,
+    "run_id": "32911489603"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3830: https://github.com/shubhodeep1/coding-workflows/pull/3832",
+  "timestamps": {
+    "created_at": "2026-08-26T00:05:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

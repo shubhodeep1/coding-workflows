@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3814,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3814\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3821\",\"pr_number\":3821,\"branch\":\"ai/issue-3814\",\"run_id\":\"32850369037\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/32850369037\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/implement.yml\",\"scripts/implement_handle_guard_block.sh\",\"tests/test_implement_post_codex_recovery.py\"]}",
+  "fingerprint": "7b06821579416490d5d80a4ba4702e4deeb7c8c5d0e081dcdd8d4ad6d54dade1",
+  "lineage": {
+    "issue_number": 3814,
+    "parent_ids": [],
+    "pr_number": 3821,
+    "run_id": "32850369037",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32850369037",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3821"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260825130741_4b6c6bee73",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3814,
+    "level": "run",
+    "pr_number": 3821,
+    "run_id": "32850369037"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3814: https://github.com/shubhodeep1/coding-workflows/pull/3821",
+  "timestamps": {
+    "created_at": "2026-08-25T13:07:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

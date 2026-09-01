@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_memory_lib.py:lines 3098 and 3207 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The two ai-memory fetch sites use unforced explicit remote-tracking refspecs, so a divergent local ref can cause the fetch to fail instead of refetching.\n  WHY: The second site treats fetch failure as fatal, aborting the retry loop; impact is bounded because memory writes fail open and never fail the workflow.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/ai_memory_lib.py:lines 3098 and 3207 | severity=low | confidence=3\n  PROBLEM: This PR establishes (from run 32891957030's `! [rejected] main -> origin/main (non-fast-forward)` hard failure) that explicit remote-tracking refspecs must carry the `+` force prefix, and adds it at every such refspec in scripts/ and workflows. The two ai-memory fetch sites were left unforced; the second one (the push-retry loop at ~3207) treats a failed fetch as fatal (`raise MemoryGitError(...)`), so a divergent local `refs/remotes/origin/ai-memory` ref aborts the retry loop instead of refetching.\n  WHY: Impact is bounded (memory writes fail open and never fail the workflow), so this is a consistency gap, not a blocker.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "bcac48428de06fb69a528bc4bd37853dd26e4f01a232d155a9bdc9855c9ed49c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32921327693",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32921327693",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260826022544_96aa41c77a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "32921327693"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-26T02:25:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

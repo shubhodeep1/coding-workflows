@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1631-1634 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3, mistralai_mistral-small-2603]\n  PROBLEM: The unconditional \"Install OpenCode CLI\" step can abort every codex-agent job when `opencode models --refresh` fails, including main-target PRs that do not use OpenCode.\n  WHY: The step has no `continue-on-error`, fallback, or `if:` gate, making models.dev or transient network failures fatal to the review pipeline.\n- tests/test_opencode_live_smoke_workflow.py:108 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3, mistralai_mistral-small-2603]\n  PROBLEM: The test function name still asserts \"opencode_free\" while its body permits four specific OpenCode install-step strings.\n  WHY: This is a clarity and maintainability gap only; the test passes correctly today.\n- changelog.d/3867-review-autofix-opencode-install.md:6 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The changelog entry inaccurately states that main-target PRs get an \"inert\" OpenCode install with \"no behaviour change\".\n  WHY: The installation step runs on every review_autofix.yml run regardless of target branch, misrepresenting the behavior change.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Inert for main-target PRs, whose scripts still invoke codex only\"\n  expected_change_site: PR description body (GitHub PR metadata, not a tracked file in the repo tree)\n  confidence=4\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR description in the prompt still contains the \"Inert for main-target PRs\" wording.\n- requirement: The PR description states the change should \"mirror the integration branch byte-for-byte so the eventual integration merge is a no-op for these hunks.\"\n  expected_change_site: .github/workflows/review_autofix.yml\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The PR diff shows the OpenCode installation step was added, but no corresponding change was made to ensure the step is conditional or gated for main-target PRs that don't need OpenCode.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml:1631-1634 | severity=high | confidence=4\n  PROBLEM: The \"Install OpenCode CLI\" step is unconditional and can fail the entire `codex-agent` job when `opencode models --refresh` encounters models.dev or network failure.\n  WHY: GitHub Actions aborts a job when an unhandled step exits non-zero.\n- tests/test_opencode_live_smoke_workflow.py:108 (function name `test_production_review_path_remains_opencode_free`) | severity=low | confidence=3\n  PROBLEM: The test function name suggests a stricter OpenCode-free invariant than its allowlist-based body enforces.\n  WHY: This is a clarity / maintainability gap; the test passes today.\n- TASK_GAP\n  Requirement: \"Inert for main-target PRs, whose scripts still invoke codex only\" (PR description body).\n  Expected change site: PR description body (GitHub PR metadata, not a tracked file in the repo tree).\n  Evidence of absence: The PR description in the prompt still contains the \"Inert for main-target PRs\" wording.\n  severity=low\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/review_autofix.yml:1631-1634 | confidence=5\n  PROBLEM: The unconditional \"Install OpenCode CLI\" step can abort every codex-agent job when `opencode models --refresh` fails, including main-target PRs that do not use OpenCode.\n  WHY: The step runs under `set -euo pipefail` without a fallback, `continue-on-error`, or `if:` gate, making models.dev or transient network failures fatal to the entire review pipeline.\n- tests/test_opencode_live_smoke_workflow.py:108-134 | severity=low | confidence=2\n  PROBLEM: The test function name still asserts \"opencode_free\" while its body permits four specific OpenCode install-step strings.\n  WHY: Not a runtime failure \u2014 the test passes correctly today; this is a clarity and maintainability gap only.\n- changelog.d/3867-review-autofix-opencode-install.md:6 | severity=high | confidence=5\n  PROBLEM: The changelog entry inaccurately states that main-target PRs get an \"inert\" OpenCode install with \"no behaviour change\".\n  WHY: The statement misrepresents the actual behavior change introduced by this PR.\n- TASK_GAP\n  Requirement: The PR description states the change should \"mirror the integration branch byte-for-byte so the eventual integration merge is a no-op for these hunks.\"\n  Expected change site: .github/workflows/review_autofix.yml\n  Evidence of absence: The PR diff shows the OpenCode installation step was added, but no corresponding change was made to ensure the step is conditional or gated for main-target PRs that don't need OpenCode.\n  severity=high\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "febd7d3eb969bdd85d1907901fadb9c2d00e3106bc47fbeb883035c87a26dd4b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3868,
+    "run_id": "33161617806",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33161617806",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260828110515_1717da6cf0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3868,
+    "run_id": "33161617806"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-28T11:05:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

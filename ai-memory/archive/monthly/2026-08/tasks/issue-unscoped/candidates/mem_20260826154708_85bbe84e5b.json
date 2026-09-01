@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:line ~183 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: Raw scans for `$(` and backticks request confirmation for literal characters inside single-quoted data arguments.\n  WHY: This causes redundant permission prompts for canonical, non-substituting API writes; the severity is low because it creates operator friction without a security bypass.\n\n- CLAUDE.md (and workflow-templates/CLAUDE.md):lines 885-886 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3]\n  PROBLEM: Documentation says `CLAUDE_PR_MERGE_GUARD=off` skips the guard entirely, although the API-write confirmation safeguard remains active.\n  WHY: Operators receive behavior contradicting the documented contract; severity disagreement exists, and the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The `CLAUDE_PR_MERGE_GUARD=off` escape hatch disables only the merged-PR check while the API-write confirmation safeguard remains active, and this corrected contract must be reflected in both documentation copies.\n  expected_change_site: CLAUDE.md line 885-886 and workflow-templates/CLAUDE.md line 885-886\n  confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603, qwen_qwen3_7-plus]\n  EVIDENCE: Both CLAUDE.md and workflow-templates/CLAUDE.md are unchanged in this PR diff; git diff ea97314^..ea97314 -- CLAUDE.md workflow-templates/CLAUDE.md shows zero hunks; no diff hunk updates the CLAUDE.md \u00a721 text; both files still say \u201cThe guard is skipped entirely...when CLAUDE_PR_MERGE_GUARD=off is set\u201d.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py\n  Line or code reference: _api_write_requires_confirmation, line ~183, `\"$(\" in command or \"\\`\" in command`\n  severity=NIT | confidence=2\n  PROBLEM: The raw-string substring scan for `$(` and backticks fires on literal `$(` or backticks inside single-quoted strings.\n  WHY: No data loss, no security bypass, no incorrect blocking \u2014 the function only requests a confirmation prompt, and the operator answers \"allow\".\n\n- TASK_GAP\n  Requirement: PR description declares changes are \"deliberately identical\" across `.claude/` and `workflow-templates/.claude/` copies of settings.json and hooks/pr_merge_status_guard.py, and the changelog states the behavioral change that `CLAUDE_PR_MERGE_GUARD=off` now \"disables only the merged-PR check\" while \"the API-write confirmation safeguard remains active.\"\n  Expected change site: CLAUDE.md and workflow-templates/CLAUDE.md, \u00a721 section\n  Evidence of absence: Both CLAUDE.md and workflow-templates/CLAUDE.md are unchanged in this PR diff.\n  severity=NIT | confidence=3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py\n  Line or code reference: _api_write_requires_confirmation, line ~183: if len(segments) != 1 or \"$(\" in command or \"`\" in command: return True\n  severity=NIT | confidence=4\n  PROBLEM: The substring scan over the raw command triggers confirmation for any literal $( or backtick character anywhere in the command string, including inside single-quoted -d '...' data arguments.\n  WHY: The hook emits a permissionDecision ask JSON for an actually-canonical, non-substituting allowlisted curl write.\n\n- CLAUDE.md (and workflow-templates/CLAUDE.md)\n  Line or code reference: lines 885-886: The guard is skipped entirely on the default branch, and when CLAUDE_PR_MERGE_GUARD=off is set (default: unset, i.e. enabled).\n  severity=MAJOR | confidence=5\n  PROBLEM: CLAUDE.md \u00a721.C still describes the env var as skipping the guard entirely.\n  WHY: An operator who reads CLAUDE.md and sets CLAUDE_PR_MERGE_GUARD=off to bypass the merged-PR check will still get the new permissionDecision ask for non-canonical allowlisted API writes.\n\n- TASK_GAP\n  Requirement: PR description states \"Two copies are updated, deliberately identical\" for settings.json and the PreToolUse hook, and the changelog says \"Both settings and hook pairs remain identical\".\n  Expected change site: CLAUDE.md line 885-886 and workflow-templates/CLAUDE.md line 885-886\n  Evidence of absence: git diff ea97314^..ea97314 -- CLAUDE.md workflow-templates/CLAUDE.md shows zero hunks.\n  severity=MAJOR | confidence=5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- TASK_GAP\n  Requirement: The PR description states \"Two copies are updated, deliberately identical\" for settings.json and hooks/pr_merge_status_guard.py under .claude/ and workflow-templates/.claude/. The CLAUDE.md documentation under both directories must reflect the updated behavior of the CLAUDE_PR_MERGE_GUARD escape hatch.\n  Expected change site: workflow-templates/CLAUDE.md and .claUDE.md\n  Evidence of absence: No diff hunk in workflow-templates/CLAUDE.md or .claude/CLAUDE.md updates the CLAUDE.md \u00a721 text that still says CLAUDE_PR_MERGE_GUARD=off \"disables the guard entirely\".\n  severity=MAJOR | confidence=4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- CLAUDE.md\n  Line or code reference: lines 885-886, \u00a721.C fail-open contract (\"The guard is skipped entirely on the default branch, and when `CLAUDE_PR_MERGE_GUARD=off` is set\")\n  severity=NIT | confidence=3\n  PROBLEM: CLAUDE.md \u00a721.C still tells operators the env var skips the guard entirely.\n  WHY: Operators following CLAUDE.md would believe they disabled the whole PreToolUse hook while the API-write confirmation check continues to run.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: The PR updated the hook's docstring in both `.claude/hooks/pr_merge_status_guard.py` and `workflow-templates/.claude/hooks/pr_merge_status_guard.py` to say: \"Escape hatch: set CLAUDE_PR_MERGE_GUARD=off to disable only the merged-PR check. The API-write confirmation safeguard remains active.\" This behavioral change to the guard's escape hatch should be reflected in the authoritative documentation.\n  Expected change site: `CLAUDE.md` line 885-886 and `workflow-templates/CLAUDE.md` line 885-886\n  Evidence of absence: Both `CLAUDE.md` and `workflow-templates/CLAUDE.md` still say \"The guard is skipped entirely on the default branch, and when `CLAUDE_PR_MERGE_GUARD=off` is set (default: unset, i.e. enabled).\" at line 885-886.\n  severity=NIT | confidence=3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "6e7818a718e7df253d8f20ae192a79230da7a4c4b30d8f8dd3ac1d8f122df4be",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3842,
+    "run_id": "32978817666",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32978817666",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260826154708_85bbe84e5b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3842,
+    "run_id": "32978817666"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-26T15:47:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

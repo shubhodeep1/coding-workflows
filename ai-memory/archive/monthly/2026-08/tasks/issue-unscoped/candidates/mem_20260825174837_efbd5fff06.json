@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- pr_check_runs_context.txt failed[0] | severity=low | confidence=1\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: One failed check-run entry exists on the PR head SHA, but its summary/title and log_tail are empty and cannot be mapped to the diff.\n  WHY: It does not fail at runtime; no failing test, lint, or script step is evidenced, and the source classified it as NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- pr_check_runs_context.txt failed[0] | severity=low | confidence=1\n  PROBLEM: One failed check-run entry exists on the PR head SHA, but its summary/title and log_tail are empty, and the sibling \"review / codex-agent\" in_progress entry is this current review run.\n  WHY: It does not \u2014 this is surfaced only because failed_count > 0 and the entry cannot be mapped to the diff; no failing test/lint/script step is evidenced.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "429e39c8cdee83573a350eead543398d23b88c6e1ec1fe67ea61936843178d06",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3819,
+    "run_id": "32872855337",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32872855337",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260825174837_efbd5fff06",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3819,
+    "run_id": "32872855337"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-08-25T17:48:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`  \nScope-mode justification: This is a surgical fixture update with an explicit single-file scope. Per \u00a76 priorities, correctness and backward compatibility are best served by changing only the requested canary file and preserving unrelated content.\n\n## Planning ref context\n- HEAD: `37e0180094362abceec5a0753bd98adcfd23e967`\n- Branch: `orchestrator/project-3790`\n- Integration branch metadata: `orchestrator/project-3790`\n- Integration branch mismatch: false\n\n## Clarification interpretation\n- No clarification questions were issued.\n- `/answer [auto-answered-by-orchestrator]` confirms planning may proceed.\n\n## Automation / wiring assessment\n- New script: no.\n- Existing script extended: no.\n- Scheduler / PR-push entry point: none; this is a static test fixture edit only.\n- Long-running supervisor: not required.\n- DB gate: not applicable.\n- Pending-removal registry entry: not applicable.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt` only.\n- Do not edit `tests/e2e_smoke_canary_b.txt` or any other file.\n\n## Functions or modules to implement\n- None.\n\n## Data structures affected\n- Plain-text canary fixture contents:\n  - Line 1 must remain exactly `status: ok`.\n  - Line 2 must become exactly `decompose-run: 32716299147`.\n  - Preserve unrelated existing lines, if any, unless acceptance checks require otherwise.\n\n## API/interface changes\n- None.\n\n## Decisions\n\n### D1 \u2014 Preserve single-file fixture scope\n- **Chosen:** Update only `tests/e2e_smoke_canary.txt`.\n- **Alternatives considered:** Also update sibling canary fixtures or normalize the whole file.\n- **Why:** The issue explicitly forbids editing `tests/e2e_smoke_canary_b.txt` or any other file, and unrelated reflow would violate the requested scope.\n\n### D2 \u2014 Replace only the required line values\n- **Chosen:** Ensure line 1 is `status: ok` and replace line 2 with `decompose-run: 32716299147`.\n- **Alternatives considered:** Rewrite the entire file from scratch.\n- **Why:** Minimal line-level editing satisfies acceptance criteria while reducing risk of unintended fixture changes.\n\n## Risks and edge cases\n- Current line 2 is `run_id: 26151428977`; implementation must replace the whole line, including the key name.\n- If the file has extra lines after line 2, do not alter them unless a verifier explicitly requires a two-line-only file.\n- Main scope risk is accidental modification of `tests/e2e_smoke_canary_b.txt`.\n\n## Testing considerations\n- Verify:\n  - `test -f tests/e2e_smoke_canary.txt`\n  - `sed -n '1p' tests/e2e_smoke_canary.txt` outputs exactly `status: ok`\n  - `sed -n '2p' tests/e2e_smoke_canary.txt` outputs exactly `decompose-run: 32716299147`\n- Check `git diff -- tests/e2e_smoke_canary.txt tests/e2e_smoke_canary_b.txt` confirms only the intended file changed.\n\n## Pre-execution self-check\n- Required input is complete.\n- Scope is explicit and limited to one file.\n- No external API, dependency, workflow, schema, or scheduler change is needed.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "523e5b8d6b97631717f56529f3e89d920936c1c2b25c0e1b963387f571c3e65c",
+  "lineage": {
+    "issue_number": 3791,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "32716699114",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32716699114",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3791"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260824102914_2bbfb84834",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3791,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "32716699114"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3791",
+  "timestamps": {
+    "created_at": "2026-08-24T10:29:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

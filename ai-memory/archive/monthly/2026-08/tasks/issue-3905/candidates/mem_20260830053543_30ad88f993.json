@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-3898` at `fbec387b6d8f7d5eba511d943edd0772a4690ec9`\n\nScope-mode: Hold Scope  \nReuse-audit: extends `Stage workflow support files` and its existing implement contract tests  \nScope-mode justification: Apply only the requested duplicate-loop removal and focused regression coverage. The required staging path already implements the complete behavior, so no refactor, wrapper change, or adjacent cleanup is warranted.\n\n## Automation wiring\n\n- Modify existing code only; introduce no new script.\n- Existing entry point remains `.github/workflows/internal-implement.yml`\u2019s `/approved` `issue_comment: created` trigger invoking `.github/workflows/implement.yml`.\n- No scheduler changes, supervisor, database operation, or removal-registry entry.\n- Do not modify workflow templates or wrappers.\n\n## Files likely to change\n\n- `.github/workflows/implement.yml`\n  - Remove only the stale optionality comments and duplicate `for f in render_prompt.py` loop around lines 907\u2013926.\n  - Preserve the required support-script list, including its current ordering.\n- `tests/test_implement_semble_contract.py`\n  - Extend the existing staging-step contract coverage with a focused single-required-path regression test.\n\n## Functions or modules to implement\n\n- In `Stage workflow support files`:\n  - Retain `render_prompt.py` in the required loop.\n  - Leave primary-ref lookup, main-snapshot fallback, required-file failure, `install -m 0755`, and `_fetched_scripts` append behavior unchanged.\n  - Remove the later duplicate optional loop entirely.\n- In the contract test:\n  - Extract the staging step using existing `_step_run_text`.\n  - Assert exactly one staging loop lists `render_prompt.py`.\n  - Assert that occurrence is the required loop.\n  - Assert the obsolete optional loop and optional-missing notice are absent.\n  - Pin required failure, fallback, executable installation, and `_fetched_scripts` behavior without relying on raw filename counts from unrelated comments.\n\n## Data structures affected\n\n- `_fetched_scripts`: `render_prompt.py` will be appended once rather than twice.\n- Generated consumer `scripts/.gitignore`: continues to contain the filename once through the unchanged array rendering.\n- No persisted schemas or payload formats change.\n\n## API/interface changes\n\n- No public API, input, environment variable, or workflow trigger changes.\n- Missing `render_prompt.py` remains a fatal required-support error after both support refs are checked.\n\nFailure modes:\n\n- **Both support refs lack the file:** existing required-support error terminates staging.\n- **Primary ref lacks the file:** unchanged fallback uses `.codex-workflow-src-main`.\n- **Required loop accidentally altered:** focused contract assertions fail in CI.\n\n## Decisions\n\n### D1 \u2014 Keep the existing required staging path\n\n- **Chosen:** Remove only the duplicate optional loop and retain the required-loop entry unchanged.\n- **Alternatives considered:** Make the file optional again or consolidate broader support staging.\n- **Why:** The acceptance criteria explicitly require hard failure, main fallback, ordering preservation, and no broader refactor.\n\n### D2 \u2014 Extend existing implement staging tests\n\n- **Chosen:** Add coverage to `tests/test_implement_semble_contract.py`.\n- **Alternatives considered:** Create a new standalone test module or exercise the entire workflow dynamically.\n- **Why:** This file already parses and contracts the same staging step, providing the smallest focused regression surface.\n\n## Risks and edge cases\n\n- Avoid removing `render_prompt.py` from the required list while deleting the duplicate block.\n- Avoid changing neighboring optional Serena, events, transcript, or Semble staging loops.\n- Count staging-loop membership rather than all textual filename mentions because unrelated comments reference `render_prompt.py`.\n- Conflict detection: none; the checked-out ref matches integration metadata and the duplicate block exists as described.\n\n## Testing considerations\n\n1. Run:\n   `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_semble_contract.py`\n2. Confirm YAML parsing succeeds through the test\u2019s existing workflow loader.\n3. Confirm the test pins:\n   - one required staging path;\n   - main-snapshot fallback;\n   - fatal missing-file behavior;\n   - executable mode;\n   - `_fetched_scripts` integration.\n4. Inspect the scoped diff to ensure only the two planned files changed.\n\n## Assumptions and missing context\n\n- No clarification questions were posed; the orchestrator auto-answer authorizes planning from the complete issue specification.\n- No external documentation or private scalar input is required.\n- No documentation or changelog update is needed for this internal dead-code cleanup.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d85109c507ab42e9d5354d05027798d6611fa2263284bcccc455e0450cd8babe",
+  "lineage": {
+    "issue_number": 3905,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33294878872",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33294878872",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3905"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260830053543_30ad88f993",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3905,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33294878872"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3905",
+  "timestamps": {
+    "created_at": "2026-08-30T05:35:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

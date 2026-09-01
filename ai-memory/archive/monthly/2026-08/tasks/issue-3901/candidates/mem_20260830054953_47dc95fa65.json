@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3901,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3901\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3912\",\"pr_number\":3912,\"branch\":\"ai/issue-3901\",\"run_id\":\"33295137252\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/33295137252\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/check_failure_triage.yml\",\".github/workflows/ci.yml\",\"README.md\",\"tests/test_check_failure_triage_workflow_security.py\"]}",
+  "fingerprint": "050f78e5a15120044c522dc16caeb5d8d93486592fb63bd381db4d66c5ebdd43",
+  "lineage": {
+    "issue_number": 3901,
+    "parent_ids": [],
+    "pr_number": 3912,
+    "run_id": "33295137252",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33295137252",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3912"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260830054953_47dc95fa65",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3901,
+    "level": "run",
+    "pr_number": 3912,
+    "run_id": "33295137252"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3901: https://github.com/shubhodeep1/coding-workflows/pull/3912",
+  "timestamps": {
+    "created_at": "2026-08-30T05:49:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

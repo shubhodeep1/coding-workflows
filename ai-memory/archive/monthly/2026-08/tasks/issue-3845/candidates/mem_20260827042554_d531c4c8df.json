@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Opencode cutover for review_autofix\",\"issues\":[{\"id\":\"p1-opencode-plumbing\",\"title\":\"P1: Add inert opencode plumbing and live-key smoke\",\"priority\":1},{\"id\":\"p2-opencode-read-side\",\"title\":\"P2: Cut review_autofix reviewers and summariser over to opencode\",\"priority\":2},{\"id\":\"p3-opencode-write-side\",\"title\":\"P3: Cut review_autofix writers over to opencode and remove its Codex runtime\",\"priority\":3}],\"dependency_edges\":[{\"from\":\"p1-opencode-plumbing\",\"to\":\"p2-opencode-read-side\"},{\"from\":\"p1-opencode-plumbing\",\"to\":\"p3-opencode-write-side\"},{\"from\":\"p2-opencode-read-side\",\"to\":\"p3-opencode-write-side\"}]}",
+  "fingerprint": "64dc3b238c038f4539c743a28ed7fa0ff526c7823b7bed46e03197a59708d973",
+  "lineage": {
+    "issue_number": 3845,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33039137194",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33039137194",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260827042554_d531c4c8df",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3845,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33039137194"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Opencode cutover for review_autofix' into 3 issues (tracking #3845)",
+  "timestamps": {
+    "created_at": "2026-08-27T04:25:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

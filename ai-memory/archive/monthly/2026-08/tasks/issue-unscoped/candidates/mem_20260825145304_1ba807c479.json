@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_editor_capacity_fallback_contract.py:72-82 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: The fallback contract test still reads .github/workflows/plan.yml for model-switching strings that were moved into scripts/run_plan_codex.sh.\n  WHY: python3 tests/test_editor_capacity_fallback_contract.py raises AssertionError in CI at .github/workflows/ci.yml line 500; all reviewers agree this is a BLOCKER.\n- .ai/.workspace_source_manifest.txt: entire file | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The regenerated manifest omits scripts/run_plan_codex.sh.\n  WHY: The tree and manifest are inconsistent, potentially impairing future manifest-driven audits or regeneration checks; severity was reported as NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a contract test that compares the extracted prompt/runtime behavior against the pre-extraction workflow contract and asserts the YAML step remains safely below the expression limit.\"\n  expected_change_site: tests/test_plan_codex_step_extraction.py (present) AND existing contract tests that asserted against plan.yml prompt content (must be retargeted)\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: tests/test_editor_capacity_fallback_contract.py::test_plan_loop_switches_model_on_final_attempt still asserts model-switching strings against plan.yml where they no longer exist.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_editor_capacity_fallback_contract.py: test_plan_loop_switches_model_on_final_attempt (lines 72-82) \u2014 the test reads PLAN (.github/workflows/plan.yml) and asserts four strings: attempt_model=\"${MODEL_EDITOR}\", the final-attempt guard [ \"${attempt}\" -eq \"${max_attempts}\" ] && [ -n \"${MODEL_EDITOR_FALLBACK:-}\" ], attempt_model=\"${MODEL_EDITOR_FALLBACK}\", and --model \"${attempt_model}\" | severity=critical | confidence=5\n  PROBLEM: All four strings were moved into scripts/run_plan_codex.sh; plan.yml no longer contains any of them.\n  WHY: The test raises AssertionError in CI at .github/workflows/ci.yml:500 and must be updated to verify run_plan_codex.sh.\n- .ai/.workspace_source_manifest.txt: entire file | severity=low | confidence=3\n  PROBLEM: The regenerated manifest omits scripts/run_plan_codex.sh.\n  WHY: Future regenerate-and-compare checks or manifest-driven tooling may flag the mismatch or miss the file entirely.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_editor_capacity_fallback_contract.py: 72 (function `test_plan_loop_switches_model_on_final_attempt`) | severity=critical | confidence=5\n  PROBLEM: The test reads plan.yml and asserts model-switching fallback code that this PR extracted into scripts/run_plan_codex.sh.\n  WHY: CI runs python3 tests/test_editor_capacity_fallback_contract.py at ci.yml line 500, where the assertion fails.\n- .ai/.workspace_source_manifest.txt: run_plan_codex.sh does not appear in the manifest | severity=low | confidence=3\n  PROBLEM: scripts/run_plan_codex.sh is absent from the workspace source manifest.\n  WHY: This is a NIT-level audit/tool inconsistency and does not cause runtime failure.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- tests/test_editor_capacity_fallback_contract.py: lines 72-82, function test_plan_loop_switches_model_on_final_attempt | severity=critical | confidence=5\n  PROBLEM: The test still reads .github/workflows/plan.yml and asserts fallback strings moved into scripts/run_plan_codex.sh.\n  WHY: The test raises AssertionError at line 74 and CI runs it at .github/workflows/ci.yml line 500.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_editor_capacity_fallback_contract.py: test_plan_loop_switches_model_on_final_attempt (lines 72-82) | severity=critical | confidence=5\n  PROBLEM: The test reads `.github/workflows/plan.yml` and asserts strings moved into `scripts/run_plan_codex.sh`.\n  WHY: The test raises AssertionError when CI runs it at `.github/workflows/ci.yml:500`-area step.\n- .ai/.workspace_source_manifest.txt: around line 409 (between scripts/run_validation_repo_checks.sh and scripts/run_workspace_hook.sh) | severity=low | confidence=4\n  PROBLEM: The manifest omits `scripts/run_plan_codex.sh`.\n  WHY: Future regenerate-and-compare checks or audits will see an inconsistency between the tree and the manifest.\n- TASK_GAP\n  Requirement: \"Add a contract test that compares the extracted prompt/runtime behavior against the pre-extraction workflow contract and asserts the YAML step remains safely below the expression limit.\"\n  Expected change site: tests/test_plan_codex_step_extraction.py (present) AND existing contract tests that asserted against plan.yml prompt content (must be retargeted)\n  Evidence of absence: The new test file `tests/test_plan_codex_step_extraction.py` covers the extraction contract correctly. However, the existing `tests/test_editor_capacity_fallback_contract.py::test_plan_loop_switches_model_on_final_attempt` was NOT retargeted to `scripts/run_plan_codex.sh` \u2014 it still asserts model-switching strings against `plan.yml` where they no longer exist. This is a completeness gap: the extraction moved behavior out of plan.yml but left a dependent contract test pointing at the old location, breaking CI.\n  SEVERITY: critical\n  ISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- tests/test_editor_capacity_fallback_contract.py: test_plan_loop_switches_model_on_final_attempt, lines 72-82 | severity=critical | confidence=5\n  PROBLEM: This contract still reads .github/workflows/plan.yml for model-switching strings now located in scripts/run_plan_codex.sh.\n  WHY: python3 tests/test_editor_capacity_fallback_contract.py raises AssertionError on line 74, causing the CI job at .github/workflows/ci.yml line 500 to fail.\n\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "1e3e6366943a21ff5bf3ddfd00625b0188505527183c4b3eea7d9e14d6304add",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3822,
+    "run_id": "32851471199",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "32851471199",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260825145304_1ba807c479",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3822,
+    "run_id": "32851471199"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-08-25T14:53:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
