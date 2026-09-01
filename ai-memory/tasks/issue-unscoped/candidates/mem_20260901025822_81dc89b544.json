@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_workflow_contract.py:83 | severity=low | confidence=5\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: Copilot review comment entry[3] suggests renaming this test because it still says \"dark_launch\" while the default is now on.\n  WHY: No runtime failure; the test passes with the updated assertion, and renaming the existing test identifier is prohibited without explicit instruction.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"In README.md, update the Phase 3 append-only orchestrator security-pass bullet and variable documentation from flagged/default-off wording to default-on wording.\"\n  expected_change_site: README.md line ~1465 (step 15 \"Completion\" section)\n  confidence=3\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The diff updates this line, but the revised wording \"When validation is disabled, completion follows a successful default-on SHA-bound security pass\" is ambiguous; it reads as if the security pass is always required when validation is disabled, rather than being the default behavior. The second sentence clarifies the kill switch, but the first sentence's subject (\"completion\") grammatically requires the security pass rather than describing it as the default path. Copilot review comment entry[4] flagged this exact ambiguity.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_orchestrate_poll_workflow_contract.py\n  Line or code reference: line 83, function `test_security_pass_dark_launch_env_and_assets_are_wired`\n  Problem: Copilot review comment entry[3] suggests renaming this test because it still says \"dark_launch\" while the default is now on. The previous editor correctly rejected this rename. Per CLAUDE.md \u00a76, renaming existing identifiers (including test function names) is a breaking change requiring the \u00a72 ask flow. The test name is an internal identifier that may be referenced by CI tooling, test selectors, or external dashboards. The assertion body correctly validates the new default-on behavior (`|| 'true'`), so the test's runtime contract is accurate regardless of its name.\n  Why it fails at runtime: No runtime failure. The test passes with the updated assertion. This is a naming preference, not a correctness defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5 (certain the rename is prohibited by \u00a76 and was already correctly rejected)\n- Requirement: \"In README.md, update the Phase 3 append-only orchestrator security-pass bullet and variable documentation from flagged/default-off wording to default-on wording.\"\n  Expected change site: README.md line ~1465 (step 15 \"Completion\" section)\n  Evidence of absence: The diff updates this line, but the revised wording \"When validation is disabled, completion follows a successful default-on SHA-bound security pass\" is ambiguous \u2014 it reads as if the security pass is always required when validation is disabled, rather than being the default behavior. The second sentence clarifies the kill switch, but the first sentence's subject (\"completion\") grammatically requires the security pass rather than describing it as the default path. Copilot review comment entry[4] flagged this exact ambiguity.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3 (likely clarity issue; the kill switch is documented in the next sentence, but the primary sentence could mislead readers into thinking the security pass is unconditionally required when validation is off)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "d48c3dadb3c9897956ac3027cc6312ceac2dd0002b1653ab5b917fd5cd72bcda",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3946,
+    "run_id": "33460110968",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33460110968",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260901025822_81dc89b544",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3946,
+    "run_id": "33460110968"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-01T02:58:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
