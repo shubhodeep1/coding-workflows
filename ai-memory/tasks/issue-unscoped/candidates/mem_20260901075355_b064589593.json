@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:4367-4384 | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new REST scan uses `gh api --paginate` with `per_page=100` and has no pagination cap.\n  WHY: A repo with tens of thousands of orchestrator-managed issues could trigger a long paginated burst, although correctness is preserved and such scale is rare.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:4367-4384 | confidence=2\n  PROBLEM: The new REST scan uses `gh api --paginate` with `per_page=100` and a per-page page-size field captured in the mock; pagination is not capped.\n  WHY: Burst size is bounded by GitHub pagination response times, not by any in-script budget. For a typical orchestrator workspace (single-digit to low-double-digit managed issues per repo), this is fine; the test fixture exercises page-three adoption with 201 decoys + 1 real, so correctness on real data is verified at low-mid scale.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- File: scripts/orchestrate_poll_process.sh\n  Location: line 4387 (reuse branch of create_security_pass_fix_issue)\n  Issue: The reuse/recovery branch emits only a plain free-text echo (\"Security-pass fix issue #N already exists ... reusing it\"), while the create branch emits the contractual stable marker SECURITY_PASS_FIX_ISSUE_CREATED. The reuse path is precisely the lost-checkpoint recovery scenario this PR instruments, but it is invisible to the grep-based workflow-log-analysis tooling that audits security-pass behavior via the stable prefix registry.\n  Suggested minimal fix: Add one line in the reuse branch emitting a stable-prefixed line, e.g. echo \"SECURITY_PASS_FIX_ISSUE_REUSED tracking_issue=${TRACKING_NUM} issue=${issue_number} cycle=$((completed_cycles + 1))\", and register the new prefix in the agents.md stable-log-prefix list in the same change (new identifiers are additive, so \u00a76 is honored).\n  Estimated lines changed: 2\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "42504ea85da91974655f530fe5c977047304eb3eeb8b9517c6c655fde7bf3a81",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3950,
+    "run_id": "33478328895",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33478328895",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260901075355_b064589593",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3950,
+    "run_id": "33478328895"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-01T07:53:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
