@@ -4376,7 +4376,6 @@ The security pass still reports ${finding_count} blocking finding(s) after ${com
 Manual intervention is required. After addressing the findings, comment \`/re-security-pass\` to reset the bounded fix loop."
   set_failed_completion_status_comment \
     "The project security pass still reports ${finding_count} blocking finding(s) after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} completed fix cycle(s). Manual intervention is required; use \`/re-security-pass\` after addressing the findings."
-  tg_cleanup_msgs "${TRACKING_NUM}"
   tg_notify "Project #${TRACKING_NUM} security pass FAILED after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} fix cycles with ${finding_count} finding(s) remaining. Manual intervention required." "CRITICAL"
 }
 
