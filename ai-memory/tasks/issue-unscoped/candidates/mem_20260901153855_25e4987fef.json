@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:913-934 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The Telegram mock in `_run_poller` creates a second cleanup marker comment instead of appending to an existing marker comment\n  WHY: The mock behavior diverges from production where `tg_store_msg_id` mutates the existing cleanup marker by appending message IDs, causing tests to validate incorrect behavior and potentially produce false negatives\n- tests/test_orchestrate_poll_process.py:3436-3440 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The assertion in `test_security_pass_cycle_exhaustion_terminalizes_project` expects the prior alert marker to remain byte-for-byte unchanged\n  WHY: Production behavior appends the terminal message ID to the existing cleanup marker comment rather than creating a separate comment, so the test assertion shape doesn't match production and would fail even when the intended behavior (preserving history) is correct\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a regression test covering cycle exhaustion and confirm prior tracked alerts remain available for diagnosis.\"\n  expected_change_site: tests/test_orchestrate_poll_process.py should contain assertions verifying that prior tracked alerts are preserved on cycle exhaustion\n  confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The test `test_security_pass_cycle_exhaustion_terminalizes_project` exists but its assertions don't properly verify prior alert preservation due to the mock/assertion mismatch described above\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_orchestrate_poll_process.py\n  Line: 913-934\n  Problem: The Telegram mock in `_run_poller` creates a second cleanup marker comment instead of appending to an existing marker comment\n  Why it fails at runtime: The mock behavior diverges from production where `tg_store_msg_id` mutates the existing cleanup marker by appending message IDs, causing tests to validate incorrect behavior and potentially produce false negatives\n  ISSUE_CONFIDENCE: 5\n- tests/test_orchestrate_poll_process.py\n  Line: 3436-3440\n  Problem: The assertion in `test_security_pass_cycle_exhaustion_terminalizes_project` expects the prior alert marker to remain byte-for-byte unchanged\n  Why it fails at runtime: Production behavior appends the terminal message ID to the existing cleanup marker comment rather than creating a separate comment, so the test assertion shape doesn't match production and would fail even when the intended behavior (preserving history) is correct\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"Add a regression test covering cycle exhaustion and confirm prior tracked alerts remain available for diagnosis.\"\n  Expected change site: tests/test_orchestrate_poll_process.py should contain assertions verifying that prior tracked alerts are preserved on cycle exhaustion\n  Evidence of absence: The test `test_security_pass_cycle_exhaustion_terminalizes_project` exists but its assertions don't properly verify prior alert preservation due to the mock/assertion mismatch described above\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "0d88cfd1056390be1a4347dd3a694a6c658c68bb507c8ba38800ce470c12a0a2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3955,
+    "run_id": "33519101868",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33519101868",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260901153855_25e4987fef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3955,
+    "run_id": "33519101868"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-01T15:38:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
