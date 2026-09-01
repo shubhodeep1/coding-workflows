@@ -4689,6 +4689,10 @@ ensure_security_pass_before_completion() {
   current_integration_ref=""
   if [ -n "${integration_branch}" ]; then
     if ! git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+      if integration_branch_exists "${integration_branch}"; then
+        security_pass_fail_closed "engine_unavailable" "The integration head could not be refreshed before checking pass validity." "$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
+        return 1
+      fi
       if [ -z "${final_pr_json}" ]; then
         final_pr_number="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
         if [[ "${final_pr_number}" =~ ^[0-9]+$ ]]; then

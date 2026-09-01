@@ -3367,6 +3367,43 @@ def test_security_pass_external_finalize_uses_verified_pr_head_when_integration_
 	assert result["git_fetch_calls"]["refs/pull/395/head:refs/orchestrator/security-pass/pr-395-head"] == 2
 
 
+def test_security_pass_external_finalize_fails_closed_on_transient_integration_fetch_error() -> None:
+	final_pr = {
+		"number": 395,
+		"state": "closed",
+		"merged": True,
+		"baseRefName": "main",
+		"headRefName": "orchestrator/project-192",
+		"headSha": "__integration_head__",
+	}
+	state = _base_state()
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"final_merge_pr": 395,
+			"final_merge_status": "pending",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		prs=[final_pr],
+		existing_branches=["main", "orchestrator/project-192"],
+		missing_git_branch_fetches=["orchestrator/project-192"],
+		pull_ref_shas={395: "__integration_head__"},
+	)
+
+	assert result["latest_state"]["status"] == "security-pass"
+	assert result["latest_state"]["security_pass_status"] == "failed"
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	assert result["security_audit_capture"] is None
+	assert "refs/pull/395/head:refs/orchestrator/security-pass/pr-395-head" not in result["git_fetch_calls"]
+
+
 def test_security_pass_merge_conflict_route_blocks_then_clean_pass_completes() -> None:
 	final_pr = {
 		"number": 396,

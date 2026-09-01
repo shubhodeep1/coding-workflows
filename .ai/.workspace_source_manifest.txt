@@ -157,6 +157,7 @@ changelog.d/3902-secure-workflow-shell-inputs.md
 changelog.d/3903-changelog-only-notification.md
 changelog.d/3909-deterministic-manifest-conflict-resolution.md
 changelog.d/3939-plan-parser-blockquote-support.md
+changelog.d/3947-security-pass-deleted-branch-recovery.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/deploy-activate-digitalocean-steps.md
