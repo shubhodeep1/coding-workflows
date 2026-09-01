@@ -4359,7 +4359,7 @@ create_security_pass_fix_issue() {
   local completed_cycles="$2"
   local integration_branch="$3"
   local issue_body_file issue_url issue_number local_id security_pass_fix_action
-  local security_pass_managed_issues_pages_file
+  local security_pass_managed_issues_pages_file security_pass_managed_issues_jq_error_file
 
   issue_body_file="${RUNTIME_DIR}/security_pass_fix_${TRACKING_NUM}_${completed_cycles}.md"
   local_id="security-pass-fix-cycle-$((completed_cycles + 1))"
@@ -4446,6 +4446,8 @@ PY
     echo "::warning::Could not verify whether security-pass fix issue ${local_id} already exists (managed-issue lookup returned no page data); skipping creation to avoid a duplicate. Will retry next poll."
     return 1
   fi
+  security_pass_managed_issues_jq_error_file="${RUNTIME_DIR}/security_pass_managed_issues_${TRACKING_NUM}_${completed_cycles}.jq.err"
+  rm -f "${security_pass_managed_issues_jq_error_file}"
   if ! issue_number="$(jq -sr \
     --arg tracking_marker "- Tracking issue: #${TRACKING_NUM}" \
     --arg local_id_marker "- Local ID: \`${local_id}\`" '
@@ -4463,12 +4465,13 @@ PY
           | select(type == "number" and . > 0)
         ][0] // empty
       end
-    ' "${security_pass_managed_issues_pages_file}" 2>/dev/null)"; then
+    ' "${security_pass_managed_issues_pages_file}" 2>"${security_pass_managed_issues_jq_error_file}")"; then
     rm -f "${security_pass_managed_issues_pages_file}"
-    echo "::warning::Could not verify whether security-pass fix issue ${local_id} already exists (managed-issue pagination output was invalid); skipping creation to avoid a duplicate. Will retry next poll."
+    echo "::warning::Could not verify whether security-pass fix issue ${local_id} already exists (managed-issue pagination output was invalid: $(head -n1 "${security_pass_managed_issues_jq_error_file}" 2>/dev/null || true)); skipping creation to avoid a duplicate. Will retry next poll."
+    rm -f "${security_pass_managed_issues_jq_error_file}"
     return 1
   fi
-  rm -f "${security_pass_managed_issues_pages_file}"
+  rm -f "${security_pass_managed_issues_pages_file}" "${security_pass_managed_issues_jq_error_file}"
   if [[ "${issue_number}" =~ ^[0-9]+$ ]]; then
     security_pass_fix_action="reused existing consolidated fix issue"
     echo "Security-pass fix issue #${issue_number} already exists for cycle $((completed_cycles + 1)); reusing it"
