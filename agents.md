@@ -376,7 +376,12 @@ Setting `ENABLE_SECURITY_PASS=false` remains the immediate operator kill switch.
 If an externally merged final PR has already deleted its integration branch,
 the only permitted analysis fallback is that PR's verified immutable head SHA;
 an unavailable or mismatched PR head fails closed and never substitutes the
-default-branch HEAD.
+default-branch HEAD. If that audit returns findings, the poller recreates the
+still-absent integration branch at exactly the verified PR-head SHA, accepts a
+create race only when the authoritative branch SHA matches, and clears stale
+final-delivery state before creating the fix issue. The repair then advances
+the branch that the next security pass audits, and the existing finalizer opens
+a replacement delivery PR; unknown or mismatched branch state fails closed.
 
 The completion-status comment is updated from three call sites:
 

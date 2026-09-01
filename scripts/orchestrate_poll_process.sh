@@ -4137,7 +4137,10 @@ prepare_tracking_judge_checkout() {
       checkout_succeeded="true"
     fi
   elif target_ref="$(resolve_branch_analysis_ref "${target_branch}")"; then
-    if git checkout -q "${target_branch}" >/dev/null 2>&1 || git checkout -q "${target_ref}" >/dev/null 2>&1; then
+    # Prefer the resolved ref because a successful fetch can advance the
+    # remote-tracking integration head while a same-named local branch remains
+    # stale. Fall back to the branch name only when no detached checkout works.
+    if git checkout -q "${target_ref}" >/dev/null 2>&1 || git checkout -q "${target_branch}" >/dev/null 2>&1; then
       checkout_succeeded="true"
     fi
   else
@@ -4240,6 +4243,49 @@ prepare_security_pass_final_pr_head() {
     SECURITY_PASS_VERIFIED_PR_REF="${metadata_head_sha}"
   fi
   SECURITY_PASS_VERIFIED_PR_SHA="${metadata_head_sha}"
+  return 0
+}
+
+ensure_security_pass_repair_branch() {
+  local integration_branch="$1"
+  local expected_head_sha="$2"
+  local create_error=""
+  local verified_branch_sha=""
+
+  [ -n "${integration_branch}" ] || return 1
+  [[ "${expected_head_sha}" =~ ^[0-9A-Fa-f]{40}$ ]] || return 1
+
+  # The branch-rebuild POST path was audited, but it is destructive and targets
+  # the default head. This recovery needs a separate create-only call at the
+  # verified immutable PR head; _branch_head_sha provides the shared GET check.
+  if ! create_error="$(gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+    -f ref="refs/heads/${integration_branch}" \
+    -f sha="${expected_head_sha}" 2>&1 >/dev/null)"; then
+    echo "  [security-pass] Integration branch create returned an error; verifying whether an exact-SHA race winner exists." >&2
+  fi
+
+  verified_branch_sha="$(_branch_head_sha "${integration_branch}" || true)"
+  if [ "${verified_branch_sha}" != "${expected_head_sha}" ]; then
+    if [ -n "${create_error}" ]; then
+      echo "::warning::Security-pass repair branch '${integration_branch}' was not verified at the audited head after create failed: ${create_error}" >&2
+    else
+      echo "::warning::Security-pass repair branch '${integration_branch}' did not resolve to the audited head after creation." >&2
+    fi
+    return 1
+  fi
+
+  if ! jq '
+    .final_merge_pr = null
+    | .final_merge_status = "pending"
+    | .final_merge_attempt_count = 0
+    | .final_merge_error = ""
+    | .final_merge_ineligible_blocked_at_sha = ""
+    | .final_merge_ineligible_first_blocked_at_utc = 0
+    | .final_merge_ineligible_alert_sent_for_sha = ""
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    return 1
+  fi
+  echo "  [security-pass] Recreated integration branch '${integration_branch}' at verified final-PR head ${expected_head_sha}; stale final-delivery state cleared."
   return 0
 }
 
@@ -4713,6 +4759,11 @@ run_security_pass_inline() {
   echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} findings=${finding_count} cycle=${completed_cycles}"
   if [ "${completed_cycles}" -ge "${MAX_SECURITY_PASS_CYCLES}" ]; then
     security_pass_terminal_failure "${current_head_sha}" "${finding_count}" "${completed_cycles}"
+    return 1
+  fi
+  if [ -n "${verified_analysis_ref}" ] \
+    && ! ensure_security_pass_repair_branch "${integration_branch}" "${current_head_sha}"; then
+    security_pass_fail_closed "repair_branch_recreate_failed" "The deleted integration branch could not be recreated and verified at the audited final-PR head." "${prior_security_status}"
     return 1
   fi
   if ! create_security_pass_fix_issue "${findings_file}" "${completed_cycles}" "${integration_branch}"; then
