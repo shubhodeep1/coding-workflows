@@ -913,13 +913,22 @@ def _run_poller(
 					'tracked_store = json.loads(tracked_store_path.read_text(encoding="utf-8"))\n'
 					'tracked_issue = tracked_store["issues"][sys.argv[2]]\n'
 					'tracked_comment_id = int(tracked_store.get("next_comment_id", 1))\n'
-					'tracked_issue["comments"].append({\n'
-					'\t"id": tracked_comment_id,\n'
-					'\t"body": f"<!-- tg_cleanup:{tracked_comment_id} -->",\n'
-					'\t"created_at": "2026-01-01T00:00:00Z",\n'
-					'\t"html_url": f"https://github.com/owner/repo/issues/{sys.argv[2]}#issuecomment-{tracked_comment_id}",\n'
-					'\t"user": {"login": "github-actions[bot]"},\n'
-					'})\n'
+					'tracked_marker_comment = next((\n'
+					'\ttracked_comment for tracked_comment in tracked_issue["comments"]\n'
+					'\tif "<!-- tg_cleanup:" in tracked_comment.get("body", "")\n'
+					'), None)\n'
+					'if tracked_marker_comment is not None:\n'
+					'\ttracked_marker_comment["body"] = tracked_marker_comment["body"].replace(\n'
+					'\t\t" -->", f",{tracked_comment_id} -->", 1\n'
+					'\t)\n'
+					'else:\n'
+					'\ttracked_issue["comments"].append({\n'
+					'\t\t"id": tracked_comment_id,\n'
+					'\t\t"body": f"<!-- tg_cleanup:{tracked_comment_id} -->",\n'
+					'\t\t"created_at": "2026-01-01T00:00:00Z",\n'
+					'\t\t"html_url": f"https://github.com/owner/repo/issues/{sys.argv[2]}#issuecomment-{tracked_comment_id}",\n'
+					'\t\t"user": {"login": "github-actions[bot]"},\n'
+					'\t})\n'
 					'tracked_store["next_comment_id"] = tracked_comment_id + 1\n'
 					'tracked_store_path.write_text(json.dumps(tracked_store), encoding="utf-8")\n'
 					'PY\n'
@@ -3427,9 +3436,8 @@ def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
 	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" in result["stdout"] + result["stderr"]
 	assert result["telegram_cleanup_calls"] == []
 	tracking_comment_bodies = [comment["body"] for comment in result["issues"]["192"]["comments"]]
-	assert prior_alert_marker in tracking_comment_bodies
 	assert any(
-		comment_body.startswith("<!-- tg_cleanup:") and comment_body != prior_alert_marker
+		comment_body.startswith(f"{prior_alert_marker[:-4]},") and comment_body.endswith(" -->")
 		for comment_body in tracking_comment_bodies
 	)
 	assert any(
