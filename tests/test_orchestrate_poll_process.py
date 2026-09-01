@@ -721,6 +721,7 @@ def _run_poller(
 	mock_branch_rebuild_audit_put_json: dict | None = None,
 	branch_protected_branches: dict[str, bool] | None = None,
 	branch_ref_shas: dict[str, str] | None = None,
+	branch_create_race_shas: dict[str, str] | None = None,
 	mock_git_fetch_fail_after: dict[str, int] | None = None,
 	missing_git_branch_fetches: list[str] | None = None,
 	pull_ref_shas: dict[int, str] | None = None,
@@ -807,6 +808,7 @@ def _run_poller(
 	mock_branch_rebuild_audit_put_json = mock_branch_rebuild_audit_put_json or {}
 	branch_protected_branches = branch_protected_branches or {}
 	branch_ref_shas = branch_ref_shas or {}
+	branch_create_race_shas = branch_create_race_shas or {}
 	mock_git_fetch_fail_after = mock_git_fetch_fail_after or {}
 	missing_git_branch_fetches = missing_git_branch_fetches or []
 	pull_ref_shas = pull_ref_shas or {}
@@ -847,6 +849,24 @@ def _run_poller(
 				env=_git_test_env(),
 			).stdout.strip(),
 		}
+		integration_head_sha = sandbox_sha_aliases["__integration_head__"]
+		integration_tree_sha = subprocess.run(
+			["git", "-C", str(sandbox), "rev-parse", f"{integration_head_sha}^{{tree}}"],
+			check=True,
+			capture_output=True,
+			text=True,
+			env=_git_test_env(),
+		).stdout.strip()
+		sandbox_sha_aliases["__advanced_integration_head__"] = subprocess.run(
+			[
+				"git", "-C", str(sandbox), "commit-tree", integration_tree_sha,
+				"-p", integration_head_sha, "-m", "advanced integration head",
+			],
+			check=True,
+			capture_output=True,
+			text=True,
+			env=_git_test_env(),
+		).stdout.strip()
 
 		def _resolve_sandbox_sha_alias(raw_sha: str) -> str:
 			return sandbox_sha_aliases.get(str(raw_sha), str(raw_sha))
@@ -1000,7 +1020,14 @@ def _run_poller(
 			"mock_branch_rebuild_audit_get_json": mock_branch_rebuild_audit_get_json,
 			"mock_branch_rebuild_audit_put_json": mock_branch_rebuild_audit_put_json,
 			"branch_protected_branches": {str(k): bool(v) for k, v in branch_protected_branches.items()},
-			"branch_ref_shas": {str(k): str(v) for k, v in branch_ref_shas.items()},
+			"branch_ref_shas": {
+				str(k): _resolve_sandbox_sha_alias(str(v))
+				for k, v in branch_ref_shas.items()
+			},
+			"branch_create_race_shas": {
+				str(k): _resolve_sandbox_sha_alias(str(v))
+				for k, v in branch_create_race_shas.items()
+			},
 			"mock_git_fetch_fail_after": {str(k): int(v) for k, v in mock_git_fetch_fail_after.items()},
 			"missing_git_branch_fetches": [str(branch) for branch in missing_git_branch_fetches],
 			"pull_ref_shas": resolved_pull_ref_shas,
@@ -2128,10 +2155,20 @@ if args[0] == 'api':
 			print('bad ref', file=sys.stderr)
 			sys.exit(1)
 		known_branches = [str(item) for item in store.get('existing_branches', ['main'])]
-		if branch not in known_branches:
-			known_branches.append(branch)
-		store['existing_branches'] = known_branches
 		branch_shas = dict(store.get('branch_ref_shas', {}))
+		race_sha = store.get('branch_create_race_shas', {}).get(branch)
+		if race_sha and branch not in known_branches:
+			known_branches.append(branch)
+			branch_shas[branch] = race_sha
+		store.setdefault('branch_create_calls', []).append({'branch': branch, 'sha': sha})
+		if branch in known_branches:
+			store['existing_branches'] = known_branches
+			store['branch_ref_shas'] = branch_shas
+			save()
+			print('Reference already exists', file=sys.stderr)
+			sys.exit(1)
+		known_branches.append(branch)
+		store['existing_branches'] = known_branches
 		branch_shas[branch] = sha or 'mocksha'
 		store['branch_ref_shas'] = branch_shas
 		store.setdefault('created_branches', []).append({'branch': branch, 'sha': sha or 'mocksha'})
@@ -2436,7 +2473,12 @@ if args and args[0] == 'fetch':
 			)
 			if src_branch == dst_branch:
 				if src_branch in known_branches:
-					head_rev = subprocess.run([real_git, 'rev-parse', f'refs/heads/{src_branch}'], capture_output=True, text=True)
+					configured_sha = str(store.get('branch_ref_shas', {}).get(src_branch, ''))
+					head_rev = subprocess.run([real_git, 'rev-parse', f'{configured_sha}^{{commit}}'], capture_output=True, text=True) if configured_sha else subprocess.CompletedProcess([], 1, '', '')
+					if head_rev.returncode == 0:
+						head_rev = subprocess.CompletedProcess([], 0, configured_sha + '\n', '')
+					else:
+						head_rev = subprocess.run([real_git, 'rev-parse', f'refs/heads/{src_branch}'], capture_output=True, text=True)
 					if head_rev.returncode != 0:
 						head_rev = subprocess.run([real_git, 'rev-parse', 'HEAD'], capture_output=True, text=True)
 					if head_rev.returncode != 0:
@@ -3630,6 +3672,192 @@ def test_security_pass_validation_complete_uses_verified_pr_head_when_integratio
 	assert result["latest_state"]["validation_completed_cycle"] == 2
 	assert result["tracking_labels"] == ["ai:validated"]
 	assert result["pr_get_calls"]["397"] == 1
+
+
+def _assert_deleted_branch_security_repair_converges(*, validation_enabled: bool) -> None:
+	integration_branch = "orchestrator/project-192"
+	original_final_pr_number = 397 if validation_enabled else 395
+	original_final_pr = {
+		"number": original_final_pr_number,
+		"state": "closed",
+		"merged": True,
+		"baseRefName": "main",
+		"headRefName": integration_branch,
+		"headSha": "__integration_head__",
+	}
+	initial_state = _base_state(status="validating" if validation_enabled else "in_progress")
+	initial_state.update(
+		{
+			"integration_branch": integration_branch,
+			"validation_cycle": 2,
+			"final_merge_pr": original_final_pr_number,
+			"final_merge_status": "pending",
+			"final_merge_attempt_count": 2,
+			"final_merge_ineligible_blocked_at_sha": "stale-head",
+			"final_merge_ineligible_first_blocked_at_utc": 123,
+			"final_merge_ineligible_alert_sent_for_sha": "stale-head",
+		}
+	)
+	first = _run_poller(
+		state=initial_state,
+		enable_validation="true" if validation_enabled else "false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		tracking_labels=["ai:validated"] if validation_enabled else [],
+		issue_labels={10: ["ai:merged"]},
+		prs=[original_final_pr],
+		existing_branches=["main"],
+		missing_git_branch_fetches=[integration_branch],
+		pull_ref_shas={original_final_pr_number: "__integration_head__"},
+	)
+
+	first_state = first["latest_state"]
+	audited_head_sha = first["security_audit_capture"]["diff_head"]
+	assert first_state["status"] == "security-pass-fixing"
+	assert first_state["final_merge_pr"] is None
+	assert first_state["final_merge_status"] == "pending"
+	assert first_state["final_merge_attempt_count"] == 0
+	assert first_state["final_merge_ineligible_blocked_at_sha"] == ""
+	assert first_state["final_merge_ineligible_first_blocked_at_utc"] == 0
+	assert first_state["final_merge_ineligible_alert_sent_for_sha"] == ""
+	assert first["created_branches"] == [{"branch": integration_branch, "sha": audited_head_sha}]
+	assert f"Integration branch: `{integration_branch}`" in first["issues"]["900"]["body"]
+
+	merged_fix_pr = {
+		"number": 990,
+		"state": "closed",
+		"merged": True,
+		"merged_at": "2026-09-01T10:00:00Z",
+		"baseRefName": integration_branch,
+		"headRefName": "ai/issue-900",
+		"willCloseTarget": True,
+	}
+	second = _run_poller(
+		state=first_state,
+		enable_validation="true" if validation_enabled else "false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		tracking_labels=["ai:security-pass-fixing"],
+		issue_labels={10: ["ai:merged"], 900: ["ai:merged"]},
+		issue_closed={900: True},
+		issue_linked_prs={900: 990},
+		prs=[merged_fix_pr],
+		existing_branches=["main", integration_branch],
+		branch_ref_shas={integration_branch: "__advanced_integration_head__"},
+	)
+
+	second_state = second["latest_state"]
+	advanced_head_sha = second["security_audit_capture"]["diff_head"]
+	assert advanced_head_sha != audited_head_sha
+	assert second_state["security_pass_cycle"] == 1
+	assert second_state["security_pass_status"] == "passed"
+	assert second_state["security_pass_head_sha"] == advanced_head_sha
+	if not validation_enabled:
+		assert second_state["status"] == "complete"
+		assert second_state["final_merge_status"] == "merged"
+		assert second_state["final_merge_pr"] != original_final_pr_number
+		return
+
+	assert second_state["status"] == "validating"
+	validation_cycle = second_state["validation_cycle"]
+	third = _run_poller(
+		state=second_state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", integration_branch],
+		branch_ref_shas={integration_branch: "__advanced_integration_head__"},
+	)
+	assert third["latest_state"]["status"] == "complete"
+	assert third["latest_state"]["final_merge_status"] == "merged"
+	assert third["latest_state"]["final_merge_pr"] != original_final_pr_number
+	assert third["latest_state"]["validation_completed_cycle"] == validation_cycle
+
+
+def test_security_pass_external_finalize_deleted_branch_findings_repair_converges() -> None:
+	_assert_deleted_branch_security_repair_converges(validation_enabled=False)
+
+
+def test_security_pass_validation_complete_deleted_branch_findings_repair_converges() -> None:
+	_assert_deleted_branch_security_repair_converges(validation_enabled=True)
+
+
+def test_security_pass_deleted_branch_repair_accepts_only_exact_sha_create_race() -> None:
+	integration_branch = "orchestrator/project-192"
+	for final_pr_number, race_sha, expect_fix_issue in (
+		(402, "__integration_head__", True),
+		(403, "__default_head__", False),
+	):
+		final_pr = {
+			"number": final_pr_number,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": integration_branch,
+			"headSha": "__integration_head__",
+		}
+		state = _base_state()
+		state.update({"integration_branch": integration_branch, "final_merge_pr": final_pr_number})
+		result = _run_poller(
+			state=state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			enable_security_pass="true",
+			security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+			issue_labels={10: ["ai:merged"]},
+			prs=[final_pr],
+			existing_branches=["main"],
+			missing_git_branch_fetches=[integration_branch],
+			pull_ref_shas={final_pr_number: "__integration_head__"},
+			branch_create_race_shas={integration_branch: race_sha},
+		)
+		assert result["branch_create_calls"] == [{"branch": integration_branch, "sha": result["security_audit_capture"]["diff_head"]}]
+		assert bool(result.get("created_issues", [])) is expect_fix_issue
+		if expect_fix_issue:
+			assert result["latest_state"]["status"] == "security-pass-fixing"
+		else:
+			assert result["latest_state"]["status"] == "security-pass"
+			assert result["latest_state"]["security_pass_status"] == "failed"
+			assert result["latest_state"]["final_merge_pr"] == final_pr_number
+			assert result.get("created_branches", []) == []
+			assert result["branch_ref_shas"][integration_branch] != result["security_audit_capture"]["diff_head"]
+
+
+def test_security_pass_deleted_branch_repair_fails_closed_when_created_ref_cannot_be_verified() -> None:
+	integration_branch = "orchestrator/project-192"
+	final_pr = {
+		"number": 404,
+		"state": "closed",
+		"merged": True,
+		"baseRefName": "main",
+		"headRefName": integration_branch,
+		"headSha": "__integration_head__",
+	}
+	state = _base_state()
+	state.update({"integration_branch": integration_branch, "final_merge_pr": 404})
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		prs=[final_pr],
+		existing_branches=["main"],
+		missing_git_branch_fetches=[integration_branch],
+		pull_ref_shas={404: "__integration_head__"},
+		fail_branch_ref_after={integration_branch: 1},
+	)
+	assert result.get("created_issues", []) == []
+	assert result["latest_state"]["status"] == "security-pass"
+	assert result["latest_state"]["security_pass_status"] == "failed"
+	assert result["latest_state"]["final_merge_pr"] == 404
+	assert "SECURITY_PASS_FAILED reason=repair_branch_recreate_failed" in result["stdout"] + result["stderr"]
 
 
 def test_security_pass_deleted_branch_rejects_unavailable_or_mismatched_final_pr_head() -> None:
