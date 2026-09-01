@@ -11758,6 +11758,25 @@ print(determine_phase(labels))
 PY
 )"
 
+    # Human-gated latch labels (keep aligned with
+    # orchestrate_lib.STALL_RECOVERY_LATCH_LABELS): implement.yml's
+    # "Validate approval phase label" step refuses to redispatch an issue
+    # carrying ai:destructive-blocked / ai:scope-blocked until a human
+    # removes it, so every standalone recovery action (/approved, /answer,
+    # /reclarify) would be a no-op that only burns a stall-judge run and a
+    # Telegram alert per cycle.  Pause exactly like ai:needs-human.
+    _standalone_latch_label=""
+    for _standalone_latch_candidate in "ai:destructive-blocked" "ai:scope-blocked"; do
+      if has_label "${labels_json}" "${_standalone_latch_candidate}"; then
+        _standalone_latch_label="${_standalone_latch_candidate}"
+        break
+      fi
+    done
+    if [ -n "${_standalone_latch_label}" ]; then
+      echo "STALL_SKIP issue=${issue_num} reason=human_gated_latch label=${_standalone_latch_label} phase=${phase} action=none"
+      continue
+    fi
+
     # Phases the standalone loop does NOT act on.  ai:review-blocked was
     # historically in this skip list because it had a dedicated inline
     # handler (review_rb_judge.sh runs at the end of review_autofix.yml
@@ -17090,6 +17109,24 @@ fi
 
     STALL_COUNT="$(echo "${STALLS_JSON}" | jq -r '.count')"
     [[ "${STALL_COUNT}" =~ ^[0-9]+$ ]] || STALL_COUNT=0
+
+    # Issues check-stalls skipped because they carry a human-gated latch
+    # label (orchestrate_lib.STALL_RECOVERY_LATCH_LABELS —
+    # ai:destructive-blocked / ai:scope-blocked).  implement.yml refuses
+    # to redispatch those until a human removes the label, so no recovery
+    # action can move them; log one stable line per issue so the pause
+    # is visible in the poll log instead of silent.  `.latched` is
+    # additive on the check-stalls payload — older payloads (or the
+    # fail-open '{"ok":false,...}' fallback) simply yield an empty list.
+    _stall_latched_json="$(echo "${STALLS_JSON}" | jq -c '.latched // []' 2>/dev/null || echo '[]')"
+    while IFS= read -r _stall_latched_entry; do
+      [ -n "${_stall_latched_entry}" ] || continue
+      _stall_latched_issue="$(printf '%s' "${_stall_latched_entry}" | jq -r '.github_issue // empty' 2>/dev/null || true)"
+      [[ "${_stall_latched_issue}" =~ ^[0-9]+$ ]] || continue
+      _stall_latched_label="$(printf '%s' "${_stall_latched_entry}" | jq -r '.latch_label // "unknown"' 2>/dev/null || echo "unknown")"
+      _stall_latched_phase="$(printf '%s' "${_stall_latched_entry}" | jq -r '.phase // "unknown"' 2>/dev/null || echo "unknown")"
+      echo "STALL_SKIP issue=${_stall_latched_issue} reason=human_gated_latch label=${_stall_latched_label} phase=${_stall_latched_phase} action=none"
+    done < <(printf '%s' "${_stall_latched_json}" | jq -c '.[]?' 2>/dev/null || true)
 
     STALL_STATE_CHANGED=false
     STALL_HEALING_CHANGED=false
