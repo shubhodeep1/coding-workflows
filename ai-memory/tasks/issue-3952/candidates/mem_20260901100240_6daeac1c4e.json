@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3952,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3952\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3954\",\"pr_number\":3954,\"branch\":\"ai/issue-3952\",\"run_id\":\"33494100704\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/33494100704\",\"changed_files\":[\"changelog.d/3933-security-pass-fix-dedupe-fail-closed.md\",\"scripts/label_helpers.sh\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_orchestrate_poll_process.py\"]}",
+  "fingerprint": "e4ad0f12ae383cfb1d48d151bc8e4053d564c252805bfcd94484b73a0850cad1",
+  "lineage": {
+    "issue_number": 3952,
+    "parent_ids": [],
+    "pr_number": 3954,
+    "run_id": "33494100704",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33494100704",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3954"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260901100240_6daeac1c4e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3952,
+    "level": "run",
+    "pr_number": 3954,
+    "run_id": "33494100704"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3952: https://github.com/shubhodeep1/coding-workflows/pull/3954",
+  "timestamps": {
+    "created_at": "2026-09-01T10:02:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
