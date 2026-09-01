@@ -4293,7 +4293,7 @@ create_security_pass_fix_issue() {
   local findings_file="$1"
   local completed_cycles="$2"
   local integration_branch="$3"
-  local issue_body_file issue_url issue_number local_id
+  local issue_body_file issue_url issue_number local_id security_pass_fix_action
 
   issue_body_file="${RUNTIME_DIR}/security_pass_fix_${TRACKING_NUM}_${completed_cycles}.md"
   local_id="security-pass-fix-cycle-$((completed_cycles + 1))"
@@ -4360,15 +4360,43 @@ PY
     return 1
   fi
 
-  ensure_label_exists "ai:clarification"
-  ensure_label_exists "ai:orchestrator-managed"
-  issue_url="$(gh_retry gh issue create \
-    --repo "${GITHUB_REPOSITORY}" \
-    --title "[security-pass] Project #${TRACKING_NUM} fix cycle $((completed_cycles + 1))" \
-    --body-file "${issue_body_file}" \
-    --label "ai:clarification" \
-    --label "ai:orchestrator-managed" 2>/dev/null || true)"
-  issue_number="$(printf '%s\n' "${issue_url}" | grep -oE '/issues/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
+  # No cycle-local cache can recover an issue omitted by a failed state checkpoint:
+  # ACTIVE_WORKFLOW_ISSUES only has workflow-active numbers, _candidate_details_json
+  # only has known candidates, and STALL_MANAGED_LINKED_PR_CACHE only has state-known
+  # stalled issues. Search by the durable body markers before creating a replacement.
+  issue_number="$(gh_retry gh api --paginate --method GET \
+    "repos/${GITHUB_REPOSITORY}/issues" \
+    -f state=open \
+    -f labels="ai:orchestrator-managed" \
+    -f per_page=100 2>/dev/null \
+    | jq -sr \
+      --arg tracking_marker "- Tracking issue: #${TRACKING_NUM}" \
+      --arg local_id_marker "- Local ID: \`${local_id}\`" '
+        add // []
+        | .[]
+        | select(.pull_request | not)
+        | select(
+            (((.body // "") | split("\n") | index($tracking_marker)) != null)
+            and (((.body // "") | split("\n") | index($local_id_marker)) != null)
+          )
+        | .number
+        | select(type == "number" and . > 0)
+      ' 2>/dev/null | head -n1 || true)"
+  if [[ "${issue_number}" =~ ^[0-9]+$ ]]; then
+    security_pass_fix_action="reused existing consolidated fix issue"
+    echo "Security-pass fix issue #${issue_number} already exists for cycle $((completed_cycles + 1)); reusing it"
+  else
+    ensure_label_exists "ai:clarification"
+    ensure_label_exists "ai:orchestrator-managed"
+    issue_url="$(gh_retry gh issue create \
+      --repo "${GITHUB_REPOSITORY}" \
+      --title "[security-pass] Project #${TRACKING_NUM} fix cycle $((completed_cycles + 1))" \
+      --body-file "${issue_body_file}" \
+      --label "ai:clarification" \
+      --label "ai:orchestrator-managed" 2>/dev/null || true)"
+    issue_number="$(printf '%s\n' "${issue_url}" | grep -oE '/issues/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
+    security_pass_fix_action="created consolidated fix issue"
+  fi
   if ! [[ "${issue_number}" =~ ^[0-9]+$ ]]; then
     return 1
   fi
@@ -4380,10 +4408,12 @@ PY
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-fixing"
-  echo "SECURITY_PASS_FIX_ISSUE_CREATED tracking_issue=${TRACKING_NUM} issue=${issue_number} cycle=$((completed_cycles + 1))"
+  if [[ "${security_pass_fix_action}" = "created consolidated fix issue" ]]; then
+    echo "SECURITY_PASS_FIX_ISSUE_CREATED tracking_issue=${TRACKING_NUM} issue=${issue_number} cycle=$((completed_cycles + 1))"
+  fi
   post_tracking_comment "## 🔒 Project security pass blocked
 
-The security pass found blocking issues and created consolidated fix issue #${issue_number} for cycle $((completed_cycles + 1))/${MAX_SECURITY_PASS_CYCLES}. Completion will resume only after its PR merges and a clean re-audit passes."
+The security pass found blocking issues and ${security_pass_fix_action} #${issue_number} for cycle $((completed_cycles + 1))/${MAX_SECURITY_PASS_CYCLES}. Completion will resume only after its PR merges and a clean re-audit passes."
   COMPLETION_STATUS_STATE_CHANGED="false"
   update_completion_status_comment "waiting" \
     "## Completion status"$'\n\n'"**State:** \`security-pass-fixing\`"$'\n\n'"Security-pass fix issue #${issue_number} is in the normal delivery pipeline. Completion remains gated until it merges and a clean current-head re-audit passes." \

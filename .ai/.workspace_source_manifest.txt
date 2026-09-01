@@ -156,6 +156,7 @@ changelog.d/3901-check-triage-input-hardening.md
 changelog.d/3902-secure-workflow-shell-inputs.md
 changelog.d/3903-changelog-only-notification.md
 changelog.d/3909-deterministic-manifest-conflict-resolution.md
+changelog.d/3933-security-pass-fix-issue-idempotency.md
 changelog.d/3939-plan-parser-blockquote-support.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
@@ -168,6 +169,7 @@ changelog.d/merged-pr-commit-guard.md
 changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md
 changelog.d/orchestrator-security-pass-phase-2-audit-engine.md
 changelog.d/orchestrator-security-pass-phase-3-dark-launch.md
+changelog.d/orchestrator-security-pass-phase-4-default-on.md
 changelog.d/review-autofix-per-slot-attempt-prompts.md
 changelog.d/reviewer-model-refresh-2026-08.md
 changelog.d/seed-repo-command.md
