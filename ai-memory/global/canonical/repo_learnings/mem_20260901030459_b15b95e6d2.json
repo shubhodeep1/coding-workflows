@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Orchestration state transitions are centralized through explicit label contracts and helper logic.",
   "timestamps": {
     "created_at": "2026-09-01T03:04:59Z",
