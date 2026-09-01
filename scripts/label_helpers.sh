@@ -29,9 +29,6 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:validation-failed"]="e11d48"
 	["ai:validation-fixing"]="d93f0b"
 	["ai:validation-recovery"]="e3a21a"
-	["ai:security-pass"]="1d76db"
-	["ai:security-pass-fixing"]="d93f0b"
-	["ai:security-pass-failed"]="e11d48"
 	["ai:clarify-failed"]="e11d48"
 	["ai:clarify-respond-failed"]="e11d48"
 	["ai:plan-failed"]="e11d48"
@@ -81,9 +78,6 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:validation-failed"]="Runtime validation failed - manual review needed"
 	["ai:validation-fixing"]="Validation fix-up issues in pipeline"
 	["ai:validation-recovery"]="Validation failed — judge re-evaluating before retry"
-	["ai:security-pass"]="Project security pass in progress"
-	["ai:security-pass-fixing"]="Security-pass fix-up issue in pipeline"
-	["ai:security-pass-failed"]="Project security pass exhausted its fix-cycle budget"
 	["ai:clarify-failed"]="Clarify workflow failed before producing a valid response"
 	["ai:clarify-respond-failed"]="Orchestrator clarify-respond workflow failed before posting an answer"
 	["ai:plan-failed"]="Plan workflow failed before producing an approved implementation plan"
@@ -123,7 +117,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:check-triage-escalated"]="Check-failure auto-fix chain hit the lineage cap; needs human attention"
 )
 
-_AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:security-pass","ai:security-pass-fixing","ai:security-pass-failed","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
+_AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
 
 # ensure_label_exists <label_name> [repo]
 #

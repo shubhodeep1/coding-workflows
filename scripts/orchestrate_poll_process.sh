@@ -4359,6 +4359,7 @@ create_security_pass_fix_issue() {
   local completed_cycles="$2"
   local integration_branch="$3"
   local issue_body_file issue_url issue_number local_id security_pass_fix_action
+  local security_pass_managed_issues_pages_file
 
   issue_body_file="${RUNTIME_DIR}/security_pass_fix_${TRACKING_NUM}_${completed_cycles}.md"
   local_id="security-pass-fix-cycle-$((completed_cycles + 1))"
@@ -4429,24 +4430,45 @@ PY
   # ACTIVE_WORKFLOW_ISSUES only has workflow-active numbers, _candidate_details_json
   # only has known candidates, and STALL_MANAGED_LINKED_PR_CACHE only has state-known
   # stalled issues. Search by the durable body markers before creating a replacement.
-  issue_number="$(gh_retry gh api --paginate --method GET \
+  security_pass_managed_issues_pages_file="${RUNTIME_DIR}/security_pass_managed_issues_${TRACKING_NUM}_${completed_cycles}.json"
+  rm -f "${security_pass_managed_issues_pages_file}"
+  if ! gh_retry_to_file "${security_pass_managed_issues_pages_file}" gh api --paginate --method GET \
     "repos/${GITHUB_REPOSITORY}/issues" \
     -f state=open \
     -f labels="ai:orchestrator-managed" \
-    -f per_page=100 2>/dev/null \
-    | jq -sr \
-      --arg tracking_marker "- Tracking issue: #${TRACKING_NUM}" \
-      --arg local_id_marker "- Local ID: \`${local_id}\`" '
-        add // []
-        | .[]
-        | select(.pull_request | not)
-        | select(
-            (((.body // "") | split("\n") | index($tracking_marker)) != null)
-            and (((.body // "") | split("\n") | index($local_id_marker)) != null)
-          )
-        | .number
-        | select(type == "number" and . > 0)
-      ' 2>/dev/null | head -n1 || true)"
+    -f per_page=100; then
+    rm -f "${security_pass_managed_issues_pages_file}"
+    echo "::warning::Could not verify whether security-pass fix issue ${local_id} already exists (managed-issue lookup failed); skipping creation to avoid a duplicate. Will retry next poll."
+    return 1
+  fi
+  if [ ! -s "${security_pass_managed_issues_pages_file}" ]; then
+    rm -f "${security_pass_managed_issues_pages_file}"
+    echo "::warning::Could not verify whether security-pass fix issue ${local_id} already exists (managed-issue lookup returned no page data); skipping creation to avoid a duplicate. Will retry next poll."
+    return 1
+  fi
+  if ! issue_number="$(jq -sr \
+    --arg tracking_marker "- Tracking issue: #${TRACKING_NUM}" \
+    --arg local_id_marker "- Local ID: \`${local_id}\`" '
+      if length == 0 or (all(.[]; type == "array") | not) then
+        error("managed-issue pagination output must contain JSON arrays")
+      else
+        [
+          .[][]
+          | select(.pull_request | not)
+          | select(
+              (((.body // "") | split("\n") | index($tracking_marker)) != null)
+              and (((.body // "") | split("\n") | index($local_id_marker)) != null)
+            )
+          | .number
+          | select(type == "number" and . > 0)
+        ][0] // empty
+      end
+    ' "${security_pass_managed_issues_pages_file}" 2>/dev/null)"; then
+    rm -f "${security_pass_managed_issues_pages_file}"
+    echo "::warning::Could not verify whether security-pass fix issue ${local_id} already exists (managed-issue pagination output was invalid); skipping creation to avoid a duplicate. Will retry next poll."
+    return 1
+  fi
+  rm -f "${security_pass_managed_issues_pages_file}"
   if [[ "${issue_number}" =~ ^[0-9]+$ ]]; then
     security_pass_fix_action="reused existing consolidated fix issue"
     echo "Security-pass fix issue #${issue_number} already exists for cycle $((completed_cycles + 1)); reusing it"
