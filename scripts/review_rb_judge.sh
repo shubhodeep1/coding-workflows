@@ -2360,7 +2360,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
 
     if [ -n "${NEW_ISSUE_TITLE}" ] && [ -n "${NEW_ISSUE_BODY}" ]; then
       if [ "${RB_REQUESTED_REISSUE_MODE}" = "spot-fix" ]; then
-        if [ "${REISSUE_PRESERVE_BASELINE_ENABLED:-true}" != "true" ]; then
+        if ! flag_enabled "${REISSUE_PRESERVE_BASELINE_ENABLED:-true}"; then
           RB_EFFECTIVE_REISSUE_MODE="redo"
           RB_SPOT_FIX_REASON="feature_flag_disabled"
         else

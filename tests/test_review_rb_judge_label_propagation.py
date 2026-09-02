@@ -395,6 +395,7 @@ set -euo pipefail
 ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
 _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ :; }}
+flag_enabled() {{ case "${{1,,}}" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac; }}
 
 GITHUB_OUTPUT="{github_output}"
 
@@ -629,7 +630,7 @@ def test_close_and_reissue_spot_fix_preserves_baseline_branch_and_keeps_caller_c
 				"body": "Keep the prior implementation and patch only the grounded gaps.",
 			},
 		},
-		reissue_preserve_baseline_enabled="true",
+		reissue_preserve_baseline_enabled="1",
 		repo_files={
 			"src/app.py": "print('hello')\n",
 			"README.md": "hello\n",
