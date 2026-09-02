@@ -1,4 +1,4 @@
-Given a GitHub issue (number / URL) — or any reference that identifies a project (PR, plan doc, feature name) — in `$ARGUMENTS`, determine three things about **this** repo (`shubhodeep1/coding-workflows`) at `main`: (1) is the project **fully implemented**, (2) is it **correct** — does the code actually do what the plan / issue specified, audited rather than assumed — and (3) is it **activated** — i.e. will it **start working automatically** on its trigger, or does something still need to be done to make it run? Read-only: this command reports in chat and never edits files. `$ARGUMENTS` is free-form and should contain at least one concrete reference (`#1234`, an issue/PR URL, a plan path, or a clearly-named feature).
+Given a GitHub issue (number / URL) — or any reference that identifies a project (PR, plan doc, feature name) — in `$ARGUMENTS`, determine three things about **this** repo (`shubhodeep1/coding-workflows`) at `main`: (1) is the project **fully implemented**, (2) is it **correct** — does the code actually do what the plan / issue specified, audited rather than assumed — and (3) is it **activated** — i.e. will it **start working automatically** on its trigger, or does something still need to be done to make it run? Diagnose, then fix: the verdict is graded against `main` and reported in chat, and then every **EVIDENCE-BASED** defect the audit found, plus every activation gap that is pure code in this repo, is fixed on a branch, verified, pushed, and opened as one ready-for-review PR whose body lists each issue, why it was an issue, and the fix applied (see [Fix Policy](#fix-policy)). Operator activation steps (repo-vars, secrets, merges, `@stable` tags) are still enumerated, never performed. `$ARGUMENTS` is free-form and should contain at least one concrete reference (`#1234`, an issue/PR URL, a plan path, or a clearly-named feature).
 
 $ARGUMENTS
 
@@ -36,7 +36,7 @@ $ARGUMENTS
    - **CONCERNS** — no BLOCKER, but CONCERN findings stand, or an open question depends on a check that could not run. Step 3's classification is unchanged; the findings still ship in the report.
    - **FAIL** — at least one EVIDENCE-BASED BLOCKER. **Downgrade Step 3's `Implemented:` to PARTIAL** — a project that does not do what it says is not completely implemented. A HYPOTHESIS finding never produces FAIL on its own; it stays a CONCERN until verified.
 
-   Report findings; do not fix them (see [Rules](#rules)).
+   Record every finding with its evidence and `file:line`; fixes are applied in Step 7, after the verdict has been graded against `main` (see [Fix Policy](#fix-policy)).
 
 5. **Activation check — the load-bearing question.** Implemented code does not mean *running* code. Determine whether it will actually execute:
    - **Workflow wiring** — is there a `.github/workflows/*.yml` with the right trigger, and is it reachable (not disabled, not gated behind an `if:` that is always false)?
@@ -47,12 +47,24 @@ $ARGUMENTS
    - **DB gates** (§18.D) — does a backfill/migration run from code behind a gate, or is it waiting on a manual step (which would violate §18.A)?
    - **Consumer propagation** (§14) — if it is a workflow-template / `.claude` change, are consumers wired (`.github/ai/consumer_repos.json`, the `@stable` dispatch), and does activation require tagging a new `@stable` release?
 
+   **Tag every gap** as `CODE-FIXABLE` — the gate is a file in this repo that Step 7 can correct (a missing or mis-wired workflow file, a wrong input / secret / permission name, an `if:` that can never be true because of a typo, a missing `docs/scripts-pending-removal.md`, `/db/contracts/*.yml`, `README.md` / `agents.md`, or `.github/ai/consumer_repos.json` entry) — or `OPERATOR` — the gate is a repo setting or a release action (set a repo-var, flip a `*_ENABLED` default, add a secret, merge to the default branch, tag `@stable`, dispatch a workflow, start a supervisor). `OPERATOR` gaps go to `To activate`; `CODE-FIXABLE` gaps go to Step 7.
+
 6. **Verdict.** Combine the three checks into one of:
    - **LIVE** — implemented, correctness-audited, *and* activated; it runs automatically. State the exact trigger. A project with `Correctness: CONCERNS` can still be LIVE — say so with the concerns attached.
    - **DORMANT** — implemented but it will not run until a manual step. Enumerate the **exact** steps to activate (set `VAR=1`, add secret `Y`, merge to the default branch, flip a flag, start a supervisor, tag `@stable` for consumers).
    - **INCOMPLETE** — not fully implemented, **including a Step 4 FAIL that downgraded `Implemented:` to PARTIAL**; list what is missing or defective before activation is even possible.
 
-7. **Report.** Emit the [Output Format](#output-format). Read-only — no edits, no PR.
+   The verdict is graded against `main` **before** any fix is applied; the fix PR from Step 7 does not upgrade it (see [Rules](#rules)).
+
+7. **Fix — apply, verify, ship.** Select the findings that qualify under the [Fix Policy](#fix-policy): every **EVIDENCE-BASED** Step 4 finding (BLOCKER and CONCERN alike) and every Step 5 gap tagged `CODE-FIXABLE`. If nothing qualifies, go to Step 8 with `Fix PR: none` and the reason. Otherwise:
+   a. **Branch.** Resolve the default branch dynamically (do not hardcode `main`) and create `claude/verify-activation-<ref-slug>` from it (append `-2`, `-3`, … on collision). If an **open** PR already exists for that branch from an earlier run, check it out and push onto it — one PR per project (§12.A). If that PR has **merged**, restart the branch from the default branch per §21.A; never stack on merged history.
+   b. **Apply** each fix as the smallest change that removes the defect (§12.C: a guard, a bounds check, a corrected name, the missing wiring line), extending existing mechanisms rather than adding new ones (§5). A fix that would rename or remove a §6 identifier, change a §10 contract without an obvious update path, flip a documented default, or that has more than one plausible shape with material tradeoffs is **not applied** — it goes to `Not fixed` with a §2 Q/A question (§12.D).
+   c. **Verify** every fix: re-run the Step 4 check that demonstrated the defect and confirm it now passes; add or extend a test when the defect had no coverage (§12.C). Re-run the full set of Step 4 checks on the final tree. A fix whose verification cannot run, or fails, is reverted and reported under `Not fixed` as `could not verify` — never ship an unverified change.
+   d. **Docs and changelog.** Update `README.md` / `agents.md` when a fix changes documented behaviour (§7), the matching `/db/contracts/*.yml` when it touches a query or index (§10.A), and add one `changelog.d/<issue>-<slug>.md` fragment when the fixes change observable behaviour (§20.A) — never edit `CHANGELOG.md` directly.
+   e. **Commit** per scope (§12.E): one commit per finding, or per theme of related findings — never one per file. Each message names the finding it resolves and why it was a defect, e.g. `fix(<area>): <what changed> — verify-activation finding <file:line>: <why>`.
+   f. **Push and open the PR.** `git push -u origin <branch>` (retry transient network errors with exponential backoff: 2s, 4s, 8s, 16s — up to 4 retries). Write the body per [PR Body](#pr-body), lint it with `PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_pr_body_auto_close.py --pr-body-file <file> --repo shubhodeep1/coding-workflows` (§19: reference the project issue as `Refs #N`, never `Fixes` / `Closes` / `Resolves #N`), then open a ready-for-review PR (`draft: false`) via `mcp__github__create_pull_request` against the default branch. Never push to the default branch.
+
+8. **Report.** Emit the [Output Format](#output-format). The verdict lines describe `main` as audited; `Fix PR`, `Fixes applied`, and `Not fixed` describe what this run changed and what it deliberately left alone.
 
 ## Output Format
 
@@ -71,7 +83,15 @@ Audit findings (omit only when PASS with nothing to note):
 Checks run:
 - <command> — pass / fail / could-not-run (<reason>)
 
-To activate (only if not already automatic):
+Fix PR: <url> (branch claude/verify-activation-<slug>, N commits) / none — <no fixable findings | every finding needs a decision | could not verify>
+
+Fixes applied (omit when none):
+- [BLOCKER|CONCERN|GAP] <file:line> — Issue: <what was wrong>. Why it is an issue: <the acceptance criterion, CLAUDE.md rule, or runtime behaviour it broke>. Fix: <what changed> (<short-sha>). Verified by: <check that now passes>.
+
+Not fixed (omit when none):
+- [BLOCKER|CONCERN|GAP] <file:line> — <reason: HYPOTHESIS | §6 rename | §10 contract | §12.D tradeoff | OPERATOR gap | could not verify> — <Q-ID when a decision would unblock it>
+
+To activate (only if not already automatic — OPERATOR steps, never performed by this command):
 1. <exact step — set REPO_VAR X=1 (read at <file:line>, default 0); add secret Y; merge <branch> to default; tag @stable; start supervisor Z>
 
 Gaps / risks:
@@ -80,19 +100,66 @@ Gaps / risks:
 
 Omit empty sections; keep every claim cited.
 
+## Fix Policy
+
+Verdict first, fixes second: Steps 3–6 grade the project as it stands on `main`, and only then does Step 7 change anything. Step 7 runs under CLAUDE.md §12 (PR Review Mode): proactive scope, evidence required, §6 and §10 untouched.
+
+**Fix automatically (no ask):**
+- Every Step 4 finding classified **EVIDENCE-BASED**, BLOCKER or CONCERN — the code was read or a check was run and the defect is demonstrated. The §12.B categories apply: security, crash / data-loss, correctness defects, missing error handling at boundaries, type / contract violations, stale docs and misleading comments, latent bugs in adjacent code the audit exercised, a missing or tautological test for a criterion.
+- Every Step 5 gap tagged **`CODE-FIXABLE`** — the gate is a file in this repo (see the Step 5 list).
+
+**Never fix automatically — report it, and ask in §2 Q/A format when a decision would unblock it:**
+- **HYPOTHESIS** findings — a fix for an unverified defect is a guess. Verify first (read more, run the check); if it cannot be verified in this run it stays a CONCERN under `Not fixed`.
+- **§6** renames, removals, or repurposing of any existing identifier; **§10** changes without an obvious contract-update path.
+- **§12.D** items: architectural refactors or new abstractions, multiple plausible fixes with material tradeoffs, behaviour changes to documented contracts (`README.md`, `agents.md`, `/db/contracts/*`), scope explosion (10+ files).
+- **`OPERATOR`** gaps — repo settings and release actions rather than code: setting a repo-var or flipping a `*_ENABLED` default, adding a secret, merging to the default branch, tagging `@stable`, dispatching a workflow, starting a supervisor, provisioning infrastructure. §22.B, §23.C, and §24.D are ask-first and stay so; these are enumerated under `To activate` exactly as before.
+- Anything whose verification cannot run in this session.
+
+**Every fix is traceable.** Each applied fix states, in the chat report and the PR body: the finding it resolves (`file:line`), why it was an issue (the acceptance criterion, rule, or runtime behaviour it broke), what changed (commit), and the check that proves it. A fix that cannot state all four is not applied.
+
+**One PR per run, one PR per project.** All fixes from a run land in the same PR (§12.A); a re-run against the same project pushes onto the existing open PR instead of opening another; a merged PR is never reused (§21).
+
+### PR Body
+
+```
+## /verify-activation fix — <project ref>
+
+Refs #<N>
+
+**Verdict on the default branch before this PR:** <LIVE | DORMANT | INCOMPLETE> — Implemented: <…>, Correctness: <…>, Activated: <…>
+
+## Findings fixed
+| # | Finding | Why it is an issue | Fix | Verified by |
+| --- | --- | --- | --- | --- |
+| 1 | [BLOCKER] `file:line` — <defect> | <criterion / rule / behaviour it broke> | <what changed> (<sha>) | <check> |
+
+## Not fixed (needs a decision or out of reach)
+- <finding> — <reason>
+
+## Checks run
+- <command> — pass / fail
+
+## To activate (operator steps, unchanged by this PR)
+1. <step>
+```
+
 ## Tool Access
 
-Read-only surface:
+Steps 1–6 are read-only; Step 7 writes to this repo's fix branch and nothing else.
 
-- **`mcp__github__*` MCP tools** — `issue_read`, `pull_request_read` (including its files method, for the Step 4 audit surface), `list_commits`, `get_file_contents`, `search_issues`, `search_pull_requests` for the project and its merge state. Read at `main`.
-- **`gh` CLI** — the `GH_TOKEN` transport; shared rules live in **CLAUDE.md §23** (auth check, the mandatory `-R <owner>/<repo>` flag, REST-over-GraphQL preference, token hygiene) — see **CLAUDE.md §23**. The SessionStart hook prints the resolved slug (`shubhodeep1/coding-workflows`). Verification is §23.A read-only work.
+- **`mcp__github__*` MCP tools** — `issue_read`, `pull_request_read` (including its files method, for the Step 4 audit surface), `list_commits`, `get_file_contents`, `search_issues`, `search_pull_requests`, `list_branches` (branch-collision check) for the project and its merge state, read at `main`; `create_pull_request` to open the Step 7 fix PR.
+- **`gh` CLI** — the `GH_TOKEN` transport; shared rules live in **CLAUDE.md §23** (auth check, the mandatory `-R <owner>/<repo>` flag, REST-over-GraphQL preference, token hygiene) — see **CLAUDE.md §23**. The SessionStart hook prints the resolved slug (`shubhodeep1/coding-workflows`). Steps 1–6 are §23.A read-only work; pushing the fix branch and opening the PR are §23.B routine writes — self-serve; §23.C operations (repo settings, secrets, variables, workflow dispatch, merges) are never part of Step 7.
 - **`Read` / `Grep` / `Glob`** — verify the implementation, audit the code, and read the workflow triggers and flag defaults on the local `main` checkout.
-- **`Bash`** — read-only inspection, plus the Step 4 checks: running the repo's existing tests, linters, and validators against the local checkout. Never `Edit` / `Write`, never `git commit` / `push`, never `gh workflow run` or any other mutating call.
+- **`Edit` / `Write`** — Step 7 only, on the fix branch, for the files a qualifying fix touches (plus the docs, contract, and changelog fragment that fix requires).
+- **`Bash`** — read-only inspection and the Step 4 checks (the repo's existing tests, linters, and validators against the local checkout; formatters in `--check` mode) during Steps 1–6; in Step 7 additionally the fix verification, `git checkout -b` / `git commit` / `git push -u origin <branch>`, and the §19 PR-body lint. Never push to the default branch, never `gh workflow run`, never a repo-settings / secret / variable mutation.
 - **Subagents** (§16) — optional read-only fan-out (`Explore` / Sonnet) when the Step 4 audit surface is large; the parent judges the findings.
 
 ## Rules
 
-- **Read-only.** A verdict, not a change. No edits, no commits, no PR. Step 4 may *execute* the repo's tests and linters, but only in a form that changes nothing (see [Tool Access](#tool-access)). If the project is DORMANT, or the audit found defects, and the user wants them addressed, that is a follow-up task (e.g. `/investigate-issue`, `/code-review --fix`, `/implement-plan-claude`, `/implement-plan-ai`, or a direct change) — this command only diagnoses.
+- **Verdict first, then fix — and the verdict is graded against `main`.** Steps 3–6 report the project as it stands on the default branch; Step 7 then ships fixes on a branch. A fix PR does **not** upgrade the verdict: a project audited FAIL stays INCOMPLETE in this run's report, with `Fix PR:` pointing at the remedy. Re-run `/verify-activation` after the PR merges to earn the upgrade; `/deploy-activate` keeps gating on the reported verdict.
+- **Fix only what the evidence demonstrates.** EVIDENCE-BASED findings and `CODE-FIXABLE` gaps are fixed; HYPOTHESIS findings, §6 / §10 / §12.D items, and `OPERATOR` gaps are reported (see [Fix Policy](#fix-policy)). Never fix speculatively, never silently widen scope, never edit a test to pass without evidence the test is wrong, never broaden a `catch` / `except` or add a retry to mask a deterministic failure.
+- **Every fix is verified before it is pushed, and every fix is explained.** The report and the PR body carry, per fix: the issue, why it was an issue, what changed, and the check that proves it. A bare "fixed" is not acceptable.
+- **Operator activation steps are never performed by this command.** Repo-vars, secrets, default flips, merges, `@stable` tags, workflow dispatches, supervisors, and infrastructure stay under `To activate` for the operator or `/deploy-activate`.
 - **"Implemented" ≠ "correct."** Code that exists, is wired, and is reachable can still do the wrong thing. COMPLETE is earned by tracing every acceptance criterion to code that does what it claims — never by the presence of a file, a merged PR, or a plan's self-reported status.
 - **A `FAIL` downgrades `Implemented:` to PARTIAL**, which makes the verdict INCOMPLETE and stops `/deploy-activate` at its completeness gate. That is the intended coupling — do not report a defective project as LIVE.
 - **Never mark `PASS` on something unverified.** An unverifiable concern is `CONCERNS` with a HYPOTHESIS finding, and a check that could not run is reported as `could-not-run`. Silence is not evidence of correctness.
