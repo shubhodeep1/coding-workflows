@@ -3175,6 +3175,132 @@ def test_codex_request_user_input_bail_and_flag() -> None:
 	)
 
 
+def test_codex_blocked_verdict_bail_and_flag() -> None:
+	"""Pin the deliberate-BLOCKED bail: when Codex exits 0 with a final
+	message containing any line that starts with `BLOCKED:` and the
+	baseline-relative worktree delta is empty, the retry loop must treat
+	that as the model's verdict (prompts/mode-implement.txt's completeness_contract
+	names `BLOCKED: <reason>` as a valid terminal deliverable), not as an
+	anonymous "no file changes" attempt. Without this, run 33470149029
+	on multi-user-ai-agent issue #246 (an admin-only fail-closed task
+	whose plan forbade repository edits) burned 5/5 attempts and ~201K
+	tokens re-emitting the same BLOCKED line under a retry nudge that
+	told the model it "must modify files".
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	blocked_grep = "grep -qE '^[[:space:]]*BLOCKED:' \"${CODEX_OUTPUT_FILE}\""
+	assert blocked_grep in codex_block, (
+		"loop must grep CODEX_OUTPUT_FILE for a line-anchored BLOCKED: "
+		"marker (same anchor shape as clarify.yml's STATUS grep) so the "
+		"model's terminal verdict is recognised"
+	)
+	blocked_idx = codex_block.find(blocked_grep)
+	# Position: inside the cmd_rc==0 + non-empty-output branch, AFTER the
+	# non-empty-delta success check (a BLOCKED line alongside real file
+	# changes must still count as success) and BEFORE the success-no-op
+	# regex (a BLOCKED message that also says "no file changes were made"
+	# must not be misread as done).
+	delta_success_idx = codex_block.find('if [ -n "${codex_delta}" ]; then')
+	noop_regex_idx = codex_block.find("no file changes were made|nothing to change")
+	assert delta_success_idx != -1 and noop_regex_idx != -1
+	assert delta_success_idx < blocked_idx < noop_regex_idx, (
+		"BLOCKED detection must sit in the empty-delta branch: after the "
+		"non-empty-delta success break and before the success-no-op regex"
+	)
+	# The reason must be logged so the workflow log names WHY the loop
+	# stopped without the operator opening codex_output.txt.
+	escape_helper_source_idx = codex_block.find("source scripts/gh_helpers.sh")
+	assert 0 <= escape_helper_source_idx < blocked_idx, (
+		"the GitHub Actions annotation escaper must be sourced before the BLOCKED bail"
+	)
+	assert 'Model reason: $(_gh_actions_escape "${codex_blocked_reason}")' in codex_block, (
+		"the bail must safely escape and log the model's own BLOCKED: line"
+	)
+	# Flag file → diag_reason routing; flag write must precede the break
+	# so the flag is always present when the loop exits via this path.
+	flag_idx = codex_block.find('> "${RUNTIME_DIR}/codex_blocked.flag"', blocked_idx)
+	assert flag_idx != -1, (
+		"bail must write codex_blocked.flag so the diagnostics comment can "
+		"name the verdict instead of 'failed after N attempts'"
+	)
+	bail_window = codex_block[flag_idx:flag_idx + 300]
+	assert 'emit_implement_substate "implement" "implement" "Failed"' in bail_window, (
+		"BLOCKED bail must emit the Failed substate, mirroring the "
+		"request_user_input bail"
+	)
+	assert "break" in bail_window, (
+		"BLOCKED bail must `break` out of the retry loop, not `continue` — "
+		"a deterministic verdict does not change on retry"
+	)
+	# The retry-nudge prompt is only assembled at the top of the NEXT
+	# attempt, so the break must come before it: the nudge text must not
+	# appear between the flag write and the break.
+	assert "requires repository modifications" not in bail_window
+	# Stale-flag hygiene: cleared before the loop, like codex_success_noop.flag.
+	cleanup_idx = codex_block.find('rm -f "${RUNTIME_DIR}/codex_blocked.flag"')
+	loop_idx = codex_block.find('for attempt in $(seq 1 "${max_attempts}"); do')
+	assert cleanup_idx != -1 and loop_idx != -1
+	assert cleanup_idx < loop_idx, (
+		"codex_blocked.flag must be cleared before the retry loop so a "
+		"stale marker from a prior run_attempt cannot relabel an unrelated "
+		"failure as a BLOCKED verdict"
+	)
+	# Diagnostics comment wording.
+	diag_branch = 'elif [ -f "${RUNTIME_DIR}/codex_blocked.flag" ]; then'
+	diag_idx = codex_block.find(diag_branch)
+	assert diag_idx != -1, "diag_reason must have a codex_blocked.flag branch"
+	assert "deliberate BLOCKED verdict" in codex_block[diag_idx:diag_idx + 600], (
+		"the issue diagnostics comment must say 'deliberate BLOCKED "
+		"verdict', not the generic 'failed after N attempts'"
+	)
+	assert "captured from final assistant output" in codex_block[diag_idx:diag_idx + 600]
+	assert "tails below contain stderr only" in codex_block[diag_idx:diag_idx + 600]
+	generic_idx = codex_block.find('diag_reason="Codex implement failed after ${max_attempts} attempts"')
+	assert generic_idx != -1 and generic_idx < diag_idx, (
+		"the BLOCKED branch must override the generic default reason"
+	)
+
+
+def test_codex_blocked_verdict_regex_matches_line_start_only() -> None:
+	"""Exercise the live BLOCKED anchor from implement.yml against fixtures:
+	it must match a `BLOCKED:` line (optionally indented) anywhere in the
+	final message, and must NOT match the word inside prose, a
+	lower-case variant, or an empty output — the same discipline the
+	prompt contract mandates ("emit exactly `BLOCKED: <reason>`").
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	m = re.search(r"grep -qE '(\^\[\[:space:\]\]\*BLOCKED:)' \"\$\{CODEX_OUTPUT_FILE\}\"", codex_block)
+	assert m is not None, "could not extract the BLOCKED anchor regex from implement.yml"
+	pattern = m.group(1)
+	assert pattern == "^[[:space:]]*BLOCKED:"
+
+	def _matches(body: str) -> bool:
+		with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as fh:
+			fh.write(body)
+			path = fh.name
+		try:
+			proc = subprocess.run(
+				["grep", "-qE", pattern, path],
+				capture_output=True,
+				check=False,
+			)
+			return proc.returncode == 0
+		finally:
+			os.unlink(path)
+
+	# Verbatim shape from run 33470149029 attempt 1.
+	assert _matches(
+		"BLOCKED: Audit-script parity failed. `main` uses ESM imports; the branch uses CommonJS requires.\n\n"
+		"No comment/state/branch mutations occurred. Issue #26 remains open.\n"
+	)
+	assert _matches("Summary of checks:\n- fetch: PASS\n\nBLOCKED: fail-closed parity gate failed.\n")
+	assert _matches("  BLOCKED: scope-lock-violation file=scripts/x.py\n")
+	assert not _matches("The plan says BLOCKED: is a valid deliverable, but nothing blocks us.\n")
+	assert not _matches("blocked: lower-case is not the contract marker\n")
+	assert not _matches("No file changes were made.\n")
+	assert not _matches("")
+
+
 def test_codex_empty_output_streak_bail_and_flag() -> None:
 	"""Pin Fix #2: when Codex returns empty output for
 	`empty_streak_threshold` (default 2) attempts in a row, the retry

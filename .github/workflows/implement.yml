@@ -2077,6 +2077,10 @@ jobs:
           # stable across reruns) cannot trick Guard 0 into closing an issue
           # that this attempt never classified as success-no-op.
           rm -f "${RUNTIME_DIR}/codex_success_noop.flag"
+          # Same for the deliberate-BLOCKED marker: a stale one from a prior
+          # run_attempt would relabel this attempt's failure diagnostics as
+          # a BLOCKED verdict the model never gave.
+          rm -f "${RUNTIME_DIR}/codex_blocked.flag"
           CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"
           git status --porcelain -uall | filter_runtime_status_noise > "${CODEX_PRE_BASELINE}" 2>/dev/null || : > "${CODEX_PRE_BASELINE}"
           codex_pre_baseline_lines="$(wc -l < "${CODEX_PRE_BASELINE}" | tr -d ' ')"
@@ -2393,6 +2397,39 @@ jobs:
                   emit_implement_substate "implement" "implement" "Succeeded" "${attempt}" "${attempt_log_file}"
                   break
                 fi
+                # Deliberate BLOCKED verdict. `prompts/mode-implement.txt`'s
+                # completeness_contract names `BLOCKED: <reason>` as a valid
+                # terminal deliverable (and its scope-lock discipline
+                # mandates `BLOCKED: scope-lock-violation file=<path>`), so
+                # any final-output line starting with optional whitespace
+                # followed by `BLOCKED:` on an empty worktree delta is the
+                # model's verdict, not a stuck attempt. Before this check it
+                # fell through to the generic
+                # "returned output but produced no file changes" path below:
+                # every remaining attempt re-ran under the retry nudge ("the
+                # implementation plan requires repository modifications"),
+                # which contradicts issues that forbid file edits, and the
+                # loop burned its full budget on a deterministic answer.
+                # Observed on multi-user-ai-agent issue #246 (run
+                # 33470149029, an admin-only fail-closed task): 5/5 attempts,
+                # ~201K tokens, the same BLOCKED line every time. Bail
+                # immediately (mirrors the request_user_input bail below),
+                # log the model's reason, and leave a flag file so the
+                # diagnostics comment names the verdict instead of "failed
+                # after 5 attempts". Checked BEFORE the success-no-op regex
+                # so a BLOCKED message that also says "no file changes were
+                # made" is not misread as done. Anchor mirrors clarify.yml's
+                # `^\s*BLOCKED:` STATUS grep; a BLOCKED line that Codex
+                # emits alongside real file changes never reaches this
+                # branch (the non-empty delta above wins).
+                if grep -qE '^[[:space:]]*BLOCKED:' "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
+                  codex_blocked_reason="$(grep -E '^[[:space:]]*BLOCKED:' "${CODEX_OUTPUT_FILE}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]+//' || true)"
+                  # Escape the annotation channel, but preserve the raw line in the flag file below.
+                  echo "::error::Codex returned a deliberate BLOCKED verdict on attempt ${attempt} — not retrying (a verdict is not a stuck attempt). Model reason: $(_gh_actions_escape "${codex_blocked_reason}")"
+                  printf '%s\n' "${codex_blocked_reason}" > "${RUNTIME_DIR}/codex_blocked.flag"
+                  emit_implement_substate "implement" "implement" "Failed" "${attempt}" "${attempt_log_file}"
+                  break
+                fi
                 # Baseline-relative delta is empty — Codex produced no new
                 # changes.  Distinguish an intentional success-no-op (model
                 # explicitly reports the work is already done) from an
@@ -2617,6 +2654,8 @@ jobs:
             diag_reason="Codex implement failed after ${max_attempts} attempts"
             if [ -f "${RUNTIME_DIR}/codex_request_user_input.flag" ]; then
               diag_reason="Codex bailed: request_user_input rejected in exec mode (issue/plan ambiguity — route back to clarify)"
+            elif [ -f "${RUNTIME_DIR}/codex_blocked.flag" ]; then
+              diag_reason="Codex bailed on attempt ${attempt}: deliberate BLOCKED verdict (the model reported the task cannot be completed as specified; its \`BLOCKED:\` line was captured from final assistant output and logged by the Run Codex implementation step, while the tails below contain stderr only; this is a terminal answer, not a retryable failure, so the loop stopped instead of exhausting all ${max_attempts} attempts)"
             elif [ -f "${RUNTIME_DIR}/codex_stuck_in_exploration.flag" ]; then
               diag_reason="Codex bailed: ${empty_streak} consecutive attempts with no actionable output (empty-output and/or announced-edit-without-changes — agent loop stuck in exploration)"
             fi
