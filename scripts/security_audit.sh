@@ -107,7 +107,10 @@ security_audit_require_writable_destination() {
 			security_audit_emit_failure "${required_phase}" "${required_path}" "destination is not writable"
 			return 1
 		fi
-		rm -f -- "${writable_probe_path}"
+		if ! rm -f -- "${writable_probe_path}" 2>/dev/null; then
+			security_audit_emit_failure "${required_phase}" "${required_path}" "destination is not writable"
+			return 1
+		fi
 	fi
 }
 

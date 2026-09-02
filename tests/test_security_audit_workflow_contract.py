@@ -375,6 +375,11 @@ def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None
 	assert 'CHANGED_FILE_COUNT="$(grep -c . "${CHANGED_FILES_FILE}" 2>/dev/null || true)"' in content
 	assert 'if ! [[ "${CHANGED_FILE_COUNT}" =~ ^[0-9]+$ ]]; then' in content
 	assert 'marker_regex = re.compile(re.escape(followup_marker_prefix) + r"([^>]+) -->")' in content
+	assert (
+		'if ! rm -f -- "${writable_probe_path}" 2>/dev/null; then\n'
+		'\t\t\tsecurity_audit_emit_failure "${required_phase}" "${required_path}" "destination is not writable"\n'
+		'\t\t\treturn 1\n'
+	) in content
 
 
 def test_security_audit_uses_workflow_editor_model_with_stable_fallback() -> None:
