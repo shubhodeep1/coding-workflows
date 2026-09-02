@@ -1315,6 +1315,152 @@ def test_detect_stalls_skips_needs_human_label():
 
 	assert stalls == []
 
+	# Invalid zero-based state must not select the final wave via waves[-1].
+	state["current_wave"] = 0
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+	)
+	assert stalls == []
+
+
+def test_detect_stalls_skips_human_gated_latch_labels():
+	"""Regression for issue #3906 (shubhodeep1/tele-funtoken-msg-scoring):
+	an ai:awaiting-approval issue latched with ai:destructive-blocked was
+	re-approved by stall recovery once per poll cycle even though
+	implement.yml refuses to redispatch it until a human removes the
+	latch.  The latch must pause stall detection like ai:needs-human.
+
+	Plain loop rather than pytest.mark.parametrize: CI also runs this
+	module directly via ``python3 tests/test_orchestrate_lib.py``.
+	"""
+	for latch_label in ("ai:destructive-blocked", "ai:scope-blocked"):
+		_assert_detect_stalls_skips_latch_label(latch_label)
+
+
+def _assert_detect_stalls_skips_latch_label(latch_label: str) -> None:
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 1
+	labels = {
+		"10": ["ai:awaiting-approval", "ai:orchestrator-managed", latch_label],
+		"11": ["ai:merged"],
+	}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=60,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+
+	assert stalls == []
+
+	# Negative control: the same issue without the latch is a real stall
+	# whose ladder action is auto_approve.
+	labels["10"] = ["ai:awaiting-approval", "ai:orchestrator-managed"]
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=60,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+	assert [s["github_issue"] for s in stalls] == [10]
+	assert stalls[0]["recovery_action"] == "auto_approve"
+
+
+def test_stall_recovery_latch_label_helper():
+	assert orchestrate_lib.stall_recovery_latch_label(["ai:awaiting-approval"]) is None
+	assert orchestrate_lib.stall_recovery_latch_label([]) is None
+	assert orchestrate_lib.stall_recovery_latch_label(None) is None
+	assert orchestrate_lib.stall_recovery_latch_label("ai:destructive-blocked") is None
+	assert (
+		orchestrate_lib.stall_recovery_latch_label(["ai:awaiting-approval", "ai:destructive-blocked"])
+		== "ai:destructive-blocked"
+	)
+	assert (
+		orchestrate_lib.stall_recovery_latch_label(["ai:scope-blocked", "ai:implementing"])
+		== "ai:scope-blocked"
+	)
+	# Every latch label is a plain marker, never a phase label, so the
+	# phase machine keeps reporting the underlying pipeline phase.
+	for latch_label in orchestrate_lib.STALL_RECOVERY_LATCH_LABELS:
+		assert latch_label not in orchestrate_lib.PHASE_LABELS_PRIORITY
+		assert orchestrate_lib.determine_phase(["ai:awaiting-approval", latch_label]) == "ai:awaiting-approval"
+
+
+def test_detect_stall_latched_issues_reports_only_latched_non_terminal_issues():
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][1]["status"] = "merged"
+	labels = {
+		"10": ["ai:awaiting-approval", "ai:destructive-blocked"],
+		# Terminal wave status: never reported even when latched.
+		"11": ["ai:merged", "ai:scope-blocked"],
+	}
+
+	latched = orchestrate_lib.detect_stall_latched_issues(state, labels)
+
+	assert latched == [
+		{
+			"id": "issue-1",
+			"github_issue": 10,
+			"phase": "ai:awaiting-approval",
+			"latch_label": "ai:destructive-blocked",
+		}
+	]
+	assert orchestrate_lib.detect_stall_latched_issues(state, {"10": ["ai:awaiting-approval"]}) == []
+	# Invalid current waves fail open instead of selecting waves[-1].
+	assert orchestrate_lib.detect_stall_latched_issues(_make_state(current_wave=0), labels) == []
+	assert orchestrate_lib.detect_stall_latched_issues(_make_state(current_wave=5), labels) == []
+
+
+def test_cmd_check_stalls_emits_additive_latched_field():
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 1
+
+	result = _run_check_stalls(
+		state,
+		{"10": ["ai:awaiting-approval", "ai:destructive-blocked"], "11": ["ai:merged"]},
+		threshold_minutes=60,
+		now_ts=8 * 60 * 60,
+	)
+
+	assert result["ok"] is True
+	assert result["stalls"] == []
+	assert result["count"] == 0
+	assert result["latched"] == [
+		{
+			"id": "issue-1",
+			"github_issue": 10,
+			"phase": "ai:awaiting-approval",
+			"latch_label": "ai:destructive-blocked",
+		}
+	]
+
+	# Unlatched payload keeps the pre-existing keys and an empty list.
+	result = _run_check_stalls(
+		state,
+		{"10": ["ai:awaiting-approval"], "11": ["ai:merged"]},
+		threshold_minutes=60,
+		now_ts=8 * 60 * 60,
+	)
+	assert result["count"] == 1
+	assert result["stalls"][0]["recovery_action"] == "auto_approve"
+	assert result["latched"] == []
+
 
 def test_detect_stalls_max_recoveries_still_skips_with_judge_enabled():
 	state = _make_state()

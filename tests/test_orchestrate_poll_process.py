@@ -12217,6 +12217,100 @@ def test_standalone_stall_recovery_skips_needs_human_candidates():
 	assert result["issues"]["10"].get("closed", False) is False
 
 
+def test_managed_stall_recovery_skips_destructive_blocked_latch():
+	"""Regression for issue #3906 (shubhodeep1/tele-funtoken-msg-scoring):
+	the destructive-commit guard latched ai:destructive-blocked while the
+	issue kept ai:awaiting-approval; implement.yml refused every redispatch
+	(``AI_PHASE_GATE_V1 ... reason=destructive_blocked outcome=skip``) but
+	the poller kept posting ``/approved`` once per cycle, four rounds of
+	no-op implement runs, stall-judge runs, and Telegram alerts."""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "ai:awaiting-approval"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 1
+
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed", "ai:destructive-blocked"]},
+	)
+
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1
+	assert "ai:destructive-blocked" in result["issues"]["10"]["labels"]
+	assert "ai:awaiting-approval" in result["issues"]["10"]["labels"]
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert not any("Stall recovery" in body or "/approved" in body for body in issue_comments), issue_comments
+	assert (
+		"STALL_SKIP issue=10 reason=human_gated_latch label=ai:destructive-blocked phase=ai:awaiting-approval action=none"
+		in result["stdout"]
+	)
+
+	# Negative control: without the latch the same stall is auto-approved,
+	# proving the skip above is the latch and not some other guard.
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert any("/approved" in body for body in issue_comments), result["stdout"]
+	assert "reason=human_gated_latch" not in result["stdout"]
+
+
+def test_standalone_stall_recovery_skips_destructive_blocked_latch():
+	"""Standalone twin of the managed regression: a non-orchestrator issue
+	stuck at ai:awaiting-approval with a human-gated latch label must not
+	be auto-approved by the standalone stall loop (issue #3906 pattern)."""
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:awaiting-approval",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"phase_attempts": {},
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval", "ai:destructive-blocked"]},
+		issue_comments={501: [standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+	)
+
+	issue_comments = [c.get("body", "") for c in result["issues"]["501"]["comments"]]
+	assert not any("Standalone stall recovery" in body or "/approved" in body for body in issue_comments), issue_comments
+	assert "ai:destructive-blocked" in result["issues"]["501"]["labels"]
+	assert "ai:awaiting-approval" in result["issues"]["501"]["labels"]
+	assert result["issues"]["501"].get("closed", False) is False
+	assert (
+		"STALL_SKIP issue=501 reason=human_gated_latch label=ai:destructive-blocked phase=ai:awaiting-approval action=none"
+		in result["stdout"]
+	)
+
+	# Negative control: the same standalone stall without the latch is
+	# auto-approved, so the skip above is attributable to the latch.
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+		issue_comments={501: [standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["501"]["comments"]]
+	assert any("/approved" in body for body in issue_comments), result["stdout"]
+	assert "reason=human_gated_latch" not in result["stdout"]
+
+
 def test_standalone_stall_recovery_uses_shared_gate_aware_action_resolver():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	function_match = re.search(

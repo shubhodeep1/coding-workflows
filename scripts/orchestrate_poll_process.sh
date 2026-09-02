@@ -12415,6 +12415,8 @@ run_standalone_stall_recovery() {
   local elapsed_minutes
   local action
   local took_action
+  local _standalone_latch_label
+  local _standalone_phase_resolve_rc
 
   for ((c_idx=0; c_idx<c_count; c_idx++)); do
     issue_num="$(echo "${candidates}" | jq -r ".[${c_idx}].number")"
@@ -12438,14 +12440,37 @@ run_standalone_stall_recovery() {
       continue
     fi
 
-    phase="$(python3 - "$labels_json" <<'PY'
+    # Resolve both values through the shared Python predicates in one call so
+    # the standalone path cannot drift from managed stall detection.  Safe
+    # defaults first: under `set -euo pipefail` an empty read (python
+    # crashed) must not abort the whole poller or leave the variables
+    # unbound — fail open by skipping just this candidate for the cycle.
+    phase=""
+    _standalone_latch_label=""
+    _standalone_phase_resolve_rc=0
+    IFS=$'\t' read -r phase _standalone_latch_label < <(python3 - "$labels_json" <<'PY'
 import json, sys
 sys.path.insert(0, 'scripts')
-from orchestrate_lib import determine_phase
+from orchestrate_lib import determine_phase, stall_recovery_latch_label
 labels = json.loads(sys.argv[1])
-print(determine_phase(labels))
+print(f"{determine_phase(labels)}\t{stall_recovery_latch_label(labels) or ''}")
 PY
-)"
+    ) || _standalone_phase_resolve_rc=$?
+    if [ -z "${phase}" ]; then
+      echo "::warning::[standalone-stall] could not resolve phase for issue #${issue_num} (read rc=${_standalone_phase_resolve_rc}); skipping this candidate for this cycle." >&2
+      continue
+    fi
+
+    # Human-gated latch labels: implement.yml's
+    # "Validate approval phase label" step refuses to redispatch an issue
+    # carrying ai:destructive-blocked / ai:scope-blocked until a human
+    # removes it, so every standalone recovery action (/approved, /answer,
+    # /reclarify) would be a no-op that only burns a stall-judge run and a
+    # Telegram alert per cycle.  Pause exactly like ai:needs-human.
+    if [ -n "${_standalone_latch_label}" ]; then
+      echo "STALL_SKIP issue=${issue_num} reason=human_gated_latch label=${_standalone_latch_label} phase=${phase} action=none"
+      continue
+    fi
 
     # Phases the standalone loop does NOT act on.  ai:review-blocked was
     # historically in this skip list because it had a dedicated inline
@@ -17943,6 +17968,24 @@ fi
 
     STALL_COUNT="$(echo "${STALLS_JSON}" | jq -r '.count')"
     [[ "${STALL_COUNT}" =~ ^[0-9]+$ ]] || STALL_COUNT=0
+
+    # Issues check-stalls skipped because they carry a human-gated latch
+    # label (orchestrate_lib.STALL_RECOVERY_LATCH_LABELS —
+    # ai:destructive-blocked / ai:scope-blocked).  implement.yml refuses
+    # to redispatch those until a human removes the label, so no recovery
+    # action can move them; log one stable line per issue so the pause
+    # is visible in the poll log instead of silent.  `.latched` is
+    # additive on the check-stalls payload — older payloads (or the
+    # fail-open '{"ok":false,...}' fallback) simply yield an empty list.
+    _stall_latched_json="$(echo "${STALLS_JSON}" | jq -c '.latched // []' 2>/dev/null || echo '[]')"
+    while IFS= read -r _stall_latched_entry; do
+      [ -n "${_stall_latched_entry}" ] || continue
+      _stall_latched_issue="$(printf '%s' "${_stall_latched_entry}" | jq -r '.github_issue // empty' 2>/dev/null || true)"
+      [[ "${_stall_latched_issue}" =~ ^[0-9]+$ ]] || continue
+      _stall_latched_label="$(printf '%s' "${_stall_latched_entry}" | jq -r '.latch_label // "unknown"' 2>/dev/null || echo "unknown")"
+      _stall_latched_phase="$(printf '%s' "${_stall_latched_entry}" | jq -r '.phase // "unknown"' 2>/dev/null || echo "unknown")"
+      echo "STALL_SKIP issue=${_stall_latched_issue} reason=human_gated_latch label=${_stall_latched_label} phase=${_stall_latched_phase} action=none"
+    done < <(printf '%s' "${_stall_latched_json}" | jq -c '.[]?' 2>/dev/null || true)
 
     STALL_STATE_CHANGED=false
     STALL_HEALING_CHANGED=false

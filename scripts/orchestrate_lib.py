@@ -1477,6 +1477,41 @@ DEDICATED_HANDLER_PHASES: set[str] = {
 	"ai:security-pass-fixing",
 }
 
+# Human-gated latch labels that implement.yml refuses to redispatch on
+# (its "Validate approval phase label" step exits with
+# ``AI_PHASE_GATE_V1 ... reason=destructive_blocked|scope_blocked
+# outcome=skip`` while the issue keeps ai:awaiting-approval).  They are
+# not phase labels — determine_phase() ignores them — so the stall
+# detector used to see a plain ai:awaiting-approval stall and post
+# ``/approved`` (auto_approve, then retrigger_implement via the stall
+# judge) once per poll cycle, each round a no-op implement run plus a
+# codex stall-judge run plus Telegram alerts, until the recovery budget
+# closed the issue and the judge regenerated it under a fresh number
+# (issue #3906 on shubhodeep1/tele-funtoken-msg-scoring, 2026-09-01).
+# The guard that latches these labels already posted the human-facing
+# comment and CRITICAL alert, so stall recovery must pause exactly like
+# it does for ai:needs-human until a human removes the latch.
+STALL_RECOVERY_LATCH_LABELS: tuple[str, ...] = (
+	"ai:destructive-blocked",
+	"ai:scope-blocked",
+)
+
+
+def stall_recovery_latch_label(labels: Any) -> str | None:
+	"""Return the first STALL_RECOVERY_LATCH_LABELS entry present in *labels*.
+
+	*labels* is normally the issue's label-name list, but the argument is
+	typed ``Any`` on purpose: label payloads come from GitHub API JSON and
+	the poller's caches, so ``None`` or a non-list value must fail open
+	to ``None`` (no latch, stall recovery may act) instead of raising.
+	"""
+	if not isinstance(labels, (list, tuple, set, frozenset)):
+		return None
+	for latch_label in STALL_RECOVERY_LATCH_LABELS:
+		if latch_label in labels:
+			return latch_label
+	return None
+
 # Escalating recovery actions per detected phase.
 # The poller indexes into this list using the per-issue stall_recovery_count.
 # If recovery_count exceeds the list length, the last entry is repeated.
@@ -2393,7 +2428,7 @@ def detect_stalls(
 	"""
 	current_wave_idx = state.get("current_wave", 1) - 1
 	waves = state.get("waves", [])
-	if current_wave_idx >= len(waves):
+	if current_wave_idx < 0 or current_wave_idx >= len(waves):
 		return []
 
 	effective_thresholds = dict(DEFAULT_PHASE_STALL_THRESHOLDS)
@@ -2414,6 +2449,12 @@ def detect_stalls(
 
 		labels = issue_labels.get(str(gh_num), [])
 		if "ai:needs-human" in labels:
+			continue
+		if stall_recovery_latch_label(labels) is not None:
+			# Human-gated latch (ai:destructive-blocked / ai:scope-blocked):
+			# implement.yml refuses every redispatch until a human removes
+			# it, so any recovery action here is a guaranteed no-op loop.
+			# detect_stall_latched_issues() reports these for logging.
 			continue
 		phase = determine_phase(labels)
 
@@ -2490,6 +2531,46 @@ def detect_stalls(
 		})
 
 	return stalled
+
+
+def detect_stall_latched_issues(
+	state: dict[str, Any],
+	issue_labels: dict[str, list[str]],
+) -> list[dict[str, Any]]:
+	"""List current-wave issues that detect_stalls() skips for a latch label.
+
+	Companion to :func:`detect_stalls` so the poller can emit one
+	``STALL_SKIP ... reason=human_gated_latch`` line per skipped issue
+	without changing detect_stalls' return shape.  Only non-terminal wave
+	issues carrying a STALL_RECOVERY_LATCH_LABELS entry are returned; no
+	threshold or recovery-count logic applies because the skip is
+	unconditional while the latch is present.
+
+	Returns a list of dicts: id, github_issue, phase, latch_label.
+	"""
+	current_wave_idx = state.get("current_wave", 1) - 1
+	waves = state.get("waves", [])
+	if current_wave_idx < 0 or current_wave_idx >= len(waves):
+		return []
+
+	latched: list[dict[str, Any]] = []
+	for issue in waves[current_wave_idx].get("issues", []):
+		gh_num = issue.get("github_issue")
+		if not gh_num:
+			continue
+		if issue.get("status", "pending") in TERMINAL_WAVE_STATUSES:
+			continue
+		labels = issue_labels.get(str(gh_num), [])
+		latch_label = stall_recovery_latch_label(labels)
+		if latch_label is None:
+			continue
+		latched.append({
+			"id": issue.get("id"),
+			"github_issue": gh_num,
+			"phase": determine_phase(labels),
+			"latch_label": latch_label,
+		})
+	return latched
 
 
 def update_issue_timestamps(
@@ -3366,7 +3447,8 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 		max_recoveries_by_phase=max_recoveries_by_phase,
 		head_pushed_at=head_pushed_at,
 	)
-	_print_json({"ok": True, "stalls": stalls, "count": len(stalls)})
+	latched = detect_stall_latched_issues(state, issue_labels)
+	_print_json({"ok": True, "stalls": stalls, "count": len(stalls), "latched": latched})
 	return 0
 
 
