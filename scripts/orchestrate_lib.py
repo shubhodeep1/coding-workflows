@@ -1405,8 +1405,6 @@ DEDICATED_HANDLER_PHASES: set[str] = {"ai:needs-human", "ai:blocked", "ai:implem
 # The guard that latches these labels already posted the human-facing
 # comment and CRITICAL alert, so stall recovery must pause exactly like
 # it does for ai:needs-human until a human removes the latch.
-# Keep aligned with the literal label list in
-# scripts/orchestrate_poll_process.sh::run_standalone_stall_recovery.
 STALL_RECOVERY_LATCH_LABELS: tuple[str, ...] = (
 	"ai:destructive-blocked",
 	"ai:scope-blocked",
@@ -2344,7 +2342,7 @@ def detect_stalls(
 	"""
 	current_wave_idx = state.get("current_wave", 1) - 1
 	waves = state.get("waves", [])
-	if current_wave_idx >= len(waves):
+	if current_wave_idx < 0 or current_wave_idx >= len(waves):
 		return []
 
 	effective_thresholds = dict(DEFAULT_PHASE_STALL_THRESHOLDS)
@@ -2466,7 +2464,7 @@ def detect_stall_latched_issues(
 	"""
 	current_wave_idx = state.get("current_wave", 1) - 1
 	waves = state.get("waves", [])
-	if current_wave_idx >= len(waves):
+	if current_wave_idx < 0 or current_wave_idx >= len(waves):
 		return []
 
 	latched: list[dict[str, Any]] = []

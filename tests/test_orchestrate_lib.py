@@ -1315,6 +1315,17 @@ def test_detect_stalls_skips_needs_human_label():
 
 	assert stalls == []
 
+	# Invalid zero-based state must not select the final wave via waves[-1].
+	state["current_wave"] = 0
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+	)
+	assert stalls == []
+
 
 def test_detect_stalls_skips_human_gated_latch_labels():
 	"""Regression for issue #3906 (shubhodeep1/tele-funtoken-msg-scoring):
@@ -1409,7 +1420,8 @@ def test_detect_stall_latched_issues_reports_only_latched_non_terminal_issues():
 		}
 	]
 	assert orchestrate_lib.detect_stall_latched_issues(state, {"10": ["ai:awaiting-approval"]}) == []
-	# Out-of-range current wave fails open to an empty list.
+	# Invalid current waves fail open instead of selecting waves[-1].
+	assert orchestrate_lib.detect_stall_latched_issues(_make_state(current_wave=0), labels) == []
 	assert orchestrate_lib.detect_stall_latched_issues(_make_state(current_wave=5), labels) == []
 
 

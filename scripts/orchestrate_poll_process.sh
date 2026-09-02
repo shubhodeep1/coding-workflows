@@ -11749,29 +11749,23 @@ run_standalone_stall_recovery() {
       continue
     fi
 
-    phase="$(python3 - "$labels_json" <<'PY'
+    # Resolve both values through the shared Python predicates in one call so
+    # the standalone path cannot drift from managed stall detection.
+    IFS=$'\t' read -r phase _standalone_latch_label < <(python3 - "$labels_json" <<'PY'
 import json, sys
 sys.path.insert(0, 'scripts')
-from orchestrate_lib import determine_phase
+from orchestrate_lib import determine_phase, stall_recovery_latch_label
 labels = json.loads(sys.argv[1])
-print(determine_phase(labels))
+print(f"{determine_phase(labels)}\t{stall_recovery_latch_label(labels) or ''}")
 PY
-)"
+    )
 
-    # Human-gated latch labels (keep aligned with
-    # orchestrate_lib.STALL_RECOVERY_LATCH_LABELS): implement.yml's
+    # Human-gated latch labels: implement.yml's
     # "Validate approval phase label" step refuses to redispatch an issue
     # carrying ai:destructive-blocked / ai:scope-blocked until a human
     # removes it, so every standalone recovery action (/approved, /answer,
     # /reclarify) would be a no-op that only burns a stall-judge run and a
     # Telegram alert per cycle.  Pause exactly like ai:needs-human.
-    _standalone_latch_label=""
-    for _standalone_latch_candidate in "ai:destructive-blocked" "ai:scope-blocked"; do
-      if has_label "${labels_json}" "${_standalone_latch_candidate}"; then
-        _standalone_latch_label="${_standalone_latch_candidate}"
-        break
-      fi
-    done
     if [ -n "${_standalone_latch_label}" ]; then
       echo "STALL_SKIP issue=${issue_num} reason=human_gated_latch label=${_standalone_latch_label} phase=${phase} action=none"
       continue

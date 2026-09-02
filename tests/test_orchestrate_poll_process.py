@@ -10935,18 +10935,18 @@ def test_standalone_stall_recovery_skips_destructive_blocked_latch():
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval", "ai:scope-blocked"]},
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval", "ai:destructive-blocked"]},
 		issue_comments={501: [standalone_state_comment]},
 		mock_gh_issue_list_label_filter=True,
 	)
 
 	issue_comments = [c.get("body", "") for c in result["issues"]["501"]["comments"]]
 	assert not any("Standalone stall recovery" in body or "/approved" in body for body in issue_comments), issue_comments
-	assert "ai:scope-blocked" in result["issues"]["501"]["labels"]
+	assert "ai:destructive-blocked" in result["issues"]["501"]["labels"]
 	assert "ai:awaiting-approval" in result["issues"]["501"]["labels"]
 	assert result["issues"]["501"].get("closed", False) is False
 	assert (
-		"STALL_SKIP issue=501 reason=human_gated_latch label=ai:scope-blocked phase=ai:awaiting-approval action=none"
+		"STALL_SKIP issue=501 reason=human_gated_latch label=ai:destructive-blocked phase=ai:awaiting-approval action=none"
 		in result["stdout"]
 	)
 
