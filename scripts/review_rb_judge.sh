@@ -2360,7 +2360,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
 
     if [ -n "${NEW_ISSUE_TITLE}" ] && [ -n "${NEW_ISSUE_BODY}" ]; then
       if [ "${RB_REQUESTED_REISSUE_MODE}" = "spot-fix" ]; then
-        if [ "${REISSUE_PRESERVE_BASELINE_ENABLED:-false}" != "true" ]; then
+        if [ "${REISSUE_PRESERVE_BASELINE_ENABLED:-true}" != "true" ]; then
           RB_EFFECTIVE_REISSUE_MODE="redo"
           RB_SPOT_FIX_REASON="feature_flag_disabled"
         else
@@ -2482,7 +2482,7 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
       echo "::warning::Judge chose close_and_reissue but provided no new issue details."
     fi
 
-    echo "REISSUE_MODE requested_raw=${RB_REISSUE_MODE_RAW:-<empty>} effective=${RB_EFFECTIVE_REISSUE_MODE} feature_flag=${REISSUE_PRESERVE_BASELINE_ENABLED:-false}"
+    echo "REISSUE_MODE requested_raw=${RB_REISSUE_MODE_RAW:-<empty>} effective=${RB_EFFECTIVE_REISSUE_MODE} feature_flag=${REISSUE_PRESERVE_BASELINE_ENABLED:-true}"
 
     echo "judge_handled=true" >> "$GITHUB_OUTPUT"
     echo "judge_action=close_and_reissue" >> "$GITHUB_OUTPUT"

@@ -603,11 +603,12 @@ def test_review_blocked_prompt_includes_phase_e_schema_fields() -> None:
 	assert '"symptom": "<brief grounded gap>"' in prompt
 
 
-def test_review_autofix_wires_reissue_preserve_baseline_flag_default_false() -> None:
+def test_review_autofix_wires_reissue_preserve_baseline_flag_default_true() -> None:
 	wf = _review_autofix_text()
-	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}" in wf, (
+	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}" in wf, (
 		"review_autofix.yml must pass REISSUE_PRESERVE_BASELINE_ENABLED to the "
-		"review-blocked judge and default it to false for Phase E bake-out safety."
+		"review-blocked judge and default it to true (Phase E bake-out complete) so a "
+		"spot-fix verdict preserves the closed PR head unless a repo opts out."
 	)
 
 
