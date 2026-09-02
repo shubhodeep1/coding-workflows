@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/verify-activation.md:Step 7 (lines 59-65) | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The command transitions from a read-only diagnostic tool to one that mutates the repository by creating branches, editing files, committing, pushing, and opening PRs.\n  WHY: This is a declared-vs-effective capability gap and the largest surface change introduced by the PR, although the change is gated to evidence-based or code-fixable findings and restricts writes to Step 7 on the fix branch.\n- changelog.d/verify-activation-auto-fix.md:line 1 (filename itself) | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The changelog fragment filename does not follow the documented `changelog.d/<issue-or-pr>-<slug>.md` convention because it has no leading issue or PR number.\n  WHY: There is no runtime failure because the assembler does not parse the prefix and the descriptive slug remains unique, but the filename deviates from the documented convention; an existing unprefixed precedent weakens this to a convention nit.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/verify-activation.md:Step 7 (lines 59-65) \u2014 the fix step that creates a branch, edits files, commits, and opens a PR | severity=MAJOR | confidence=4\n  PROBLEM: The command transitions from a read-only diagnostic tool to one that mutates the repository (creates branches, edits files, pushes commits, opens PRs).\n  WHY: This is a declared-vs-effective capability gap that the PR itself documents; the change is correctly gated to evidence-based or code-fixable findings, and writes are restricted to Step 7 on the fix branch.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- changelog.d/verify-activation-auto-fix.md: line 1 (filename itself) | severity=NIT | confidence=2\n  PROBLEM: CLAUDE.md \u00a720.B prescribes the fragment filename format as changelog.d/<issue-or-pr>-<slug>.md, with the leading issue/PR number; this fragment is named verify-activation-auto-fix.md with no number prefix.\n  WHY: No runtime failure \u2014 the uniqueness purpose of \u00a720.B is still satisfied by the descriptive slug, and scripts/assemble_changelog.py does not parse the prefix; the only impact is deviation from the documented convention, with an existing unprefixed precedent weakening this to a convention nit.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "432b91128517cce33120b578021ae74196820f266ebd6b6601d7e23f40931b7c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33582346914",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33582346914",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260902024857_af326ad0cf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33582346914"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-02T02:48:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
