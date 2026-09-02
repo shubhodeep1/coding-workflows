@@ -274,10 +274,10 @@ def test_workflow_contains_guarded_baseline_override_checkout_path() -> None:
 	fallback_checkout_step = _step_block_text("Checkout repository")
 	log_step = _step_block_text("Log checkout ref")
 
-	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}" in workflow
+	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}" in workflow
 	assert "ISSUE_BODY: ${{ github.event.issue.body || '' }}" in resolver_step
 	assert "ISSUE_AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association || '' }}" in resolver_step
-	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}" in resolver_step
+	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}" in resolver_step
 	assert "ISSUE_BODY_FILE" in resolver_script
 	assert "except (OSError, UnicodeDecodeError):" in resolver_script
 	assert "ISSUE_BODY_FILE could not be read; falling back to event body" in resolver_script

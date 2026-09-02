@@ -26,7 +26,7 @@ env:
   # primary slug (or clear it) to disable the switch.
   MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.5' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'xhigh' }}
-  REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}
+  REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
   WORKSPACE_HOOK_TIMEOUT_SECONDS: ${{ vars.WORKSPACE_HOOK_TIMEOUT_SECONDS || '600' }}
@@ -500,7 +500,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ISSUE_BODY: ${{ github.event.issue.body || '' }}
           ISSUE_AUTHOR_ASSOCIATION: ${{ github.event.issue.author_association || '' }}
-          REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}
+          REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -520,7 +520,7 @@ jobs:
                   print("::notice::Baseline override ignored: ISSUE_BODY_FILE could not be read; falling back to event body.")
           issue_body = issue_body.replace("\r\n", "\n")
           issue_author_association = os.environ.get("ISSUE_AUTHOR_ASSOCIATION", "").strip().upper()
-          feature_enabled = os.environ.get("REISSUE_PRESERVE_BASELINE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+          feature_enabled = os.environ.get("REISSUE_PRESERVE_BASELINE_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
           repo = os.environ.get("GITHUB_REPOSITORY", "")
           trusted_issue_associations = {"OWNER", "MEMBER", "COLLABORATOR"}
 

@@ -395,6 +395,7 @@ set -euo pipefail
 ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
 _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ :; }}
+flag_enabled() {{ case "${{1,,}}" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac; }}
 
 GITHUB_OUTPUT="{github_output}"
 
@@ -603,11 +604,12 @@ def test_review_blocked_prompt_includes_phase_e_schema_fields() -> None:
 	assert '"symptom": "<brief grounded gap>"' in prompt
 
 
-def test_review_autofix_wires_reissue_preserve_baseline_flag_default_false() -> None:
+def test_review_autofix_wires_reissue_preserve_baseline_flag_default_true() -> None:
 	wf = _review_autofix_text()
-	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}" in wf, (
+	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}" in wf, (
 		"review_autofix.yml must pass REISSUE_PRESERVE_BASELINE_ENABLED to the "
-		"review-blocked judge and default it to false for Phase E bake-out safety."
+		"review-blocked judge and default it to true (Phase E bake-out complete) so a "
+		"spot-fix verdict preserves the closed PR head unless a repo opts out."
 	)
 
 
@@ -628,7 +630,7 @@ def test_close_and_reissue_spot_fix_preserves_baseline_branch_and_keeps_caller_c
 				"body": "Keep the prior implementation and patch only the grounded gaps.",
 			},
 		},
-		reissue_preserve_baseline_enabled="true",
+		reissue_preserve_baseline_enabled="1",
 		repo_files={
 			"src/app.py": "print('hello')\n",
 			"README.md": "hello\n",
