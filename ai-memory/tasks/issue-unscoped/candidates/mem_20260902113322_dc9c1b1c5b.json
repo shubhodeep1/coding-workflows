@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:2363 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603, moonshotai_kimi-k3, qwen_qwen3_7-plus, x-ai_grok-4_6]\n  PROBLEM: The spot-fix gate uses a strict literal comparison against `\"true\"` instead of the repository-standard truthy values `1|true|yes|on` accepted by `flag_enabled()` and the implement-side Python resolver.\n  WHY: Values such as `1`, `yes`, `on`, and `TRUE` make the judge downgrade `spot-fix` to `redo` and discard the closed PR's work, while the implement-side resolver treats them as enabled; severity disagreement: mistralai_mistral-small-2603 rated this BLOCKER, while the other reviewers rated it MAJOR.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states \"The script-level `:-false` fallbacks in `scripts/review_rb_judge.sh` and the resolver's Python default in `implement.yml` were flipped alongside the workflow defaults so a missing env var behaves the same everywhere.\" and lists both `scripts/review_rb_judge.sh` and the resolver Python default as flipped.\n  expected_change_site: `scripts/review_rb_judge.sh:2363` (the spot-fix gate comparison) and the surrounding truthiness parsing\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `scripts/review_rb_judge.sh:2363` was only flipped from `:-false` to `:-true` but still uses the strict literal `!= \"true\"` test rather than the `flag_enabled()` helper (line 390) or the truthy set `{\"1\",\"true\",\"yes\",\"on\"}` used by the implement-side Python resolver.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh:2363 | severity=MAJOR | confidence=5\n  PROBLEM: The spot-fix enablement gate uses a strict literal string comparison `\"${REISSUE_PRESERVE_BASELINE_ENABLED:-true}\" != \"true\"` although `flag_enabled()` and the Python resolver accept `1|true|yes|on` case-insensitively.\n  WHY: An operator using `1`, `yes`, `on`, or `TRUE` enters the `redo` branch, logs `REISSUE_BASELINE_DISCARDED requested=spot-fix reason=feature_flag_disabled`, and throws away the closed PR's 16 commits of work.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_rb_judge.sh:2363 | severity=MAJOR | confidence=5\n  PROBLEM: The spot-fix gate compares `${REISSUE_PRESERVE_BASELINE_ENABLED:-true}` against the literal string `\"true\"` while `flag_enabled()` and `.github/workflows/implement.yml:523` accept `1|true|yes|on` case-insensitively.\n  WHY: Setting `REISSUE_PRESERVE_BASELINE_ENABLED=1`, `yes`, `on`, or `True` causes the script to downgrade `RB_EFFECTIVE_REISSUE_MODE` to `\"redo\"` and discard the closed PR's work, while the Python resolver treats the same value as enabled.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_rb_judge.sh:2363 | severity=BLOCKER | confidence=5\n  PROBLEM: The environment variable comparison uses strict literal string comparison against `\"true\"` instead of accepting the standard truthy values (`1`, `yes`, `on`) accepted by `flag_enabled()` and the Python resolver.\n  WHY: Setting `REISSUE_PRESERVE_BASELINE_ENABLED=1`, `yes`, or `on` incorrectly disables baseline preservation, causing `RB_EFFECTIVE_REISSUE_MODE` to become `\"redo\"` and discarding the closed PR's work.\n- scripts/review_rb_judge.sh:2485 | severity=MAJOR | confidence=5\n  PROBLEM: The diagnostic log message shows the fallback value as `true` but does not normalize the actual value, making it misleading when non-literal truthy values are used.\n  WHY: Operators cannot reliably determine from logs whether the feature is actually enabled when using `1`, `yes`, or `on` values.\n- .github/workflows/implement.yml:523 | severity=BLOCKER | confidence=5\n  PROBLEM: The Python code correctly normalizes the environment variable value, but the workflow YAML defaults to `true` while the Python fallback is `\"false\"`, creating an inconsistency.\n  WHY: When the environment variable is not set, the workflow defaults to `true` but the Python code defaults to `false`, disabling baseline preservation despite the workflow intending to enable it.\n\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/review_rb_judge.sh:2363, `if [ \"${REISSUE_PRESERVE_BASELINE_ENABLED:-true}\" != \"true\" ]; then` | severity=MAJOR | confidence=4\n  PROBLEM: The spot-fix gate parses the flag with a strict literal comparison to `\"true\"` while `flag_enabled` and `.github/workflows/implement.yml:523` accept `1|true|yes|on` case-insensitively.\n  WHY: A repo setting of `1`, `yes`, `on`, or `TRUE` makes the judge force `RB_EFFECTIVE_REISSUE_MODE=\"redo\"`, set `RB_SPOT_FIX_REASON=\"feature_flag_disabled\"`, and discard the closed PR's work even though the implement resolver treats the value as enabled.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_rb_judge.sh:2363 | severity=MAJOR | confidence=5\n  PROBLEM: The shell-side check uses strict string comparison `!= \"true\"` while `flag_enabled()` and `.github/workflows/implement.yml:523` accept `1|true|yes|on` case-insensitively.\n  WHY: Setting `REISSUE_PRESERVE_BASELINE_ENABLED=1`, `yes`, `on`, or `TRUE` causes the judge to disable baseline preservation and downgrade `spot-fix` to `redo`, while the implement-side resolver treats the same value as enabled.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- scripts/review_rb_judge.sh:2363 if [ \"${REISSUE_PRESERVE_BASELINE_ENABLED:-true}\" != \"true\" ]; then | severity=MAJOR | confidence=5\n  PROBLEM: The close_and_reissue spot-fix gate requires the env var to be the exact string `true`, despite `flag_enabled` and `.github/workflows/implement.yml:523` accepting `1|true|yes|on` case-insensitively.\n  WHY: A repo var of `1`, `yes`, `on`, `TRUE`, or `True` makes the judge take the `feature_flag_disabled` branch, set `RB_EFFECTIVE_REISSUE_MODE=redo`, skip the baseline push, and log `REISSUE_BASELINE_DISCARDED`.\n\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "e5e8ab18effb644f5d01cae70f0c6098095b5875c0d94d0e1d55b981d2582a41",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3963,
+    "run_id": "33619265885",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33619265885",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260902113322_dc9c1b1c5b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3963,
+    "run_id": "33619265885"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-02T11:33:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
