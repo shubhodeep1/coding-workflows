@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-09-01T16:01:31Z",
+  "tick_at": "2026-09-02T15:44:14Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -15,14 +15,13 @@
   },
   "tracking_issues": [
     {
-      "current_wave": 4,
-      "integration_ahead_by": "15",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 6,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -30,10 +29,10 @@
       },
       "number": 3933,
       "project_complete": false,
-      "status": "waiting",
+      "status": "in-progress",
       "title": "[Orchestrator] Mandatory Orchestrator Security Pass Gate",
-      "total_waves": 4,
-      "wave_complete": true
+      "total_waves": 0,
+      "wave_complete": false
     }
   ]
 }
