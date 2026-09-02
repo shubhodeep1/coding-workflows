@@ -92,6 +92,26 @@ security_audit_require_writable_destination() {
 		security_audit_emit_failure "${required_phase}" "${required_path}" "destination is not writable"
 		return 1
 	fi
+	# `-w` answers from permission bits alone, so it reports "writable" for
+	# root on read-only or pseudo filesystems (e.g. /sys) where the write
+	# itself is refused. Prove writability with a real write so a bad
+	# destination fails at preflight instead of after the model run.
+	if [ -e "${required_path}" ]; then
+		if ! : >> "${required_path}" 2>/dev/null; then
+			security_audit_emit_failure "${required_phase}" "${required_path}" "destination is not writable"
+			return 1
+		fi
+	else
+		local writable_probe_path
+		if ! writable_probe_path="$(mktemp -p "${required_parent}" ".security-audit-writable-probe.XXXXXX" 2>/dev/null)"; then
+			security_audit_emit_failure "${required_phase}" "${required_path}" "destination is not writable"
+			return 1
+		fi
+		if ! rm -f -- "${writable_probe_path}" 2>/dev/null; then
+			security_audit_emit_failure "${required_phase}" "${required_path}" "destination is not writable"
+			return 1
+		fi
+	fi
 }
 
 security_audit_append_prompt_context() {
