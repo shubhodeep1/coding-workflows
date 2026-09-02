@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #3933 verify-activation follow-ups \u2014 confirm the security-audit findings-JSON preflight closes the root-on-read-only-mount gap AND the lifecycle doc covers the security-pass gate states and the `/re-security-pass` command.\n  expected_change_site: scripts/security_audit.sh:81-112 and docs/how-it-works.md state-machine + command vocabulary sections.\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Both sites are present in this PR. The preflight now performs a real write probe (`: >>` for existing paths; `mktemp`+`rm` for missing-file parents) so the failure surfaces at preflight instead of mid-audit. The doc adds `ai:security-pass`, `ai:security-pass-fixing`, `ai:security-pass-failed` to the mermaid + ASCII diagrams and a `/re-security-pass` row to the command vocabulary referencing the `<!-- re-security-pass-dedup:<comment-id> -->` marker.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: Issue #3933 verify-activation follow-ups \u2014 confirm the security-audit findings-JSON preflight closes the root-on-read-only-mount gap AND the lifecycle doc covers the security-pass gate states and the `/re-security-pass` command.\n  Expected change site: scripts/security_audit.sh:81-112 and docs/how-it-works.md state-machine + command vocabulary sections.\n  Evidence of absence: Both sites are present in this PR. The preflight now performs a real write probe (`: >>` for existing paths; `mktemp`+`rm` for missing-file parents) so the failure surfaces at preflight instead of mid-audit. The doc adds `ai:security-pass`, `ai:security-pass-fixing`, `ai:security-pass-failed` to the mermaid + ASCII diagrams and a `/re-security-pass` row to the command vocabulary referencing the `<!-- re-security-pass-dedup:<comment-id> -->` marker.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "2b00c0fba424451dd62b2d84c845e6d89840059fcb5d8e9c32422ae0ec7bd928",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33584814564",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33584814564",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260902031807_8d91b85e0e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33584814564"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-02T03:18:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
