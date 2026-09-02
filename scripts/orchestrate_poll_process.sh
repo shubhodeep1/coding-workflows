@@ -11726,6 +11726,8 @@ run_standalone_stall_recovery() {
   local elapsed_minutes
   local action
   local took_action
+  local _standalone_latch_label
+  local _standalone_phase_resolve_rc
 
   for ((c_idx=0; c_idx<c_count; c_idx++)); do
     issue_num="$(echo "${candidates}" | jq -r ".[${c_idx}].number")"
@@ -11750,7 +11752,13 @@ run_standalone_stall_recovery() {
     fi
 
     # Resolve both values through the shared Python predicates in one call so
-    # the standalone path cannot drift from managed stall detection.
+    # the standalone path cannot drift from managed stall detection.  Safe
+    # defaults first: under `set -euo pipefail` an empty read (python
+    # crashed) must not abort the whole poller or leave the variables
+    # unbound — fail open by skipping just this candidate for the cycle.
+    phase=""
+    _standalone_latch_label=""
+    _standalone_phase_resolve_rc=0
     IFS=$'\t' read -r phase _standalone_latch_label < <(python3 - "$labels_json" <<'PY'
 import json, sys
 sys.path.insert(0, 'scripts')
@@ -11758,7 +11766,11 @@ from orchestrate_lib import determine_phase, stall_recovery_latch_label
 labels = json.loads(sys.argv[1])
 print(f"{determine_phase(labels)}\t{stall_recovery_latch_label(labels) or ''}")
 PY
-    )
+    ) || _standalone_phase_resolve_rc=$?
+    if [ -z "${phase}" ]; then
+      echo "::warning::[standalone-stall] could not resolve phase for issue #${issue_num} (read rc=${_standalone_phase_resolve_rc}); skipping this candidate for this cycle." >&2
+      continue
+    fi
 
     # Human-gated latch labels: implement.yml's
     # "Validate approval phase label" step refuses to redispatch an issue
