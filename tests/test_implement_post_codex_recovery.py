@@ -3177,9 +3177,9 @@ def test_codex_request_user_input_bail_and_flag() -> None:
 
 def test_codex_blocked_verdict_bail_and_flag() -> None:
 	"""Pin the deliberate-BLOCKED bail: when Codex exits 0 with a final
-	message whose line starts with `BLOCKED:` and the baseline-relative
-	worktree delta is empty, the retry loop must treat that as the
-	model's verdict (prompts/mode-implement.txt's completeness_contract
+	message containing any line that starts with `BLOCKED:` and the
+	baseline-relative worktree delta is empty, the retry loop must treat
+	that as the model's verdict (prompts/mode-implement.txt's completeness_contract
 	names `BLOCKED: <reason>` as a valid terminal deliverable), not as an
 	anonymous "no file changes" attempt. Without this, run 33470149029
 	on multi-user-ai-agent issue #246 (an admin-only fail-closed task
@@ -3209,8 +3209,12 @@ def test_codex_blocked_verdict_bail_and_flag() -> None:
 	)
 	# The reason must be logged so the workflow log names WHY the loop
 	# stopped without the operator opening codex_output.txt.
-	assert "Model reason: ${codex_blocked_reason}" in codex_block, (
-		"the bail must log the model's own BLOCKED: line"
+	escape_helper_source_idx = codex_block.find("source scripts/gh_helpers.sh")
+	assert 0 <= escape_helper_source_idx < blocked_idx, (
+		"the GitHub Actions annotation escaper must be sourced before the BLOCKED bail"
+	)
+	assert 'Model reason: $(_gh_actions_escape "${codex_blocked_reason}")' in codex_block, (
+		"the bail must safely escape and log the model's own BLOCKED: line"
 	)
 	# Flag file → diag_reason routing; flag write must precede the break
 	# so the flag is always present when the loop exits via this path.
@@ -3249,6 +3253,8 @@ def test_codex_blocked_verdict_bail_and_flag() -> None:
 		"the issue diagnostics comment must say 'deliberate BLOCKED "
 		"verdict', not the generic 'failed after N attempts'"
 	)
+	assert "captured from final assistant output" in codex_block[diag_idx:diag_idx + 600]
+	assert "tails below contain stderr only" in codex_block[diag_idx:diag_idx + 600]
 	generic_idx = codex_block.find('diag_reason="Codex implement failed after ${max_attempts} attempts"')
 	assert generic_idx != -1 and generic_idx < diag_idx, (
 		"the BLOCKED branch must override the generic default reason"

@@ -2401,9 +2401,10 @@ jobs:
                 # completeness_contract names `BLOCKED: <reason>` as a valid
                 # terminal deliverable (and its scope-lock discipline
                 # mandates `BLOCKED: scope-lock-violation file=<path>`), so
-                # a final message opening with `BLOCKED:` on an empty
-                # worktree delta is the model's verdict, not a stuck
-                # attempt. Before this check it fell through to the generic
+                # any final-output line starting with optional whitespace
+                # followed by `BLOCKED:` on an empty worktree delta is the
+                # model's verdict, not a stuck attempt. Before this check it
+                # fell through to the generic
                 # "returned output but produced no file changes" path below:
                 # every remaining attempt re-ran under the retry nudge ("the
                 # implementation plan requires repository modifications"),
@@ -2423,7 +2424,8 @@ jobs:
                 # branch (the non-empty delta above wins).
                 if grep -qE '^[[:space:]]*BLOCKED:' "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
                   codex_blocked_reason="$(grep -E '^[[:space:]]*BLOCKED:' "${CODEX_OUTPUT_FILE}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]+//' || true)"
-                  echo "::error::Codex returned a deliberate BLOCKED verdict on attempt ${attempt} — not retrying (a verdict is not a stuck attempt). Model reason: ${codex_blocked_reason}"
+                  # Escape the annotation channel, but preserve the raw line in the flag file below.
+                  echo "::error::Codex returned a deliberate BLOCKED verdict on attempt ${attempt} — not retrying (a verdict is not a stuck attempt). Model reason: $(_gh_actions_escape "${codex_blocked_reason}")"
                   printf '%s\n' "${codex_blocked_reason}" > "${RUNTIME_DIR}/codex_blocked.flag"
                   emit_implement_substate "implement" "implement" "Failed" "${attempt}" "${attempt_log_file}"
                   break
@@ -2653,7 +2655,7 @@ jobs:
             if [ -f "${RUNTIME_DIR}/codex_request_user_input.flag" ]; then
               diag_reason="Codex bailed: request_user_input rejected in exec mode (issue/plan ambiguity — route back to clarify)"
             elif [ -f "${RUNTIME_DIR}/codex_blocked.flag" ]; then
-              diag_reason="Codex bailed on attempt ${attempt}: deliberate BLOCKED verdict (the model reported the task cannot be completed as specified — its \`BLOCKED:\` line is in the attempt ${attempt} tail below; this is a terminal answer, not a retryable failure, so the loop stopped instead of exhausting all ${max_attempts} attempts)"
+              diag_reason="Codex bailed on attempt ${attempt}: deliberate BLOCKED verdict (the model reported the task cannot be completed as specified; its \`BLOCKED:\` line was captured from final assistant output and logged by the Run Codex implementation step, while the tails below contain stderr only; this is a terminal answer, not a retryable failure, so the loop stopped instead of exhausting all ${max_attempts} attempts)"
             elif [ -f "${RUNTIME_DIR}/codex_stuck_in_exploration.flag" ]; then
               diag_reason="Codex bailed: ${empty_streak} consecutive attempts with no actionable output (empty-output and/or announced-edit-without-changes — agent loop stuck in exploration)"
             fi
