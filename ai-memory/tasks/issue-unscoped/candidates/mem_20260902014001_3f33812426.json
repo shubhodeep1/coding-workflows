@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:line 1404 | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The documented trigger condition says the final message's first non-blank-prefixed line must start with `BLOCKED:`, but the implementation matches a `BLOCKED:` line anywhere in the final message.\n  WHY: The documentation misleads maintainers about when the bail fires, because a summary followed by a later `BLOCKED:` line matches the implementation and its test.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- README.md\n  Line or code reference: line 1404 (new item 10i): \"a final message whose first non-blank-prefixed line starts with BLOCKED:\"\n  Problem: The documented trigger condition does not match the implemented behavior. The grep in implement.yml line 2424 (`grep -qE '^[[:space:]]*BLOCKED:'`) matches a `BLOCKED:` line anywhere in the final message, not only as the first non-blank-prefixed line \u2014 and the PR's own test `test_codex_blocked_verdict_regex_matches_line_start_only` deliberately asserts the multi-line shape (\"Summary of checks:\\n- fetch: PASS\\n\\nBLOCKED: ...\") must match, which the README wording would exclude.\n  Why it fails at runtime: It does not fail at runtime; it is a doc/behavior mismatch that misleads future maintainers about when the bail fires (an operator reading 10i would expect a summary-then-BLOCKED message to fall through to the retry path, when in fact the loop bails).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- HARDENING_SUGGESTIONS:\n  - file: .github/workflows/implement.yml\n  - location: line 2426 (`echo \"::error::... Model reason: ${codex_blocked_reason}\"`)\n  - issue: `codex_blocked_reason` is model-generated text interpolated raw into a `::error::` workflow annotation. A `%`, `\\r`, or `:` sequence in the model's reason can mangle or drop the annotation (GitHub command parsing), though the plain log line still prints.\n  - suggested minimal fix: sanitize before annotation, e.g. `codex_blocked_reason_safe=\"${codex_blocked_reason//'%'/'%25'}\"; codex_blocked_reason_safe=\"${codex_blocked_reason_safe//$'\\r'/}\"` and echo the sanitized copy (keep the raw reason in the flag file).\n  - estimated lines changed: 2\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "641c131ebc1106ce818a46d5f111971d7795a599bd0c6d744b072b85d2faca55",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33577813122",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33577813122",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260902014001_3f33812426",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33577813122"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-02T01:40:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
