@@ -8082,7 +8082,7 @@ sync_default_into_integration_branch() {
     expected_integration_branch="orchestrator/project-${TRACKING_NUM}"
   fi
   if [ -z "${expected_integration_branch}" ] || [ "${integration_branch}" != "${expected_integration_branch}" ]; then
-    echo "::warning::SYNC_LIST_UNION_V1: integration=${integration_branch} outcome=ineligible reason=branch_binding_mismatch"
+    echo "::warning::Integration sync rejected: integration=${integration_branch} outcome=ineligible reason=branch_binding_mismatch"
     return 1
   fi
 
@@ -14454,8 +14454,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       continue
     fi
     if [ "${EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT:-0}" -gt 0 ]; then
-      echo "::warning::Rejected ${EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT} unauthenticated orchestrator state comment(s) for tracking issue #${TRACKING_NUM}; skipping state reconstruction this cycle."
-      continue
+      echo "::warning::Rejected ${EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT} unauthenticated orchestrator state comment(s) for tracking issue #${TRACKING_NUM}; continuing reconstruction from trusted project inputs only."
     fi
     if [ "${EXTRACTED_STATE_BRANCH_MISMATCH_COUNT:-0}" -gt 0 ]; then
       echo "::warning::Rejected authenticated orchestrator state for tracking issue #${TRACKING_NUM} because its integration branch is not orchestrator/project-${TRACKING_NUM}; skipping state reconstruction this cycle."

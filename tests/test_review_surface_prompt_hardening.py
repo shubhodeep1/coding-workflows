@@ -333,8 +333,21 @@ def test_phase_e_review_surface_prompts_keep_injected_fence_text_as_data() -> No
 	)
 
 
+def test_integration_conflict_state_selection_requires_trust_and_branch_binding() -> None:
+	prepare_body = CONFLICT_PREPARE.read_text(encoding="utf-8")
+	selection_start = prepare_body.index('  _state_payload="$(jq -s \'')
+	selection_end = prepare_body.index('    _state_json=', selection_start)
+	selection_body = prepare_body[selection_start:selection_end]
+	assert 'select(.body | contains("ORCHESTRATOR_STATE_V1"))' not in selection_body
+	assert r'test("\\[bot\\]$")' in selection_body
+	assert 'IN("OWNER", "MEMBER", "COLLABORATOR")' in selection_body
+	assert '--arg expected_branch "${TARGET_BRANCH}"' in prepare_body
+	assert '((.integration_branch // "") == $expected_branch)' in prepare_body
+
+
 def main() -> int:
 	test_phase_e_review_surface_prompts_keep_injected_fence_text_as_data()
+	test_integration_conflict_state_selection_requires_trust_and_branch_binding()
 	print("OK: review-surface prompt hardening preserves injected fence bait as data")
 	return 0
 

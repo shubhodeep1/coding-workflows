@@ -419,9 +419,10 @@ dashboard without producing a fresh comment per tick.
 State-marker authority is restricted to `*[bot]` logins and authors with
 `OWNER`, `MEMBER`, or `COLLABORATOR` association. V2 chunks are filtered before
 chain assembly, and any non-empty state `integration_branch` must equal
-`orchestrator/project-<tracking issue>`. With no authenticated, branch-bound
-state available, unauthorized markers and cross-project branch values pause
-the poll cycle rather than permitting state reconstruction or branch access.
+`orchestrator/project-<tracking issue>`. Unauthorized markers are ignored as
+state authority and cannot veto reconstruction from trusted project inputs;
+authenticated cross-project branch values pause the poll cycle rather than
+permitting state reconstruction or branch access.
 
 | Marker | Helper | Purpose |
 |---|---|---|

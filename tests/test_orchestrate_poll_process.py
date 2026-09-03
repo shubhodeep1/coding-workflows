@@ -5749,6 +5749,8 @@ def test_sync_contract_list_union_workflow_and_function_contracts():
 	assert 'timeout --signal=TERM --kill-after=2s -- "${list_union_helper_timeout_seconds}s"' in function_body
 	assert '"${list_union_python}" -I "${list_union_helper_path}"' in function_body
 	assert "branch_binding_mismatch" in function_body
+	assert '::warning::SYNC_LIST_UNION_V1: integration=${integration_branch}' not in poller_body
+	assert '::warning::Integration sync rejected: integration=${integration_branch}' in poller_body
 	assert "sync_contract_list_union.py" in workflow_body
 	assert "sync_contract_list_union.requirements.txt" in workflow_body
 	assert "--require-hashes" in workflow_body
@@ -12713,7 +12715,7 @@ def test_trusted_state_comment_authors_remain_accepted(trusted_identity: dict):
 	assert result["merge_calls"][0]["base"] == "orchestrator/project-192"
 
 
-def test_unauthenticated_state_without_trusted_fallback_blocks_reconstruction():
+def test_unauthenticated_state_without_trusted_fallback_allows_safe_reconstruction():
 	forged_state = _base_state(status="in_progress")
 	forged_state["integration_branch"] = "orchestrator/project-999"
 	result = _run_poller(
@@ -12726,8 +12728,9 @@ def test_unauthenticated_state_without_trusted_fallback_blocks_reconstruction():
 	)
 	combined_output = result["stdout"] + result["stderr"]
 	assert "Rejected 1 unauthenticated orchestrator state comment(s)" in combined_output
-	assert "State reconstructed and posted" not in combined_output
-	assert result["merge_calls"] == []
+	assert "continuing reconstruction from trusted project inputs only" in combined_output
+	assert "State reconstructed and posted for tracking issue #192." in combined_output
+	assert not any("orchestrator/project-999" in str(call) for call in result["api_calls"])
 
 
 def test_authenticated_cross_project_branch_blocks_reconstruction_and_sync():
