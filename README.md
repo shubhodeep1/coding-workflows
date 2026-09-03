@@ -283,7 +283,15 @@ Several Symphony-era behaviors are configured by optional committed files rather
 
 Copy the ready-to-use templates from [`workflow-templates/`](workflow-templates/) into your repo's `.github/workflows/` directory. Reference implementations also live in [`.github/workflows/internal-*.yml`](.github/workflows/) in this repository.
 
-At minimum, create these three core wrappers:
+At minimum, create these three core wrappers. Each job carries the same `if:` predicate as the
+reusable workflow it calls (see `agents.md`, "Phase wrapper predicate parity"). `ai-clarify`
+automatically triages newly opened issues unless they carry `ai:orchestrator-tracking`,
+`ai:security-audit`, or `ai:retro`; its `/reclarify` route accepts only comments from a user whose
+`author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`. The `/answer` route in `ai-plan` and the
+`/approved` route in `ai-implement` accept the same trusted-user associations and also accept
+`github-actions[bot]` with their documented auto-answer and auto-approve markers, respectively. Copy
+the predicate verbatim — a wrapper without it still runs the reusable workflow's own job-level gate,
+but fires a skipped run for every other comment.
 
 **`.github/workflows/ai-clarify.yml`** — Triages new issues automatically
 ```yaml
@@ -298,6 +306,9 @@ permissions:
   issues: write
 jobs:
   clarify:
+    if: >-
+      (github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) ||
+      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
     uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@stable
     secrets: inherit
 ```
@@ -313,6 +324,26 @@ permissions:
   issues: write
 jobs:
   plan:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.pull_request == null &&
+      (
+        (
+          github.event.comment.user.type == 'User' &&
+          contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+          startsWith(github.event.comment.body, '/answer')
+        ) ||
+        (
+          github.event.comment.user.type == 'Bot' &&
+          github.event.comment.user.login == 'github-actions[bot]' &&
+          startsWith(github.event.comment.body, '/answer') &&
+          (
+            contains(github.event.comment.body, '[auto-answered-by-clarify]') ||
+            contains(github.event.comment.body, '[auto-answered-by-orchestrator]')
+          )
+        )
+      )
     uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@stable
     secrets: inherit
 ```
@@ -329,6 +360,23 @@ permissions:
   pull-requests: write
 jobs:
   implement:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.pull_request == null &&
+      (
+        (
+          github.event.comment.user.type == 'User' &&
+          contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+          startsWith(github.event.comment.body, '/approved')
+        ) ||
+        (
+          github.event.comment.user.type == 'Bot' &&
+          github.event.comment.user.login == 'github-actions[bot]' &&
+          startsWith(github.event.comment.body, '/approved') &&
+          contains(github.event.comment.body, '[auto-approved-by-plan]')
+        )
+      )
     uses: shubhodeep1/coding-workflows/.github/workflows/implement.yml@stable
     secrets: inherit
 ```
@@ -2059,7 +2107,12 @@ Consumer repos pin to `@stable` for automatic updates or exact tags for reproduc
 2. Test via canary channel on pilot repos
 3. Promote to stable after validation
 
-See `docs/release-policy.md` for the full release process.
+The release process is the `stable` tag flow described under [Versioning](#versioning): promote
+`main` with [`promote-main-to-stable.yml`](.github/workflows/promote-main-to-stable.yml) (which runs the
+[`test-and-mark-stable.yml`](.github/workflows/test-and-mark-stable.yml) release gate) or cut a
+stable-only patch with [`mark-stable.yml`](.github/workflows/mark-stable.yml); both are
+`workflow_dispatch`-only and, on success, send the `coding-workflows-stable-released`
+`repository_dispatch` to every repo in `.github/ai/consumer_repos.json`.
 
 ## Task-state mirror flag
 
