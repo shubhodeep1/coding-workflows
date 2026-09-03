@@ -484,6 +484,7 @@ scripts/slop_scan_local.py
 scripts/stage_workflow_support.sh
 scripts/summarize_reviewer_consensus.sh
 scripts/summarize_unselected_runs.py
+scripts/sync_contract_list_union.py
 scripts/targeted_file_context.py
 scripts/task_state.py
 scripts/templates/serena_project.yml.j2
@@ -769,6 +770,7 @@ tests/test_state_snapshot.py
 tests/test_subissue_closing_pr.py
 tests/test_summarize_reviewer_consensus_sandbox_pin.py
 tests/test_summarize_unselected_runs.py
+tests/test_sync_contract_list_union.py
 tests/test_targeted_file_context.py
 tests/test_task_state.py
 tests/test_task_state_unblock.py

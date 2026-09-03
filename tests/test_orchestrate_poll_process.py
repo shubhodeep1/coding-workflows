@@ -3139,10 +3139,10 @@ sys.exit(proc.returncode)
 				"TG_CLEANUP_CAPTURE": str(telegram_cleanup_capture),
 				"TG_NOTIFICATION_CAPTURE": str(telegram_notification_capture),
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
-					"BRANCH_REBUILD_ENABLED": branch_rebuild_enabled,
-					"BRANCH_REBUILD_THRESHOLD_HOURS": branch_rebuild_threshold_hours,
-					"BRANCH_REBUILD_COOLDOWN_HOURS": branch_rebuild_cooldown_hours,
-					"ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED": "false",
+				"BRANCH_REBUILD_ENABLED": branch_rebuild_enabled,
+				"BRANCH_REBUILD_THRESHOLD_HOURS": branch_rebuild_threshold_hours,
+				"BRANCH_REBUILD_COOLDOWN_HOURS": branch_rebuild_cooldown_hours,
+				"ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED": "false",
 				"GH_MOCK_STORE": str(store_file),
 				"GH_RETRY_MAX_ATTEMPTS": "1",
 				"REAL_GIT_BIN": real_git,
@@ -5609,6 +5609,9 @@ def test_sync_conflict_comment_includes_paths_and_runbook_link():
 def test_sync_contract_list_union_pushes_two_parent_merge_without_resolver_dispatch():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_sync_status"] = "healing"
+	state["integration_sync_last_error"] = "prior conflict"
+	state["integration_conflict_unresolved_ticks"] = 1
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
@@ -5627,8 +5630,11 @@ def test_sync_contract_list_union_pushes_two_parent_merge_without_resolver_dispa
 	assert result["review_dispatches"] == []
 	assert result["latest_state"]["sync"]["last_sync_outcome"] == "merged-deterministic"
 	assert result["latest_state"]["sync"]["last_list_union_paths"] == ["db/contracts/x.yml"]
+	assert result["latest_state"]["integration_sync_status"] == "clean"
+	assert result["latest_state"]["integration_sync_last_error"] == ""
 	assert result["latest_state"]["integration_conflict_unresolved_ticks"] == 0
 	tracking_bodies = [comment.get("body", "") for comment in result["issues"]["192"]["comments"]]
+	assert sum(body.startswith("## ✅ Integration self-healing resolved") for body in tracking_bodies) == 1
 	assert any(body.startswith("## ✅ Integration sync auto-resolved") for body in tracking_bodies)
 	assert "SYNC_LIST_UNION_V1:" in result["stdout"] + result["stderr"]
 	assert "outcome=merged" in result["stdout"] + result["stderr"]

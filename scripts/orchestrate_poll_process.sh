@@ -8112,10 +8112,7 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
 				"last_list_union_at": $now,
 				"last_conflict_paths": [],
 				"last_conflict_fingerprint": ""
-			}) |
-			.integration_sync_status = "clean" |
-			.integration_sync_last_error = "" |
-			.integration_conflict_unresolved_ticks = 0' \
+			})' \
 			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 		mark_integration_sync_clean "${default_branch}"
 		post_state_comment || true
