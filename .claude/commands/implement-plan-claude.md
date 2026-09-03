@@ -1,3 +1,6 @@
+---
+model: best
+---
 Implement the plan documented at the path / reference in `$ARGUMENTS` **directly in this Claude Code session**, then **re-verify it is fully implemented**, and **only if it is complete** move the plan doc into `docs/completed/`. Commit, push, and open a PR. This is the **in-session** variant — Claude writes the code here and now. To hand the plan to the unattended **AI orchestrator** instead (which decomposes the work into a dependency DAG of issues and ships each phase as its own PR), use `/implement-plan-ai`. `$ARGUMENTS` is **free-form prose** that must resolve to a single plan markdown doc — typically a path like `docs/plans/<slug>-plan.md`, but it may also be a slug, a topic that matches one plan filename, or a GitHub reference (issue / PR) that links to the plan. Optional trailing prose (focus areas, a phase to start with) is allowed but not required.
 
 $ARGUMENTS

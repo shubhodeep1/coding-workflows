@@ -1,3 +1,6 @@
+---
+model: opus
+---
 Investigate a PR, issue, workflow run, or other reference, identify the root cause, and ship a fix. `$ARGUMENTS` is **free-form prose** that may contain any combination of GitHub PR URLs, issue URLs, Actions run/job URLs, raw log URLs, `#1234` references, run IDs / job IDs, commit SHAs, branch / tag names, file paths, stack traces, and quoted error messages — plus an optional free-form description of what the user expects you to focus on.
 
 **Which repo / which ref.** By default the reference lives in **this** repo (`shubhodeep1/coding-workflows`), which is investigated at **`main`** (the local working checkout) — never a `stable` tag, because this is the upstream library itself and the fix lands on `main`. If the evidence shows the reference actually concerns a **different** repo (e.g. a consumer repo) and the root cause is internal to that repo, investigate **that** repo at its **`main`** branch instead — decide which repo to investigate from the leads + description + evidence, and state the decision in the `Summary`. You can only commit / push fixes to **this** repo: when the fix must land in a different repo, do not edit — produce the [Output Format](#output-format) report with the proposed fix and tell the user which repo to open.

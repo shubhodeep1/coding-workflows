@@ -1,3 +1,6 @@
+---
+model: sonnet
+---
 Seed a **new consumer repository** so it runs the coding-workflows automation: given a target `owner/repo` in `$ARGUMENTS` (plus an optional profile — `core`, `standard`, or `full`; default **`standard`**), copy the profile's wrapper workflows, the `.claude/` command/hook assets, and the root `CLAUDE.md` from the upstream library (`shubhodeep1/coding-workflows` at the **`stable`** ref — the ref consumers pin and the daily sync updates from, never `main`) into the target repo via a seed branch + PR, set the target's `WORKFLOW_PROFILE` repo variable (after asking, §23.C), and register the repo in the library's `.github/ai/consumer_repos.json` (§14 — mandatory). After the seed PR merges and the user adds the required secrets, the existing `ai-update-workflows.yml` sync (daily 04:00 UTC cron + `@stable` `repository_dispatch`) owns all future updates — this command is **initial onboarding only** and is a no-op on an already-seeded repo.
 
 $ARGUMENTS

@@ -1,3 +1,6 @@
+---
+model: opus
+---
 Take a software task described in `$ARGUMENTS`, clarify every ambiguity with the user via CLAUDE.md §2-style Q1/Q2 multiple-choice questions, then write a detailed implementation plan to `docs/plans/<slug>-plan.md` and open a PR. `$ARGUMENTS` is **free-form prose** describing the task. It may contain optional references — issue / PR URLs, `#1234` refs, Actions run URLs, commit SHAs, file paths, related prior plans — but they are not required.
 
 $ARGUMENTS
