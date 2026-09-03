@@ -180,6 +180,15 @@ def test_invalid_merged_yaml_is_rejected(tmp_path: Path) -> None:
 	_assert_ineligible(result, output_path, "yaml_parse_failed")
 
 
+def test_loader_constructor_parse_failure_is_ineligible() -> None:
+	import yaml
+
+	import scripts.sync_contract_list_union as list_union_helper
+
+	with pytest.raises(list_union_helper.IneligibleError, match="yaml_parse_failed"):
+		list_union_helper._safe_load(yaml, "\x00")
+
+
 @pytest.mark.parametrize("duplicate_source", ["base", "ours", "theirs"])
 def test_duplicate_top_level_key_in_each_input_is_rejected(tmp_path: Path, duplicate_source: str) -> None:
 	inputs = {

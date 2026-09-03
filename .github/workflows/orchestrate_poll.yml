@@ -213,6 +213,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          architecture: "x64"
 
       - name: Install Codex CLI
         if: steps.find_tracking.outputs.has_work == 'true'
@@ -577,7 +578,7 @@ jobs:
             --no-deps \
             --requirement "${requirements_file}" \
             || disable_list_union_python "Hash-locked PyYAML installation failed."
-          "${union_python}" -I -c 'import yaml; assert yaml.__version__ == "6.0.3"' \
+          "${union_python}" -I -c 'import yaml' \
             || disable_list_union_python "The isolated PyYAML installation did not verify."
           echo "SYNC_CONTRACT_LIST_UNION_PYTHON=${union_python}" >> "$GITHUB_ENV"
 

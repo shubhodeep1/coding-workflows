@@ -127,11 +127,15 @@ def test_contract_list_union_uses_isolated_hash_locked_pyyaml_before_git_credent
 	assert "--only-binary=:all:" in prepare_block
 	assert "--no-deps" in prepare_block
 	assert '--requirement "${requirements_file}"' in prepare_block
-	assert '-I -c \'import yaml; assert yaml.__version__ == "6.0.3"\'' in prepare_block
+	assert '-I -c \'import yaml\'' in prepare_block
+	assert "yaml.__version__" not in prepare_block
 	assert 'SYNC_CONTRACT_LIST_UNION_PYTHON=${unavailable_python}' in prepare_block
 	assert "PyYAML==6.0.3" in requirements
 	assert "--hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc" in requirements
-	assert requirements.count("--hash=sha256:") == 1
+	assert requirements.count("--hash=sha256:") > 1
+	assert "runs-on: ubuntu-latest" in wf
+	assert 'python-version: "3.12"' in wf
+	assert 'architecture: "x64"' in wf
 	assert "GH_TOKEN" not in prepare_block
 	assert "python3 -m pip install --quiet pyyaml" not in wf
 

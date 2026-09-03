@@ -64,15 +64,17 @@ def _safe_load(yaml_module: Any, text: str) -> Any:
 		yaml_module.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
 		_construct_unique_mapping,
 	)
-	loader = _UniqueKeySafeLoader(text)
+	loader: Any | None = None
 	try:
+		loader = _UniqueKeySafeLoader(text)
 		return loader.get_single_data()
 	except IneligibleError:
 		raise
 	except Exception as error:
 		raise IneligibleError("yaml_parse_failed") from error
 	finally:
-		loader.dispose()
+		if loader is not None:
+			loader.dispose()
 
 
 def _nearest_top_level_key(lines: list[str], marker_index: int) -> str | None:
