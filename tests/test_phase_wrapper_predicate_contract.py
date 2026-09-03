@@ -127,6 +127,40 @@ def test_clarify_response_predicate_preserves_actor_and_content_guards() -> None
 	)
 
 
+README_WRAPPER_EXAMPLES = {
+	"clarify": "ai-clarify",
+	"plan": "ai-plan",
+	"implement": "ai-implement",
+}
+
+
+def _readme_wrapper_example(template_name: str) -> dict:
+	"""Return the parsed ```yaml block that README.md shows for one core wrapper."""
+	readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+	heading = f"**`.github/workflows/{template_name}.yml`**"
+	heading_index = readme.index(heading)
+	fence_start = readme.index("```yaml\n", heading_index) + len("```yaml\n")
+	fence_end = readme.index("\n```", fence_start)
+	return yaml.safe_load(readme[fence_start:fence_end])
+
+
+def test_readme_core_wrapper_examples_carry_reusable_predicates() -> None:
+	# README's "Create wrapper workflows" section is what a consumer hand-copies
+	# when it does not install workflow-templates/ verbatim. An example without
+	# the job-level predicate is the SEC-B06 shape (any commenter dispatches a
+	# secrets-inheriting run), so the examples must match the canonical
+	# reusable-workflow predicate exactly like the shipped templates do.
+	for job_name, template_name in README_WRAPPER_EXAMPLES.items():
+		example = _readme_wrapper_example(template_name)
+		predicate = example["jobs"][job_name].get("if")
+		assert isinstance(predicate, str), f"README {template_name}.yml example lacks jobs.{job_name}.if"
+		assert " ".join(predicate.split()) == _canonical_predicate(job_name), (
+			f"README {template_name}.yml example predicate drifted from the reusable workflow"
+		)
+		expected_uses = f"shubhodeep1/coding-workflows/.github/workflows/{PHASE_WORKFLOWS[job_name][0].rsplit('/', 1)[1]}@stable"
+		assert example["jobs"][job_name]["uses"] == expected_uses
+
+
 def main() -> int:
 	tests = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
 	for test in tests:
