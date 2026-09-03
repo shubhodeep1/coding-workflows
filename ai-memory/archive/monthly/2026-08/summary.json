@@ -1,10 +1,10 @@
 {
-  "archived_candidates": 541,
-  "archived_ledgers": 2852,
-  "generated_at": "2026-09-01T03:06:58Z",
+  "archived_candidates": 504,
+  "archived_ledgers": 1,
+  "generated_at": "2026-09-03T11:40:47Z",
   "month": "2026-08",
   "prune": true,
-  "removed_candidates": 37,
-  "removed_ledgers": 2851,
+  "removed_candidates": 0,
+  "removed_ledgers": 0,
   "schema_version": "ai_memory_compaction_summary.v1"
 }
