@@ -181,7 +181,9 @@ def test_release_payload_is_validated_but_current_stable_wins() -> None:
 	assert 'git fetch --force --no-tags --depth 1 origin "${TEMPLATES_REF}"' in wf
 	assert 'UPSTREAM_SHA="$(git rev-parse \'FETCH_HEAD^{commit}\')"' in wf
 	assert '[[ ! "${DISPATCH_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]' in wf
-	assert 'if [ "${DISPATCH_SHA,,}" != "${UPSTREAM_SHA}" ]; then' in wf
+	assert '::warning::coding-workflows-stable-released payload is missing a valid 40-character sha;' in wf
+	assert '::error::coding-workflows-stable-released payload is missing' not in wf
+	assert 'elif [ "${DISPATCH_SHA,,}" != "${UPSTREAM_SHA}" ]; then' in wf
 	assert "current stable wins" in wf
 	assert '--sha "${UPSTREAM_SHA}"' in wf
 
@@ -274,6 +276,11 @@ def test_seed_commands_require_immutable_wrapper_rendering() -> None:
 		assert "scripts/workflow_wrapper_refs.py" in command_text
 		assert "40-character" in command_text
 		assert "# stable" in command_text
+		assert "git fetch --force --no-tags --depth=1 origin refs/tags/stable" in command_text
+		assert "git rev-parse 'FETCH_HEAD^{commit}'" in command_text
+		assert "origin/stable" not in command_text
+		assert "ref=<UPSTREAM_SHA>" in command_text
+		assert "refreshes an existing copy to the current release pin" in command_text
 
 
 def main() -> int:

@@ -94,10 +94,8 @@ jobs:
           # delayed event can never downgrade consumer pins.
           if [ "${EVENT_NAME}" = "repository_dispatch" ]; then
             if [[ ! "${DISPATCH_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-              echo "::error::coding-workflows-stable-released payload is missing a valid 40-character sha."
-              exit 1
-            fi
-            if [ "${DISPATCH_SHA,,}" != "${UPSTREAM_SHA}" ]; then
+              echo "::warning::coding-workflows-stable-released payload is missing a valid 40-character sha; current stable ${UPSTREAM_SHA} wins."
+            elif [ "${DISPATCH_SHA,,}" != "${UPSTREAM_SHA}" ]; then
               echo "::warning::Release payload sha ${DISPATCH_SHA,,} does not match current stable ${UPSTREAM_SHA}; current stable wins."
             fi
           fi
