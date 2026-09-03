@@ -2313,7 +2313,12 @@ extract_orchestrator_state_payload() {
 
 is_valid_orchestrator_state_json() {
   local state_json="$1"
-  printf '%s' "${state_json}" | jq -e '
+  local expected_tracking_num="${2:-${TRACKING_NUM:-}}"
+  local expected_integration_branch=""
+  if [[ "${expected_tracking_num}" =~ ^[0-9]+$ ]]; then
+    expected_integration_branch="orchestrator/project-${expected_tracking_num}"
+  fi
+  printf '%s' "${state_json}" | jq -e --arg expected_branch "${expected_integration_branch}" '
     type == "object" and
     (.schema_version == "orchestrate_state.v1") and
     (.status | type == "string") and
@@ -2321,21 +2326,67 @@ is_valid_orchestrator_state_json() {
     (.current_wave | type == "number") and
     (.total_waves | type == "number") and
     (.issue_number_map | type == "object") and
-    (.pending_issue_defs | type == "object")
+    (.pending_issue_defs | type == "object") and
+    ((.integration_branch // "") | type == "string") and
+    (((.integration_branch // "") == "") or ((.integration_branch // "") == $expected_branch))
   ' >/dev/null 2>&1
 }
 
 extract_latest_valid_orchestrator_state() {
   local comments_json="$1"
+  local expected_tracking_num="${2:-${TRACKING_NUM:-}}"
   local candidate
   local candidate_body
   local candidate_state
   local candidate_id
   local latest_state_comment_id=""
+  local trusted_comments_json
+  local expected_integration_branch=""
+  local candidate_integration_branch
 
   EXTRACTED_STATE_JSON=""
   EXTRACTED_STATE_FALLBACK_USED="false"
   EXTRACTED_STATE_COMMENT_COUNT=0
+  EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT=0
+  EXTRACTED_STATE_AUTH_FILTER_FAILED="false"
+  EXTRACTED_STATE_BRANCH_MISMATCH_COUNT=0
+  if [[ "${expected_tracking_num}" =~ ^[0-9]+$ ]]; then
+    expected_integration_branch="orchestrator/project-${expected_tracking_num}"
+  fi
+
+  EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT="$(printf '%s' "${comments_json}" | jq -r '
+    [ .[]
+      | select(
+          (
+            ((.body // "") | test("(?ms)^<!-- ORCHESTRATOR_STATE_V1$.*^ORCHESTRATOR_STATE_V1 -->$")) or
+            ((.body // "") | test("(?ms)^<!-- ORCHESTRATOR_STATE_V2 part=[0-9]+/[0-9]+ manifest=[0-9a-f]{64} -->$.*^ORCHESTRATOR_STATE_V2 -->$"))
+          ) and
+          (
+            (
+              (.user.login // "" | test("\\[bot\\]$")) or
+              ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+            ) | not
+          )
+        )
+    ] | length
+  ' 2>/dev/null || echo "")"
+  if ! [[ "${EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT}" =~ ^[0-9]+$ ]]; then
+    EXTRACTED_STATE_AUTH_FILTER_FAILED="true"
+    echo "::warning::Unable to authenticate orchestrator state comments for issue #${expected_tracking_num:-?}; rejecting state input." >&2
+    return 1
+  fi
+  if ! trusted_comments_json="$(printf '%s' "${comments_json}" | jq -c '
+    [ .[]
+      | select(
+          (.user.login // "" | test("\\[bot\\]$")) or
+          ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+        )
+    ]
+  ' 2>/dev/null)"; then
+    EXTRACTED_STATE_AUTH_FILTER_FAILED="true"
+    echo "::warning::Unable to filter trusted orchestrator state comments for issue #${expected_tracking_num:-?}; rejecting state input." >&2
+    return 1
+  fi
 
   # Try the V2 chunked-chain reader first.  If a complete V2 chain is
   # present (newest write wins), use it; otherwise fall through to the
@@ -2345,7 +2396,7 @@ extract_latest_valid_orchestrator_state() {
   local _v2_comments_file _v2_payload_file _v2_rc
   _v2_comments_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_comments.XXXXXX")"
   _v2_payload_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_payload.XXXXXX")"
-  printf '%s' "${comments_json}" > "${_v2_comments_file}"
+  printf '%s' "${trusted_comments_json}" > "${_v2_comments_file}"
   python3 scripts/orchestrate_state_v2.py extract \
     --comments-json "${_v2_comments_file}" > "${_v2_payload_file}" 2>/dev/null
   _v2_rc=$?
@@ -2370,7 +2421,11 @@ extract_latest_valid_orchestrator_state() {
       echo "::warning::V2 state extract payload is ${_v2_payload_bytes} bytes (>8 MiB cap); rejecting and falling back to V1 for issue #${TRACKING_NUM:-?}." >&2
     else
       candidate_state="$(cat "${_v2_payload_file}")"
-      if is_valid_orchestrator_state_json "${candidate_state}"; then
+      candidate_integration_branch="$(printf '%s' "${candidate_state}" | jq -r '.integration_branch // ""' 2>/dev/null || echo "")"
+      if [ -n "${candidate_integration_branch}" ] && [ "${candidate_integration_branch}" != "${expected_integration_branch}" ]; then
+        EXTRACTED_STATE_BRANCH_MISMATCH_COUNT=$((EXTRACTED_STATE_BRANCH_MISMATCH_COUNT + 1))
+      fi
+      if is_valid_orchestrator_state_json "${candidate_state}" "${expected_tracking_num}"; then
         EXTRACTED_STATE_JSON="${candidate_state}"
         rm -f "${_v2_comments_file}" "${_v2_payload_file}"
         return 0
@@ -2387,14 +2442,18 @@ extract_latest_valid_orchestrator_state() {
     candidate_body="$(printf '%s' "${candidate}" | jq -r '.body // ""' 2>/dev/null || echo "")"
     candidate_state="$(extract_orchestrator_state_payload "${candidate_body}")"
     [ -n "${candidate_state}" ] || continue
-    if is_valid_orchestrator_state_json "${candidate_state}"; then
+    candidate_integration_branch="$(printf '%s' "${candidate_state}" | jq -r '.integration_branch // ""' 2>/dev/null || echo "")"
+    if [ -n "${candidate_integration_branch}" ] && [ "${candidate_integration_branch}" != "${expected_integration_branch}" ]; then
+      EXTRACTED_STATE_BRANCH_MISMATCH_COUNT=$((EXTRACTED_STATE_BRANCH_MISMATCH_COUNT + 1))
+    fi
+    if is_valid_orchestrator_state_json "${candidate_state}" "${expected_tracking_num}"; then
       EXTRACTED_STATE_JSON="${candidate_state}"
       if [ -n "${latest_state_comment_id}" ] && [ "${candidate_id}" != "${latest_state_comment_id}" ]; then
         EXTRACTED_STATE_FALLBACK_USED="true"
       fi
       return 0
     fi
-  done < <(printf '%s' "${comments_json}" | jq -c '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | reverse | .[]?' 2>/dev/null || true)
+  done < <(printf '%s' "${trusted_comments_json}" | jq -c '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | reverse | .[]?' 2>/dev/null || true)
 
   return 1
 }
@@ -4004,7 +4063,7 @@ resolve_active_orchestrator_context_for_issue() {
     rm -f "${tracking_comments_pages_file}"
 
     tracking_state_json=""
-    if ! extract_latest_valid_orchestrator_state "${tracking_comments}"; then
+    if ! extract_latest_valid_orchestrator_state "${tracking_comments}" "${tracking_num}"; then
       continue
     fi
     tracking_state_json="${EXTRACTED_STATE_JSON}"
@@ -6561,14 +6620,20 @@ sync_contract_list_union_merge() {
 	local list_union_tmpdir
 	local list_union_subshell_rc
 	local list_union_paths_csv
+	local list_union_expected_branch=""
+	local list_union_helper_timeout_seconds=10
 
 	SYNC_LIST_UNION_RESOLVED_PATHS_JSON='[]'
 	[ "${ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED:-true}" = "true" ] || return 1
-	case "${list_union_integration_branch}" in
-		orchestrator/project-*) ;;
-		*) return 1 ;;
-	esac
 	[ -n "${list_union_default_branch}" ] || return 1
+	[ "${list_union_integration_branch}" != "${list_union_default_branch}" ] || return 1
+	if [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
+		list_union_expected_branch="orchestrator/project-${TRACKING_NUM}"
+	fi
+	if [ -z "${list_union_expected_branch}" ] || [ "${list_union_integration_branch}" != "${list_union_expected_branch}" ]; then
+		echo "::warning::SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=ineligible reason=branch_binding_mismatch"
+		return 1
+	fi
 
 	if ! printf '%s' "${list_union_conflict_paths_json}" | jq -e '
 		type == "array" and
@@ -6586,6 +6651,10 @@ sync_contract_list_union_merge() {
 	fi
 	if ! command -v "${list_union_python}" >/dev/null 2>&1; then
 		echo "::warning::SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=failed reason=python_unavailable"
+		return 1
+	fi
+	if ! command -v timeout >/dev/null 2>&1; then
+		echo "::warning::SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=failed reason=timeout_unavailable"
 		return 1
 	fi
 	if ! "${list_union_python}" -I -c 'import yaml' >/dev/null 2>&1; then
@@ -6634,6 +6703,7 @@ sync_contract_list_union_merge() {
 			local list_union_unmerged_paths=()
 			local list_union_resolved_csv
 			local list_union_commit_body
+			local list_union_helper_rc
 
 			git merge --no-ff --no-commit \
 				"refs/remotes/origin/${list_union_default_branch}" >/dev/null 2>&1 || list_union_merge_rc=$?
@@ -6650,12 +6720,20 @@ sync_contract_list_union_merge() {
 					git show ":1:${list_union_unmerged_path}" > "${list_union_tmpdir}/${list_union_path_slug}.base" 2>/dev/null || : > "${list_union_tmpdir}/${list_union_path_slug}.base"
 					git show ":2:${list_union_unmerged_path}" > "${list_union_tmpdir}/${list_union_path_slug}.ours" 2>/dev/null || exit 23
 					git show ":3:${list_union_unmerged_path}" > "${list_union_tmpdir}/${list_union_path_slug}.theirs" 2>/dev/null || exit 23
-					if ! PYTHONDONTWRITEBYTECODE=1 "${list_union_python}" -I "${list_union_helper_path}" \
+					if PYTHONDONTWRITEBYTECODE=1 timeout --signal=TERM --kill-after=2s -- "${list_union_helper_timeout_seconds}s" \
+						"${list_union_python}" -I "${list_union_helper_path}" \
 						--path "${list_union_unmerged_path}" \
 						--base "${list_union_tmpdir}/${list_union_path_slug}.base" \
 						--ours "${list_union_tmpdir}/${list_union_path_slug}.ours" \
 						--theirs "${list_union_tmpdir}/${list_union_path_slug}.theirs" \
 						--out "${list_union_tmpdir}/${list_union_path_slug}.merged"; then
+						:
+					else
+						list_union_helper_rc=$?
+						if [ "${list_union_helper_rc}" = "124" ] || [ "${list_union_helper_rc}" = "137" ]; then
+							printf 'failed:helper_timeout:%s\n' "${list_union_unmerged_path}" > "${list_union_tmpdir}/status"
+							exit 41
+						fi
 						printf 'ineligible:helper_rejected:%s\n' "${list_union_unmerged_path}" > "${list_union_tmpdir}/status"
 						exit 40
 					fi
@@ -6706,6 +6784,12 @@ Resolution used the deterministic contract-list union from sync_contract_list_un
 				list_union_paths_csv="$(cat "${list_union_tmpdir}/status" 2>/dev/null || echo 'ineligible:helper_rejected:unknown')"
 				rm -rf "${list_union_tmpdir}" 2>/dev/null || true
 				echo "SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=ineligible reason=${list_union_paths_csv}"
+				return 1
+				;;
+			41)
+				list_union_paths_csv="$(cat "${list_union_tmpdir}/status" 2>/dev/null || echo 'failed:helper_timeout:unknown')"
+				rm -rf "${list_union_tmpdir}" 2>/dev/null || true
+				echo "::warning::SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=failed reason=${list_union_paths_csv}"
 				return 1
 				;;
 			*)
@@ -7985,6 +8069,7 @@ Integration conflicts are cleared; final merge into \`${default_branch}\` will p
 sync_default_into_integration_branch() {
   local integration_branch="$1"
   local default_branch="$2"
+  local expected_integration_branch=""
   local sync_status
   local prev_conflict_fingerprint
   local runbook_url
@@ -7992,6 +8077,16 @@ sync_default_into_integration_branch() {
 
   if [ -z "${integration_branch}" ]; then
     return 0
+  fi
+  if [ "${integration_branch}" = "${default_branch}" ]; then
+    return 0
+  fi
+  if [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
+    expected_integration_branch="orchestrator/project-${TRACKING_NUM}"
+  fi
+  if [ -z "${expected_integration_branch}" ] || [ "${integration_branch}" != "${expected_integration_branch}" ]; then
+    echo "::warning::Integration sync rejected: integration=${integration_branch} outcome=ineligible reason=branch_binding_mismatch"
+    return 1
   fi
 
   sync_status="$(jq -r '.sync.status // "active"' "${STATE_FILE}")"
@@ -12571,7 +12666,7 @@ run_standalone_stall_recovery() {
         t_comments='[]'
       fi
       t_state_json=""
-      if extract_latest_valid_orchestrator_state "${t_comments}"; then
+      if extract_latest_valid_orchestrator_state "${t_comments}" "${t_num}"; then
         t_state_json="${EXTRACTED_STATE_JSON}"
       fi
       managed_nums="$(printf '%s' "${t_state_json}" | jq -r '.waves[]?.issues[]?.github_issue // empty' 2>/dev/null || true)"
@@ -14321,7 +14416,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   STATE_JSON=""
   STATE_COMMENT_COUNT=0
   STATE_FALLBACK_USED="false"
-  if extract_latest_valid_orchestrator_state "${COMMENTS}"; then
+  if extract_latest_valid_orchestrator_state "${COMMENTS}" "${TRACKING_NUM}"; then
     STATE_JSON="${EXTRACTED_STATE_JSON}"
     STATE_COMMENT_COUNT="${EXTRACTED_STATE_COMMENT_COUNT}"
     STATE_FALLBACK_USED="${EXTRACTED_STATE_FALLBACK_USED}"
@@ -14355,6 +14450,17 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     # later poll cycle read the real state.
     if [ "${COMMENTS_FETCH_OK}" != "true" ]; then
       echo "::warning::Comments fetch failed for tracking issue #${TRACKING_NUM}; cannot confirm orchestrator state is missing. Skipping state reconstruction this cycle (will retry next poll)."
+      continue
+    fi
+    if [ "${EXTRACTED_STATE_AUTH_FILTER_FAILED:-false}" = "true" ]; then
+      echo "::warning::State-comment authentication failed for tracking issue #${TRACKING_NUM}; skipping state reconstruction this cycle (will retry next poll)."
+      continue
+    fi
+    if [ "${EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT:-0}" -gt 0 ]; then
+      echo "::warning::Rejected ${EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT} unauthenticated orchestrator state comment(s) for tracking issue #${TRACKING_NUM}; continuing reconstruction from trusted project inputs only."
+    fi
+    if [ "${EXTRACTED_STATE_BRANCH_MISMATCH_COUNT:-0}" -gt 0 ]; then
+      echo "::warning::Rejected authenticated orchestrator state for tracking issue #${TRACKING_NUM} because its integration branch is not orchestrator/project-${TRACKING_NUM}; skipping state reconstruction this cycle."
       continue
     fi
     if [ "${STATE_COMMENT_COUNT}" -gt 0 ]; then
@@ -14428,7 +14534,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     fi
   fi
 
-  if ! is_valid_orchestrator_state_json "${STATE_JSON}"; then
+  if ! is_valid_orchestrator_state_json "${STATE_JSON}" "${TRACKING_NUM}"; then
     echo "::warning::STATE_JSON for issue #${TRACKING_NUM} is not a valid orchestrator state object; skipping"
     continue
   fi

@@ -462,13 +462,26 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
     "repos/${GITHUB_REPOSITORY}/issues/${INTEGRATION_TRACKING_NUM}/comments?per_page=100" \
     > "${_ti_comments_raw}" 2>/dev/null; then
     _state_payload="$(jq -s '
-      ([.[][] | select(.body | contains("ORCHESTRATOR_STATE_V1"))] // [])
+      ([.[][] | select(
+        (
+          ((.user.login // "") | test("\\[bot\\]$")) or
+          ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+        ) and ((.body // "") | contains("ORCHESTRATOR_STATE_V1"))
+      )] // [])
       | last // {}
       | .body // ""
       | capture("ORCHESTRATOR_STATE_V1\\n(?<json>(.|\\n)*)\\nORCHESTRATOR_STATE_V1")
       | .json // ""
     ' "${_ti_comments_raw}" 2>/dev/null || echo '""')"
     _state_json="$(printf '%s' "${_state_payload}" | jq -r '.' 2>/dev/null || echo "")"
+    if [ -n "${_state_json}" ] && ! printf '%s' "${_state_json}" | jq -e --arg expected_branch "${TARGET_BRANCH}" '
+      type == "object" and
+      (.schema_version == "orchestrate_state.v1") and
+      (((.integration_branch // "") == "") or ((.integration_branch // "") == $expected_branch))
+    ' >/dev/null 2>&1; then
+      echo "::warning::Ignoring orchestrator state whose integration branch is not bound to ${TARGET_BRANCH}."
+      _state_json=""
+    fi
     if [ -n "${_state_json}" ]; then
       # Build the merged sub-issues list (id : github_issue : status)
       INTEGRATION_MERGED_SUB_ISSUES_LIST="$(printf '%s' "${_state_json}" | jq -r '

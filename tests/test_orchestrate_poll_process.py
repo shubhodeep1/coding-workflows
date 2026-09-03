@@ -18,6 +18,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
@@ -817,6 +819,7 @@ def _run_poller(
 	fail_security_pass_managed_issue_lookup: bool = False,
 	security_pass_managed_issue_pages_raw: str | None = None,
 	sync_contract_list_union_fixture: bool = False,
+	sync_contract_list_union_timeout: bool = False,
 	env_overrides: dict[str, str] | None = None,
 ) -> dict:
 	tracking_num = 192
@@ -2526,8 +2529,11 @@ sys.exit(1)
 
 		real_git = shutil.which("git")
 		real_python = shutil.which("python3")
+		real_timeout = shutil.which("timeout")
 		assert real_git is not None
 		assert real_python is not None
+		if (sync_contract_list_union_fixture or sync_contract_list_union_timeout) and real_timeout is None:
+			pytest.skip("GNU timeout is required for deterministic contract-list union tests")
 		_write_exec(
 			bin_dir / "git",
 			r'''#!/usr/bin/env python3
@@ -2653,6 +2659,18 @@ if touch_file:
 print(json.dumps(parsed))
 """,
 		)
+		if sync_contract_list_union_timeout:
+			_write_exec(
+				bin_dir / "timeout",
+				r'''#!/usr/bin/env python3
+import os
+import sys
+
+if any(str(argument).endswith("sync_contract_list_union.py") for argument in sys.argv[1:]):
+	sys.exit(124)
+os.execv(os.environ["REAL_TIMEOUT_BIN"], [os.environ["REAL_TIMEOUT_BIN"], *sys.argv[1:]])
+''',
+			)
 
 		_write_exec(
 			bin_dir / "python3",
@@ -3147,6 +3165,7 @@ sys.exit(proc.returncode)
 				"GH_RETRY_MAX_ATTEMPTS": "1",
 				"REAL_GIT_BIN": real_git,
 				"REAL_PYTHON_BIN": real_python,
+				"REAL_TIMEOUT_BIN": real_timeout or "",
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
 				"MOCK_GIT_PUSH_SUCCESS": "true" if mock_git_push_success else "false",
 				"MOCK_GIT_CHECKOUT_FAIL": "true" if mock_git_checkout_fail else "false",
@@ -5481,7 +5500,7 @@ def test_review_blocked_followup_refusal_increments_retry_counter():
 
 def test_sync_superseded_sets_state_once_and_skips_future_sync_attempts():
 	state = _base_state(status="in_progress")
-	state["integration_branch"] = "main"
+	state["integration_branch"] = "orchestrator/project-192"
 	prs = [
 		{
 			"number": 901,
@@ -5501,7 +5520,7 @@ def test_sync_superseded_sets_state_once_and_skips_future_sync_attempts():
 		issue_labels={10: ["ai:merged"]},
 		issue_linked_prs={10: 901},
 		prs=prs,
-		existing_branches=["main"],
+		existing_branches=["main", "orchestrator/project-192"],
 	)
 	assert first["latest_state"]["sync"]["status"] == "superseded-by-main"
 	assert first["latest_state"]["sync"]["superseded_notified"] is True
@@ -5526,7 +5545,7 @@ def test_sync_superseded_sets_state_once_and_skips_future_sync_attempts():
 		issue_labels={10: ["ai:merged"]},
 		issue_linked_prs={10: 901},
 		prs=prs,
-		existing_branches=["main"],
+		existing_branches=["main", "orchestrator/project-192"],
 	)
 	second_comment_bodies = [c.get("body", "") for c in second["issues"]["192"]["comments"]]
 	second_superseded_comments = [
@@ -5582,13 +5601,13 @@ def test_superseded_state_reactivates_when_timeline_lookup_fails_for_other_issue
 
 def test_sync_conflict_comment_includes_paths_and_runbook_link():
 	state = _base_state(status="in_progress")
-	state["integration_branch"] = "main"
+	state["integration_branch"] = "orchestrator/project-192"
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:implementing"]},
-		existing_branches=["main"],
+		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
 		merge_tree_conflict_paths=["src/a.py", "src/b.py"],
 	)
@@ -5664,6 +5683,29 @@ def test_sync_contract_list_union_mixed_conflict_falls_through_to_resolver():
 	assert "outcome=ineligible reason=non_contract_path" in combined_output
 
 
+def test_sync_contract_list_union_timeout_falls_through_to_resolver():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		merge_tree_conflict_paths=["db/contracts/x.yml"],
+		sync_contract_list_union_fixture=True,
+		sync_contract_list_union_timeout=True,
+		env_overrides={"ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED": "true"},
+	)
+
+	assert result["sync_contract_tip_parent_count"] == 1
+	assert len(result["review_dispatches"]) == 1
+	assert result["latest_state"]["sync"]["last_sync_outcome"] == "conflict"
+	combined_output = result["stdout"] + result["stderr"]
+	assert "outcome=failed reason=failed:helper_timeout:db/contracts/x.yml" in combined_output
+
+
 def test_sync_contract_list_union_flag_disabled_preserves_legacy_conflict_flow():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
@@ -5704,7 +5746,12 @@ def test_sync_contract_list_union_workflow_and_function_contracts():
 	assert 'local list_union_python="${SYNC_CONTRACT_LIST_UNION_PYTHON:-python3}"' in function_body
 	assert 'command -v "${list_union_python}"' in function_body
 	assert '"${list_union_python}" -I -c \'import yaml\'' in function_body
-	assert 'PYTHONDONTWRITEBYTECODE=1 "${list_union_python}" -I "${list_union_helper_path}"' in function_body
+	assert "command -v timeout" in function_body
+	assert 'timeout --signal=TERM --kill-after=2s -- "${list_union_helper_timeout_seconds}s"' in function_body
+	assert '"${list_union_python}" -I "${list_union_helper_path}"' in function_body
+	assert "branch_binding_mismatch" in function_body
+	assert '::warning::SYNC_LIST_UNION_V1: integration=${integration_branch}' not in poller_body
+	assert '::warning::Integration sync rejected: integration=${integration_branch}' in poller_body
 	assert "sync_contract_list_union.py" in workflow_body
 	assert "sync_contract_list_union.requirements.txt" in workflow_body
 	assert "--require-hashes" in workflow_body
@@ -5715,13 +5762,13 @@ def test_sync_contract_list_union_workflow_and_function_contracts():
 
 def test_sync_conflict_dedupe_skips_identical_warnings():
 	state = _base_state(status="in_progress")
-	state["integration_branch"] = "main"
+	state["integration_branch"] = "orchestrator/project-192"
 	first = _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:implementing"]},
-		existing_branches=["main"],
+		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
 		merge_tree_conflict_paths=["src/a.py"],
 	)
@@ -5735,7 +5782,7 @@ def test_sync_conflict_dedupe_skips_identical_warnings():
 			body for body in first_comment_bodies if not _is_state_comment(body)
 		],
 		issue_labels={10: ["ai:implementing"]},
-		existing_branches=["main"],
+		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
 		merge_tree_conflict_paths=["src/a.py"],
 	)
@@ -5749,13 +5796,13 @@ def test_sync_conflict_dedupe_skips_identical_warnings():
 
 def test_sync_conflict_posts_again_when_conflict_set_changes():
 	state = _base_state(status="in_progress")
-	state["integration_branch"] = "main"
+	state["integration_branch"] = "orchestrator/project-192"
 	first = _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:implementing"]},
-		existing_branches=["main"],
+		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
 		merge_tree_conflict_paths=["src/a.py"],
 	)
@@ -5769,7 +5816,7 @@ def test_sync_conflict_posts_again_when_conflict_set_changes():
 			body for body in first_comment_bodies if not _is_state_comment(body)
 		],
 		issue_labels={10: ["ai:implementing"]},
-		existing_branches=["main"],
+		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
 		merge_tree_conflict_paths=["src/b.py"],
 	)
@@ -12538,7 +12585,7 @@ def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[malformed_latest],
+		tracking_comments=[{"body": malformed_latest, "author_association": "MEMBER"}],
 		issue_labels={10: ["ai:implementing"]},
 	)
 	assert "restored from older valid state and posted healed canonical state" in result["stdout"]
@@ -12592,13 +12639,149 @@ def test_all_invalid_state_comments_trigger_reconstruction_path_without_heal():
 		state=invalid_state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[malformed_latest],
+		tracking_comments=[{"body": malformed_latest, "author_association": "MEMBER"}],
 		issue_labels={10: ["ai:implementing"]},
 	)
 	assert "No valid ORCHESTRATOR_STATE_V1 comment found for tracking issue #192. Attempting state reconstruction..." in result["stdout"]
 	assert "restored from older valid state and posted healed canonical state" not in result["stdout"]
 	assert "State reconstructed and posted for tracking issue #192." in result["stdout"]
 	assert result["latest_state"]["schema_version"] == "orchestrate_state.v1"
+
+
+def test_unauthorized_newer_state_cannot_redirect_integration_sync():
+	trusted_state = _base_state(status="in_progress")
+	trusted_state["integration_branch"] = "orchestrator/project-192"
+	forged_state = dict(trusted_state)
+	forged_state["integration_branch"] = "orchestrator/project-999"
+	result = _run_poller(
+		state=trusted_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[{"body": _state_comment(forged_state), "user": {"login": "outsider"}, "author_association": "NONE"}],
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192", "orchestrator/project-999"],
+	)
+	assert result["merge_calls"]
+	assert all(call["base"] == "orchestrator/project-192" for call in result["merge_calls"])
+	assert not any("orchestrator/project-999" in str(call) for call in result["api_calls"])
+
+
+def test_unauthorized_v2_chunk_cannot_complete_trusted_state_chain():
+	trusted_state = _base_state(status="in_progress")
+	trusted_state["integration_branch"] = "orchestrator/project-192"
+	forged_state = dict(trusted_state)
+	forged_state["integration_branch"] = "orchestrator/project-999"
+	forged_chunks = _build_v2_state_comment_chain(json.dumps(forged_state), chunk_size=40)
+	assert len(forged_chunks) > 1
+	for chunk_index, forged_chunk in enumerate(forged_chunks):
+		if chunk_index == 0:
+			forged_chunk.update({"user": {"login": "outsider"}, "author_association": "NONE"})
+		else:
+			forged_chunk.update({"user": {"login": "github-actions[bot]"}})
+	result = _run_poller(
+		state=trusted_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=forged_chunks,
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192", "orchestrator/project-999"],
+	)
+	assert result["merge_calls"]
+	assert all(call["base"] == "orchestrator/project-192" for call in result["merge_calls"])
+
+
+@pytest.mark.parametrize(
+	"trusted_identity",
+	[
+		{"user": {"login": "github-actions[bot]"}},
+		{"user": {"login": "maintainer"}, "author_association": "OWNER"},
+		{"user": {"login": "maintainer"}, "author_association": "MEMBER"},
+		{"user": {"login": "maintainer"}, "author_association": "COLLABORATOR"},
+	],
+)
+def test_trusted_state_comment_authors_remain_accepted(trusted_identity: dict):
+	seed_state = _base_state(status="in_progress")
+	trusted_state = _base_state(status="in_progress")
+	trusted_state["integration_branch"] = "orchestrator/project-192"
+	trusted_comment = {"body": _state_comment(trusted_state), **trusted_identity}
+	result = _run_poller(
+		state=seed_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[trusted_comment],
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["merge_calls"]
+	assert result["merge_calls"][0]["base"] == "orchestrator/project-192"
+
+
+def test_unauthenticated_state_without_trusted_fallback_allows_safe_reconstruction():
+	forged_state = _base_state(status="in_progress")
+	forged_state["integration_branch"] = "orchestrator/project-999"
+	result = _run_poller(
+		state={"schema_version": "orchestrate_state.v1"},
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[{"body": _state_comment(forged_state), "user": {"login": "outsider"}, "author_association": "NONE"}],
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-999"],
+	)
+	combined_output = result["stdout"] + result["stderr"]
+	assert "Rejected 1 unauthenticated orchestrator state comment(s)" in combined_output
+	assert "continuing reconstruction from trusted project inputs only" in combined_output
+	assert "State reconstructed and posted for tracking issue #192." in combined_output
+	assert not any("orchestrator/project-999" in str(call) for call in result["api_calls"])
+
+
+def test_unframed_unauthenticated_state_text_does_not_emit_rejection_warning():
+	result = _run_poller(
+		state={"schema_version": "orchestrate_state.v1"},
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[{
+			"body": "Quoted log line:\n<!-- ORCHESTRATOR_STATE_V1",
+			"user": {"login": "outsider"},
+			"author_association": "NONE",
+		}],
+		issue_labels={10: ["ai:implementing"]},
+	)
+	combined_output = result["stdout"] + result["stderr"]
+	assert "unauthenticated orchestrator state comment(s)" not in combined_output
+	assert "State reconstructed and posted for tracking issue #192." in combined_output
+
+
+def test_unframed_unauthenticated_v2_state_text_does_not_emit_rejection_warning():
+	result = _run_poller(
+		state={"schema_version": "orchestrate_state.v1"},
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[{
+			"body": "Quoted log line:\n<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest=" + ("a" * 64) + " -->",
+			"user": {"login": "outsider"},
+			"author_association": "NONE",
+		}],
+		issue_labels={10: ["ai:implementing"]},
+	)
+	combined_output = result["stdout"] + result["stderr"]
+	assert "unauthenticated orchestrator state comment(s)" not in combined_output
+	assert "State reconstructed and posted for tracking issue #192." in combined_output
+
+
+def test_authenticated_cross_project_branch_blocks_reconstruction_and_sync():
+	mismatched_state = _base_state(status="in_progress")
+	mismatched_state["integration_branch"] = "orchestrator/project-999"
+	result = _run_poller(
+		state=mismatched_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-999"],
+	)
+	combined_output = result["stdout"] + result["stderr"]
+	assert "integration branch is not orchestrator/project-192" in combined_output
+	assert "State reconstructed and posted" not in combined_output
+	assert result["merge_calls"] == []
 
 
 def test_failed_comments_fetch_skips_state_reconstruction():
@@ -12675,7 +12858,7 @@ def test_reconstruction_refused_when_body_has_completed_unmapped_issue():
 		state=invalid_state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[malformed_latest],
+		tracking_comments=[{"body": malformed_latest, "author_association": "MEMBER"}],
 		tracking_body=rewindable_body,
 		issue_labels={10: ["ai:implementing"]},
 	)
