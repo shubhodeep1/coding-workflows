@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "The orchestrator\u2019s label and failure-handling behavior is treated as a strict, idempotent contract.",
   "timestamps": {
     "created_at": "2026-09-03T11:36:33Z",
