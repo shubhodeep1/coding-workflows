@@ -770,7 +770,16 @@ def test_overflow_semble_blocks_are_charged_against_the_total_budget() -> None:
 
 		# Two 40000-byte payloads fit under 102400; the rest must not render.
 		assert context.count("chunk-retrieved via semble") == 2
-		assert len(context.encode("utf-8")) < 102400
+		# The budget is charged with source content; the summary reports
+		# exactly the two rendered payloads and nothing for the eight
+		# marker-only entries.
+		assert "80000 byte(s) of source content. Overflow-rendered content: 80000 byte(s)." in context
+		# Per-entry framing (FILE / END FILE lines, markers, summary) is
+		# not charged, but it is small and bounded: measured at ~200
+		# bytes per entry for this input, so allow 300 — the emitted
+		# block is the budgeted content plus that overhead, not the
+		# ~1.2MB the unguarded path produced for the same input.
+		assert len(context.encode("utf-8")) < 80000 + 10 * 300
 		assert "would overflow total budget" in context
 		assert "SEMBLE_FALLBACK target=overflow" in stderr.getvalue()
 		assert "reason=budget-exhausted" in stderr.getvalue()

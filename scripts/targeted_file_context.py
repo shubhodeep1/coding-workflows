@@ -68,16 +68,23 @@ Bounds (defensible default; override per caller):
                                   passes is reported, either inlined or
                                   as a marker.
 
-                                  This is a cap on the whole emitted
-                                  block, not just the inlined files:
+                                  The budget is charged with source
+                                  content — inlined file bytes AND
                                   overflow representations (semble
-                                  chunks, read-fallback heads) are
-                                  charged against the same budget and
-                                  are only rendered when they fit the
-                                  remaining headroom. Callers can size
-                                  the assembled prompt against a hard
-                                  stdin cap knowing this block will not
-                                  exceed --max-bytes.
+                                  chunks, read-fallback heads). An
+                                  overflow representation is rendered
+                                  only when it fits the remaining
+                                  headroom, so source content never
+                                  exceeds --max-bytes. Per-entry
+                                  framing (the FILE / END FILE lines,
+                                  markers, the summary line) is NOT
+                                  charged; it is a small, bounded
+                                  overhead of roughly 200 bytes per
+                                  entry, so callers sizing an assembled
+                                  prompt against a hard stdin cap
+                                  should reserve for it rather than
+                                  treat --max-bytes as an exact bound
+                                  on the emitted block.
 
 Designed to be safe on missing inputs: if the plan has no recognised
 section, --paths-file is empty, and --paths is unset, the output is just
