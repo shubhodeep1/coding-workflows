@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.91,
+  "details": "Recent merged work progressed through prompt hardening, audit-engine integration, dark launch, and default-on phases. Changes commonly update orchestrator scripts, workflows, documentation, and contract-focused tests together. Future planning should identify the relevant security phase and preserve its transition and rollback semantics.",
+  "fingerprint": "acf95e7237011902f15a78d2c65ad95fbf5fedcfc24dbe66d9c286d81ce2d13d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33750334171",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33750334171",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3951",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3953",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3966",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3972",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3973",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3955",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3956",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3970",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3974",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3986"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260903113510_c3056987ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator security changes are implemented incrementally behind explicit phase contracts and workflow tests.",
+  "timestamps": {
+    "created_at": "2026-09-03T11:35:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
