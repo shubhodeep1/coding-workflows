@@ -276,7 +276,8 @@ def test_seed_commands_require_immutable_wrapper_rendering() -> None:
 		assert "scripts/workflow_wrapper_refs.py" in command_text
 		assert "40-character" in command_text
 		assert "# stable" in command_text
-		assert "git fetch --force --no-tags --depth=1 origin refs/tags/stable" in command_text
+		assert "git fetch --force --no-tags origin refs/tags/stable" in command_text
+		assert "--depth=1" not in command_text
 		assert "git rev-parse 'FETCH_HEAD^{commit}'" in command_text
 		assert "origin/stable" not in command_text
 		assert "ref=<UPSTREAM_SHA>" in command_text

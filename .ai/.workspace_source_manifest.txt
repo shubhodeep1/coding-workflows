@@ -168,6 +168,7 @@ changelog.d/3957-blocker-only-plan-blocked-routing.md
 changelog.d/3963-reissue-preserve-baseline-default-true.md
 changelog.d/3967-slash-command-model-pins.md
 changelog.d/3971-deploy-activate-best-model.md
+changelog.d/3973-immutable-consumer-workflow-pins.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/codex-blocked-verdict-bail.md
@@ -507,6 +508,7 @@ scripts/verify_integration_fingerprints.py
 scripts/watchdog_helpers.sh
 scripts/workflow_retro.py
 scripts/workflow_retro_fanout.sh
+scripts/workflow_wrapper_refs.py
 scripts/workspace_init.sh
 scripts/workspace_safety_check.sh
 scripts/worktree_gc.sh

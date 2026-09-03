@@ -382,8 +382,8 @@ jobs:
           manifest_templates=()
           self_template_selected=false
 
-          # The updater itself must already exist for this job to run;
-          # never overwrite or auto-create it to avoid bootstrap loops.
+          # The updater itself must already exist for this job to run. Refresh
+          # it when present, but never auto-create it, to avoid bootstrap loops.
           SELF_TEMPLATE="ai-update-workflows.yml"
 
           printf '' > /tmp/updated_files.txt
