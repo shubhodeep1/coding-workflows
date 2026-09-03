@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/_templates/mode-implement.txt:157-162 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, qwen_qwen3_7-plus]\n  PROBLEM: The template file is missing the BLOCKED-vs-no-op clause that was added to prompts/mode-implement.txt at lines 169-175.\n  WHY: The assembled template fails the byte-match assertion in tests/test_assemble_prompt.py::test_assembled_templates_match_legacy_prompt_bytes; no severity disagreement.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/implement.yml:2437-2459 | severity=MAJOR | confidence=5\n  PROBLEM: The BLOCKED verdict classifier uses `printf '%s' \"${codex_blocked_reason}\" | grep -qiE` which may fail or behave unexpectedly when the reason contains shell-special characters (backslashes, quotes, regex metacharacters).\n  WHY: A real \"already satisfied\" verdict could be misclassified as a failure obstacle due to grep failing or behaving incorrectly on special characters, causing incorrect workflow behavior.\n- tests/test_implement_post_codex_recovery.py:test function `test_blocked_already_satisfied_regexes_classify_real_verdicts()` | severity=MAJOR | confidence=5\n  PROBLEM: The test uses `subprocess.run([\"grep\", \"-qiE\", pattern], ...)` without handling regex patterns containing shell-special characters.\n  WHY: Patterns containing characters such as `|`, `(`, `)`, `[`, or `]` could cause grep to fail or behave incorrectly, producing false test results and potentially allowing defective regex patterns to pass validation.\n- prompts/_templates/mode-implement.txt:157-162 | severity=BLOCKER | confidence=5\n  PROBLEM: The template file is missing the BLOCKED-vs-no-op clause that was added to `prompts/mode-implement.txt` at lines 169-175.\n  WHY: The `test_assembled_templates_match_legacy_prompt_bytes` test in `tests/test_assemble_prompt.py` asserts that the assembled template output (from `prompts/_templates/`) byte-matches the legacy prompt (from `prompts/`). The missing 7 lines cause this test to fail, which is exactly what happened in the CI lint job (run 33712816637, job 100515720322).\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- prompts/_templates/mode-implement.txt:157-162 | severity=BLOCKER | confidence=5\n  PROBLEM: The template file is missing the BLOCKED-vs-no-op clause that was added to `prompts/mode-implement.txt` at lines 169-175.\n  WHY: The CI lint job (run 33712816637, job 100515720322) already proves this; `tests/test_assemble_prompt.py::test_assembled_templates_match_legacy_prompt_bytes` asserts that the assembled template output byte-matches the legacy prompt, and the missing 7 lines cause the assertion to fail at line 78.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "8d405ebf581aeef2457ea724f9da5e423898c7d51586bf2f6da9feb374a30cac",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3975,
+    "run_id": "33712817032",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33712817032",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260903045251_8afce0753c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3975,
+    "run_id": "33712817032"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-03T04:52:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
