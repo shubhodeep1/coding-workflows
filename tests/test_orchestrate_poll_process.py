@@ -2532,7 +2532,8 @@ sys.exit(1)
 		real_timeout = shutil.which("timeout")
 		assert real_git is not None
 		assert real_python is not None
-		assert real_timeout is not None
+		if (sync_contract_list_union_fixture or sync_contract_list_union_timeout) and real_timeout is None:
+			pytest.skip("GNU timeout is required for deterministic contract-list union tests")
 		_write_exec(
 			bin_dir / "git",
 			r'''#!/usr/bin/env python3
@@ -3164,7 +3165,7 @@ sys.exit(proc.returncode)
 				"GH_RETRY_MAX_ATTEMPTS": "1",
 				"REAL_GIT_BIN": real_git,
 				"REAL_PYTHON_BIN": real_python,
-				"REAL_TIMEOUT_BIN": real_timeout,
+				"REAL_TIMEOUT_BIN": real_timeout or "",
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
 				"MOCK_GIT_PUSH_SUCCESS": "true" if mock_git_push_success else "false",
 				"MOCK_GIT_CHECKOUT_FAIL": "true" if mock_git_checkout_fail else "false",
@@ -12731,6 +12732,40 @@ def test_unauthenticated_state_without_trusted_fallback_allows_safe_reconstructi
 	assert "continuing reconstruction from trusted project inputs only" in combined_output
 	assert "State reconstructed and posted for tracking issue #192." in combined_output
 	assert not any("orchestrator/project-999" in str(call) for call in result["api_calls"])
+
+
+def test_unframed_unauthenticated_state_text_does_not_emit_rejection_warning():
+	result = _run_poller(
+		state={"schema_version": "orchestrate_state.v1"},
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[{
+			"body": "Quoted log line:\n<!-- ORCHESTRATOR_STATE_V1",
+			"user": {"login": "outsider"},
+			"author_association": "NONE",
+		}],
+		issue_labels={10: ["ai:implementing"]},
+	)
+	combined_output = result["stdout"] + result["stderr"]
+	assert "unauthenticated orchestrator state comment(s)" not in combined_output
+	assert "State reconstructed and posted for tracking issue #192." in combined_output
+
+
+def test_unframed_unauthenticated_v2_state_text_does_not_emit_rejection_warning():
+	result = _run_poller(
+		state={"schema_version": "orchestrate_state.v1"},
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[{
+			"body": "Quoted log line:\n<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest=" + ("a" * 64) + " -->",
+			"user": {"login": "outsider"},
+			"author_association": "NONE",
+		}],
+		issue_labels={10: ["ai:implementing"]},
+	)
+	combined_output = result["stdout"] + result["stderr"]
+	assert "unauthenticated orchestrator state comment(s)" not in combined_output
+	assert "State reconstructed and posted for tracking issue #192." in combined_output
 
 
 def test_authenticated_cross_project_branch_blocks_reconstruction_and_sync():

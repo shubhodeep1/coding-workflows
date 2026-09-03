@@ -2357,7 +2357,10 @@ extract_latest_valid_orchestrator_state() {
   EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT="$(printf '%s' "${comments_json}" | jq -r '
     [ .[]
       | select(
-          ((.body // "") | test("(?m)^<!-- ORCHESTRATOR_STATE_V1$|^<!-- ORCHESTRATOR_STATE_V2 part=[0-9]+/[0-9]+ manifest=[0-9a-f]{64} -->$")) and
+          (
+            ((.body // "") | test("(?ms)^<!-- ORCHESTRATOR_STATE_V1$.*^ORCHESTRATOR_STATE_V1 -->$")) or
+            ((.body // "") | test("(?ms)^<!-- ORCHESTRATOR_STATE_V2 part=[0-9]+/[0-9]+ manifest=[0-9a-f]{64} -->$.*^ORCHESTRATOR_STATE_V2 -->$"))
+          ) and
           (
             (
               (.user.login // "" | test("\\[bot\\]$")) or
