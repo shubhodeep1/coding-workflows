@@ -284,11 +284,14 @@ Several Symphony-era behaviors are configured by optional committed files rather
 Copy the ready-to-use templates from [`workflow-templates/`](workflow-templates/) into your repo's `.github/workflows/` directory. Reference implementations also live in [`.github/workflows/internal-*.yml`](.github/workflows/) in this repository.
 
 At minimum, create these three core wrappers. Each job carries the same `if:` predicate as the
-reusable workflow it calls (see `agents.md`, "Phase wrapper predicate parity"): comment commands
-(`/reclarify`, `/answer`, `/approved`) only dispatch when posted by a user whose
-`author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`, or by `github-actions[bot]` carrying the
-documented auto-answer / auto-approve marker. Copy the predicate verbatim — a wrapper without it
-still runs the reusable workflow's own job-level gate, but fires a skipped run for every other comment.
+reusable workflow it calls (see `agents.md`, "Phase wrapper predicate parity"). `ai-clarify`
+automatically triages newly opened issues unless they carry `ai:orchestrator-tracking`,
+`ai:security-audit`, or `ai:retro`; its `/reclarify` route accepts only comments from a user whose
+`author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`. The `/answer` route in `ai-plan` and the
+`/approved` route in `ai-implement` accept the same trusted-user associations and also accept
+`github-actions[bot]` with their documented auto-answer and auto-approve markers, respectively. Copy
+the predicate verbatim — a wrapper without it still runs the reusable workflow's own job-level gate,
+but fires a skipped run for every other comment.
 
 **`.github/workflows/ai-clarify.yml`** — Triages new issues automatically
 ```yaml
