@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3973,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3973\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3974\",\"pr_number\":3974,\"branch\":\"ai/issue-3973\",\"run_id\":\"33711398849\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/33711398849\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".claude/commands/seed-repo.md\",\".github/workflows/audit_consumer_drift.yml\",\".github/workflows/mark-stable.yml\",\".github/workflows/test-and-mark-stable.yml\",\".github/workflows/update_workflows.yml\",\"README.md\",\"agents.md\",\"changelog.d/3973-immutable-consumer-workflow-pins.md\",\"probably_unnecessary_but_read_if_stuck.md\",\"scripts/audit_consumer_drift.py\",\"scripts/workflow_wrapper_refs.py\",\"tests/test_audit_consumer_drift.py\",\"tests/test_mark_stable_release_tag_refspec_contract.py\",\"tests/test_update_workflows_guardrails.py\",\"workflow-templates/.claude/commands/seed-repo.md\"]}",
+  "fingerprint": "2ee1ba514c4366c813ab4f8c365b8aa9e1fcf0603d52c3c95f8cef608d69e1b3",
+  "lineage": {
+    "issue_number": 3973,
+    "parent_ids": [],
+    "pr_number": 3974,
+    "run_id": "33711398849",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33711398849",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3974"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260903034507_e76143922d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3973,
+    "level": "run",
+    "pr_number": 3974,
+    "run_id": "33711398849"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3973: https://github.com/shubhodeep1/coding-workflows/pull/3974",
+  "timestamps": {
+    "created_at": "2026-09-03T03:45:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
