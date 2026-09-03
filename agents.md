@@ -281,7 +281,7 @@ driven by repo-vars. The pins below are `model:` frontmatter on
 | `/apply-analysis` | `sonnet` | — |
 | `/apply-url` | `sonnet` | `fork`, `background: false` |
 | `/audit-plans` | `sonnet` | `fork`, `background: false` |
-| `/deploy-activate` | `opus` | — |
+| `/deploy-activate` | `best` | — |
 | `/implement-plan-ai` | `sonnet` | — |
 | `/implement-plan-claude` | `best` | — |
 | `/investigate-issue` | `opus` | — |
@@ -292,10 +292,13 @@ driven by repo-vars. The pins below are `model:` frontmatter on
 
 Rationale for the tiers: `sonnet` for dispatch-only, scaffolding, and
 read-only commands; `opus` for diagnosis and commands that write code or
-mutate infrastructure; `best` for the two long-horizon commands, where a
-wrong answer costs a full re-run. `best` resolves to the latest Fable model
-where the account has access and falls back to `opus` where it does not —
-prefer it over a literal `fable`, which has no such fallback.
+mutate infrastructure; `best` for the long-horizon commands, where a
+wrong answer costs a full re-run — the two that implement or audit a
+whole project (`/implement-plan-claude`, `/verify-activation`) and the
+operator-facing activation runbook (`/deploy-activate`), where a wrong
+step is executed against live infrastructure. `best` resolves to the latest
+Fable model where the account has access and falls back to `opus` where it
+does not — prefer it over a literal `fable`, which has no such fallback.
 
 Four constraints govern edits to these pins:
 
