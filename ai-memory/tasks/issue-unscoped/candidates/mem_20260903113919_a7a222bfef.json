@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "Many merged PRs modify .ai/.workspace_source_manifest.txt, and broader workflow changes often update README.md, agents.md, changelog.d entries, and mirrored workflow templates. Planning should verify whether source manifests, operator documentation, changelog fragments, or template copies need synchronized updates.",
+  "fingerprint": "0b442ddf6ff1799c5f8cf435a73323917a745fc8148ea792bb876e4bdb8c357c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33750334171",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33750334171",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3951",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3953",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3966",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3972",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3973",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3955",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3956",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3970",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3974",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3986"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260903113919_a7a222bfef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Repository metadata and generated-source manifests are routinely updated alongside functional changes.",
+  "timestamps": {
+    "created_at": "2026-09-03T11:39:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
