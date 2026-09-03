@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_phase_wrapper_predicate_contract.py:137-144 | confidence=1\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Bare str.index() calls raise ValueError with unhelpful default messages when README.md heading or YAML fence format drifts, making CI diagnosis harder\n  WHY: Missing headings or fences produce a generic substring-not-found error instead of identifying which expected pattern is absent.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: tests/test_phase_wrapper_predicate_contract.py\n  Location: _readme_wrapper_example function, lines 137-144\n  Issue: Bare str.index() calls raise ValueError with unhelpful default messages when README.md heading or YAML fence format drifts, making CI diagnosis harder\n  Suggested minimal fix: Wrap each index() call in try/except ValueError that raises AssertionError with a message naming which pattern was not found\n  Estimated lines changed: 4\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "203243acb6785fd0601c546c610a1711be7a63e96a7cd7d3c331dea671dc9211",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3969,
+    "run_id": "33708662605",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33708662605",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260903035119_79d765aaef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3969,
+    "run_id": "33708662605"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-03T03:51:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
