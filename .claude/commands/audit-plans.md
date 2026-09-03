@@ -1,3 +1,8 @@
+---
+model: sonnet
+context: fork
+background: false
+---
 Audit every plan under `docs/` — read each one, classify it **implemented completely / partially / not implemented** against the *current* repo state, and recommend the single **next highest-value** plan to implement **that will not create merge conflicts with in-flight orchestrator work** (open `ai:orchestrator-tracking` issues and their unmerged PRs). If no candidate is conflict-safe, the correct output is *no recommendation*. The recommendation itself is report-only — this command never implements a plan — but every run also performs two bounded maintenance actions: it **archives verified-complete plans** (moves `docs/plans/` files classified COMPLETE into `docs/completed/`) and **sweeps `docs/scripts-pending-removal.md`** (removes scripts whose §18.F removal trigger is met and whose preflight checks all pass, deleting the registry entry alongside), committing and opening a maintenance PR only when either action changed something. `$ARGUMENTS` is optional — pass a filter (a subdirectory, a topic, or a glob) to narrow the audit; empty means audit all plans under `docs/plans/`.
 
 $ARGUMENTS

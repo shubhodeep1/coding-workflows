@@ -1,3 +1,6 @@
+---
+model: sonnet
+---
 Hand the plan documented at the path / reference in `$ARGUMENTS` to the **AI orchestrator** (the unattended pipeline) for implementation, by dispatching the orchestrator's `workflow_dispatch` trigger with the plan fed in as the `project_description`. The orchestrator clarifies scope, decomposes the work into a dependency DAG of issues, opens a tracking issue, and ships each phase as its own PR. This command does **not** implement the plan in this session and opens **no** PR of its own — it kicks off the orchestrator and reports the dispatched run + tracking issue. For in-session implementation by Claude, use `/implement-plan-claude` instead. `$ARGUMENTS` is **free-form prose** that must resolve to a single plan markdown doc — typically a path like `docs/plans/<slug>-plan.md`, but it may also be a slug, a topic that matches one plan filename, or a GitHub reference (issue / PR) that links to the plan. Optional trailing prose (an emphasis to pass through to the orchestrator) is allowed but not required.
 
 $ARGUMENTS

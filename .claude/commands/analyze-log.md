@@ -1,3 +1,6 @@
+---
+model: opus
+---
 Download the full logs from every URL in `$ARGUMENTS`, identify the root cause, and ship a fix. `$ARGUMENTS` may contain **one or more log URLs** (newline- or whitespace-separated; mix and match accepted) and an **optional free-form description** of what the user expects you to focus on (suspected cause, what changed recently, which step failed, etc.). The description may appear before, between, or after the URLs.
 
 $ARGUMENTS

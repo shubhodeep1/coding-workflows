@@ -1,3 +1,8 @@
+---
+model: best
+context: fork
+background: false
+---
 Given a GitHub issue (number / URL) — or any reference that identifies a project (PR, plan doc, feature name) — in `$ARGUMENTS`, determine three things about **this** repo (`shubhodeep1/coding-workflows`) at `main`: (1) is the project **fully implemented**, (2) is it **correct** — does the code actually do what the plan / issue specified, audited rather than assumed — and (3) is it **activated** — i.e. will it **start working automatically** on its trigger, or does something still need to be done to make it run? Diagnose, then fix: the verdict is graded against `main` and reported in chat, and then every **EVIDENCE-BASED** defect the audit found, plus every activation gap that is pure code in this repo, is fixed on a branch, verified, pushed, and opened as one ready-for-review PR whose body lists each issue, why it was an issue, and the fix applied (see [Fix Policy](#fix-policy)). Operator activation steps (repo-vars, secrets, merges, `@stable` tags) are still enumerated, never performed. `$ARGUMENTS` is free-form and should contain at least one concrete reference (`#1234`, an issue/PR URL, a plan path, or a clearly-named feature).
 
 $ARGUMENTS
