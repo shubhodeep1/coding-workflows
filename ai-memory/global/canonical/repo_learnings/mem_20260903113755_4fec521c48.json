@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow and release-reference changes require repository-wide contract checks, not isolated YAML edits.",
   "timestamps": {
     "created_at": "2026-09-03T11:37:55Z",
