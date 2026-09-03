@@ -5,6 +5,8 @@ import sys
 
 import pytest
 
+import scripts.sync_contract_list_union as list_union_helper
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HELPER = REPO_ROOT / "scripts" / "sync_contract_list_union.py"
@@ -274,3 +276,65 @@ def test_residual_marker_is_rejected(tmp_path: Path) -> None:
 	theirs = _contract(["old", "theirs"], prefix=prefix)
 	result, output_path = _run_helper(tmp_path, base, ours, theirs)
 	_assert_ineligible(result, output_path, "markers_remain")
+
+
+@pytest.mark.parametrize("unsupported_entry", ["[nested]", "{nested: value}", "null", "7", "true"])
+def test_non_string_entrypoints_are_rejected(tmp_path: Path, unsupported_entry: str) -> None:
+	base = _contract(["old"])
+	ours = _contract(["old", unsupported_entry])
+	theirs = _contract(["old", "theirs"])
+	result, output_path = _run_helper(tmp_path, base, ours, theirs)
+	_assert_ineligible(result, output_path, "entrypoint_not_string")
+
+
+def test_recursive_alias_entrypoint_is_rejected_without_recursive_equality(tmp_path: Path) -> None:
+	prefix = "recursive: &recursive\n  - *recursive\n"
+	base = _contract(["old"], prefix=prefix)
+	ours = _contract(["old", "*recursive"], prefix=prefix)
+	theirs = _contract(["old", "theirs"], prefix=prefix)
+	result, output_path = _run_helper(tmp_path, base, ours, theirs)
+	_assert_ineligible(result, output_path, "entrypoint_not_string")
+
+
+def test_non_string_unaffected_write_entrypoint_is_rejected(tmp_path: Path) -> None:
+	base = _contract(["old"], ["null"])
+	ours = _contract(["old", "ours"], ["null"])
+	theirs = _contract(["old", "theirs"], ["null"])
+	result, output_path = _run_helper(tmp_path, base, ours, theirs)
+	_assert_ineligible(result, output_path, "entrypoint_not_string")
+
+
+def test_oversized_input_file_is_rejected_before_yaml_parsing(tmp_path: Path) -> None:
+	oversized_prefix = "#" * (list_union_helper.MAX_INPUT_BYTES + 1) + "\n"
+	base = _contract(["old"], prefix=oversized_prefix)
+	result, output_path = _run_helper(
+		tmp_path,
+		base,
+		_contract(["old", "ours"]),
+		_contract(["old", "theirs"]),
+	)
+	_assert_ineligible(result, output_path, "input_too_large")
+
+
+def test_oversized_entrypoint_list_is_rejected(tmp_path: Path) -> None:
+	base = _contract(["old"])
+	ours_entries = ["old", *[f"ours_{index}" for index in range(list_union_helper.MAX_ENTRYPOINT_ENTRIES)]]
+	result, output_path = _run_helper(
+		tmp_path,
+		base,
+		_contract(ours_entries),
+		_contract(["old", "theirs"]),
+	)
+	_assert_ineligible(result, output_path, "entrypoint_list_too_large")
+
+
+def test_oversized_entrypoint_string_is_rejected(tmp_path: Path) -> None:
+	base = _contract(["old"])
+	oversized_entry = "x" * (list_union_helper.MAX_ENTRYPOINT_LENGTH + 1)
+	result, output_path = _run_helper(
+		tmp_path,
+		base,
+		_contract(["old", oversized_entry]),
+		_contract(["old", "theirs"]),
+	)
+	_assert_ineligible(result, output_path, "entrypoint_too_long")

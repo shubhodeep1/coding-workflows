@@ -19,6 +19,9 @@ LIST_ITEM_RE = re.compile(r"^([ \t]+)- \S.*(?:\r?\n)?$")
 TOP_LEVEL_KEY_RE = re.compile(r"^([^\s:#][^:]*):(?:\s*(?:#.*)?)?(?:\r?\n)?$")
 MARKER_RE = re.compile(r"^(?:<<<<<<<|=======|>>>>>>>)", re.MULTILINE)
 ALLOWED_KEYS = {"read_entrypoints", "write_entrypoints"}
+MAX_INPUT_BYTES = 1_048_576
+MAX_ENTRYPOINT_ENTRIES = 4_096
+MAX_ENTRYPOINT_LENGTH = 4_096
 
 
 class IneligibleError(Exception):
@@ -75,6 +78,17 @@ def _safe_load(yaml_module: Any, text: str) -> Any:
 	finally:
 		if loader is not None:
 			loader.dispose()
+
+
+def _read_bounded_text(input_path: Path) -> str:
+	with input_path.open("rb") as input_file:
+		input_bytes = input_file.read(MAX_INPUT_BYTES + 1)
+	if len(input_bytes) > MAX_INPUT_BYTES:
+		raise IneligibleError("input_too_large")
+	try:
+		return input_bytes.decode("utf-8")
+	except UnicodeDecodeError as error:
+		raise IneligibleError("input_not_utf8") from error
 
 
 def _nearest_top_level_key(lines: list[str], marker_index: int) -> str | None:
@@ -144,20 +158,30 @@ def _parse_and_merge_hunks(marked_text: str) -> tuple[str, str, set[str]]:
 	return merged_text, "".join(auto_merged_lines), affected_keys
 
 
-def _contains_equal(values: list[Any], candidate: Any) -> bool:
-	return any(existing == candidate for existing in values)
+def _validated_entrypoint_lists(document: dict[Any, Any]) -> dict[str, list[str]]:
+	validated_lists: dict[str, list[str]] = {}
+	for entrypoint_key in ALLOWED_KEYS:
+		if entrypoint_key not in document:
+			continue
+		entrypoint_values = document[entrypoint_key]
+		if not isinstance(entrypoint_values, list):
+			raise IneligibleError("entrypoints_not_string_list")
+		if len(entrypoint_values) > MAX_ENTRYPOINT_ENTRIES:
+			raise IneligibleError("entrypoint_list_too_large")
+		for entrypoint_value in entrypoint_values:
+			if not isinstance(entrypoint_value, str):
+				raise IneligibleError("entrypoint_not_string")
+			if len(entrypoint_value) > MAX_ENTRYPOINT_LENGTH:
+				raise IneligibleError("entrypoint_too_long")
+		validated_lists[entrypoint_key] = entrypoint_values
+	return validated_lists
 
 
-def _has_duplicates(values: list[Any]) -> bool:
-	seen_values: list[Any] = []
-	for value in values:
-		if _contains_equal(seen_values, value):
-			return True
-		seen_values.append(value)
-	return False
+def _has_duplicates(values: list[str]) -> bool:
+	return len(values) != len(set(values))
 
 
-def _is_subsequence(needles: list[Any], haystack: list[Any]) -> bool:
+def _is_subsequence(needles: list[str], haystack: list[str]) -> bool:
 	haystack_index = 0
 	for needle in needles:
 		while haystack_index < len(haystack) and haystack[haystack_index] != needle:
@@ -168,18 +192,18 @@ def _is_subsequence(needles: list[Any], haystack: list[Any]) -> bool:
 	return True
 
 
-def _deduplicated_union(ours_values: list[Any], theirs_values: list[Any]) -> list[Any]:
+def _deduplicated_union(ours_values: list[str], theirs_values: list[str]) -> list[str]:
 	union_values = list(ours_values)
+	seen_values = set(ours_values)
 	for value in theirs_values:
-		if not _contains_equal(union_values, value):
+		if value not in seen_values:
 			union_values.append(value)
+			seen_values.add(value)
 	return union_values
 
 
-def _same_unique_members(first_values: list[Any], second_values: list[Any]) -> bool:
-	return len(first_values) == len(second_values) and all(
-		_contains_equal(second_values, value) for value in first_values
-	)
+def _same_unique_members(first_values: list[str], second_values: list[str]) -> bool:
+	return len(first_values) == len(second_values) and set(first_values) == set(second_values)
 
 
 def _validate_result(
@@ -198,13 +222,15 @@ def _validate_result(
 	auto_merged_data = _safe_load(yaml_module, auto_merged_text)
 	if not all(isinstance(data, dict) for data in (base_data, ours_data, theirs_data, merged_data, auto_merged_data)):
 		raise IneligibleError("list_not_union")
+	validated_documents = [
+		_validated_entrypoint_lists(data)
+		for data in (base_data, ours_data, theirs_data, merged_data, auto_merged_data)
+	]
 
 	for affected_key in affected_keys:
 		lists = [
-			base_data.get(affected_key),
-			ours_data.get(affected_key),
-			theirs_data.get(affected_key),
-			merged_data.get(affected_key),
+			validated_document.get(affected_key)
+			for validated_document in validated_documents[:4]
 		]
 		if not all(isinstance(value, list) for value in lists):
 			raise IneligibleError("list_not_union")
@@ -219,9 +245,6 @@ def _validate_result(
 		):
 			raise IneligibleError("list_not_union")
 
-	for top_level_key, auto_merged_value in auto_merged_data.items():
-		if top_level_key not in affected_keys and merged_data.get(top_level_key) != auto_merged_value:
-			raise IneligibleError("list_not_union")
 	if set(merged_data) != set(auto_merged_data):
 		raise IneligibleError("list_not_union")
 
@@ -248,11 +271,11 @@ def _merge(args: argparse.Namespace) -> None:
 	base_path = Path(args.base)
 	ours_path = Path(args.ours)
 	theirs_path = Path(args.theirs)
-	base_text = base_path.read_text(encoding="utf-8")
+	base_text = _read_bounded_text(base_path)
 	if not base_text:
 		raise IneligibleError("base_missing")
-	ours_text = ours_path.read_text(encoding="utf-8")
-	theirs_text = theirs_path.read_text(encoding="utf-8")
+	ours_text = _read_bounded_text(ours_path)
+	theirs_text = _read_bounded_text(theirs_path)
 
 	merge_result = subprocess.run(
 		[
