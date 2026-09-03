@@ -3301,6 +3301,181 @@ def test_codex_blocked_verdict_regex_matches_line_start_only() -> None:
 	assert not _matches("")
 
 
+def test_blocked_already_satisfied_routes_to_success_noop() -> None:
+	"""Pin the BLOCKED-verdict classifier (run 33711184784, issue #3972).
+
+	Issue #3972 asked for an `author_association` gate that `main` already
+	carried. Codex correctly found nothing to do and answered
+	`BLOCKED: Approved plan requires no edits; ...`. The bail below treated
+	every BLOCKED line as a hard failure, so a legitimate "already
+	implemented" outcome failed the run and posted implementation-failed
+	diagnostics instead of taking the success-no-op path that closes the
+	issue with `ai:closed`.
+
+	The classifier must sit inside the BLOCKED branch, before the failure
+	bail, and must set `codex_success_noop.flag` (the same marker Guard 0
+	in "Handle no-op implementation" reads) rather than
+	`codex_blocked.flag`.
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+
+	# Both halves of the classifier must exist as named knobs above the loop.
+	assert "BLOCKED_ALREADY_SATISFIED_REGEX='" in codex_block, (
+		"the positive half of the classifier must be a named regex knob"
+	)
+	assert "BLOCKED_REAL_OBSTACLE_REGEX='" in codex_block, (
+		"the negative half must be a named regex knob so a real obstacle "
+		"that merely mentions 'already present' keeps failing"
+	)
+	regex_def_idx = codex_block.find("BLOCKED_ALREADY_SATISFIED_REGEX='")
+	loop_idx = codex_block.find('for attempt in $(seq 1 "${max_attempts}"); do')
+	assert regex_def_idx != -1 and loop_idx != -1
+	assert regex_def_idx < loop_idx, (
+		"classifier regexes must be defined once above the retry loop, "
+		"mirroring ANNOUNCE_EDIT_REGEX"
+	)
+
+	# Placement: inside the BLOCKED branch, before the failure bail.
+	blocked_idx = codex_block.find(
+		"grep -qE '^[[:space:]]*BLOCKED:' \"${CODEX_OUTPUT_FILE}\""
+	)
+	classifier_idx = codex_block.find(
+		'grep -qiE "${BLOCKED_ALREADY_SATISFIED_REGEX}"'
+	)
+	fail_bail_idx = codex_block.find(
+		"Codex returned a deliberate BLOCKED verdict on attempt"
+	)
+	assert -1 not in (blocked_idx, classifier_idx, fail_bail_idx)
+	assert blocked_idx < classifier_idx < fail_bail_idx, (
+		"the already-satisfied classifier must run inside the BLOCKED "
+		"branch and before the failure bail, otherwise the bail wins"
+	)
+
+	# The negative half must be applied as a negation, not a second positive.
+	assert '! printf' in codex_block[classifier_idx:classifier_idx + 500], (
+		"the real-obstacle regex must be applied as a NOT condition"
+	)
+
+	# Outcome: success-no-op flag, success substate, break. Never the
+	# blocked flag — that would re-route the run into failure diagnostics.
+	window = codex_block[classifier_idx:fail_bail_idx]
+	assert ': > "${RUNTIME_DIR}/codex_success_noop.flag"' in window, (
+		"an already-satisfied verdict must set codex_success_noop.flag so "
+		"Guard 0 closes the issue with ai:closed"
+	)
+	assert "codex_blocked.flag" not in window, (
+		"the already-satisfied path must not write codex_blocked.flag"
+	)
+	assert "implement_succeeded=true" in window, (
+		"an already-satisfied verdict is a success, not a failure"
+	)
+	assert 'emit_implement_substate "implement" "implement" "Succeeded"' in window, (
+		"the already-satisfied path must emit the Succeeded substate"
+	)
+	assert "break" in window, (
+		"an already-satisfied verdict is terminal — break, do not retry"
+	)
+
+
+def test_blocked_already_satisfied_regexes_classify_real_verdicts() -> None:
+	"""Exercise the live classifier regexes from implement.yml against
+	fixtures. The positive half must recognise "nothing was required"
+	verdicts; the negative half must veto every real obstacle, including
+	one whose wording happens to contain an "already present" clause.
+
+	A miss in either direction is not symmetric: failing to classify keeps
+	today's behaviour (a failed run), while a false positive would close a
+	genuinely unfinished issue. The fixtures below pin both.
+	"""
+	block = _step_block_text("Run Codex implementation")
+
+	def _regex(name: str) -> str:
+		match = re.search(rf"^\s+{name}='(.*)'$", block, re.M)
+		assert match is not None, f"could not extract {name} from implement.yml"
+		return match.group(1)
+
+	positive = _regex("BLOCKED_ALREADY_SATISFIED_REGEX")
+	negative = _regex("BLOCKED_REAL_OBSTACLE_REGEX")
+
+	def _grep(pattern: str, text: str) -> bool:
+		proc = subprocess.run(
+			["grep", "-qiE", pattern],
+			input=text,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+		return proc.returncode == 0
+
+	def _is_success_noop(reason: str) -> bool:
+		return _grep(positive, reason) and not _grep(negative, reason)
+
+	# Verbatim verdict from run 33711184784 attempt 1 (issue #3972).
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires no edits; all actor gates exist and "
+		"the focused contract test passes (5/5). Pre-existing manifest change "
+		"left untouched."
+	)
+	assert _is_success_noop("BLOCKED: The requested gate is already implemented on main.")
+	assert _is_success_noop("BLOCKED: No repository changes are required.")
+	assert _is_success_noop("BLOCKED: Nothing to do; the index already exists.")
+
+	# Real obstacles must keep failing.
+	assert not _is_success_noop("BLOCKED: scope-lock-violation file=scripts/x.py")
+	assert not _is_success_noop(
+		"BLOCKED: Audit-script parity failed. `main` uses ESM imports; the "
+		"branch uses CommonJS requires."
+	)
+	assert not _is_success_noop("BLOCKED: fail-closed parity gate failed.")
+	assert not _is_success_noop("BLOCKED: requirements are contradictory and the plan is ambiguous.")
+	assert not _is_success_noop("BLOCKED: needs human review before proceeding.")
+	assert not _is_success_noop("BLOCKED: the target file is inaccessible.")
+	# Negative half vetoes an obstacle that also claims something is already present.
+	assert not _is_success_noop(
+		"BLOCKED: cannot regenerate the lockfile; uv is unavailable in the "
+		"runner, though the dependency is already present in pyproject.toml"
+	)
+	assert not _is_success_noop(
+		"BLOCKED: the upstream API is missing, so no changes are required here."
+	)
+
+
+def test_implement_prompt_reserves_blocked_for_real_obstacles() -> None:
+	"""The prompt contract must stop steering the model toward `BLOCKED:`
+	for a no-op outcome. `prompts/mode-implement.txt` previously named
+	`BLOCKED: <reason>` as the only alternative to on-disk changes, which
+	is what produced the issue #3972 verdict. It must now name the
+	success-no-op phrasing for the "nothing was required" case.
+	"""
+	prompt = (REPO_ROOT / "prompts" / "mode-implement.txt").read_text(encoding="utf-8")
+	assert "No changes needed." in prompt, (
+		"the prompt must name the exact success-no-op phrase the workflow's "
+		"success-no-op regex recognises"
+	)
+	assert "It is NOT the marker for" in prompt, (
+		"the prompt must state that BLOCKED is not the nothing-to-do marker"
+	)
+	# The phrase the prompt tells the model to emit must actually satisfy the
+	# workflow's success-no-op regex — otherwise the guidance is a dead end.
+	block = _step_block_text("Run Codex implementation")
+	match = re.search(
+		r"if grep -qEi '(\^\(\[\[:space:\]\]\*.*?)' \"\$\{CODEX_OUTPUT_FILE\}\"",
+		block,
+	)
+	assert match is not None, "could not extract the success-no-op regex from implement.yml"
+	proc = subprocess.run(
+		["grep", "-qEi", match.group(1)],
+		input="No changes needed.\n",
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	assert proc.returncode == 0, (
+		"the phrase the prompt mandates must match the workflow's "
+		"success-no-op regex"
+	)
+
+
 def test_codex_empty_output_streak_bail_and_flag() -> None:
 	"""Pin Fix #2: when Codex returns empty output for
 	`empty_streak_threshold` (default 2) attempts in a row, the retry

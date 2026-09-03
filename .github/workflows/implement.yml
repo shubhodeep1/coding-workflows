@@ -2136,6 +2136,28 @@ jobs:
           # confirmed no-op.
           ANNOUNCE_EDIT_REGEX='(apply_patch|(applying|implementing|patching|editing|overwriting|rewriting|replacing|writing|removing|deleting|cleaning) ([^[:space:]]+[[:space:]]+){0,6}(patch|edit|implementation|change|fix|plan|update|modification|overwrite|rewrite|replacement|cleanup|removal|deletion|override|file)|(patching|editing|overwriting|rewriting|replacing|writing|implementing|removing|deleting|cleaning) `?[A-Za-z0-9_./-]+|i.?ll (now |first |then |next |only |just |go ahead and |proceed to )*(apply|patch|edit|update|modify|write|create|add|change|implement|fix|overwrite|rewrite|replace)|will (now |first |then |next |only |just |go ahead and |proceed to )*(apply|patch|edit|update|modify|write|create|add|change|implement|fix|overwrite|rewrite|replace))'
 
+          # BLOCKED verdict classifier (run 33711184784, issue #3972).
+          # `prompts/mode-implement.txt` names `BLOCKED: <reason>` as a
+          # valid terminal deliverable, and the bail below treats every
+          # such verdict as a hard failure. That is right for a real
+          # obstacle (scope-lock violation, unavailable tooling), but
+          # wrong for the one reason the workflow already has a success
+          # path for: the approved plan requires no edits because the
+          # requested state is already present on the branch. Issue
+          # #3972 asked for an `author_association` gate that `main`
+          # already carried; the model answered `BLOCKED: Approved plan
+          # requires no edits; all actor gates exist and the focused
+          # contract test passes (5/5).` and the run failed instead of
+          # closing the issue via the success-no-op path below.
+          # The classifier is deliberately two-sided and conservative:
+          # the reason must affirmatively state that nothing is required
+          # AND must not name a real obstacle. Anything that fails
+          # either half keeps the pre-existing failure behaviour, so a
+          # miss costs a false failure (today's behaviour), never a
+          # falsely-closed issue.
+          BLOCKED_ALREADY_SATISFIED_REGEX='(requires?[[:space:]]+no[[:space:]]+([a-z-]+[[:space:]]+){0,3}(edit|change|modification|diff|patch)s?|no[[:space:]]+([a-z-]+[[:space:]]+){0,3}(edit|change|modification|diff|patch)s?[[:space:]]+(are[[:space:]]+|is[[:space:]]+|were[[:space:]]+|was[[:space:]]+)?(required|needed|necessary)|nothing[[:space:]]+to[[:space:]]+(do|change|implement|apply)|already[[:space:]]+(implemented|present|satisfied|applied|in[[:space:]]+place|aligned|complete|completed|done|exists|enforced|up[- ]to[- ]date))'
+          BLOCKED_REAL_OBSTACLE_REGEX='(scope-lock-violation|\<cannot\>|\<can[[:space:]]not\>|\<can.?t\>|\<unable\>|\<unavailable\>|\<not[[:space:]]available\>|\<inaccessible\>|\<no[[:space:]]access\>|\<denied\>|\<forbidden\>|\<not[[:space:]]permitted\>|\<no[[:space:]]permission\>|\<missing\>|\<absent\>|\<fail(s|ed|ing|ure|ures)?\>|\<errors?\>|\<conflict(s|ed|ing)?\>|\<ambiguous\>|\<unclear\>|\<insufficient\>|\<needs?[[:space:]]human\>|\<requires?[[:space:]]human\>|\<blocked[[:space:]]by\>|\<out[- ]of[- ]scope\>|\<timed?[[:space:]]out\>|\<timeout\>)'
+
           # Salvage gate. Returns 0 iff at least one path in the porcelain
           # delta passed in carries a non-whitespace change vs HEAD/index
           # (or, for an untracked file, contains any non-whitespace bytes).
@@ -2415,6 +2437,23 @@ jobs:
                 # branch (the non-empty delta above wins).
                 if grep -qE '^[[:space:]]*BLOCKED:' "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
                   codex_blocked_reason="$(grep -E '^[[:space:]]*BLOCKED:' "${CODEX_OUTPUT_FILE}" 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]+//' || true)"
+                  # An "already satisfied" verdict is a success-no-op, not a
+                  # failure: the plan asked for state the branch already has.
+                  # Classified from the BLOCKED reason alone (see
+                  # BLOCKED_ALREADY_SATISFIED_REGEX / BLOCKED_REAL_OBSTACLE_REGEX
+                  # above the loop) so a real obstacle that happens to mention
+                  # "already present" keeps failing. Sets the same flag the
+                  # success-no-op regex below sets, so Guard 0 in "Handle no-op
+                  # implementation" closes the issue with ai:closed instead of
+                  # the diagnostics comment reporting a bail.
+                  if printf '%s' "${codex_blocked_reason}" | grep -qiE "${BLOCKED_ALREADY_SATISFIED_REGEX}" 2>/dev/null \
+                     && ! printf '%s' "${codex_blocked_reason}" | grep -qiE "${BLOCKED_REAL_OBSTACLE_REGEX}" 2>/dev/null; then
+                    echo "Codex returned a BLOCKED verdict on attempt ${attempt} that reports the requested work is already present — treating it as success-no-op. Model reason: $(_gh_actions_escape "${codex_blocked_reason}")"
+                    : > "${RUNTIME_DIR}/codex_success_noop.flag"
+                    implement_succeeded=true
+                    emit_implement_substate "implement" "implement" "Succeeded" "${attempt}" "${attempt_log_file}"
+                    break
+                  fi
                   # Escape the annotation channel, but preserve the raw line in the flag file below.
                   echo "::error::Codex returned a deliberate BLOCKED verdict on attempt ${attempt} — not retrying (a verdict is not a stuck attempt). Model reason: $(_gh_actions_escape "${codex_blocked_reason}")"
                   printf '%s\n' "${codex_blocked_reason}" > "${RUNTIME_DIR}/codex_blocked.flag"

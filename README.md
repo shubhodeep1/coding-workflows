@@ -283,7 +283,15 @@ Several Symphony-era behaviors are configured by optional committed files rather
 
 Copy the ready-to-use templates from [`workflow-templates/`](workflow-templates/) into your repo's `.github/workflows/` directory. Reference implementations also live in [`.github/workflows/internal-*.yml`](.github/workflows/) in this repository.
 
-At minimum, create these three core wrappers:
+At minimum, create these three core wrappers. Each job carries the same `if:` predicate as the
+reusable workflow it calls (see `agents.md`, "Phase wrapper predicate parity"). `ai-clarify`
+automatically triages newly opened issues unless they carry `ai:orchestrator-tracking`,
+`ai:security-audit`, or `ai:retro`; its `/reclarify` route accepts only comments from a user whose
+`author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`. The `/answer` route in `ai-plan` and the
+`/approved` route in `ai-implement` accept the same trusted-user associations and also accept
+`github-actions[bot]` with their documented auto-answer and auto-approve markers, respectively. Copy
+the predicate verbatim — a wrapper without it still runs the reusable workflow's own job-level gate,
+but fires a skipped run for every other comment.
 
 **`.github/workflows/ai-clarify.yml`** — Triages new issues automatically
 ```yaml
@@ -298,6 +306,9 @@ permissions:
   issues: write
 jobs:
   clarify:
+    if: >-
+      (github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) ||
+      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
     uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@<40-character-release-sha> # stable
     secrets: inherit
 ```
@@ -313,6 +324,26 @@ permissions:
   issues: write
 jobs:
   plan:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.pull_request == null &&
+      (
+        (
+          github.event.comment.user.type == 'User' &&
+          contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+          startsWith(github.event.comment.body, '/answer')
+        ) ||
+        (
+          github.event.comment.user.type == 'Bot' &&
+          github.event.comment.user.login == 'github-actions[bot]' &&
+          startsWith(github.event.comment.body, '/answer') &&
+          (
+            contains(github.event.comment.body, '[auto-answered-by-clarify]') ||
+            contains(github.event.comment.body, '[auto-answered-by-orchestrator]')
+          )
+        )
+      )
     uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@<40-character-release-sha> # stable
     secrets: inherit
 ```
@@ -329,6 +360,23 @@ permissions:
   pull-requests: write
 jobs:
   implement:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.pull_request == null &&
+      (
+        (
+          github.event.comment.user.type == 'User' &&
+          contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+          startsWith(github.event.comment.body, '/approved')
+        ) ||
+        (
+          github.event.comment.user.type == 'Bot' &&
+          github.event.comment.user.login == 'github-actions[bot]' &&
+          startsWith(github.event.comment.body, '/approved') &&
+          contains(github.event.comment.body, '[auto-approved-by-plan]')
+        )
+      )
     uses: shubhodeep1/coding-workflows/.github/workflows/implement.yml@<40-character-release-sha> # stable
     secrets: inherit
 ```
@@ -1425,6 +1473,8 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
 10g. **files_touched scope guard (`ai:scope-blocked`):** Sibling to the destructive-commit guard (10d), this guard enforces the per-issue `files_touched` allowlist that orchestrator decomposition declares (and that issue bodies carry as a `files_touched:` block). Before the AI implementation commit, `implement.yml` computes the staged change set (`git diff --cached --name-only --diff-filter=ACMRD`) from the same staged index the destructive guard inspects — at both the preflight stage (fail fast) and the commit-time path — and refuses the commit (the run fails, nothing is committed or pushed) when any staged path falls outside the allowlist. Matching supports exact paths, directory-prefix entries (`frontend/`), and globs (`frontend/**`), with leading `./` and trailing `/` normalized; dependency lockfiles (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `Cargo.lock`, `poetry.lock`, `uv.lock`, `go.sum`, `composer.lock`) are auto-allowed but compiled build outputs are not. Parsing reuses the same `files_touched:` block semantics as the review-time scope verifier (`scripts/review_reject_verify.sh`) via the shared helper `scripts/files_touched_scope_guard.py`. On rejection the issue is labeled `ai:scope-blocked`, a visible comment lists the out-of-scope paths plus the declared allowlist, and a CRITICAL Telegram alert is sent; the `Validate approval phase label` step refuses to redispatch any issue carrying `ai:scope-blocked` until a human removes the label. The guard **fails open** — it skips silently when the issue declares no `files_touched` allowlist, when the master toggle `ENFORCE_FILES_TOUCHED` is `false`, or when the helper is unavailable — and `ALLOW_OUT_OF_SCOPE_FILES=true` downgrades a block to a warning for a single run. This guard exists because consumer-repo project #244 / issue #254 ("frontend-send-status") blew past its `frontend/`-only scope in one commit — editing four root TypeScript files and committing sixteen compiled `.js` twins — with nothing in `implement.yml` to stop it, forcing a downstream judge cleanup that then tripped the destructive guard and required manual intervention.
 10h. **Issue scope-lock label (`ai:scope:<glob>`):** When `SCOPE_LOCK_LABEL_ENABLED=true`, `implement.yml` recognizes at most one active dynamic issue label of the form `ai:scope:<glob>`. The suffix is treated as a Bash `globstar`-style path glob (for example `scripts/**/*.py` or `prompts/mode-*.txt`) and is copied into the implementation context so the implement prompt can refuse required out-of-scope edits with `BLOCKED: scope-lock-violation file=<path>`. Workflow enforcement remains authoritative: after the local AI commit is created, `scripts/implement_commit_changes.sh` reuses `scripts/files_touched_scope_guard.py` against the committed pathset and rolls the local unpushed commit back if any changed path falls outside the glob. The issue is then labeled `ai:scope-blocked`, a visible comment lists the violating paths plus the active glob, and redispatch stays blocked until a human removes the label. Multiple `ai:scope:` labels are not merged; the workflow enforces only the first matching label from the issue metadata and logs a warning.
 10i. **Deliberate `BLOCKED:` verdict bail (implement retry loop):** `prompts/mode-implement.txt`'s `completeness_contract` names `BLOCKED: <reason>` as a valid terminal deliverable (its scope-lock discipline mandates `BLOCKED: scope-lock-violation file=<path>`). When a Codex implement attempt exits 0 with any final-output line starting with optional whitespace followed by `BLOCKED:` and the baseline-relative worktree delta is empty, the "Run Codex implementation" retry loop in `.github/workflows/implement.yml` now treats that as the model's verdict rather than an anonymous "no file changes" attempt: it logs the model's reason through the existing GitHub Actions workflow-command escaper (`::error::… Model reason: BLOCKED: …`), writes the raw reason to `${RUNTIME_DIR}/codex_blocked.flag`, emits the `Failed` substate, and `break`s out of the loop immediately (mirroring the `request_user_input` bail) instead of re-running the remaining attempts under the retry nudge, whose "the implementation plan requires repository modifications" wording contradicts issues that forbid file edits. Summary text may precede the `BLOCKED:` line. The check runs before the success-no-op regex (10f) so a BLOCKED message that also says "no file changes were made" is not misread as done, and it never fires when the attempt also produced real file changes (the non-empty delta wins). The failure-diagnostics comment on the source issue then opens with "Codex bailed on attempt N: deliberate BLOCKED verdict …" instead of "Codex implement failed after 5 attempts" and points operators to the final assistant output captured in the workflow log; its included attempt tails contain stderr only. Downstream handling is unchanged: the step still exits 1 and the run takes the existing implementation-failed path. Motivating case: shubhodeep1/multi-user-ai-agent issue #246 (run 33470149029), an admin-only fail-closed task whose plan forbade repository edits, spent 5/5 attempts and ~201K tokens re-emitting the same `BLOCKED: Audit-script parity failed …` verdict.
+
+10j. **Already-satisfied `BLOCKED:` verdicts route to success-no-op (not failure):** Not every `BLOCKED:` line is an obstacle. When the approved plan requires no edits because the requested state is already present on the branch, the verdict describes the one outcome the pipeline already has a success path for (10f). Before the 10i failure bail, the "Run Codex implementation" step classifies the extracted reason line with two named regexes defined above the retry loop: `BLOCKED_ALREADY_SATISFIED_REGEX` (positive — "requires no edits", "no changes are required", "nothing to do", "already implemented/present/satisfied/applied/enforced/…") and `BLOCKED_REAL_OBSTACLE_REGEX` (negative veto — `scope-lock-violation`, `cannot`, `unable`, `unavailable`, `inaccessible`, `denied`, `missing`, `fail*`, `error`, `conflict`, `ambiguous`, `unclear`, `insufficient`, `needs human`, `blocked by`, `out-of-scope`, `timeout`). Only a reason matching the positive half **and** not the negative half is reclassified: the step writes `${RUNTIME_DIR}/codex_success_noop.flag` (never `codex_blocked.flag`), sets `implement_succeeded=true`, emits the `Succeeded` substate, and breaks — so Guard 0 of "Handle no-op implementation" closes the issue with `ai:closed` and the ✅ "Already implemented" comment instead of posting implementation-failed diagnostics. The classification is deliberately asymmetric: anything failing either half keeps the 10i failure behaviour, so a miss costs a false failure (the pre-existing outcome), never a falsely-closed issue. `prompts/mode-implement.txt`'s `completeness_contract` was the upstream cause and now states that `BLOCKED:` is reserved for real obstacles and that a no-op outcome must end with `No changes needed.` on its own line, which the 10f success-no-op regex already recognises. Motivating case: issue #3972 (run 33711184784) asked for an `author_association` gate that `main` already carried; Codex answered `BLOCKED: Approved plan requires no edits; all actor gates exist and the focused contract test passes (5/5).` and the run failed instead of closing the issue.
 11. **Auto-recovery:** On failure, the judge can revert problematic PRs and create fix-up issues. Those fix-up issues include the standard orchestrator metadata block (`Tracking issue`, `Integration branch`, `Local ID`, `Managed by`) in the issue body. Recovery is attempted up to `MAX_RECOVERY_ATTEMPTS` (default 3) times; if all attempts fail, the project stops and the operator is notified via Telegram.
 12. **Validation-failure recovery:** When runtime validation fails, the poller transitions the project back to the judge for re-evaluation (labeled `ai:validation-recovery`) up to `MAX_VALIDATION_RECOVERY_ATTEMPTS` (default 2) times. The judge sees the validation diagnosis in tracking issue comments, can issue fix-up work (with orchestrator metadata), and then re-validates. After exhausting the recovery budget, the project goes to terminal `ai:validation-failed`.
 12a. **Integration branch delivery:** Orchestrator projects now create a per-project integration branch (`orchestrator/project-<tracking_issue>`). All orchestrator child issues include `Integration branch` metadata so implementation PRs target the integration branch instead of `main`. Branch resolution order is strict: child issue metadata footer first, then tracking issue metadata, and default-branch fallback only when no integration metadata exists. If metadata exists but the branch is invalid/missing, the poller fails safe instead of silently falling back to default branch. The poller periodically syncs default branch changes into this branch via the merge API.
@@ -2065,7 +2115,12 @@ Consumer wrapper files pin reusable workflows to immutable release commit SHAs; 
 2. Test via canary channel on pilot repos
 3. Promote to stable after validation
 
-See `docs/release-policy.md` for the full release process.
+The release process is the `stable` tag flow described under [Versioning](#versioning): promote
+`main` with [`promote-main-to-stable.yml`](.github/workflows/promote-main-to-stable.yml) (which runs the
+[`test-and-mark-stable.yml`](.github/workflows/test-and-mark-stable.yml) release gate) or cut a
+stable-only patch with [`mark-stable.yml`](.github/workflows/mark-stable.yml); both are
+`workflow_dispatch`-only and, on success, send the `coding-workflows-stable-released`
+`repository_dispatch` to every repo in `.github/ai/consumer_repos.json`.
 
 ## Task-state mirror flag
 

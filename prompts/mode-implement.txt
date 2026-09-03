@@ -166,6 +166,13 @@ Apply this shared money-handling lens when the change reads or mutates money:
   on disk or explicitly recorded as `BLOCKED: <reason>`.
 - The deliverable is a worktree change set, not a description of one.
   Describing the edit is not the edit; only the write tool's success counts.
+- `BLOCKED: <reason>` means an obstacle stopped you (scope-lock violation,
+  unavailable tooling, contradictory requirements). It is NOT the marker for
+  "there was nothing to do". When the approved plan requires no repository
+  edits because the requested state is already present on the branch, end
+  your final message with exactly `No changes needed.` on its own line
+  instead of a `BLOCKED:` line. Automation closes that as done; a `BLOCKED:`
+  line fails the run.
 </completeness_contract>
 
 {{REFERENCE_VERIFICATION_LOOP}}
