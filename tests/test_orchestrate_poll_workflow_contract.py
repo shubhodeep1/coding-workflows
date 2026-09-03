@@ -10,6 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 ORCHESTRATE_POLL_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
 ORCHESTRATE_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
 ORCHESTRATE_POLL_PROCESS = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+SYNC_LIST_UNION_REQUIREMENTS = REPO_ROOT / "scripts" / "sync_contract_list_union.requirements.txt"
 
 
 def _workflow(path: Path = ORCHESTRATE_POLL_WF) -> str:
@@ -109,6 +110,42 @@ def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> No
 	assert "run: bash scripts/worktree_gc.sh" in wf
 
 
+def test_contract_list_union_uses_isolated_hash_locked_pyyaml_before_git_credentials() -> None:
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	requirements = SYNC_LIST_UNION_REQUIREMENTS.read_text(encoding="utf-8")
+	prepare_marker = "      - name: Prepare isolated contract-list union Python"
+	auth_marker = "      - name: Configure git auth for memory helper clones"
+	prepare_start = wf.index(prepare_marker)
+	auth_start = wf.index(auth_marker)
+	prepare_block = wf[prepare_start:auth_start]
+
+	assert prepare_start < auth_start
+	assert "sync_contract_list_union.requirements.txt" in wf
+	assert 'python3 -I -m venv "${union_venv}"' in prepare_block
+	assert '"${union_python}" -I -m pip install' in prepare_block
+	assert "--require-hashes" in prepare_block
+	assert "--only-binary=:all:" in prepare_block
+	assert "--no-deps" in prepare_block
+	assert '--requirement "${requirements_file}"' in prepare_block
+	assert '-I -c \'import yaml\'' in prepare_block
+	assert "yaml.__version__" not in prepare_block
+	assert 'SYNC_CONTRACT_LIST_UNION_PYTHON=${unavailable_python}' in prepare_block
+	assert "PyYAML==6.0.3" in requirements
+	assert "--hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc" in requirements
+	assert requirements.count("--hash=sha256:") > 1
+	assert "runs-on: ubuntu-latest" in wf
+	assert 'python-version: "3.12"' in wf
+	assert 'architecture: "x64"' in wf
+	assert "GH_TOKEN" not in prepare_block
+	assert "python3 -m pip install --quiet pyyaml" not in wf
+
+	checkout_prefix = "uses: actions/checkout@v5"
+	for checkout_start in [index for index in range(prepare_start) if wf.startswith(checkout_prefix, index)]:
+		next_step = wf.find("\n      - name:", checkout_start)
+		checkout_block = wf[checkout_start:next_step if next_step != -1 else prepare_start]
+		assert "persist-credentials: false" in checkout_block
+
+
 def main() -> int:
 	test_stall_control_env_defaults_are_declared()
 	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
@@ -118,6 +155,7 @@ def main() -> int:
 	test_task_state_helper_and_flag_are_wired_into_poller_workflow()
 	test_security_pass_dark_launch_env_and_assets_are_wired()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
+	test_contract_list_union_uses_isolated_hash_locked_pyyaml_before_git_credentials()
 	return 0
 
 

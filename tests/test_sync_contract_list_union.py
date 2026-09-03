@@ -3,6 +3,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HELPER = REPO_ROOT / "scripts" / "sync_contract_list_union.py"
@@ -176,6 +178,85 @@ def test_invalid_merged_yaml_is_rejected(tmp_path: Path) -> None:
 	theirs = _contract(["old", "theirs"], prefix=prefix)
 	result, output_path = _run_helper(tmp_path, base, ours, theirs)
 	_assert_ineligible(result, output_path, "yaml_parse_failed")
+
+
+def test_loader_constructor_parse_failure_is_ineligible() -> None:
+	import yaml
+
+	import scripts.sync_contract_list_union as list_union_helper
+
+	with pytest.raises(list_union_helper.IneligibleError, match="yaml_parse_failed"):
+		list_union_helper._safe_load(yaml, "\x00")
+
+
+@pytest.mark.parametrize("duplicate_source", ["base", "ours", "theirs"])
+def test_duplicate_top_level_key_in_each_input_is_rejected(tmp_path: Path, duplicate_source: str) -> None:
+	inputs = {
+		"base": _contract(["old"]),
+		"ours": _contract(["old", "ours"]),
+		"theirs": _contract(["old", "theirs"]),
+	}
+	inputs[duplicate_source] = inputs[duplicate_source].replace(
+		"purpose: Store fantasy leaderboard rankings.\n",
+		"purpose: Store fantasy leaderboard rankings.\npurpose: Decoy value.\n",
+		1,
+	)
+	result, output_path = _run_helper(tmp_path, inputs["base"], inputs["ours"], inputs["theirs"])
+	_assert_ineligible(result, output_path, "duplicate_mapping_key")
+
+
+def test_duplicate_nested_mapping_key_is_rejected(tmp_path: Path) -> None:
+	prefix = "metadata:\n  owner: first\n  owner: second\n"
+	result, output_path = _run_helper(
+		tmp_path,
+		_contract(["old"], prefix=prefix),
+		_contract(["old", "ours"], prefix=prefix),
+		_contract(["old", "theirs"], prefix=prefix),
+	)
+	_assert_ineligible(result, output_path, "duplicate_mapping_key")
+
+
+def test_merge_expanded_duplicate_mapping_key_is_rejected(tmp_path: Path) -> None:
+	prefix = "defaults: &defaults\n  owner: first\nmetadata:\n  <<: *defaults\n  owner: second\n"
+	result, output_path = _run_helper(
+		tmp_path,
+		_contract(["old"], prefix=prefix),
+		_contract(["old", "ours"], prefix=prefix),
+		_contract(["old", "theirs"], prefix=prefix),
+	)
+	_assert_ineligible(result, output_path, "duplicate_mapping_key")
+
+
+def test_duplicate_key_created_in_merged_text_is_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+	base = _contract(["old"])
+	ours = _contract(["old", "ours"])
+	theirs = _contract(["old", "theirs"])
+	generated_with_duplicate = _contract(["old", "ours", "theirs"]).replace(
+		"purpose: Store fantasy leaderboard rankings.\n",
+		"purpose: Store fantasy leaderboard rankings.\npurpose: Decoy value.\n",
+		1,
+	)
+
+	import scripts.sync_contract_list_union as list_union_helper
+
+	monkeypatch.setattr(
+		list_union_helper,
+		"_parse_and_merge_hunks",
+		lambda _marked_text: (generated_with_duplicate, generated_with_duplicate, {"read_entrypoints"}),
+	)
+	args = list_union_helper.argparse.Namespace(
+		path="db/contracts/fantasy_leaderboards.yml",
+		base=str(tmp_path / "base.yml"),
+		ours=str(tmp_path / "ours.yml"),
+		theirs=str(tmp_path / "theirs.yml"),
+		out=str(tmp_path / "merged.yml"),
+	)
+	for path, text in ((Path(args.base), base), (Path(args.ours), ours), (Path(args.theirs), theirs)):
+		path.write_text(text, encoding="utf-8")
+
+	with pytest.raises(list_union_helper.IneligibleError, match="duplicate_mapping_key"):
+		list_union_helper._merge(args)
+	assert not Path(args.out).exists()
 
 
 def test_divergent_replacements_are_not_pure_appends(tmp_path: Path) -> None:

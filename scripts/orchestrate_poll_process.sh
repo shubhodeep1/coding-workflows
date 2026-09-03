@@ -1695,6 +1695,7 @@ case "${ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED}" in
     ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED="true"
     ;;
 esac
+SYNC_CONTRACT_LIST_UNION_PYTHON="${SYNC_CONTRACT_LIST_UNION_PYTHON:-python3}"
 
 # INTEGRATION_CONFLICT_LIFETIME_MAX — global lifetime cap on the total
 # number of resolver+judge dispatches per integration branch before the
@@ -6552,6 +6553,7 @@ sync_contract_list_union_merge() {
 	local list_union_conflict_paths_json="${conflict_paths_json:-[]}"
 	local list_union_script_dir
 	local list_union_helper_path
+	local list_union_python="${SYNC_CONTRACT_LIST_UNION_PYTHON:-python3}"
 	local list_union_runtime_dir="${RUNTIME_DIR:-/tmp}"
 	local list_union_attempt
 	local list_union_worktree
@@ -6580,6 +6582,14 @@ sync_contract_list_union_merge() {
 	list_union_helper_path="${list_union_script_dir}/sync_contract_list_union.py"
 	if [ ! -f "${list_union_helper_path}" ]; then
 		echo "::warning::SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=failed reason=helper_missing"
+		return 1
+	fi
+	if ! command -v "${list_union_python}" >/dev/null 2>&1; then
+		echo "::warning::SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=failed reason=python_unavailable"
+		return 1
+	fi
+	if ! "${list_union_python}" -I -c 'import yaml' >/dev/null 2>&1; then
+		echo "::warning::SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=failed reason=pyyaml_missing"
 		return 1
 	fi
 
@@ -6640,7 +6650,7 @@ sync_contract_list_union_merge() {
 					git show ":1:${list_union_unmerged_path}" > "${list_union_tmpdir}/${list_union_path_slug}.base" 2>/dev/null || : > "${list_union_tmpdir}/${list_union_path_slug}.base"
 					git show ":2:${list_union_unmerged_path}" > "${list_union_tmpdir}/${list_union_path_slug}.ours" 2>/dev/null || exit 23
 					git show ":3:${list_union_unmerged_path}" > "${list_union_tmpdir}/${list_union_path_slug}.theirs" 2>/dev/null || exit 23
-					if ! PYTHONDONTWRITEBYTECODE=1 python3 "${list_union_helper_path}" \
+					if ! PYTHONDONTWRITEBYTECODE=1 "${list_union_python}" -I "${list_union_helper_path}" \
 						--path "${list_union_unmerged_path}" \
 						--base "${list_union_tmpdir}/${list_union_path_slug}.base" \
 						--ours "${list_union_tmpdir}/${list_union_path_slug}.ours" \

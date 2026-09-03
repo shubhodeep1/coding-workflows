@@ -166,7 +166,12 @@ changelog.d/3939-plan-parser-blockquote-support.md
 changelog.d/3947-security-pass-deleted-branch-recovery.md
 changelog.d/3957-blocker-only-plan-blocked-routing.md
 changelog.d/3963-reissue-preserve-baseline-default-true.md
+changelog.d/3965-security-pass-pyyaml-duplicate-key-hardening.md
 changelog.d/3965-sync-contract-list-union.md
+changelog.d/3967-slash-command-model-pins.md
+changelog.d/3971-deploy-activate-best-model.md
+changelog.d/3972-blocked-already-satisfied-noop.md
+changelog.d/433-readme-wrapper-predicate-examples.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/codex-blocked-verdict-bail.md
@@ -486,6 +491,7 @@ scripts/stage_workflow_support.sh
 scripts/summarize_reviewer_consensus.sh
 scripts/summarize_unselected_runs.py
 scripts/sync_contract_list_union.py
+scripts/sync_contract_list_union.requirements.txt
 scripts/targeted_file_context.py
 scripts/task_state.py
 scripts/templates/serena_project.yml.j2
