@@ -60,6 +60,20 @@ def test_workflows_push_immutable_version_via_refs_tags() -> None:
 		)
 
 
+def test_workflows_dispatch_peeled_release_commit_sha() -> None:
+	for workflow_path in WORKFLOWS:
+		workflow_text = _read(workflow_path)
+		assert 'RELEASE_SHA="$(git rev-parse "${VERSION}^{commit}")"' in workflow_text, (
+			f"{workflow_path.name}: release dispatch must peel the annotated version tag"
+		)
+		assert '[[ ! "${RELEASE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]' in workflow_text, (
+			f"{workflow_path.name}: peeled release SHA must be validated before dispatch"
+		)
+		assert '-f "client_payload[sha]=${RELEASE_SHA}"' in workflow_text, (
+			f"{workflow_path.name}: consumer dispatch must include the immutable release SHA"
+		)
+
+
 def test_script_pushes_all_three_tags_via_refs_tags() -> None:
 	text = _read(SCRIPT)
 	assert 'git push origin "refs/tags/${VERSION_TAG}"' in text, (

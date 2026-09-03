@@ -3701,6 +3701,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_drift_audit_job.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_guardrails.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
@@ -5141,6 +5142,12 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.resolve-version.outputs.version }}"
+          RELEASE_SHA="$(git rev-parse "${VERSION}^{commit}")"
+          if [[ ! "${RELEASE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Could not peel ${VERSION} to a 40-character release commit SHA."
+            exit 1
+          fi
+          RELEASE_SHA="${RELEASE_SHA,,}"
 
           CONSUMER_FILE=".github/ai/consumer_repos.json"
           if [ ! -f "$CONSUMER_FILE" ]; then
@@ -5159,6 +5166,7 @@ jobs:
             gh api "repos/${REPO}/dispatches" \
               -f event_type="coding-workflows-stable-released" \
               -f "client_payload[version]=${VERSION}" \
+              -f "client_payload[sha]=${RELEASE_SHA}" \
               || echo "::warning::Failed to dispatch to ${REPO} (may lack permissions)"
           done
 

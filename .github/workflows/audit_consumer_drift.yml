@@ -48,9 +48,19 @@ jobs:
           SUMMARY_JSON="${RUNTIME_DIR}/summary.json"
           echo "summary_json=${SUMMARY_JSON}" >> "${GITHUB_OUTPUT}"
 
+          # Resolve the moving release tag to its immutable commit. The audit
+          # must flag stale consumer pins instead of normalizing SHAs away.
+          git fetch --no-tags --depth=1 origin refs/tags/stable
+          STABLE_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
+          if [[ ! "${STABLE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Could not resolve refs/tags/stable to a 40-character commit SHA."
+            exit 1
+          fi
+
           python3 scripts/audit_consumer_drift.py \
             --consumer-repos .github/ai/consumer_repos.json \
             --templates-dir workflow-templates \
+            --stable-sha "${STABLE_SHA,,}" \
             --output "${SUMMARY_JSON}" \
             --max-diff-lines 25
 

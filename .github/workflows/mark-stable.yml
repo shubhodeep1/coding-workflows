@@ -366,6 +366,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_memory_record_schema.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_guardrails.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_foundation.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_assemble_prompt.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py
@@ -675,6 +676,12 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           VERSION="${{ needs.resolve-version.outputs.version }}"
+          RELEASE_SHA="$(git rev-parse "${VERSION}^{commit}")"
+          if [[ ! "${RELEASE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Could not peel ${VERSION} to a 40-character release commit SHA."
+            exit 1
+          fi
+          RELEASE_SHA="${RELEASE_SHA,,}"
 
           # Read consumer repos from .github/ai/consumer_repos.json (a JSON
           # array of repo strings, e.g. ["owner/repo"]). If the file is
@@ -697,6 +704,7 @@ jobs:
             gh_retry gh api "repos/${REPO}/dispatches" \
               -f event_type="coding-workflows-stable-released" \
               -f "client_payload[version]=${VERSION}" \
+              -f "client_payload[sha]=${RELEASE_SHA}" \
               || echo "::warning::Failed to dispatch to ${REPO} (may lack permissions)"
           done
 

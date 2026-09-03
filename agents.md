@@ -349,6 +349,20 @@ PROFILE.name=core manifest=workflow-templates/profiles/core.txt wrappers=ai-clar
 PROFILE.name=standard manifest=workflow-templates/profiles/standard.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml,ai-orchestrate.yml,ai-orchestrate-poll.yml,ai-orchestrate-clarify-respond.yml,ai-validate.yml,ai-sync-labels.yml,review_rb_judge_dispatch.yml
 PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-cancel-on-pr-close.yml,ai-check-failure-triage.yml,ai-clarify.yml,ai-implement.yml,ai-issue-pr-status.yml,ai-memory-maintenance.yml,ai-orchestrate-clarify-respond.yml,ai-orchestrate-poll.yml,ai-orchestrate.yml,ai-plan.yml,ai-review.yml,ai-security-audit.yml,ai-sync-labels.yml,ai-update-workflows.yml,ai-validate.yml,review_rb_judge_dispatch.yml
 
+## Immutable consumer wrapper pins
+
+- Canonical `workflow-templates/*.yml` files retain `@stable` as a delivery-time
+  render token. Installed consumer wrappers must use
+  `@<40-character-release-sha> # stable` instead.
+- `scripts/workflow_wrapper_refs.py` is the single renderer used by the updater,
+  drift audit, and `/seed-repo`; do not duplicate its substitution rules.
+- `.github/workflows/update_workflows.yml` renders every top-level wrapper before
+  any consumer mutation, updates an existing `ai-update-workflows.yml` regardless
+  of profile, and never creates that self-updater when absent.
+- Stable-release repository dispatch payloads carry both `version` and the peeled
+  commit `sha`. Consumers validate the payload but independently resolve current
+  `stable`, so delayed events cannot downgrade installed pins.
+
 ---
 
 ## Optional `.github/ai` operator surfaces
