@@ -739,6 +739,82 @@ def test_cli_rejects_unknown_fallback_mode() -> None:
 		assert "invalid choice" in stderr.getvalue()
 
 
+def test_overflow_semble_blocks_are_charged_against_the_total_budget() -> None:
+	"""The emitted block must stay inside --max-bytes as a whole.
+
+	Regression for run 33796624872 (issue #3990). The semble overflow
+	branch rendered its payload unconditionally and only then added it
+	to `used_bytes`, so once the budget was spent every further overflow
+	file still emitted a full payload. Ten files rendered 1,281,280
+	bytes against max_bytes=102400 and pushed the assembled implement
+	prompt past codex's 1,048,576-character turn/start stdin cap.
+	"""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		for index in range(10):
+			(root / "src" / f"big{index}.py").write_text("x = 1\n" * 40000, encoding="utf-8")
+		semble = root / "fake_semble.py"
+		_make_fake_semble_script(semble, stdout="C" * 40000)
+
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			context = emit_context(
+				[f"src/big{index}.py" for index in range(10)],
+				root,
+				max_bytes=102400,
+				semble_bin=str(semble),
+				semble_index=str(root / ".semble-index"),
+				semble_query_text="task summary",
+			)
+
+		# Two 40000-byte payloads fit under 102400; the rest must not render.
+		assert context.count("chunk-retrieved via semble") == 2
+		assert len(context.encode("utf-8")) < 102400
+		assert "would overflow total budget" in context
+		assert "SEMBLE_FALLBACK target=overflow" in stderr.getvalue()
+		assert "reason=budget-exhausted" in stderr.getvalue()
+
+
+def test_overflow_semble_query_is_skipped_once_budget_is_exhausted() -> None:
+	"""No semble subprocess once there is no headroom left to render into."""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "first.py").write_text("x = 1\n" * 4000, encoding="utf-8")
+		(root / "src" / "second.py").write_text("y = 2\n" * 4000, encoding="utf-8")
+		# Both files exceed max_bytes on their own, so both take the
+		# overflow path; the first payload consumes the budget exactly.
+		marker = root / "invocations.txt"
+		semble = root / "counting_semble.py"
+		semble.write_text(
+			"#!/usr/bin/env python3\n"
+			"import sys\n"
+			f"open({str(marker)!r}, 'a').write('call\\n')\n"
+			"sys.stdout.write('C' * 900)\n",
+			encoding="utf-8",
+		)
+		semble.chmod(0o755)
+
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			context = emit_context(
+				["src/first.py", "src/second.py"],
+				root,
+				max_bytes=900,
+				semble_bin=str(semble),
+				semble_index=str(root / ".semble-index"),
+				semble_query_text="task summary",
+			)
+
+		# The first payload consumes all 900 bytes, leaving zero headroom,
+		# so the second file skips the subprocess entirely.
+		assert marker.read_text(encoding="utf-8").count("call") == 1
+		assert context.count("chunk-retrieved via semble") == 1
+		assert "--- FILE: src/second.py (24000 bytes; would overflow total budget" in context
+		assert "reason=budget-exhausted bytes=0 remaining=0" in stderr.getvalue()
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0
