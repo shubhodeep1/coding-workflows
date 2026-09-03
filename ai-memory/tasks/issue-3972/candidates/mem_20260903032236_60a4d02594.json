@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `main` at `80a22256248ffe8fccb05d2d1007718be45d3efd`\n\nScope-mode: Hold Scope  \nReuse-audit: extends existing phase-wrapper predicate contract  \nScope-mode justification: The complete requested security control already exists on this ref. Under \u00a76 priorities, avoiding redundant changes best preserves correctness, backward compatibility, and operational clarity.\n\n## Clarification interpretation\n\nThe automatic `/answer` confirms no additional requirements or choices are outstanding.\n\n## Current-state assessment\n\nThe issue conflicts with the checked-out code:\n\n- `/answer` is restricted to `OWNER`, `MEMBER`, or `COLLABORATOR` in the reusable, internal, and consumer plan workflows.\n- `/approved` has the equivalent restriction in all three implement workflows.\n- Automated continuation remains limited to `github-actions[bot]` with the required marker.\n- `tests/test_phase_wrapper_predicate_contract.py` enforces predicate parity and required security clauses.\n- The focused contract suite currently passes: `5 passed`.\n\nTherefore, no implementation change is required on this planning ref.\n\n## Automation and rollout\n\n- Change type: no new script and no existing-code modification.\n- Existing entry points: `issue_comment: created` in `workflow-templates/ai-plan.yml` and `workflow-templates/ai-implement.yml`.\n- Scheduler or PR-push wiring: no new wiring required.\n- Long-running supervisor: not required.\n- Database operation or gate: not applicable.\n- Future-removal registry entry: not applicable.\n\n## Decisions\n\n### D1 \u2014 Treat the requirement as already satisfied\n\n- **Chosen:** Preserve the current predicates and perform no repository edit.\n- **Alternatives considered:** Reapply the same clauses, introduce a username allowlist, or add another authorization helper.\n- **Why:** Reapplying identical logic creates churn without improving protection; server-provided association checks already meet the requirement.\n\n### D2 \u2014 Preserve trusted automation routes\n\n- **Chosen:** Retain the narrowly authenticated `github-actions[bot]` marker routes.\n- **Alternatives considered:** Require human association for every command or allow arbitrary bots.\n- **Why:** Removing these routes would break automatic phase progression, while broad bot access would weaken authorization.\n\n## Files likely to change\n\nNone.\n\nExisting implementation verified in:\n\n- `.github/workflows/plan.yml`\n- `.github/workflows/internal-plan.yml`\n- `workflow-templates/ai-plan.yml`\n- `.github/workflows/implement.yml`\n- `.github/workflows/internal-implement.yml`\n- `workflow-templates/ai-implement.yml`\n- `tests/test_phase_wrapper_predicate_contract.py`\n\n## Functions or modules to implement\n\nNone. The relevant `jobs.plan.if` and `jobs.implement.if` predicates already implement the requested behavior.\n\n## Data structures affected\n\nNo persisted structures change. The existing predicates consume these GitHub event fields:\n\n- `github.event.comment.author_association`\n- `github.event.comment.user.type`\n- `github.event.comment.user.login`\n- `github.event.comment.body`\n- `github.event.issue.pull_request`\n\n## API/interface changes\n\nNone. The command surface remains `/answer` and `/approved`; only trusted associations and authenticated automation routes are accepted.\n\n## Security considerations\n\n- Trust boundary: user-controlled issue comments entering secrets-inheriting workflows.\n- Authorization: human command execution is limited to `OWNER`, `MEMBER`, and `COLLABORATOR`.\n- Validation: event type, action, issue-versus-PR context, actor type, command prefix, bot identity, and automation marker are checked.\n- Abuse cases covered:\n  - External contributors posting `/answer` or `/approved` are rejected.\n  - Arbitrary bots cannot impersonate the automation route.\n  - Commands posted on pull requests do not trigger these issue workflows.\n- No money-handling or secret-storage changes are involved.\n\nFailure modes:\n\n- Template predicate drift: detected by the wrapper-parity contract test.\n- Missing or untrusted association: job is skipped before secrets or write permissions are used.\n- Missing bot marker or incorrect bot identity: automated continuation is rejected.\n\n## Risks and edge cases\n\n- The issue likely describes an older consumer `@stable` revision rather than current `main`.\n- The planning checkout does not include usable integration-branch metadata or a local `stable` ref, so deployed `@stable` propagation was not verified.\n- Do not replace `author_association` with a repository-specific username allowlist unless explicitly required.\n\n## Testing considerations\n\n- Rerun `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_wrapper_predicate_contract.py`.\n- CI should continue validating YAML parsing and exact reusable/internal/template predicate parity.\n- No new tests are warranted unless the implementation ref has regressed from the inspected state.\n\n## Assumptions\n\n- The implementation phase uses the same planning ref or a descendant retaining these predicates.\n- Stable promotion and consumer synchronization remain handled by existing release automation.\n\n## Pre-execution self-check\n\n- Requested authorization behavior is present across reusable and consumer-facing workflows.\n- Trusted automated progression is preserved.\n- No new dependencies, interfaces, scripts, or manual operations are proposed.\n\nPLAN_SELF_CHECK: WARNING: Current `@stable` deployment state was unavailable in the planning checkout; repository implementation is already complete on `main`.\n\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "55fdbb864c8b37536caacb8fffbe41bf598deb9a3a3f6e182ea3cfe8de17a7b8",
+  "lineage": {
+    "issue_number": 3972,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33710821118",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33710821118",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3972"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260903032236_60a4d02594",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3972,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33710821118"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3972",
+  "timestamps": {
+    "created_at": "2026-09-03T03:22:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
