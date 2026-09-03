@@ -138,9 +138,13 @@ def _readme_wrapper_example(template_name: str) -> dict:
 	"""Return the parsed ```yaml block that README.md shows for one core wrapper."""
 	readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
 	heading = f"**`.github/workflows/{template_name}.yml`**"
-	heading_index = readme.index(heading)
-	fence_start = readme.index("```yaml\n", heading_index) + len("```yaml\n")
-	fence_end = readme.index("\n```", fence_start)
+	heading_index = readme.find(heading)
+	assert heading_index >= 0, f"README missing heading for {template_name}.yml"
+	fence_start = readme.find("```yaml\n", heading_index)
+	assert fence_start >= 0, f"README missing YAML fence after {template_name}.yml heading"
+	fence_start += len("```yaml\n")
+	fence_end = readme.find("\n```", fence_start)
+	assert fence_end >= 0, f"README missing closing fence for {template_name}.yml example"
 	return yaml.safe_load(readme[fence_start:fence_end])
 
 
