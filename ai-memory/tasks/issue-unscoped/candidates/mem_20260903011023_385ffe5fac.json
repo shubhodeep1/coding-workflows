@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/orchestrator-prerequisite-gate-automation-plan.md:line 22 | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The PR renames `docs/plans/opencode-review-autofix-cutover-plan.md` to `docs/completed/opencode-review-autofix-cutover-plan.md` but does not update this live plan doc's reference, which still points at the old `docs/plans/` path.\n  WHY: After merge, the path no longer exists; anyone following the cross-reference from this active plan doc (including the unattended planner, which reads plan files when decomposing related work) hits a missing file.\n- docs/plans/opencode-clarify-cutover-plan.md:line 425 | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: Same rename-induced stale path: this live plan doc lists the moved file as a predecessor reference under its old `docs/plans/` location.\n  WHY: The referenced file no longer exists at that path after this PR merges, so the predecessor-plan link breaks for humans and for any tooling that resolves plan cross-references.\n- changelog.d/3873-cache-read-baseline-forward-only.md:line 4 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The rename leaves this pending changelog fragment citing the old path.\n  WHY: Lower impact than the plan-doc references \u2014 this is a historical narrative of a past BLOCKED event, and the fragment will be folded into CHANGELOG.md and deleted by `scripts/assemble_changelog.py` at the next release, so the stale path is short-lived.\n- docs/completed/orchestrator-security-pass-gate-plan.md and docs/completed/opencode-review-autofix-cutover-plan.md:PR diff | severity=high | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The archival is done as a bare `git mv` with no `## De-scoped phases` PR-body section and no tracking-issue checkbox evidence visible in the PR body (PR body is empty).\n  WHY: The PR body is empty, so `scripts/lint_plan_archival_completeness.py` must resolve the referenced tracking issues (#3933, #3845 \u2014 named only in the commit message, not necessarily the body) and verify all checkboxes are ticked. If the linter keys off the PR body and finds no `Refs #N` there, the `Lint plan-archival completeness` check may fail at merge time.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- docs/plans/orchestrator-prerequisite-gate-automation-plan.md\n  Line or code reference: line 22 \u2014 \"(`docs/plans/opencode-review-autofix-cutover-plan.md:381-384`, restated in the body of issues #3849 and #3865.)\"\n  Problem: The PR renames `docs/plans/opencode-review-autofix-cutover-plan.md` to `docs/completed/opencode-review-autofix-cutover-plan.md` but does not update this live plan doc's reference, which still points at the old `docs/plans/` path.\n  Why it fails at runtime: After merge, the path no longer exists; anyone following the cross-reference from this active plan doc (including the unattended planner, which reads plan files when decomposing related work) hits a missing file. The reference is to specific line numbers (381-384) used as evidence for the human-gate encoding, so the citation becomes unverifiable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- docs/plans/opencode-clarify-cutover-plan.md\n  Line or code reference: line 425 \u2014 \"- `docs/plans/opencode-review-autofix-cutover-plan.md` \u2014 predecessor plan,\"\n  Problem: Same rename-induced stale path: this live plan doc lists the moved file as a predecessor reference under its old `docs/plans/` location.\n  Why it fails at runtime: The referenced file no longer exists at that path after this PR merges, so the predecessor-plan link breaks for humans and for any tooling that resolves plan cross-references.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- changelog.d/3873-cache-read-baseline-forward-only.md\n  Line or code reference: line 4 \u2014 \"the gate in `docs/plans/opencode-review-autofix-cutover-plan.md` demanded a numeric pre-P2 cache-read baseline\"\n  Problem: The rename leaves this pending changelog fragment citing the old path.\n  Why it fails at runtime: Lower impact than the plan-doc references \u2014 this is a historical narrative of a past BLOCKED event, and the fragment will be folded into CHANGELOG.md and deleted by `scripts/assemble_changelog.py` at the next release, so the stale path is short-lived. Updating it in the same PR is a one-line fix and keeps the eventual changelog entry pointing at a resolvable file.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- docs/completed/orchestrator-security-pass-gate-plan.md and docs/completed/opencode-review-autofix-cutover-plan.md\n  Line or code reference: PR diff \u2014 pure renames (`similarity index 100%`) from docs/plans/ to docs/completed/\n  Problem: The archival is done as a bare `git mv` with no `## De-scoped phases` PR-body section and no tracking-issue checkbox evidence visible in the PR body (PR body is empty).\n  Why it fails at runtime: The PR body is empty, so `scripts/lint_plan_archival_completeness.py` must resolve the referenced tracking issues (#3933, #3845 \u2014 named only in the commit message, not necessarily the body) and verify all checkboxes are ticked. If the linter keys off the PR body and finds no `Refs #N` there, the `Lint plan-archival completeness` check may fail at merge time. The commit message carries the refs, but the PR title/body fields (both empty per the PR intent context) are what the workflow feeds the linter. This is the one gate that can realistically turn red on this PR; the check-run snapshot shows the lint job still `in_progress`, so this is unverified rather than confirmed-failing.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "58fcfeb2a5b8ba5464b96220a5893f789b8ddec448ef6ae8fb4aa4b61cc4ded9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "33700660599",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33700660599",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260903011023_385ffe5fac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "33700660599"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-03T01:10:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
