@@ -193,6 +193,61 @@ def _make_poller_sandbox(target: Path) -> None:
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
+
+
+def _configure_contract_list_union_fixture(sandbox: Path, bare_origin: Path) -> None:
+	git_env = _git_test_env()
+	contract_path = sandbox / "db" / "contracts" / "x.yml"
+	base_entries = ["api_fantasy_leaderboard", "_load_group_ranking"]
+	ours_entries = ["api_fantasy_leaderboard", "_ranking_documents_for_pot", "_load_group_ranking"]
+	theirs_entries = ["api_fantasy_leaderboard", "cosmodea_fantasy", "_load_group_ranking"]
+
+	def _fixture_contract(entries: list[str]) -> str:
+		return (
+			"collection: x\n"
+			"purpose: Exercise deterministic list union.\n"
+			"read_entrypoints:\n"
+			+ "".join(f"  - {entry}\n" for entry in entries)
+			+ "write_entrypoints:\n"
+			"  - persist_leaderboard\n"
+			"invariants:\n"
+			"  - Rankings remain stable.\n"
+		)
+
+	def _fixture_git(*args: str) -> None:
+		subprocess.run(
+			["git", "-C", str(sandbox), *args],
+			check=True,
+			env=git_env,
+			stdout=subprocess.DEVNULL,
+			stderr=subprocess.DEVNULL,
+		)
+
+	subprocess.run(
+		["git", "init", "--bare", "--quiet", str(bare_origin)],
+		check=True,
+		env=git_env,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	_fixture_git("checkout", "main")
+	contract_path.parent.mkdir(parents=True, exist_ok=True)
+	contract_path.write_text(_fixture_contract(base_entries), encoding="utf-8")
+	_fixture_git("add", "db/contracts/x.yml")
+	_fixture_git("commit", "-m", "contract base", "--quiet")
+	_fixture_git("branch", "-f", "orchestrator/project-192", "main")
+	_fixture_git("checkout", "orchestrator/project-192")
+	contract_path.write_text(_fixture_contract(ours_entries), encoding="utf-8")
+	_fixture_git("add", "db/contracts/x.yml")
+	_fixture_git("commit", "-m", "integration contract entry", "--quiet")
+	_fixture_git("checkout", "main")
+	contract_path.write_text(_fixture_contract(theirs_entries), encoding="utf-8")
+	_fixture_git("add", "db/contracts/x.yml")
+	_fixture_git("commit", "-m", "default contract entry", "--quiet")
+	_fixture_git("remote", "set-url", "origin", str(bare_origin))
+	_fixture_git("push", "--all", "origin", "--quiet")
+
+
 def _rewrite_cmd_for_sandbox(cmd: list, sandbox: Path) -> list:
 	"""Rewrite any command-line argument that is an absolute path under
 	``REPO_ROOT`` so it resolves to the equivalent path inside
@@ -761,6 +816,7 @@ def _run_poller(
 	capture_telegram_calls: bool = False,
 	fail_security_pass_managed_issue_lookup: bool = False,
 	security_pass_managed_issue_pages_raw: str | None = None,
+	sync_contract_list_union_fixture: bool = False,
 	env_overrides: dict[str, str] | None = None,
 ) -> dict:
 	tracking_num = 192
@@ -836,6 +892,9 @@ def _run_poller(
 		runtime_dir = tmp / "runtime"
 		store_file = tmp / "gh_store.json"
 		_make_poller_sandbox(sandbox)
+		bare_sync_origin = tmp / "sync-origin.git" if sync_contract_list_union_fixture else None
+		if bare_sync_origin is not None:
+			_configure_contract_list_union_fixture(sandbox, bare_sync_origin)
 		sandbox_sha_aliases = {
 			"__integration_head__": subprocess.run(
 				["git", "-C", str(sandbox), "rev-parse", "refs/heads/orchestrator/project-192"],
@@ -3083,6 +3142,7 @@ sys.exit(proc.returncode)
 				"BRANCH_REBUILD_ENABLED": branch_rebuild_enabled,
 				"BRANCH_REBUILD_THRESHOLD_HOURS": branch_rebuild_threshold_hours,
 				"BRANCH_REBUILD_COOLDOWN_HOURS": branch_rebuild_cooldown_hours,
+				"ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED": "false",
 				"GH_MOCK_STORE": str(store_file),
 				"GH_RETRY_MAX_ATTEMPTS": "1",
 				"REAL_GIT_BIN": real_git,
@@ -3162,6 +3222,23 @@ sys.exit(proc.returncode)
 		)
 		result["actions_runs_fetch_count"] = int(result.get("actions_runs_fetch_count", 0))
 		result["actions_runs_if_none_match_count"] = int(result.get("actions_runs_if_none_match_count", 0))
+		if bare_sync_origin is not None:
+			remote_tip = "refs/heads/orchestrator/project-192"
+			result["sync_contract_tip"] = subprocess.run(
+				[real_git, "--git-dir", str(bare_sync_origin), "show", f"{remote_tip}:db/contracts/x.yml"],
+				check=True,
+				capture_output=True,
+				text=True,
+				env=_git_test_env(),
+			).stdout
+			parent_line = subprocess.run(
+				[real_git, "--git-dir", str(bare_sync_origin), "rev-list", "--parents", "-n", "1", remote_tip],
+				check=True,
+				capture_output=True,
+				text=True,
+				env=_git_test_env(),
+			).stdout.split()
+			result["sync_contract_tip_parent_count"] = len(parent_line) - 1
 		return result
 
 
@@ -5527,6 +5604,106 @@ def test_sync_conflict_comment_includes_paths_and_runbook_link():
 	assert "- `src/a.py`" in conflict_comments[0]
 	assert "- `src/b.py`" in conflict_comments[0]
 	assert "orchestrator-integration-branch-rebuild-runbook.md" in conflict_comments[0]
+
+
+def test_sync_contract_list_union_pushes_two_parent_merge_without_resolver_dispatch():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_sync_status"] = "healing"
+	state["integration_sync_last_error"] = "prior conflict"
+	state["integration_conflict_unresolved_ticks"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		merge_tree_conflict_paths=["db/contracts/x.yml"],
+		sync_contract_list_union_fixture=True,
+		env_overrides={"ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED": "true"},
+	)
+
+	assert result["sync_contract_tip_parent_count"] == 2
+	assert "  - _ranking_documents_for_pot\n" in result["sync_contract_tip"]
+	assert "  - cosmodea_fantasy\n" in result["sync_contract_tip"]
+	assert result["review_dispatches"] == []
+	assert result["latest_state"]["sync"]["last_sync_outcome"] == "merged-deterministic"
+	assert result["latest_state"]["sync"]["last_list_union_paths"] == ["db/contracts/x.yml"]
+	assert result["latest_state"]["integration_sync_status"] == "clean"
+	assert result["latest_state"]["integration_sync_last_error"] == ""
+	assert result["latest_state"]["integration_conflict_unresolved_ticks"] == 0
+	tracking_bodies = [comment.get("body", "") for comment in result["issues"]["192"]["comments"]]
+	assert sum(body.startswith("## ✅ Integration self-healing resolved") for body in tracking_bodies) == 1
+	assert any(body.startswith("## ✅ Integration sync auto-resolved") for body in tracking_bodies)
+	assert "SYNC_LIST_UNION_V1:" in result["stdout"] + result["stderr"]
+	assert "outcome=merged" in result["stdout"] + result["stderr"]
+
+
+def test_sync_contract_list_union_mixed_conflict_falls_through_to_resolver():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		merge_tree_conflict_paths=["db/contracts/x.yml", "backend/app.py"],
+		sync_contract_list_union_fixture=True,
+		env_overrides={"ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED": "true"},
+	)
+
+	assert result["sync_contract_tip_parent_count"] == 1
+	assert len(result["review_dispatches"]) == 1
+	assert result["latest_state"]["sync"]["last_sync_outcome"] == "conflict"
+	tracking_bodies = [comment.get("body", "") for comment in result["issues"]["192"]["comments"]]
+	assert any("## ⚠️ Integration sync conflict" in body for body in tracking_bodies)
+	combined_output = result["stdout"] + result["stderr"]
+	assert "outcome=ineligible reason=non_contract_path" in combined_output
+
+
+def test_sync_contract_list_union_flag_disabled_preserves_legacy_conflict_flow():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		merge_tree_conflict_paths=["db/contracts/x.yml"],
+		sync_contract_list_union_fixture=True,
+		env_overrides={"ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED": "false"},
+	)
+
+	assert result["sync_contract_tip_parent_count"] == 1
+	assert len(result["review_dispatches"]) == 1
+	assert result["latest_state"]["sync"]["last_sync_outcome"] == "conflict"
+	assert result["latest_state"]["integration_conflict_unresolved_ticks"] == 1
+	assert "SYNC_LIST_UNION_V1:" not in result["stdout"] + result["stderr"]
+
+
+def test_sync_contract_list_union_workflow_and_function_contracts():
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	workflow_body = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	function_start = poller_body.index("sync_contract_list_union_merge() {")
+	function_end = poller_body.index("\n}\n\n# Drive one iteration", function_start) + 2
+	function_body = poller_body[function_start:function_end]
+
+	assert 'ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED="${ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED:-true}"' in poller_body
+	assert "zero GitHub REST or GraphQL calls" in poller_body
+	assert "worktree_registry_register" in function_body
+	assert "worktree_registry_deregister" in function_body
+	assert "git worktree remove --force" in function_body
+	assert "gh_retry" not in function_body
+	assert "gh api" not in function_body
+	assert "sync_contract_list_union.py" in workflow_body
+	assert "python3 -c 'import yaml'" in workflow_body
+	assert "python3 -m pip install --quiet pyyaml" in workflow_body
+	assert "ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED: ${{ vars.ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED || 'true' }}" in workflow_body
 
 
 def test_sync_conflict_dedupe_skips_identical_warnings():
