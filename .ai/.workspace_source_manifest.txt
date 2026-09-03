@@ -167,6 +167,10 @@ changelog.d/3947-security-pass-deleted-branch-recovery.md
 changelog.d/3957-blocker-only-plan-blocked-routing.md
 changelog.d/3963-reissue-preserve-baseline-default-true.md
 changelog.d/3965-sync-contract-list-union.md
+changelog.d/3967-slash-command-model-pins.md
+changelog.d/3971-deploy-activate-best-model.md
+changelog.d/3972-blocked-already-satisfied-noop.md
+changelog.d/433-readme-wrapper-predicate-examples.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
 changelog.d/codex-blocked-verdict-bail.md

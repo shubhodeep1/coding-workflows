@@ -5700,9 +5700,16 @@ def test_sync_contract_list_union_workflow_and_function_contracts():
 	assert "git worktree remove --force" in function_body
 	assert "gh_retry" not in function_body
 	assert "gh api" not in function_body
+	assert 'SYNC_CONTRACT_LIST_UNION_PYTHON="${SYNC_CONTRACT_LIST_UNION_PYTHON:-python3}"' in poller_body
+	assert 'local list_union_python="${SYNC_CONTRACT_LIST_UNION_PYTHON:-python3}"' in function_body
+	assert 'command -v "${list_union_python}"' in function_body
+	assert '"${list_union_python}" -I -c \'import yaml\'' in function_body
+	assert 'PYTHONDONTWRITEBYTECODE=1 "${list_union_python}" -I "${list_union_helper_path}"' in function_body
 	assert "sync_contract_list_union.py" in workflow_body
-	assert "python3 -c 'import yaml'" in workflow_body
-	assert "python3 -m pip install --quiet pyyaml" in workflow_body
+	assert "sync_contract_list_union.requirements.txt" in workflow_body
+	assert "--require-hashes" in workflow_body
+	assert "--only-binary=:all:" in workflow_body
+	assert "--no-deps" in workflow_body
 	assert "ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED: ${{ vars.ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED || 'true' }}" in workflow_body
 
 

@@ -47,10 +47,32 @@ def _load_yaml_module() -> Any:
 
 
 def _safe_load(yaml_module: Any, text: str) -> Any:
+	class _UniqueKeySafeLoader(yaml_module.SafeLoader):
+		pass
+
+	def _construct_unique_mapping(loader: Any, node: Any, deep: bool = False) -> dict[Any, Any]:
+		loader.flatten_mapping(node)
+		constructed_mapping: dict[Any, Any] = {}
+		for mapping_key_node, mapping_value_node in node.value:
+			mapping_key = loader.construct_object(mapping_key_node, deep=deep)
+			if mapping_key in constructed_mapping:
+				raise IneligibleError("duplicate_mapping_key")
+			constructed_mapping[mapping_key] = loader.construct_object(mapping_value_node, deep=deep)
+		return constructed_mapping
+
+	_UniqueKeySafeLoader.add_constructor(
+		yaml_module.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+		_construct_unique_mapping,
+	)
+	loader = _UniqueKeySafeLoader(text)
 	try:
-		return yaml_module.safe_load(text)
+		return loader.get_single_data()
+	except IneligibleError:
+		raise
 	except Exception as error:
 		raise IneligibleError("yaml_parse_failed") from error
+	finally:
+		loader.dispose()
 
 
 def _nearest_top_level_key(lines: list[str], marker_index: int) -> str | None:

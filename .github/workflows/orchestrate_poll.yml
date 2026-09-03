@@ -100,6 +100,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout workflow support source fallback for gh retry
         if: ${{ steps.checkout_pre_support_source.outcome == 'failure' }}
@@ -111,6 +112,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Ensure workflow support source checkout for gh retry
         run: |
@@ -130,6 +132,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src-main
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Stage gh retry helper
         run: |
@@ -197,17 +200,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT }}
-
-      - name: Configure git auth for memory helper clones
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          set -euo pipefail
-          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
-          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
-          SERVER_HOST="${SERVER_HOST#http://}"
-          SERVER_HOST="${SERVER_HOST%/}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+          persist-credentials: false
 
       - name: Setup Node.js
         if: steps.find_tracking.outputs.has_work == 'true'
@@ -261,12 +254,6 @@ jobs:
             fi
           fi
 
-          if ! python3 -c 'import yaml' >/dev/null 2>&1; then
-            if ! python3 -m pip install --quiet pyyaml; then
-              echo "::warning::PyYAML installation failed; deterministic contract-list union will fail open to the existing resolver path."
-            fi
-          fi
-
           echo "PYTHONDONTWRITEBYTECODE=1" >> "$GITHUB_ENV"
 
       - name: Validate required environment variables
@@ -302,6 +289,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout workflow support source fallback
         if: ${{ steps.checkout_support_source.outcome == 'failure' }}
@@ -313,6 +301,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Ensure workflow support source checkout
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
@@ -333,6 +322,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src-main
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Stage workflow support files
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
@@ -354,6 +344,19 @@ jobs:
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
           done
+
+          list_union_requirements="sync_contract_list_union.requirements.txt"
+          list_union_requirements_src=".codex-workflow-src/scripts/${list_union_requirements}"
+          if [ ! -f "${list_union_requirements_src}" ] && [ -f ".codex-workflow-src-main/scripts/${list_union_requirements}" ]; then
+            list_union_requirements_src=".codex-workflow-src-main/scripts/${list_union_requirements}"
+          fi
+          rm -f "scripts/${list_union_requirements}"
+          if [ -f "${list_union_requirements_src}" ]; then
+            install -m 0644 "${list_union_requirements_src}" "scripts/${list_union_requirements}"
+            _fetched_scripts+=("${list_union_requirements}")
+          else
+            echo "::warning::Locked dependency file ${list_union_requirements} is unavailable on ${SCRIPT_REF}; deterministic contract-list union will fail open."
+          fi
 
           # render_prompt.py is the optional Python backend for the
           # render_prompt.sh shim adopted by branches that took the issue
@@ -548,6 +551,46 @@ jobs:
           done
 
           rm -rf .codex-workflow-src-main
+
+      - name: Prepare isolated contract-list union Python
+        if: steps.find_tracking.outputs.has_work == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          union_venv="${RUNTIME_DIR}/sync-contract-list-union-venv"
+          union_python="${union_venv}/bin/python"
+          unavailable_python="${RUNTIME_DIR}/sync-contract-list-union-unavailable"
+          requirements_file="scripts/sync_contract_list_union.requirements.txt"
+
+          disable_list_union_python() {
+            echo "SYNC_CONTRACT_LIST_UNION_PYTHON=${unavailable_python}" >> "$GITHUB_ENV"
+            echo "::warning::$1 Deterministic contract-list union will fail open to the existing resolver path."
+            exit 0
+          }
+
+          [ -f "${requirements_file}" ] || disable_list_union_python "Locked PyYAML requirements file is missing."
+          python3 -I -m venv "${union_venv}" || disable_list_union_python "Could not create the isolated PyYAML environment."
+          "${union_python}" -I -m pip install \
+            --disable-pip-version-check \
+            --require-hashes \
+            --only-binary=:all: \
+            --no-deps \
+            --requirement "${requirements_file}" \
+            || disable_list_union_python "Hash-locked PyYAML installation failed."
+          "${union_python}" -I -c 'import yaml; assert yaml.__version__ == "6.0.3"' \
+            || disable_list_union_python "The isolated PyYAML installation did not verify."
+          echo "SYNC_CONTRACT_LIST_UNION_PYTHON=${union_python}" >> "$GITHUB_ENV"
+
+      - name: Configure git auth for memory helper clones
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
+          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
+          SERVER_HOST="${SERVER_HOST#http://}"
+          SERVER_HOST="${SERVER_HOST%/}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: setup-uv
         if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
