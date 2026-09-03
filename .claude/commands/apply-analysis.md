@@ -1,3 +1,6 @@
+---
+model: sonnet
+---
 Hand the recommendation docs under `analysis/` to the **AI orchestrator** (the unattended pipeline) for validation and implementation, by dispatching the orchestrator's `workflow_dispatch` trigger with the analysis docs fed in **by reference** as the `project_description`. The orchestrator reads each doc, validates every recommendation against the *current* repo, decomposes the valid-and-safe subset into a dependency DAG of issues, opens a tracking issue, and ships each phase as its own PR. This command does **not** apply any recommendation in this session and opens **no** PR of its own — it kicks off the orchestrator and reports the dispatched run + tracking issue. It mirrors `/implement-plan-ai` (the plan hand-off), but over the recommendation docs in `analysis/` instead of a single plan doc. `$ARGUMENTS` is optional — pass a filter (a specific doc, a date, or a glob) to scope which analysis docs are handed off; empty means hand off all recommendation docs under `analysis/`. Optional trailing prose (an emphasis to pass through to the orchestrator) is allowed but not required.
 
 $ARGUMENTS

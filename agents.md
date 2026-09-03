@@ -267,6 +267,60 @@ models (`minimax/minimax-m3`, `moonshotai/kimi-k3`,
 
 ---
 
+## Interactive slash-command model pins
+
+**Interactive Claude Code sessions only.** This section is unrelated to
+`## Models in use` above: that table covers the unattended codex/OpenCode
+pipeline models, which read `unattended_system_instructions.md` and are
+driven by repo-vars. The pins below are `model:` frontmatter on
+`.claude/commands/*.md` and only affect a human-driven `/command` invocation.
+
+| Command | `model` | `context` |
+|---|---|---|
+| `/analyze-log` | `opus` | — |
+| `/apply-analysis` | `sonnet` | — |
+| `/apply-url` | `sonnet` | `fork`, `background: false` |
+| `/audit-plans` | `sonnet` | `fork`, `background: false` |
+| `/deploy-activate` | `opus` | — |
+| `/implement-plan-ai` | `sonnet` | — |
+| `/implement-plan-claude` | `best` | — |
+| `/investigate-issue` | `opus` | — |
+| `/seed-repo` | `sonnet` | — |
+| `/validate-consumer-issue` | `opus` | — |
+| `/verify-activation` | `best` | `fork`, `background: false` |
+| `/write-plan` | `opus` | — |
+
+Rationale for the tiers: `sonnet` for dispatch-only, scaffolding, and
+read-only commands; `opus` for diagnosis and commands that write code or
+mutate infrastructure; `best` for the two long-horizon commands, where a
+wrong answer costs a full re-run. `best` resolves to the latest Fable model
+where the account has access and falls back to `opus` where it does not —
+prefer it over a literal `fable`, which has no such fallback.
+
+Four constraints govern edits to these pins:
+
+- **`---` must be the file's first line.** Claude Code reads frontmatter
+  only there; anywhere else the markers and fields render as prompt prose.
+- **The pin lasts one turn, not one command.** The override applies for the
+  rest of the current turn and the session model resumes on the next
+  prompt, so a command that stops for CLAUDE.md §2 Q/A questions
+  (`/write-plan`, `/deploy-activate`) runs its later turns on the session
+  model. `context: fork` is the exception — there the pin sets the forked
+  subagent's model for the whole run.
+- **Do not set `agent:` on the forked commands.** A forked skill loads
+  CLAUDE.md *except* when the agent is `Explore` or `Plan`. Naming either
+  would silently drop §0–§24 from the command's context. Leaving `agent`
+  unset keeps the repo rules loaded.
+- **`background: false` is required on the forks.** A backgrounded fork
+  runs with the narrower background-subagent tool set and applies edits
+  outside session checkpoints. `background: false` keeps the full tool set,
+  so the §2 ask-first flow can still reach the operator.
+
+No field here changes what any consumer repo receives on the `@stable`
+sync: `.claude/commands/` is not part of the synced surface.
+
+---
+
 ## Repo-specific batching helpers
 
 The following helpers are the canonical batched GraphQL paths for the

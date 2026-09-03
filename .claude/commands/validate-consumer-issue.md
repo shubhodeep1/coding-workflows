@@ -1,3 +1,6 @@
+---
+model: opus
+---
 Given an issue **and a proposed fix reported from a consumer repo** (in `$ARGUMENTS` — an issue URL / number, pasted issue text, a PR carrying the fix, or prose describing both), determine two things about **this** upstream library (`shubhodeep1/coding-workflows`) at its **[target ref](#target-ref)** (default `stable` — the ref consumers pin and actually run, not `main`): (1) is it a **valid issue** — real, reproducible, and correctly diagnosed as an upstream bug rather than consumer misconfiguration; and (2) is the **proposed fix** correct, complete, and safe to land here? Then **act on the verdict**: when the issue is a genuine upstream defect and the correct fix (the proposed one, or a corrected/completed version you derive from the evidence) is fully evidence-based, safe, and needs no clarification, **implement it here** — apply, verify, commit, push, open a PR — exactly as `/investigate-issue` would. Otherwise this stays a read-only verdict: report the two judgments and ask / route, never landing a flawed or ambiguous fix.
 
 $ARGUMENTS

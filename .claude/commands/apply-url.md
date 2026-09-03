@@ -1,3 +1,8 @@
+---
+model: sonnet
+context: fork
+background: false
+---
 Read the URL(s) in `$ARGUMENTS`, follow same-domain links/pagination a bounded depth until you have a **full grasp** of the content, then report — **read-only** — what from it could **improve the existing code** or **add new features** to the repo this command is invoked from. `$ARGUMENTS` may contain **one or more URLs** (newline- or whitespace-separated; mix and match accepted) and an **optional free-form focus** (which parts to weight, what the repo is trying to get better at, a suspected angle). The focus may appear before, between, or after the URLs. This command makes **no** code changes, writes **no** files, and opens **no** PR — its deliverable is the chat report. It mirrors the URL-driven fetch/follow loop of `/analyze-log` and the repo-context grounding of `/apply-analysis`, but its job is to map an external resource onto *this* repo and surface concrete, repo-anchored improvements.
 
 $ARGUMENTS
