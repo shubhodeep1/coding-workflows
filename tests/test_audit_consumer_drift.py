@@ -14,6 +14,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODULE_PATH = REPO_ROOT / "scripts" / "audit_consumer_drift.py"
+WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "audit_consumer_drift.yml"
+CURRENT_STABLE_SHA = "0123456789abcdef0123456789abcdef01234567"
+STALE_STABLE_SHA = "89abcdef0123456789abcdef0123456789abcdef"
+sys.path.insert(0, str(MODULE_PATH.parent))
 
 spec = importlib.util.spec_from_file_location("audit_consumer_drift", MODULE_PATH)
 assert spec is not None and spec.loader is not None
@@ -106,6 +110,100 @@ def test_load_target_repositories_deduplicates_and_validates() -> None:
 			assert "index 1" in str(exc)
 		else:
 			raise AssertionError("expected ValueError for non-string repository entry")
+
+
+def test_expected_templates_render_current_stable_sha_and_detect_stale_pin() -> None:
+	with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-pins-") as td:
+		templates_dir = Path(td) / "workflow-templates"
+		canonical_text = (
+			"name: AI Clarify\n"
+			"jobs:\n"
+			"  call:\n"
+			"    uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@stable\n"
+		)
+		_write_templates(templates_dir, {"ai-clarify.yml": canonical_text})
+
+		expected_templates = drift_audit.load_expected_templates(
+			templates_dir,
+			CURRENT_STABLE_SHA,
+		)
+		expected_text = expected_templates["ai-clarify.yml"]
+		assert f"@{CURRENT_STABLE_SHA} # stable" in expected_text
+		assert ".yml@stable" not in expected_text
+
+		current_executor = FakeExecutor(
+			[
+				PlannedCall(
+					(
+						"gh",
+						"api",
+						"-H",
+						"Accept: application/vnd.github+json",
+						"repos/octo/current/contents/.github/workflows",
+					),
+					stdout=json.dumps([{"name": "ai-clarify.yml", "type": "file"}]),
+				),
+				PlannedCall(
+					(
+						"gh",
+						"api",
+						"-H",
+						"Accept: application/vnd.github.raw+json",
+						"repos/octo/current/contents/.github/workflows/ai-clarify.yml",
+					),
+					stdout=expected_text,
+				),
+			]
+		)
+		current_auditor = drift_audit.ConsumerDriftAuditor(
+			expected_templates=expected_templates,
+			max_diff_lines=10,
+			executor=current_executor,
+		)
+		assert current_auditor.audit_repository("octo/current").outcome == "match"
+		current_executor.assert_consumed()
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(
+					(
+						"gh",
+						"api",
+						"-H",
+						"Accept: application/vnd.github+json",
+						"repos/octo/demo/contents/.github/workflows",
+					),
+					stdout=json.dumps([{"name": "ai-clarify.yml", "type": "file"}]),
+				),
+				PlannedCall(
+					(
+						"gh",
+						"api",
+						"-H",
+						"Accept: application/vnd.github.raw+json",
+						"repos/octo/demo/contents/.github/workflows/ai-clarify.yml",
+					),
+					stdout=expected_text.replace(CURRENT_STABLE_SHA, STALE_STABLE_SHA),
+				),
+			]
+		)
+		auditor = drift_audit.ConsumerDriftAuditor(
+			expected_templates=expected_templates,
+			max_diff_lines=10,
+			executor=executor,
+		)
+		result = auditor.audit_repository("octo/demo")
+		assert result.outcome == "drift"
+		assert CURRENT_STABLE_SHA in result.drift_items[0].diff_preview
+		assert STALE_STABLE_SHA in result.drift_items[0].diff_preview
+		executor.assert_consumed()
+
+
+def test_workflow_resolves_and_passes_current_stable_sha() -> None:
+	workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
+	assert "git fetch --no-tags --depth=1 origin refs/tags/stable" in workflow_text
+	assert "STABLE_SHA=\"$(git rev-parse 'FETCH_HEAD^{commit}')\"" in workflow_text
+	assert '--stable-sha "${STABLE_SHA,,}"' in workflow_text
 
 
 def test_clean_match_normalizes_managed_header_and_trailing_whitespace() -> None:
@@ -568,6 +666,8 @@ def test_command_failure_is_recorded_without_aborting_other_repos() -> None:
 
 def main() -> int:
 	test_load_target_repositories_deduplicates_and_validates()
+	test_expected_templates_render_current_stable_sha_and_detect_stale_pin()
+	test_workflow_resolves_and_passes_current_stable_sha()
 	test_clean_match_normalizes_managed_header_and_trailing_whitespace()
 	test_missing_wrapper_is_reported_as_drift_without_extra_fetch()
 	test_multi_repo_drift_aggregates_into_summary()

@@ -42,9 +42,9 @@ The memory schema set also includes the cross-run cache document used by workflo
 Get AI-powered issue-to-PR automation running in your repository in a few minutes.
 
 > **Interactive shortcut:** from a Claude Code session, `/seed-repo <owner>/<repo> [core|standard|full]`
-> (default profile: `standard`) performs the onboarding below for you — it copies the profile's
-> wrapper workflows plus `ai-update-workflows.yml`, the `.claude/` command/hook assets, and the root
-> `CLAUDE.md` from `@stable` into the target repo via a seed PR, sets the `WORKFLOW_PROFILE` repo
+> (default profile: `standard`) performs the onboarding below for you — it renders the profile's
+> wrapper workflows plus `ai-update-workflows.yml` with the immutable commit behind `@stable`, copies
+> the `.claude/` command/hook assets and root `CLAUDE.md` from that release into the target repo via a seed PR, sets the `WORKFLOW_PROFILE` repo
 > variable (after asking), and registers the repo in `.github/ai/consumer_repos.json` (CLAUDE.md §14).
 > Secrets (step 1 below) still have to be added by you.
 
@@ -309,7 +309,7 @@ jobs:
     if: >-
       (github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
-    uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@<40-character-release-sha> # stable
     secrets: inherit
 ```
 
@@ -344,7 +344,7 @@ jobs:
           )
         )
       )
-    uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@<40-character-release-sha> # stable
     secrets: inherit
 ```
 
@@ -377,7 +377,7 @@ jobs:
           contains(github.event.comment.body, '[auto-approved-by-plan]')
         )
       )
-    uses: shubhodeep1/coding-workflows/.github/workflows/implement.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/implement.yml@<40-character-release-sha> # stable
     secrets: inherit
 ```
 
@@ -406,7 +406,7 @@ permissions:
   issues: write
 jobs:
   review:
-    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@<40-character-release-sha> # stable
     with:
       pr_number: ${{ github.event.inputs.pr_number || '' }}
       pr_is_draft: >-
@@ -624,7 +624,7 @@ permissions:
   issues: write
 jobs:
   status:
-    uses: shubhodeep1/coding-workflows/.github/workflows/issue_pr_status.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/issue_pr_status.yml@<40-character-release-sha> # stable
     secrets: inherit
 ```
 
@@ -638,7 +638,7 @@ permissions:
   actions: write
 jobs:
   cancel:
-    uses: shubhodeep1/coding-workflows/.github/workflows/cancel_on_pr_close.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/cancel_on_pr_close.yml@<40-character-release-sha> # stable
     secrets: inherit
 ```
 
@@ -663,7 +663,7 @@ permissions:
   issues: write
 jobs:
   judge:
-    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@<40-character-release-sha> # stable
     with:
       pr_number: ${{ github.event.inputs.pr_number }}
       pr_is_draft: false
@@ -685,7 +685,7 @@ permissions:
   contents: write
 jobs:
   maintenance:
-    uses: shubhodeep1/coding-workflows/.github/workflows/memory_maintenance.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/memory_maintenance.yml@<40-character-release-sha> # stable
     secrets: inherit
 ```
 
@@ -707,7 +707,7 @@ permissions:
   pull-requests: write
 jobs:
   orchestrate:
-    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate.yml@<40-character-release-sha> # stable
     with:
       project_description: ${{ inputs.project_description }}
     secrets: inherit
@@ -724,7 +724,7 @@ permissions:
   issues: write
 jobs:
   respond:
-    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_clarify_respond.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_clarify_respond.yml@<40-character-release-sha> # stable
     secrets: inherit
 ```
 
@@ -741,7 +741,7 @@ permissions:
   actions: write
 jobs:
   poll:
-    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_poll.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_poll.yml@<40-character-release-sha> # stable
     secrets: inherit
 ```
 
@@ -781,7 +781,7 @@ permissions:
   pull-requests: write
 jobs:
   validate:
-    uses: shubhodeep1/coding-workflows/.github/workflows/validate.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/validate.yml@<40-character-release-sha> # stable
     with:
       tracking_issue: ${{ inputs.tracking_issue || '0' }}
       compose_file: ${{ inputs.compose_file || 'docker-compose.yml' }}
@@ -811,7 +811,7 @@ permissions:
   contents: write
 jobs:
   update:
-    uses: shubhodeep1/coding-workflows/.github/workflows/update_workflows.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/update_workflows.yml@<40-character-release-sha> # stable
     with:
       allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS != 'false' }}
     secrets: inherit
@@ -820,11 +820,16 @@ jobs:
 > **How auto-updates work:** The update workflow runs daily and also triggers
 > immediately when a new `@stable` release is tagged (via `repository_dispatch`
 > from this repo). It fetches the latest templates from
-> `coding-workflows@stable`, compares them against your local wrappers, and
-> overwrites any that have changed. **New upstream templates are also created
+> `coding-workflows@stable`, resolves that release to a 40-character commit SHA,
+> renders each reusable-workflow reference as `@<sha> # stable`, compares those
+> immutable candidates against your local wrappers, and overwrites any that have
+> changed. **New upstream templates are also created
 > automatically** — you no longer need to manually copy new workflow files.
-> The only exception is `ai-update-workflows.yml` itself, which must be
-> bootstrapped manually (it's the workflow that runs this process). A Telegram
+> The only exception is an absent `ai-update-workflows.yml`, which must be
+> bootstrapped manually (it's the workflow that runs this process); once present,
+> the updater refreshes its pin regardless of install profile. Release dispatches
+> include the peeled release SHA, but the updater independently resolves current
+> `stable`, so delayed events cannot downgrade pins. A Telegram
 > alert lists which files were updated or created. To opt out, set
 > `ALLOW_WORKFLOW_EDITS` to `false`. If you have customized a wrapper and want
 > to keep your changes, either opt out or maintain your customizations after
@@ -842,7 +847,8 @@ on a weekly cron plus manual `workflow_dispatch`. The audit reads the live
 [`.github/ai/consumer_repos.json`](.github/ai/consumer_repos.json) registry,
 fetches each consumer's installed `.github/workflows/ai-*.yml` wrappers via
 the GitHub contents API, diffs them against this repo's checked-in
-[`workflow-templates/ai-*.yml`](workflow-templates/), and reports drift
+[`workflow-templates/ai-*.yml`](workflow-templates/) rendered with the current
+stable release SHA, and reports drift (including stale pins)
 read-only — it never writes to consumer repositories. Transient GitHub API
 failures (intermittent 5xx "Unicorn" pages, rate limits, and network hiccups)
 are retried with exponential backoff before a repository is recorded as an
@@ -923,11 +929,13 @@ not delete wrappers that are already present in `.github/workflows/`.
 
 > All internal wrapper reference implementations can be found in [`.github/workflows/internal-*.yml`](.github/workflows/).
 >
-> **Note on `@main` vs `@stable` inside this repo.** The `internal-*.yml`
+> **Note on `@main` versus immutable consumer pins.** The `internal-*.yml`
 > wrappers here pin `uses:` to
 > `shubhodeep1/coding-workflows/.github/workflows/<wf>.yml@main` rather than
-> `@stable` (consumer templates in [`workflow-templates/`](workflow-templates/)
-> keep `@stable`). This split is intentional:
+> release SHAs. Canonical consumer templates in
+> [`workflow-templates/`](workflow-templates/) keep `@stable` only as a render
+> token; `update_workflows.yml` and `/seed-repo` replace it with
+> `@<40-character-release-sha> # stable` before delivery. This split is intentional:
 >
 > 1. **Branch-drift immunity.** When the orchestrator opens a feature PR, any
 >    `pull_request`-triggered wrapper (`internal-review.yml`,
@@ -951,9 +959,9 @@ not delete wrappers that are already present in `.github/workflows/`.
 >    fetches `clarify.yml@main` — i.e. the candidate code about to be tagged
 >    stable. So the release gate continues to exercise main HEAD rather than
 >    the already-stable tag.
-> 4. **Consumer repos are unaffected.** Consumer repos install the
->    `workflow-templates/ai-*.yml` copies pinned `@stable` and get the
->    conservative, release-gated channel.
+> 4. **Consumer repos are unaffected by mutable refs.** Consumer repos install
+>    SHA-rendered `workflow-templates/ai-*.yml` copies and get the conservative,
+>    release-gated channel without executing a moving tag.
 >
 > **Dogfood lint gate.** Because `@main` wrappers run whatever is on `main`,
 > a bad merge can cascade. To catch YAML/schema regressions on PRs before
@@ -996,7 +1004,7 @@ permissions:
 
 jobs:
   clarify:
-    uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@stable
+    uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@<40-character-release-sha> # stable
     secrets: inherit
 ```
 
@@ -1805,7 +1813,7 @@ This phase starts only after the orchestrator judge returns `complete`.
 ### Lifecycle After Judge Approval
 
 1. The poller transitions the tracking issue to `ai:validating` and dispatches `.github/workflows/ai-validate.yml`.
-2. The wrapper workflow calls reusable `.github/workflows/validate.yml@stable`, which runs `scripts/validate_process.sh`.
+2. The wrapper workflow calls reusable `.github/workflows/validate.yml@<40-character-release-sha> # stable`, which runs `scripts/validate_process.sh`.
 3. If validation passes, `validate_process.sh` sets `ai:validated`; the poller marks the project `complete` and closes the tracking issue.
 4. If validation fails with fixable findings (`needs_fixes`), `validate_process.sh` creates fix-up issues, comments them on the tracking issue, and sets `ai:validation-fixing`. Before creating a new fix-up issue, the script now runs two guards (fail-open on API error):
    - **Per-tracker dedupe**: if an open issue labelled `ai:orchestrator-managed` already contains both the `Local ID: validation-fix-cycle-<N>` marker and the `Tracking issue: #<tracker>` marker (the pair emitted in the fix-up body), the existing issue number is reused instead of creating a duplicate — the tracking comment and `ai:validation-fixing` label are still applied so downstream poller behavior is unchanged.
@@ -2097,7 +2105,7 @@ coding-workflows/
   "Create wrapper workflows" above for why internal wrappers track `@main`
   rather than `@stable`.
 
-Consumer repos pin to `@stable` for automatic updates or exact tags for reproducibility. This repo's own `internal-*.yml` wrappers pin `@main`.
+Consumer wrapper files pin reusable workflows to immutable release commit SHAs; `@stable` triggers the updater that advances those pins. This repo's own `internal-*.yml` wrappers pin `@main`.
 
 > **Semble rollout note.** `workflow-templates/*.yml` remain thin caller wrappers. The opt-in `SEMBLE_ENABLED` gate plus the Semble install/index steps live in the reusable workflows under `.github/workflows/` (`clarify`, `plan`, `implement`, `orchestrate`, `orchestrate_poll`, `orchestrate_clarify_respond`, `review_autofix`, `validate`, and `workflow-log-analysis`). Consumer repos pick up those reusable-workflow changes only after a new `@stable` tag is cut; merging changes on `main` here does not update already-installed consumer wrappers by itself. `workflow-log-analysis.yml`'s three Codex passes (analyze-commit-notify, deep-audit, api-redundancy) each install Semble, build an index of the repo state they will analyze, and pass a `{{SEMBLE_PREFETCH}}` block into the rendered prompt via `scripts/render_prompt.sh`; misses are fail-soft (empty prefetch → blank placeholder).
 

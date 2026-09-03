@@ -179,13 +179,25 @@
   the default-branch wrapper, which then fetches the reusable body from
   `@main` (= main HEAD = the candidate about to be tagged).
 - Consumer templates under `workflow-templates/ai-*.yml` MUST stay pinned
-  to `@stable`. Do not unify the two pin targets.
+  to `@stable` in source. This is a render token, not the installed consumer
+  value: `scripts/workflow_wrapper_refs.py` converts it to
+  `@<40-character-release-sha> # stable` during sync and seeding. Do not
+  hardcode a release SHA in the canonical templates and do not unify internal
+  `@main` pins with the consumer delivery path.
+- `update_workflows.yml` must render all top-level wrapper candidates before
+  any consumer mutation. It updates `ai-update-workflows.yml` when that file
+  already exists, regardless of `WORKFLOW_PROFILE`, but never creates the
+  self-updater. Release dispatches include the peeled release commit as
+  `client_payload.sha`; the updater validates it as an untrusted hint and uses
+  its independently fetched current `stable` SHA so an out-of-order event
+  cannot downgrade consumer pins.
 - `ai-update-workflows.yml` must NOT be installed into `.github/workflows/`
   in this repo. The self-updater in `update_workflows.yml` copies files
   from `workflow-templates/*.yml` into `.github/workflows/` keyed by exact
   filename, so the current `internal-*.yml` filenames are not directly
   overwritten. The hazard is different: on first run the self-updater
-  would **create** new `ai-*.yml` wrappers pinned `@stable` (because
+  would **create** new `ai-*.yml` wrappers rendered from `@stable` to the
+  current immutable release SHA (because
   those filenames are absent today), which would then auto-fire on the
   same issue/PR events as the `internal-*.yml` wrappers and cause
   duplicate runs and racing state writes. Keeping the self-updater
@@ -714,7 +726,7 @@ The analyzer is now a context-prep stage only — it loads the collector report,
 ## 21. Semble rollout and observability
 
 - `SEMBLE_ENABLED` defaults to `false`. That default is intentional: Semble-backed context retrieval is opt-in per caller repo until operators are ready to soak it.
-- The install/index path lives in the reusable workflows under `.github/workflows/`, not in `workflow-templates/*.yml`. Consumer templates stay thin `uses:` wrappers pinned to `@stable`; a job that uses a reusable workflow cannot also define its own `steps:` block for local install/index setup.
+- The install/index path lives in the reusable workflows under `.github/workflows/`, not in `workflow-templates/*.yml`. Canonical consumer templates stay thin `uses:` wrappers with an `@stable` render token; installed wrappers carry the immutable release SHA because a job that uses a reusable workflow cannot also define its own `steps:` block for local install/index setup.
 - Merging Semble changes on this repo's `main` branch updates the source-of-truth reusable workflows for this repo's own internal wrappers, but consumer repos do not receive those changes until a separate operational step cuts a new `@stable` tag. That tag cut and the downstream repository-dispatch fanout are operational rollout steps, not part of a docs/observability-only issue.
 - Expected success telemetry in job logs:
   - `SEMBLE_QUERY target=<slug> chunks=<n> bytes=<m> ms=<t>` — Semble returned prompt context; `bytes` is the producer-reported size of the rendered Semble block, not a normalized end-to-end prompt-byte metric.

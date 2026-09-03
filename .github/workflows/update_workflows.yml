@@ -55,29 +55,83 @@ jobs:
         id: fetch
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          DISPATCH_SHA: ${{ github.event.client_payload.sha || '' }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
 
           TEMPLATES_REPO="shubhodeep1/coding-workflows"
-          TEMPLATES_REF="stable"
+          TEMPLATES_REF="refs/tags/stable"
           TEMPLATES_DIR="workflow-templates"
           SCRIPTS_DIR="scripts"
 
           # Clone only the workflow-templates and scripts directories (sparse checkout)
           TMPDIR=$(mktemp -d)
-          git clone --depth 1 --branch "${TEMPLATES_REF}" \
+          git clone --depth 1 --no-checkout \
             --filter=blob:none --sparse \
             "https://x-access-token:${GH_TOKEN}@github.com/${TEMPLATES_REPO}.git" \
             "${TMPDIR}/upstream"
           cd "${TMPDIR}/upstream"
+          # Fetch the release tag explicitly. A long-lived branch also named
+          # stable exists, so --branch stable would leave the authoritative
+          # source ambiguous during release preparation.
+          git fetch --force --no-tags --depth 1 origin "${TEMPLATES_REF}"
+          UPSTREAM_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
+          git checkout --detach "${UPSTREAM_SHA}"
           # In cone mode, repo-root files remain present alongside these
           # directory patterns, which keeps workflow-templates/CLAUDE.md
           # (a symlink to ../CLAUDE.md) readable without passing a bare
           # root-file argument here; modern git rejects that form.
           git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}"
+          if [[ ! "${UPSTREAM_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Resolved upstream stable ref is not a 40-character commit SHA."
+            exit 1
+          fi
+          UPSTREAM_SHA="${UPSTREAM_SHA,,}"
+
+          # repository_dispatch payloads are untrusted hints only. Validate
+          # them, but always render the freshly fetched stable commit so a
+          # delayed event can never downgrade consumer pins.
+          if [ "${EVENT_NAME}" = "repository_dispatch" ]; then
+            if [[ ! "${DISPATCH_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "::warning::coding-workflows-stable-released payload is missing a valid 40-character sha; current stable ${UPSTREAM_SHA} wins."
+            elif [ "${DISPATCH_SHA,,}" != "${UPSTREAM_SHA}" ]; then
+              echo "::warning::Release payload sha ${DISPATCH_SHA,,} does not match current stable ${UPSTREAM_SHA}; current stable wins."
+            fi
+          fi
           cd -
 
           echo "upstream_dir=${TMPDIR}/upstream/${TEMPLATES_DIR}" >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare immutable workflow wrappers
+        id: render_wrappers
+        run: |
+          set -euo pipefail
+
+          UPSTREAM_DIR="${{ steps.fetch.outputs.upstream_dir }}"
+          UPSTREAM_SHA="${{ steps.fetch.outputs.upstream_sha }}"
+          RENDERER="${UPSTREAM_DIR}/../scripts/workflow_wrapper_refs.py"
+          RENDERED_DIR="$(mktemp -d)"
+
+          [ -f "${RENDERER}" ] || { echo "::error::Immutable wrapper renderer is missing: ${RENDERER}"; exit 1; }
+
+          shopt -s nullglob
+          upstream_wrapper_templates=( "${UPSTREAM_DIR}"/*.yml )
+          [ "${#upstream_wrapper_templates[@]}" -gt 0 ] || { echo "::error::No workflow wrappers found to render."; exit 1; }
+          for upstream_wrapper_template in "${upstream_wrapper_templates[@]}"; do
+            rendered_wrapper_path="${RENDERED_DIR}/$(basename "${upstream_wrapper_template}")"
+            if ! PYTHONDONTWRITEBYTECODE=1 python3 "${RENDERER}" \
+              --input "${upstream_wrapper_template}" \
+              --output "${rendered_wrapper_path}" \
+              --sha "${UPSTREAM_SHA}"; then
+              echo "::error::Failed to render immutable wrapper: ${upstream_wrapper_template}"
+              exit 1
+            fi
+          done
+          shopt -u nullglob
+
+          echo "rendered_dir=${RENDERED_DIR}" >> "$GITHUB_OUTPUT"
 
       - name: Apply canonical audit-gate assets
         id: audit_gate
@@ -313,6 +367,7 @@ jobs:
           set -euo pipefail
 
           UPSTREAM_DIR="${{ steps.fetch.outputs.upstream_dir }}"
+          RENDERED_DIR="${{ steps.render_wrappers.outputs.rendered_dir }}"
           LOCAL_DIR=".github/workflows"
           UPDATED_FILES=""
           CREATED_FILES=""
@@ -325,9 +380,10 @@ jobs:
           PROFILE_MANIFEST_DIR="${UPSTREAM_DIR}/profiles"
           PROFILE_MANIFEST="${PROFILE_MANIFEST_DIR}/${SELECTED_PROFILE}.txt"
           manifest_templates=()
+          self_template_selected=false
 
-          # The updater itself must already exist for this job to run;
-          # never overwrite or auto-create it to avoid bootstrap loops.
+          # The updater itself must already exist for this job to run. Refresh
+          # it when present, but never auto-create it, to avoid bootstrap loops.
           SELF_TEMPLATE="ai-update-workflows.yml"
 
           printf '' > /tmp/updated_files.txt
@@ -375,17 +431,27 @@ jobs:
             manifest_entry="${manifest_entry#"${manifest_entry%%[![:space:]]*}"}"
             manifest_entry="${manifest_entry%"${manifest_entry##*[![:space:]]}"}"
             [ -n "${manifest_entry}" ] || continue
-            upstream_file="${UPSTREAM_DIR}/${manifest_entry}"
+            upstream_file="${RENDERED_DIR}/${manifest_entry}"
             [ -f "${upstream_file}" ] || fail_with_reason "ERR_PROFILE_TEMPLATE_MISSING" "Workflow profile ${SELECTED_PROFILE} references missing template ${manifest_entry}."
             manifest_templates+=( "${upstream_file}" )
+            if [ "${manifest_entry}" = "${SELF_TEMPLATE}" ]; then
+              self_template_selected=true
+            fi
           done < "${PROFILE_MANIFEST}"
 
           [ "${#manifest_templates[@]}" -gt 0 ] || fail_with_reason "ERR_WORKFLOW_PROFILE_EMPTY" "Workflow profile ${SELECTED_PROFILE} has no template entries."
 
+          # The self-updater is bootstrap-only when absent, but once present
+          # it must receive immutable pins even when the selected profile does
+          # not list it.
+          if [ "${self_template_selected}" != "true" ] && [ -e "${LOCAL_DIR}/${SELF_TEMPLATE}" ]; then
+            manifest_templates+=( "${RENDERED_DIR}/${SELF_TEMPLATE}" )
+          fi
+
           for upstream_file in "${manifest_templates[@]}"; do
             filename=$(basename "$upstream_file")
             local_file="${LOCAL_DIR}/${filename}"
-            if [ "$filename" = "$SELF_TEMPLATE" ]; then
+            if [ "$filename" = "$SELF_TEMPLATE" ] && [ ! -e "$local_file" ]; then
               continue
             fi
             if [ -e "$local_file" ] && [ -d "$local_file" ]; then
@@ -403,7 +469,7 @@ jobs:
 
             if [ ! -f "$local_file" ]; then
               if [ "$filename" = "$SELF_TEMPLATE" ]; then
-                SKIPPED_FILES="${SKIPPED_FILES}${filename} (self-updater, skipped)\n"
+                SKIPPED_FILES="${SKIPPED_FILES}${filename} (self-updater absent, skipped)\n"
                 continue
               fi
 
@@ -415,11 +481,6 @@ jobs:
             fi
 
             # Compare content (ignore trailing whitespace differences)
-            if [ "$filename" = "$SELF_TEMPLATE" ]; then
-              SKIPPED_FILES="${SKIPPED_FILES}${filename} (self-updater, skipped)\n"
-              continue
-            fi
-
             if ! diff -q --strip-trailing-cr --ignore-space-at-eol "$upstream_file" "$local_file" >/dev/null 2>&1; then
               echo "Updating: ${filename}"
               cp "$upstream_file" "$local_file" || fail_with_reason "ERR_TEMPLATE_COPY_FAILED" "Failed to update workflow file ${local_file} from ${upstream_file}."
@@ -670,6 +731,7 @@ jobs:
           set -euo pipefail
 
           FETCH_OUTCOME="${{ steps.fetch.outcome }}"
+          RENDER_OUTCOME="${{ steps.render_wrappers.outcome }}"
           UPDATE_OUTCOME="${{ steps.update.outcome }}"
           HAS_UPDATES="${{ steps.update.outputs.has_updates }}"
           TEMPLATES_CHECKED="${{ steps.update.outputs.templates_checked }}"
@@ -711,6 +773,13 @@ jobs:
             if [ -f "${FAILURE_REASON_FILE}" ]; then
               echo "- **Failure reason artifact:** \\`${FAILURE_REASON_FILE}\\`" >> "$GITHUB_STEP_SUMMARY"
             fi
+            exit 1
+          fi
+
+          if [ "${RENDER_OUTCOME}" = "failure" ]; then
+            echo "- **Status:** failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Failure reason code:** \`ERR_WRAPPER_RENDER_FAILED\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Failure reason detail:** Canonical wrappers could not be validated and rendered with the current stable commit SHA." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 

@@ -3,15 +3,25 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+from workflow_wrapper_refs import pin_reusable_workflow_refs, validate_release_sha
+
+
 UPDATE_WORKFLOWS_WF = REPO_ROOT / ".github" / "workflows" / "update_workflows.yml"
 WORKFLOW_TEMPLATES_DIR = REPO_ROOT / "workflow-templates"
 WORKFLOW_PROFILE_DIR = WORKFLOW_TEMPLATES_DIR / "profiles"
 README_MD = REPO_ROOT / "README.md"
 AGENTS_MD = REPO_ROOT / "agents.md"
+SEED_COMMANDS = (
+	REPO_ROOT / ".claude" / "commands" / "seed-repo.md",
+	REPO_ROOT / "workflow-templates" / ".claude" / "commands" / "seed-repo.md",
+)
+VALID_RELEASE_SHA = "0123456789abcdef0123456789abcdef01234567"
 
 
 def _workflow_text() -> str:
@@ -80,7 +90,10 @@ def test_install_profile_docs_and_agents_contracts() -> None:
 def test_fail_fast_validation_precedes_any_copy_mutation() -> None:
 	wf = _workflow_text()
 	assert '[ -n "${UPSTREAM_DIR}" ] || fail_with_reason "ERR_UPSTREAM_DIR_EMPTY"' in wf
+	assert '- name: Prepare immutable workflow wrappers' in wf
+	assert 'python3 "${RENDERER}"' in wf
 	assert 'cp "$upstream_file" "$local_file"' in wf
+	assert wf.index('- name: Prepare immutable workflow wrappers') < wf.index('- name: Apply canonical audit-gate assets')
 	assert wf.index('[ -n "${UPSTREAM_DIR}" ] || fail_with_reason "ERR_UPSTREAM_DIR_EMPTY"') < wf.index('cp "$upstream_file" "$local_file"')
 
 
@@ -108,12 +121,12 @@ def test_guardrail_reason_codes_and_outputs_are_declared() -> None:
 	assert 'ERR_WORKFLOW_PROFILE_EMPTY' in wf
 	assert 'ERR_LOCAL_TARGET_IS_DIRECTORY' in wf
 	assert 'ERR_LOCAL_TARGET_NOT_WRITABLE' in wf
-	assert 'if [ "$filename" = "$SELF_TEMPLATE" ]; then' in wf
+	assert 'if [ "$filename" = "$SELF_TEMPLATE" ] && [ ! -e "$local_file" ]; then' in wf
 	directory_guard = 'if [ -e "$local_file" ] && [ -d "$local_file" ]; then'
 	writable_guard = 'if [ -e "$local_file" ] && [ ! -w "$local_file" ]; then'
 	assert directory_guard in wf
 	assert writable_guard in wf
-	assert wf.index('if [ "$filename" = "$SELF_TEMPLATE" ]; then') < wf.index(directory_guard)
+	assert wf.index('if [ "$filename" = "$SELF_TEMPLATE" ] && [ ! -e "$local_file" ]; then') < wf.index(directory_guard)
 	assert wf.index(directory_guard) < wf.index(writable_guard)
 	assert '- name: Apply canonical audit-gate assets' in wf
 	assert 'python3 "${UPSTREAM_DIR}/../scripts/apply_audit_gate_assets.py"' in wf
@@ -145,6 +158,36 @@ def test_profile_selection_and_non_destructive_downgrade_contracts() -> None:
 	assert 'find "${LOCAL_DIR}"' not in wf
 
 
+def test_self_updater_is_refreshed_existing_only_for_every_profile() -> None:
+	wf = _workflow_text()
+	assert "ai-update-workflows.yml" not in _manifest_lines("core.txt")
+	assert "ai-update-workflows.yml" not in _manifest_lines("standard.txt")
+	assert "ai-update-workflows.yml" in _manifest_lines("full.txt")
+	assert (
+		'if [ "${self_template_selected}" != "true" ] && '
+		'[ -e "${LOCAL_DIR}/${SELF_TEMPLATE}" ]; then'
+	) in wf
+	assert 'manifest_templates+=( "${RENDERED_DIR}/${SELF_TEMPLATE}" )' in wf
+	assert 'if [ "$filename" = "$SELF_TEMPLATE" ] && [ ! -e "$local_file" ]; then' in wf
+	assert wf.index('SKIPPED_FILES="${SKIPPED_FILES}${filename} (self-updater absent, skipped)\\n"') < wf.index(
+		'cp "$upstream_file" "$local_file" || fail_with_reason "ERR_TEMPLATE_COPY_FAILED"'
+	)
+
+
+def test_release_payload_is_validated_but_current_stable_wins() -> None:
+	wf = _workflow_text()
+	assert 'DISPATCH_SHA: ${{ github.event.client_payload.sha || \'\' }}' in wf
+	assert 'TEMPLATES_REF="refs/tags/stable"' in wf
+	assert 'git fetch --force --no-tags --depth 1 origin "${TEMPLATES_REF}"' in wf
+	assert 'UPSTREAM_SHA="$(git rev-parse \'FETCH_HEAD^{commit}\')"' in wf
+	assert '[[ ! "${DISPATCH_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]' in wf
+	assert '::warning::coding-workflows-stable-released payload is missing a valid 40-character sha;' in wf
+	assert '::error::coding-workflows-stable-released payload is missing' not in wf
+	assert 'elif [ "${DISPATCH_SHA,,}" != "${UPSTREAM_SHA}" ]; then' in wf
+	assert "current stable wins" in wf
+	assert '--sha "${UPSTREAM_SHA}"' in wf
+
+
 def test_failure_summary_contract_is_present() -> None:
 	wf = _workflow_text()
 	assert '- name: Summary' in wf
@@ -165,7 +208,9 @@ def test_success_path_contracts_are_preserved() -> None:
 	wf = _workflow_text()
 	assert "if: ${{ inputs.allow_workflow_edits != false }}" in wf
 	assert 'SELF_TEMPLATE="ai-update-workflows.yml"' in wf
-	assert 'SKIPPED_FILES="${SKIPPED_FILES}${filename} (self-updater, skipped)\\n"' in wf
+	assert 'SKIPPED_FILES="${SKIPPED_FILES}${filename} (self-updater absent, skipped)\\n"' in wf
+	assert '[ -e "${LOCAL_DIR}/${SELF_TEMPLATE}" ]' in wf
+	assert 'manifest_templates+=( "${RENDERED_DIR}/${SELF_TEMPLATE}" )' in wf
 	assert 'SKIPPED_LIST=$(cat /tmp/skipped_files.txt)' in wf
 	assert "printf '%b' \"$UPDATED_FILES\" > /tmp/updated_files.txt" in wf
 	assert "printf '%b' \"$CREATED_FILES\" > /tmp/created_files.txt" in wf
@@ -179,14 +224,79 @@ def test_success_path_contracts_are_preserved() -> None:
 	assert "ALLOW_WORKFLOW_EDITS repository variable to '\\''false'\\''." in wf
 
 
+def test_wrapper_ref_renderer_contract() -> None:
+	template_text = """jobs:
+  first:
+    uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@stable
+  second:
+    uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@stable # old marker
+  third:
+    uses: actions/checkout@stable
+# shubhodeep1/coding-workflows/.github/workflows/comment.yml@stable
+"""
+	rendered_text = pin_reusable_workflow_refs(template_text, VALID_RELEASE_SHA.upper())
+	expected_suffix = f"@{VALID_RELEASE_SHA} # stable"
+	assert rendered_text.count(expected_suffix) == 2
+	assert "uses: actions/checkout@stable" in rendered_text
+	assert "# shubhodeep1/coding-workflows/.github/workflows/comment.yml@stable" in rendered_text
+	assert validate_release_sha(VALID_RELEASE_SHA.upper()) == VALID_RELEASE_SHA
+
+	for invalid_sha in ("", "a" * 39, "g" * 40, "a" * 41):
+		try:
+			validate_release_sha(invalid_sha)
+		except ValueError:
+			pass
+		else:
+			raise AssertionError(f"invalid SHA was accepted: {invalid_sha!r}")
+
+	try:
+		pin_reusable_workflow_refs("uses: actions/checkout@v5\n", VALID_RELEASE_SHA)
+	except ValueError as exc:
+		assert "no coding-workflows" in str(exc)
+	else:
+		raise AssertionError("template without a reusable-workflow ref was accepted")
+
+
+def test_every_wrapper_template_renders_to_an_immutable_ref() -> None:
+	templates = sorted(WORKFLOW_TEMPLATES_DIR.glob("*.yml"))
+	assert len(templates) == 16
+	for template_path in templates:
+		rendered_text = pin_reusable_workflow_refs(
+			template_path.read_text(encoding="utf-8"),
+			VALID_RELEASE_SHA,
+		)
+		assert "shubhodeep1/coding-workflows/.github/workflows/" in rendered_text
+		assert ".yml@stable" not in rendered_text
+		assert f"@{VALID_RELEASE_SHA} # stable" in rendered_text
+
+
+def test_seed_commands_require_immutable_wrapper_rendering() -> None:
+	for command_path in SEED_COMMANDS:
+		command_text = command_path.read_text(encoding="utf-8")
+		assert "scripts/workflow_wrapper_refs.py" in command_text
+		assert "40-character" in command_text
+		assert "# stable" in command_text
+		assert "git fetch --force --no-tags origin refs/tags/stable" in command_text
+		assert "--depth=1" not in command_text
+		assert "git rev-parse 'FETCH_HEAD^{commit}'" in command_text
+		assert "origin/stable" not in command_text
+		assert "ref=<UPSTREAM_SHA>" in command_text
+		assert "refreshes an existing copy to the current release pin" in command_text
+
+
 def main() -> int:
 	test_profile_manifests_match_contracts()
 	test_install_profile_docs_and_agents_contracts()
 	test_fail_fast_validation_precedes_any_copy_mutation()
 	test_guardrail_reason_codes_and_outputs_are_declared()
 	test_profile_selection_and_non_destructive_downgrade_contracts()
+	test_self_updater_is_refreshed_existing_only_for_every_profile()
+	test_release_payload_is_validated_but_current_stable_wins()
 	test_failure_summary_contract_is_present()
 	test_success_path_contracts_are_preserved()
+	test_wrapper_ref_renderer_contract()
+	test_every_wrapper_template_renders_to_an_immutable_ref()
+	test_seed_commands_require_immutable_wrapper_rendering()
 	return 0
 
 
