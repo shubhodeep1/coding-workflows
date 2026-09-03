@@ -531,6 +531,8 @@ and shipped:
 - `SECURITY_PASS_FIX_ISSUE_CREATED`
 - `SECURITY_PASS_FAILED`
 - `SECURITY_PASS_SKIPPED_DISABLED`
+- `SYNC_LIST_UNION_V1`
+- `SYNC_LIST_UNION_INELIGIBLE_V1`
 
 - `SEMBLE_QUERY`
 - `SEMBLE_FALLBACK`
@@ -645,6 +647,8 @@ LOG_PREFIX.name=SECURITY_PASS_BLOCKED
 LOG_PREFIX.name=SECURITY_PASS_FIX_ISSUE_CREATED
 LOG_PREFIX.name=SECURITY_PASS_FAILED
 LOG_PREFIX.name=SECURITY_PASS_SKIPPED_DISABLED
+LOG_PREFIX.name=SYNC_LIST_UNION_V1
+LOG_PREFIX.name=SYNC_LIST_UNION_INELIGIBLE_V1
 LOG_PREFIX.name=SEMBLE_QUERY
 LOG_PREFIX.name=SEMBLE_FALLBACK
 LOG_PREFIX.name=SERENA_QUERY
@@ -829,6 +833,7 @@ depend on it.
 
 ## Integration-sync verifier + bootstrap contract
 
+- `scripts/sync_contract_list_union.py`, gated by the default-on `ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED`, resolves only validated pure-addition conflicts in contract `read_entrypoints` / `write_entrypoints` lists before resolver dispatch. Successful pushes record the additive `.sync.last_list_union_paths` and `.sync.last_list_union_at` fields and the compatible `.sync.last_sync_outcome = "merged-deterministic"` value; every ineligible or failed attempt falls through to the existing resolver path.
 - `scripts/verify_integration_fingerprints.py` supports `--baseline-fingerprints-state <out>` / `--compare-against-baseline <in>` alongside `--ref`; capture mode records ref-accurate `head_sha` metadata, compare mode emits `PRE_EXISTING_FINGERPRINT_DRIFT_V1` markers for pre-existing drift that should not block the resolver commit, and the verifier-side false-positive defenses emit `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1` (capture-side multi-occurrence partial removal), `FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1` (a `must_contain` line modified after capture by a non-`[ai-merge-resolve]` commit), and `FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1` (a `must_not_contain` line re-added after capture by a non-`[ai-merge-resolve]` commit — e.g. a back-merge of the default branch keeping its still-present copy) when the ref-mode wave-dispatch gate suppresses a non-resolver false positive. The two post-capture defenses share one direction-agnostic pickaxe primitive and both fail closed in working-tree mode, so the resolver's own pre-commit self-check stays strict and still cannot silently revert merged intent.
 - `.github/workflows/review_autofix.yml` stages `verify_integration_fingerprints.py`, `review_conflict_prepare.sh`, `review_conflict_resolve.sh`, `render_prompt.py`, `opencode_helpers.sh`, and `write_opencode_config.sh` through `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` (main snapshot first, branch fallback). `render_prompt.py` is main-primary so the newest renderer (and any bundled contract/reference assets) reaches an in-flight PR whose branch predates the fix. The reviewer/editor prompt bodies embed arbitrary PR-diff + comment text that can carry literal `{{...}}` / `{%...%}` tokens, so their post-embed render calls now pass `--skip-syntax-validation` (opt-in via `RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1` in `render_prompt.sh`) — the strict `validate_supported_template_syntax` gate is skipped for those already-assembled bodies while placeholder substitution still runs. This removes the false-positive class at the source (an embedded diff token no longer hard-fails the whole reviewer/editor step, so a docs/diff carrying template syntax — run 28936678508 — or the earlier lone-`${{` case, PR #3592 / #3593 / run 28888093412, cannot wedge the review). The gate stays strict for every static template render (e.g. the editor continuation prompt `prompts/mode-review-apply-fixes-continuation.txt`), so genuine prompt-authoring errors are still caught. `render_prompt.py` stays fail-open — when the backend is absent from both refs, bootstrap preserves the ref's bundled bash renderer. `OPTIONAL_BOOTSTRAP_SCRIPTS` is reserved for genuinely optional helpers only.
 - `scripts/review_conflict_resolve.sh` persists one `AUTOFIX_RESOLVER_RETRY_STATE_V1` PR-body block per final PR/head SHA, keyed by normalized fingerprint failure signature. `RESOLVER_ESCAPE_THRESHOLD_N` is the per-tier same-head, same-signature step size: multiples advance `strict` → `ratio` → `count_only` → `warn_only`, emit `FINGERPRINT_TIER_DOWNGRADED_V1`, and after the next multiple the script labels the **final PR issue** `ai:resolver-escalated` and records `escalated_at` for poller-side suppression / branch-rebuild gating.

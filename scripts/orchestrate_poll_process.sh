@@ -1687,6 +1687,15 @@ if ! [[ "${INTEGRATION_SYNC_CONFLICT_MAX_RETRIES}" =~ ^[0-9]+$ ]]; then
   INTEGRATION_SYNC_CONFLICT_MAX_RETRIES="1"
 fi
 
+ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED="${ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED:-true}"
+case "${ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED}" in
+  true|false) ;;
+  *)
+    echo "::warning::ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED must be true or false; defaulting to true"
+    ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED="true"
+    ;;
+esac
+
 # INTEGRATION_CONFLICT_LIFETIME_MAX — global lifetime cap on the total
 # number of resolver+judge dispatches per integration branch before the
 # orchestrator gives up and flips status to "failed".  Unlike the
@@ -6527,6 +6536,179 @@ _refresh_integration_resolver_tooling() {
   return 0
 }
 
+# Attempt a deterministic union of contract entrypoint-list conflicts.
+# Inputs: $1 integration branch, $2 default branch, and the caller-scoped
+# conflict_paths_json array already computed by merge_tree_conflict_paths_json.
+# Output: SYNC_LIST_UNION_RESOLVED_PATHS_JSON is set to the resolved path array.
+# Returns 0 only after the integration ref is current (a pushed merge or a
+# verified no-op push); returns 1 for disabled, ineligible, or failed attempts.
+# This helper makes zero GitHub REST or GraphQL calls: it uses only local git
+# fetch/worktree/merge/commit/push operations. Every failure cleans up and
+# fails open so sync_default_into_integration_branch keeps its legacy resolver
+# dispatch path.
+sync_contract_list_union_merge() {
+	local list_union_integration_branch="$1"
+	local list_union_default_branch="$2"
+	local list_union_conflict_paths_json="${conflict_paths_json:-[]}"
+	local list_union_script_dir
+	local list_union_helper_path
+	local list_union_runtime_dir="${RUNTIME_DIR:-/tmp}"
+	local list_union_attempt
+	local list_union_worktree
+	local list_union_worktree_name
+	local list_union_tmpdir
+	local list_union_subshell_rc
+	local list_union_paths_csv
+
+	SYNC_LIST_UNION_RESOLVED_PATHS_JSON='[]'
+	[ "${ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED:-true}" = "true" ] || return 1
+	case "${list_union_integration_branch}" in
+		orchestrator/project-*) ;;
+		*) return 1 ;;
+	esac
+	[ -n "${list_union_default_branch}" ] || return 1
+
+	if ! printf '%s' "${list_union_conflict_paths_json}" | jq -e '
+		type == "array" and
+		all(.[]; type == "string" and test("^db/contracts/[^/]+\\.ya?ml$"))
+	' >/dev/null 2>&1; then
+		echo "SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=ineligible reason=non_contract_path"
+		return 1
+	fi
+
+	list_union_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
+	list_union_helper_path="${list_union_script_dir}/sync_contract_list_union.py"
+	if [ ! -f "${list_union_helper_path}" ]; then
+		echo "::warning::SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=failed reason=helper_missing"
+		return 1
+	fi
+
+	for list_union_attempt in 1 2 3; do
+		if ! git fetch --quiet --no-tags --prune origin \
+			"+refs/heads/${list_union_default_branch}:refs/remotes/origin/${list_union_default_branch}" \
+			"+refs/heads/${list_union_integration_branch}:refs/remotes/origin/${list_union_integration_branch}" \
+			2>/dev/null; then
+			echo "::warning::SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=failed reason=fetch attempt=${list_union_attempt}/3"
+			[ "${list_union_attempt}" -lt 3 ] && sleep 1 && continue
+			return 1
+		fi
+
+		list_union_worktree="${list_union_runtime_dir}/sync-list-union-wt-${TRACKING_NUM:-0}-$$-${RANDOM:-0}-${list_union_attempt}"
+		list_union_worktree_name="$(basename -- "${list_union_worktree}")"
+		list_union_tmpdir="$(mktemp -d "${list_union_runtime_dir}/sync-list-union-inputs-XXXXXX" 2>/dev/null || echo "")"
+		if [ -z "${list_union_tmpdir}" ] || [ ! -d "${list_union_tmpdir}" ]; then
+			echo "::warning::SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=failed reason=tmpdir attempt=${list_union_attempt}/3"
+			return 1
+		fi
+
+		if ! git worktree add --quiet --detach "${list_union_worktree}" \
+			"refs/remotes/origin/${list_union_integration_branch}" 2>/dev/null; then
+			rm -rf "${list_union_tmpdir}" 2>/dev/null || true
+			echo "::warning::SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=failed reason=worktree_add attempt=${list_union_attempt}/3"
+			[ "${list_union_attempt}" -lt 3 ] && sleep 1 && continue
+			return 1
+		fi
+		worktree_registry_register "${list_union_worktree_name}" "${list_union_worktree}" \
+			"refs/remotes/origin/${list_union_integration_branch}" "tracking-${TRACKING_NUM:-0}" "orchestrate-poll"
+
+		list_union_subshell_rc=0
+		(
+			cd "${list_union_worktree}" || exit 20
+			git config user.name "codex-bot" || exit 21
+			git config user.email "codex@users.noreply.github.com" || exit 21
+
+			local list_union_merge_rc=0
+			local list_union_unmerged_path
+			local list_union_path_slug
+			local list_union_resolved_paths=()
+			local list_union_unmerged_paths=()
+			local list_union_resolved_csv
+			local list_union_commit_body
+
+			git merge --no-ff --no-commit \
+				"refs/remotes/origin/${list_union_default_branch}" >/dev/null 2>&1 || list_union_merge_rc=$?
+			if [ "${list_union_merge_rc}" -ne 0 ]; then
+				mapfile -t list_union_unmerged_paths < <(git diff --name-only --diff-filter=U --)
+				[ "${#list_union_unmerged_paths[@]}" -gt 0 ] || exit 22
+				for list_union_unmerged_path in "${list_union_unmerged_paths[@]}"; do
+					if ! [[ "${list_union_unmerged_path}" =~ ^db/contracts/[^/]+\.ya?ml$ ]]; then
+						printf 'ineligible:non_contract_path:%s\n' "${list_union_unmerged_path}" > "${list_union_tmpdir}/status"
+						exit 40
+					fi
+					list_union_path_slug="${#list_union_resolved_paths[@]}"
+					: > "${list_union_tmpdir}/${list_union_path_slug}.base"
+					git show ":1:${list_union_unmerged_path}" > "${list_union_tmpdir}/${list_union_path_slug}.base" 2>/dev/null || : > "${list_union_tmpdir}/${list_union_path_slug}.base"
+					git show ":2:${list_union_unmerged_path}" > "${list_union_tmpdir}/${list_union_path_slug}.ours" 2>/dev/null || exit 23
+					git show ":3:${list_union_unmerged_path}" > "${list_union_tmpdir}/${list_union_path_slug}.theirs" 2>/dev/null || exit 23
+					if ! PYTHONDONTWRITEBYTECODE=1 python3 "${list_union_helper_path}" \
+						--path "${list_union_unmerged_path}" \
+						--base "${list_union_tmpdir}/${list_union_path_slug}.base" \
+						--ours "${list_union_tmpdir}/${list_union_path_slug}.ours" \
+						--theirs "${list_union_tmpdir}/${list_union_path_slug}.theirs" \
+						--out "${list_union_tmpdir}/${list_union_path_slug}.merged"; then
+						printf 'ineligible:helper_rejected:%s\n' "${list_union_unmerged_path}" > "${list_union_tmpdir}/status"
+						exit 40
+					fi
+					cp -- "${list_union_tmpdir}/${list_union_path_slug}.merged" "${list_union_unmerged_path}" || exit 24
+					git add -- "${list_union_unmerged_path}" || exit 24
+					list_union_resolved_paths+=("${list_union_unmerged_path}")
+				done
+				[ -z "$(git diff --name-only --diff-filter=U --)" ] || exit 25
+			fi
+
+			printf '%s\n' "${list_union_resolved_paths[@]}" \
+				| jq -Rsc 'split("\n") | map(select(length > 0))' > "${list_union_tmpdir}/resolved_paths.json" || exit 26
+			list_union_resolved_csv="$(jq -r 'join(", ")' "${list_union_tmpdir}/resolved_paths.json")"
+			[ -n "${list_union_resolved_csv}" ] || list_union_resolved_csv="none (local merge was clean)"
+			if [ -f .git/MERGE_HEAD ] || git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+				list_union_commit_body="Resolved paths: ${list_union_resolved_csv}
+
+Resolution used the deterministic contract-list union from sync_contract_list_union_merge."
+				git commit --quiet \
+					-m "chore: sync ${list_union_default_branch} into ${list_union_integration_branch}" \
+					-m "${list_union_commit_body}" || exit 27
+			fi
+			git push --quiet origin "HEAD:refs/heads/${list_union_integration_branch}" 2>/dev/null || exit 30
+		) || list_union_subshell_rc=$?
+
+		git -C "${list_union_worktree}" merge --abort >/dev/null 2>&1 || true
+		worktree_registry_deregister "${list_union_worktree_name}"
+		git worktree remove --force "${list_union_worktree}" 2>/dev/null || rm -rf "${list_union_worktree}" 2>/dev/null || true
+
+		case "${list_union_subshell_rc}" in
+			0)
+				SYNC_LIST_UNION_RESOLVED_PATHS_JSON="$(cat "${list_union_tmpdir}/resolved_paths.json" 2>/dev/null || echo '[]')"
+				list_union_paths_csv="$(printf '%s' "${SYNC_LIST_UNION_RESOLVED_PATHS_JSON}" | jq -r 'join(",")' 2>/dev/null || echo "")"
+				rm -rf "${list_union_tmpdir}" 2>/dev/null || true
+				echo "SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=merged paths=${list_union_paths_csv:-none}"
+				return 0
+				;;
+			30)
+				rm -rf "${list_union_tmpdir}" 2>/dev/null || true
+				if [ "${list_union_attempt}" -lt 3 ]; then
+					sleep 1
+					continue
+				fi
+				echo "::warning::SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=failed reason=push attempts=3"
+				return 1
+				;;
+			40)
+				list_union_paths_csv="$(cat "${list_union_tmpdir}/status" 2>/dev/null || echo 'ineligible:helper_rejected:unknown')"
+				rm -rf "${list_union_tmpdir}" 2>/dev/null || true
+				echo "SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=ineligible reason=${list_union_paths_csv}"
+				return 1
+				;;
+			*)
+				rm -rf "${list_union_tmpdir}" 2>/dev/null || true
+				echo "::warning::SYNC_LIST_UNION_V1: integration=${list_union_integration_branch} outcome=failed reason=merge_step_${list_union_subshell_rc}"
+				return 1
+				;;
+		esac
+	done
+
+	return 1
+}
+
 # Drive one iteration of the self-healing loop for the integration
 # branch. Must be called when we know a conflict exists (either from
 # a 409 in sync_default_into_integration_branch or from a
@@ -7917,6 +8099,35 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
     && integration_ref="$(resolve_branch_analysis_ref "${integration_branch}")"; then
     conflict_paths_json="$(merge_tree_conflict_paths_json "${default_ref}" "${integration_ref}" 2>/dev/null || echo '[]')"
   fi
+	if sync_contract_list_union_merge "${integration_branch}" "${default_branch}"; then
+		local list_union_resolved_at
+		local list_union_paths_md
+		list_union_resolved_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+		jq --arg now "${list_union_resolved_at}" \
+			--argjson paths "${SYNC_LIST_UNION_RESOLVED_PATHS_JSON}" \
+			'.sync = ((.sync // {}) + {
+				"status": "active",
+				"last_sync_outcome": "merged-deterministic",
+				"last_list_union_paths": $paths,
+				"last_list_union_at": $now,
+				"last_conflict_paths": [],
+				"last_conflict_fingerprint": ""
+			}) |
+			.integration_sync_status = "clean" |
+			.integration_sync_last_error = "" |
+			.integration_conflict_unresolved_ticks = 0' \
+			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+		mark_integration_sync_clean "${default_branch}"
+		post_state_comment || true
+		list_union_paths_md="$(format_conflict_paths_markdown "${SYNC_LIST_UNION_RESOLVED_PATHS_JSON}")"
+		post_tracking_comment "## ✅ Integration sync auto-resolved (contract list union)
+
+Deterministically merged append-only contract entrypoint changes while syncing \`${default_branch}\` into \`${integration_branch}\` without dispatching the review resolver.
+
+Resolved contract paths:
+${list_union_paths_md}"
+		return 0
+	fi
   conflict_fingerprint="$(merge_tree_conflict_fingerprint "${conflict_paths_json}" "${default_ref}" "${integration_ref}")"
 
   jq --arg fp "${conflict_fingerprint}" --argjson paths "${conflict_paths_json}" \

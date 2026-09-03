@@ -261,6 +261,12 @@ jobs:
             fi
           fi
 
+          if ! python3 -c 'import yaml' >/dev/null 2>&1; then
+            if ! python3 -m pip install --quiet pyyaml; then
+              echo "::warning::PyYAML installation failed; deterministic contract-list union will fail open to the existing resolver path."
+            fi
+          fi
+
           echo "PYTHONDONTWRITEBYTECODE=1" >> "$GITHUB_ENV"
 
       - name: Validate required environment variables
@@ -336,7 +342,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh worktree_registry.sh worktree_gc.sh; do
+          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh sync_contract_list_union.py worktree_registry.sh worktree_gc.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -698,6 +704,9 @@ jobs:
           BRANCH_REBUILD_ENABLED: ${{ vars.BRANCH_REBUILD_ENABLED || 'false' }}
           BRANCH_REBUILD_THRESHOLD_HOURS: ${{ vars.BRANCH_REBUILD_THRESHOLD_HOURS || '24' }}
           BRANCH_REBUILD_COOLDOWN_HOURS: ${{ vars.BRANCH_REBUILD_COOLDOWN_HOURS || '48' }}
+          # Default-on deterministic pre-resolver implemented by
+          # scripts/orchestrate_poll_process.sh::sync_contract_list_union_merge.
+          ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED: ${{ vars.ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED || 'true' }}
           # Integration-backpressure size-aware margin (see scripts/orchestrate_poll_process.sh
           # _integration_backpressure_effective_threshold). Effective threshold is
           # max(ORCH_INTEGRATION_MAX_AHEAD_COMMITS, planned_issue_count + this margin).
