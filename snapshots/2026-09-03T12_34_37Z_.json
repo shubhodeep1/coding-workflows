@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-09-02T10:54:39Z",
+  "tick_at": "2026-09-03T12:34:37Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -27,10 +27,10 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 3933,
+      "number": 3965,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] Mandatory Orchestrator Security Pass Gate",
+      "title": "[Orchestrator] Deterministic contract-list union for orchestrator sync",
       "total_waves": 0,
       "wave_complete": false
     }
