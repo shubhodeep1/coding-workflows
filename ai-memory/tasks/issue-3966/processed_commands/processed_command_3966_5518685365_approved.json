@@ -5,13 +5,31 @@
   "entry_id": "processed_command_3966_5518685365_approved",
   "issue_number": 3966,
   "metadata": {
+    "branch": "ai/issue-3966",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/orchestrate_poll.yml",
+      "README.md",
+      "agents.md",
+      "changelog.d/3965-sync-contract-list-union.md",
+      "docs/INVENTORY.md",
+      "scripts/orchestrate_poll_process.sh",
+      "scripts/sync_contract_list_union.py",
+      "tests/test_orchestrate_poll_process.py",
+      "tests/test_sync_contract_list_union.py"
+    ],
+    "issue_number": 3966,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3966",
+    "pr_number": 3970,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3970",
+    "run_attempt": "1",
+    "run_id": "33701763313",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/33701763313"
   },
   "run_attempt": 1,
   "run_id": "33701763313",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-09-03T01:00:41Z",
+  "status": "completed",
+  "timestamp": "2026-09-03T01:17:45Z",
   "workflow": "implement"
 }
