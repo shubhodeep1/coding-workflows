@@ -2012,6 +2012,25 @@ jobs:
             cat "${IMPLEMENTATION_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
 
+          # Safety net: log the assembled implement prompt size and warn if
+          # it is at or over codex-cli's hard `turn/start` stdin cap. Every
+          # section above is individually bounded, but nothing measured the
+          # total, so an overshoot surfaced only as an opaque per-attempt
+          # "Input exceeds the maximum length of 1048576 characters" and
+          # then as a generic "no actionable output" bail (run 33796624872 /
+          # issue #3990, where the targeted-file-context block alone reached
+          # ~1.16MB). Mirrors the equivalent guards in
+          # scripts/review_run_reviewers.sh and scripts/review_rb_judge.sh.
+          IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES="${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES:-1048576}"
+          implement_prompt_assembled_bytes="$(wc -c < "${CODEX_PROMPT_FILE}" 2>/dev/null | tr -d '[:space:]' || printf '0')"
+          if ! [[ "${implement_prompt_assembled_bytes}" =~ ^[0-9]+$ ]]; then
+            implement_prompt_assembled_bytes=0
+          fi
+          echo "Implement prompt assembled size: ${implement_prompt_assembled_bytes} bytes (codex stdin cap: ${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES})."
+          if [ "${implement_prompt_assembled_bytes}" -ge "${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES}" ]; then
+            echo "::warning::Implement prompt is ${implement_prompt_assembled_bytes} bytes, at or over codex's ${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES}-character turn/start stdin cap. Every attempt will fail with 'Input exceeds the maximum length'. Lower TARGETED_FILE_CONTEXT_MAX_BYTES or shrink pre_assembled_static.txt / memory / issue-comment context."
+          fi
+
           # ── Shared event-idle stall guard for the implement editor ──
           # scripts/codex_stall_guard.sh owns per-pid heartbeats and the
           # event-idle kill/observe logic. This step retains only the outer
