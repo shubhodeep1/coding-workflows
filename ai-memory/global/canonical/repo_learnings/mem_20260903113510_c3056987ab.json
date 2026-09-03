@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Orchestrator security changes are implemented incrementally behind explicit phase contracts and workflow tests.",
   "timestamps": {
     "created_at": "2026-09-03T11:35:10Z",
