@@ -1813,7 +1813,7 @@ This phase starts only after the orchestrator judge returns `complete`.
 ### Lifecycle After Judge Approval
 
 1. The poller transitions the tracking issue to `ai:validating` and dispatches `.github/workflows/ai-validate.yml`.
-2. The wrapper workflow calls reusable `.github/workflows/validate.yml@<release-commit-sha> # stable`, which runs `scripts/validate_process.sh`.
+2. The wrapper workflow calls reusable `.github/workflows/validate.yml@<40-character-release-sha> # stable`, which runs `scripts/validate_process.sh`.
 3. If validation passes, `validate_process.sh` sets `ai:validated`; the poller marks the project `complete` and closes the tracking issue.
 4. If validation fails with fixable findings (`needs_fixes`), `validate_process.sh` creates fix-up issues, comments them on the tracking issue, and sets `ai:validation-fixing`. Before creating a new fix-up issue, the script now runs two guards (fail-open on API error):
    - **Per-tracker dedupe**: if an open issue labelled `ai:orchestrator-managed` already contains both the `Local ID: validation-fix-cycle-<N>` marker and the `Tracking issue: #<tracker>` marker (the pair emitted in the fix-up body), the existing issue number is reused instead of creating a duplicate — the tracking comment and `ai:validation-fixing` label are still applied so downstream poller behavior is unchanged.
