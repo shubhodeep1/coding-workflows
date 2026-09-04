@@ -208,7 +208,7 @@ def _load_fingerprints(path: str) -> tuple[dict[str, Any] | None, str | None]:
 def _resolver_safe_path(raw_path: Any, *, regex_pattern: bool) -> str | None:
 	if not isinstance(raw_path, str) or not raw_path or len(raw_path) > RESOLVER_SAFE_MAX_STRING_LENGTH:
 		return None
-	if "\x00" in raw_path or "\\" in raw_path or raw_path.startswith("/"):
+	if re.search(r"[\x00-\x1f\x7f]", raw_path) is not None or "\\" in raw_path or raw_path.startswith("/"):
 		return None
 	if posixpath.normpath(raw_path) != raw_path:
 		return None

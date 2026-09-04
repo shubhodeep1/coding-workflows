@@ -180,6 +180,9 @@ def test_resolver_safe_export_omits_unmerged_and_unsafe_fingerprints():
 						{"file": "scripts/app.py", "regex": re.escape("expected literal")},
 						{"file": "../outside", "regex": re.escape("unsafe")},
 						{"file": ".git/config", "regex": re.escape("unsafe")},
+						{"file": "scripts/control\ninjected.py", "regex": re.escape("unsafe")},
+						{"file": "scripts/control\tinjected.py", "regex": re.escape("unsafe")},
+						{"file": "scripts/control\x01injected.py", "regex": re.escape("unsafe")},
 						{"file": "scripts/raw.py", "regex": ".*"},
 						{"file": "scripts/" + ("a" * 4097), "regex": re.escape("oversized")},
 					],
@@ -187,6 +190,8 @@ def test_resolver_safe_export_omits_unmerged_and_unsafe_fingerprints():
 					"must_not_exist": [
 						{"file": "src/deleted.py"},
 						{"file": ".git/index"},
+						{"file": "src/control\rinjected.py"},
+						{"file": "src/control\x7finjected.py"},
 					],
 				},
 				"11": {
