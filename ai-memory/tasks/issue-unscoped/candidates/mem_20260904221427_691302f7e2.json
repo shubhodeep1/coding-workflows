@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_prepare.sh:447-502 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: New authenticated-user resolution via `gh api user` call duplicates identity validation already present in scripts/orchestrate_poll_process.sh, violating the \"zero new GitHub API calls\" requirement from issue #3965.\n  WHY: Adds redundant API call that violates explicit project constraint; moonshotai_kimi-k3 and qwen_qwen3_7-plus disputed that the zero-new-calls constraint is present or applicable.\n- scripts/orchestrate_poll_process.sh:12779-12792 | severity=critical | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: New branch-mismatch guard only aborts standalone stall recovery but does not prevent main tracking cycle from continuing with authenticated state targeting another project branch.\n  WHY: Allows authenticated cross-project state to proceed, potentially leaving managed-child set empty and vulnerable to later mutations; moonshotai_kimi-k3 disputed this, stating the main tracking loop gates on `EXTRACTED_STATE_BRANCH_MISMATCH_COUNT`.\n- scripts/orchestrate_poll_process.sh:12783-12786 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: New identity-failure guard returns early without resetting/clearing cached identity state, which persists into subsequent extractor calls in same process.\n  WHY: Process-cached failed identity state remains fail-closed for entire cycle, but code doesn't clear it for reuse; moonshotai_kimi-k3 disputed this, stating the process-cached failed identity state is deliberate cycle-wide fail-closed behavior.\n- scripts/review_conflict_prepare.sh:483-501 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: jq capture emits no output and exits successfully when no V1 marker matches, but code treats this as failure requiring error handling restoration.\n  WHY: Restoring `|| echo '\"\"'` would hide genuine jq parse/execution failures that must remain fail-closed.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"zero new GitHub API calls\" per issue #3965 security-pass fix cycle\n  expected_change_site: scripts/review_conflict_prepare.sh and scripts/orchestrate_poll_process.sh\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Both files now introduce new gh api user calls for authenticated-user resolution, violating the zero-new-calls constraint.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_conflict_prepare.sh:447-502 | severity=BLOCKER | confidence=5\n  PROBLEM: New authenticated-user resolution via `gh api user` call duplicates identity validation already present in scripts/orchestrate_poll_process.sh, violating the \"zero new GitHub API calls\" requirement from issue #3965.\n  WHY: Adds redundant API call that violates explicit project constraint.\n- scripts/orchestrate_poll_process.sh:12779-12792 | severity=BLOCKER | confidence=4\n  PROBLEM: New branch-mismatch guard only aborts standalone stall recovery but does not prevent main tracking cycle from continuing with authenticated state targeting another project branch.\n  WHY: Allows authenticated cross-project state to proceed, potentially leaving managed-child set empty and vulnerable to later mutations.\n- scripts/orchestrate_poll_process.sh:12783-12786 | severity=MAJOR | confidence=4\n  PROBLEM: New identity-failure guard returns early without resetting/clearing cached identity state, which persists into subsequent extractor calls in same process.\n  WHY: Process-cached failed identity state remains fail-closed for entire cycle, but code doesn't clear it for reuse.\n- scripts/review_conflict_prepare.sh:483-501 | severity=MAJOR | confidence=4\n  PROBLEM: jq capture emits no output and exits successfully when no V1 marker matches, but code treats this as failure requiring error handling restoration.\n  WHY: Restoring `|| echo '\"\"'` would hide genuine jq parse/execution failures that must remain fail-closed.\n- TASK_GAP\n  Requirement: \"zero new GitHub API calls\" per issue #3965 security-pass fix cycle\n  Expected change site: scripts/review_conflict_prepare.sh and scripts/orchestrate_poll_process.sh\n  Evidence of absence: Both files now introduce new gh api user calls for authenticated-user resolution, violating the zero-new-calls constraint.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "4ff2dcb075ca62419943e5da3f6869cacd4e93cc773e50873d90d51ad654e397",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3999,
+    "run_id": "33916261548",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33916261548",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260904221427_691302f7e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3999,
+    "run_id": "33916261548"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-04T22:14:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
