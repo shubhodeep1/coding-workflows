@@ -739,89 +739,151 @@ def test_cli_rejects_unknown_fallback_mode() -> None:
 		assert "invalid choice" in stderr.getvalue()
 
 
-def test_overflow_semble_blocks_are_charged_against_the_total_budget() -> None:
-	"""Source content stays inside --max-bytes with bounded framing overhead.
+def test_semble_overflow_blocks_stay_within_total_budget() -> None:
+	"""Regression: the semble overflow path must respect `max_bytes`.
 
-	Regression for run 33796624872 (issue #3990). The semble overflow
-	branch rendered its payload unconditionally and only then added it
-	to `used_bytes`, so once the budget was spent every further overflow
-	file still emitted a full payload. Ten files rendered 1,281,280
-	bytes against max_bytes=102400 and pushed the assembled implement
-	prompt past codex's 1,048,576-character turn/start stdin cap.
-	"""
+	Chunk size is set by the semble index, not by the file that triggered
+	the query, so an unclamped overflow block could render far more than
+	the caller's whole budget — and every subsequent overflowing path
+	added another one on top. On run 33796624872 (issue #3990) that
+	emitted ~129KB per overflowing file against a 102400-byte budget and
+	pushed the implement prompt past codex-cli's 1,048,576-character
+	`turn/start` stdin cap, failing every attempt before the editor ran."""
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "src").mkdir()
-		for index in range(10):
-			(root / "src" / f"big{index}.py").write_text("x = 1\n" * 40000, encoding="utf-8")
+		names = ["src/a.py", "src/b.py", "src/c.py", "src/d.py", "src/e.py"]
+		for rel in names:
+			(root / rel).write_text("x = 1\n" * 4000, encoding="utf-8")
 		semble = root / "fake_semble.py"
-		_make_fake_semble_script(semble, stdout="C" * 40000)
+		# One chunk set far larger than the whole budget, as the real
+		# index returns for a broad repo-wide query.
+		_make_fake_semble_script(semble, stdout="chunk line\n" * 5000)
 
+		max_bytes = 10_000
 		stderr = io.StringIO()
 		with contextlib.redirect_stderr(stderr):
 			context = emit_context(
-				[f"src/big{index}.py" for index in range(10)],
+				names,
 				root,
-				max_bytes=102400,
+				max_bytes=max_bytes,
 				semble_bin=str(semble),
 				semble_index=str(root / ".semble-index"),
 				semble_query_text="task summary",
+				semble_max_chunks=6,
 			)
 
-		# Two 40000-byte payloads fit under 102400; the rest must not render.
-		assert context.count("chunk-retrieved via semble") == 2
-		# The budget is charged with source content; the summary reports
-		# exactly the two rendered payloads and nothing for the eight
-		# marker-only entries.
-		assert "80000 byte(s) of source content. Overflow-rendered content: 80000 byte(s)." in context
-		# Per-entry framing (FILE / END FILE lines, markers, summary) is
-		# not charged, but it is small and bounded: measured at ~200
-		# bytes per entry for this input, so allow 300 — the emitted
-		# block is the budgeted content plus that overhead, not the
-		# ~1.2MB the unguarded path produced for the same input.
-		assert len(context.encode("utf-8")) - 80000 < 10 * 300
+		# Chunk content across ALL overflow blocks must fit the budget.
+		chunk_bytes = sum(
+			len(line.encode("utf-8")) + 1
+			for line in context.splitlines()
+			if line.startswith("chunk line")
+		)
+		assert chunk_bytes <= max_bytes, f"chunk content {chunk_bytes} exceeds budget {max_bytes}"
+		# Pre-fix this produced ~275KB for these inputs.
+		assert len(context.encode("utf-8")) < 4 * max_bytes, (
+			f"total context {len(context.encode('utf-8'))} bytes is not bounded by the budget"
+		)
+		# The first overflow block is clamped and says so; the rest have
+		# no budget left and fall back to the marker.
+		assert "truncated to" in context
+		assert "read with read tool for the rest" in context
 		assert "would overflow total budget" in context
-		assert "SEMBLE_FALLBACK target=overflow" in stderr.getvalue()
-		assert "reason=budget-exhausted" in stderr.getvalue()
+		# Every path is still reported — no silent drops.
+		for rel in names:
+			assert rel in context, f"path {rel} missing from output"
 
 
-def test_overflow_semble_query_is_skipped_once_budget_is_exhausted() -> None:
-	"""No semble subprocess once there is no headroom left to render into."""
+def test_semble_overflow_query_skipped_once_budget_is_exhausted() -> None:
+	"""With no budget left there is nothing to render, so the subprocess
+	query is not worth issuing — the path gets the standard marker and no
+	SEMBLE_QUERY telemetry."""
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "src").mkdir()
-		(root / "src" / "first.py").write_text("x = 1\n" * 4000, encoding="utf-8")
-		(root / "src" / "second.py").write_text("y = 2\n" * 4000, encoding="utf-8")
-		# Both files exceed max_bytes on their own, so both take the
-		# overflow path; the first payload consumes the budget exactly.
-		marker = root / "invocations.txt"
-		semble = root / "counting_semble.py"
-		semble.write_text(
-			"#!/usr/bin/env python3\n"
-			"import sys\n"
-			f"open({str(marker)!r}, 'a').write('call\\n')\n"
-			"sys.stdout.write('C' * 900)\n",
-			encoding="utf-8",
-		)
-		semble.chmod(0o755)
+		(root / "src" / "small.py").write_text("x = 1\n" * 100, encoding="utf-8")
+		(root / "src" / "big.py").write_text("y = 1\n" * 4000, encoding="utf-8")
+		semble = root / "fake_semble.py"
+		_make_fake_semble_script(semble, stdout="chunk 1\nchunk 2\n")
 
 		stderr = io.StringIO()
 		with contextlib.redirect_stderr(stderr):
 			context = emit_context(
-				["src/first.py", "src/second.py"],
+				["src/small.py", "src/big.py"],
 				root,
-				max_bytes=900,
+				# Exactly the small file, nothing left over.
+				max_bytes=600,
 				semble_bin=str(semble),
 				semble_index=str(root / ".semble-index"),
 				semble_query_text="task summary",
+				semble_max_chunks=6,
 			)
 
-		# The first payload consumes all 900 bytes, leaving zero headroom,
-		# so the second file skips the subprocess entirely.
-		assert marker.read_text(encoding="utf-8").count("call") == 1
-		assert context.count("chunk-retrieved via semble") == 1
-		assert "--- FILE: src/second.py (24000 bytes; would overflow total budget" in context
-		assert "reason=budget-exhausted bytes=0 remaining=0" in stderr.getvalue()
+		assert "--- FILE: src/small.py (600 bytes) ---" in context
+		assert "would overflow total budget" in context
+		assert "chunk-retrieved via semble" not in context
+		assert "SEMBLE_QUERY target=overflow file=src/big.py" not in stderr.getvalue()
+
+
+def test_semble_overflow_empty_clamp_marks_budget_exhausted() -> None:
+	"""Regression (PR #3995 review): when the remaining budget is smaller
+	than the first UTF-8 code point of the chunk text, the clamp yields an
+	empty string. Rendering that would append a header/footer pair without
+	advancing `used_bytes`, so every later overflowing path would re-run the
+	Semble subprocess and stack more empty blocks. Instead: no block, a
+	`budget-exhausted` fallback (never the chunk text itself), and no
+	further queries for the remaining paths."""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		for name in ("a.py", "b.py", "c.py"):
+			(root / "src" / name).write_text("x = 1\n" * 400, encoding="utf-8")
+		semble = root / "fake_semble.py"
+		# Multi-byte first character: 2 bytes, so a 1-byte budget clamps
+		# to nothing.
+		_make_fake_semble_script(semble, stdout="\u00e9 secret chunk text\n" * 50)
+
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			context = emit_context(
+				["src/a.py", "src/b.py", "src/c.py"],
+				root,
+				max_bytes=1,
+				semble_bin=str(semble),
+				semble_index=str(root / ".semble-index"),
+				semble_query_text="task summary",
+				semble_max_chunks=6,
+			)
+
+		assert "chunk-retrieved via semble" not in context
+		assert "secret chunk text" not in context
+		for name in ("src/a.py", "src/b.py", "src/c.py"):
+			assert f"--- FILE: {name} (2400 bytes; would overflow total budget" in context
+		telemetry = stderr.getvalue()
+		assert "SEMBLE_QUERY" not in telemetry
+		# One query ran (for the first path) and reported exhaustion; the
+		# other two paths never invoked the subprocess.
+		assert telemetry.count("SEMBLE_FALLBACK") == 1
+		assert "SEMBLE_FALLBACK target=overflow file=src/a.py reason=budget-exhausted" in telemetry
+		assert "secret chunk text" not in telemetry
+
+
+def test_clamp_text_to_byte_budget_prefers_whole_lines() -> None:
+	clamp = targeted_file_context_module._clamp_text_to_byte_budget
+
+	assert clamp("abc\ndef", 100) == ("abc\ndef", False)
+	assert clamp("abc\ndef", 7) == ("abc\ndef", False)
+	# 4 bytes fits "abc" but not "abc\ndef" (7 bytes).
+	clamped, was_clamped = clamp("abc\ndef", 4)
+	assert (clamped, was_clamped) == ("abc", True)
+	# First line alone overshoots: fall back to a byte prefix rather than
+	# rendering an empty block.
+	clamped, was_clamped = clamp("abcdefgh", 3)
+	assert (clamped, was_clamped) == ("abc", True)
+	assert clamp("abc", 0) == ("", True)
+	# Never splits a multi-byte character.
+	clamped, _ = clamp("\u00e9\u00e9\u00e9", 3)
+	assert clamped == "\u00e9"
 
 
 def main() -> int:

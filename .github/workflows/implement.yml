@@ -1794,11 +1794,11 @@ jobs:
           # read tool" marker so the model uses its native read flow. Set
           # MAX_BYTES=0 to disable inlining entirely.
           TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
-          # Codex-cli's `turn/start` stdin cap, in characters. The assembled
-          # prompt is measured with `wc -c` (bytes, never lower than the
-          # character count) and a warning is emitted at or over this value.
-          # Override only when the codex-cli build in use changes the cap.
-          IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES: ${{ vars.IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES || '1048576' }}
+          # Warning threshold for the assembled-prompt size guard below the
+          # prompt assembly. Repo variables are not exported to the shell on
+          # their own, so this is what makes the documented override reach
+          # the guard; the shell-side default remains as a fail-open.
+          IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS: ${{ vars.IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS || '1048576' }}
           # Required by the Fix #5 diagnostics-posting branch. Without
           # this, `[ -n "${GH_TOKEN:-}" ]` at the gh-issue-comment guard
           # is always false and the per-attempt failure diagnostics
@@ -2017,34 +2017,40 @@ jobs:
             cat "${IMPLEMENTATION_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
 
-          # Safety net: log the assembled implement prompt size and warn if
-          # it is at or over codex-cli's hard `turn/start` stdin cap. Every
-          # section above is individually bounded, but nothing measured the
-          # total, so an overshoot surfaced only as an opaque per-attempt
-          # "Input exceeds the maximum length of 1048576 characters" and
-          # then as a generic "no actionable output" bail (run 33796624872 /
-          # issue #3990, where the targeted-file-context block alone reached
-          # ~1.16MB). Mirrors the equivalent guards in
+          # Safety net: codex-cli hard-caps `turn/start` stdin at 1,048,576
+          # characters. Overshooting fails EVERY attempt before the editor
+          # runs, with only an opaque "Input exceeds the maximum length of
+          # 1048576 characters" on stderr — the attempt then looks like an
+          # ordinary no-actionable-output bail, so the retry loop, the stall
+          # recovery, and the stall judge all react to the wrong signal. On
+          # run 33796624872 (issue #3990) that chain closed a security-pass
+          # fix issue and gated project #3965 on `ai:security-pass-failed`.
+          # The per-file clamp in scripts/targeted_file_context.py is the
+          # prevention; this line is the diagnosis, and mirrors the guards in
           # scripts/review_run_reviewers.sh and scripts/review_rb_judge.sh.
-          # The cap is counted in characters by codex; `wc -c` counts bytes.
-          # A UTF-8 byte count is never lower than the character count, so
-          # comparing bytes against the cap is conservative: it can only
-          # warn early, never miss an overshoot. The override must be a
-          # positive integer — anything else silently disarmed the guard
-          # (`[ -ge ]` on a non-integer prints an error and takes the
-          # "under cap" branch), so coerce it back to the codex default.
-          IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES="${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES:-1048576}"
-          if ! [[ "${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES}" =~ ^[0-9]+$ ]] || [ "${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES}" -le 0 ]; then
-            echo "::warning::IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES='${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES}' is not a positive integer; using 1048576."
-            IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES=1048576
+          # The cap is a CHARACTER count, so measure characters (`wc -m`
+          # under a UTF-8 locale) and compare in that unit; bytes are logged
+          # alongside for operators reading the byte-denominated budgets.
+          # Under a non-UTF-8 locale `wc -m` degrades to a byte count, which
+          # is >= the character count and therefore only ever warns early.
+          IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS="${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS:-1048576}"
+          if ! [[ "${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS}" =~ ^[1-9][0-9]*$ ]]; then
+            IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS=1048576
           fi
           implement_prompt_assembled_bytes="$(wc -c < "${CODEX_PROMPT_FILE}" 2>/dev/null | tr -d '[:space:]' || printf '0')"
           if ! [[ "${implement_prompt_assembled_bytes}" =~ ^[0-9]+$ ]]; then
             implement_prompt_assembled_bytes=0
           fi
-          echo "Implement prompt assembled size: ${implement_prompt_assembled_bytes} bytes (codex turn/start stdin cap: ${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES} characters; bytes >= characters, so this comparison is conservative)."
-          if [ "${implement_prompt_assembled_bytes}" -ge "${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES}" ]; then
-            echo "::warning::Implement prompt is ${implement_prompt_assembled_bytes} bytes, at or over codex's ${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES}-character turn/start stdin cap. Every attempt will fail with 'Input exceeds the maximum length'. Lower TARGETED_FILE_CONTEXT_MAX_BYTES or shrink pre_assembled_static.txt / memory / issue-comment context."
+          # `|| true` (not `|| printf '0'`) so a failed `wc -m` leaves this
+          # EMPTY and the numeric check below falls back to the byte count;
+          # a forced `0` would pass that check and silently under-report.
+          implement_prompt_assembled_chars="$(LC_ALL=C.UTF-8 wc -m < "${CODEX_PROMPT_FILE}" 2>/dev/null | tr -d '[:space:]' || true)"
+          if ! [[ "${implement_prompt_assembled_chars}" =~ ^[0-9]+$ ]]; then
+            implement_prompt_assembled_chars="${implement_prompt_assembled_bytes}"
+          fi
+          echo "Implement prompt assembled size: ${implement_prompt_assembled_chars} characters (${implement_prompt_assembled_bytes} bytes); codex turn/start stdin cap: ${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS} characters."
+          if [ "${implement_prompt_assembled_chars}" -ge "${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS}" ]; then
+            echo "::warning::Implement prompt is ${implement_prompt_assembled_chars} characters (${implement_prompt_assembled_bytes} bytes), at or over codex's ${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS}-character turn/start stdin cap. Every attempt will fail with 'Input exceeds the maximum length' before the editor runs. Lower TARGETED_FILE_CONTEXT_MAX_BYTES, or shrink pre_assembled_static.txt / the memory context / the issue-comment context."
           fi
 
           # ── Shared event-idle stall guard for the implement editor ──

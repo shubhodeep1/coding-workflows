@@ -68,24 +68,6 @@ Bounds (defensible default; override per caller):
                                   passes is reported, either inlined or
                                   as a marker.
 
-                                  The budget is charged with source
-                                  content — inlined file bytes AND
-                                  overflow representations (semble
-                                  chunks, read-fallback heads). An
-                                  overflow representation is rendered
-                                  only when it fits the remaining
-                                  headroom, so source content never
-                                  exceeds --max-bytes. Per-entry
-                                  framing (the FILE / END FILE lines,
-                                  markers, the summary line) is NOT
-                                  charged; it is a small, bounded
-                                  overhead of roughly 200 bytes per
-                                  entry, so callers sizing an assembled
-                                  prompt against a hard stdin cap
-                                  should reserve for it rather than
-                                  treat --max-bytes as an exact bound
-                                  on the emitted block.
-
 Designed to be safe on missing inputs: if the plan has no recognised
 section, --paths-file is empty, and --paths is unset, the output is just
 the header + "(no existing target files could be inlined)" — the caller
@@ -464,12 +446,67 @@ def _run_semble_query(
 	return True, chunk_text
 
 
-def _append_semble_block(output: list[str], rel: str, raw_size: int, chunk_text: str) -> int:
-	output.append(f"--- FILE: {rel} ({raw_size} bytes — chunk-retrieved via semble) ---")
+def _clamp_text_to_byte_budget(text: str, budget_bytes: int) -> tuple[str, bool]:
+	"""Clamp `text` to at most `budget_bytes` UTF-8 bytes on a line boundary.
+
+	Returns `(clamped_text, was_clamped)`. Whole lines are preferred so a
+	chunk block never ends mid-token; when even the first line exceeds the
+	budget the text is cut at the largest byte prefix that decodes cleanly.
+	That prefix can itself be empty when the budget is smaller than the
+	first UTF-8 code point (e.g. a 1-byte budget against a multi-byte
+	character), so callers must tolerate an empty result. A non-positive
+	budget yields `("", True)`.
+	"""
+	if budget_bytes <= 0:
+		return "", True
+	encoded = text.encode("utf-8")
+	if len(encoded) <= budget_bytes:
+		return text, False
+	kept_lines: list[str] = []
+	kept_bytes = 0
+	for line in text.splitlines():
+		# +1 for the newline that rejoining re-adds between lines.
+		line_cost = len(line.encode("utf-8")) + (1 if kept_lines else 0)
+		if kept_bytes + line_cost > budget_bytes:
+			break
+		kept_lines.append(line)
+		kept_bytes += line_cost
+	if kept_lines:
+		return "\n".join(kept_lines), True
+	return encoded[:budget_bytes].decode("utf-8", errors="ignore"), True
+
+
+# `truncated_to_budget` exists because the overflow branch in `emit_context`
+# renders semble chunks whose size is set by the index, not by the file that
+# triggered the query — a 12KB source file can retrieve a 129KB chunk set.
+# Without clamping, one overflowing path could emit more than the caller's
+# entire `max_bytes` budget, and every subsequent overflowing path added
+# another unclamped block on top. That is what pushed the implement prompt
+# past codex-cli's 1,048,576-character `turn/start` stdin cap on run
+# 33796624872 (issue #3990), failing every attempt before the editor ran.
+# The header records the clamp so the model knows the block is partial and
+# should use its read tool for the rest.
+def _append_semble_block(
+	output: list[str],
+	rel: str,
+	raw_size: int,
+	chunk_text: str,
+	*,
+	truncated_to_budget: bool = False,
+) -> int:
+	rendered_bytes = len(chunk_text.encode("utf-8"))
+	if truncated_to_budget:
+		output.append(
+			f"--- FILE: {rel} ({raw_size} bytes — chunk-retrieved via semble, "
+			f"truncated to {rendered_bytes} byte(s) to fit the remaining total "
+			f"budget — read with read tool for the rest) ---"
+		)
+	else:
+		output.append(f"--- FILE: {rel} ({raw_size} bytes — chunk-retrieved via semble) ---")
 	output.extend(chunk_text.splitlines())
 	output.append(f"--- END FILE: {rel} ---")
 	output.append("")
-	return len(chunk_text.encode("utf-8"))
+	return rendered_bytes
 
 
 def _append_read_fallback_block(output: list[str], rel: str, truncated: bytes, raw_size: int) -> int:
@@ -508,6 +545,14 @@ def emit_context(
 	read_fallback_rendered = 0
 	off_suppressed = 0
 	overflow_rendered_bytes = 0
+	# Set once a clamp yields nothing renderable (remaining budget smaller
+	# than the first UTF-8 code point of the chunk text). From then on no
+	# further Semble query is issued for overflowing paths; they proceed to
+	# the configured `semble_fallback` (`read`, `off`, or the default
+	# marker) exactly as if Semble were unavailable. Rendering an empty
+	# block instead would leave `used_bytes` unchanged, so every later path
+	# would re-run the Semble subprocess and stack an empty header/footer.
+	semble_overflow_budget_exhausted = False
 	semble_max_chunks = _normalize_semble_max_chunks(semble_max_chunks)
 
 	output.append("=== TARGETED FILE CONTEXT ===")
@@ -534,23 +579,17 @@ def emit_context(
 			continue
 		raw_size = abs_path.stat().st_size
 		if used_bytes + raw_size > max_bytes:
-			# Headroom left under the total budget. EVERY overflow
-			# representation below — semble chunks and the read-fallback
-			# head alike — must fit inside it.
-			#
-			# The semble branch used to render its payload
-			# unconditionally and only afterwards add it to
-			# `used_bytes`. Once `used_bytes` passed `max_bytes` nothing
-			# stopped the next overflow file from rendering another full
-			# payload, so `max_bytes` bounded the inlined files but not
-			# the emitted block as a whole. Run 33796624872 (issue
-			# #3990) rendered 10 semble blocks totalling 1,281,280 bytes
-			# against max_bytes=102400; the assembled implement prompt
-			# cleared codex's 1,048,576-character turn/start stdin cap
-			# and every attempt died with "Input exceeds the maximum
-			# length of 1048576 characters".
-			remaining_bytes = max_bytes - used_bytes
-			if semble_query_text and remaining_bytes > 0:
+			# Budget left for this overflowing entry. The semble and read
+			# fallbacks below BOTH render content, so both must be clamped
+			# to this remainder — otherwise `max_bytes` stops being a total
+			# budget and becomes a per-file trigger threshold. See the
+			# rationale comment above `_append_semble_block`.
+			overflow_budget_remaining_bytes = max_bytes - used_bytes
+			if (
+				semble_query_text
+				and overflow_budget_remaining_bytes > 0
+				and not semble_overflow_budget_exhausted
+			):
 				query_start = time.monotonic()
 				success, payload = _run_semble_query(
 					f"{rel}\n{semble_query_text}",
@@ -561,9 +600,17 @@ def emit_context(
 				)
 				elapsed_ms = int((time.monotonic() - query_start) * 1000)
 				if success and payload is not None:
-					payload_bytes = len(payload.encode("utf-8"))
-					if payload_bytes <= remaining_bytes:
-						rendered_bytes = _append_semble_block(output, rel, raw_size, payload)
+					clamped_payload, payload_was_clamped = _clamp_text_to_byte_budget(
+						payload, overflow_budget_remaining_bytes
+					)
+					if clamped_payload:
+						rendered_bytes = _append_semble_block(
+							output,
+							rel,
+							raw_size,
+							clamped_payload,
+							truncated_to_budget=payload_was_clamped,
+						)
 						_log_semble_event(
 							"SEMBLE_QUERY",
 							target="overflow",
@@ -577,42 +624,20 @@ def emit_context(
 						included += 1
 						semble_rendered += 1
 						continue
-					# Chunks came back but do not fit the remaining
-					# budget. Drop them and fall through to the
-					# configured fallback rather than truncate
-					# mid-chunk: a partial chunk set misleads the editor
-					# the same way a truncated head does, and the marker
-					# tells it to read the file with its own read tool.
-					_log_semble_event(
-						"SEMBLE_FALLBACK",
-						target="overflow",
-						file=rel,
-						reason="budget-exhausted",
-						bytes=payload_bytes,
-						remaining=remaining_bytes,
-						ms=elapsed_ms,
-					)
-				else:
-					_log_semble_event(
-						"SEMBLE_FALLBACK",
-						target="overflow",
-						file=rel,
-						reason=payload or "unknown",
-						ms=elapsed_ms,
-					)
-			elif semble_query_text:
-				# Budget already spent — skip the semble subprocess
-				# entirely instead of paying for a payload that could
-				# not be rendered anyway.
+					# Nothing renderable fits. Do not emit an empty block (it
+					# would not advance `used_bytes`), do not echo the chunk
+					# text as a reason, and stop querying for later paths.
+					semble_overflow_budget_exhausted = True
+					payload = "budget-exhausted"
 				_log_semble_event(
 					"SEMBLE_FALLBACK",
 					target="overflow",
 					file=rel,
-					reason="budget-exhausted",
-					bytes=0,
-					remaining=remaining_bytes,
+					reason=payload or "unknown",
+					ms=elapsed_ms,
 				)
 			if semble_fallback == "read":
+				remaining_bytes = max_bytes - used_bytes
 				if remaining_bytes <= 0:
 					output.extend([
 						f"--- FILE: {rel} ({raw_size} bytes; would overflow total "
