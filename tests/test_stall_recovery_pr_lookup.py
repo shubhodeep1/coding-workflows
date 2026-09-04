@@ -93,6 +93,20 @@ _safe_gh_jq() {
 		".state")
 			printf '%s' "${PR_STATE_MAP[${path}]:-open}"
 			;;
+		"{state: "*"head_ref: "*"base_ref: "*"body: "*"}")
+			# close_linked_pr reads state, head, base and body from ONE
+			# pulls/<n> request (§15). Head defaults to a branch that is
+			# NOT the issue's implementation branch so a test must state
+			# intent (PR_HEAD_REF_MAP / PR_BODY_MAP) for a PR to count as
+			# the issue's own — mirroring production, where a PR that only
+			# cross-references the issue is left open.
+			jq -cn \
+				--arg state "${PR_STATE_MAP[${path}]:-open}" \
+				--arg head_ref "${PR_HEAD_REF_MAP[${path}]:-feature/unrelated}" \
+				--arg base_ref "${PR_BASE_REF_MAP[${path}]:-main}" \
+				--arg body "${PR_BODY_MAP[${path}]:-}" \
+				'{state: $state, head_ref: $head_ref, base_ref: $base_ref, body: $body}'
+			;;
 		".body // \"\""|".body // \"\"")
 			printf '%s' "${ISSUE_BODY_MAP[${path}]:-}"
 			;;
@@ -184,6 +198,8 @@ def _bootstrap(tmp_dir: Path) -> Path:
 	echo                                       >> helpers.sh
 	extract_fn '_find_all_linked_prs'          >> helpers.sh
 	echo                                       >> helpers.sh
+	extract_fn '_linked_pr_is_issue_implementation' >> helpers.sh
+	echo                                       >> helpers.sh
 	extract_fn 'close_linked_pr'               >> helpers.sh
 	echo                                       >> helpers.sh
 	extract_fn 'surface_reissue_closed_without_pr' >> helpers.sh
@@ -200,6 +216,9 @@ def _invoke(body: str, cwd: Path, extra_env: dict[str, str] | None = None) -> su
 	set -uo pipefail
 	declare -gA PR_STATE_MAP=()
 	declare -gA ISSUE_BODY_MAP=()
+	declare -gA PR_HEAD_REF_MAP=()
+	declare -gA PR_BASE_REF_MAP=()
+	declare -gA PR_BODY_MAP=()
 	{_STUBS}
 	source helpers.sh
 	{body}
@@ -230,6 +249,7 @@ def test_close_linked_pr_finds_pr_via_branch_name_when_timeline_empty():
 			export GH_PR_LIST_HEAD_JSON='[{{"number":2568}}]'
 			export GH_PR_LIST_SEARCH_JSON='[]'
 			PR_STATE_MAP["repos/owner/repo/pulls/2568"]="open"
+			PR_HEAD_REF_MAP["repos/owner/repo/pulls/2568"]="ai/issue-2552"
 			close_linked_pr 2552 "stall recovery test"
 			""",
 			cwd=tmp,
@@ -258,6 +278,8 @@ def test_close_linked_pr_finds_pr_via_body_parse_when_branch_empty():
 			export GH_PR_LIST_SEARCH_JSON='[{{"number":2580,"body":"Closes #2552"}},{{"number":2581,"body":"mentions #25528 only"}}]'
 			PR_STATE_MAP["repos/owner/repo/pulls/2580"]="open"
 			PR_STATE_MAP["repos/owner/repo/pulls/2581"]="open"
+			PR_BODY_MAP["repos/owner/repo/pulls/2580"]="Closes #2552"
+			PR_BODY_MAP["repos/owner/repo/pulls/2581"]="mentions #25528 only"
 			close_linked_pr 2552 "stall recovery test"
 			""",
 			cwd=tmp,
@@ -285,6 +307,8 @@ def test_close_linked_pr_iterates_multiple_prs():
 			export GH_PR_LIST_SEARCH_JSON='[]'
 			PR_STATE_MAP["repos/owner/repo/pulls/3001"]="open"
 			PR_STATE_MAP["repos/owner/repo/pulls/3002"]="open"
+			PR_HEAD_REF_MAP["repos/owner/repo/pulls/3001"]="ai/issue-2552"
+			PR_BODY_MAP["repos/owner/repo/pulls/3002"]="Fixes #2552"
 			close_linked_pr 2552 "stall recovery test"
 			""",
 			cwd=tmp,
@@ -310,6 +334,7 @@ def test_close_linked_pr_dedupes_across_lookup_sources():
 			export GH_PR_LIST_HEAD_JSON='[{{"number":2568}}]'
 			export GH_PR_LIST_SEARCH_JSON='[{{"number":2568,"body":"Closes #2552"}}]'
 			PR_STATE_MAP["repos/owner/repo/pulls/2568"]="open"
+			PR_HEAD_REF_MAP["repos/owner/repo/pulls/2568"]="ai/issue-2552"
 			close_linked_pr 2552 "stall recovery test"
 			""",
 			cwd=tmp,
@@ -317,6 +342,45 @@ def test_close_linked_pr_dedupes_across_lookup_sources():
 		assert r.returncode == 0, r.stderr
 		closed = [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
 		assert closed == ["2568"], closed
+
+
+def test_close_linked_pr_skips_cross_reference_only_pr():
+	"""Regression for PR #3991 / issue #3990: a PR that only
+	cross-references the stalled issue (``Refs #<n>`` in its body, head
+	on an unrelated ``claude/…`` branch targeting ``main``) is surfaced by
+	the timeline lookup but is NOT the issue's implementation PR. It must
+	be left open and logged as cross-reference only, while a sibling on
+	``ai/issue-<n>`` in the same candidate set is still closed."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		log = tmp / "closed.log"
+		log.write_text("", encoding="utf-8")
+		r = _invoke(
+			body=f"""
+			export GH_PR_CLOSE_LOG="{log}"
+			CROSS_REF_PR_NUMBERS=$'3991\n3992'
+			export GH_PR_LIST_HEAD_JSON='[]'
+			export GH_PR_LIST_SEARCH_JSON='[]'
+			PR_STATE_MAP["repos/owner/repo/pulls/3991"]="open"
+			PR_HEAD_REF_MAP["repos/owner/repo/pulls/3991"]="claude/deeps-notifier-bot-workflow"
+			PR_BASE_REF_MAP["repos/owner/repo/pulls/3991"]="main"
+			PR_BODY_MAP["repos/owner/repo/pulls/3991"]="Tooling fix for the stall. Refs #2552"
+			PR_STATE_MAP["repos/owner/repo/pulls/3992"]="open"
+			PR_HEAD_REF_MAP["repos/owner/repo/pulls/3992"]="ai/issue-2552"
+			close_linked_pr 2552 "stall recovery test"
+			""",
+			cwd=tmp,
+		)
+		assert r.returncode == 0, r.stderr
+		closed = [ln for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+		assert closed == ["3992"], (closed, r.stdout)
+		assert (
+			"close_linked_pr: skipping PR #3991 for issue #2552 (cross-reference only; "
+			"head=claude/deeps-notifier-bot-workflow does not match the issue's implementation branch pattern "
+			"and the body carries no close keyword; base=main is shown for context" in r.stdout
+		), r.stdout
+		assert "scanned=2 closed=1" in r.stdout
 
 
 def test_close_linked_pr_skips_already_closed_pr():

@@ -16681,6 +16681,127 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 	assert '"event":"slowest"' not in pass_output.getvalue()
 
 
+def _extract_bash_function(script: str, signature: str) -> str:
+	"""Return the source of one top-level bash function, from its
+	``signature`` line through the first line that is exactly ``}``."""
+	start = script.index(signature)
+	end = script.index("\n}\n", start) + 3
+	return script[start:end]
+
+
+def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
+	"""Regression for PR #3991 / issue #3990: stall recovery closed a
+	green, fully reviewed tooling fix on ``claude/…`` targeting ``main``
+	purely because its body said ``Refs #3990`` (a timeline
+	cross-reference).  ``close_linked_pr`` must now skip such
+	cross-reference-only PRs, still close the ``ai/issue-<n>`` PR and a
+	PR whose body carries a close keyword, keep skipping non-open PRs,
+	and treat an API failure as unknown state — all with exactly one
+	``pulls/<n>`` request per candidate."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helper = _extract_bash_function(script, "_linked_pr_is_issue_implementation()\n{")
+	closer = _extract_bash_function(script, "close_linked_pr() {")
+	with tempfile.TemporaryDirectory() as tmp:
+		closed_log = Path(tmp) / "closed.txt"
+		api_log = Path(tmp) / "api.txt"
+		harness = Path(tmp) / "harness.sh"
+		harness.write_text(
+			"set -euo pipefail\n"
+			"GITHUB_REPOSITORY=o/r\n"
+			f"CLOSED_LOG={str(closed_log)!r}\n"
+			f"API_LOG={str(api_log)!r}\n"
+			'gh_retry() { "$@"; }\n'
+			"_safe_gh_jq() {\n"
+			'  echo "$1" >> "$API_LOG"\n'
+			'  case "${1##*/}" in\n'
+			"    101) printf '%s' '{\"state\":\"open\",\"head_ref\":\"claude/some-fix\",\"base_ref\":\"main\",\"body\":\"Tooling fix.\\n\\nRefs #77\"}' ;;\n"
+			"    102) printf '%s' '{\"state\":\"open\",\"head_ref\":\"ai/issue-77\",\"base_ref\":\"orchestrator/project-9\",\"body\":\"impl\"}' ;;\n"
+			"    103) printf '%s' '{\"state\":\"open\",\"head_ref\":\"feature/x\",\"base_ref\":\"orchestrator/project-9\",\"body\":\"Closes #77\"}' ;;\n"
+			"    104) printf '%s' '{\"state\":\"closed\",\"head_ref\":\"ai/issue-77\",\"base_ref\":\"main\",\"body\":\"\"}' ;;\n"
+			"    105) return 1 ;;\n"
+			"  esac\n"
+			"}\n"
+			'gh() { if [ "$1" = pr ] && [ "$2" = close ]; then echo "$3" >> "$CLOSED_LOG"; return 0; fi; return 1; }\n'
+			"_find_all_linked_prs() { printf '101\\n102\\n103\\n104\\n105\\n'; }\n"
+			+ helper + "\n" + closer + "\n"
+			'close_linked_pr 77 "why"\n',
+			encoding="utf-8",
+		)
+		result = subprocess.run(
+			["bash", str(harness)],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		out = result.stdout
+		closed = closed_log.read_text(encoding="utf-8").split() if closed_log.exists() else []
+		assert closed == ["102", "103"], (closed, out)
+		assert (
+			"close_linked_pr: skipping PR #101 for issue #77 (cross-reference only; "
+			"head=claude/some-fix does not match the issue's implementation branch pattern "
+			"and the body carries no close keyword; base=main is shown for context" in out
+		), out
+		assert "close_linked_pr: closing linked PR #102 for issue #77 (state=open)." in out
+		assert "close_linked_pr: closing linked PR #103 for issue #77 (state=open)." in out
+		assert "close_linked_pr: skipping PR #104 for issue #77 (state=closed)." in out
+		assert "close_linked_pr: skipping PR #105 for issue #77 (state=unknown)." in out
+		assert "close_linked_pr: issue=#77 scanned=5 closed=2" in out
+		# §15: exactly one pulls/<n> request per candidate, none extra.
+		api_calls = api_log.read_text(encoding="utf-8").split()
+		assert sorted(api_calls) == sorted(f"repos/o/r/pulls/{n}" for n in (101, 102, 103, 104, 105)), api_calls
+
+
+def test_linked_pr_is_issue_implementation_predicate_contract():
+	"""The predicate accepts the orchestrator branch convention and a
+	body close keyword for the exact issue number, and rejects
+	cross-reference-only bodies, neighbouring issue numbers, and
+	non-numeric issue ids.  It must issue no ``gh`` calls."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helper = _extract_bash_function(script, "_linked_pr_is_issue_implementation()\n{")
+	cases = [
+		("77", "ai/issue-77", "", 0),
+		("77", "ai/77", "", 0),
+		("77", "ai-implement-77", "", 0),
+		("77", "ai-77", "", 0),
+		("77", "refs/heads/ai/issue-77", "", 0),
+		("77", "ai/issue-770", "", 1),
+		("77", "ai/issue-77a", "", 1),
+		("77", "ai/issue-77_x", "", 1),
+		("77", "ai/issue-77-retry", "", 0),
+		("77", "claude/some-fix", "Refs #77", 1),
+		("77", "claude/some-fix", "prefixes #77", 1),
+		("77", "claude/some-fix", "Closes #77", 0),
+		("77", "claude/some-fix", "fixes: #77 and more", 0),
+		("77", "claude/some-fix", "Resolved #775", 1),
+		("77", "claude/some-fix", "closes #7", 1),
+		("77", "claude/some-fix", "Closes #77a", 1),
+		("77", "claude/some-fix", "Closes #77_x", 1),
+		("77", "claude/some-fix", "Closes #77.", 0),
+		("77", "claude/some-fix", "Closes #77)", 0),
+		("abc", "ai/issue-abc", "Closes #abc", 1),
+	]
+	with tempfile.TemporaryDirectory() as tmp:
+		harness = Path(tmp) / "harness.sh"
+		lines = [
+			"set -uo pipefail\n",
+			'gh() { echo "UNEXPECTED gh $*" >&2; exit 99; }\n',
+			helper,
+			"\n",
+		]
+		for issue, head, body, expected in cases:
+			lines.append(
+				f'if _linked_pr_is_issue_implementation {issue!r} {head!r} {body!r}; then rc=0; else rc=$?; fi; '
+				f'echo "{issue}|{head}|{body}|$rc"\n'
+			)
+		harness.write_text("".join(lines), encoding="utf-8")
+		result = subprocess.run(["bash", str(harness)], capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stderr
+		got = {line.rsplit("|", 1)[0]: int(line.rsplit("|", 1)[1]) for line in result.stdout.splitlines() if line}
+		for issue, head, body, expected in cases:
+			assert got[f"{issue}|{head}|{body}"] == expected, (issue, head, body, got)
+
+
 def main() -> int:
 	# Force line-buffered stdout so PASS/FAIL messages surface to CI logs as
 	# each test completes, instead of sitting in Python's default block buffer
@@ -16707,6 +16828,76 @@ def main() -> int:
 	else:
 		test_funcs = list(tests_by_name.values())
 	return _run_selected_tests(test_funcs)
+
+
+def test_reset_implementing_to_awaiting_approval_for_retrigger_contract():
+	"""The shared stall-recovery label swap issues exactly one ``gh issue
+	edit`` moving ``ai:implementing`` back to ``ai:awaiting-approval``,
+	returns 0 on success, and on failure warns and returns 1 without
+	aborting the caller (which still posts ``/approved``)."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helper = _extract_bash_function(script, "_reset_implementing_to_awaiting_approval_for_retrigger()\n{")
+	with tempfile.TemporaryDirectory() as tmp:
+		gh_log = Path(tmp) / "gh.txt"
+		harness = Path(tmp) / "harness.sh"
+		harness.write_text(
+			"set -euo pipefail\n"
+			"GITHUB_REPOSITORY=o/r\n"
+			f"GH_LOG={str(gh_log)!r}\n"
+			'gh_retry() { "$@"; }\n'
+			'gh() { printf \'%s\\n\' "$*" >> "$GH_LOG"; return "${GH_RC:-0}"; }\n'
+			+ helper + "\n"
+			"rc=0\n"
+			"_reset_implementing_to_awaiting_approval_for_retrigger 77 || rc=$?\n"
+			'echo "rc=${rc}"\n',
+			encoding="utf-8",
+		)
+		expected_call = "issue edit 77 --repo o/r --remove-label ai:implementing --add-label ai:awaiting-approval"
+		for gh_rc, want_rc in ((0, 0), (1, 1)):
+			if gh_log.exists():
+				gh_log.unlink()
+			result = subprocess.run(
+				["bash", str(harness)],
+				capture_output=True,
+				text=True,
+				check=False,
+				env={**os.environ, "GH_RC": str(gh_rc)},
+			)
+			assert result.returncode == 0, result.stderr
+			assert f"rc={want_rc}" in result.stdout, result.stdout
+			# §15: exactly one API call regardless of outcome.
+			assert gh_log.read_text(encoding="utf-8").splitlines() == [expected_call]
+			warning = "::warning::Failed to swap ai:implementing"
+			if want_rc:
+				assert warning in result.stdout, result.stdout
+				assert "/approved retrigger may no-op" in result.stdout, result.stdout
+			else:
+				assert warning not in result.stdout, result.stdout
+
+
+def test_stall_recovery_retrigger_implement_arms_swap_label_before_posting_approved():
+	"""Regression for issues #3990 / #3993: the standalone
+	``retrigger_implement`` arm posted ``/approved`` while the issue still
+	carried ``ai:implementing``, so ``implement.yml``'s precheck skipped
+	with ``reason=already_implementing`` and the re-trigger was a no-op.
+	Both the managed and the standalone arm must call the shared swap
+	helper before posting the comment."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	swap_call = '_reset_implementing_to_awaiting_approval_for_retrigger "${issue_num}" || true'
+	for arm_anchor in (
+		"      local _retrigger_implement_rc=0\n",  # managed: execute_stall_recovery_action
+		"        local _std_retrigger_implement_rc=0\n",  # standalone: run_standalone_stall_recovery
+	):
+		assert script.count(arm_anchor) == 1, arm_anchor
+		anchor_at = script.index(arm_anchor)
+		arm_at = script.rindex("retrigger_implement)", 0, anchor_at)
+		arm_prefix = script[arm_at:anchor_at]
+		assert swap_call in arm_prefix, arm_prefix
+		# The /approved comment is posted (gh api … comments with a heredoc
+		# body) only after the rc variable is declared, so nothing in the
+		# prefix may already post it.
+		assert "gh api" not in arm_prefix, arm_prefix
+		assert "\n/approved\n" not in arm_prefix, arm_prefix
 
 
 if __name__ == "__main__":
