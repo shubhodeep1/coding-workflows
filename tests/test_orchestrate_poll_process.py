@@ -12816,6 +12816,34 @@ def test_authenticated_user_lookup_failure_skips_all_state_driven_mutations():
 	assert not any("/git/refs" in path or "/compare/" in path for path in result["api_calls"])
 
 
+def test_authenticated_user_lookup_failure_skips_standalone_recovery_for_managed_children():
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:awaiting-approval",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=_base_state(status="in_progress"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval"]},
+		issue_comments={10: [standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+		fail_authenticated_user_lookup=True,
+	)
+	combined_output = result["stdout"] + result["stderr"]
+	managed_issue_comments = [comment.get("body", "") for comment in result["issues"]["10"]["comments"]]
+	assert "skipping standalone stall recovery this cycle" in combined_output
+	assert not any("/approved" in body for body in managed_issue_comments)
+	assert result["issues"]["10"]["labels"] == ["ai:awaiting-approval"]
+	assert len(managed_issue_comments) == 1
+
+
 def test_authenticated_user_identity_lookup_is_cached_across_extractors():
 	result = _run_poller(
 		state=_base_state(status="in_progress"),

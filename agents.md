@@ -419,8 +419,9 @@ dashboard without producing a fresh comment per tick.
 State-marker authority is restricted to comments whose positive numeric
 `.user.id` exactly matches the account ID authenticated by the poller's
 `GH_TOKEN`. The account lookup is cached for the process lifetime; lookup or
-validation failure rejects all state and pauses that tracking issue for the
-poll cycle. V2 chunks are filtered before chain assembly, and any non-empty
+validation failure rejects all state and pauses state-driven work, including
+standalone stall recovery, for that poll cycle. V2 chunks are filtered before
+chain assembly, and any non-empty
 state `integration_branch` must equal `orchestrator/project-<tracking issue>`.
 Unauthorized markers are ignored as state authority and cannot veto
 reconstruction from trusted project inputs; authenticated cross-project branch
