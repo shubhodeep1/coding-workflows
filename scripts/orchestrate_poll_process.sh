@@ -2968,10 +2968,10 @@ _linked_pr_is_issue_implementation()
 	if printf '%s\n' "${head_ref}" | grep -Eq "(^|/)(ai/(issue-)?|ai-(implement-)?)${issue_num}([^0-9A-Za-z_]|$)"; then
 		return 0
 	fi
-	# Trailing boundary is a non-word character or end of line, matching the
-	# `\b` the jq filter in _linked_prs_by_body_reference uses, so `#77a`
-	# does not count as a close keyword for issue 77.
-	if printf '%s\n' "${body}" | grep -Eiq "(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#${issue_num}([^0-9A-Za-z_]|$)"; then
+	# Keyword substrings inside larger words are rejected, and the trailing
+	# boundary is a non-word character or end of line, so neither
+	# `prefixes #77` nor `Closes #77a` targets issue 77.
+	if printf '%s\n' "${body}" | grep -Eiq "(^|[^[:alnum:]_-])(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#${issue_num}([^0-9A-Za-z_]|$)"; then
 		return 0
 	fi
 	return 1
