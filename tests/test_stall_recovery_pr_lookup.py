@@ -377,7 +377,8 @@ def test_close_linked_pr_skips_cross_reference_only_pr():
 		assert closed == ["3992"], (closed, r.stdout)
 		assert (
 			"close_linked_pr: skipping PR #3991 for issue #2552 (cross-reference only; "
-			"head=claude/deeps-notifier-bot-workflow base=main does not match" in r.stdout
+			"head=claude/deeps-notifier-bot-workflow does not match the issue's implementation branch pattern "
+			"and the body carries no close keyword; base=main is shown for context" in r.stdout
 		), r.stdout
 		assert "scanned=2 closed=1" in r.stdout
 

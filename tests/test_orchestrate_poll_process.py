@@ -16739,7 +16739,8 @@ def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 		assert closed == ["102", "103"], (closed, out)
 		assert (
 			"close_linked_pr: skipping PR #101 for issue #77 (cross-reference only; "
-			"head=claude/some-fix base=main does not match" in out
+			"head=claude/some-fix does not match the issue's implementation branch pattern "
+			"and the body carries no close keyword; base=main is shown for context" in out
 		), out
 		assert "close_linked_pr: closing linked PR #102 for issue #77 (state=open)." in out
 		assert "close_linked_pr: closing linked PR #103 for issue #77 (state=open)." in out

@@ -10034,7 +10034,7 @@ close_linked_pr() {
     # _linked_pr_is_issue_implementation) is left open and logged so the
     # skip leaves the same trail the other outcomes do.
     if ! _linked_pr_is_issue_implementation "${issue_num}" "${pr_head_ref}" "${pr_body}"; then
-      echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (cross-reference only; head=${pr_head_ref:-?} base=${pr_base_ref:-?} does not match the issue's implementation branch and the body carries no close keyword)."
+      echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (cross-reference only; head=${pr_head_ref:-?} does not match the issue's implementation branch pattern and the body carries no close keyword; base=${pr_base_ref:-?} is shown for context and is not evaluated)."
       continue
     fi
     echo "  close_linked_pr: closing linked PR #${pr_num} for issue #${issue_num} (state=open)."

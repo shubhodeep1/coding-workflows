@@ -1683,7 +1683,7 @@ Results are deduped (`sort -u`) so a PR surfaced by multiple strategies is only 
 
 - `close_linked_pr: closing linked PR #<pr> for issue #<n> (state=open).`
 - `close_linked_pr: skipping PR #<pr> for issue #<n> (state=closed|merged|unknown).`
-- `close_linked_pr: skipping PR #<pr> for issue #<n> (cross-reference only; head=<branch> base=<branch> does not match the issue's implementation branch and the body carries no close keyword).`
+- `close_linked_pr: skipping PR #<pr> for issue #<n> (cross-reference only; head=<branch> does not match the issue's implementation branch pattern and the body carries no close keyword; base=<branch> is shown for context and is not evaluated).`
 - `close_linked_pr: issue=#<n> scanned=<k> closed=<k>`
 - `close_linked_pr: no linked PRs found for issue #<n> (timeline/branch/body lookups all empty).`
 
