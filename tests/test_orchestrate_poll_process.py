@@ -820,6 +820,8 @@ def _run_poller(
 	security_pass_managed_issue_pages_raw: str | None = None,
 	sync_contract_list_union_fixture: bool = False,
 	sync_contract_list_union_timeout: bool = False,
+	authenticated_user_id: int = 24680,
+	fail_authenticated_user_lookup: bool = False,
 	env_overrides: dict[str, str] | None = None,
 ) -> dict:
 	tracking_num = 192
@@ -1055,8 +1057,10 @@ def _run_poller(
 			user = entry.get("user")
 			if isinstance(user, dict):
 				user_entry = dict(user)
+			elif user:
+				user_entry = {"login": str(user)}
 			else:
-				user_entry = {"login": str(user) if user else "octocat"}
+				user_entry = {"login": "poller-writer", "id": authenticated_user_id}
 			user_entry.setdefault("login", "octocat")
 			entry["user"] = user_entry
 			entry.setdefault(
@@ -1069,7 +1073,7 @@ def _run_poller(
 			str(tracking_num): {
 				"labels": list(tracking_labels),
 				"comments": [
-					_comment_entry({"body": _state_comment(state), "user": {"login": "github-actions[bot]"}}, 1, tracking_num),
+					_comment_entry({"body": _state_comment(state), "user": {"login": "poller-writer", "id": authenticated_user_id}}, 1, tracking_num),
 					*[
 						_comment_entry(comment_body, idx + 2, tracking_num)
 						for idx, comment_body in enumerate(tracking_comments)
@@ -1184,6 +1188,9 @@ def _run_poller(
 			"mock_pr_ready_exit_code": mock_pr_ready_exit_code,
 			"fail_security_pass_managed_issue_lookup": bool(fail_security_pass_managed_issue_lookup),
 			"security_pass_managed_issue_pages_raw": security_pass_managed_issue_pages_raw,
+			"authenticated_user": {"id": authenticated_user_id, "login": "poller-writer"},
+			"authenticated_user_lookup_calls": 0,
+			"fail_authenticated_user_lookup": bool(fail_authenticated_user_lookup),
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -1742,6 +1749,15 @@ if args[0] == 'api':
 		sys.exit(0)
 	store.setdefault('api_calls', []).append(path)
 
+	if path == 'user' and method == 'GET':
+		store['authenticated_user_lookup_calls'] = int(store.get('authenticated_user_lookup_calls', 0)) + 1
+		save()
+		if store.get('fail_authenticated_user_lookup'):
+			print('forced authenticated-user lookup failure', file=sys.stderr)
+			sys.exit(1)
+		print(json.dumps(store.get('authenticated_user', {})))
+		sys.exit(0)
+
 	if path == 'graphql':
 		mode = store.get('graphql_mode', 'full')
 		store['graphql_calls'] = int(store.get('graphql_calls', 0)) + 1
@@ -1989,7 +2005,7 @@ if args[0] == 'api':
 			'id': cid,
 			'body': body,
 			'created_at': f'2026-01-01T00:00:{cid % 60:02d}Z',
-			'user': {'login': 'github-actions[bot]'},
+			'user': dict(store.get('authenticated_user', {})),
 			'html_url': f'https://github.com/owner/repo/issues/{m.group(1)}#issuecomment-{cid}',
 		})
 		save()
@@ -12675,9 +12691,9 @@ def test_unauthorized_v2_chunk_cannot_complete_trusted_state_chain():
 	assert len(forged_chunks) > 1
 	for chunk_index, forged_chunk in enumerate(forged_chunks):
 		if chunk_index == 0:
-			forged_chunk.update({"user": {"login": "outsider"}, "author_association": "NONE"})
+			forged_chunk.update({"user": {"id": 97531, "login": "outsider"}, "author_association": "NONE"})
 		else:
-			forged_chunk.update({"user": {"login": "github-actions[bot]"}})
+			forged_chunk.update({"user": {"id": 24680, "login": "poller-writer"}})
 	result = _run_poller(
 		state=trusted_state,
 		enable_validation="false",
@@ -12690,30 +12706,104 @@ def test_unauthorized_v2_chunk_cannot_complete_trusted_state_chain():
 	assert all(call["base"] == "orchestrator/project-192" for call in result["merge_calls"])
 
 
-@pytest.mark.parametrize(
-	"trusted_identity",
-	[
-		{"user": {"login": "github-actions[bot]"}},
-		{"user": {"login": "maintainer"}, "author_association": "OWNER"},
-		{"user": {"login": "maintainer"}, "author_association": "MEMBER"},
-		{"user": {"login": "maintainer"}, "author_association": "COLLABORATOR"},
-	],
-)
-def test_trusted_state_comment_authors_remain_accepted(trusted_identity: dict):
-	seed_state = _base_state(status="in_progress")
+def test_bot_suffix_and_repository_association_do_not_authorize_state():
+	for forged_identity in [
+		{"user": {"id": 97531, "login": "unrelated-app[bot]"}},
+		{"user": {"id": 97531, "login": "maintainer"}, "author_association": "OWNER"},
+		{"user": {"id": 97531, "login": "maintainer"}, "author_association": "MEMBER"},
+		{"user": {"id": 97531, "login": "maintainer"}, "author_association": "COLLABORATOR"},
+	]:
+		trusted_state = _base_state(status="in_progress")
+		trusted_state["integration_branch"] = "orchestrator/project-192"
+		forged_state = dict(trusted_state)
+		forged_state["integration_branch"] = "orchestrator/project-999"
+		result = _run_poller(
+			state=trusted_state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			tracking_comments=[{"body": _state_comment(forged_state), **forged_identity}],
+			issue_labels={10: ["ai:implementing"]},
+			existing_branches=["main", "orchestrator/project-192", "orchestrator/project-999"],
+		)
+		assert result["merge_calls"]
+		assert result["merge_calls"][0]["base"] == "orchestrator/project-192"
+		assert not any("orchestrator/project-999" in str(call) for call in result["api_calls"])
+
+
+def test_exact_authenticated_account_id_authorizes_state():
+	for trusted_identity in [
+		{"user": {"id": 24680, "login": "plain-user"}, "author_association": "NONE"},
+		{"user": {"id": 24680, "login": "renamed-app[bot]"}, "author_association": "COLLABORATOR"},
+	]:
+		seed_state = _base_state(status="in_progress")
+		trusted_state = _base_state(status="in_progress")
+		trusted_state["integration_branch"] = "orchestrator/project-192"
+		result = _run_poller(
+			state=seed_state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			tracking_comments=[{"body": _state_comment(trusted_state), **trusted_identity}],
+			issue_labels={10: ["ai:implementing"]},
+			existing_branches=["main", "orchestrator/project-192"],
+		)
+		assert result["merge_calls"]
+		assert result["merge_calls"][0]["base"] == "orchestrator/project-192"
+
+
+def test_state_comment_without_numeric_user_id_is_rejected():
 	trusted_state = _base_state(status="in_progress")
 	trusted_state["integration_branch"] = "orchestrator/project-192"
-	trusted_comment = {"body": _state_comment(trusted_state), **trusted_identity}
+	forged_state = dict(trusted_state)
+	forged_state["integration_branch"] = "orchestrator/project-999"
 	result = _run_poller(
-		state=seed_state,
+		state=trusted_state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[trusted_comment],
+		tracking_comments=[{
+			"body": _state_comment(forged_state),
+			"user": {"login": "poller-writer"},
+			"author_association": "OWNER",
+		}],
 		issue_labels={10: ["ai:implementing"]},
-		existing_branches=["main", "orchestrator/project-192"],
+		existing_branches=["main", "orchestrator/project-192", "orchestrator/project-999"],
 	)
 	assert result["merge_calls"]
-	assert result["merge_calls"][0]["base"] == "orchestrator/project-192"
+	assert all(call["base"] == "orchestrator/project-192" for call in result["merge_calls"])
+	assert not any("orchestrator/project-999" in str(call) for call in result["api_calls"])
+
+
+def test_authenticated_user_lookup_failure_skips_all_state_driven_mutations():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		fail_authenticated_user_lookup=True,
+	)
+	combined_output = result["stdout"] + result["stderr"]
+	assert "State-comment authentication failed for tracking issue #192" in combined_output
+	assert "State reconstructed and posted" not in combined_output
+	assert result["authenticated_user_lookup_calls"] == 1
+	assert result["merge_calls"] == []
+	assert result.get("created_issues", []) == []
+	assert result["state_on_disk"] is None
+	assert len(result["issues"]["192"]["comments"]) == 1
+	assert not any("/git/refs" in path or "/compare/" in path for path in result["api_calls"])
+
+
+def test_authenticated_user_identity_lookup_is_cached_across_extractors():
+	result = _run_poller(
+		state=_base_state(status="in_progress"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+	)
+	tracking_comments_path = "repos/owner/repo/issues/192/comments?per_page=100"
+	assert result["api_calls"].count(tracking_comments_path) >= 2
+	assert result["authenticated_user_lookup_calls"] == 1
 
 
 def test_unauthenticated_state_without_trusted_fallback_allows_safe_reconstruction():

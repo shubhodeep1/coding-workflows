@@ -2332,6 +2332,40 @@ is_valid_orchestrator_state_json() {
   ' >/dev/null 2>&1
 }
 
+ORCHESTRATOR_STATE_AUTHENTICATED_USER_ID=""
+ORCHESTRATOR_STATE_AUTHENTICATED_USER_LOOKUP_STATUS="unresolved"
+
+resolve_orchestrator_state_authenticated_user_id() {
+	if [ "${ORCHESTRATOR_STATE_AUTHENTICATED_USER_LOOKUP_STATUS}" = "resolved" ]; then
+		return 0
+	fi
+	if [ "${ORCHESTRATOR_STATE_AUTHENTICATED_USER_LOOKUP_STATUS}" = "failed" ]; then
+		return 1
+	fi
+
+	# Issue-comment responses identify each comment author, but they do not
+	# establish which account GH_TOKEN authenticates. No existing request in
+	# this path provides that principal, so one process-cached GET /user call is
+	# required before any comment can be trusted as canonical state.
+	local authenticated_user_json authenticated_user_id
+	ORCHESTRATOR_STATE_AUTHENTICATED_USER_LOOKUP_STATUS="failed"
+	if ! authenticated_user_json="$(gh_retry gh api user 2>/dev/null)"; then
+		return 1
+	fi
+	if ! authenticated_user_id="$(printf '%s' "${authenticated_user_json}" | jq -er '
+		if type == "object" and (.id | type == "number") and (.id > 0) and ((.id | floor) == .id)
+		then (.id | tostring)
+		else empty
+		end
+	' 2>/dev/null)" || ! [[ "${authenticated_user_id}" =~ ^[1-9][0-9]*$ ]]; then
+		return 1
+	fi
+
+	ORCHESTRATOR_STATE_AUTHENTICATED_USER_ID="${authenticated_user_id}"
+	ORCHESTRATOR_STATE_AUTHENTICATED_USER_LOOKUP_STATUS="resolved"
+	return 0
+}
+
 extract_latest_valid_orchestrator_state() {
   local comments_json="$1"
   local expected_tracking_num="${2:-${TRACKING_NUM:-}}"
@@ -2354,7 +2388,13 @@ extract_latest_valid_orchestrator_state() {
     expected_integration_branch="orchestrator/project-${expected_tracking_num}"
   fi
 
-  EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT="$(printf '%s' "${comments_json}" | jq -r '
+  if ! resolve_orchestrator_state_authenticated_user_id; then
+    EXTRACTED_STATE_AUTH_FILTER_FAILED="true"
+    echo "::warning::Unable to resolve the authenticated account for orchestrator state comments on issue #${expected_tracking_num:-?}; rejecting state input." >&2
+    return 1
+  fi
+
+  EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT="$(printf '%s' "${comments_json}" | jq -r --argjson trusted_id "${ORCHESTRATOR_STATE_AUTHENTICATED_USER_ID}" '
     [ .[]
       | select(
           (
@@ -2362,9 +2402,11 @@ extract_latest_valid_orchestrator_state() {
             ((.body // "") | test("(?ms)^<!-- ORCHESTRATOR_STATE_V2 part=[0-9]+/[0-9]+ manifest=[0-9a-f]{64} -->$.*^ORCHESTRATOR_STATE_V2 -->$"))
           ) and
           (
-            (
-              (.user.login // "" | test("\\[bot\\]$")) or
-              ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+            ((.user.id // null) as $comment_user_id
+              | (($comment_user_id | type) == "number") and
+                ($comment_user_id > 0) and
+                (($comment_user_id | floor) == $comment_user_id) and
+                ($comment_user_id == $trusted_id)
             ) | not
           )
         )
@@ -2375,11 +2417,14 @@ extract_latest_valid_orchestrator_state() {
     echo "::warning::Unable to authenticate orchestrator state comments for issue #${expected_tracking_num:-?}; rejecting state input." >&2
     return 1
   fi
-  if ! trusted_comments_json="$(printf '%s' "${comments_json}" | jq -c '
+  if ! trusted_comments_json="$(printf '%s' "${comments_json}" | jq -c --argjson trusted_id "${ORCHESTRATOR_STATE_AUTHENTICATED_USER_ID}" '
     [ .[]
       | select(
-          (.user.login // "" | test("\\[bot\\]$")) or
-          ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+          (.user.id // null) as $comment_user_id
+          | (($comment_user_id | type) == "number") and
+            ($comment_user_id > 0) and
+            (($comment_user_id | floor) == $comment_user_id) and
+            ($comment_user_id == $trusted_id)
         )
     ]
   ' 2>/dev/null)"; then
