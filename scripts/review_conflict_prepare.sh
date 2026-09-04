@@ -446,11 +446,30 @@ fi
 
 # Pull the orchestrator state comment for this tracking issue so we
 # can render merged sub-issue intent + fingerprints into the prompt.
-# Fail-open: any failure here just leaves the integration variables
-# blank and still renders the integration template (the resolver
-# will see a placeholder note and behave like the generic resolver
-# for those slots).
+# Comment-fetch failures leave the integration variables blank and render the
+# generic placeholder, but authenticated-user resolution and comment-filter
+# parsing fail closed so unverified state never reaches the resolver.
 if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ ^[0-9]+$ ]]; then
+	# The issue and comment requests below identify content owners, not the
+	# account authenticated by GH_TOKEN. No existing request in this script
+	# exposes that principal, so resolve it once before trusting state input.
+	INTEGRATION_STATE_AUTHENTICATED_USER_ID=""
+	_integration_state_authenticated_user_json=""
+	if ! _integration_state_authenticated_user_json="$(gh_retry gh api user 2>/dev/null)"; then
+		echo "::error::Unable to resolve the authenticated account for integration state comments; refusing conflict preparation."
+		exit 1
+	fi
+	if ! INTEGRATION_STATE_AUTHENTICATED_USER_ID="$(printf '%s' "${_integration_state_authenticated_user_json}" | jq -er '
+		if type == "object" and (.id | type == "number") and (.id > 0) and ((.id | floor) == .id)
+		then (.id | tostring)
+		else empty
+		end
+	' 2>/dev/null)" || ! [[ "${INTEGRATION_STATE_AUTHENTICATED_USER_ID}" =~ ^[1-9][0-9]*$ ]]; then
+		echo "::error::Authenticated account metadata is invalid for integration state comments; refusing conflict preparation."
+		exit 1
+	fi
+	unset _integration_state_authenticated_user_json
+
   _ti_json="$(gh_retry gh api -H 'Accept: application/vnd.github+json' \
     "repos/${GITHUB_REPOSITORY}/issues/${INTEGRATION_TRACKING_NUM}" 2>/dev/null || echo '{}')"
   INTEGRATION_TRACKING_TITLE="$(printf '%s' "${_ti_json}" | jq -r '.title // ""' 2>/dev/null || echo "")"
@@ -461,18 +480,26 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
   if gh_retry gh api --paginate \
     "repos/${GITHUB_REPOSITORY}/issues/${INTEGRATION_TRACKING_NUM}/comments?per_page=100" \
     > "${_ti_comments_raw}" 2>/dev/null; then
-    _state_payload="$(jq -s '
+    if ! _state_payload="$(jq -s --argjson trusted_id "${INTEGRATION_STATE_AUTHENTICATED_USER_ID}" '
       ([.[][] | select(
         (
-          ((.user.login // "") | test("\\[bot\\]$")) or
-          ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+          (.user // null) as $comment_user
+          | (if ($comment_user | type) == "object" then ($comment_user.id // null) else null end) as $comment_user_id
+          | (($comment_user_id | type) == "number") and
+            ($comment_user_id > 0) and
+            (($comment_user_id | floor) == $comment_user_id) and
+            ($comment_user_id == $trusted_id)
         ) and ((.body // "") | contains("ORCHESTRATOR_STATE_V1"))
       )] // [])
       | last // {}
       | .body // ""
       | capture("ORCHESTRATOR_STATE_V1\\n(?<json>(.|\\n)*)\\nORCHESTRATOR_STATE_V1")
       | .json // ""
-    ' "${_ti_comments_raw}" 2>/dev/null || echo '""')"
+    ' "${_ti_comments_raw}" 2>/dev/null)"; then
+		echo "::error::Unable to authenticate integration state comments; refusing conflict preparation."
+		rm -f "${_ti_comments_raw}"
+		exit 1
+	fi
     _state_json="$(printf '%s' "${_state_payload}" | jq -r '.' 2>/dev/null || echo "")"
     if [ -n "${_state_json}" ] && ! printf '%s' "${_state_json}" | jq -e --arg expected_branch "${TARGET_BRANCH}" '
       type == "object" and
