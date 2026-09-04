@@ -4861,6 +4861,14 @@ def test_render_prompt_py_is_main_primary_so_validator_fixes_reach_wedged_branch
 	)
 
 
+def test_conflict_prepare_receives_dedicated_state_auth_keyring() -> None:
+	workflow = _workflow_text()
+	assert "ORCHESTRATOR_STATE_AUTH_KEYRING:" in workflow
+	assert "ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}" in workflow
+	prepare = (REPO_ROOT / "scripts" / "review_conflict_prepare.sh").read_text(encoding="utf-8")
+	assert '.state_auth.schema_version == "orchestrator_state_auth.v2"' in prepare
+
+
 def test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets() -> None:
 	stage_helper = _stage_helper_text()
 	assert "validation_history.v1.json" in stage_helper
@@ -6097,6 +6105,7 @@ def main() -> int:
 	test_reviewer_filter_stat_harness_handles_brace_expansion_renames()
 	test_reject_verifier_bootstrap_and_stage_order_contract()
 	test_render_prompt_py_is_main_primary_so_validator_fixes_reach_wedged_branches()
+	test_conflict_prepare_receives_dedicated_state_auth_keyring()
 	test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain()
 	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()

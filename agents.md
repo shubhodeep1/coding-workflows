@@ -416,15 +416,16 @@ two distinct marker-keyed comment families on each tracking issue. Both edit
 in place every poll cycle so the tracking issue stays a live status
 dashboard without producing a fresh comment per tick.
 
-State-marker authority is restricted to the exact numeric producer ID returned
-for the active `GH_TOKEN` and a valid HMAC-SHA-256 `state_auth` envelope bound to
-the repository, tracking issue, canonical integration branch, producer, and a
-monotonic signed generation. Both state readers select the highest generation,
-so reposting an older authentic state cannot supersede newer project state.
-Unsigned legacy state is accepted only by the poller from that exact producer
-and immediately republished as signed V2; the resolver never uses unsigned
-state to expand its file allowlist. Unauthorized markers are ignored and cannot
-veto reconstruction, while invalid signed state pauses processing rather than
+State-marker authority is restricted to the immutable numeric producer ID and
+an `orchestrator_state_auth.v2` HMAC-SHA-256 envelope signed by the dedicated
+`ORCHESTRATOR_STATE_AUTH_KEYRING`. V2 binds repository, tracking issue,
+canonical integration branch, producer ID, key ID, and monotonic generation;
+it does not bind the mutable producer login or derive keys from `GH_TOKEN`.
+The active key signs while retained previous keys verify during rotation. Both
+state readers select the highest generation. V1/GH-token and unsigned
+exact-producer state are poller-only migration inputs and are immediately
+republished as V2; the resolver expands scope only from valid V2 state. Missing
+or invalid keyring/state authentication pauses mutation rather than
 reconstructing over uncertain data.
 
 | Marker | Helper | Purpose |

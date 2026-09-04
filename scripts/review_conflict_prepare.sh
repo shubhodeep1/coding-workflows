@@ -512,7 +512,8 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
         --producer-login "${_state_producer_login}" >/dev/null 2>&1 \
         && _state_verify_exit=0
     fi
-    if [ "${_state_verify_exit}" -eq 0 ]; then
+    if [ "${_state_verify_exit}" -eq 0 ] \
+      && jq -e '.state_auth.schema_version == "orchestrator_state_auth.v2"' "${_state_json_file}" >/dev/null 2>&1; then
       _state_json="$(cat "${_state_json_file}")"
       # Build the merged sub-issues list (id : github_issue : status)
       INTEGRATION_MERGED_SUB_ISSUES_LIST="$(printf '%s' "${_state_json}" | jq -r '

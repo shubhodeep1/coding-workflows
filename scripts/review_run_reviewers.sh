@@ -1810,7 +1810,11 @@ prepare_reviewer_scoped_context() {
       --semble-fallback marker
     )
   fi
-  if ! "${targeted_file_context_args[@]}" || [ ! -s "${REVIEWER_SCOPED_FILES_CONTEXT_FILE}" ]; then
+  if ! "${targeted_file_context_args[@]}"; then
+    write_reviewer_scope_summary "full-diff" "failed to render scoped reviewer file context"
+    return 1
+  fi
+  if [ "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}" != "0" ] && [ ! -s "${REVIEWER_SCOPED_FILES_CONTEXT_FILE}" ]; then
     write_reviewer_scope_summary "full-diff" "failed to render scoped reviewer file context"
     return 1
   fi

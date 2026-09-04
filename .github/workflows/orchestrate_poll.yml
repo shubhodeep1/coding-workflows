@@ -23,6 +23,8 @@ name: AI Orchestrate Poller (Reusable)
         required: true
       OPENROUTER_API_KEY:
         required: true
+      ORCHESTRATOR_STATE_AUTH_KEYRING:
+        required: false
       TG_BOT_SECRET:
         required: false
 
@@ -588,10 +590,14 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
-          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
-          SERVER_HOST="${SERVER_HOST#http://}"
-          SERVER_HOST="${SERVER_HOST%/}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+          git remote set-url origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}.git"
+          trusted_credential_helper='!f() { if [ "$1" = get ] && [ -n "${GH_TOKEN:-}" ]; then printf "%s\n" "username=x-access-token" "password=${GH_TOKEN}"; fi; }; f'
+          git config credential.helper "${trusted_credential_helper}"
+          {
+            echo "GIT_CONFIG_COUNT=1"
+            echo "GIT_CONFIG_KEY_0=credential.helper"
+            echo "GIT_CONFIG_VALUE_0=${trusted_credential_helper}"
+          } >> "$GITHUB_ENV"
 
       - name: setup-uv
         if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
@@ -682,6 +688,7 @@ jobs:
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
@@ -820,6 +827,8 @@ jobs:
       - name: Publish state snapshot branch
         if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' && env.STATE_SNAPSHOT_BRANCH_ENABLED == 'true' }}
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
 
@@ -915,6 +924,8 @@ jobs:
       - name: Record poll run end
         if: always()
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           if [ ! -f scripts/memory_helpers.sh ]; then

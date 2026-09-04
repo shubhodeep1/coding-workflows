@@ -134,6 +134,22 @@ def test_hunk_with_non_list_line_is_rejected(tmp_path: Path) -> None:
 	_assert_ineligible(result, output_path, "hunk_non_list_line")
 
 
+def test_block_scalar_list_shaped_conflict_is_rejected(tmp_path: Path) -> None:
+	base = _contract(["old"]) + "notes: |\n  - original\n"
+	ours = _contract(["old"]) + "notes: |\n  - ours\n"
+	theirs = _contract(["old"]) + "notes: |\n  - theirs\n"
+	result, output_path = _run_helper(tmp_path, base, ours, theirs)
+	_assert_ineligible(result, output_path, "hunk_outside_entrypoints")
+
+
+def test_nested_entrypoint_named_sequence_conflict_is_rejected(tmp_path: Path) -> None:
+	base = _contract(["old"]) + "metadata:\n  read_entrypoints:\n    - original\n"
+	ours = _contract(["old"]) + "metadata:\n  read_entrypoints:\n    - ours\n"
+	theirs = _contract(["old"]) + "metadata:\n  read_entrypoints:\n    - theirs\n"
+	result, output_path = _run_helper(tmp_path, base, ours, theirs)
+	_assert_ineligible(result, output_path, "hunk_outside_entrypoints")
+
+
 def test_one_sided_hunk_is_rejected(tmp_path: Path) -> None:
 	base = _contract(["old"])
 	ours = _contract([])
@@ -259,6 +275,33 @@ def test_duplicate_key_created_in_merged_text_is_rejected(monkeypatch: pytest.Mo
 	with pytest.raises(list_union_helper.IneligibleError, match="duplicate_mapping_key"):
 		list_union_helper._merge(args)
 	assert not Path(args.out).exists()
+
+
+@pytest.mark.parametrize(
+	("safe_prefix", "changed_prefix"),
+	[
+		("metadata: safe\npadding: stable\n", "metadata: changed\npadding: stable\n"),
+		("metadata:\n  flags: [safe]\n", "metadata:\n  flags: [safe, changed]\n"),
+		("metadata: {owner: safe}\npadding: stable\n", "metadata: {owner: changed}\npadding: stable\n"),
+	],
+)
+def test_non_entrypoint_nested_value_difference_is_rejected(safe_prefix: str, changed_prefix: str) -> None:
+	import yaml
+
+	base = _contract(["old"], prefix=safe_prefix)
+	ours = _contract(["old", "ours"], prefix=safe_prefix)
+	theirs = _contract(["old", "theirs"], prefix=safe_prefix)
+	merged = _contract(["old", "ours", "theirs"], prefix=changed_prefix)
+	with pytest.raises(list_union_helper.IneligibleError, match="list_not_union"):
+		list_union_helper._validate_result(
+			yaml,
+			base,
+			ours,
+			theirs,
+			merged,
+			ours,
+			[(5, 8)],
+		)
 
 
 def test_divergent_replacements_are_not_pure_appends(tmp_path: Path) -> None:
