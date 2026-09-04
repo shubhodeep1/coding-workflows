@@ -2952,9 +2952,9 @@ _find_all_linked_prs()
 #     This is the same family cancel_zombie_runs_for_issue matches, with a
 #     stricter trailing boundary (non-word-or-end rather than
 #     non-digit-or-end, see below); or
-#   - body carries a GitHub auto-close keyword targeting the issue — the
-#     same pattern _linked_prs_by_body_reference matches — i.e. the
-#     author declared the PR closes it.
+#   - body carries a GitHub auto-close keyword targeting the issue.  This
+#     authorization check is stricter than _linked_prs_by_body_reference's
+#     broad candidate filter: it adds leading and ASCII non-word boundaries.
 # Returns 1 otherwise (cross-reference only).
 # The base branch is deliberately not consulted: matching it against the
 # issue's integration branch would need the issue body (one extra API
