@@ -2041,7 +2041,10 @@ jobs:
           if ! [[ "${implement_prompt_assembled_bytes}" =~ ^[0-9]+$ ]]; then
             implement_prompt_assembled_bytes=0
           fi
-          implement_prompt_assembled_chars="$(LC_ALL=C.UTF-8 wc -m < "${CODEX_PROMPT_FILE}" 2>/dev/null | tr -d '[:space:]' || printf '0')"
+          # `|| true` (not `|| printf '0'`) so a failed `wc -m` leaves this
+          # EMPTY and the numeric check below falls back to the byte count;
+          # a forced `0` would pass that check and silently under-report.
+          implement_prompt_assembled_chars="$(LC_ALL=C.UTF-8 wc -m < "${CODEX_PROMPT_FILE}" 2>/dev/null | tr -d '[:space:]' || true)"
           if ! [[ "${implement_prompt_assembled_chars}" =~ ^[0-9]+$ ]]; then
             implement_prompt_assembled_chars="${implement_prompt_assembled_bytes}"
           fi
