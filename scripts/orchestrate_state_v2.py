@@ -11,6 +11,14 @@ poll loop to keep re-doing wave advancement / issue creation each cycle
 
 Subcommands
 -----------
+sign
+    Write a canonical state copy with a context-bound HMAC authentication
+    envelope. The key is read only from ``GH_TOKEN``.
+
+verify
+    Verify the authentication envelope against the expected repository,
+    tracking issue, integration branch, and producer identity.
+
 pack
     Read a state JSON file, split into byte-sized chunks that comfortably
     fit under the comment-body cap, and emit each chunk to a temp file
@@ -66,7 +74,9 @@ import argparse
 import base64
 import binascii
 import hashlib
+import hmac
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -92,11 +102,163 @@ DEFAULT_CHUNK_SIZE = GITHUB_COMMENT_BODY_CAP - DEFAULT_FRAMING_HEADROOM
 # realising the chain is incomplete.
 MAX_CHUNKS_PER_MANIFEST = 1024
 
+STATE_AUTH_SCHEMA_VERSION = "orchestrator_state_auth.v1"
+STATE_AUTH_ALGORITHM = "hmac-sha256"
+STATE_AUTH_DOMAIN = b"coding-workflows/orchestrator-state/v1"
+
 V2_OPENER_RE = re.compile(
 	r"^<!-- ORCHESTRATOR_STATE_V2 part=(\d+)/(\d+) manifest=([0-9a-f]{64}) -->$",
 	re.MULTILINE,
 )
 V2_CLOSER = "ORCHESTRATOR_STATE_V2 -->"
+
+
+def _load_state_document(state_path: Path) -> tuple[dict[str, Any] | None, str | None]:
+	try:
+		state_document = json.loads(state_path.read_text(encoding="utf-8"))
+	except FileNotFoundError:
+		return None, f"state file not found: {state_path}"
+	except UnicodeDecodeError:
+		return None, "state file is not valid UTF-8"
+	except json.JSONDecodeError:
+		return None, "state file is not valid JSON"
+	except OSError:
+		return None, "state file is unreadable"
+	if not isinstance(state_document, dict):
+		return None, "state file is not a JSON object"
+	return state_document, None
+
+
+def _validated_auth_context(args: argparse.Namespace) -> tuple[dict[str, Any] | None, str | None]:
+	repository = args.repository.strip()
+	producer_login = args.producer_login.strip()
+	tracking_issue = args.tracking_issue
+	producer_id = args.producer_id
+	integration_branch = args.integration_branch.strip()
+	repository_segments = repository.split("/")
+	if (
+		len(repository) > 256
+		or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None
+		or any(segment in (".", "..") for segment in repository_segments)
+	):
+		return None, "repository must be an owner/repo slug"
+	if tracking_issue < 1:
+		return None, "tracking issue must be a positive integer"
+	if integration_branch != f"orchestrator/project-{tracking_issue}":
+		return None, "integration branch does not match the tracking issue"
+	if producer_id < 1:
+		return None, "producer id must be a positive integer"
+	if not producer_login or len(producer_login) > 100:
+		return None, "producer login is invalid"
+	return {
+		"schema_version": STATE_AUTH_SCHEMA_VERSION,
+		"algorithm": STATE_AUTH_ALGORITHM,
+		"producer_id": producer_id,
+		"producer_login": producer_login,
+		"repository": repository,
+		"tracking_issue": tracking_issue,
+		"integration_branch": integration_branch,
+	}, None
+
+
+def _state_auth_key() -> tuple[bytes | None, str | None]:
+	raw_key = os.environ.get("GH_TOKEN", "")
+	if not raw_key:
+		return None, "GH_TOKEN is unavailable"
+	return raw_key.encode("utf-8"), None
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+	return json.dumps(
+		value,
+		ensure_ascii=False,
+		sort_keys=True,
+		separators=(",", ":"),
+	).encode("utf-8")
+
+
+def _signature_for_state(
+	state_document: dict[str, Any],
+	auth_context: dict[str, Any],
+	auth_key: bytes,
+) -> str:
+	unsigned_state = dict(state_document)
+	unsigned_state.pop("state_auth", None)
+	message = b"\n".join((
+		STATE_AUTH_DOMAIN,
+		_canonical_json_bytes(auth_context),
+		_canonical_json_bytes(unsigned_state),
+	))
+	return hmac.new(auth_key, message, hashlib.sha256).hexdigest()
+
+
+def cmd_sign(args: argparse.Namespace) -> int:
+	state_document, state_error = _load_state_document(Path(args.state_file))
+	if state_error is not None:
+		print(f"state signing failed: {state_error}", file=sys.stderr)
+		return 2
+	auth_context, context_error = _validated_auth_context(args)
+	if context_error is not None:
+		print(f"state signing failed: {context_error}", file=sys.stderr)
+		return 2
+	auth_key, key_error = _state_auth_key()
+	if key_error is not None:
+		print(f"state signing failed: {key_error}", file=sys.stderr)
+		return 2
+	assert state_document is not None
+	assert auth_context is not None
+	assert auth_key is not None
+	if state_document.get("schema_version") != "orchestrate_state.v1":
+		print("state signing failed: unsupported state schema", file=sys.stderr)
+		return 2
+	if state_document.get("integration_branch", "") not in ("", auth_context["integration_branch"]):
+		print("state signing failed: state integration branch does not match the authentication context", file=sys.stderr)
+		return 2
+	signed_state = dict(state_document)
+	signed_state["state_auth"] = {
+		**auth_context,
+		"signature": _signature_for_state(state_document, auth_context, auth_key),
+	}
+	out_path = Path(args.out_file)
+	try:
+		out_path.write_bytes(_canonical_json_bytes(signed_state) + b"\n")
+		os.chmod(out_path, 0o600)
+	except OSError:
+		print("state signing failed: output file is not writable", file=sys.stderr)
+		return 2
+	return 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+	state_document, state_error = _load_state_document(Path(args.state_file))
+	if state_error is not None:
+		print(f"state verification failed: {state_error}", file=sys.stderr)
+		return 2
+	auth_context, context_error = _validated_auth_context(args)
+	if context_error is not None:
+		print(f"state verification failed: {context_error}", file=sys.stderr)
+		return 2
+	auth_key, key_error = _state_auth_key()
+	if key_error is not None:
+		print(f"state verification failed: {key_error}", file=sys.stderr)
+		return 2
+	assert state_document is not None
+	assert auth_context is not None
+	assert auth_key is not None
+	if state_document.get("schema_version") != "orchestrate_state.v1":
+		return 1
+	if state_document.get("integration_branch", "") not in ("", auth_context["integration_branch"]):
+		return 1
+	state_auth = state_document.get("state_auth")
+	if not isinstance(state_auth, dict):
+		return 1
+	signature = state_auth.get("signature")
+	if not isinstance(signature, str) or re.fullmatch(r"[0-9a-f]{64}", signature) is None:
+		return 1
+	if any(state_auth.get(field) != expected for field, expected in auth_context.items()):
+		return 1
+	expected_signature = _signature_for_state(state_document, auth_context, auth_key)
+	return 0 if hmac.compare_digest(signature, expected_signature) else 1
 
 
 def _frame(part: int, total: int, manifest: str, payload: bytes) -> bytes:
@@ -297,6 +459,20 @@ def cmd_extract(args: argparse.Namespace) -> int:
 def main() -> int:
 	p = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
 	sub = p.add_subparsers(dest="cmd", required=True)
+	for command_name, command_help, command_func in (
+		("sign", "Write a context-bound authenticated state copy", cmd_sign),
+		("verify", "Verify a context-bound authenticated state copy", cmd_verify),
+	):
+		command_parser = sub.add_parser(command_name, help=command_help)
+		command_parser.add_argument("--state-file", required=True)
+		command_parser.add_argument("--repository", required=True)
+		command_parser.add_argument("--tracking-issue", required=True, type=int)
+		command_parser.add_argument("--integration-branch", required=True)
+		command_parser.add_argument("--producer-id", required=True, type=int)
+		command_parser.add_argument("--producer-login", required=True)
+		if command_name == "sign":
+			command_parser.add_argument("--out-file", required=True)
+		command_parser.set_defaults(func=command_func)
 	p_pack = sub.add_parser(
 		"pack",
 		help="Split a state JSON file into V2-framed chunk files",

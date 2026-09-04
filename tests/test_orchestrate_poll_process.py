@@ -1058,6 +1058,10 @@ def _run_poller(
 			else:
 				user_entry = {"login": str(user) if user else "octocat"}
 			user_entry.setdefault("login", "octocat")
+			user_entry.setdefault(
+				"id",
+				41898282 if user_entry["login"] == "github-actions[bot]" else 1001,
+			)
 			entry["user"] = user_entry
 			entry.setdefault(
 				"html_url",
@@ -1741,6 +1745,10 @@ if args[0] == 'api':
 		print('{}')
 		sys.exit(0)
 	store.setdefault('api_calls', []).append(path)
+	if path == 'user' and method == 'GET':
+		save()
+		print(json.dumps({'id': 41898282, 'login': 'github-actions[bot]'}))
+		sys.exit(0)
 
 	if path == 'graphql':
 		mode = store.get('graphql_mode', 'full')
@@ -1989,7 +1997,7 @@ if args[0] == 'api':
 			'id': cid,
 			'body': body,
 			'created_at': f'2026-01-01T00:00:{cid % 60:02d}Z',
-			'user': {'login': 'github-actions[bot]'},
+			'user': {'login': 'github-actions[bot]', 'id': 41898282},
 			'html_url': f'https://github.com/owner/repo/issues/{m.group(1)}#issuecomment-{cid}',
 		})
 		save()
@@ -11166,6 +11174,83 @@ def test_v2_extract_helper_matches_production_for_interleaved_older_complete_and
 	assert _extract_latest_state(comments) == state
 
 
+def test_state_auth_sign_verify_and_payload_mutation_rejection():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		state_file = tmp / "state.json"
+		signed_file = tmp / "signed.json"
+		state_file.write_text(json.dumps(state), encoding="utf-8")
+		env = {**os.environ, "GH_TOKEN": "state-auth-test-key", "PYTHONDONTWRITEBYTECODE": "1"}
+		common_args = [
+			"--repository", "owner/repo",
+			"--tracking-issue", "192",
+			"--integration-branch", "orchestrator/project-192",
+			"--producer-id", "41898282",
+			"--producer-login", "github-actions[bot]",
+		]
+		sign_result = subprocess.run(
+			[
+				"python3", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"sign", "--state-file", str(state_file), "--out-file", str(signed_file),
+				*common_args,
+			],
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		assert sign_result.returncode == 0, sign_result.stderr
+		verify_command = [
+			"python3", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+			"verify", "--state-file", str(signed_file), *common_args,
+		]
+		assert subprocess.run(verify_command, env=env, capture_output=True).returncode == 0
+		tampered_state = json.loads(signed_file.read_text(encoding="utf-8"))
+		tampered_state["status"] = "failed"
+		signed_file.write_text(json.dumps(tampered_state), encoding="utf-8")
+		assert subprocess.run(verify_command, env=env, capture_output=True).returncode == 1
+
+
+def test_state_auth_rejects_cross_context_replay():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		state_file = tmp / "state.json"
+		signed_file = tmp / "signed.json"
+		state_file.write_text(json.dumps(state), encoding="utf-8")
+		env = {**os.environ, "GH_TOKEN": "state-auth-test-key", "PYTHONDONTWRITEBYTECODE": "1"}
+		base_context = [
+			"--repository", "owner/repo", "--tracking-issue", "192",
+			"--integration-branch", "orchestrator/project-192",
+			"--producer-id", "41898282", "--producer-login", "github-actions[bot]",
+		]
+		assert subprocess.run(
+			[
+				"python3", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"sign", "--state-file", str(state_file), "--out-file", str(signed_file),
+				*base_context,
+			],
+			env=env,
+			capture_output=True,
+		).returncode == 0
+		for changed_context in (
+			["--repository", "other/repo", *base_context[2:]],
+			[*base_context[:-4], "--producer-id", "999", "--producer-login", "github-actions[bot]"],
+			[*base_context[:-2], "--producer-login", "other-bot"],
+		):
+			result = subprocess.run(
+				[
+					"python3", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+					"verify", "--state-file", str(signed_file), *changed_context,
+				],
+				env=env,
+				capture_output=True,
+			)
+			assert result.returncode == 1
+
+
 def test_revalidate_ignored_when_no_comment():
 	"""Without a /revalidate comment, a validation-failed project stays skipped."""
 	state = _base_state(status="failed")
@@ -12585,7 +12670,11 @@ def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[{"body": malformed_latest, "author_association": "MEMBER"}],
+		tracking_comments=[{
+			"body": malformed_latest,
+			"user": {"login": "github-actions[bot]", "id": 41898282},
+			"author_association": "MEMBER",
+		}],
 		issue_labels={10: ["ai:implementing"]},
 	)
 	assert "restored from older valid state and posted healed canonical state" in result["stdout"]
@@ -12639,7 +12728,11 @@ def test_all_invalid_state_comments_trigger_reconstruction_path_without_heal():
 		state=invalid_state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[{"body": malformed_latest, "author_association": "MEMBER"}],
+		tracking_comments=[{
+			"body": malformed_latest,
+			"user": {"login": "github-actions[bot]", "id": 41898282},
+			"author_association": "MEMBER",
+		}],
 		issue_labels={10: ["ai:implementing"]},
 	)
 	assert "No valid ORCHESTRATOR_STATE_V1 comment found for tracking issue #192. Attempting state reconstruction..." in result["stdout"]
@@ -12690,20 +12783,14 @@ def test_unauthorized_v2_chunk_cannot_complete_trusted_state_chain():
 	assert all(call["base"] == "orchestrator/project-192" for call in result["merge_calls"])
 
 
-@pytest.mark.parametrize(
-	"trusted_identity",
-	[
-		{"user": {"login": "github-actions[bot]"}},
-		{"user": {"login": "maintainer"}, "author_association": "OWNER"},
-		{"user": {"login": "maintainer"}, "author_association": "MEMBER"},
-		{"user": {"login": "maintainer"}, "author_association": "COLLABORATOR"},
-	],
-)
-def test_trusted_state_comment_authors_remain_accepted(trusted_identity: dict):
+def test_exact_authenticated_producer_legacy_state_is_accepted_and_migrated():
 	seed_state = _base_state(status="in_progress")
 	trusted_state = _base_state(status="in_progress")
 	trusted_state["integration_branch"] = "orchestrator/project-192"
-	trusted_comment = {"body": _state_comment(trusted_state), **trusted_identity}
+	trusted_comment = {
+		"body": _state_comment(trusted_state),
+		"user": {"login": "github-actions[bot]", "id": 41898282},
+	}
 	result = _run_poller(
 		state=seed_state,
 		enable_validation="false",
@@ -12714,6 +12801,71 @@ def test_trusted_state_comment_authors_remain_accepted(trusted_identity: dict):
 	)
 	assert result["merge_calls"]
 	assert result["merge_calls"][0]["base"] == "orchestrator/project-192"
+	assert result["latest_state"]["state_auth"]["producer_id"] == 41898282
+	assert "Migrated exact-producer legacy orchestrator state" in result["stdout"]
+	assert result["api_calls"].count("user") == 1
+
+
+def test_invalid_signed_state_from_designated_producer_fails_closed():
+	seed_state = _base_state(status="in_progress")
+	seed_state["integration_branch"] = "orchestrator/project-192"
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		state_file = tmp / "state.json"
+		signed_file = tmp / "signed.json"
+		state_file.write_text(json.dumps(seed_state), encoding="utf-8")
+		sign_result = subprocess.run(
+			[
+				"python3", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"sign", "--state-file", str(state_file), "--out-file", str(signed_file),
+				"--repository", "owner/repo", "--tracking-issue", "192",
+				"--integration-branch", "orchestrator/project-192",
+				"--producer-id", "41898282", "--producer-login", "github-actions[bot]",
+			],
+			env={**os.environ, "GH_TOKEN": "wrong-state-auth-key", "PYTHONDONTWRITEBYTECODE": "1"},
+			capture_output=True,
+			text=True,
+		)
+		assert sign_result.returncode == 0, sign_result.stderr
+		invalid_signed_state = json.loads(signed_file.read_text(encoding="utf-8"))
+	result = _run_poller(
+		state=seed_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[{
+			"body": _state_comment(invalid_signed_state),
+			"user": {"login": "github-actions[bot]", "id": 41898282},
+		}],
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	combined_output = result["stdout"] + result["stderr"]
+	assert "Rejected invalidly authenticated V1 orchestrator state" in combined_output
+	assert "State-comment authentication failed" in combined_output
+	assert "State reconstructed and posted" not in combined_output
+	assert result["merge_calls"] == []
+
+
+@pytest.mark.parametrize("association", ["OWNER", "MEMBER", "COLLABORATOR"])
+def test_associated_user_cannot_override_designated_state_producer(association: str):
+	seed_state = _base_state(status="in_progress")
+	seed_state["integration_branch"] = "orchestrator/project-192"
+	forged_state = dict(seed_state)
+	forged_state["integration_branch"] = "orchestrator/project-999"
+	result = _run_poller(
+		state=seed_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[{
+			"body": _state_comment(forged_state),
+			"user": {"login": "maintainer", "id": 1001},
+			"author_association": association,
+		}],
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192", "orchestrator/project-999"],
+	)
+	assert result["merge_calls"]
+	assert all(call["base"] == "orchestrator/project-192" for call in result["merge_calls"])
 
 
 def test_unauthenticated_state_without_trusted_fallback_allows_safe_reconstruction():
@@ -12858,7 +13010,11 @@ def test_reconstruction_refused_when_body_has_completed_unmapped_issue():
 		state=invalid_state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[{"body": malformed_latest, "author_association": "MEMBER"}],
+		tracking_comments=[{
+			"body": malformed_latest,
+			"user": {"login": "github-actions[bot]", "id": 41898282},
+			"author_association": "MEMBER",
+		}],
 		tracking_body=rewindable_body,
 		issue_labels={10: ["ai:implementing"]},
 	)
