@@ -12833,9 +12833,9 @@ def test_unauthorized_v2_chunk_cannot_complete_trusted_state_chain():
 	assert len(forged_chunks) > 1
 	for chunk_index, forged_chunk in enumerate(forged_chunks):
 		if chunk_index == 0:
-			forged_chunk.update({"user": {"login": "outsider"}, "author_association": "NONE"})
+			forged_chunk.update({"user": {"id": 97531, "login": "outsider"}, "author_association": "NONE"})
 		else:
-			forged_chunk.update({"user": {"login": "github-actions[bot]"}})
+			forged_chunk.update({"user": {"id": 24680, "login": "poller-writer"}})
 	result = _run_poller(
 		state=trusted_state,
 		enable_validation="false",

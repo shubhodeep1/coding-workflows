@@ -361,7 +361,7 @@ def test_overflow_uses_semble_chunks_when_query_succeeds() -> None:
 		semble = root / "fake_semble.py"
 		_make_fake_semble_script(
 			semble,
-			stdout="chunk 1\n# lines 10-20\nchunk 2\n",
+			stdout="x" * 150,
 		)
 
 		stderr = io.StringIO()
@@ -377,12 +377,57 @@ def test_overflow_uses_semble_chunks_when_query_succeeds() -> None:
 			)
 
 		assert "chunk-retrieved via semble" in context
+		assert "truncated to 100 byte(s) to fit the remaining total budget" in context
+		assert f"\n{'x' * 100}\n--- END FILE: src/big.py ---" in context
 		assert "--- FILE: src/big.py (12000 bytes; would overflow total budget" not in context
 		assert "src/big.py" in context
+		assert "100 byte(s) of source content" in context
 		assert "SEMBLE_QUERY" not in context
 		telemetry = stderr.getvalue()
 		assert "SEMBLE_QUERY target=overflow file=src/big.py chunks=20 bytes=" in telemetry
 		assert " ms=" in telemetry
+
+
+def test_semble_overflow_payload_is_clamped_on_utf8_line_boundaries() -> None:
+	clamped, was_clamped = targeted_file_context_module._clamp_text_to_byte_budget(
+		"first\nsecond\nthird",
+		12,
+	)
+	assert was_clamped is True
+	assert clamped == "first\nsecond"
+	assert len(clamped.encode("utf-8")) == 12
+	assert targeted_file_context_module._clamp_text_to_byte_budget("😀tail", 1) == ("", True)
+
+
+def test_empty_semble_clamp_stops_later_overflow_queries() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "small.py").write_text("a" * 9, encoding="utf-8")
+		for name in ("big.py", "later.py"):
+			(root / "src" / name).write_text("b" * 100, encoding="utf-8")
+		original_query = targeted_file_context_module._run_semble_query
+		query_calls: list[str] = []
+
+		def _query_once(query: str, *args: object) -> tuple[bool, str]:
+			query_calls.append(query)
+			return True, "😀payload"
+
+		targeted_file_context_module._run_semble_query = _query_once
+		try:
+			context = emit_context(
+				["src/small.py", "src/big.py", "src/later.py"],
+				root,
+				max_bytes=10,
+				semble_query_text="task summary",
+			)
+		finally:
+			targeted_file_context_module._run_semble_query = original_query
+
+		assert len(query_calls) == 1
+		assert "chunk-retrieved via semble" not in context
+		assert "src/big.py" in context
+		assert "src/later.py" in context
 
 
 def test_overflow_marker_remains_default_fallback_when_semble_unavailable() -> None:
