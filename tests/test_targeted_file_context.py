@@ -740,7 +740,7 @@ def test_cli_rejects_unknown_fallback_mode() -> None:
 
 
 def test_overflow_semble_blocks_are_charged_against_the_total_budget() -> None:
-	"""The emitted block must stay inside --max-bytes as a whole.
+	"""Source content stays inside --max-bytes with bounded framing overhead.
 
 	Regression for run 33796624872 (issue #3990). The semble overflow
 	branch rendered its payload unconditionally and only then added it
@@ -779,7 +779,7 @@ def test_overflow_semble_blocks_are_charged_against_the_total_budget() -> None:
 		# bytes per entry for this input, so allow 300 — the emitted
 		# block is the budgeted content plus that overhead, not the
 		# ~1.2MB the unguarded path produced for the same input.
-		assert len(context.encode("utf-8")) < 80000 + 10 * 300
+		assert len(context.encode("utf-8")) - 80000 < 10 * 300
 		assert "would overflow total budget" in context
 		assert "SEMBLE_FALLBACK target=overflow" in stderr.getvalue()
 		assert "reason=budget-exhausted" in stderr.getvalue()

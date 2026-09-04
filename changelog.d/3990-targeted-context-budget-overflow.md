@@ -15,4 +15,4 @@ What this means for operators: implement, review-autofix, and conflict-resolver 
 
 ### For contributors
 
-The read-fallback branch already computed remaining headroom and emitted a marker at zero; the semble branch simply lacked the same guard. New telemetry reason code `budget-exhausted` on `SEMBLE_FALLBACK` distinguishes a budget rejection from a semble failure. Two contract tests in `tests/test_targeted_file_context.py` pin the whole-block bound and the skip-the-subprocess-at-zero-headroom behaviour.
+The read-fallback branch already computed remaining headroom and emitted a marker at zero; the semble branch simply lacked the same guard. New telemetry reason code `budget-exhausted` on `SEMBLE_FALLBACK` distinguishes a budget rejection from a semble failure. Two contract tests in `tests/test_targeted_file_context.py` pin the source-content bound, the bounded framing overhead, and the skip-the-subprocess-at-zero-headroom behaviour.
