@@ -16761,7 +16761,9 @@ def test_linked_pr_is_issue_implementation_predicate_contract():
 	helper = _extract_bash_function(script, "_linked_pr_is_issue_implementation()\n{")
 	cases = [
 		("77", "ai/issue-77", "", 0),
+		("77", "ai/77", "", 0),
 		("77", "ai-implement-77", "", 0),
+		("77", "ai-77", "", 0),
 		("77", "refs/heads/ai/issue-77", "", 0),
 		("77", "ai/issue-770", "", 1),
 		("77", "ai/issue-77a", "", 1),
