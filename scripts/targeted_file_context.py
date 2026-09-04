@@ -451,9 +451,11 @@ def _clamp_text_to_byte_budget(text: str, budget_bytes: int) -> tuple[str, bool]
 
 	Returns `(clamped_text, was_clamped)`. Whole lines are preferred so a
 	chunk block never ends mid-token; when even the first line exceeds the
-	budget the text is cut at the largest byte prefix that decodes cleanly,
-	so the caller always gets something renderable rather than an empty
-	block. A non-positive budget yields `("", True)`.
+	budget the text is cut at the largest byte prefix that decodes cleanly.
+	That prefix can itself be empty when the budget is smaller than the
+	first UTF-8 code point (e.g. a 1-byte budget against a multi-byte
+	character), so callers must tolerate an empty result. A non-positive
+	budget yields `("", True)`.
 	"""
 	if budget_bytes <= 0:
 		return "", True
