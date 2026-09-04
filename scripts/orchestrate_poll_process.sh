@@ -1973,6 +1973,11 @@ post_state_comment() {
     rm -rf "${pack_dir}"
     return 1
   fi
+  if ! cp "${signed_state_file}" "${STATE_FILE}"; then
+    echo "::error::Published authenticated V2 state for issue #${TRACKING_NUM}, but failed to persist its monotonic generation locally; refusing further state writes this cycle." >&2
+    rm -rf "${pack_dir}"
+    return 1
+  fi
   rm -rf "${pack_dir}"
   _mirror_task_state_files_from_state
   return 0
@@ -2436,8 +2441,9 @@ extract_latest_valid_orchestrator_state() {
     return 1
   fi
 
-  # Try the V2 chunked-chain reader first.  If a complete V2 chain is
-  # present (newest write wins), use it; otherwise fall through to the
+  # Try the V2 chunked-chain reader first. If complete V2 chains are
+  # present, prefer the highest signed generation (newest write wins on
+  # equal generations); otherwise fall through to the
   # legacy V1 single-comment scan.  This keeps existing tracking issues
   # whose state was last persisted as V1 readable until a V2 write
   # supersedes them.  See scripts/orchestrate_state_v2.py for framing.
@@ -2446,7 +2452,8 @@ extract_latest_valid_orchestrator_state() {
   _v2_payload_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_payload.XXXXXX")"
   printf '%s' "${trusted_comments_json}" > "${_v2_comments_file}"
   python3 scripts/orchestrate_state_v2.py extract \
-    --comments-json "${_v2_comments_file}" > "${_v2_payload_file}" 2>/dev/null
+    --comments-json "${_v2_comments_file}" \
+    --prefer-highest-auth-generation > "${_v2_payload_file}" 2>/dev/null
   _v2_rc=$?
   if [ "${_v2_rc}" = "0" ] && [ -s "${_v2_payload_file}" ]; then
     # Independent size guard: the extractor enforces its own per-chunk
@@ -2485,6 +2492,13 @@ extract_latest_valid_orchestrator_state() {
           && candidate_auth_rc=0
         if [ "${candidate_auth_rc}" -eq 0 ]; then
           EXTRACTED_STATE_JSON="${candidate_state}"
+          if ! printf '%s' "${candidate_state}" | jq -e '
+              (.state_auth.generation | type == "number") and
+              (.state_auth.generation >= 1) and
+              (.state_auth.generation == (.state_auth.generation | floor))
+            ' >/dev/null 2>&1; then
+            EXTRACTED_STATE_LEGACY_MIGRATION_REQUIRED="true"
+          fi
           rm -f "${_v2_comments_file}" "${_v2_payload_file}"
           return 0
         fi
@@ -2536,6 +2550,12 @@ extract_latest_valid_orchestrator_state() {
       fi
       EXTRACTED_STATE_JSON="${candidate_state}"
       if [ "${candidate_auth_rc}" -ne 0 ]; then
+        EXTRACTED_STATE_LEGACY_MIGRATION_REQUIRED="true"
+      elif ! printf '%s' "${candidate_state}" | jq -e '
+          (.state_auth.generation | type == "number") and
+          (.state_auth.generation >= 1) and
+          (.state_auth.generation == (.state_auth.generation | floor))
+        ' >/dev/null 2>&1; then
         EXTRACTED_STATE_LEGACY_MIGRATION_REQUIRED="true"
       fi
       if [ -n "${latest_state_comment_id}" ] && [ "${candidate_id}" != "${latest_state_comment_id}" ]; then
@@ -14519,7 +14539,9 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   if { [ "${STATE_FALLBACK_USED}" = "true" ] || [ "${STATE_LEGACY_MIGRATION_REQUIRED}" = "true" ]; } \
     && [ -n "${STATE_JSON}" ]; then
     printf '%s\n' "${STATE_JSON}" > "${STATE_FILE}"
-    post_state_comment || true
+    if post_state_comment; then
+      STATE_JSON="$(cat "${STATE_FILE}")"
+    fi
     if [ "${STATE_FALLBACK_USED}" = "true" ]; then
       echo "::warning::Detected malformed latest ORCHESTRATOR_STATE_V1 for issue #${TRACKING_NUM}; restored from older valid state and posted healed canonical state."
     else
@@ -14612,7 +14634,9 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       if [ -s "${STATE_FILE}" ] && jq -e '.schema_version' "${STATE_FILE}" >/dev/null 2>&1; then
         STATE_JSON="$(cat "${STATE_FILE}")"
         # Post the reconstructed state so future poll cycles find it
-        post_state_comment || true
+        if post_state_comment; then
+          STATE_JSON="$(cat "${STATE_FILE}")"
+        fi
         echo "  State reconstructed and posted for tracking issue #${TRACKING_NUM}."
         tg_notify "Auto-recovery: rebuilt missing orchestrator state for tracking issue #${TRACKING_NUM}." "DEBUG"
       else

@@ -344,6 +344,9 @@ def test_integration_conflict_state_selection_requires_designated_producer_authe
 	assert '--tracking-issue "${INTEGRATION_TRACKING_NUM}"' in prepare_body
 	assert '--integration-branch "${TARGET_BRANCH}"' in prepare_body
 	assert "--export-resolver-safe-fingerprints" in prepare_body
+	assert "--prefer-highest-auth-generation" in prepare_body
+	assert "failed at comments-json-merge" in prepare_body
+	assert "failed at producer-filter" in prepare_body
 
 
 def main() -> int:

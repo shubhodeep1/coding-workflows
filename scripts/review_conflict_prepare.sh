@@ -467,26 +467,32 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
   _state_producer_json="$(gh_retry gh api user 2>/dev/null || echo '{}')"
   _state_producer_id="$(printf '%s' "${_state_producer_json}" | jq -r '.id // empty' 2>/dev/null || echo '')"
   _state_producer_login="$(printf '%s' "${_state_producer_json}" | jq -r '.login // empty' 2>/dev/null || echo '')"
+  _state_acquisition_ready="true"
   if ! [[ "${_state_producer_id}" =~ ^[1-9][0-9]*$ ]] \
     || [ -z "${_state_producer_login}" ] \
     || [ ! -f "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" ] \
     || [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
     echo "::warning::Authenticated orchestrator state support is unavailable; state-derived scope expansion is disabled."
-  fi
-  if gh_retry gh api --paginate \
+    _state_acquisition_ready="false"
+  elif ! gh_retry gh api --paginate \
     "repos/${GITHUB_REPOSITORY}/issues/${INTEGRATION_TRACKING_NUM}/comments?per_page=100" \
-    > "${_ti_comments_raw}" 2>/dev/null \
-    && [[ "${_state_producer_id}" =~ ^[1-9][0-9]*$ ]] \
-    && [ -n "${_state_producer_login}" ] \
-    && [ -f "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" ] \
-    && [ -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ] \
-    && jq -s 'add // []' "${_ti_comments_raw}" > "${_ti_comments_json}" 2>/dev/null \
-    && jq --argjson producer_id "${_state_producer_id}" \
+    > "${_ti_comments_raw}" 2>/dev/null; then
+    echo "::warning::Authenticated orchestrator state acquisition failed at comments-fetch; state-derived scope expansion is disabled."
+    _state_acquisition_ready="false"
+  elif ! jq -s 'add // []' "${_ti_comments_raw}" > "${_ti_comments_json}" 2>/dev/null; then
+    echo "::warning::Authenticated orchestrator state acquisition failed at comments-json-merge; state-derived scope expansion is disabled."
+    _state_acquisition_ready="false"
+  elif ! jq --argjson producer_id "${_state_producer_id}" \
       '[.[] | select((.user.id // 0) == $producer_id)]' \
       "${_ti_comments_json}" > "${_trusted_ti_comments_json}" 2>/dev/null; then
+    echo "::warning::Authenticated orchestrator state acquisition failed at producer-filter; state-derived scope expansion is disabled."
+    _state_acquisition_ready="false"
+  fi
+  if [ "${_state_acquisition_ready}" = "true" ]; then
     _state_extract_exit=0
     PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" extract \
-      --comments-json "${_trusted_ti_comments_json}" > "${_state_json_file}" 2>/dev/null \
+      --comments-json "${_trusted_ti_comments_json}" \
+      --prefer-highest-auth-generation > "${_state_json_file}" 2>/dev/null \
       || _state_extract_exit=$?
     if [ "${_state_extract_exit}" -ne 0 ]; then
       jq -r '
@@ -534,7 +540,8 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
   fi
   rm -f "${_ti_comments_raw}" "${_ti_comments_json}" "${_trusted_ti_comments_json}" "${_state_json_file}"
   unset _ti_comments_raw _ti_comments_json _trusted_ti_comments_json _state_json_file
-  unset _state_producer_json _state_producer_id _state_producer_login _state_extract_exit _state_verify_exit _state_json
+  unset _state_producer_json _state_producer_id _state_producer_login _state_acquisition_ready
+  unset _state_extract_exit _state_verify_exit _state_json
 
   if [ -z "${INTEGRATION_MERGED_SUB_ISSUES_LIST}" ]; then
     INTEGRATION_MERGED_SUB_ISSUES_LIST="          (no merged sub-issues recorded in tracking-issue state — this typically means the integration branch is empty or state is not yet seeded)"

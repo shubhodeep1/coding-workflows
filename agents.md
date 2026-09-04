@@ -418,7 +418,9 @@ dashboard without producing a fresh comment per tick.
 
 State-marker authority is restricted to the exact numeric producer ID returned
 for the active `GH_TOKEN` and a valid HMAC-SHA-256 `state_auth` envelope bound to
-the repository, tracking issue, canonical integration branch, and producer.
+the repository, tracking issue, canonical integration branch, producer, and a
+monotonic signed generation. Both state readers select the highest generation,
+so reposting an older authentic state cannot supersede newer project state.
 Unsigned legacy state is accepted only by the poller from that exact producer
 and immediately republished as signed V2; the resolver never uses unsigned
 state to expand its file allowlist. Unauthorized markers are ignored and cannot

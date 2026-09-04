@@ -105,6 +105,7 @@ MAX_CHUNKS_PER_MANIFEST = 1024
 STATE_AUTH_SCHEMA_VERSION = "orchestrator_state_auth.v1"
 STATE_AUTH_ALGORITHM = "hmac-sha256"
 STATE_AUTH_DOMAIN = b"coding-workflows/orchestrator-state/v1"
+STATE_AUTH_MAX_GENERATION = 9_223_372_036_854_775_807
 
 V2_OPENER_RE = re.compile(
 	r"^<!-- ORCHESTRATOR_STATE_V2 part=(\d+)/(\d+) manifest=([0-9a-f]{64}) -->$",
@@ -177,6 +178,21 @@ def _canonical_json_bytes(value: Any) -> bytes:
 	).encode("utf-8")
 
 
+def _state_auth_generation(state_document: dict[str, Any]) -> int | None:
+	state_auth = state_document.get("state_auth")
+	if not isinstance(state_auth, dict) or "generation" not in state_auth:
+		return 0
+	generation = state_auth.get("generation")
+	if (
+		not isinstance(generation, int)
+		or isinstance(generation, bool)
+		or generation < 0
+		or generation > STATE_AUTH_MAX_GENERATION
+	):
+		return None
+	return generation
+
+
 def _signature_for_state(
 	state_document: dict[str, Any],
 	auth_context: dict[str, Any],
@@ -214,10 +230,15 @@ def cmd_sign(args: argparse.Namespace) -> int:
 	if state_document.get("integration_branch", "") not in ("", auth_context["integration_branch"]):
 		print("state signing failed: state integration branch does not match the authentication context", file=sys.stderr)
 		return 2
+	previous_generation = _state_auth_generation(state_document)
+	if previous_generation is None or previous_generation >= STATE_AUTH_MAX_GENERATION:
+		print("state signing failed: state authentication generation is invalid or exhausted", file=sys.stderr)
+		return 2
+	signed_auth_context = {**auth_context, "generation": previous_generation + 1}
 	signed_state = dict(state_document)
 	signed_state["state_auth"] = {
-		**auth_context,
-		"signature": _signature_for_state(state_document, auth_context, auth_key),
+		**signed_auth_context,
+		"signature": _signature_for_state(state_document, signed_auth_context, auth_key),
 	}
 	out_path = Path(args.out_file)
 	try:
@@ -252,12 +273,18 @@ def cmd_verify(args: argparse.Namespace) -> int:
 	state_auth = state_document.get("state_auth")
 	if not isinstance(state_auth, dict):
 		return 1
+	generation = _state_auth_generation(state_document)
+	if generation is None:
+		return 1
+	signed_auth_context = dict(auth_context)
+	if "generation" in state_auth:
+		signed_auth_context["generation"] = generation
 	signature = state_auth.get("signature")
 	if not isinstance(signature, str) or re.fullmatch(r"[0-9a-f]{64}", signature) is None:
 		return 1
-	if any(state_auth.get(field) != expected for field, expected in auth_context.items()):
+	if any(state_auth.get(field) != expected for field, expected in signed_auth_context.items()):
 		return 1
-	expected_signature = _signature_for_state(state_document, auth_context, auth_key)
+	expected_signature = _signature_for_state(state_document, signed_auth_context, auth_key)
 	return 0 if hmac.compare_digest(signature, expected_signature) else 1
 
 
@@ -403,6 +430,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
 	# start at part=total so a newer partial write cannot blend with an older
 	# complete chain that happened to use different chunk slicing.
 	active_chain_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+	selected_state_candidate: tuple[int, bytes] | None = None
 	for c in reversed(comments):
 		body = (c or {}).get("body") or ""
 		if "ORCHESTRATOR_STATE_V2" not in body:
@@ -442,6 +470,24 @@ def cmd_extract(args: argparse.Namespace) -> int:
 				continue
 			digest = hashlib.sha256(decoded).hexdigest()
 			if digest == manifest:
+				if args.prefer_highest_auth_generation:
+					try:
+						state_document = json.loads(decoded)
+					except (UnicodeDecodeError, json.JSONDecodeError):
+						state_document = {}
+					generation = (
+						_state_auth_generation(state_document)
+						if isinstance(state_document, dict)
+						else None
+					)
+					candidate_generation = generation if generation is not None else 0
+					if (
+						selected_state_candidate is None
+						or candidate_generation > selected_state_candidate[0]
+					):
+						selected_state_candidate = (candidate_generation, decoded)
+					active_chain_by_key.pop(chain_key, None)
+					continue
 				# Write raw bytes through the buffer so non-UTF-8
 				# state bytes round-trip unchanged.  In practice the
 				# orchestrator state is JSON (UTF-8) but we never
@@ -452,7 +498,12 @@ def cmd_extract(args: argparse.Namespace) -> int:
 			# this manifest and keep walking older comments for an
 			# earlier intact chain.
 			active_chain_by_key.pop(chain_key, None)
-	# No complete chain.  Caller falls back to V1 extraction.
+	if selected_state_candidate is not None:
+		# Candidates are visited newest-first and equal generations do not
+		# replace the selection, preserving legacy newest-write-wins behavior.
+		sys.stdout.buffer.write(selected_state_candidate[1])
+		return 0
+	# No complete chain. Caller falls back to V1 extraction.
 	return 1
 
 
@@ -486,6 +537,7 @@ def main() -> int:
 		help="Find the latest complete V2 chain in a paginated comments JSON array",
 	)
 	p_extract.add_argument("--comments-json", required=True)
+	p_extract.add_argument("--prefer-highest-auth-generation", action="store_true")
 	p_extract.set_defaults(func=cmd_extract)
 	args = p.parse_args()
 	return args.func(args)

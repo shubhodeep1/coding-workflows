@@ -11207,6 +11207,11 @@ def test_state_auth_sign_verify_and_payload_mutation_rejection():
 		]
 		assert subprocess.run(verify_command, env=env, capture_output=True).returncode == 0
 		tampered_state = json.loads(signed_file.read_text(encoding="utf-8"))
+		assert tampered_state["state_auth"]["generation"] == 1
+		tampered_state["state_auth"]["generation"] = 2
+		signed_file.write_text(json.dumps(tampered_state), encoding="utf-8")
+		assert subprocess.run(verify_command, env=env, capture_output=True).returncode == 1
+		tampered_state["state_auth"]["generation"] = 1
 		tampered_state["status"] = "failed"
 		signed_file.write_text(json.dumps(tampered_state), encoding="utf-8")
 		assert subprocess.run(verify_command, env=env, capture_output=True).returncode == 1
@@ -11249,6 +11254,66 @@ def test_state_auth_rejects_cross_context_replay():
 				capture_output=True,
 			)
 			assert result.returncode == 1
+
+
+def test_v2_extract_prefers_highest_signed_generation_over_newest_replay():
+	state_auth_script = REPO_ROOT / "scripts" / "orchestrate_state_v2.py"
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["current_wave"] = 1
+	env = {**os.environ, "GH_TOKEN": "state-auth-test-key", "PYTHONDONTWRITEBYTECODE": "1"}
+	auth_args = [
+		"--repository", "owner/repo", "--tracking-issue", "192",
+		"--integration-branch", "orchestrator/project-192",
+		"--producer-id", "41898282", "--producer-login", "github-actions[bot]",
+	]
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		state_file = tmp / "state.json"
+		first_signed_file = tmp / "first-signed.json"
+		second_signed_file = tmp / "second-signed.json"
+		state_file.write_text(json.dumps(state), encoding="utf-8")
+		assert subprocess.run(
+			[
+				"python3", str(state_auth_script), "sign", "--state-file", str(state_file),
+				"--out-file", str(first_signed_file), *auth_args,
+			],
+			env=env,
+			capture_output=True,
+		).returncode == 0
+		newer_state = json.loads(first_signed_file.read_text(encoding="utf-8"))
+		newer_state["current_wave"] = 2
+		state_file.write_text(json.dumps(newer_state), encoding="utf-8")
+		assert subprocess.run(
+			[
+				"python3", str(state_auth_script), "sign", "--state-file", str(state_file),
+				"--out-file", str(second_signed_file), *auth_args,
+			],
+			env=env,
+			capture_output=True,
+		).returncode == 0
+		first_signed = json.loads(first_signed_file.read_text(encoding="utf-8"))
+		second_signed = json.loads(second_signed_file.read_text(encoding="utf-8"))
+		assert first_signed["state_auth"]["generation"] == 1
+		assert second_signed["state_auth"]["generation"] == 2
+		comments = (
+			_build_v2_state_comment_chain(json.dumps(first_signed), chunk_size=60_000)
+			+ _build_v2_state_comment_chain(json.dumps(second_signed), chunk_size=60_000)
+			+ _build_v2_state_comment_chain(json.dumps(first_signed), chunk_size=60_000)
+		)
+		comments_file = tmp / "comments.json"
+		comments_file.write_text(json.dumps(comments), encoding="utf-8")
+		extract_result = subprocess.run(
+			[
+				"python3", str(state_auth_script), "extract", "--comments-json", str(comments_file),
+				"--prefer-highest-auth-generation",
+			],
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+	assert extract_result.returncode == 0, extract_result.stderr
+	assert json.loads(extract_result.stdout)["current_wave"] == 2
 
 
 def test_revalidate_ignored_when_no_comment():
@@ -12802,6 +12867,7 @@ def test_exact_authenticated_producer_legacy_state_is_accepted_and_migrated():
 	assert result["merge_calls"]
 	assert result["merge_calls"][0]["base"] == "orchestrator/project-192"
 	assert result["latest_state"]["state_auth"]["producer_id"] == 41898282
+	assert result["latest_state"]["state_auth"]["generation"] >= 1
 	assert "Migrated exact-producer legacy orchestrator state" in result["stdout"]
 	assert result["api_calls"].count("user") == 1
 
@@ -16081,7 +16147,7 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in wf_body
 	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in wf_body
 	assert (
-		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh '
+		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py orchestrate_state_v2.py review_conflict_resolve.sh '
 		'review_conflict_prepare.sh render_prompt.py opencode_helpers.sh write_opencode_config.sh"'
 	) in stage_helper_body
 	assert 'SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in stage_helper_body
