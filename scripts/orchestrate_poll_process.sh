@@ -10444,6 +10444,35 @@ sys.exit(1)
 " "${file_path}" 2>> "${parse_log}" || echo ""
 }
 
+# Swap ai:implementing -> ai:awaiting-approval before a stall-recovery
+# /approved re-trigger of the implement phase.
+#
+# The implement workflow precheck ("Precheck approval phase label" in
+# implement.yml) skips with reason=already_implementing while ai:implementing
+# is present and with reason=wrong_phase while ai:awaiting-approval is absent.
+# A stalled issue still carries ai:implementing from the failed run, so the
+# label must be moved back BEFORE the /approved comment is posted; otherwise
+# the re-triggered run exits at the precheck in a few seconds with conclusion
+# "success", no PR and no diagnostics, and the stall clock keeps running
+# until the judge closes and re-issues (issues #3990 / #3993, implement runs
+# 33837705036 and 33846524770).
+#
+# Shared by the managed arm (execute_stall_recovery_action) and the standalone
+# arm (run_standalone_stall_recovery) so both re-triggers use one contract.
+# Issues exactly one gh call. Fail-open: on failure it emits a ::warning and
+# returns 1; callers still post /approved so a transient label error never
+# suppresses the re-trigger.
+_reset_implementing_to_awaiting_approval_for_retrigger()
+{
+  local issue_num="$1"
+  if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+    --remove-label 'ai:implementing' --add-label 'ai:awaiting-approval' >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "::warning::Failed to swap ai:implementing → ai:awaiting-approval for issue #${issue_num}; /approved retrigger may no-op if label state is unchanged."
+  return 1
+}
+
 execute_stall_recovery_action() {
   local issue_num="$1"
   local phase="$2"
@@ -10581,11 +10610,9 @@ STALL_EOF
       # still carries ai:implementing from the previous run, so we must
       # swap the label back to ai:awaiting-approval BEFORE posting
       # /approved; otherwise the re-triggered workflow will no-op and the
-      # stall recovery loops forever.
-      if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
-        --remove-label 'ai:implementing' --add-label 'ai:awaiting-approval' >/dev/null 2>&1; then
-        echo "::warning::Failed to swap ai:implementing → ai:awaiting-approval for issue #${issue_num}; /approved retrigger may no-op if label state is unchanged."
-      fi
+      # stall recovery loops forever. Shared with the standalone arm via
+      # _reset_implementing_to_awaiting_approval_for_retrigger.
+      _reset_implementing_to_awaiting_approval_for_retrigger "${issue_num}" || true
       local _retrigger_implement_rc=0
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
         -f body="$(cat <<'STALL_EOF'
@@ -12996,6 +13023,11 @@ STALL_EOF
         took_action="true"
         ;;
       retrigger_implement)
+        # Same precheck gate as the managed arm in execute_stall_recovery_action:
+        # without this swap the /approved below fires an implement run that
+        # exits at "Precheck approval phase label" with
+        # reason=already_implementing and never reaches the editor.
+        _reset_implementing_to_awaiting_approval_for_retrigger "${issue_num}" || true
         local _std_retrigger_implement_rc=0
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /approved
