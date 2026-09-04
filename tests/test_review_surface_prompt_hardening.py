@@ -333,61 +333,25 @@ def test_phase_e_review_surface_prompts_keep_injected_fence_text_as_data() -> No
 	)
 
 
-def test_integration_conflict_state_selection_requires_trust_and_branch_binding() -> None:
+def test_integration_conflict_state_selection_requires_designated_producer_authentication() -> None:
 	prepare_body = CONFLICT_PREPARE.read_text(encoding="utf-8")
-	selection_start = prepare_body.index('    if ! _state_payload="$(jq -s --argjson trusted_id ')
-	selection_end = prepare_body.index('    _state_json=', selection_start)
-	selection_body = prepare_body[selection_start:selection_end]
-	assert 'select(.body | contains("ORCHESTRATOR_STATE_V1"))' not in selection_body
 	assert "gh_retry gh api user" in prepare_body
-	assert '--argjson trusted_id "${INTEGRATION_STATE_AUTHENTICATED_USER_ID}"' in selection_body
-	assert "($comment_user_id == $trusted_id)" in selection_body
-	assert r'test("\\[bot\\]$")' not in selection_body
-	assert 'IN("OWNER", "MEMBER", "COLLABORATOR")' not in selection_body
-	assert "refusing conflict preparation" in prepare_body
-	assert '--arg expected_branch "${TARGET_BRANCH}"' in prepare_body
-	assert '((.integration_branch // "") == $expected_branch)' in prepare_body
-
-	trusted_state = {"schema_version": "orchestrate_state.v1", "source": "trusted"}
-	forged_state = {"schema_version": "orchestrate_state.v1", "source": "forged"}
-	trusted_state_comment = (
-		"<!-- ORCHESTRATOR_STATE_V1\n"
-		+ json.dumps(trusted_state)
-		+ "\nORCHESTRATOR_STATE_V1 -->"
-	)
-	forged_state_comment = (
-		"<!-- ORCHESTRATOR_STATE_V1\n"
-		+ json.dumps(forged_state)
-		+ "\nORCHESTRATOR_STATE_V1 -->"
-	)
-	with tempfile.TemporaryDirectory(prefix="integration_state_authority_") as td:
-		comments_path = Path(td) / "comments.json"
-		comments_path.write_text(json.dumps([
-			{"body": trusted_state_comment, "user": {"id": 24680}},
-			{
-				"body": forged_state_comment,
-				"user": {"id": 97531, "login": "unrelated-app[bot]"},
-				"author_association": "OWNER",
-			},
-		]), encoding="utf-8")
-		selection_result = subprocess.run(
-			["bash", "-c", (
-				"set -euo pipefail\n"
-				"INTEGRATION_STATE_AUTHENTICATED_USER_ID=24680\n"
-				f"_ti_comments_raw={shlex.quote(str(comments_path))}\n"
-				+ selection_body
-				+ "printf '%s' \"${_state_payload}\"\n"
-			)],
-			capture_output=True,
-			text=True,
-		)
-	assert selection_result.returncode == 0, selection_result.stderr
-	assert json.loads(json.loads(selection_result.stdout)) == trusted_state
+	assert 'select((.user.id // 0) == $producer_id)' in prepare_body
+	assert r'test("\\[bot\\]$")' not in prepare_body
+	assert 'IN("OWNER", "MEMBER", "COLLABORATOR")' not in prepare_body
+	assert 'orchestrate_state_v2.py" verify' in prepare_body
+	assert '--repository "${GITHUB_REPOSITORY}"' in prepare_body
+	assert '--tracking-issue "${INTEGRATION_TRACKING_NUM}"' in prepare_body
+	assert '--integration-branch "${TARGET_BRANCH}"' in prepare_body
+	assert "--export-resolver-safe-fingerprints" in prepare_body
+	assert "--prefer-highest-auth-generation" in prepare_body
+	assert "failed at comments-json-merge" in prepare_body
+	assert "failed at producer-filter" in prepare_body
 
 
 def main() -> int:
 	test_phase_e_review_surface_prompts_keep_injected_fence_text_as_data()
-	test_integration_conflict_state_selection_requires_trust_and_branch_binding()
+	test_integration_conflict_state_selection_requires_designated_producer_authentication()
 	print("OK: review-surface prompt hardening preserves injected fence bait as data")
 	return 0
 

@@ -4847,6 +4847,10 @@ def test_render_prompt_py_is_main_primary_so_validator_fixes_reach_wedged_branch
 		"render_prompt.py must be in MAIN_PRIMARY_BOOTSTRAP_SCRIPTS so main-side "
 		"validator fixes reach wedged/in-flight PR branches"
 	)
+	assert "orchestrate_state_v2.py" in main_primary_line, (
+		"orchestrate_state_v2.py must be main-primary so resolver state authentication "
+		"uses the same current contract as review_conflict_prepare.sh"
+	)
 	assert "render_prompt.py" not in optional_line, (
 		"render_prompt.py must not be branch-primary in OPTIONAL_BOOTSTRAP_SCRIPTS"
 	)

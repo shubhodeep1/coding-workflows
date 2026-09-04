@@ -444,32 +444,13 @@ if [ ! -f "${PROMPT_TPL}" ]; then
   exit 1
 fi
 
-# Pull the orchestrator state comment for this tracking issue so we
-# can render merged sub-issue intent + fingerprints into the prompt.
-# Comment-fetch failures leave the integration variables blank and render the
-# generic placeholder, but authenticated-user resolution and comment-filter
-# parsing fail closed so unverified state never reaches the resolver.
+# Pull the authenticated orchestrator state comment for this tracking issue
+# so we can render merged sub-issue intent + fingerprints into the prompt.
+# State-derived file paths expand a privileged resolver allowlist, so this
+# boundary fails closed: unsigned, forged, malformed, or unsafely shaped state
+# leaves the integration variables blank. Ordinary git-conflicted paths remain
+# resolvable through the pre-existing allowlist.
 if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ ^[0-9]+$ ]]; then
-	# The issue and comment requests below identify content owners, not the
-	# account authenticated by GH_TOKEN. No existing request in this script
-	# exposes that principal, so resolve it once before trusting state input.
-	INTEGRATION_STATE_AUTHENTICATED_USER_ID=""
-	_integration_state_authenticated_user_json=""
-	if ! _integration_state_authenticated_user_json="$(gh_retry gh api user 2>/dev/null)"; then
-		echo "::error::Unable to resolve the authenticated account for integration state comments; refusing conflict preparation."
-		exit 1
-	fi
-	if ! INTEGRATION_STATE_AUTHENTICATED_USER_ID="$(printf '%s' "${_integration_state_authenticated_user_json}" | jq -er '
-		if type == "object" and (.id | type == "number") and (.id > 0) and ((.id | floor) == .id)
-		then (.id | tostring)
-		else empty
-		end
-	' 2>/dev/null)" || ! [[ "${INTEGRATION_STATE_AUTHENTICATED_USER_ID}" =~ ^[1-9][0-9]*$ ]]; then
-		echo "::error::Authenticated account metadata is invalid for integration state comments; refusing conflict preparation."
-		exit 1
-	fi
-	unset _integration_state_authenticated_user_json
-
   _ti_json="$(gh_retry gh api -H 'Accept: application/vnd.github+json' \
     "repos/${GITHUB_REPOSITORY}/issues/${INTEGRATION_TRACKING_NUM}" 2>/dev/null || echo '{}')"
   INTEGRATION_TRACKING_TITLE="$(printf '%s' "${_ti_json}" | jq -r '.title // ""' 2>/dev/null || echo "")"
@@ -477,39 +458,62 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
   unset _ti_json
 
   _ti_comments_raw="$(mktemp)"
-  if gh_retry gh api --paginate \
+  _ti_comments_json="$(mktemp)"
+  _trusted_ti_comments_json="$(mktemp)"
+  _state_json_file="$(mktemp)"
+  # Audited existing calls: the tracking-issue and comments responses do not
+  # identify the active credential. One GET /user is required to bind state
+  # authority to the designated producer rather than a forgeable association.
+  _state_producer_json="$(gh_retry gh api user 2>/dev/null || echo '{}')"
+  _state_producer_id="$(printf '%s' "${_state_producer_json}" | jq -r '.id // empty' 2>/dev/null || echo '')"
+  _state_producer_login="$(printf '%s' "${_state_producer_json}" | jq -r '.login // empty' 2>/dev/null || echo '')"
+  _state_acquisition_ready="true"
+  if ! [[ "${_state_producer_id}" =~ ^[1-9][0-9]*$ ]] \
+    || [ -z "${_state_producer_login}" ] \
+    || [ ! -f "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" ] \
+    || [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
+    echo "::warning::Authenticated orchestrator state support is unavailable; state-derived scope expansion is disabled."
+    _state_acquisition_ready="false"
+  elif ! gh_retry gh api --paginate \
     "repos/${GITHUB_REPOSITORY}/issues/${INTEGRATION_TRACKING_NUM}/comments?per_page=100" \
     > "${_ti_comments_raw}" 2>/dev/null; then
-    if ! _state_payload="$(jq -s --argjson trusted_id "${INTEGRATION_STATE_AUTHENTICATED_USER_ID}" '
-      ([.[][] | select(
-        (
-          (.user // null) as $comment_user
-          | (if ($comment_user | type) == "object" then ($comment_user.id // null) else null end) as $comment_user_id
-          | (($comment_user_id | type) == "number") and
-            ($comment_user_id > 0) and
-            (($comment_user_id | floor) == $comment_user_id) and
-            ($comment_user_id == $trusted_id)
-        ) and ((.body // "") | contains("ORCHESTRATOR_STATE_V1"))
-      )] // [])
-      | last // {}
-      | .body // ""
-      | capture("ORCHESTRATOR_STATE_V1\\n(?<json>(.|\\n)*)\\nORCHESTRATOR_STATE_V1")
-      | .json // ""
-    ' "${_ti_comments_raw}" 2>/dev/null)"; then
-		echo "::error::Unable to authenticate integration state comments; refusing conflict preparation."
-		rm -f "${_ti_comments_raw}"
-		exit 1
-	fi
-    _state_json="$(printf '%s' "${_state_payload}" | jq -r '.' 2>/dev/null || echo "")"
-    if [ -n "${_state_json}" ] && ! printf '%s' "${_state_json}" | jq -e --arg expected_branch "${TARGET_BRANCH}" '
-      type == "object" and
-      (.schema_version == "orchestrate_state.v1") and
-      (((.integration_branch // "") == "") or ((.integration_branch // "") == $expected_branch))
-    ' >/dev/null 2>&1; then
-      echo "::warning::Ignoring orchestrator state whose integration branch is not bound to ${TARGET_BRANCH}."
-      _state_json=""
+    echo "::warning::Authenticated orchestrator state acquisition failed at comments-fetch; state-derived scope expansion is disabled."
+    _state_acquisition_ready="false"
+  elif ! jq -s 'add // []' "${_ti_comments_raw}" > "${_ti_comments_json}" 2>/dev/null; then
+    echo "::warning::Authenticated orchestrator state acquisition failed at comments-json-merge; state-derived scope expansion is disabled."
+    _state_acquisition_ready="false"
+  elif ! jq --argjson producer_id "${_state_producer_id}" \
+      '[.[] | select((.user.id // 0) == $producer_id)]' \
+      "${_ti_comments_json}" > "${_trusted_ti_comments_json}" 2>/dev/null; then
+    echo "::warning::Authenticated orchestrator state acquisition failed at producer-filter; state-derived scope expansion is disabled."
+    _state_acquisition_ready="false"
+  fi
+  if [ "${_state_acquisition_ready}" = "true" ]; then
+    _state_extract_exit=0
+    PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" extract \
+      --comments-json "${_trusted_ti_comments_json}" \
+      --prefer-highest-auth-generation > "${_state_json_file}" 2>/dev/null \
+      || _state_extract_exit=$?
+    if [ "${_state_extract_exit}" -ne 0 ]; then
+      jq -r '
+        [.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | reverse | .[0].body // ""
+      ' "${_trusted_ti_comments_json}" 2>/dev/null \
+        | sed -n '/^<!-- ORCHESTRATOR_STATE_V1$/,/^ORCHESTRATOR_STATE_V1 -->$/p' \
+        | sed '1d;$d' > "${_state_json_file}"
     fi
-    if [ -n "${_state_json}" ]; then
+    _state_verify_exit=1
+    if [ -s "${_state_json_file}" ]; then
+      PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" verify \
+        --state-file "${_state_json_file}" \
+        --repository "${GITHUB_REPOSITORY}" \
+        --tracking-issue "${INTEGRATION_TRACKING_NUM}" \
+        --integration-branch "${TARGET_BRANCH}" \
+        --producer-id "${_state_producer_id}" \
+        --producer-login "${_state_producer_login}" >/dev/null 2>&1 \
+        && _state_verify_exit=0
+    fi
+    if [ "${_state_verify_exit}" -eq 0 ]; then
+      _state_json="$(cat "${_state_json_file}")"
       # Build the merged sub-issues list (id : github_issue : status)
       INTEGRATION_MERGED_SUB_ISSUES_LIST="$(printf '%s' "${_state_json}" | jq -r '
         [
@@ -521,14 +525,23 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
       INTEGRATION_MERGED_SUB_ISSUE_COUNT="$(printf '%s' "${_state_json}" | jq -r '
         [.waves[]?.issues[]? | select(.status == "merged")] | length
       ' 2>/dev/null || echo "0")"
-      INTEGRATION_FINGERPRINTS_JSON="$(printf '%s' "${_state_json}" | jq -c '
-        .merged_issue_fingerprints // {}
-      ' 2>/dev/null || echo "{}")"
+      _safe_fingerprints_file="$(mktemp)"
+      if PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+        --export-resolver-safe-fingerprints "${_state_json_file}" \
+        > "${_safe_fingerprints_file}"; then
+        INTEGRATION_FINGERPRINTS_JSON="$(cat "${_safe_fingerprints_file}")"
+      else
+        echo "::warning::Authenticated orchestrator state failed resolver-safe fingerprint validation; state-derived scope expansion is disabled."
+      fi
+      rm -f "${_safe_fingerprints_file}"
+    elif [ -s "${_state_json_file}" ]; then
+      echo "::warning::Ignoring unsigned or invalidly authenticated orchestrator state; state-derived scope expansion is disabled."
     fi
-    unset _state_payload _state_json
   fi
-  rm -f "${_ti_comments_raw}"
-  unset _ti_comments_raw
+  rm -f "${_ti_comments_raw}" "${_ti_comments_json}" "${_trusted_ti_comments_json}" "${_state_json_file}"
+  unset _ti_comments_raw _ti_comments_json _trusted_ti_comments_json _state_json_file
+  unset _state_producer_json _state_producer_id _state_producer_login _state_acquisition_ready
+  unset _state_extract_exit _state_verify_exit _state_json
 
   if [ -z "${INTEGRATION_MERGED_SUB_ISSUES_LIST}" ]; then
     INTEGRATION_MERGED_SUB_ISSUES_LIST="          (no merged sub-issues recorded in tracking-issue state — this typically means the integration branch is empty or state is not yet seeded)"

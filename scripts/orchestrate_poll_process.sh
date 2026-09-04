@@ -1858,6 +1858,34 @@ post_issue_comment_json() {
 	rm -f "${response_file}"
 }
 
+_ORCHESTRATOR_STATE_PRODUCER_RESOLVED="false"
+ORCHESTRATOR_STATE_PRODUCER_ID=""
+ORCHESTRATOR_STATE_PRODUCER_LOGIN=""
+
+resolve_orchestrator_state_producer() {
+  if [ "${_ORCHESTRATOR_STATE_PRODUCER_RESOLVED}" = "true" ]; then
+    [[ "${ORCHESTRATOR_STATE_PRODUCER_ID}" =~ ^[1-9][0-9]*$ ]] \
+      && [ -n "${ORCHESTRATOR_STATE_PRODUCER_LOGIN}" ]
+    return $?
+  fi
+  _ORCHESTRATOR_STATE_PRODUCER_RESOLVED="true"
+  local producer_json
+  # Audited existing calls: repository, issue, and comments payloads do not
+  # identify the principal behind GH_TOKEN. This one process-cached GET /user
+  # is required to bind state authority to the active workflow credential.
+  producer_json="$(gh_retry gh api user 2>/dev/null || echo '{}')"
+  ORCHESTRATOR_STATE_PRODUCER_ID="$(printf '%s' "${producer_json}" | jq -r '.id // empty' 2>/dev/null || echo '')"
+  ORCHESTRATOR_STATE_PRODUCER_LOGIN="$(printf '%s' "${producer_json}" | jq -r '.login // empty' 2>/dev/null || echo '')"
+  if ! [[ "${ORCHESTRATOR_STATE_PRODUCER_ID}" =~ ^[1-9][0-9]*$ ]] \
+    || [ -z "${ORCHESTRATOR_STATE_PRODUCER_LOGIN}" ]; then
+    ORCHESTRATOR_STATE_PRODUCER_ID=""
+    ORCHESTRATOR_STATE_PRODUCER_LOGIN=""
+    echo "::warning::Unable to resolve the authenticated orchestrator state producer; state authority is unavailable this cycle." >&2
+    return 1
+  fi
+  return 0
+}
+
 post_state_comment() {
   # Persist orchestrator state as a V2 chunked-comment chain so a snapshot
   # bigger than GitHub's 65,536-byte comment-body cap still lands.  The
@@ -1884,9 +1912,30 @@ post_state_comment() {
     return 1
   fi
   local pack_dir manifest_json total raw_bytes chunk_files chunk_file idx chunk_count
+  local signed_state_file integration_branch
+  if ! resolve_orchestrator_state_producer; then
+    return 1
+  fi
   pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/orchstate_v2_pack.XXXXXX")"
-  if ! manifest_json="$(python3 scripts/orchestrate_state_v2.py pack \
+  signed_state_file="${pack_dir}/signed-state.json"
+  integration_branch="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo '')"
+  if [ -z "${integration_branch}" ]; then
+    integration_branch="orchestrator/project-${TRACKING_NUM}"
+  fi
+  if ! python3 scripts/orchestrate_state_v2.py sign \
       --state-file "${STATE_FILE}" \
+      --out-file "${signed_state_file}" \
+      --repository "${GITHUB_REPOSITORY}" \
+      --tracking-issue "${TRACKING_NUM}" \
+      --integration-branch "${integration_branch}" \
+      --producer-id "${ORCHESTRATOR_STATE_PRODUCER_ID}" \
+      --producer-login "${ORCHESTRATOR_STATE_PRODUCER_LOGIN}" >/dev/null; then
+    echo "::error::orchestrate_state_v2 signing failed for issue #${TRACKING_NUM}; refusing to publish unauthenticated state." >&2
+    rm -rf "${pack_dir}"
+    return 1
+  fi
+  if ! manifest_json="$(python3 scripts/orchestrate_state_v2.py pack \
+      --state-file "${signed_state_file}" \
       --out-dir "${pack_dir}" 2>&1)"; then
     echo "::error::orchestrate_state_v2 pack failed for issue #${TRACKING_NUM}: ${manifest_json}" >&2
     rm -rf "${pack_dir}"
@@ -1921,6 +1970,11 @@ post_state_comment() {
   done <<< "${chunk_files}"
   if [ "${idx}" -ne "${total}" ]; then
     echo "::error::orchestrate_state_v2 pack manifest mismatch for issue #${TRACKING_NUM}: posted ${idx} chunk(s) but manifest declared ${total} (raw_bytes=${raw_bytes}); treating V2 write as failed to avoid persisting a torn chain." >&2
+    rm -rf "${pack_dir}"
+    return 1
+  fi
+  if ! cp "${signed_state_file}" "${STATE_FILE}"; then
+    echo "::error::Published authenticated V2 state for issue #${TRACKING_NUM}, but failed to persist its monotonic generation locally; refusing further state writes this cycle." >&2
     rm -rf "${pack_dir}"
     return 1
   fi
@@ -2332,40 +2386,6 @@ is_valid_orchestrator_state_json() {
   ' >/dev/null 2>&1
 }
 
-ORCHESTRATOR_STATE_AUTHENTICATED_USER_ID=""
-ORCHESTRATOR_STATE_AUTHENTICATED_USER_LOOKUP_STATUS="unresolved"
-
-resolve_orchestrator_state_authenticated_user_id() {
-	if [ "${ORCHESTRATOR_STATE_AUTHENTICATED_USER_LOOKUP_STATUS}" = "resolved" ]; then
-		return 0
-	fi
-	if [ "${ORCHESTRATOR_STATE_AUTHENTICATED_USER_LOOKUP_STATUS}" = "failed" ]; then
-		return 1
-	fi
-
-	# Issue-comment responses identify each comment author, but they do not
-	# establish which account GH_TOKEN authenticates. No existing request in
-	# this path provides that principal, so one process-cached GET /user call is
-	# required before any comment can be trusted as canonical state.
-	local authenticated_user_json authenticated_user_id
-	ORCHESTRATOR_STATE_AUTHENTICATED_USER_LOOKUP_STATUS="failed"
-	if ! authenticated_user_json="$(gh_retry gh api user 2>/dev/null)"; then
-		return 1
-	fi
-	if ! authenticated_user_id="$(printf '%s' "${authenticated_user_json}" | jq -er '
-		if type == "object" and (.id | type == "number") and (.id > 0) and ((.id | floor) == .id)
-		then (.id | tostring)
-		else empty
-		end
-	' 2>/dev/null)" || ! [[ "${authenticated_user_id}" =~ ^[1-9][0-9]*$ ]]; then
-		return 1
-	fi
-
-	ORCHESTRATOR_STATE_AUTHENTICATED_USER_ID="${authenticated_user_id}"
-	ORCHESTRATOR_STATE_AUTHENTICATED_USER_LOOKUP_STATUS="resolved"
-	return 0
-}
-
 extract_latest_valid_orchestrator_state() {
   local comments_json="$1"
   local expected_tracking_num="${2:-${TRACKING_NUM:-}}"
@@ -2377,6 +2397,7 @@ extract_latest_valid_orchestrator_state() {
   local trusted_comments_json
   local expected_integration_branch=""
   local candidate_integration_branch
+  local candidate_auth_file candidate_auth_rc
 
   EXTRACTED_STATE_JSON=""
   EXTRACTED_STATE_FALLBACK_USED="false"
@@ -2384,32 +2405,24 @@ extract_latest_valid_orchestrator_state() {
   EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT=0
   EXTRACTED_STATE_AUTH_FILTER_FAILED="false"
   EXTRACTED_STATE_BRANCH_MISMATCH_COUNT=0
+  EXTRACTED_STATE_LEGACY_MIGRATION_REQUIRED="false"
   if [[ "${expected_tracking_num}" =~ ^[0-9]+$ ]]; then
     expected_integration_branch="orchestrator/project-${expected_tracking_num}"
   fi
 
-  if ! resolve_orchestrator_state_authenticated_user_id; then
+  if ! resolve_orchestrator_state_producer; then
     EXTRACTED_STATE_AUTH_FILTER_FAILED="true"
-    echo "::warning::Unable to resolve the authenticated account for orchestrator state comments on issue #${expected_tracking_num:-?}; rejecting state input." >&2
     return 1
   fi
 
-  EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT="$(printf '%s' "${comments_json}" | jq -r --argjson trusted_id "${ORCHESTRATOR_STATE_AUTHENTICATED_USER_ID}" '
+  EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT="$(printf '%s' "${comments_json}" | jq -r --argjson producer_id "${ORCHESTRATOR_STATE_PRODUCER_ID}" '
     [ .[]
       | select(
           (
             ((.body // "") | test("(?ms)^<!-- ORCHESTRATOR_STATE_V1$.*^ORCHESTRATOR_STATE_V1 -->$")) or
             ((.body // "") | test("(?ms)^<!-- ORCHESTRATOR_STATE_V2 part=[0-9]+/[0-9]+ manifest=[0-9a-f]{64} -->$.*^ORCHESTRATOR_STATE_V2 -->$"))
           ) and
-          (
-            ((.user // null) as $comment_user
-              | (if ($comment_user | type) == "object" then ($comment_user.id // null) else null end) as $comment_user_id
-              | (($comment_user_id | type) == "number") and
-                ($comment_user_id > 0) and
-                (($comment_user_id | floor) == $comment_user_id) and
-                ($comment_user_id == $trusted_id)
-            ) | not
-          )
+          ((.user.id // 0) != $producer_id)
         )
     ] | length
   ' 2>/dev/null || echo "")"
@@ -2418,16 +2431,9 @@ extract_latest_valid_orchestrator_state() {
     echo "::warning::Unable to authenticate orchestrator state comments for issue #${expected_tracking_num:-?}; rejecting state input." >&2
     return 1
   fi
-  if ! trusted_comments_json="$(printf '%s' "${comments_json}" | jq -c --argjson trusted_id "${ORCHESTRATOR_STATE_AUTHENTICATED_USER_ID}" '
+  if ! trusted_comments_json="$(printf '%s' "${comments_json}" | jq -c --argjson producer_id "${ORCHESTRATOR_STATE_PRODUCER_ID}" '
     [ .[]
-      | select(
-          (.user // null) as $comment_user
-          | (if ($comment_user | type) == "object" then ($comment_user.id // null) else null end) as $comment_user_id
-          | (($comment_user_id | type) == "number") and
-            ($comment_user_id > 0) and
-            (($comment_user_id | floor) == $comment_user_id) and
-            ($comment_user_id == $trusted_id)
-        )
+      | select((.user.id // 0) == $producer_id)
     ]
   ' 2>/dev/null)"; then
     EXTRACTED_STATE_AUTH_FILTER_FAILED="true"
@@ -2435,8 +2441,9 @@ extract_latest_valid_orchestrator_state() {
     return 1
   fi
 
-  # Try the V2 chunked-chain reader first.  If a complete V2 chain is
-  # present (newest write wins), use it; otherwise fall through to the
+  # Try the V2 chunked-chain reader first. If complete V2 chains are
+  # present, prefer the highest signed generation (newest write wins on
+  # equal generations); otherwise fall through to the
   # legacy V1 single-comment scan.  This keeps existing tracking issues
   # whose state was last persisted as V1 readable until a V2 write
   # supersedes them.  See scripts/orchestrate_state_v2.py for framing.
@@ -2445,7 +2452,8 @@ extract_latest_valid_orchestrator_state() {
   _v2_payload_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_payload.XXXXXX")"
   printf '%s' "${trusted_comments_json}" > "${_v2_comments_file}"
   python3 scripts/orchestrate_state_v2.py extract \
-    --comments-json "${_v2_comments_file}" > "${_v2_payload_file}" 2>/dev/null
+    --comments-json "${_v2_comments_file}" \
+    --prefer-highest-auth-generation > "${_v2_payload_file}" 2>/dev/null
   _v2_rc=$?
   if [ "${_v2_rc}" = "0" ] && [ -s "${_v2_payload_file}" ]; then
     # Independent size guard: the extractor enforces its own per-chunk
@@ -2473,7 +2481,35 @@ extract_latest_valid_orchestrator_state() {
         EXTRACTED_STATE_BRANCH_MISMATCH_COUNT=$((EXTRACTED_STATE_BRANCH_MISMATCH_COUNT + 1))
       fi
       if is_valid_orchestrator_state_json "${candidate_state}" "${expected_tracking_num}"; then
+        candidate_auth_rc=1
+        python3 scripts/orchestrate_state_v2.py verify \
+          --state-file "${_v2_payload_file}" \
+          --repository "${GITHUB_REPOSITORY}" \
+          --tracking-issue "${expected_tracking_num}" \
+          --integration-branch "${expected_integration_branch}" \
+          --producer-id "${ORCHESTRATOR_STATE_PRODUCER_ID}" \
+          --producer-login "${ORCHESTRATOR_STATE_PRODUCER_LOGIN}" >/dev/null 2>&1 \
+          && candidate_auth_rc=0
+        if [ "${candidate_auth_rc}" -eq 0 ]; then
+          EXTRACTED_STATE_JSON="${candidate_state}"
+          if ! printf '%s' "${candidate_state}" | jq -e '
+              (.state_auth.generation | type == "number") and
+              (.state_auth.generation >= 1) and
+              (.state_auth.generation == (.state_auth.generation | floor))
+            ' >/dev/null 2>&1; then
+            EXTRACTED_STATE_LEGACY_MIGRATION_REQUIRED="true"
+          fi
+          rm -f "${_v2_comments_file}" "${_v2_payload_file}"
+          return 0
+        fi
+        if printf '%s' "${candidate_state}" | jq -e 'has("state_auth")' >/dev/null 2>&1; then
+          EXTRACTED_STATE_AUTH_FILTER_FAILED="true"
+          echo "::warning::Rejected invalidly authenticated V2 orchestrator state for issue #${expected_tracking_num}." >&2
+          rm -f "${_v2_comments_file}" "${_v2_payload_file}"
+          return 1
+        fi
         EXTRACTED_STATE_JSON="${candidate_state}"
+        EXTRACTED_STATE_LEGACY_MIGRATION_REQUIRED="true"
         rm -f "${_v2_comments_file}" "${_v2_payload_file}"
         return 0
       fi
@@ -2494,7 +2530,34 @@ extract_latest_valid_orchestrator_state() {
       EXTRACTED_STATE_BRANCH_MISMATCH_COUNT=$((EXTRACTED_STATE_BRANCH_MISMATCH_COUNT + 1))
     fi
     if is_valid_orchestrator_state_json "${candidate_state}" "${expected_tracking_num}"; then
+      candidate_auth_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v1_auth.XXXXXX")"
+      printf '%s' "${candidate_state}" > "${candidate_auth_file}"
+      candidate_auth_rc=1
+      python3 scripts/orchestrate_state_v2.py verify \
+        --state-file "${candidate_auth_file}" \
+        --repository "${GITHUB_REPOSITORY}" \
+        --tracking-issue "${expected_tracking_num}" \
+        --integration-branch "${expected_integration_branch}" \
+        --producer-id "${ORCHESTRATOR_STATE_PRODUCER_ID}" \
+        --producer-login "${ORCHESTRATOR_STATE_PRODUCER_LOGIN}" >/dev/null 2>&1 \
+        && candidate_auth_rc=0
+      rm -f "${candidate_auth_file}"
+      if [ "${candidate_auth_rc}" -ne 0 ] \
+        && printf '%s' "${candidate_state}" | jq -e 'has("state_auth")' >/dev/null 2>&1; then
+        EXTRACTED_STATE_AUTH_FILTER_FAILED="true"
+        echo "::warning::Rejected invalidly authenticated V1 orchestrator state for issue #${expected_tracking_num}." >&2
+        return 1
+      fi
       EXTRACTED_STATE_JSON="${candidate_state}"
+      if [ "${candidate_auth_rc}" -ne 0 ]; then
+        EXTRACTED_STATE_LEGACY_MIGRATION_REQUIRED="true"
+      elif ! printf '%s' "${candidate_state}" | jq -e '
+          (.state_auth.generation | type == "number") and
+          (.state_auth.generation >= 1) and
+          (.state_auth.generation == (.state_auth.generation | floor))
+        ' >/dev/null 2>&1; then
+        EXTRACTED_STATE_LEGACY_MIGRATION_REQUIRED="true"
+      fi
       if [ -n "${latest_state_comment_id}" ] && [ "${candidate_id}" != "${latest_state_comment_id}" ]; then
         EXTRACTED_STATE_FALLBACK_USED="true"
       fi
@@ -14471,18 +14534,27 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   STATE_JSON=""
   STATE_COMMENT_COUNT=0
   STATE_FALLBACK_USED="false"
+  STATE_LEGACY_MIGRATION_REQUIRED="false"
   if extract_latest_valid_orchestrator_state "${COMMENTS}" "${TRACKING_NUM}"; then
     STATE_JSON="${EXTRACTED_STATE_JSON}"
     STATE_COMMENT_COUNT="${EXTRACTED_STATE_COMMENT_COUNT}"
     STATE_FALLBACK_USED="${EXTRACTED_STATE_FALLBACK_USED}"
+    STATE_LEGACY_MIGRATION_REQUIRED="${EXTRACTED_STATE_LEGACY_MIGRATION_REQUIRED:-false}"
   else
     STATE_COMMENT_COUNT="${EXTRACTED_STATE_COMMENT_COUNT:-0}"
   fi
 
-  if [ "${STATE_FALLBACK_USED}" = "true" ] && [ -n "${STATE_JSON}" ]; then
+  if { [ "${STATE_FALLBACK_USED}" = "true" ] || [ "${STATE_LEGACY_MIGRATION_REQUIRED}" = "true" ]; } \
+    && [ -n "${STATE_JSON}" ]; then
     printf '%s\n' "${STATE_JSON}" > "${STATE_FILE}"
-    post_state_comment || true
-    echo "::warning::Detected malformed latest ORCHESTRATOR_STATE_V1 for issue #${TRACKING_NUM}; restored from older valid state and posted healed canonical state."
+    if post_state_comment; then
+      STATE_JSON="$(cat "${STATE_FILE}")"
+    fi
+    if [ "${STATE_FALLBACK_USED}" = "true" ]; then
+      echo "::warning::Detected malformed latest ORCHESTRATOR_STATE_V1 for issue #${TRACKING_NUM}; restored from older valid state and posted healed canonical state."
+    else
+      echo "::notice::Migrated exact-producer legacy orchestrator state for issue #${TRACKING_NUM} to authenticated V2 state."
+    fi
   fi
 
   if [ -z "${STATE_JSON}" ] || [ "${STATE_JSON}" = "null" ]; then
@@ -14570,7 +14642,9 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       if [ -s "${STATE_FILE}" ] && jq -e '.schema_version' "${STATE_FILE}" >/dev/null 2>&1; then
         STATE_JSON="$(cat "${STATE_FILE}")"
         # Post the reconstructed state so future poll cycles find it
-        post_state_comment || true
+        if post_state_comment; then
+          STATE_JSON="$(cat "${STATE_FILE}")"
+        fi
         echo "  State reconstructed and posted for tracking issue #${TRACKING_NUM}."
         tg_notify "Auto-recovery: rebuilt missing orchestrator state for tracking issue #${TRACKING_NUM}." "DEBUG"
       else

@@ -172,6 +172,7 @@ changelog.d/3965-sync-contract-list-union.md
 changelog.d/3967-slash-command-model-pins.md
 changelog.d/3971-deploy-activate-best-model.md
 changelog.d/3972-blocked-already-satisfied-noop.md
+changelog.d/3996-forged-state-resolver-scope.md
 changelog.d/433-readme-wrapper-predicate-examples.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
