@@ -171,6 +171,7 @@ changelog.d/3965-sync-contract-list-union.md
 changelog.d/3967-slash-command-model-pins.md
 changelog.d/3971-deploy-activate-best-model.md
 changelog.d/3972-blocked-already-satisfied-noop.md
+changelog.d/3996-forged-state-resolver-scope.md
 changelog.d/433-readme-wrapper-predicate-examples.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
@@ -185,6 +186,7 @@ changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md
 changelog.d/orchestrator-security-pass-phase-2-audit-engine.md
 changelog.d/orchestrator-security-pass-phase-3-dark-launch.md
 changelog.d/orchestrator-security-pass-phase-4-default-on.md
+changelog.d/orchestrator-state-auth-yaml-bounds.md
 changelog.d/review-autofix-per-slot-attempt-prompts.md
 changelog.d/reviewer-model-refresh-2026-08.md
 changelog.d/seed-repo-command.md

@@ -65,7 +65,7 @@ REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.
 # absent. Staging them from the same snapshot as the resolver keeps the
 # resolver and its dependencies in lockstep, so a main-side resolver change
 # can never land in a bundle whose helpers came from an older ref.
-MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh review_conflict_prepare.sh render_prompt.py opencode_helpers.sh write_opencode_config.sh"
+MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py orchestrate_state_v2.py review_conflict_resolve.sh review_conflict_prepare.sh render_prompt.py opencode_helpers.sh write_opencode_config.sh"
 # Optional bootstrap scripts: allowed to be missing from both
 # refs.  The bootstrap emits a warning and continues — callers
 # that depend on these must themselves tolerate absence.  Keep

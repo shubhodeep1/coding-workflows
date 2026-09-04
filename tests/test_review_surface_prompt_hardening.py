@@ -333,21 +333,25 @@ def test_phase_e_review_surface_prompts_keep_injected_fence_text_as_data() -> No
 	)
 
 
-def test_integration_conflict_state_selection_requires_trust_and_branch_binding() -> None:
+def test_integration_conflict_state_selection_requires_designated_producer_authentication() -> None:
 	prepare_body = CONFLICT_PREPARE.read_text(encoding="utf-8")
-	selection_start = prepare_body.index('  _state_payload="$(jq -s \'')
-	selection_end = prepare_body.index('    _state_json=', selection_start)
-	selection_body = prepare_body[selection_start:selection_end]
-	assert 'select(.body | contains("ORCHESTRATOR_STATE_V1"))' not in selection_body
-	assert r'test("\\[bot\\]$")' in selection_body
-	assert 'IN("OWNER", "MEMBER", "COLLABORATOR")' in selection_body
-	assert '--arg expected_branch "${TARGET_BRANCH}"' in prepare_body
-	assert '((.integration_branch // "") == $expected_branch)' in prepare_body
+	assert "gh_retry gh api user" in prepare_body
+	assert 'select((.user.id // 0) == $producer_id)' in prepare_body
+	assert r'test("\\[bot\\]$")' not in prepare_body
+	assert 'IN("OWNER", "MEMBER", "COLLABORATOR")' not in prepare_body
+	assert 'orchestrate_state_v2.py" verify' in prepare_body
+	assert '--repository "${GITHUB_REPOSITORY}"' in prepare_body
+	assert '--tracking-issue "${INTEGRATION_TRACKING_NUM}"' in prepare_body
+	assert '--integration-branch "${TARGET_BRANCH}"' in prepare_body
+	assert "--export-resolver-safe-fingerprints" in prepare_body
+	assert "--prefer-highest-auth-generation" in prepare_body
+	assert "failed at comments-json-merge" in prepare_body
+	assert "failed at producer-filter" in prepare_body
 
 
 def main() -> int:
 	test_phase_e_review_surface_prompts_keep_injected_fence_text_as_data()
-	test_integration_conflict_state_selection_requires_trust_and_branch_binding()
+	test_integration_conflict_state_selection_requires_designated_producer_authentication()
 	print("OK: review-surface prompt hardening preserves injected fence bait as data")
 	return 0
 

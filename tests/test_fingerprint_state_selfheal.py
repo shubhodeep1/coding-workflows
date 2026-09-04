@@ -37,6 +37,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 import subprocess
 import tempfile
 import textwrap
@@ -45,6 +46,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+FINGERPRINT_VERIFIER = REPO_ROOT / "scripts" / "verify_integration_fingerprints.py"
 
 
 _EXTRACT_FN = r"""
@@ -156,6 +158,72 @@ def _purged(stdout: str) -> dict[str, tuple[str, str]]:
 # ISO-8601 UTC string from a unix timestamp the harness controls.
 def _iso(unix_ts: int) -> str:
 	return datetime.datetime.fromtimestamp(unix_ts, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_resolver_safe_export_omits_unmerged_and_unsafe_fingerprints():
+	with tempfile.TemporaryDirectory() as td:
+		state_path = Path(td) / "state.json"
+		state_path.write_text(json.dumps({
+			"schema_version": "orchestrate_state.v1",
+			"waves": [{"issues": [
+				{"github_issue": 10, "status": "merged"},
+				{"github_issue": 11, "status": "in_progress"},
+				{"github_issue": 12, "status": "merged"},
+				{"github_issue": 13, "status": "merged"},
+			]}],
+			"merged_issue_fingerprints": {
+				"10": {
+					"issue": 10,
+					"pr": 20,
+					"captured_at": "2026-09-04T00:00:00Z",
+					"must_contain": [
+						{"file": "scripts/app.py", "regex": re.escape("expected literal")},
+						{"file": "../outside", "regex": re.escape("unsafe")},
+						{"file": ".git/config", "regex": re.escape("unsafe")},
+						{"file": "scripts/.git/config", "regex": re.escape("unsafe")},
+						{"file": "scripts/control\ninjected.py", "regex": re.escape("unsafe")},
+						{"file": "scripts/control\tinjected.py", "regex": re.escape("unsafe")},
+						{"file": "scripts/control\x01injected.py", "regex": re.escape("unsafe")},
+						{"file": "scripts/raw.py", "regex": ".*"},
+						{"file": "scripts/" + ("a" * 4097), "regex": re.escape("oversized")},
+					],
+					"must_not_contain": [{"file": "/tmp/absolute", "regex": re.escape("unsafe")}],
+					"must_not_exist": [
+						{"file": "src/deleted.py"},
+						{"file": ".git/index"},
+						{"file": "src/.git/HEAD"},
+						{"file": "src/control\rinjected.py"},
+						{"file": "src/control\x7finjected.py"},
+					],
+				},
+				"11": {
+					"issue": 11, "pr": 21,
+					"must_contain": [{"file": "scripts/unmerged.py", "regex": re.escape("no")}],
+				},
+				"12": {"issue": 999, "pr": 22, "must_contain": []},
+				"13": {
+					"issue": 13,
+					"pr": 23,
+					"must_contain": [
+						{"file": "scripts/excess.py", "regex": re.escape("bounded")}
+					] * 4097,
+				},
+			},
+		}), encoding="utf-8")
+		result = subprocess.run(
+			["python3", str(FINGERPRINT_VERIFIER), "--export-resolver-safe-fingerprints", str(state_path)],
+			capture_output=True,
+			text=True,
+			env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+	assert result.returncode == 0, result.stderr
+	exported = json.loads(result.stdout)
+	assert list(exported) == ["10"]
+	assert exported["10"]["must_contain"] == [
+		{"file": "scripts/app.py", "regex": re.escape("expected literal")},
+	]
+	assert exported["10"]["must_not_contain"] == []
+	assert exported["10"]["must_not_exist"] == [{"file": "src/deleted.py"}]
 
 
 # ---------------------------------------------------------------------------
