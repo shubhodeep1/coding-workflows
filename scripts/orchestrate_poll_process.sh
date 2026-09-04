@@ -2962,7 +2962,10 @@ _linked_pr_is_issue_implementation()
 	local head_ref="${2:-}"
 	local body="${3:-}"
 	[[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
-	if printf '%s\n' "${head_ref}" | grep -Eq "(^|/)(ai/(issue-)?|ai-(implement-)?)${issue_num}([^0-9]|$)"; then
+	# Trailing boundary is a non-word character or end of line (same as the
+	# body keyword below), so `ai/issue-77a` / `ai/issue-77_x` are not
+	# treated as issue 77; `ai/issue-77-retry` still is.
+	if printf '%s\n' "${head_ref}" | grep -Eq "(^|/)(ai/(issue-)?|ai-(implement-)?)${issue_num}([^0-9A-Za-z_]|$)"; then
 		return 0
 	fi
 	# Trailing boundary is a non-word character or end of line, matching the
