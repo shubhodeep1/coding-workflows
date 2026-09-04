@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:2338-2371 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The function makes an unauthenticated `gh api user` call to determine the authenticated account without explicitly verifying that the expected token is being used.\n  WHY: The state-authentication decision relies on an implicit trust boundary in the gh CLI credential configuration.\n- scripts/orchestrate_poll_process.sh:2338-2371 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The function caches the authenticated user ID lookup status but does not reset the cached ID when a lookup fails.\n  WHY: A transient authentication lookup failure can cause subsequent calls to skip the API lookup and leave state-driven mutations paused indefinitely.\n- scripts/orchestrate_poll_process.sh:2397-2435 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The authentication checks do not explicitly verify that the `.user` object is non-null and present before accessing `.id`.\n  WHY: A comment with a null user object could cause the ID extraction to fail and potentially allow authentication filtering to pass incorrectly.\n- scripts/orchestrate_poll_process.sh:12716-12722 | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The code checks EXTRACTED_STATE_AUTH_FILTER_FAILED without verifying that state JSON extraction succeeded for another reason.\n  WHY: If extraction failed because of a branch mismatch or another condition that does not set the flag, standalone recovery could proceed incorrectly.\n- scripts/orchestrate_poll_process.sh:2338-2345 | confidence=2\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The global ORCHESTRATOR_STATE_AUTHENTICATED_USER_ID variable is shared across extractor calls without locking.\n  WHY: Concurrent tracking-issue processing could overwrite the value while another extraction is using it.\n- scripts/orchestrate_poll_process.sh:2338-2371 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The function does not explicitly validate that the authenticated user API response is a complete, non-empty object with a valid positive numeric `.id` before extracting it.\n  WHY: A malformed, empty, or partial response can produce an empty or invalid authenticated user ID and fail downstream checks without sufficiently clear diagnostics.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Address every row through the normal clarify, plan, implement, and review pipeline \u2014 The PR implements the security fix but doesn't include documentation updates for operators on how to handle authentication failures in practice.\n  expected_change_site: README.md or operators documentation\n  confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: No changes to documentation files explaining the new authentication requirement or failure handling procedures.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:2338-2371 | confidence=4\n  PROBLEM: The function makes an unauthenticated `gh api user` call to determine the authenticated account without explicitly verifying that the expected token is being used.\n  WHY: The state-authentication decision relies on an implicit trust boundary in the gh CLI credential configuration.\n- scripts/orchestrate_poll_process.sh:2338-2371 | confidence=4\n  PROBLEM: The function caches the authenticated user ID lookup status but does not reset the cached ID when a lookup fails.\n  WHY: A transient authentication lookup failure can cause subsequent calls to skip the API lookup and leave state-driven mutations paused indefinitely.\n- scripts/orchestrate_poll_process.sh:2397-2435 | confidence=4\n  PROBLEM: The authentication checks do not explicitly verify that the `.user` object is non-null and present before accessing `.id`.\n  WHY: A comment with a null user object could cause the ID extraction to fail and potentially allow authentication filtering to pass incorrectly.\n- scripts/orchestrate_poll_process.sh:12716-12722 | confidence=3\n  PROBLEM: The code checks EXTRACTED_STATE_AUTH_FILTER_FAILED without verifying that state JSON extraction succeeded for another reason.\n  WHY: If extraction failed because of a branch mismatch or another condition that does not set the flag, standalone recovery could proceed incorrectly.\n- scripts/orchestrate_poll_process.sh:2338-2345 | confidence=2\n  PROBLEM: The variable is global and shared across multiple extractor calls within the same poller process, but there's no locking mechanism to prevent race conditions during concurrent state extraction.\n  WHY: In a multi-threaded environment or when multiple tracking issues are processed concurrently, the global variable could be overwritten by one extraction while another is still using it.\n- scripts/orchestrate_poll_process.sh:2338-2345 | confidence=2\n  PROBLEM: The global ORCHESTRATOR_STATE_AUTHENTICATED_USER_ID variable is shared across extractor calls without locking.\n  WHY: Concurrent tracking-issue processing could overwrite the value while another extraction is using it.\n- scripts/orchestrate_poll_process.sh:2338-2371 | confidence=4\n  PROBLEM: The function does not explicitly validate that the authenticated user API response is complete, non-empty object with a valid positive numeric .id before extracting it.\n  WHY: A malformed, empty, or partial response can produce an empty or invalid authenticated user ID and fail downstream checks without sufficiently clear diagnostics.\n- TASK_GAP\n  Requirement: Address every row through the normal clarify, plan, implement, and review pipeline \u2014 The PR implements the security fix but doesn't include documentation updates for operators on how to handle authentication failures in practice.\n  Expected change site: README.md or operators documentation\n  Evidence of absence: No changes to documentation files explaining the new authentication requirement or failure handling procedures.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "0d3fb40577a86092ce21f46fdfb4af9457cc6251d1de4d23a2ba2229f85b5cd6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3999,
+    "run_id": "33877407647",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33877407647",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260904150429_d133d8075b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3999,
+    "run_id": "33877407647"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 7 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-04T15:04:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
