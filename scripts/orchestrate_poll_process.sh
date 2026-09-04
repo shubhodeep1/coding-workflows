@@ -2926,6 +2926,51 @@ _find_all_linked_prs()
 	} | grep -E '^[0-9]+$' | sort -u
 }
 
+# _linked_pr_is_issue_implementation — Decide whether a PR surfaced by
+# _find_all_linked_prs is plausibly the issue's OWN implementation PR, as
+# opposed to an unrelated PR that merely mentions the issue.
+#
+# The timeline cross-reference strategy inside _find_all_linked_prs
+# returns every PR whose body or comments contain `#<n>`, and CLAUDE.md
+# §19 requires exactly that (`Refs #<n>`) for semantic linkage.  Without
+# this filter, close_linked_pr treated any rule-following tooling fix
+# that cited a stalled issue as the issue's implementation PR and closed
+# it unmerged: PR #3991 (branch claude/…, base main, a fix for the very
+# bug that stalled issue #3990) was closed that way while green and fully
+# reviewed, even though the stall judge had recorded that its head did
+# not match the integration branch.
+#
+# Args:
+#   issue_num  — the stalled issue
+#   head_ref   — the candidate PR's head branch name
+#   body       — the candidate PR's body (may be empty)
+# Returns 0 (treat as the implementation PR) when either:
+#   - head_ref matches the orchestrator branch convention for the issue
+#     (`ai/issue-<n>`, `ai-implement-<n>`, …) — the same pattern
+#     cancel_zombie_runs_for_issue matches; or
+#   - body carries a GitHub auto-close keyword targeting the issue — the
+#     same pattern _linked_prs_by_body_reference matches — i.e. the
+#     author declared the PR closes it.
+# Returns 1 otherwise (cross-reference only).
+# The base branch is deliberately not consulted: matching it against the
+# issue's integration branch would need the issue body (one extra API
+# call per candidate, §15), and a close keyword already expresses the
+# author's intent unambiguously.  Issues no API calls.
+_linked_pr_is_issue_implementation()
+{
+	local issue_num="$1"
+	local head_ref="${2:-}"
+	local body="${3:-}"
+	[[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+	if printf '%s\n' "${head_ref}" | grep -Eq "(^|/)(ai/(issue-)?|ai-(implement-)?)${issue_num}([^0-9]|$)"; then
+		return 0
+	fi
+	if printf '%s\n' "${body}" | grep -Eiq "(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#${issue_num}([^0-9]|$)"; then
+		return 0
+	fi
+	return 1
+}
+
 # _resolve_linked_pr_fresh_by_branch — Deterministic fallback for a linked
 # PR's head-commit timestamp when the issue→PR cross-reference timeline (the
 # single source that feeds BOTH stall-freshness guards: the detect_stalls
@@ -9964,16 +10009,35 @@ close_linked_pr() {
   while IFS= read -r pr_num; do
     [[ "${pr_num}" =~ ^[0-9]+$ ]] || continue
     scanned=$((scanned + 1))
-    local pr_state
-    pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.state' | grep -xE 'open|closed|merged' || echo "")"
-    if [ "${pr_state}" = "open" ]; then
-      echo "  close_linked_pr: closing linked PR #${pr_num} for issue #${issue_num} (state=open)."
-      if gh_retry gh pr close "${pr_num}" --repo "${GITHUB_REPOSITORY}" \
-          --comment "${close_reason}" 2>/dev/null; then
-        closed=$((closed + 1))
-      fi
-    else
+    # One `pulls/<n>` request per candidate (§15): the same call that
+    # answers "is it still open?" also carries the head ref and body the
+    # implementation-PR filter below needs, so its --jq is extended rather
+    # than issuing a second request.  A failed call yields an empty blob,
+    # which parses to state="" and is skipped as unknown, exactly as the
+    # previous `.state`-only lookup behaved.
+    local pr_meta_json pr_state pr_head_ref pr_base_ref pr_body
+    pr_meta_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" \
+      --jq '{state: (.state // ""), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), body: (.body // "")}' || echo "")"
+    pr_state="$(printf '%s' "${pr_meta_json}" | jq -r '.state // ""' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+    pr_head_ref="$(printf '%s' "${pr_meta_json}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
+    pr_base_ref="$(printf '%s' "${pr_meta_json}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
+    pr_body="$(printf '%s' "${pr_meta_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+    if [ "${pr_state}" != "open" ]; then
       echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (state=${pr_state:-unknown})."
+      continue
+    fi
+    # Only the issue's own implementation PR is closed.  A PR that merely
+    # cross-references the issue from an unrelated branch (see
+    # _linked_pr_is_issue_implementation) is left open and logged so the
+    # skip leaves the same trail the other outcomes do.
+    if ! _linked_pr_is_issue_implementation "${issue_num}" "${pr_head_ref}" "${pr_body}"; then
+      echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (cross-reference only; head=${pr_head_ref:-?} base=${pr_base_ref:-?} does not match the issue's implementation branch and the body carries no close keyword)."
+      continue
+    fi
+    echo "  close_linked_pr: closing linked PR #${pr_num} for issue #${issue_num} (state=open)."
+    if gh_retry gh pr close "${pr_num}" --repo "${GITHUB_REPOSITORY}" \
+        --comment "${close_reason}" 2>/dev/null; then
+      closed=$((closed + 1))
     fi
   done <<< "${pr_nums}"
   echo "  close_linked_pr: issue=#${issue_num} scanned=${scanned} closed=${closed}"
@@ -10000,6 +10064,12 @@ close_linked_pr() {
 #   - issue body lacks the "Re-issued from #<n>" marker (i.e. it is the
 #     original task, not itself a re-issue — still a gap but not Gap 2)
 #   - issue has at least one linked PR per _find_all_linked_prs
+#     (the BROAD set, on purpose: this helper only surfaces a warning and
+#     never blocks recovery, so it errs toward silence rather than paying
+#     one `pulls/<n>` request per candidate (§15) to apply the
+#     _linked_pr_is_issue_implementation filter that close_linked_pr
+#     uses.  A cross-reference-only PR can therefore suppress the Gap-2
+#     signal; close_linked_pr will still leave that PR open.)
 #
 # Fail-open on every underlying call; the surfacing is best-effort and
 # must never block stall recovery.

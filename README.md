@@ -1678,16 +1678,17 @@ When stall recovery closes a stuck issue and opens a replacement, two contracts 
 2. **Head branch name** (`_linked_prs_by_branch_name`) — `gh pr list --head ai/issue-<n> --state open`; catches PRs the orchestrator opened on its conventional branch even when the timeline cross-ref event was missed (observed in prod for PR #2568 / issue #2552, where the timeline API silently omitted the event).
 3. **Body-parse** (`_linked_prs_by_body_reference`) — `gh pr list --search "#<n> in:body"` narrowed to open PRs, post-filtered by a case-insensitive regex for the GitHub close keywords `close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved` followed by `#<n>` and a non-digit boundary (so `#25528` does not match for issue #2552).
 
-Results are deduped (`sort -u`) so a PR surfaced by multiple strategies is only acted on once. Already-closed and merged PRs are skipped. Each call emits one of these diagnostic lines to the workflow log, grep-able for audit:
+Results are deduped (`sort -u`) so a PR surfaced by multiple strategies is only acted on once. Already-closed and merged PRs are skipped. Each open candidate is then passed through `_linked_pr_is_issue_implementation`, and only a PR that is plausibly the issue's **own implementation PR** is closed: its head branch matches the orchestrator convention (`ai/issue-<n>`, `ai-implement-<n>`, …), or its body carries a GitHub close keyword targeting the issue. A PR that merely cross-references the issue from an unrelated branch (the `Refs #<n>` linkage CLAUDE.md §19 requires produces exactly that timeline event) is left open and logged. This filter exists because stall recovery previously closed PR #3991, a green and fully reviewed tooling fix on a `claude/…` branch targeting `main`, purely because its body said `Refs #3990`. The check reads head, base, and body from the same `pulls/<n>` request that reads the PR state, so it adds no API calls. Each call emits one of these diagnostic lines to the workflow log, grep-able for audit:
 
 - `close_linked_pr: closing linked PR #<pr> for issue #<n> (state=open).`
 - `close_linked_pr: skipping PR #<pr> for issue #<n> (state=closed|merged|unknown).`
+- `close_linked_pr: skipping PR #<pr> for issue #<n> (cross-reference only; head=<branch> base=<branch> does not match the issue's implementation branch and the body carries no close keyword).`
 - `close_linked_pr: issue=#<n> scanned=<k> closed=<k>`
 - `close_linked_pr: no linked PRs found for issue #<n> (timeline/branch/body lookups all empty).`
 
 This enforces the documented `ai:closed` label semantic ("Linked PR closed without merge") that the single-path timeline lookup could silently violate.
 
-**Re-issue Gap-2 surfacing (`surface_reissue_closed_without_pr`).** When stall recovery is about to close a task whose body carries the `Re-issued from #<parent>` marker AND `_find_all_linked_prs` returned nothing — i.e. a re-issue that never produced a PR before stall recovery exhausted (observed in prod for re-issue #2591 of #2552) — four stable signals are emitted before the close:
+**Re-issue Gap-2 surfacing (`surface_reissue_closed_without_pr`).** When stall recovery is about to close a task whose body carries the `Re-issued from #<parent>` marker AND `_find_all_linked_prs` returned nothing (the broad, unfiltered set: this helper only surfaces a warning and never blocks recovery, so it deliberately does not spend one `pulls/<n>` request per candidate to apply the implementation-PR filter above; a cross-reference-only PR can therefore suppress the signal) — i.e. a re-issue that never produced a PR before stall recovery exhausted (observed in prod for re-issue #2591 of #2552) — four stable signals are emitted before the close:
 
 - **Log prefix** (public contract, do not rename): `REISSUE_CLOSED_WITHOUT_PR issue=<n> parent=<p> phase=<label> stall_minutes=<m> recovery_count=<c> source=<main|standalone>`
 - **GHA annotation**: `::warning title=Re-issue closed without PR::...`
