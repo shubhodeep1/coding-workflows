@@ -2402,7 +2402,8 @@ extract_latest_valid_orchestrator_state() {
             ((.body // "") | test("(?ms)^<!-- ORCHESTRATOR_STATE_V2 part=[0-9]+/[0-9]+ manifest=[0-9a-f]{64} -->$.*^ORCHESTRATOR_STATE_V2 -->$"))
           ) and
           (
-            ((.user.id // null) as $comment_user_id
+            ((.user // null) as $comment_user
+              | (if ($comment_user | type) == "object" then ($comment_user.id // null) else null end) as $comment_user_id
               | (($comment_user_id | type) == "number") and
                 ($comment_user_id > 0) and
                 (($comment_user_id | floor) == $comment_user_id) and
@@ -2420,7 +2421,8 @@ extract_latest_valid_orchestrator_state() {
   if ! trusted_comments_json="$(printf '%s' "${comments_json}" | jq -c --argjson trusted_id "${ORCHESTRATOR_STATE_AUTHENTICATED_USER_ID}" '
     [ .[]
       | select(
-          (.user.id // null) as $comment_user_id
+          (.user // null) as $comment_user
+          | (if ($comment_user | type) == "object" then ($comment_user.id // null) else null end) as $comment_user_id
           | (($comment_user_id | type) == "number") and
             ($comment_user_id > 0) and
             (($comment_user_id | floor) == $comment_user_id) and

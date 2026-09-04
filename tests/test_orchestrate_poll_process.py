@@ -1057,12 +1057,11 @@ def _run_poller(
 			user = entry.get("user")
 			if isinstance(user, dict):
 				user_entry = dict(user)
-			elif user:
-				user_entry = {"login": str(user)}
-			else:
+				user_entry.setdefault("login", "octocat")
+				entry["user"] = user_entry
+			elif user is None:
 				user_entry = {"login": "poller-writer", "id": authenticated_user_id}
-			user_entry.setdefault("login", "octocat")
-			entry["user"] = user_entry
+				entry["user"] = user_entry
 			entry.setdefault(
 				"html_url",
 				f"https://github.com/owner/repo/issues/{issue_num}#issuecomment-{entry['id']}",
@@ -12770,6 +12769,29 @@ def test_state_comment_without_numeric_user_id_is_rejected():
 	assert result["merge_calls"]
 	assert all(call["base"] == "orchestrator/project-192" for call in result["merge_calls"])
 	assert not any("orchestrator/project-999" in str(call) for call in result["api_calls"])
+
+
+def test_malformed_state_comment_user_metadata_is_rejected_without_vetoing_trusted_state():
+	trusted_state = _base_state(status="in_progress")
+	trusted_state["integration_branch"] = "orchestrator/project-192"
+	forged_state = dict(trusted_state)
+	forged_state["integration_branch"] = "orchestrator/project-999"
+	for malformed_user in ["poller-writer", {"id": "24680", "login": "poller-writer"}]:
+		result = _run_poller(
+			state=trusted_state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			tracking_comments=[{
+				"body": _state_comment(forged_state),
+				"user": malformed_user,
+				"author_association": "OWNER",
+			}],
+			issue_labels={10: ["ai:implementing"]},
+			existing_branches=["main", "orchestrator/project-192", "orchestrator/project-999"],
+		)
+		assert result["merge_calls"]
+		assert all(call["base"] == "orchestrator/project-192" for call in result["merge_calls"])
+		assert not any("orchestrator/project-999" in str(call) for call in result["api_calls"])
 
 
 def test_authenticated_user_lookup_failure_skips_all_state_driven_mutations():
