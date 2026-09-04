@@ -12720,6 +12720,10 @@ run_standalone_stall_recovery() {
         echo "::warning::State-comment authentication failed while identifying orchestrator-managed issues; skipping standalone stall recovery this cycle." >&2
         return
       fi
+      if [ "${EXTRACTED_STATE_BRANCH_MISMATCH_COUNT:-0}" -gt 0 ]; then
+        echo "::warning::Authenticated state branch mismatch while identifying orchestrator-managed issues; skipping standalone stall recovery this cycle." >&2
+        return
+      fi
       managed_nums="$(printf '%s' "${t_state_json}" | jq -r '.waves[]?.issues[]?.github_issue // empty' 2>/dev/null || true)"
       if [ -n "${managed_nums}" ]; then
         orchestrator_managed_set="${orchestrator_managed_set}"$'\n'"${managed_nums}"

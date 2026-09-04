@@ -12844,6 +12844,36 @@ def test_authenticated_user_lookup_failure_skips_standalone_recovery_for_managed
 	assert len(managed_issue_comments) == 1
 
 
+def test_authenticated_state_branch_mismatch_skips_standalone_recovery_for_managed_children():
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:awaiting-approval",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	mismatched_state = _base_state(status="in_progress")
+	mismatched_state["integration_branch"] = "orchestrator/project-999"
+	result = _run_poller(
+		state=mismatched_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval"]},
+		issue_comments={10: [standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	combined_output = result["stdout"] + result["stderr"]
+	managed_issue_comments = [comment.get("body", "") for comment in result["issues"]["10"]["comments"]]
+	assert "Authenticated state branch mismatch" in combined_output
+	assert "skipping standalone stall recovery this cycle" in combined_output
+	assert not any("/approved" in body for body in managed_issue_comments)
+	assert result["issues"]["10"]["labels"] == ["ai:awaiting-approval"]
+	assert len(managed_issue_comments) == 1
+
+
 def test_authenticated_user_identity_lookup_is_cached_across_extractors():
 	result = _run_poller(
 		state=_base_state(status="in_progress"),
