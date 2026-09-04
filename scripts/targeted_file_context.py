@@ -546,10 +546,12 @@ def emit_context(
 	off_suppressed = 0
 	overflow_rendered_bytes = 0
 	# Set once a clamp yields nothing renderable (remaining budget smaller
-	# than the first UTF-8 code point of the chunk text). From then on the
-	# overflow path goes straight to the marker: rendering nothing would
-	# leave `used_bytes` unchanged, so every later path would re-run the
-	# Semble subprocess and stack an empty header/footer pair.
+	# than the first UTF-8 code point of the chunk text). From then on no
+	# further Semble query is issued for overflowing paths; they proceed to
+	# the configured `semble_fallback` (`read`, `off`, or the default
+	# marker) exactly as if Semble were unavailable. Rendering an empty
+	# block instead would leave `used_bytes` unchanged, so every later path
+	# would re-run the Semble subprocess and stack an empty header/footer.
 	semble_overflow_budget_exhausted = False
 	semble_max_chunks = _normalize_semble_max_chunks(semble_max_chunks)
 
