@@ -1794,6 +1794,11 @@ jobs:
           # read tool" marker so the model uses its native read flow. Set
           # MAX_BYTES=0 to disable inlining entirely.
           TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
+          # Warning threshold for the assembled-prompt size guard below the
+          # prompt assembly. Repo variables are not exported to the shell on
+          # their own, so this is what makes the documented override reach
+          # the guard; the shell-side default remains as a fail-open.
+          IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS: ${{ vars.IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS || '1048576' }}
           # Required by the Fix #5 diagnostics-posting branch. Without
           # this, `[ -n "${GH_TOKEN:-}" ]` at the gh-issue-comment guard
           # is always false and the per-attempt failure diagnostics

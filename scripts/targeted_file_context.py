@@ -545,6 +545,12 @@ def emit_context(
 	read_fallback_rendered = 0
 	off_suppressed = 0
 	overflow_rendered_bytes = 0
+	# Set once a clamp yields nothing renderable (remaining budget smaller
+	# than the first UTF-8 code point of the chunk text). From then on the
+	# overflow path goes straight to the marker: rendering nothing would
+	# leave `used_bytes` unchanged, so every later path would re-run the
+	# Semble subprocess and stack an empty header/footer pair.
+	semble_overflow_budget_exhausted = False
 	semble_max_chunks = _normalize_semble_max_chunks(semble_max_chunks)
 
 	output.append("=== TARGETED FILE CONTEXT ===")
@@ -577,7 +583,11 @@ def emit_context(
 			# budget and becomes a per-file trigger threshold. See the
 			# rationale comment above `_append_semble_block`.
 			overflow_budget_remaining_bytes = max_bytes - used_bytes
-			if semble_query_text and overflow_budget_remaining_bytes > 0:
+			if (
+				semble_query_text
+				and overflow_budget_remaining_bytes > 0
+				and not semble_overflow_budget_exhausted
+			):
 				query_start = time.monotonic()
 				success, payload = _run_semble_query(
 					f"{rel}\n{semble_query_text}",
@@ -591,26 +601,32 @@ def emit_context(
 					clamped_payload, payload_was_clamped = _clamp_text_to_byte_budget(
 						payload, overflow_budget_remaining_bytes
 					)
-					rendered_bytes = _append_semble_block(
-						output,
-						rel,
-						raw_size,
-						clamped_payload,
-						truncated_to_budget=payload_was_clamped,
-					)
-					_log_semble_event(
-						"SEMBLE_QUERY",
-						target="overflow",
-						file=rel,
-						chunks=semble_max_chunks,
-						bytes=rendered_bytes,
-						ms=elapsed_ms,
-					)
-					overflow_rendered_bytes += rendered_bytes
-					used_bytes += rendered_bytes
-					included += 1
-					semble_rendered += 1
-					continue
+					if clamped_payload:
+						rendered_bytes = _append_semble_block(
+							output,
+							rel,
+							raw_size,
+							clamped_payload,
+							truncated_to_budget=payload_was_clamped,
+						)
+						_log_semble_event(
+							"SEMBLE_QUERY",
+							target="overflow",
+							file=rel,
+							chunks=semble_max_chunks,
+							bytes=rendered_bytes,
+							ms=elapsed_ms,
+						)
+						overflow_rendered_bytes += rendered_bytes
+						used_bytes += rendered_bytes
+						included += 1
+						semble_rendered += 1
+						continue
+					# Nothing renderable fits. Do not emit an empty block (it
+					# would not advance `used_bytes`), do not echo the chunk
+					# text as a reason, and stop querying for later paths.
+					semble_overflow_budget_exhausted = True
+					payload = "budget-exhausted"
 				_log_semble_event(
 					"SEMBLE_FALLBACK",
 					target="overflow",

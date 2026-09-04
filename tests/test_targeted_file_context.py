@@ -825,6 +825,49 @@ def test_semble_overflow_query_skipped_once_budget_is_exhausted() -> None:
 		assert "SEMBLE_QUERY target=overflow file=src/big.py" not in stderr.getvalue()
 
 
+def test_semble_overflow_empty_clamp_marks_budget_exhausted() -> None:
+	"""Regression (PR #3995 review): when the remaining budget is smaller
+	than the first UTF-8 code point of the chunk text, the clamp yields an
+	empty string. Rendering that would append a header/footer pair without
+	advancing `used_bytes`, so every later overflowing path would re-run the
+	Semble subprocess and stack more empty blocks. Instead: no block, a
+	`budget-exhausted` fallback (never the chunk text itself), and no
+	further queries for the remaining paths."""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		for name in ("a.py", "b.py", "c.py"):
+			(root / "src" / name).write_text("x = 1\n" * 400, encoding="utf-8")
+		semble = root / "fake_semble.py"
+		# Multi-byte first character: 2 bytes, so a 1-byte budget clamps
+		# to nothing.
+		_make_fake_semble_script(semble, stdout="\u00e9 secret chunk text\n" * 50)
+
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			context = emit_context(
+				["src/a.py", "src/b.py", "src/c.py"],
+				root,
+				max_bytes=1,
+				semble_bin=str(semble),
+				semble_index=str(root / ".semble-index"),
+				semble_query_text="task summary",
+				semble_max_chunks=6,
+			)
+
+		assert "chunk-retrieved via semble" not in context
+		assert "secret chunk text" not in context
+		for name in ("src/a.py", "src/b.py", "src/c.py"):
+			assert f"--- FILE: {name} (2400 bytes; would overflow total budget" in context
+		telemetry = stderr.getvalue()
+		assert "SEMBLE_QUERY" not in telemetry
+		# One query ran (for the first path) and reported exhaustion; the
+		# other two paths never invoked the subprocess.
+		assert telemetry.count("SEMBLE_FALLBACK") == 1
+		assert "SEMBLE_FALLBACK target=overflow file=src/a.py reason=budget-exhausted" in telemetry
+		assert "secret chunk text" not in telemetry
+
+
 def test_clamp_text_to_byte_budget_prefers_whole_lines() -> None:
 	clamp = targeted_file_context_module._clamp_text_to_byte_budget
 
