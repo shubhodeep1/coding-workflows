@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_targeted_file_context.py:779 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The assertion comment still says \"allow 300 \u2014 the emitted block is the budgeted content plus that overhead\" when it should reference the bounded framing overhead calculation.\n  WHY: Misleading test documentation does not match the implementation behavior.\n- tests/test_targeted_file_context.py:740 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The test comment still references the old \"emitted block must stay inside --max-bytes as a whole\" phrasing instead of \"Source content stays inside --max-bytes with bounded framing overhead\".\n  WHY: Misleading test documentation does not match the implementation behavior.\n- changelog.d/3990-targeted-context-budget-overflow.md:17 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The changelog entry still references \"3990-targeted-context-budget-overflow.md\" after consolidation into \"3994-targeted-context-budget-and-stall-recovery-scope.md\".\n  WHY: Documentation inconsistency.\n- scripts/orchestrate_poll_process.sh:2974 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The keyword matcher has no leading word boundary, so a close keyword substring inside a larger word can cause stall recovery to close an unrelated PR.\n  WHY: A PR body saying \"prefixes #77\" or \"encloses #77\" can be misclassified as the issue's implementation PR, diverging from the stricter canonical matcher.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states \"Consolidated in e33bfad. Both entries now live verbatim in changelog.d/3994-targeted-context-budget-and-stall-recovery-scope.md, named for this PR, under a single fixed marker\"\n  expected_change_site: changelog.d/3990-targeted-context-budget-overflow.md:17\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The file still contains a reference to the old consolidated filename \"3990-targeted-context-budget-overflow.md\" instead of the new \"3994-targeted-context-budget-and-stall-recovery-scope.md\".\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_targeted_file_context.py:779 | severity=NIT | confidence=5\n  PROBLEM: The assertion comment still says \"allow 300 \u2014 the emitted block is the budgeted content plus that overhead\" when it should reference the bounded framing overhead calculation.\n  WHY: Misleading test documentation does not match the implementation behavior.\n- tests/test_targeted_file_context.py:740 | severity=NIT | confidence=5\n  PROBLEM: The test comment still references the old \"emitted block must stay inside --max-bytes as a whole\" phrasing instead of \"Source content stays inside --max-bytes with bounded framing overhead\".\n  WHY: Misleading test documentation does not match the implementation behavior.\n- changelog.d/3990-targeted-context-budget-overflow.md:17 | severity=NIT | confidence=5\n  PROBLEM: The changelog entry still references \"3990-targeted-context-budget-overflow.md\" after consolidation into \"3994-targeted-context-budget-and-stall-recovery-scope.md\".\n  WHY: Documentation inconsistency.\n- TASK_GAP\n  Requirement: The PR description states \"Consolidated in e33bfad. Both entries now live verbatim in changelog.d/3994-targeted-context-budget-and-stall-recovery-scope.md, named for this PR, under a single fixed marker\"\n  Expected change site: changelog.d/3990-targeted-context-budget-overflow.md:17\n  Evidence of absence: The file still contains a reference to the old consolidated filename \"3990-targeted-context-budget-overflow.md\" instead of the new \"3994-targeted-context-budget-and-stall-recovery-scope.md\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/orchestrate_poll_process.sh:2974 | severity=NIT | confidence=3\n  PROBLEM: The keyword matcher `(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#${issue_num}...` has no leading word boundary, so a keyword substring inside a larger word matches.\n  WHY: Stall recovery on issue #N closes an unrelated open PR whose body happens to contain e.g. \"prefixes #N\" / \"encloses #N\", because the predicate misclassifies it as the issue's own implementation PR.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "38431477416fcc89d3f67cb12f9fdcf9334b76ed64c8d9997a15b53b96020a55",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3994,
+    "run_id": "33844068008",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33844068008",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260904085243_c06476c327",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3994,
+    "run_id": "33844068008"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-04T08:52:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
