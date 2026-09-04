@@ -739,6 +739,110 @@ def test_cli_rejects_unknown_fallback_mode() -> None:
 		assert "invalid choice" in stderr.getvalue()
 
 
+def test_semble_overflow_blocks_stay_within_total_budget() -> None:
+	"""Regression: the semble overflow path must respect `max_bytes`.
+
+	Chunk size is set by the semble index, not by the file that triggered
+	the query, so an unclamped overflow block could render far more than
+	the caller's whole budget — and every subsequent overflowing path
+	added another one on top. On run 33796624872 (issue #3990) that
+	emitted ~129KB per overflowing file against a 102400-byte budget and
+	pushed the implement prompt past codex-cli's 1,048,576-character
+	`turn/start` stdin cap, failing every attempt before the editor ran."""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		names = ["src/a.py", "src/b.py", "src/c.py", "src/d.py", "src/e.py"]
+		for rel in names:
+			(root / rel).write_text("x = 1\n" * 4000, encoding="utf-8")
+		semble = root / "fake_semble.py"
+		# One chunk set far larger than the whole budget, as the real
+		# index returns for a broad repo-wide query.
+		_make_fake_semble_script(semble, stdout="chunk line\n" * 5000)
+
+		max_bytes = 10_000
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			context = emit_context(
+				names,
+				root,
+				max_bytes=max_bytes,
+				semble_bin=str(semble),
+				semble_index=str(root / ".semble-index"),
+				semble_query_text="task summary",
+				semble_max_chunks=6,
+			)
+
+		# Chunk content across ALL overflow blocks must fit the budget.
+		chunk_bytes = sum(
+			len(line.encode("utf-8")) + 1
+			for line in context.splitlines()
+			if line.startswith("chunk line")
+		)
+		assert chunk_bytes <= max_bytes, f"chunk content {chunk_bytes} exceeds budget {max_bytes}"
+		# Pre-fix this produced ~275KB for these inputs.
+		assert len(context.encode("utf-8")) < 4 * max_bytes, (
+			f"total context {len(context.encode('utf-8'))} bytes is not bounded by the budget"
+		)
+		# The first overflow block is clamped and says so; the rest have
+		# no budget left and fall back to the marker.
+		assert "truncated to" in context
+		assert "read with read tool for the rest" in context
+		assert "would overflow total budget" in context
+		# Every path is still reported — no silent drops.
+		for rel in names:
+			assert rel in context, f"path {rel} missing from output"
+
+
+def test_semble_overflow_query_skipped_once_budget_is_exhausted() -> None:
+	"""With no budget left there is nothing to render, so the subprocess
+	query is not worth issuing — the path gets the standard marker and no
+	SEMBLE_QUERY telemetry."""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "small.py").write_text("x = 1\n" * 100, encoding="utf-8")
+		(root / "src" / "big.py").write_text("y = 1\n" * 4000, encoding="utf-8")
+		semble = root / "fake_semble.py"
+		_make_fake_semble_script(semble, stdout="chunk 1\nchunk 2\n")
+
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			context = emit_context(
+				["src/small.py", "src/big.py"],
+				root,
+				# Exactly the small file, nothing left over.
+				max_bytes=600,
+				semble_bin=str(semble),
+				semble_index=str(root / ".semble-index"),
+				semble_query_text="task summary",
+				semble_max_chunks=6,
+			)
+
+		assert "--- FILE: src/small.py (600 bytes) ---" in context
+		assert "would overflow total budget" in context
+		assert "chunk-retrieved via semble" not in context
+		assert "SEMBLE_QUERY target=overflow file=src/big.py" not in stderr.getvalue()
+
+
+def test_clamp_text_to_byte_budget_prefers_whole_lines() -> None:
+	clamp = targeted_file_context_module._clamp_text_to_byte_budget
+
+	assert clamp("abc\ndef", 100) == ("abc\ndef", False)
+	assert clamp("abc\ndef", 7) == ("abc\ndef", False)
+	# 4 bytes fits "abc" but not "abc\ndef" (7 bytes).
+	clamped, was_clamped = clamp("abc\ndef", 4)
+	assert (clamped, was_clamped) == ("abc", True)
+	# First line alone overshoots: fall back to a byte prefix rather than
+	# rendering an empty block.
+	clamped, was_clamped = clamp("abcdefgh", 3)
+	assert (clamped, was_clamped) == ("abc", True)
+	assert clamp("abc", 0) == ("", True)
+	# Never splits a multi-byte character.
+	clamped, _ = clamp("\u00e9\u00e9\u00e9", 3)
+	assert clamped == "\u00e9"
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0

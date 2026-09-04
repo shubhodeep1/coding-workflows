@@ -2012,6 +2012,30 @@ jobs:
             cat "${IMPLEMENTATION_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
 
+          # Safety net: codex-cli hard-caps `turn/start` stdin at 1,048,576
+          # characters. Overshooting fails EVERY attempt before the editor
+          # runs, with only an opaque "Input exceeds the maximum length of
+          # 1048576 characters" on stderr — the attempt then looks like an
+          # ordinary no-actionable-output bail, so the retry loop, the stall
+          # recovery, and the stall judge all react to the wrong signal. On
+          # run 33796624872 (issue #3990) that chain closed a security-pass
+          # fix issue and gated project #3965 on `ai:security-pass-failed`.
+          # The per-file clamp in scripts/targeted_file_context.py is the
+          # prevention; this line is the diagnosis, and mirrors the guards in
+          # scripts/review_run_reviewers.sh and scripts/review_rb_judge.sh.
+          IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES="${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES:-1048576}"
+          if ! [[ "${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES}" =~ ^[1-9][0-9]*$ ]]; then
+            IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES=1048576
+          fi
+          implement_prompt_assembled_bytes="$(wc -c < "${CODEX_PROMPT_FILE}" 2>/dev/null | tr -d '[:space:]' || printf '0')"
+          if ! [[ "${implement_prompt_assembled_bytes}" =~ ^[0-9]+$ ]]; then
+            implement_prompt_assembled_bytes=0
+          fi
+          echo "Implement prompt assembled size: ${implement_prompt_assembled_bytes} bytes (codex stdin cap: ${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES})."
+          if [ "${implement_prompt_assembled_bytes}" -ge "${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES}" ]; then
+            echo "::warning::Implement prompt is ${implement_prompt_assembled_bytes} bytes, at or over codex's ${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES}-character turn/start stdin cap. Every attempt will fail with 'Input exceeds the maximum length' before the editor runs. Lower TARGETED_FILE_CONTEXT_MAX_BYTES, or shrink pre_assembled_static.txt / the memory context / the issue-comment context."
+          fi
+
           # ── Shared event-idle stall guard for the implement editor ──
           # scripts/codex_stall_guard.sh owns per-pid heartbeats and the
           # event-idle kill/observe logic. This step retains only the outer

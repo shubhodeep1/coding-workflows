@@ -446,12 +446,65 @@ def _run_semble_query(
 	return True, chunk_text
 
 
-def _append_semble_block(output: list[str], rel: str, raw_size: int, chunk_text: str) -> int:
-	output.append(f"--- FILE: {rel} ({raw_size} bytes — chunk-retrieved via semble) ---")
+def _clamp_text_to_byte_budget(text: str, budget_bytes: int) -> tuple[str, bool]:
+	"""Clamp `text` to at most `budget_bytes` UTF-8 bytes on a line boundary.
+
+	Returns `(clamped_text, was_clamped)`. Whole lines are preferred so a
+	chunk block never ends mid-token; when even the first line exceeds the
+	budget the text is cut at the largest byte prefix that decodes cleanly,
+	so the caller always gets something renderable rather than an empty
+	block. A non-positive budget yields `("", True)`.
+	"""
+	if budget_bytes <= 0:
+		return "", True
+	encoded = text.encode("utf-8")
+	if len(encoded) <= budget_bytes:
+		return text, False
+	kept_lines: list[str] = []
+	kept_bytes = 0
+	for line in text.splitlines():
+		# +1 for the newline that rejoining re-adds between lines.
+		line_cost = len(line.encode("utf-8")) + (1 if kept_lines else 0)
+		if kept_bytes + line_cost > budget_bytes:
+			break
+		kept_lines.append(line)
+		kept_bytes += line_cost
+	if kept_lines:
+		return "\n".join(kept_lines), True
+	return encoded[:budget_bytes].decode("utf-8", errors="ignore"), True
+
+
+# `truncated_to_budget` exists because the overflow branch in `emit_context`
+# renders semble chunks whose size is set by the index, not by the file that
+# triggered the query — a 12KB source file can retrieve a 129KB chunk set.
+# Without clamping, one overflowing path could emit more than the caller's
+# entire `max_bytes` budget, and every subsequent overflowing path added
+# another unclamped block on top. That is what pushed the implement prompt
+# past codex-cli's 1,048,576-character `turn/start` stdin cap on run
+# 33796624872 (issue #3990), failing every attempt before the editor ran.
+# The header records the clamp so the model knows the block is partial and
+# should use its read tool for the rest.
+def _append_semble_block(
+	output: list[str],
+	rel: str,
+	raw_size: int,
+	chunk_text: str,
+	*,
+	truncated_to_budget: bool = False,
+) -> int:
+	rendered_bytes = len(chunk_text.encode("utf-8"))
+	if truncated_to_budget:
+		output.append(
+			f"--- FILE: {rel} ({raw_size} bytes — chunk-retrieved via semble, "
+			f"truncated to {rendered_bytes} byte(s) to fit the remaining total "
+			f"budget — read with read tool for the rest) ---"
+		)
+	else:
+		output.append(f"--- FILE: {rel} ({raw_size} bytes — chunk-retrieved via semble) ---")
 	output.extend(chunk_text.splitlines())
 	output.append(f"--- END FILE: {rel} ---")
 	output.append("")
-	return len(chunk_text.encode("utf-8"))
+	return rendered_bytes
 
 
 def _append_read_fallback_block(output: list[str], rel: str, truncated: bytes, raw_size: int) -> int:
@@ -516,7 +569,13 @@ def emit_context(
 			continue
 		raw_size = abs_path.stat().st_size
 		if used_bytes + raw_size > max_bytes:
-			if semble_query_text:
+			# Budget left for this overflowing entry. The semble and read
+			# fallbacks below BOTH render content, so both must be clamped
+			# to this remainder — otherwise `max_bytes` stops being a total
+			# budget and becomes a per-file trigger threshold. See the
+			# rationale comment above `_append_semble_block`.
+			overflow_budget_remaining_bytes = max_bytes - used_bytes
+			if semble_query_text and overflow_budget_remaining_bytes > 0:
 				query_start = time.monotonic()
 				success, payload = _run_semble_query(
 					f"{rel}\n{semble_query_text}",
@@ -527,7 +586,16 @@ def emit_context(
 				)
 				elapsed_ms = int((time.monotonic() - query_start) * 1000)
 				if success and payload is not None:
-					rendered_bytes = _append_semble_block(output, rel, raw_size, payload)
+					clamped_payload, payload_was_clamped = _clamp_text_to_byte_budget(
+						payload, overflow_budget_remaining_bytes
+					)
+					rendered_bytes = _append_semble_block(
+						output,
+						rel,
+						raw_size,
+						clamped_payload,
+						truncated_to_budget=payload_was_clamped,
+					)
 					_log_semble_event(
 						"SEMBLE_QUERY",
 						target="overflow",
