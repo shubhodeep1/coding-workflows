@@ -16768,6 +16768,10 @@ def test_linked_pr_is_issue_implementation_predicate_contract():
 		("77", "claude/some-fix", "fixes: #77 and more", 0),
 		("77", "claude/some-fix", "Resolved #775", 1),
 		("77", "claude/some-fix", "closes #7", 1),
+		("77", "claude/some-fix", "Closes #77a", 1),
+		("77", "claude/some-fix", "Closes #77_x", 1),
+		("77", "claude/some-fix", "Closes #77.", 0),
+		("77", "claude/some-fix", "Closes #77)", 0),
 		("abc", "ai/issue-abc", "Closes #abc", 1),
 	]
 	with tempfile.TemporaryDirectory() as tmp:

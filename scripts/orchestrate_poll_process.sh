@@ -2965,7 +2965,10 @@ _linked_pr_is_issue_implementation()
 	if printf '%s\n' "${head_ref}" | grep -Eq "(^|/)(ai/(issue-)?|ai-(implement-)?)${issue_num}([^0-9]|$)"; then
 		return 0
 	fi
-	if printf '%s\n' "${body}" | grep -Eiq "(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#${issue_num}([^0-9]|$)"; then
+	# Trailing boundary is a non-word character or end of line, matching the
+	# `\b` the jq filter in _linked_prs_by_body_reference uses, so `#77a`
+	# does not count as a close keyword for issue 77.
+	if printf '%s\n' "${body}" | grep -Eiq "(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#${issue_num}([^0-9A-Za-z_]|$)"; then
 		return 0
 	fi
 	return 1

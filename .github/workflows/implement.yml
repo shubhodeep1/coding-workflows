@@ -1794,6 +1794,11 @@ jobs:
           # read tool" marker so the model uses its native read flow. Set
           # MAX_BYTES=0 to disable inlining entirely.
           TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
+          # Codex-cli's `turn/start` stdin cap, in characters. The assembled
+          # prompt is measured with `wc -c` (bytes, never lower than the
+          # character count) and a warning is emitted at or over this value.
+          # Override only when the codex-cli build in use changes the cap.
+          IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES: ${{ vars.IMPLEMENT_PROMPT_CODEX_STDIN_CAP_BYTES || '1048576' }}
           # Required by the Fix #5 diagnostics-posting branch. Without
           # this, `[ -n "${GH_TOKEN:-}" ]` at the gh-issue-comment guard
           # is always false and the per-attempt failure diagnostics
