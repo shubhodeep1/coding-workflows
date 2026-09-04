@@ -16828,10 +16828,6 @@ def main() -> int:
 	return _run_selected_tests(test_funcs)
 
 
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 def test_reset_implementing_to_awaiting_approval_for_retrigger_contract():
 	"""The shared stall-recovery label swap issues exactly one ``gh issue
 	edit`` moving ``ai:implementing`` back to ``ai:awaiting-approval``,
@@ -16900,3 +16896,7 @@ def test_stall_recovery_retrigger_implement_arms_swap_label_before_posting_appro
 		# prefix may already post it.
 		assert "gh api" not in arm_prefix, arm_prefix
 		assert "\n/approved\n" not in arm_prefix, arm_prefix
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
