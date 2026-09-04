@@ -2945,9 +2945,13 @@ _find_all_linked_prs()
 #   head_ref   — the candidate PR's head branch name
 #   body       — the candidate PR's body (may be empty)
 # Returns 0 (treat as the implementation PR) when either:
-#   - head_ref matches the orchestrator branch convention for the issue
-#     (`ai/issue-<n>`, `ai-implement-<n>`, …) — the same pattern
-#     cancel_zombie_runs_for_issue matches; or
+#   - head_ref matches the orchestrator branch convention for the issue:
+#     `ai/issue-<n>`, `ai/<n>`, `ai-implement-<n>` or `ai-<n>`, optionally
+#     under a path prefix (`refs/heads/ai/issue-<n>`) and optionally
+#     followed by a non-word suffix (`ai/issue-<n>-retry`, `ai/<n>-<slug>`).
+#     This is the same family cancel_zombie_runs_for_issue matches, with a
+#     stricter trailing boundary (non-word-or-end rather than
+#     non-digit-or-end, see below); or
 #   - body carries a GitHub auto-close keyword targeting the issue — the
 #     same pattern _linked_prs_by_body_reference matches — i.e. the
 #     author declared the PR closes it.
@@ -2963,8 +2967,9 @@ _linked_pr_is_issue_implementation()
 	local body="${3:-}"
 	[[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
 	# Trailing boundary is a non-word character or end of line (same as the
-	# body keyword below), so `ai/issue-77a` / `ai/issue-77_x` are not
-	# treated as issue 77; `ai/issue-77-retry` still is.
+	# body keyword below; cancel_zombie_runs_for_issue uses the looser
+	# `([^0-9]|$)`), so `ai/issue-77a` / `ai/issue-77_x` are not treated as
+	# issue 77; `ai/issue-77-retry` and `ai/77-slug` still are.
 	if printf '%s\n' "${head_ref}" | grep -Eq "(^|/)(ai/(issue-)?|ai-(implement-)?)${issue_num}([^0-9A-Za-z_]|$)"; then
 		return 0
 	fi
