@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:line 2965 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The head-branch matcher trailing boundary `([^0-9]|$)` is too loose and falsely accepts related branch names such as `ai/issue-77a`, `ai/issue-77_x`, and `ai-implement-77_alt` as the issue's implementation PR.\n  WHY: Stall recovery can close a related PR unmerged when its head branch matches the loose pattern; severity was reported as MAJOR by the reviewer.\n- tests/test_orchestrate_poll_process.py:the `cases` list inside `test_linked_pr_is_issue_implementation_predicate_contract` (around lines 16720-16760 in the post-diff file) | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The predicate contract test does not cover head-branch boundary cases such as `(\"77\", \"ai/issue-77a\", \"\", 1)` and `(\"77\", \"ai/issue-77_x\", \"\", 1)`.\n  WHY: The missing cases allow the inconsistent head-branch boundary to escape regression testing; severity was reported as NIT by the reviewer.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:line 2965 | severity=MAJOR | confidence=5\n  PROBLEM: The head-branch matcher trailing boundary `([^0-9]|$)` is too loose and falsely accepts related branch names such as `ai/issue-77a`, `ai/issue-77_x`, and `ai-implement-77_alt` as the issue's implementation PR.\n  WHY: Stall recovery can close a related PR unmerged when its head branch matches the loose pattern.\n- tests/test_orchestrate_poll_process.py:the `cases` list inside `test_linked_pr_is_issue_implementation_predicate_contract` (around lines 16720-16760 in the post-diff file)\n  PROBLEM: The predicate contract test does not cover head-branch boundary cases such as `(\"77\", \"ai/issue-77a\", \"\", 1)` and `(\"77\", \"ai/issue-77_x\", \"\", 1)`.\n  WHY: The missing cases allow the inconsistent head-branch boundary to escape regression testing.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "5d377494c33d3edc8e7a9e5755e7d06b8818de240318fb59fe6d61fe713bb594",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3994,
+    "run_id": "33839770999",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33839770999",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260904065956_d43f5a4704",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3994,
+    "run_id": "33839770999"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-04T06:59:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
