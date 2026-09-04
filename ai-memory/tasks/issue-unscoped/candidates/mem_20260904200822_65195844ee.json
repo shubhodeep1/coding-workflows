@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_prepare.sh:483-501 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m3, x-ai_grok-4_6]\n  PROBLEM: The fail-closed rewrite removed the previous `|| echo '\"\"'` rescue around the V1 `capture(...)` selector, so a V2-only integration-sync state with no matching V1 comment may abort conflict preparation.\n  WHY: The selector's `capture(\"ORCHESTRATOR_STATE_V1\\\\n(?<json>(.|\\\\n)*)\\\\nORCHESTRATOR_STATE_V1\")` is disputed: minimax_minimax-m3 and x-ai_grok-4_6 report that the routine no-V1 case exits non-zero and blocks the resolver, while moonshotai_kimi-k3 and qwen_qwen3_7-plus report that jq emits an empty stream with exit 0 and reject the finding.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_conflict_prepare.sh:483-501 | severity=BLOCKER | confidence=5\n  PROBLEM: The fail-closed rewrite dropped the previous `|| echo '\"\"'` rescue on the V1 selector, so ANY non-zero jq exit now aborts preparation.\n  WHY: The current poller posts V2 state chunks only, and the V1 selector may fail on empty input, causing integration-sync conflict preparation to exit 1 and preventing the Codex resolver from running.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n- scripts/review_conflict_prepare.sh:483-501 | severity=BLOCKER | confidence=5\n  PROBLEM: Last-run fail-closed rewrite treats every non-zero jq exit as authentication failure, including the routine case where no trusted V1 body exists.\n  WHY: Current integration-sync tracking issues use V2-only comment chains, so the V1 selector may abort preparation and prevent the resolver from running; the new test only covers a matching V1 comment.\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "cf1e1889383771d48e33a86d8e520eaa25ea713db0cb80e186c64e761f619c71",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3999,
+    "run_id": "33900993333",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33900993333",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260904200822_65195844ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3999,
+    "run_id": "33900993333"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-04T20:08:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
