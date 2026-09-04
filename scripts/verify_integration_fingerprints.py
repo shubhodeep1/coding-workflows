@@ -213,7 +213,7 @@ def _resolver_safe_path(raw_path: Any, *, regex_pattern: bool) -> str | None:
 	if posixpath.normpath(raw_path) != raw_path:
 		return None
 	path_parts = raw_path.split("/")
-	if any(part in ("", ".", "..") for part in path_parts) or path_parts[0] == ".git":
+	if any(part in ("", ".", "..", ".git") for part in path_parts):
 		return None
 	if regex_pattern and not (
 		raw_path in RESOLVER_SAFE_REGEX_ROOT_PATHS
