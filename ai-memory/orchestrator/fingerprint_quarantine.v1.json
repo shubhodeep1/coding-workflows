@@ -59,6 +59,76 @@
       ],
       "issue_key": "3066",
       "last_seen_run_id": "26993788694"
+    },
+    {
+      "consecutive_unchanged_runs": 1,
+      "first_seen_run_id": "33987631244",
+      "fp_key": [
+        ".github/workflows/orchestrate_poll.yml",
+        "echo\\ \"::warning::PyYAML\\ installation\\ failed;\\ deterministic\\ contract\\-list\\ union\\ will\\ fail\\ open\\ to\\ the\\ existing\\ resolver\\ path\\.\""
+      ],
+      "issue_key": "3966",
+      "last_seen_run_id": "33987631244"
+    },
+    {
+      "consecutive_unchanged_runs": 1,
+      "first_seen_run_id": "33987631244",
+      "fp_key": [
+        ".github/workflows/orchestrate_poll.yml",
+        "if\\ !\\ python3\\ \\-c\\ 'import\\ yaml'\\ >/dev/null\\ 2>\\&1;\\ then"
+      ],
+      "issue_key": "3966",
+      "last_seen_run_id": "33987631244"
+    },
+    {
+      "consecutive_unchanged_runs": 1,
+      "first_seen_run_id": "33987631244",
+      "fp_key": [
+        ".github/workflows/orchestrate_poll.yml",
+        "if\\ !\\ python3\\ \\-m\\ pip\\ install\\ \\-\\-quiet\\ pyyaml;\\ then"
+      ],
+      "issue_key": "3966",
+      "last_seen_run_id": "33987631244"
+    },
+    {
+      "consecutive_unchanged_runs": 1,
+      "first_seen_run_id": "33987631244",
+      "fp_key": [
+        "README.md",
+        "12c\\.\\ \\*\\*Integration\\ self\\-healing:\\*\\*\\ If\\ a\\ periodic\\ `main`\\ \u2192\\ integration\\-branch\\ sync\\ returns\\ HTTP\\ 409\\ \\(real\\ conflict\\),\\ the\\ poller\\ routes\\ recovery\\ through\\ `heal_integration_branch_conflict`:\\ it\\ \\(a\\)\\ ensures/creates\\ the\\ final\\ integration\u2192default\\ PR\\ \\(eagerly,\\ if\\ it\\ does\\ not\\ yet\\ exist\\),\\ \\(b\\)\\ dispatches\\ the\\ review/autofix\\ workflow\\ through\\ `_dispatch_review_for_conflicts`\\ against\\ that\\ PR\\ to\\ run\\ the\\ existing\\ Codex\\ conflict\\ resolver\\ on\\ a\\ clean\\ runner,\\ and\\ \\(c\\)\\ records\\ the\\ attempt\\ in\\ new\\ tracking\\-state\\ fields\\ \\(`integration_sync_status`,\\ `integration_sync_last_error`,\\ `integration_conflict_dispatch_count`,\\ `integration_conflict_dispatch_ts`,\\ `integration_conflict_unresolved_ticks`\\)\\.\\ Dispatches\\ are\\ throttled\\ by\\ `CONFLICT_DISPATCH_COOLDOWN_SECS`\\ \\(default\\ 900s\\)\\.\\ The\\ retry\\ budget\\ is\\ \\*\\*branch\\-aware\\*\\*:\\ head\\ refs\\ matching\\ `orchestrator/project\\-\\*`\\ honour\\ `INTEGRATION_SYNC_CONFLICT_MAX_RETRIES`\\ \\(default\\ `1`\\ \u2014\\ single\\ resolver\\ shot,\\ then\\ judge\\),\\ while\\ non\\-orchestrator\\ integration\\ branches\\ honour\\ `INTEGRATION_CONFLICT_MAX_RETRIES`\\ \\(default\\ `3`\\)\\.\\ After\\ the\\ effective\\ budget\\ is\\ exhausted\\ the\\ orchestrator\\ escalates\\ by\\ invoking\\ the\\ judge\\ with\\ full\\ PR\\ context\\ via\\ `codex\\ exec`\\.\\ Only\\ after\\ both\\ the\\ automated\\ resolver\\ \\*and\\*\\ the\\ judge\\ escalation\\ fail\\ is\\ the\\ project\\ marked\\ terminally\\ `failed`\\.\\ The\\ same\\ healing\\ flow\\ is\\ triggered\\ from\\ `finalize_integration_merge_if_needed`\\ whenever\\ the\\ final\\ PR\\ is\\ observed\\ with\\ `mergeable=false`,\\ so\\ the\\ project\\ no\\ longer\\ halts\\ on\\ first\\ conflict\\.\\ Before\\ dispatching\\ the\\ resolver,\\ `sync_contract_list_union_merge`\\ deterministically\\ keeps\\ both\\ sides\\ of\\ eligible\\ contract\\ entrypoint\\-list\\ appends\\ and\\ records\\ `sync\\.last_sync_outcome\\ =\\ merged\\-deterministic`\\ after\\ the\\ validated\\ merge\\ is\\ pushed\\."
+      ],
+      "issue_key": "3966",
+      "last_seen_run_id": "33987631244"
+    },
+    {
+      "consecutive_unchanged_runs": 1,
+      "first_seen_run_id": "33987631244",
+      "fp_key": [
+        "README.md",
+        "\\|\\ `ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED`\\ \\|\\ No\\ \\|\\ `true`\\ \\|\\ orchestrate_poll\\ \\|\\ Enable\\ the\\ deterministic\\ pre\\-resolver\\ for\\ pure\\ two\\-sided\\ `read_entrypoints`\\ /\\ `write_entrypoints`\\ list\\ appends\\ in\\ `db/contracts/\\*\\.yml`\\ and\\ `\\*\\.yaml`\\.\\ Eligible\\ conflicts\\ are\\ validated\\ locally,\\ committed,\\ and\\ pushed\\ without\\ a\\ review/autofix\\ resolver\\ dispatch;\\ unsupported\\ shapes\\ fail\\ open\\ to\\ the\\ existing\\ conflict\\ path\\.\\ Set\\ to\\ `false`\\ to\\ restore\\ the\\ legacy\\ resolver\\ flow\\ exactly\\.\\ \\|"
+      ],
+      "issue_key": "3966",
+      "last_seen_run_id": "33987631244"
+    },
+    {
+      "consecutive_unchanged_runs": 1,
+      "first_seen_run_id": "33987631244",
+      "fp_key": [
+        "agents.md",
+        "\\-\\ `scripts/sync_contract_list_union\\.py`,\\ gated\\ by\\ the\\ default\\-on\\ `ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED`,\\ resolves\\ only\\ validated\\ pure\\-addition\\ conflicts\\ in\\ contract\\ `read_entrypoints`\\ /\\ `write_entrypoints`\\ lists\\ before\\ resolver\\ dispatch\\.\\ Successful\\ pushes\\ record\\ the\\ additive\\ `\\.sync\\.last_list_union_paths`\\ and\\ `\\.sync\\.last_list_union_at`\\ fields\\ and\\ the\\ compatible\\ `\\.sync\\.last_sync_outcome\\ =\\ \"merged\\-deterministic\"`\\ value;\\ every\\ ineligible\\ or\\ failed\\ attempt\\ falls\\ through\\ to\\ the\\ existing\\ resolver\\ path\\."
+      ],
+      "issue_key": "3966",
+      "last_seen_run_id": "33987631244"
+    },
+    {
+      "consecutive_unchanged_runs": 1,
+      "first_seen_run_id": "33987631244",
+      "fp_key": [
+        "scripts/sync_contract_list_union.py",
+        "TOP_LEVEL_KEY_RE\\ =\\ re\\.compile\\(r\"\\^\\(\\[\\^\\\\s:\\#\\]\\[\\^:\\]\\*\\):\\(\\?:\\\\s\\*\\(\\?:\\#\\.\\*\\)\\?\\)\\?\\(\\?:\\\\r\\?\\\\n\\)\\?\\$\"\\)"
+      ],
+      "issue_key": "3966",
+      "last_seen_run_id": "33987631244"
     }
   ],
   "schema_version": "v1"
