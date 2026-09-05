@@ -9503,9 +9503,11 @@ def test_recovery_exhausted_still_files_judge_fixup_issues_and_resume_dispatches
 			# Malformed entry with a stale mapping: skipped by the creation
 			# loop and must NOT be reported as filed.
 			{"id": "stale-titleless", "body": "no title"},
+			{"id": "stale-null-title", "title": "null", "body": "literal null title"},
 		],
 	)
 	state["issue_number_map"]["stale-titleless"] = 777
+	state["issue_number_map"]["stale-null-title"] = 778
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
@@ -9536,6 +9538,7 @@ def test_recovery_exhausted_still_files_judge_fixup_issues_and_resume_dispatches
 	refs = f"#{created_numbers[0]}, #{created_numbers[1]}"
 	assert f"**Fix-up issues filed from this verdict:** {refs}\n" in failed_comment
 	assert "#777" not in failed_comment
+	assert "#778" not in failed_comment
 	assert "Skipping malformed judge fix-up entry (id='stale-titleless', title='')" in (result["stdout"] + result["stderr"])
 	completion_comment = next(body for body in tracking_bodies if "<!-- orchestrator:completion-status -->" in body)
 	assert "<!-- status:failed -->" in completion_comment
