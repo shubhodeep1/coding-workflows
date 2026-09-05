@@ -55,18 +55,13 @@ edit-tool choice.
 
 Bounds (defensible default; override per caller):
 
-  --max-bytes (default 102400)    Total bytes across all inlined files
-                                  (~25k tokens at ~4 b/t). A file that
-                                  would push the cumulative size over
-                                  this cap is NOT head-truncated — it
-                                  gets a "(would overflow total budget —
-                                  read with read tool)" marker so the
-                                  model uses its native targeted-read
-                                  flow instead of being misled by a
-                                  truncated head. There is no separate
-                                  file-count cap: every path the caller
-                                  passes is reported, either inlined or
-                                  as a marker.
+  --max-bytes (default 102400)    Hard UTF-8 limit for the complete rendered
+	                                  block, including headers, wrappers,
+	                                  markers, fallback content, and summaries.
+	                                  At most 256 paths of at most 1024 UTF-8
+	                                  bytes are accepted before filesystem
+	                                  access. Only complete fragments are
+	                                  appended. Zero emits an empty block.
 
 Designed to be safe on missing inputs: if the plan has no recognised
 section, --paths-file is empty, and --paths is unset, the output is just
@@ -152,6 +147,8 @@ PLAIN_TEXT_HINT_EXTENSIONS = {".txt", ".csv", ".md"}
 SEMBLE_QUERY_TIMEOUT_SECS = 30
 SEMBLE_READ_FALLBACK_MAX_BYTES = 4096
 SEMBLE_MAX_CHUNKS_CAP = 20
+MAX_TARGET_PATHS = 256
+MAX_TARGET_PATH_BYTES = 1024
 
 
 def _mirror_event(prefix: str, **fields: object) -> None:
@@ -240,6 +237,8 @@ def is_probable_path(value: str) -> bool:
 
 def normalize_path(value: str) -> str | None:
 	value = _trim_path_candidate(value)
+	if len(value.encode("utf-8")) > MAX_TARGET_PATH_BYTES:
+		return None
 	if not is_probable_path(value):
 		return None
 	return value
@@ -536,181 +535,213 @@ def emit_context(
 	semble_max_chunks: int = 6,
 	semble_fallback: str = "marker",
 ) -> str:
-	output: list[str] = []
+	if max_bytes <= 0:
+		return ""
+
+	fragments: list[str] = []
+	rendered_bytes = 0
+	final_summary_reserve = min(256, max_bytes)
+	content_byte_limit = max(0, max_bytes - final_summary_reserve)
 	included = 0
 	inlined = 0
-	used_bytes = 0
-	skipped_too_large: list[tuple[str, int]] = []
+	marker_only = 0
 	semble_rendered = 0
 	read_fallback_rendered = 0
 	off_suppressed = 0
-	overflow_rendered_bytes = 0
-	# Set once a clamp yields nothing renderable (remaining budget smaller
-	# than the first UTF-8 code point of the chunk text). From then on no
-	# further Semble query is issued for overflowing paths; they proceed to
-	# the configured `semble_fallback` (`read`, `off`, or the default
-	# marker) exactly as if Semble were unavailable. Rendering an empty
-	# block instead would leave `used_bytes` unchanged, so every later path
-	# would re-run the Semble subprocess and stack an empty header/footer.
+	omitted_entries = 0
 	semble_overflow_budget_exhausted = False
 	semble_max_chunks = _normalize_semble_max_chunks(semble_max_chunks)
 
-	output.append("=== TARGETED FILE CONTEXT ===")
-	output.append(header_text)
-	output.append("")
+	def append_complete(fragment: str) -> bool:
+		nonlocal rendered_bytes
+		fragment_size = len(fragment.encode("utf-8"))
+		if rendered_bytes + fragment_size > max_bytes:
+			return False
+		fragments.append(fragment)
+		rendered_bytes += fragment_size
+		return True
 
-	if max_bytes <= 0:
-		output.append(f"(targeted context disabled: max_bytes={max_bytes})")
-		return "\n".join(output) + "\n"
+	def render_lines(lines: list[str]) -> str:
+		return "\n".join(lines) + "\n"
+
+	def append_content(fragment: str) -> bool:
+		nonlocal rendered_bytes
+		fragment_size = len(fragment.encode("utf-8"))
+		if rendered_bytes + fragment_size > content_byte_limit:
+			return False
+		fragments.append(fragment)
+		rendered_bytes += fragment_size
+		return True
+
+	def append_marker(marker: str) -> bool:
+		return append_content(render_lines([marker, ""]))
+
+	if not append_complete("=== TARGETED FILE CONTEXT ===\n"):
+		return ""
+	if not append_content(f"{header_text}\n\n"):
+		append_content("(targeted context header omitted: rendered byte budget exhausted)\n\n")
 
 	repo_root_resolved = repo_root.resolve()
+	bounded_paths: list[str] = []
+	for raw_path in paths[:MAX_TARGET_PATHS]:
+		if not isinstance(raw_path, str):
+			omitted_entries += 1
+			continue
+		normalized_candidate_path = normalize_path(raw_path)
+		if normalized_candidate_path is None:
+			omitted_entries += 1
+			continue
+		bounded_paths.append(normalized_candidate_path)
+	omitted_entries += max(0, len(paths) - MAX_TARGET_PATHS)
 
-	for rel in paths:
+	for rel in bounded_paths:
 		abs_path = (repo_root / rel).resolve()
 		try:
 			abs_path.relative_to(repo_root_resolved)
 		except ValueError:
-			# Outside repo root — refuse silently. Caller's path source
-			# may include adversarial / typo paths from PR/issue bodies.
+			omitted_entries += 1
 			continue
 		if not abs_path.is_file():
-			output.extend([f"--- FILE: {rel} (missing) ---", ""])
-			included += 1
+			if append_marker(f"--- FILE: {rel} (missing) ---"):
+				included += 1
+				marker_only += 1
+			else:
+				omitted_entries += 1
 			continue
-		raw_size = abs_path.stat().st_size
-		if used_bytes + raw_size > max_bytes:
-			# Budget left for this overflowing entry. The semble and read
-			# fallbacks below BOTH render content, so both must be clamped
-			# to this remainder — otherwise `max_bytes` stops being a total
-			# budget and becomes a per-file trigger threshold. See the
-			# rationale comment above `_append_semble_block`.
-			overflow_budget_remaining_bytes = max_bytes - used_bytes
-			if (
-				semble_query_text
-				and overflow_budget_remaining_bytes > 0
-				and not semble_overflow_budget_exhausted
-			):
-				query_start = time.monotonic()
-				success, payload = _run_semble_query(
-					f"{rel}\n{semble_query_text}",
-					semble_bin,
-					semble_index,
-					semble_max_chunks,
-					repo_root,
-				)
-				elapsed_ms = int((time.monotonic() - query_start) * 1000)
-				if success and payload is not None:
-					clamped_payload, payload_was_clamped = _clamp_text_to_byte_budget(
-						payload, overflow_budget_remaining_bytes
-					)
-					if clamped_payload:
-						rendered_bytes = _append_semble_block(
-							output,
-							rel,
-							raw_size,
-							clamped_payload,
-							truncated_to_budget=payload_was_clamped,
-						)
-						_log_semble_event(
-							"SEMBLE_QUERY",
-							target="overflow",
-							file=rel,
-							chunks=semble_max_chunks,
-							bytes=rendered_bytes,
-							ms=elapsed_ms,
-						)
-						overflow_rendered_bytes += rendered_bytes
-						used_bytes += rendered_bytes
-						included += 1
-						semble_rendered += 1
-						continue
-					# Nothing renderable fits. Do not emit an empty block (it
-					# would not advance `used_bytes`), do not echo the chunk
-					# text as a reason, and stop querying for later paths.
-					semble_overflow_budget_exhausted = True
-					payload = "budget-exhausted"
-				_log_semble_event(
-					"SEMBLE_FALLBACK",
-					target="overflow",
-					file=rel,
-					reason=payload or "unknown",
-					ms=elapsed_ms,
-				)
-			if semble_fallback == "read":
-				remaining_bytes = max_bytes - used_bytes
-				if remaining_bytes <= 0:
-					output.extend([
-						f"--- FILE: {rel} ({raw_size} bytes; would overflow total "
-						f"budget — read with read tool, max_bytes={max_bytes}, "
-						f"used={used_bytes}) ---",
-						"",
-					])
-					skipped_too_large.append((rel, raw_size))
+
+		try:
+			raw_size = abs_path.stat().st_size
+		except OSError:
+			omitted_entries += 1
+			continue
+		remaining_bytes = content_byte_limit - rendered_bytes
+		header = _render_inlined_file_header(rel, raw_size, Path(rel).suffix.lower())
+		minimum_inline_size = len(render_lines([header, f"--- END FILE: {rel} ---", ""]).encode("utf-8"))
+		if raw_size + minimum_inline_size <= remaining_bytes:
+			try:
+				raw = abs_path.read_bytes()
+			except OSError:
+				omitted_entries += 1
+				continue
+			if b"\x00" in raw:
+				if append_marker(f"--- FILE: {rel} (binary skipped) ---"):
 					included += 1
+					marker_only += 1
+				else:
+					omitted_entries += 1
+				continue
+			inline_lines: list[str] = []
+			_append_inlined_file_block(inline_lines, rel, raw)
+			if append_content(render_lines(inline_lines)):
+				included += 1
+				inlined += 1
+				continue
+
+		remaining_bytes = content_byte_limit - rendered_bytes
+		if semble_query_text and remaining_bytes > 0 and not semble_overflow_budget_exhausted:
+			query_start = time.monotonic()
+			success, payload = _run_semble_query(
+				f"{rel}\n{semble_query_text}",
+				semble_bin,
+				semble_index,
+				semble_max_chunks,
+				repo_root,
+			)
+			elapsed_ms = int((time.monotonic() - query_start) * 1000)
+			if success and payload is not None:
+				payload_budget = remaining_bytes
+				semble_fragment = ""
+				content_size = 0
+				for _attempt in range(3):
+					clamped_payload, payload_was_clamped = _clamp_text_to_byte_budget(payload, payload_budget)
+					if not clamped_payload:
+						break
+					semble_lines: list[str] = []
+					content_size = _append_semble_block(
+						semble_lines,
+						rel,
+						raw_size,
+						clamped_payload,
+						truncated_to_budget=payload_was_clamped,
+					)
+					semble_fragment = render_lines(semble_lines)
+					overage = len(semble_fragment.encode("utf-8")) - remaining_bytes
+					if overage <= 0:
+						break
+					payload_budget = max(0, payload_budget - overage)
+				if semble_fragment and append_content(semble_fragment):
+					_log_semble_event(
+						"SEMBLE_QUERY",
+						target="overflow",
+						file=rel,
+						chunks=semble_max_chunks,
+						bytes=content_size,
+						ms=elapsed_ms,
+					)
+					included += 1
+					semble_rendered += 1
 					continue
-				head_bytes = min(raw_size, min(remaining_bytes, SEMBLE_READ_FALLBACK_MAX_BYTES))
-				with abs_path.open("rb") as handle:
-					truncated = handle.read(head_bytes)
-				rendered_bytes = _append_read_fallback_block(output, rel, truncated, raw_size)
-				overflow_rendered_bytes += rendered_bytes
-				used_bytes += rendered_bytes
+				payload = "budget-exhausted"
+			semble_overflow_budget_exhausted = True
+			_log_semble_event(
+				"SEMBLE_FALLBACK",
+				target="overflow",
+				file=rel,
+				reason=payload or "unknown",
+				ms=elapsed_ms,
+			)
+
+		if semble_fallback == "read":
+			remaining_bytes = content_byte_limit - rendered_bytes
+			head_size = min(raw_size, SEMBLE_READ_FALLBACK_MAX_BYTES, remaining_bytes)
+			read_fragment = ""
+			content_size = 0
+			for _attempt in range(3):
+				if head_size <= 0:
+					break
+				try:
+					with abs_path.open("rb") as handle:
+						truncated = handle.read(head_size)
+				except OSError:
+					break
+				read_lines: list[str] = []
+				content_size = _append_read_fallback_block(read_lines, rel, truncated, raw_size)
+				read_fragment = render_lines(read_lines)
+				overage = len(read_fragment.encode("utf-8")) - remaining_bytes
+				if overage <= 0:
+					break
+				head_size = max(0, head_size - overage)
+			if read_fragment and append_content(read_fragment):
 				included += 1
 				read_fallback_rendered += 1
 				continue
-			if semble_fallback == "off":
-				off_suppressed += 1
-				continue
-			# Including this file would overflow the total budget. Mark
-			# rather than head-truncate — a truncated head of a 500KB
-			# file misleads the editor when the edit target lives at
-			# the bottom. Tell the model to read it normally with its
-			# read tool instead.
-			output.extend([
-				f"--- FILE: {rel} ({raw_size} bytes; would overflow total "
-				f"budget — read with read tool, max_bytes={max_bytes}, "
-				f"used={used_bytes}) ---",
-				"",
-			])
-			skipped_too_large.append((rel, raw_size))
-			included += 1
+		elif semble_fallback == "off":
+			off_suppressed += 1
 			continue
-		raw = abs_path.read_bytes()
-		if b"\x00" in raw:
-			output.extend([f"--- FILE: {rel} (binary skipped) ---", ""])
+
+		if append_marker(
+			f"--- FILE: {rel} ({raw_size} bytes; would overflow total budget — "
+			f"read with read tool, max_bytes={max_bytes}) ---"
+		):
 			included += 1
-			continue
-		used_bytes += len(raw)
-		_append_inlined_file_block(output, rel, raw)
-		included += 1
-		inlined += 1
+			marker_only += 1
+		else:
+			omitted_entries += 1
 
 	if included == 0 and off_suppressed == 0:
-		output.append("(no existing target files could be inlined)")
+		summary = "(no existing target files could be inlined)"
 	else:
-		if semble_rendered == 0 and read_fallback_rendered == 0 and off_suppressed == 0:
-			summary = (
-				f"Included {included} entr{'y' if included == 1 else 'ies'} "
-				f"({inlined} inlined, {included - inlined} marker-only), "
-				f"{used_bytes} byte(s) of source content."
-			)
-		else:
-			summary = (
-				f"Included {included} entr{'y' if included == 1 else 'ies'} "
-				f"({inlined} inlined, {len(skipped_too_large)} marker-only, "
-				f"{semble_rendered} semble, {read_fallback_rendered} read), "
-				f"{used_bytes} byte(s) of source content."
-			)
-			if overflow_rendered_bytes:
-				summary += f" Overflow-rendered content: {overflow_rendered_bytes} byte(s)."
-			if off_suppressed:
-				summary += f" Suppressed overflow entries: {off_suppressed}."
-		if skipped_too_large:
-			skipped_summary = ", ".join(f"{p} ({n} bytes)" for p, n in skipped_too_large[:5])
-			if len(skipped_too_large) > 5:
-				skipped_summary += f", +{len(skipped_too_large) - 5} more"
-			summary += f" Marker-only (would overflow): {skipped_summary}."
-		output.append(summary)
-	return "\n".join(output) + "\n"
+		summary = (
+			f"Included {included} entr{'y' if included == 1 else 'ies'} "
+			f"({inlined} inlined, {marker_only} marker-only, "
+			f"{semble_rendered} semble, {read_fallback_rendered} read)."
+		)
+		if off_suppressed:
+			summary += f" Suppressed overflow entries: {off_suppressed}."
+	if omitted_entries:
+		summary += f" Omitted {omitted_entries} path(s) due to path or rendered-byte limits."
+	append_complete(f"{summary}\n")
+	return "".join(fragments)
 
 
 def positive_int(value: str) -> int:
