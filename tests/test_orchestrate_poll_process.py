@@ -3606,6 +3606,196 @@ def test_security_pass_closed_fix_without_merged_pr_terminalizes_recoverably() -
 	assert any("/re-security-pass" in comment["body"] for comment in result["issues"]["192"]["comments"])
 
 
+def _security_pass_reissued_fix_body(tracking_issue: int, cycle: int, parent_issue: int) -> str:
+	"""Body a stall-recovery re-issue of a security-pass fix issue carries.
+
+	`execute_stall_recovery_action` -> close_and_reissue copies the original
+	issue body verbatim and appends its footer, so both durable orchestrator
+	markers survive into the successor.
+	"""
+	return f"""Refs #{tracking_issue}
+
+---
+**Orchestrator metadata** (do not edit)
+- Tracking issue: #{tracking_issue}
+- Local ID: `security-pass-fix-cycle-{cycle}`
+- Managed by: AI Orchestrator
+
+---
+
+**⚠️ Re-issued from #{parent_issue}** — the previous issue stalled in the `ai:implementing` phase for 122 minutes despite 3 recovery attempt(s).
+"""
+
+
+def test_security_pass_closed_fix_adopts_stall_recovery_successor() -> None:
+	"""A closed-and-re-issued fix issue must be tracked, not failed.
+
+	Regression for project #3965: stall recovery closed security-pass fix
+	issue #3990 and re-issued it as #3993, but close_and_reissue only
+	re-points wave state (gated on a non-null local_id), so
+	security_pass_active_fix_issues stayed pinned to the closed
+	predecessor and the whole project was failed out from under a live
+	successor that later merged.
+	"""
+	state = _base_state(status="security-pass-fixing")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 1,
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [900],
+			"security_pass_head_sha": "audited-head",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			900: ["ai:closed", "ai:orchestrator-managed"],
+			901: ["ai:implementing", "ai:orchestrator-managed"],
+		},
+		issue_bodies={901: _security_pass_reissued_fix_body(192, 2, 900)},
+		issue_closed={900: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	for persisted_state in (result["state_on_disk"], result["latest_state"]):
+		assert persisted_state["status"] == "security-pass-fixing"
+		assert persisted_state["security_pass_status"] == "blocked"
+		assert persisted_state["security_pass_active_fix_issues"] == [901]
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	assert result["security_audit_capture"] is None
+	combined_log = result["stdout"] + result["stderr"]
+	assert (
+		"SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED tracking_issue=192 "
+		"closed_issue=900 successor=901" in combined_log
+	)
+	assert "SECURITY_PASS_FAILED" not in combined_log
+	tracking_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	assert any("re-issued as #901" in body for body in tracking_comments)
+	assert not any("/re-security-pass" in body for body in tracking_comments)
+
+
+def test_security_pass_closed_fix_ignores_other_project_and_other_cycle_markers() -> None:
+	"""Successor adoption must match both durable markers, not just one."""
+	state = _base_state(status="security-pass-fixing")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 1,
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [900],
+			"security_pass_head_sha": "audited-head",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			900: ["ai:closed", "ai:orchestrator-managed"],
+			# Right cycle, wrong project.
+			902: ["ai:implementing", "ai:orchestrator-managed"],
+			# Right project, wrong cycle.
+			903: ["ai:implementing", "ai:orchestrator-managed"],
+		},
+		issue_bodies={
+			902: _security_pass_reissued_fix_body(1920, 2, 900),
+			903: _security_pass_reissued_fix_body(192, 3, 900),
+		},
+		issue_closed={900: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["security_pass_status"] == "failed"
+	assert result["latest_state"]["security_pass_active_fix_issues"] == []
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED" not in combined_log
+	assert "SECURITY_PASS_FAILED reason=fix_issue_closed_without_merged_pr" in combined_log
+
+
+def test_security_pass_closed_fix_successor_lookup_failure_retains_fixing_state() -> None:
+	"""An inconclusive successor lookup must retry, never terminalize.
+
+	Same fail-closed contract create_security_pass_fix_issue uses for its
+	dedupe lookup: a transient read failure must not be read as evidence.
+	"""
+	state = _base_state(status="security-pass-fixing")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 1,
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [900],
+			"security_pass_head_sha": "audited-head",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		fail_security_pass_managed_issue_lookup=True,
+		issue_labels={10: ["ai:merged"], 900: ["ai:closed", "ai:orchestrator-managed"]},
+		issue_closed={900: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result["latest_state"]["status"] == "security-pass-fixing"
+	assert result["latest_state"]["security_pass_status"] == "blocked"
+	assert result["latest_state"]["security_pass_active_fix_issues"] == [900]
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "successor lookup was inconclusive" in combined_log
+	assert "SECURITY_PASS_FAILED" not in combined_log
+
+
+def test_security_pass_fix_successor_malformed_state_is_inconclusive() -> None:
+	"""State parse and type failures must return the helper's retry code."""
+	poller_source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	successor_helper = _extract_bash_function(
+		poller_source, "resolve_security_pass_fix_successor() {"
+	)
+	with tempfile.TemporaryDirectory() as temp_dir:
+		temp_path = Path(temp_dir)
+		state_path = temp_path / "state.json"
+		harness_path = temp_path / "harness.sh"
+		api_call_path = temp_path / "api-called"
+		harness_path.write_text(
+			"set -uo pipefail\n"
+			f"STATE_FILE={str(state_path)!r}\n"
+			f"RUNTIME_DIR={str(temp_path)!r}\n"
+			"TRACKING_NUM=192\n"
+			"GITHUB_REPOSITORY=owner/repo\n"
+			f"API_CALL_PATH={str(api_call_path)!r}\n"
+			'gh_retry_to_file() { : > "${API_CALL_PATH}"; return 0; }\n'
+			+ successor_helper
+			+ "\ncheck_invalid_state() {\n"
+			+ '\tprintf \'%s\' "$1" > "${STATE_FILE}"\n'
+			+ "\tlocal invalid_state_rc=0\n"
+			+ "\tresolve_security_pass_fix_successor 900 || invalid_state_rc=$?\n"
+			+ "\tprintf '%s\\n' \"${invalid_state_rc}\"\n"
+			+ "}\n"
+			+ "check_invalid_state '{\"security_pass_cycle\":'\n"
+			+ "check_invalid_state '{\"security_pass_cycle\":\"invalid\"}'\n",
+			encoding="utf-8",
+		)
+		result = subprocess.run(
+			["bash", str(harness_path)], capture_output=True, text=True, check=False
+		)
+
+		assert result.returncode == 0, result.stderr
+		assert result.stdout.splitlines() == ["2", "2"]
+		assert not api_call_path.exists()
+
+
 def test_security_pass_judge_validation_route_blocks_then_clean_pass_dispatches() -> None:
 	blocked_state = _base_state()
 	blocked_state["integration_branch"] = "orchestrator/project-192"

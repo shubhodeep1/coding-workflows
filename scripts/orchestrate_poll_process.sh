@@ -4435,6 +4435,117 @@ Manual intervention is required. After addressing the findings, comment \`/re-se
   tg_notify "Project #${TRACKING_NUM} security pass FAILED after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} fix cycles with ${finding_count} finding(s) remaining. Manual intervention required." "CRITICAL"
 }
 
+# resolve_security_pass_fix_successor <closed_issue_num>
+#
+# Resolve the live successor of a security-pass consolidated fix issue
+# that orchestrator stall recovery closed and re-issued.
+#
+# Why this exists: execute_stall_recovery_action's `close_and_reissue`
+# arm re-points *wave* state only — it rewrites `.issue_number_map` and
+# `.waves[].issues[].github_issue`, and both writes are gated on a
+# non-null `local_id`.  A security-pass consolidated fix issue is not a
+# wave issue, so the stall judge reports `local_id: null`, the re-point
+# is skipped, and `.security_pass_active_fix_issues` stays pinned to the
+# closed predecessor.  The next poll tick then reads that issue as
+# closed-without-merge and security_pass_closed_fix_failure fails the
+# whole project, demanding a human `/re-security-pass` — even though a
+# live successor is already moving through the normal pipeline and
+# usually merges.  Project #3965 lost two completed fix cycles this way:
+# fix issue #3990 was closed and re-issued as #3993 -> #3996 at
+# 2026-09-04T01:52Z, the project was failed at 01:59Z, and #3996's fix
+# merged at 18:18Z against a project that had already been reset to
+# cycle 0 by the operator's `/re-security-pass`.
+#
+# Resolution uses the durable body markers `- Tracking issue: #<N>` and
+# "- Local ID: `security-pass-fix-cycle-<K>`", which survive re-issue
+# because stall recovery copies the original body verbatim and appends
+# its footer.  This is the same marker contract, the same single
+# paginated managed-issue listing, and the same jq shape that
+# create_security_pass_fix_issue's dedupe lookup already relies on.
+#
+# API cost (§15): one paginated `GET /issues?state=open&labels=
+# ai:orchestrator-managed` page walk, issued only on the
+# closed-without-merged-PR branch — never on an ordinary poll tick, and
+# never once the successor has been adopted into state.  No cycle-local
+# cache can serve it: ACTIVE_WORKFLOW_ISSUES holds only
+# workflow-active numbers, _candidate_details_json only known
+# candidates, and STALL_MANAGED_LINKED_PR_CACHE only state-known
+# stalled issues — a stall-recovery successor is in none of them on the
+# tick that first observes the predecessor closed.
+#
+# Args:
+#   closed_issue_num — the fix issue number recorded in state
+# Stdout:
+#   successor issue number on a confirmed match; empty otherwise
+# Returns:
+#   0 — successor found (number on stdout)
+#   1 — lookup succeeded and no successor exists
+#   2 — lookup inconclusive (API or parse failure).  Callers MUST retain
+#       the fixing state and retry rather than terminalize the project,
+#       mirroring the fail-closed dedupe contract established for
+#       create_security_pass_fix_issue.
+resolve_security_pass_fix_successor() {
+  local closed_issue_num="$1"
+  local security_pass_successor_local_id security_pass_successor_cycles
+  local security_pass_successor_pages_file security_pass_successor_jq_error_file
+  local security_pass_successor_number
+
+  [[ "${closed_issue_num}" =~ ^[0-9]+$ ]] || return 2
+
+  if ! security_pass_successor_cycles="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}" 2>/dev/null)"; then
+    return 2
+  fi
+  if ! [[ "${security_pass_successor_cycles}" =~ ^[0-9]+$ ]]; then
+    return 2
+  fi
+  security_pass_successor_local_id="security-pass-fix-cycle-$((security_pass_successor_cycles + 1))"
+
+  security_pass_successor_pages_file="${RUNTIME_DIR}/security_pass_successor_${TRACKING_NUM}_${closed_issue_num}.json"
+  security_pass_successor_jq_error_file="${security_pass_successor_pages_file}.jq.err"
+  rm -f "${security_pass_successor_pages_file}" "${security_pass_successor_jq_error_file}"
+  if ! gh_retry_to_file "${security_pass_successor_pages_file}" gh api --paginate --method GET \
+    "repos/${GITHUB_REPOSITORY}/issues" \
+    -f state=open \
+    -f labels="ai:orchestrator-managed" \
+    -f per_page=100; then
+    rm -f "${security_pass_successor_pages_file}"
+    return 2
+  fi
+  if [ ! -s "${security_pass_successor_pages_file}" ]; then
+    rm -f "${security_pass_successor_pages_file}"
+    return 2
+  fi
+  if ! security_pass_successor_number="$(jq -sr \
+    --arg tracking_marker "- Tracking issue: #${TRACKING_NUM}" \
+    --arg local_id_marker "- Local ID: \`${security_pass_successor_local_id}\`" \
+    --argjson closed_issue "${closed_issue_num}" '
+      if length == 0 or (all(.[]; type == "array") | not) then
+        error("managed-issue pagination output must contain JSON arrays")
+      else
+        [
+          .[][]
+          | select(.pull_request | not)
+          | select(.number != $closed_issue)
+          | select(
+              (((.body // "") | split("\n") | index($tracking_marker)) != null)
+              and (((.body // "") | split("\n") | index($local_id_marker)) != null)
+            )
+          | .number
+          | select(type == "number" and . > 0)
+        ] | max // empty
+      end
+    ' "${security_pass_successor_pages_file}" 2>"${security_pass_successor_jq_error_file}")"; then
+    rm -f "${security_pass_successor_pages_file}" "${security_pass_successor_jq_error_file}"
+    return 2
+  fi
+  rm -f "${security_pass_successor_pages_file}" "${security_pass_successor_jq_error_file}"
+  if [[ "${security_pass_successor_number}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "${security_pass_successor_number}"
+    return 0
+  fi
+  return 1
+}
+
 security_pass_closed_fix_failure() {
   local issue_number="$1"
 
@@ -14420,6 +14531,46 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
         set_tracking_phase_label "ai:security-pass"
         PROJECT_STATUS="security-pass"
       elif [ "${SECURITY_FIX_STATE}" = "closed" ]; then
+        # A closed fix issue is not automatically a failed fix.  Orchestrator
+        # stall recovery closes a stalled issue and immediately re-issues it
+        # (execute_stall_recovery_action -> close_and_reissue), but only
+        # re-points wave state, which a security-pass fix issue does not have
+        # (the stall judge reports `local_id: null` for it).  Adopt the live
+        # successor before terminalizing, or the project is failed out from
+        # under a replacement issue that is still in the pipeline.  See
+        # resolve_security_pass_fix_successor for the incident this closes.
+        SECURITY_FIX_SUCCESSOR=""
+        SECURITY_FIX_SUCCESSOR_RC=0
+        SECURITY_FIX_SUCCESSOR="$(resolve_security_pass_fix_successor "${SECURITY_FIX_ISSUE}")" \
+          || SECURITY_FIX_SUCCESSOR_RC=$?
+        if [ "${SECURITY_FIX_SUCCESSOR_RC}" -eq 2 ]; then
+          echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE} is closed without merged-PR evidence, but the stall-recovery successor lookup was inconclusive; retaining fixing state for retry."
+          continue
+        fi
+        if [ "${SECURITY_FIX_SUCCESSOR_RC}" -eq 0 ] && [[ "${SECURITY_FIX_SUCCESSOR}" =~ ^[0-9]+$ ]]; then
+          echo "SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED tracking_issue=${TRACKING_NUM} closed_issue=${SECURITY_FIX_ISSUE} successor=${SECURITY_FIX_SUCCESSOR}"
+          if jq --argjson successor "${SECURITY_FIX_SUCCESSOR}" \
+            '.security_pass_active_fix_issues = [$successor]' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+            :
+          else
+            rm -f "${STATE_FILE}.tmp" || true
+            echo "::warning::Security-pass successor #${SECURITY_FIX_SUCCESSOR} could not be persisted for tracking issue #${TRACKING_NUM}; retaining fixing state for retry."
+            continue
+          fi
+          post_state_comment || true
+          post_tracking_comment "## 🔁 Security-pass fix issue re-issued
+
+Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall recovery and re-issued as #${SECURITY_FIX_SUCCESSOR}. Tracking the successor; completion remains gated until it merges and a clean re-audit passes."
+          COMPLETION_STATUS_STATE_CHANGED="false"
+          update_completion_status_comment "waiting" \
+            "## Completion status"$'\n\n'"**State:** \`security-pass-fixing\`"$'\n\n'"Security-pass fix issue #${SECURITY_FIX_SUCCESSOR} (re-issued from #${SECURITY_FIX_ISSUE}) is in the normal delivery pipeline. Completion remains gated until it merges and a clean current-head re-audit passes." \
+            || true
+          if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+            post_state_comment || true
+          fi
+          continue
+        fi
         echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} reason=fix_issue_closed_without_merged_pr issue=${SECURITY_FIX_ISSUE}"
         security_pass_closed_fix_failure "${SECURITY_FIX_ISSUE}"
         continue
