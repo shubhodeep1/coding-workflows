@@ -167,6 +167,7 @@ changelog.d/3947-security-pass-deleted-branch-recovery.md
 changelog.d/3957-blocker-only-plan-blocked-routing.md
 changelog.d/3963-reissue-preserve-baseline-default-true.md
 changelog.d/3965-orchestrator-state-author-identity.md
+changelog.d/3965-security-pass-fix-cycle-2.md
 changelog.d/3965-security-pass-pyyaml-duplicate-key-hardening.md
 changelog.d/3965-sync-contract-list-union.md
 changelog.d/3967-slash-command-model-pins.md

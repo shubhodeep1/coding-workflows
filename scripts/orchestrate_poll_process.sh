@@ -17207,11 +17207,6 @@ sys.exit(1)
           # made on the pre-checked-out branch; merge path operates via
           # GitHub API only.
           rb_cleanup_combined_workspace
-          # Remove review-blocked, set ready-to-merge
-          ensure_label_exists "ai:ready-to-merge"
-          gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
-            --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
-
           # Attempt squash merge (with branch update if needed)
           # Re-fetch PR data (state may have changed since the judge ran)
           RB_MERGED="false"
@@ -17219,6 +17214,7 @@ sys.exit(1)
           PR_STATE="$(_jq_field "${_rb_merge_json}" '.state' 'open|closed|merged')"
           PR_MERGEABLE="$(_jq_field "${_rb_merge_json}" '.mergeable' 'true|false')"
           _rb_merge_sha="$(_jq_field "${_rb_merge_json}" '.head.sha')"
+          _rb_merge_judged_sha="$(printf '%s' "${PR_META}" | jq -r '.head_sha // empty' 2>/dev/null || echo '')"
           # Pass the PR's base ref (3rd arg) so the gate uses the required-
           # checks filter — branch protection ∪ ORCH_FINAL_MERGE_REQUIRED_CHECKS
           # — instead of the legacy block-on-ANY-failing-check mode. Reuses
@@ -17226,16 +17222,19 @@ sys.exit(1)
           # non-required/environmental check (e.g. CodeQL with code scanning
           # disabled) no longer deadlocks the review-blocked merge.
           _rb_merge_base="$(_jq_field "${_rb_merge_json}" '.base.ref')"
-		  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}"; then
-		    if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
-		      echo "  PR #${RB_PR} merge initiated (auto)."
-		      RB_MERGED="true"
-		    elif gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
-		      echo "  PR #${RB_PR} merged directly."
-		      RB_MERGED="true"
-		    else
-		      echo "::warning::Could not merge PR #${RB_PR}."
-		    fi
+          if [ -z "${_rb_merge_judged_sha}" ] || [ -z "${_rb_merge_sha}" ] \
+            || [ "${_rb_merge_sha}" != "${_rb_merge_judged_sha}" ]; then
+            echo "::warning::Judge-approved merge for PR #${RB_PR} refused because its live head changed or could not be bound to the judged snapshot. Leaving issue in ai:review-blocked."
+          elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_merge_judged_sha}" "${_rb_merge_base}"; then
+            if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${_rb_merge_judged_sha}"; then
+              echo "  PR #${RB_PR} merge initiated (auto)."
+              RB_MERGED="true"
+            elif gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit "${_rb_merge_judged_sha}"; then
+              echo "  PR #${RB_PR} merged directly."
+              RB_MERGED="true"
+            else
+              echo "::warning::Could not merge PR #${RB_PR}."
+            fi
           elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
             echo "  PR #${RB_PR} is not mergeable. Attempting branch update..."
             if gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
@@ -17265,6 +17264,9 @@ sys.exit(1)
 
           REVIEW_BLOCKED_STATE_CHANGED=true
           if [ "${RB_MERGED}" = "true" ]; then
+            ensure_label_exists "ai:ready-to-merge"
+            gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+              --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
             tg_notify "Orchestrator judge merged review-blocked PR #${RB_PR} (issue #${rb_issue}): ${RB_JUSTIFICATION}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
           fi
           ;;
@@ -17387,12 +17389,16 @@ EOF
             PR_MERGED_NOW="$(_jq_field "${_rb_mwf_json}" '(.merged_at != null) or (.merged == true)' 'true|false')"
             [ -n "${PR_MERGED_NOW}" ] || PR_MERGED_NOW="false"
             _rb_mwf_sha="$(_jq_field "${_rb_mwf_json}" '.head.sha')"
+            _rb_mwf_judged_sha="$(printf '%s' "${PR_META}" | jq -r '.head_sha // empty' 2>/dev/null || echo '')"
             # Required-checks filter via the PR's base ref (see the merge)
             # branch above) — no extra API call, reuses _rb_mwf_json.
             _rb_mwf_base="$(_jq_field "${_rb_mwf_json}" '.base.ref')"
 
             MERGE_CONFIRMED="false"
-            if [ "${PR_MERGED_NOW}" = "true" ]; then
+            if [ -z "${_rb_mwf_judged_sha}" ] || [ -z "${_rb_mwf_sha}" ] \
+              || [ "${_rb_mwf_sha}" != "${_rb_mwf_judged_sha}" ]; then
+              echo "::warning::Judge-approved merge_with_followup for PR #${RB_PR} refused because its live head changed or could not be bound to the judged snapshot. Leaving issue in ai:review-blocked."
+            elif [ "${PR_MERGED_NOW}" = "true" ]; then
               echo "  PR #${RB_PR} already merged (.merged=true) before merge_with_followup ran."
               MERGE_CONFIRMED="true"
             elif [ "${PR_STATE}" = "closed" ]; then
@@ -17407,18 +17413,8 @@ EOF
               # the final integration-merge path and unblocking the
               # review-blocked-judge merge that previously deadlocked on a
               # permanently-red environmental check.
-              if ! _pr_checks_completed "${RB_PR}" "${_rb_mwf_sha}" "${_rb_mwf_base}"; then
+              if ! _pr_checks_completed "${RB_PR}" "${_rb_mwf_judged_sha}" "${_rb_mwf_base}"; then
                 echo "::warning::PR #${RB_PR} mergeable=true but check-runs still pending/failing — leaving issue in ai:review-blocked. Next orchestrator poll cycle will re-fire the judge after checks complete; that run will hit the PR_MERGED_NOW=true short path (after the existing \`merge)\` action's auto-merge enrollment lands the PR)."
-              elif [ -z "${_rb_mwf_sha}" ]; then
-                # Defensive: `_pr_checks_completed` may have re-fetched
-                # the SHA locally and returned 0 while our outer
-                # `_rb_mwf_sha` is still empty (transient API failure
-                # at the initial fetch). Refuse the merge here so we
-                # never call `gh pr merge` without --match-head-commit
-                # — an unbound merge could let a concurrent push slip
-                # in. Leave the issue in ai:review-blocked for the
-                # next poll cycle, which re-fetches PR metadata.
-                echo "::warning::PR #${RB_PR} head SHA could not be resolved from the PR-meta fetch — refusing merge_with_followup to avoid an unbound merge (no --match-head-commit guard against concurrent pushes). Leaving issue in ai:review-blocked."
               elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
                 # Sync merge only — NEVER --auto enrollment. The whole
                 # point of the conservative ladder is to ensure follow-
@@ -17452,13 +17448,10 @@ EOF
                 # to the same warning path. Matches the standalone
                 # review_rb_judge.sh's pattern.
                 #
-                # `--match-head-commit "${_rb_mwf_sha}"` binds the
-                # merge to the head SHA the PR-meta fetch observed.
-                # The `elif [ -z "${_rb_mwf_sha}" ]` branch above
-                # ensures we never reach here with an empty SHA, so
-                # the merge is always bound — no concurrent-push
-                # window between judge decision and merge.
-                _rb_mwf_match_arg=(--match-head-commit "${_rb_mwf_sha}")
+                # Bind the mutation to the same immutable head SHA the
+                # judge assessed, closing the race after the live-head
+                # equality check above.
+                _rb_mwf_match_arg=(--match-head-commit "${_rb_mwf_judged_sha}")
                 if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash "${_rb_mwf_match_arg[@]}" 2>/dev/null; then
                   echo "  PR #${RB_PR} merged synchronously."
                   MERGE_CONFIRMED="true"
