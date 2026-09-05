@@ -215,6 +215,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/stage_workflow_support.sh` — Shell helper for stage workflow support.
 - `scripts/summarize_reviewer_consensus.sh` — ledger via codex-cli (model: openai/gpt-5.6-luna, reasoning: medium).
 - `scripts/summarize_unselected_runs.py` — Summarize unselected workflow runs via gpt-5.6-luna to widen analysis coverage.
+- `scripts/sync_contract_list_union.py` — Deterministically merge validated append-only contract entrypoint-list conflicts.
+- `scripts/sync_contract_list_union.requirements.txt` — Hash-lock PyYAML for the isolated contract-list union helper environment.
 - `scripts/targeted_file_context.py` — Inline likely-to-be-edited files into the Codex prompt as a reference block so the editor doesn't waste budget reading them.
 - `scripts/task_state.py` — Mirror orchestrator wave-issue state into per-task JSON files and unblock mirrored dependents.
 - `scripts/templates/serena_project.yml.j2` — Template asset for serena_project.yml.j2.

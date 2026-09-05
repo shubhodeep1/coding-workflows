@@ -10,6 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 ORCHESTRATE_POLL_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
 ORCHESTRATE_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
 ORCHESTRATE_POLL_PROCESS = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+SYNC_LIST_UNION_REQUIREMENTS = REPO_ROOT / "scripts" / "sync_contract_list_union.requirements.txt"
 
 
 def _workflow(path: Path = ORCHESTRATE_POLL_WF) -> str:
@@ -110,6 +111,69 @@ def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> No
 	assert "run: bash scripts/worktree_gc.sh" in wf
 
 
+def test_contract_list_union_uses_isolated_hash_locked_pyyaml_before_git_credentials() -> None:
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	requirements = SYNC_LIST_UNION_REQUIREMENTS.read_text(encoding="utf-8")
+	prepare_marker = "      - name: Prepare isolated contract-list union Python"
+	auth_marker = "      - name: Configure git auth for memory helper clones"
+	prepare_start = wf.index(prepare_marker)
+	auth_start = wf.index(auth_marker)
+	prepare_block = wf[prepare_start:auth_start]
+
+	assert prepare_start < auth_start
+	assert "sync_contract_list_union.requirements.txt" in wf
+	assert 'python3 -I -m venv "${union_venv}"' in prepare_block
+	assert '"${union_python}" -I -m pip install' in prepare_block
+	assert "--require-hashes" in prepare_block
+	assert "--only-binary=:all:" in prepare_block
+	assert "--no-deps" in prepare_block
+	assert '--requirement "${requirements_file}"' in prepare_block
+	assert '-I -c \'import yaml\'' in prepare_block
+	assert "yaml.__version__" not in prepare_block
+	assert 'SYNC_CONTRACT_LIST_UNION_PYTHON=${unavailable_python}' in prepare_block
+	assert "PyYAML==6.0.3" in requirements
+	assert "--hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc" in requirements
+	assert requirements.count("--hash=sha256:") > 1
+	assert "runs-on: ubuntu-latest" in wf
+	assert 'python-version: "3.12"' in wf
+	assert 'architecture: "x64"' in wf
+	assert "GH_TOKEN" not in prepare_block
+	assert "python3 -m pip install --quiet pyyaml" not in wf
+
+	checkout_prefix = "uses: actions/checkout@v5"
+	for checkout_start in [index for index in range(prepare_start) if wf.startswith(checkout_prefix, index)]:
+		next_step = wf.find("\n      - name:", checkout_start)
+		checkout_block = wf[checkout_start:next_step if next_step != -1 else prepare_start]
+		assert "persist-credentials: false" in checkout_block
+
+
+def test_poller_state_auth_and_readonly_model_security_contract() -> None:
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert "ORCHESTRATOR_STATE_AUTH_KEYRING:\n        required: true" in wf
+	assert "ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}" in wf
+	assert 'git remote set-url origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}.git"' in wf
+	assert 'echo "GIT_CONFIG_KEY_0=credential.helper"' in wf
+	assert 'echo "GIT_CONFIG_VALUE_0=${trusted_credential_helper}"' in wf
+	assert "https://x-access-token:${GH_TOKEN}" not in wf
+	assert "poller_run_sanitized_command()" in poller
+	assert "poller_run_readonly_model()" in poller
+	assert "--sandbox read-only" in poller
+	assert "-c web_search=disabled" in poller
+	assert "-c shell_environment_policy.ignore_default_excludes=false" in poller
+	assert "--sandbox danger-full-access" not in poller
+	assert "x-access-token:${GH_TOKEN}" not in poller
+	runner_block = poller.split("poller_run_sanitized_command() {", 1)[1].split("\n}", 1)[0]
+	for credential_name in (
+		"GH_TOKEN",
+		"GH_PAT",
+		"TG_BOT_SECRET",
+		"TG_ADMIN_CHAT_ID",
+		"ORCHESTRATOR_STATE_AUTH_KEYRING",
+	):
+		assert credential_name not in runner_block
+
+
 def main() -> int:
 	test_stall_control_env_defaults_are_declared()
 	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
@@ -119,6 +183,8 @@ def main() -> int:
 	test_task_state_helper_and_flag_are_wired_into_poller_workflow()
 	test_security_pass_dark_launch_env_and_assets_are_wired()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
+	test_contract_list_union_uses_isolated_hash_locked_pyyaml_before_git_credentials()
+	test_poller_state_auth_and_readonly_model_security_contract()
 	return 0
 
 

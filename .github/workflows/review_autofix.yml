@@ -72,6 +72,8 @@ on:
         required: true
       OPENROUTER_API_KEY:
         required: true
+      ORCHESTRATOR_STATE_AUTH_KEYRING:
+        required: false
       TG_BOT_SECRET:
         required: false
   workflow_dispatch:
@@ -4791,6 +4793,7 @@ jobs:
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}
           # Kill switch for the deterministic union-merge of the generated
           # .ai/.workspace_source_manifest.txt (see the "Deterministic
           # union-merge" block in scripts/review_conflict_prepare.sh).

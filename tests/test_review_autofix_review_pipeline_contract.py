@@ -4847,6 +4847,10 @@ def test_render_prompt_py_is_main_primary_so_validator_fixes_reach_wedged_branch
 		"render_prompt.py must be in MAIN_PRIMARY_BOOTSTRAP_SCRIPTS so main-side "
 		"validator fixes reach wedged/in-flight PR branches"
 	)
+	assert "orchestrate_state_v2.py" in main_primary_line, (
+		"orchestrate_state_v2.py must be main-primary so resolver state authentication "
+		"uses the same current contract as review_conflict_prepare.sh"
+	)
 	assert "render_prompt.py" not in optional_line, (
 		"render_prompt.py must not be branch-primary in OPTIONAL_BOOTSTRAP_SCRIPTS"
 	)
@@ -4855,6 +4859,14 @@ def test_render_prompt_py_is_main_primary_so_validator_fixes_reach_wedged_branch
 	assert re.search(r"\brender_prompt\.py\b", required_line) is None, (
 		"render_prompt.py must not be branch-primary in REQUIRED_BOOTSTRAP_SCRIPTS"
 	)
+
+
+def test_conflict_prepare_receives_dedicated_state_auth_keyring() -> None:
+	workflow = _workflow_text()
+	assert "ORCHESTRATOR_STATE_AUTH_KEYRING:" in workflow
+	assert "ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}" in workflow
+	prepare = (REPO_ROOT / "scripts" / "review_conflict_prepare.sh").read_text(encoding="utf-8")
+	assert '.state_auth.schema_version == "orchestrator_state_auth.v2"' in prepare
 
 
 def test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets() -> None:
@@ -6093,6 +6105,7 @@ def main() -> int:
 	test_reviewer_filter_stat_harness_handles_brace_expansion_renames()
 	test_reject_verifier_bootstrap_and_stage_order_contract()
 	test_render_prompt_py_is_main_primary_so_validator_fixes_reach_wedged_branches()
+	test_conflict_prepare_receives_dedicated_state_auth_keyring()
 	test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain()
 	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()

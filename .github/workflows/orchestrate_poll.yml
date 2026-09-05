@@ -23,6 +23,8 @@ name: AI Orchestrate Poller (Reusable)
         required: true
       OPENROUTER_API_KEY:
         required: true
+      ORCHESTRATOR_STATE_AUTH_KEYRING:
+        required: true
       TG_BOT_SECRET:
         required: false
 
@@ -100,6 +102,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout workflow support source fallback for gh retry
         if: ${{ steps.checkout_pre_support_source.outcome == 'failure' }}
@@ -111,6 +114,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Ensure workflow support source checkout for gh retry
         run: |
@@ -130,6 +134,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src-main
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Stage gh retry helper
         run: |
@@ -197,17 +202,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT }}
-
-      - name: Configure git auth for memory helper clones
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          set -euo pipefail
-          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
-          SERVER_HOST="${GITHUB_SERVER_URL#https://}"
-          SERVER_HOST="${SERVER_HOST#http://}"
-          SERVER_HOST="${SERVER_HOST%/}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+          persist-credentials: false
 
       - name: Setup Node.js
         if: steps.find_tracking.outputs.has_work == 'true'
@@ -220,6 +215,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          architecture: "x64"
 
       - name: Install Codex CLI
         if: steps.find_tracking.outputs.has_work == 'true'
@@ -296,6 +292,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout workflow support source fallback
         if: ${{ steps.checkout_support_source.outcome == 'failure' }}
@@ -307,6 +304,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Ensure workflow support source checkout
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
@@ -327,6 +325,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src-main
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Stage workflow support files
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
@@ -336,7 +335,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh worktree_registry.sh worktree_gc.sh; do
+          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh sync_contract_list_union.py worktree_registry.sh worktree_gc.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -348,6 +347,19 @@ jobs:
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
           done
+
+          list_union_requirements="sync_contract_list_union.requirements.txt"
+          list_union_requirements_src=".codex-workflow-src/scripts/${list_union_requirements}"
+          if [ ! -f "${list_union_requirements_src}" ] && [ -f ".codex-workflow-src-main/scripts/${list_union_requirements}" ]; then
+            list_union_requirements_src=".codex-workflow-src-main/scripts/${list_union_requirements}"
+          fi
+          rm -f "scripts/${list_union_requirements}"
+          if [ -f "${list_union_requirements_src}" ]; then
+            install -m 0644 "${list_union_requirements_src}" "scripts/${list_union_requirements}"
+            _fetched_scripts+=("${list_union_requirements}")
+          else
+            echo "::warning::Locked dependency file ${list_union_requirements} is unavailable on ${SCRIPT_REF}; deterministic contract-list union will fail open."
+          fi
 
           # render_prompt.py is the optional Python backend for the
           # render_prompt.sh shim adopted by branches that took the issue
@@ -543,6 +555,50 @@ jobs:
 
           rm -rf .codex-workflow-src-main
 
+      - name: Prepare isolated contract-list union Python
+        if: steps.find_tracking.outputs.has_work == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          union_venv="${RUNTIME_DIR}/sync-contract-list-union-venv"
+          union_python="${union_venv}/bin/python"
+          unavailable_python="${RUNTIME_DIR}/sync-contract-list-union-unavailable"
+          requirements_file="scripts/sync_contract_list_union.requirements.txt"
+
+          disable_list_union_python() {
+            echo "SYNC_CONTRACT_LIST_UNION_PYTHON=${unavailable_python}" >> "$GITHUB_ENV"
+            echo "::warning::$1 Deterministic contract-list union will fail open to the existing resolver path."
+            exit 0
+          }
+
+          [ -f "${requirements_file}" ] || disable_list_union_python "Locked PyYAML requirements file is missing."
+          python3 -I -m venv "${union_venv}" || disable_list_union_python "Could not create the isolated PyYAML environment."
+          "${union_python}" -I -m pip install \
+            --disable-pip-version-check \
+            --require-hashes \
+            --only-binary=:all: \
+            --no-deps \
+            --requirement "${requirements_file}" \
+            || disable_list_union_python "Hash-locked PyYAML installation failed."
+          "${union_python}" -I -c 'import yaml' \
+            || disable_list_union_python "The isolated PyYAML installation did not verify."
+          echo "SYNC_CONTRACT_LIST_UNION_PYTHON=${union_python}" >> "$GITHUB_ENV"
+
+      - name: Configure git auth for memory helper clones
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
+          git remote set-url origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}.git"
+          trusted_credential_helper='!f() { if [ "$1" = get ] && [ -n "${GH_TOKEN:-}" ]; then printf "%s\n" "username=x-access-token" "password=${GH_TOKEN}"; fi; }; f'
+          git config credential.helper "${trusted_credential_helper}"
+          {
+            echo "GIT_CONFIG_COUNT=1"
+            echo "GIT_CONFIG_KEY_0=credential.helper"
+            echo "GIT_CONFIG_VALUE_0=${trusted_credential_helper}"
+          } >> "$GITHUB_ENV"
+
       - name: setup-uv
         if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
         continue-on-error: true
@@ -632,6 +688,7 @@ jobs:
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
@@ -702,6 +759,9 @@ jobs:
           BRANCH_REBUILD_ENABLED: ${{ vars.BRANCH_REBUILD_ENABLED || 'false' }}
           BRANCH_REBUILD_THRESHOLD_HOURS: ${{ vars.BRANCH_REBUILD_THRESHOLD_HOURS || '24' }}
           BRANCH_REBUILD_COOLDOWN_HOURS: ${{ vars.BRANCH_REBUILD_COOLDOWN_HOURS || '48' }}
+          # Default-on deterministic pre-resolver implemented by
+          # scripts/orchestrate_poll_process.sh::sync_contract_list_union_merge.
+          ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED: ${{ vars.ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED || 'true' }}
           # Integration-backpressure size-aware margin (see scripts/orchestrate_poll_process.sh
           # _integration_backpressure_effective_threshold). Effective threshold is
           # max(ORCH_INTEGRATION_MAX_AHEAD_COMMITS, planned_issue_count + this margin).
@@ -771,6 +831,8 @@ jobs:
       - name: Publish state snapshot branch
         if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' && env.STATE_SNAPSHOT_BRANCH_ENABLED == 'true' }}
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
 
@@ -866,6 +928,8 @@ jobs:
       - name: Record poll run end
         if: always()
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           if [ ! -f scripts/memory_helpers.sh ]; then

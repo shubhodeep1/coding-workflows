@@ -18,9 +18,23 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+
+
+def _state_auth_keyring(active_key_id: str = "active", keys: dict[str, bytes] | None = None) -> str:
+	key_material = keys or {active_key_id: b"a" * 32}
+	return json.dumps({
+		"schema_version": "orchestrator_state_auth_keyring.v1",
+		"active_key_id": active_key_id,
+		"keys": [
+			{"key_id": key_id, "key_base64": base64.b64encode(key_value).decode("ascii")}
+			for key_id, key_value in key_material.items()
+		],
+	})
 
 # Upper bound for a single poller invocation under test. The mocked poller
 # should complete in a few seconds; anything longer indicates a hang (e.g. an
@@ -193,6 +207,61 @@ def _make_poller_sandbox(target: Path) -> None:
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
+
+
+def _configure_contract_list_union_fixture(sandbox: Path, bare_origin: Path) -> None:
+	git_env = _git_test_env()
+	contract_path = sandbox / "db" / "contracts" / "x.yml"
+	base_entries = ["api_fantasy_leaderboard", "_load_group_ranking"]
+	ours_entries = ["api_fantasy_leaderboard", "_ranking_documents_for_pot", "_load_group_ranking"]
+	theirs_entries = ["api_fantasy_leaderboard", "cosmodea_fantasy", "_load_group_ranking"]
+
+	def _fixture_contract(entries: list[str]) -> str:
+		return (
+			"collection: x\n"
+			"purpose: Exercise deterministic list union.\n"
+			"read_entrypoints:\n"
+			+ "".join(f"  - {entry}\n" for entry in entries)
+			+ "write_entrypoints:\n"
+			"  - persist_leaderboard\n"
+			"invariants:\n"
+			"  - Rankings remain stable.\n"
+		)
+
+	def _fixture_git(*args: str) -> None:
+		subprocess.run(
+			["git", "-C", str(sandbox), *args],
+			check=True,
+			env=git_env,
+			stdout=subprocess.DEVNULL,
+			stderr=subprocess.DEVNULL,
+		)
+
+	subprocess.run(
+		["git", "init", "--bare", "--quiet", str(bare_origin)],
+		check=True,
+		env=git_env,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	_fixture_git("checkout", "main")
+	contract_path.parent.mkdir(parents=True, exist_ok=True)
+	contract_path.write_text(_fixture_contract(base_entries), encoding="utf-8")
+	_fixture_git("add", "db/contracts/x.yml")
+	_fixture_git("commit", "-m", "contract base", "--quiet")
+	_fixture_git("branch", "-f", "orchestrator/project-192", "main")
+	_fixture_git("checkout", "orchestrator/project-192")
+	contract_path.write_text(_fixture_contract(ours_entries), encoding="utf-8")
+	_fixture_git("add", "db/contracts/x.yml")
+	_fixture_git("commit", "-m", "integration contract entry", "--quiet")
+	_fixture_git("checkout", "main")
+	contract_path.write_text(_fixture_contract(theirs_entries), encoding="utf-8")
+	_fixture_git("add", "db/contracts/x.yml")
+	_fixture_git("commit", "-m", "default contract entry", "--quiet")
+	_fixture_git("remote", "set-url", "origin", str(bare_origin))
+	_fixture_git("push", "--all", "origin", "--quiet")
+
+
 def _rewrite_cmd_for_sandbox(cmd: list, sandbox: Path) -> list:
 	"""Rewrite any command-line argument that is an absolute path under
 	``REPO_ROOT`` so it resolves to the equivalent path inside
@@ -694,6 +763,7 @@ def _run_poller(
 	pr_api_sequence: dict[int, list[dict]] | None = None,
 	existing_branches: list[str] | None = None,
 	merge_conflict_on_sync: bool = False,
+	fail_auto_pr_merge: bool = False,
 	blocked_check_shas: list[str] | None = None,
 	validation_workflow_runs: list[dict] | None = None,
 	issue_closed: dict[int, bool] | None = None,
@@ -762,6 +832,8 @@ def _run_poller(
 	capture_telegram_calls: bool = False,
 	fail_security_pass_managed_issue_lookup: bool = False,
 	security_pass_managed_issue_pages_raw: str | None = None,
+	sync_contract_list_union_fixture: bool = False,
+	sync_contract_list_union_timeout: bool = False,
 	env_overrides: dict[str, str] | None = None,
 ) -> dict:
 	tracking_num = 192
@@ -837,6 +909,9 @@ def _run_poller(
 		runtime_dir = tmp / "runtime"
 		store_file = tmp / "gh_store.json"
 		_make_poller_sandbox(sandbox)
+		bare_sync_origin = tmp / "sync-origin.git" if sync_contract_list_union_fixture else None
+		if bare_sync_origin is not None:
+			_configure_contract_list_union_fixture(sandbox, bare_sync_origin)
 		sandbox_sha_aliases = {
 			"__integration_head__": subprocess.run(
 				["git", "-C", str(sandbox), "rev-parse", "refs/heads/orchestrator/project-192"],
@@ -997,6 +1072,10 @@ def _run_poller(
 			else:
 				user_entry = {"login": str(user) if user else "octocat"}
 			user_entry.setdefault("login", "octocat")
+			user_entry.setdefault(
+				"id",
+				41898282 if user_entry["login"] == "github-actions[bot]" else 1001,
+			)
 			entry["user"] = user_entry
 			entry.setdefault(
 				"html_url",
@@ -1067,6 +1146,8 @@ def _run_poller(
 			"active_autofix_runs": active_autofix_runs,
 			"merge_conflict_on_sync": merge_conflict_on_sync,
 			"merge_calls": [],
+			"pr_merge_calls": [],
+			"fail_auto_pr_merge": fail_auto_pr_merge,
 			"blocked_check_shas": blocked_check_shas,
 			"validation_workflow_runs": validation_workflow_runs,
 			"issue_linked_prs": {
@@ -1577,6 +1658,11 @@ if args[0] == 'pr' and len(args) >= 3 and args[1] == 'ready':
 
 if args[0] == 'pr' and len(args) >= 3 and args[1] == 'merge':
 	pr_num = int(args[2])
+	store.setdefault('pr_merge_calls', []).append(list(args[2:]))
+	save()
+	if '--auto' in args and store.get('fail_auto_pr_merge'):
+		print('mock auto merge failure', file=sys.stderr)
+		sys.exit(1)
 	for pr in store.get('prs', []):
 		if pr.get('number') == pr_num:
 			if pr.get('mergeable') is False:
@@ -1683,6 +1769,10 @@ if args[0] == 'api':
 		print('{}')
 		sys.exit(0)
 	store.setdefault('api_calls', []).append(path)
+	if path == 'user' and method == 'GET':
+		save()
+		print(json.dumps({'id': 41898282, 'login': 'github-actions[bot]'}))
+		sys.exit(0)
 
 	if path == 'graphql':
 		mode = store.get('graphql_mode', 'full')
@@ -1931,7 +2021,7 @@ if args[0] == 'api':
 			'id': cid,
 			'body': body,
 			'created_at': f'2026-01-01T00:00:{cid % 60:02d}Z',
-			'user': {'login': 'github-actions[bot]'},
+			'user': {'login': 'github-actions[bot]', 'id': 41898282},
 			'html_url': f'https://github.com/owner/repo/issues/{m.group(1)}#issuecomment-{cid}',
 		})
 		save()
@@ -2489,8 +2579,11 @@ sys.exit(1)
 
 		real_git = shutil.which("git")
 		real_python = shutil.which("python3")
+		real_timeout = shutil.which("timeout")
 		assert real_git is not None
 		assert real_python is not None
+		if (sync_contract_list_union_fixture or sync_contract_list_union_timeout) and real_timeout is None:
+			pytest.skip("GNU timeout is required for deterministic contract-list union tests")
 		_write_exec(
 			bin_dir / "git",
 			r'''#!/usr/bin/env python3
@@ -2519,6 +2612,23 @@ if len(args) >= 2 and args[0] == 'push' and os.environ.get('MOCK_GIT_PUSH_SUCCES
 	store.setdefault('git_push_calls', []).append(args[1:])
 	store_path.write_text(json.dumps(store), encoding='utf-8')
 	sys.exit(0)
+
+if args and args[0] == 'commit-tree' and os.environ.get('MOCK_GIT_COMMIT_TREE_FAIL', '') == 'true':
+	sys.stdin.read()
+	sys.exit(1)
+
+if args and args[0] == 'commit-tree':
+	commit_message = sys.stdin.read()
+	proc = subprocess.run([real_git, *args], input=commit_message, capture_output=True, text=True)
+	store.setdefault('git_commit_tree_calls', []).append({
+		'args': args[1:],
+		'message': commit_message,
+		'sha': proc.stdout.strip(),
+	})
+	store_path.write_text(json.dumps(store), encoding='utf-8')
+	sys.stdout.write(proc.stdout)
+	sys.stderr.write(proc.stderr)
+	sys.exit(proc.returncode)
 
 if args and args[0] == 'checkout' and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '') == 'true':
 	sys.exit(1)
@@ -2616,6 +2726,18 @@ if touch_file:
 print(json.dumps(parsed))
 """,
 		)
+		if sync_contract_list_union_timeout:
+			_write_exec(
+				bin_dir / "timeout",
+				r'''#!/usr/bin/env python3
+import os
+import sys
+
+if any(str(argument).endswith("sync_contract_list_union.py") for argument in sys.argv[1:]):
+	sys.exit(124)
+os.execv(os.environ["REAL_TIMEOUT_BIN"], [os.environ["REAL_TIMEOUT_BIN"], *sys.argv[1:]])
+''',
+			)
 
 		_write_exec(
 			bin_dir / "python3",
@@ -3080,6 +3202,7 @@ sys.exit(proc.returncode)
 				"JUDGE_PROMPT_FILE": str(runtime_dir / "judge_prompt.txt"),
 				"JUDGE_OUTPUT_FILE": str(runtime_dir / "judge_output.txt"),
 				"GH_TOKEN": "test-token",
+				"ORCHESTRATOR_STATE_AUTH_KEYRING": _state_auth_keyring(),
 				"OPENROUTER_API_KEY": "test-openrouter",
 				"GITHUB_REPOSITORY": "owner/repo",
 				"MODEL_EDITOR": "openai/gpt-5.4",
@@ -3105,10 +3228,12 @@ sys.exit(proc.returncode)
 				"BRANCH_REBUILD_ENABLED": branch_rebuild_enabled,
 				"BRANCH_REBUILD_THRESHOLD_HOURS": branch_rebuild_threshold_hours,
 				"BRANCH_REBUILD_COOLDOWN_HOURS": branch_rebuild_cooldown_hours,
+				"ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED": "false",
 				"GH_MOCK_STORE": str(store_file),
 				"GH_RETRY_MAX_ATTEMPTS": "1",
 				"REAL_GIT_BIN": real_git,
 				"REAL_PYTHON_BIN": real_python,
+				"REAL_TIMEOUT_BIN": real_timeout or "",
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
 				"MOCK_GIT_PUSH_SUCCESS": "true" if mock_git_push_success else "false",
 				"MOCK_GIT_CHECKOUT_FAIL": "true" if mock_git_checkout_fail else "false",
@@ -3149,6 +3274,7 @@ sys.exit(proc.returncode)
 		result["tracking_labels"] = tracking_issue["labels"]
 		result["tracking_closed"] = tracking_issue.get("closed", False)
 		result["merge_calls"] = result.get("merge_calls", [])
+		result["pr_merge_calls"] = result.get("pr_merge_calls", [])
 		result["review_dispatches"] = result.get("review_dispatches", [])
 		result["update_branch_calls"] = result.get("update_branch_calls", [])
 		result["label_create_calls"] = result.get("label_create_calls", [])
@@ -3184,6 +3310,23 @@ sys.exit(proc.returncode)
 		)
 		result["actions_runs_fetch_count"] = int(result.get("actions_runs_fetch_count", 0))
 		result["actions_runs_if_none_match_count"] = int(result.get("actions_runs_if_none_match_count", 0))
+		if bare_sync_origin is not None:
+			remote_tip = "refs/heads/orchestrator/project-192"
+			result["sync_contract_tip"] = subprocess.run(
+				[real_git, "--git-dir", str(bare_sync_origin), "show", f"{remote_tip}:db/contracts/x.yml"],
+				check=True,
+				capture_output=True,
+				text=True,
+				env=_git_test_env(),
+			).stdout
+			parent_line = subprocess.run(
+				[real_git, "--git-dir", str(bare_sync_origin), "rev-list", "--parents", "-n", "1", remote_tip],
+				check=True,
+				capture_output=True,
+				text=True,
+				env=_git_test_env(),
+			).stdout.split()
+			result["sync_contract_tip_parent_count"] = len(parent_line) - 1
 		return result
 
 
@@ -5301,6 +5444,137 @@ def test_wave_judge_uses_default_branch_context_without_integration_metadata():
 	assert "Judge context sentinel for tracking #192:" not in result["stdout"]
 
 
+def _review_blocked_pr_snapshot(head_sha: str, *, pr_number: int = 901) -> dict:
+	return {
+		"number": pr_number,
+		"state": "open",
+		"merged": False,
+		"merged_at": None,
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"headSha": head_sha,
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
+
+
+def _run_review_blocked_merge_decision(
+	*,
+	action: str,
+	judged_head_sha: str,
+	live_head_sha: str,
+	fail_auto_pr_merge: bool = False,
+) -> dict:
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	judged_pr_snapshot = _review_blocked_pr_snapshot(judged_head_sha)
+	live_pr_snapshot = _review_blocked_pr_snapshot(live_head_sha)
+	decision = {
+		"action": action,
+		"justification": "the reviewed change is shippable",
+		"fix_description": "",
+		"remaining_issues_summary": "none",
+	}
+	if action == "merge_with_followup":
+		decision["followup_issue"] = {
+			"title": "Track deferred review gap",
+			"body": "Apply the deferred non-blocking correction.",
+		}
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 901},
+		prs=[dict(judged_pr_snapshot)],
+		existing_branches=["main"],
+		# Reconciliation consumes two snapshots, the initial handler fetch and
+		# comment-context hydration consume two more, and the fifth is live.
+		pr_api_sequence={
+			901: [dict(judged_pr_snapshot) for _ in range(4)] + [dict(live_pr_snapshot)],
+		},
+		codex_json=decision,
+		fail_auto_pr_merge=fail_auto_pr_merge,
+		env_overrides={"ENABLE_AUTO_MERGE": "true"},
+	)
+
+
+def test_review_blocked_merge_refuses_head_changed_after_judge_snapshot():
+	judged_head_sha = "a" * 40
+	result = _run_review_blocked_merge_decision(
+		action="merge",
+		judged_head_sha=judged_head_sha,
+		live_head_sha="b" * 40,
+	)
+	assert result["pr_merge_calls"] == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert "ai:ready-to-merge" not in result["issues"]["10"]["labels"]
+	assert "live head changed or could not be bound to the judged snapshot" in result["stdout"]
+
+
+def test_review_blocked_merge_auto_command_is_bound_to_judged_head():
+	judged_head_sha = "c" * 40
+	result = _run_review_blocked_merge_decision(
+		action="merge",
+		judged_head_sha=judged_head_sha,
+		live_head_sha=judged_head_sha,
+	)
+	assert len(result["pr_merge_calls"]) == 1
+	assert result["pr_merge_calls"][0][-2:] == ["--match-head-commit", judged_head_sha]
+	assert "--auto" in result["pr_merge_calls"][0]
+	assert "ai:ready-to-merge" in result["issues"]["10"]["labels"]
+
+
+def test_review_blocked_merge_direct_fallback_keeps_judged_head_guard():
+	judged_head_sha = "d" * 40
+	result = _run_review_blocked_merge_decision(
+		action="merge",
+		judged_head_sha=judged_head_sha,
+		live_head_sha=judged_head_sha,
+		fail_auto_pr_merge=True,
+	)
+	assert len(result["pr_merge_calls"]) == 2
+	assert "--auto" in result["pr_merge_calls"][0]
+	assert "--auto" not in result["pr_merge_calls"][1]
+	assert all(
+		call[-2:] == ["--match-head-commit", judged_head_sha]
+		for call in result["pr_merge_calls"]
+	)
+
+
+def test_review_blocked_merge_with_followup_refuses_stale_judged_head():
+	result = _run_review_blocked_merge_decision(
+		action="merge_with_followup",
+		judged_head_sha="e" * 40,
+		live_head_sha="f" * 40,
+	)
+	assert result["pr_merge_calls"] == []
+	assert result.get("created_issues", []) == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert "Judge-approved merge_with_followup" in result["stdout"]
+
+
+def test_review_blocked_merge_with_followup_binds_merge_to_judged_head():
+	judged_head_sha = "1" * 40
+	result = _run_review_blocked_merge_decision(
+		action="merge_with_followup",
+		judged_head_sha=judged_head_sha,
+		live_head_sha=judged_head_sha,
+	)
+	assert len(result["pr_merge_calls"]) == 1
+	assert result["pr_merge_calls"][0][-2:] == ["--match-head-commit", judged_head_sha]
+	assert result.get("created_issues") == [
+		{
+			"number": 900,
+			"title": "Track deferred review gap",
+			"labels": ["ai:clarification", "ai:orchestrator-managed"],
+		},
+	]
+
+
 def test_review_blocked_merged_followup_retargets_to_integration_branch():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
@@ -5380,11 +5654,8 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 
 
 	followup_prs = [pr for pr in result["prs"] if int(pr.get("number", 0)) != 901]
-	assert any(pr.get("baseRefName") == "orchestrator/project-192" for pr in followup_prs)
-	assert not any(
-		pr.get("headRefName", "").startswith("fix/10-followup-") and pr.get("baseRefName") == "main"
-		for pr in followup_prs
-	)
+	assert followup_prs == []
+	assert "normalizing to merge_with_followup" in (result["stdout"] + result["stderr"])
 
 
 def test_review_blocked_merged_followup_refuses_default_base_when_active_integration_branch_unavailable():
@@ -5459,7 +5730,7 @@ def test_review_blocked_merged_followup_refuses_default_base_when_active_integra
 
 
 	assert len(result["prs"]) == 1
-	assert "Aborting follow-up PR creation to avoid targeting main" in (result["stdout"] + result["stderr"])
+	assert "normalizing to merge_with_followup" in (result["stdout"] + result["stderr"])
 
 
 def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_context():
@@ -5534,7 +5805,8 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 
 
 	followup_prs = [pr for pr in result["prs"] if int(pr.get("number", 0)) != 901]
-	assert any(pr.get("baseRefName") == "main" for pr in followup_prs)
+	assert followup_prs == []
+	assert "normalizing to merge_with_followup" in (result["stdout"] + result["stderr"])
 
 
 def test_review_blocked_followup_refusal_increments_retry_counter():
@@ -5611,12 +5883,244 @@ def test_review_blocked_followup_refusal_increments_retry_counter():
 
 
 	assert len(result["prs"]) == 1
+	assert result["latest_state"]["review_blocked_retries"].get("10") is None
+
+
+def test_review_blocked_fix_dispatches_existing_review_actuator_for_open_pr():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	open_pr = {
+		"number": 901,
+		"state": "open",
+		"merged": False,
+		"merged_at": None,
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"headSha": "__default_head__",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 901},
+		prs=[open_pr],
+		existing_branches=["main"],
+		codex_json={
+			"action": "fix",
+			"justification": "review should apply a bounded correction",
+			"fix_description": "Apply the validated correction through review/autofix.",
+			"remaining_issues_summary": "one correction remains",
+		},
+		mock_git_push_success=True,
+	)
+	assert any(dispatch["pr_number"] == 901 for dispatch in result["review_dispatches"])
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert len(result.get("git_commit_tree_calls", [])) == 1
+	boundary_call = result["git_commit_tree_calls"][0]
+	assert boundary_call["message"].startswith("[judge-fix] request review-blocked correction for #10\n")
+	assert boundary_call["args"][1:] == ["-p", result["prs"][0]["headSha"]]
+	assert any(
+		len(push_call) == 2
+		and push_call[0] == "origin"
+		and re.fullmatch(r"[0-9a-f]{40}:refs/heads/ai/issue-10", push_call[1])
+		for push_call in result.get("git_push_calls", [])
+	)
+	assert "pushed a [judge-fix] boundary" in result["stdout"]
+
+
+def test_review_blocked_fix_does_not_dispatch_when_boundary_push_fails():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 901},
+		prs=[{
+			"number": 901,
+			"state": "open",
+			"merged": False,
+			"merged_at": None,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"headSha": "__default_head__",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"title": "Test PR",
+			"body": "Body",
+		}],
+		existing_branches=["main"],
+		codex_json={
+			"action": "fix",
+			"justification": "review should apply a bounded correction",
+			"fix_description": "Apply the validated correction through review/autofix.",
+			"remaining_issues_summary": "one correction remains",
+		},
+	)
+	assert result["review_dispatches"] == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") is None
+	assert "Could not push the [judge-fix] boundary" in (result["stdout"] + result["stderr"])
+
+
+def test_review_blocked_fix_commit_tree_failure_continues_without_dispatch_or_retry():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 901},
+		prs=[{
+			"number": 901,
+			"state": "open",
+			"merged": False,
+			"merged_at": None,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"headSha": "__default_head__",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"title": "Test PR",
+			"body": "Body",
+		}],
+		existing_branches=["main"],
+		codex_json={
+			"action": "fix",
+			"justification": "review should apply a bounded correction",
+			"fix_description": "Apply the validated correction through review/autofix.",
+			"remaining_issues_summary": "one correction remains",
+		},
+		mock_git_push_success=True,
+		env_overrides={"MOCK_GIT_COMMIT_TREE_FAIL": "true"},
+	)
+	assert result["review_dispatches"] == []
+	assert result.get("git_push_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") is None
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert "Could not create the [judge-fix] boundary commit" in (result["stdout"] + result["stderr"])
+
+
+def test_review_blocked_oversized_fix_decision_performs_no_actuator_action():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	open_pr = {
+		"number": 902,
+		"state": "open",
+		"merged": False,
+		"merged_at": None,
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 902},
+		prs=[open_pr],
+		existing_branches=["main"],
+		codex_json={
+			"action": "fix",
+			"justification": "invalid oversized decision",
+			"fix_description": "x" * 4001,
+			"remaining_issues_summary": "one correction remains",
+		},
+	)
+	assert result["review_dispatches"] == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") is None
+	assert "invalid, oversized, or disallowed decision" in (result["stdout"] + result["stderr"])
+
+
+def test_review_blocked_final_fix_decision_performs_no_actuator_action():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	state["review_blocked_retries"]["10"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 903},
+		prs=[{
+			"number": 903,
+			"state": "open",
+			"merged": False,
+			"merged_at": None,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"title": "Test PR",
+			"body": "Body",
+		}],
+		existing_branches=["main"],
+		codex_json={
+			"action": "fix",
+			"justification": "retry despite the final-action boundary",
+			"fix_description": "This must not dispatch after retry exhaustion.",
+			"remaining_issues_summary": "one correction remains",
+		},
+	)
+	assert result["review_dispatches"] == []
+	assert result["latest_state"]["review_blocked_retries"]["10"] == 2
+	assert "normalizing to close_and_reissue" in (result["stdout"] + result["stderr"])
+	assert "ai:closed" in result["issues"]["10"]["labels"]
+
+
+def test_review_blocked_close_and_reissue_requires_replacement_details():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 904},
+		prs=[{
+			"number": 904,
+			"state": "open",
+			"merged": False,
+			"merged_at": None,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"title": "Test PR",
+			"body": "Body",
+		}],
+		existing_branches=["main"],
+		codex_json={
+			"action": "close_and_reissue",
+			"justification": "replacement details are missing",
+			"fix_description": "",
+			"remaining_issues_summary": "one correction remains",
+		},
+	)
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert "ai:closed" not in result["issues"]["10"]["labels"]
+	assert "invalid, oversized, or disallowed decision" in (result["stdout"] + result["stderr"])
 
 
 def test_sync_superseded_sets_state_once_and_skips_future_sync_attempts():
 	state = _base_state(status="in_progress")
-	state["integration_branch"] = "main"
+	state["integration_branch"] = "orchestrator/project-192"
 	prs = [
 		{
 			"number": 901,
@@ -5636,7 +6140,7 @@ def test_sync_superseded_sets_state_once_and_skips_future_sync_attempts():
 		issue_labels={10: ["ai:merged"]},
 		issue_linked_prs={10: 901},
 		prs=prs,
-		existing_branches=["main"],
+		existing_branches=["main", "orchestrator/project-192"],
 	)
 	assert first["latest_state"]["sync"]["status"] == "superseded-by-main"
 	assert first["latest_state"]["sync"]["superseded_notified"] is True
@@ -5661,7 +6165,7 @@ def test_sync_superseded_sets_state_once_and_skips_future_sync_attempts():
 		issue_labels={10: ["ai:merged"]},
 		issue_linked_prs={10: 901},
 		prs=prs,
-		existing_branches=["main"],
+		existing_branches=["main", "orchestrator/project-192"],
 	)
 	second_comment_bodies = [c.get("body", "") for c in second["issues"]["192"]["comments"]]
 	second_superseded_comments = [
@@ -5717,13 +6221,13 @@ def test_superseded_state_reactivates_when_timeline_lookup_fails_for_other_issue
 
 def test_sync_conflict_comment_includes_paths_and_runbook_link():
 	state = _base_state(status="in_progress")
-	state["integration_branch"] = "main"
+	state["integration_branch"] = "orchestrator/project-192"
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:implementing"]},
-		existing_branches=["main"],
+		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
 		merge_tree_conflict_paths=["src/a.py", "src/b.py"],
 	)
@@ -5741,15 +6245,150 @@ def test_sync_conflict_comment_includes_paths_and_runbook_link():
 	assert "orchestrator-integration-branch-rebuild-runbook.md" in conflict_comments[0]
 
 
+def test_sync_contract_list_union_pushes_two_parent_merge_without_resolver_dispatch():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_sync_status"] = "healing"
+	state["integration_sync_last_error"] = "prior conflict"
+	state["integration_conflict_unresolved_ticks"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		merge_tree_conflict_paths=["db/contracts/x.yml"],
+		sync_contract_list_union_fixture=True,
+		env_overrides={"ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED": "true"},
+	)
+
+	assert result["sync_contract_tip_parent_count"] == 2
+	assert "  - _ranking_documents_for_pot\n" in result["sync_contract_tip"]
+	assert "  - cosmodea_fantasy\n" in result["sync_contract_tip"]
+	assert result["review_dispatches"] == []
+	assert result["latest_state"]["sync"]["last_sync_outcome"] == "merged-deterministic"
+	assert result["latest_state"]["sync"]["last_list_union_paths"] == ["db/contracts/x.yml"]
+	assert result["latest_state"]["integration_sync_status"] == "clean"
+	assert result["latest_state"]["integration_sync_last_error"] == ""
+	assert result["latest_state"]["integration_conflict_unresolved_ticks"] == 0
+	tracking_bodies = [comment.get("body", "") for comment in result["issues"]["192"]["comments"]]
+	assert sum(body.startswith("## ✅ Integration self-healing resolved") for body in tracking_bodies) == 1
+	assert any(body.startswith("## ✅ Integration sync auto-resolved") for body in tracking_bodies)
+	assert "SYNC_LIST_UNION_V1:" in result["stdout"] + result["stderr"]
+	assert "outcome=merged" in result["stdout"] + result["stderr"]
+
+
+def test_sync_contract_list_union_mixed_conflict_falls_through_to_resolver():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		merge_tree_conflict_paths=["db/contracts/x.yml", "backend/app.py"],
+		sync_contract_list_union_fixture=True,
+		env_overrides={"ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED": "true"},
+	)
+
+	assert result["sync_contract_tip_parent_count"] == 1
+	assert len(result["review_dispatches"]) == 1
+	assert result["latest_state"]["sync"]["last_sync_outcome"] == "conflict"
+	tracking_bodies = [comment.get("body", "") for comment in result["issues"]["192"]["comments"]]
+	assert any("## ⚠️ Integration sync conflict" in body for body in tracking_bodies)
+	combined_output = result["stdout"] + result["stderr"]
+	assert "outcome=ineligible reason=non_contract_path" in combined_output
+
+
+def test_sync_contract_list_union_timeout_falls_through_to_resolver():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		merge_tree_conflict_paths=["db/contracts/x.yml"],
+		sync_contract_list_union_fixture=True,
+		sync_contract_list_union_timeout=True,
+		env_overrides={"ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED": "true"},
+	)
+
+	assert result["sync_contract_tip_parent_count"] == 1
+	assert len(result["review_dispatches"]) == 1
+	assert result["latest_state"]["sync"]["last_sync_outcome"] == "conflict"
+	combined_output = result["stdout"] + result["stderr"]
+	assert "outcome=failed reason=failed:helper_timeout:db/contracts/x.yml" in combined_output
+
+
+def test_sync_contract_list_union_flag_disabled_preserves_legacy_conflict_flow():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		merge_tree_conflict_paths=["db/contracts/x.yml"],
+		sync_contract_list_union_fixture=True,
+		env_overrides={"ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED": "false"},
+	)
+
+	assert result["sync_contract_tip_parent_count"] == 1
+	assert len(result["review_dispatches"]) == 1
+	assert result["latest_state"]["sync"]["last_sync_outcome"] == "conflict"
+	assert result["latest_state"]["integration_conflict_unresolved_ticks"] == 1
+	assert "SYNC_LIST_UNION_V1:" not in result["stdout"] + result["stderr"]
+
+
+def test_sync_contract_list_union_workflow_and_function_contracts():
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	workflow_body = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	function_start = poller_body.index("sync_contract_list_union_merge() {")
+	function_end = poller_body.index("\n}\n\n# Drive one iteration", function_start) + 2
+	function_body = poller_body[function_start:function_end]
+
+	assert 'ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED="${ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED:-true}"' in poller_body
+	assert "zero GitHub REST or GraphQL calls" in poller_body
+	assert "worktree_registry_register" in function_body
+	assert "worktree_registry_deregister" in function_body
+	assert "git worktree remove --force" in function_body
+	assert "gh_retry" not in function_body
+	assert "gh api" not in function_body
+	assert 'SYNC_CONTRACT_LIST_UNION_PYTHON="${SYNC_CONTRACT_LIST_UNION_PYTHON:-python3}"' in poller_body
+	assert 'local list_union_python="${SYNC_CONTRACT_LIST_UNION_PYTHON:-python3}"' in function_body
+	assert 'command -v "${list_union_python}"' in function_body
+	assert '"${list_union_python}" -I -c \'import yaml\'' in function_body
+	assert "command -v timeout" in function_body
+	assert 'timeout --signal=TERM --kill-after=2s -- "${list_union_helper_timeout_seconds}s"' in function_body
+	assert '"${list_union_python}" -I "${list_union_helper_path}"' in function_body
+	assert "branch_binding_mismatch" in function_body
+	assert '::warning::SYNC_LIST_UNION_V1: integration=${integration_branch}' not in poller_body
+	assert '::warning::Integration sync rejected: integration=${integration_branch}' in poller_body
+	assert "sync_contract_list_union.py" in workflow_body
+	assert "sync_contract_list_union.requirements.txt" in workflow_body
+	assert "--require-hashes" in workflow_body
+	assert "--only-binary=:all:" in workflow_body
+	assert "--no-deps" in workflow_body
+	assert "ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED: ${{ vars.ORCH_SYNC_CONTRACT_LIST_UNION_ENABLED || 'true' }}" in workflow_body
+
+
 def test_sync_conflict_dedupe_skips_identical_warnings():
 	state = _base_state(status="in_progress")
-	state["integration_branch"] = "main"
+	state["integration_branch"] = "orchestrator/project-192"
 	first = _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:implementing"]},
-		existing_branches=["main"],
+		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
 		merge_tree_conflict_paths=["src/a.py"],
 	)
@@ -5763,7 +6402,7 @@ def test_sync_conflict_dedupe_skips_identical_warnings():
 			body for body in first_comment_bodies if not _is_state_comment(body)
 		],
 		issue_labels={10: ["ai:implementing"]},
-		existing_branches=["main"],
+		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
 		merge_tree_conflict_paths=["src/a.py"],
 	)
@@ -5777,13 +6416,13 @@ def test_sync_conflict_dedupe_skips_identical_warnings():
 
 def test_sync_conflict_posts_again_when_conflict_set_changes():
 	state = _base_state(status="in_progress")
-	state["integration_branch"] = "main"
+	state["integration_branch"] = "orchestrator/project-192"
 	first = _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:implementing"]},
-		existing_branches=["main"],
+		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
 		merge_tree_conflict_paths=["src/a.py"],
 	)
@@ -5797,7 +6436,7 @@ def test_sync_conflict_posts_again_when_conflict_set_changes():
 			body for body in first_comment_bodies if not _is_state_comment(body)
 		],
 		issue_labels={10: ["ai:implementing"]},
-		existing_branches=["main"],
+		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
 		merge_tree_conflict_paths=["src/b.py"],
 	)
@@ -5824,10 +6463,11 @@ def test_sync_conflict_escalates_to_judge_immediately_after_retry_budget_exhaust
 		issue_labels={10: ["ai:implementing"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
+		codex_json={"action": "redispatch_resolver", "guidance": "Preserve both branches' validated intent."},
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Integration judge invoked" in body for body in tracking_bodies)
-	assert result["review_dispatches"] == []
+	assert len(result["review_dispatches"]) == 1
 
 def test_final_merge_conflict_sets_merge_conflict_status():
 	# Regression coverage for the self-healing flow introduced in PR #918
@@ -8801,23 +9441,20 @@ def test_implementation_failed_comment_lookup_failure_defers_reissue():
 
 def test_review_blocked_merged_fix_followup_retargets_base_to_integration_branch():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
-	assert "resolve_active_orchestrator_context_for_issue \"${rb_issue}\" \"${TRACKING_NUM:-}\"" in script
-	assert "BASE_REF=\"${ORCH_FOLLOWUP_INTEGRATION_BRANCH}\"" in script
-	assert "Retargeting base to ${BASE_REF}." in script
+	assert "Judge chose fix for already-merged PR #${RB_PR}" in script
+	assert "merge_with_followup is the only safe deferred-change action" in script
 
 
 def test_review_blocked_merged_fix_followup_refuses_when_integration_branch_invalid():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
-	assert "RB_FOLLOWUP_REFUSED=\"true\"" in script
-	assert "integration branch '${ORCH_FOLLOWUP_INTEGRATION_BRANCH:-<missing>}' is unavailable. Aborting follow-up PR creation to avoid targeting ${DEFAULT_BRANCH:-main}." in script
-	assert "Refused merged follow-up PR creation for review-blocked issue #${rb_issue}" in script
+	assert '_dispatch_review_for_conflicts "${RB_PR}" "${RB_FIX_HEAD_REF}"' in script
+	assert "[orchestrator-fix] address review-blocked issues" not in script
 
 
 def test_review_blocked_merged_fix_followup_keeps_default_base_without_integration_context():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
-	assert ": \"${BASE_REF:=${DEFAULT_BRANCH:-main}}\"" in script
-	assert "if [ \"${RB_INTEGRATION_BRANCH_VALID}\" = \"true\" ]" in script
-	assert "&& { [ \"${BASE_REF}\" = \"${DEFAULT_BRANCH:-main}\" ] || [ \"${BASE_REF}\" = \"main\" ]; }; then" in script
+	assert "COMBINED DECIDE + APPLY INSTRUCTIONS" not in script
+	assert "--sandbox danger-full-access" not in script
 
 
 def test_post_issue_comment_json_validates_numeric_body_size_before_limit_check():
@@ -11539,6 +12176,295 @@ def test_v2_extract_helper_matches_production_for_interleaved_older_complete_and
 	assert _extract_latest_state(comments) == state
 
 
+def test_state_auth_sign_verify_and_payload_mutation_rejection():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		state_file = tmp / "state.json"
+		signed_file = tmp / "signed.json"
+		state_file.write_text(json.dumps(state), encoding="utf-8")
+		env = {
+			**os.environ,
+			"GH_TOKEN": "state-auth-test-key",
+			"ORCHESTRATOR_STATE_AUTH_KEYRING": _state_auth_keyring(),
+			"PYTHONDONTWRITEBYTECODE": "1",
+		}
+		common_args = [
+			"--repository", "owner/repo",
+			"--tracking-issue", "192",
+			"--integration-branch", "orchestrator/project-192",
+			"--producer-id", "41898282",
+			"--producer-login", "github-actions[bot]",
+		]
+		sign_result = subprocess.run(
+			[
+				"python3", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"sign", "--state-file", str(state_file), "--out-file", str(signed_file),
+				*common_args,
+			],
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		assert sign_result.returncode == 0, sign_result.stderr
+		signed_payload = json.loads(signed_file.read_text(encoding="utf-8"))
+		assert signed_payload["state_auth"]["schema_version"] == "orchestrator_state_auth.v2"
+		assert signed_payload["state_auth"]["key_id"] == "active"
+		assert signed_payload["state_auth"]["producer_id"] == 41898282
+		assert "producer_login" not in signed_payload["state_auth"]
+		verify_command = [
+			"python3", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+			"verify", "--state-file", str(signed_file), *common_args,
+		]
+		assert subprocess.run(verify_command, env=env, capture_output=True).returncode == 0
+		tampered_state = json.loads(signed_file.read_text(encoding="utf-8"))
+		assert tampered_state["state_auth"]["generation"] == 1
+		tampered_state["state_auth"]["generation"] = 2
+		signed_file.write_text(json.dumps(tampered_state), encoding="utf-8")
+		assert subprocess.run(verify_command, env=env, capture_output=True).returncode == 1
+		tampered_state["state_auth"]["generation"] = 1
+		tampered_state["status"] = "failed"
+		signed_file.write_text(json.dumps(tampered_state), encoding="utf-8")
+		assert subprocess.run(verify_command, env=env, capture_output=True).returncode == 1
+		tampered_state["status"] = "in_progress"
+		tampered_state["state_auth"]["producer_login"] = "injected-login"
+		signed_file.write_text(json.dumps(tampered_state), encoding="utf-8")
+		assert subprocess.run(verify_command, env=env, capture_output=True).returncode == 1
+
+
+def test_state_auth_rejects_cross_context_replay():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		state_file = tmp / "state.json"
+		signed_file = tmp / "signed.json"
+		state_file.write_text(json.dumps(state), encoding="utf-8")
+		env = {
+			**os.environ,
+			"GH_TOKEN": "state-auth-test-key",
+			"ORCHESTRATOR_STATE_AUTH_KEYRING": _state_auth_keyring(),
+			"PYTHONDONTWRITEBYTECODE": "1",
+		}
+		base_context = [
+			"--repository", "owner/repo", "--tracking-issue", "192",
+			"--integration-branch", "orchestrator/project-192",
+			"--producer-id", "41898282", "--producer-login", "github-actions[bot]",
+		]
+		assert subprocess.run(
+			[
+				"python3", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"sign", "--state-file", str(state_file), "--out-file", str(signed_file),
+				*base_context,
+			],
+			env=env,
+			capture_output=True,
+		).returncode == 0
+		for changed_context in (
+			["--repository", "other/repo", *base_context[2:]],
+			[*base_context[:-4], "--producer-id", "999", "--producer-login", "github-actions[bot]"],
+		):
+			result = subprocess.run(
+				[
+					"python3", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+					"verify", "--state-file", str(signed_file), *changed_context,
+				],
+				env=env,
+				capture_output=True,
+			)
+			assert result.returncode == 1
+		login_changed = subprocess.run(
+			[
+				"python3", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"verify", "--state-file", str(signed_file),
+				*base_context[:-2], "--producer-login", "other-bot",
+			],
+			env={**env, "GH_TOKEN": "rotated-pat"},
+			capture_output=True,
+		)
+		assert login_changed.returncode == 0
+		custom_branch_result = subprocess.run(
+			[
+				"python3", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"verify", "--state-file", str(signed_file),
+				*base_context[:5], "feature/manual-integration", *base_context[6:],
+			],
+			env=env,
+			capture_output=True,
+		)
+		assert custom_branch_result.returncode == 2
+
+
+def test_state_auth_key_rotation_accepts_retained_previous_key_and_rejects_unknown_key():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		state_file = tmp / "state.json"
+		signed_file = tmp / "signed.json"
+		state_file.write_text(json.dumps(state), encoding="utf-8")
+		common_args = [
+			"--repository", "owner/repo", "--tracking-issue", "192",
+			"--integration-branch", "orchestrator/project-192",
+			"--producer-id", "41898282", "--producer-login", "old-login",
+		]
+		old_env = {
+			**os.environ,
+			"GH_TOKEN": "old-pat",
+			"ORCHESTRATOR_STATE_AUTH_KEYRING": _state_auth_keyring("old", {"old": b"o" * 32}),
+		}
+		assert subprocess.run(
+			[
+				"python3", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"sign", "--state-file", str(state_file), "--out-file", str(signed_file), *common_args,
+			],
+			env=old_env,
+			capture_output=True,
+		).returncode == 0
+		verify_command = [
+			"python3", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+			"verify", "--state-file", str(signed_file), *common_args[:-2],
+			"--producer-login", "new-login",
+		]
+		rotated_env = {
+			**old_env,
+			"GH_TOKEN": "new-pat",
+			"ORCHESTRATOR_STATE_AUTH_KEYRING": _state_auth_keyring(
+				"new", {"new": b"n" * 32, "old": b"o" * 32}
+			),
+		}
+		assert subprocess.run(verify_command, env=rotated_env, capture_output=True).returncode == 0
+		retired_env = {
+			**rotated_env,
+			"ORCHESTRATOR_STATE_AUTH_KEYRING": _state_auth_keyring("new", {"new": b"n" * 32}),
+		}
+		assert subprocess.run(verify_command, env=retired_env, capture_output=True).returncode == 1
+
+
+def test_state_auth_legacy_v1_signature_remains_verifiable_for_migration():
+	import argparse
+	import scripts.orchestrate_state_v2 as state_auth_helper
+
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	auth_args = argparse.Namespace(
+		repository="owner/repo",
+		tracking_issue=192,
+		integration_branch="orchestrator/project-192",
+		producer_id=41898282,
+		producer_login="legacy-login",
+	)
+	auth_context, context_error = state_auth_helper._validated_auth_context(auth_args)
+	assert context_error is None
+	assert auth_context is not None
+	signed_context = {**auth_context, "generation": 1}
+	state["state_auth"] = {
+		**signed_context,
+		"signature": state_auth_helper._signature_for_state(
+			state,
+			signed_context,
+			b"legacy-pat",
+		),
+	}
+	with tempfile.TemporaryDirectory() as td:
+		state_file = Path(td) / "legacy-state.json"
+		state_file.write_text(json.dumps(state), encoding="utf-8")
+		result = subprocess.run(
+			[
+				"python3", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"verify", "--state-file", str(state_file),
+				"--repository", "owner/repo", "--tracking-issue", "192",
+				"--integration-branch", "orchestrator/project-192",
+				"--producer-id", "41898282", "--producer-login", "legacy-login",
+			],
+			env={**os.environ, "GH_TOKEN": "legacy-pat"},
+			capture_output=True,
+		)
+	assert result.returncode == 0
+
+
+def test_missing_state_auth_keyring_pauses_poller_mutations():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"ORCHESTRATOR_STATE_AUTH_KEYRING": ""},
+	)
+	assert result["merge_calls"] == []
+	assert result["review_dispatches"] == []
+	assert "pausing all project mutations" in result["stderr"]
+
+
+def test_v2_extract_prefers_highest_signed_generation_over_newest_replay():
+	state_auth_script = REPO_ROOT / "scripts" / "orchestrate_state_v2.py"
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["current_wave"] = 1
+	env = {
+		**os.environ,
+		"GH_TOKEN": "state-auth-test-key",
+		"ORCHESTRATOR_STATE_AUTH_KEYRING": _state_auth_keyring(),
+		"PYTHONDONTWRITEBYTECODE": "1",
+	}
+	auth_args = [
+		"--repository", "owner/repo", "--tracking-issue", "192",
+		"--integration-branch", "orchestrator/project-192",
+		"--producer-id", "41898282", "--producer-login", "github-actions[bot]",
+	]
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		state_file = tmp / "state.json"
+		first_signed_file = tmp / "first-signed.json"
+		second_signed_file = tmp / "second-signed.json"
+		state_file.write_text(json.dumps(state), encoding="utf-8")
+		assert subprocess.run(
+			[
+				"python3", str(state_auth_script), "sign", "--state-file", str(state_file),
+				"--out-file", str(first_signed_file), *auth_args,
+			],
+			env=env,
+			capture_output=True,
+		).returncode == 0
+		newer_state = json.loads(first_signed_file.read_text(encoding="utf-8"))
+		newer_state["current_wave"] = 2
+		state_file.write_text(json.dumps(newer_state), encoding="utf-8")
+		assert subprocess.run(
+			[
+				"python3", str(state_auth_script), "sign", "--state-file", str(state_file),
+				"--out-file", str(second_signed_file), *auth_args,
+			],
+			env=env,
+			capture_output=True,
+		).returncode == 0
+		first_signed = json.loads(first_signed_file.read_text(encoding="utf-8"))
+		second_signed = json.loads(second_signed_file.read_text(encoding="utf-8"))
+		assert first_signed["state_auth"]["generation"] == 1
+		assert second_signed["state_auth"]["generation"] == 2
+		comments = (
+			_build_v2_state_comment_chain(json.dumps(first_signed), chunk_size=60_000)
+			+ _build_v2_state_comment_chain(json.dumps(second_signed), chunk_size=60_000)
+			+ _build_v2_state_comment_chain(json.dumps(first_signed), chunk_size=60_000)
+		)
+		comments_file = tmp / "comments.json"
+		comments_file.write_text(json.dumps(comments), encoding="utf-8")
+		extract_result = subprocess.run(
+			[
+				"python3", str(state_auth_script), "extract", "--comments-json", str(comments_file),
+				"--prefer-highest-auth-generation",
+			],
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+	assert extract_result.returncode == 0, extract_result.stderr
+	assert json.loads(extract_result.stdout)["current_wave"] == 2
+
+
 def test_revalidate_ignored_when_no_comment():
 	"""Without a /revalidate comment, a validation-failed project stays skipped."""
 	state = _base_state(status="failed")
@@ -12958,7 +13884,11 @@ def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[malformed_latest],
+		tracking_comments=[{
+			"body": malformed_latest,
+			"user": {"login": "github-actions[bot]", "id": 41898282},
+			"author_association": "MEMBER",
+		}],
 		issue_labels={10: ["ai:implementing"]},
 	)
 	assert "restored from older valid state and posted healed canonical state" in result["stdout"]
@@ -13012,13 +13942,220 @@ def test_all_invalid_state_comments_trigger_reconstruction_path_without_heal():
 		state=invalid_state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[malformed_latest],
+		tracking_comments=[{
+			"body": malformed_latest,
+			"user": {"login": "github-actions[bot]", "id": 41898282},
+			"author_association": "MEMBER",
+		}],
 		issue_labels={10: ["ai:implementing"]},
 	)
 	assert "No valid ORCHESTRATOR_STATE_V1 comment found for tracking issue #192. Attempting state reconstruction..." in result["stdout"]
 	assert "restored from older valid state and posted healed canonical state" not in result["stdout"]
 	assert "State reconstructed and posted for tracking issue #192." in result["stdout"]
 	assert result["latest_state"]["schema_version"] == "orchestrate_state.v1"
+
+
+def test_unauthorized_newer_state_cannot_redirect_integration_sync():
+	trusted_state = _base_state(status="in_progress")
+	trusted_state["integration_branch"] = "orchestrator/project-192"
+	forged_state = dict(trusted_state)
+	forged_state["integration_branch"] = "orchestrator/project-999"
+	result = _run_poller(
+		state=trusted_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[{"body": _state_comment(forged_state), "user": {"login": "outsider"}, "author_association": "NONE"}],
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192", "orchestrator/project-999"],
+	)
+	assert result["merge_calls"]
+	assert all(call["base"] == "orchestrator/project-192" for call in result["merge_calls"])
+	assert not any("orchestrator/project-999" in str(call) for call in result["api_calls"])
+
+
+def test_unauthorized_v2_chunk_cannot_complete_trusted_state_chain():
+	trusted_state = _base_state(status="in_progress")
+	trusted_state["integration_branch"] = "orchestrator/project-192"
+	forged_state = dict(trusted_state)
+	forged_state["integration_branch"] = "orchestrator/project-999"
+	forged_chunks = _build_v2_state_comment_chain(json.dumps(forged_state), chunk_size=40)
+	assert len(forged_chunks) > 1
+	for chunk_index, forged_chunk in enumerate(forged_chunks):
+		if chunk_index == 0:
+			forged_chunk.update({"user": {"id": 97531, "login": "outsider"}, "author_association": "NONE"})
+		else:
+			forged_chunk.update({"user": {"id": 24680, "login": "poller-writer"}})
+	result = _run_poller(
+		state=trusted_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=forged_chunks,
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192", "orchestrator/project-999"],
+	)
+	assert result["merge_calls"]
+	assert all(call["base"] == "orchestrator/project-192" for call in result["merge_calls"])
+
+
+def test_exact_authenticated_producer_legacy_state_is_accepted_and_migrated():
+	seed_state = _base_state(status="in_progress")
+	trusted_state = _base_state(status="in_progress")
+	trusted_state["integration_branch"] = "orchestrator/project-192"
+	trusted_comment = {
+		"body": _state_comment(trusted_state),
+		"user": {"login": "github-actions[bot]", "id": 41898282},
+	}
+	result = _run_poller(
+		state=seed_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[trusted_comment],
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["merge_calls"]
+	assert result["merge_calls"][0]["base"] == "orchestrator/project-192"
+	assert result["latest_state"]["state_auth"]["producer_id"] == 41898282
+	assert result["latest_state"]["state_auth"]["generation"] >= 1
+	assert "Migrated exact-producer legacy orchestrator state" in result["stdout"]
+	assert result["api_calls"].count("user") == 1
+
+
+def test_invalid_signed_state_from_designated_producer_fails_closed():
+	seed_state = _base_state(status="in_progress")
+	seed_state["integration_branch"] = "orchestrator/project-192"
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		state_file = tmp / "state.json"
+		signed_file = tmp / "signed.json"
+		state_file.write_text(json.dumps(seed_state), encoding="utf-8")
+		sign_result = subprocess.run(
+			[
+				"python3", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"sign", "--state-file", str(state_file), "--out-file", str(signed_file),
+				"--repository", "owner/repo", "--tracking-issue", "192",
+				"--integration-branch", "orchestrator/project-192",
+				"--producer-id", "41898282", "--producer-login", "github-actions[bot]",
+			],
+				env={
+					**os.environ,
+					"GH_TOKEN": "wrong-state-auth-key",
+					"ORCHESTRATOR_STATE_AUTH_KEYRING": _state_auth_keyring(
+						"active", {"active": b"z" * 32}
+					),
+					"PYTHONDONTWRITEBYTECODE": "1",
+				},
+			capture_output=True,
+			text=True,
+		)
+		assert sign_result.returncode == 0, sign_result.stderr
+		invalid_signed_state = json.loads(signed_file.read_text(encoding="utf-8"))
+	result = _run_poller(
+		state=seed_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[{
+			"body": _state_comment(invalid_signed_state),
+			"user": {"login": "github-actions[bot]", "id": 41898282},
+		}],
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	combined_output = result["stdout"] + result["stderr"]
+	assert "Rejected invalidly authenticated V1 orchestrator state" in combined_output
+	assert "State-comment authentication failed" in combined_output
+	assert "State reconstructed and posted" not in combined_output
+	assert result["merge_calls"] == []
+
+
+@pytest.mark.parametrize("association", ["OWNER", "MEMBER", "COLLABORATOR"])
+def test_associated_user_cannot_override_designated_state_producer(association: str):
+	seed_state = _base_state(status="in_progress")
+	seed_state["integration_branch"] = "orchestrator/project-192"
+	forged_state = dict(seed_state)
+	forged_state["integration_branch"] = "orchestrator/project-999"
+	result = _run_poller(
+		state=seed_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[{
+			"body": _state_comment(forged_state),
+			"user": {"login": "maintainer", "id": 1001},
+			"author_association": association,
+		}],
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192", "orchestrator/project-999"],
+	)
+	assert result["merge_calls"]
+	assert all(call["base"] == "orchestrator/project-192" for call in result["merge_calls"])
+
+
+def test_unauthenticated_state_without_trusted_fallback_allows_safe_reconstruction():
+	forged_state = _base_state(status="in_progress")
+	forged_state["integration_branch"] = "orchestrator/project-999"
+	result = _run_poller(
+		state={"schema_version": "orchestrate_state.v1"},
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[{"body": _state_comment(forged_state), "user": {"login": "outsider"}, "author_association": "NONE"}],
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-999"],
+	)
+	combined_output = result["stdout"] + result["stderr"]
+	assert "Rejected 1 unauthenticated orchestrator state comment(s)" in combined_output
+	assert "continuing reconstruction from trusted project inputs only" in combined_output
+	assert "State reconstructed and posted for tracking issue #192." in combined_output
+	assert not any("orchestrator/project-999" in str(call) for call in result["api_calls"])
+
+
+def test_unframed_unauthenticated_state_text_does_not_emit_rejection_warning():
+	result = _run_poller(
+		state={"schema_version": "orchestrate_state.v1"},
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[{
+			"body": "Quoted log line:\n<!-- ORCHESTRATOR_STATE_V1",
+			"user": {"login": "outsider"},
+			"author_association": "NONE",
+		}],
+		issue_labels={10: ["ai:implementing"]},
+	)
+	combined_output = result["stdout"] + result["stderr"]
+	assert "unauthenticated orchestrator state comment(s)" not in combined_output
+	assert "State reconstructed and posted for tracking issue #192." in combined_output
+
+
+def test_unframed_unauthenticated_v2_state_text_does_not_emit_rejection_warning():
+	result = _run_poller(
+		state={"schema_version": "orchestrate_state.v1"},
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[{
+			"body": "Quoted log line:\n<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest=" + ("a" * 64) + " -->",
+			"user": {"login": "outsider"},
+			"author_association": "NONE",
+		}],
+		issue_labels={10: ["ai:implementing"]},
+	)
+	combined_output = result["stdout"] + result["stderr"]
+	assert "unauthenticated orchestrator state comment(s)" not in combined_output
+	assert "State reconstructed and posted for tracking issue #192." in combined_output
+
+
+def test_authenticated_cross_project_branch_blocks_reconstruction_and_sync():
+	mismatched_state = _base_state(status="in_progress")
+	mismatched_state["integration_branch"] = "orchestrator/project-999"
+	result = _run_poller(
+		state=mismatched_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-999"],
+	)
+	combined_output = result["stdout"] + result["stderr"]
+	assert "integration branch is not orchestrator/project-192" in combined_output
+	assert "State reconstructed and posted" not in combined_output
+	assert result["merge_calls"] == []
 
 
 def test_failed_comments_fetch_skips_state_reconstruction():
@@ -13095,7 +14232,11 @@ def test_reconstruction_refused_when_body_has_completed_unmapped_issue():
 		state=invalid_state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[malformed_latest],
+		tracking_comments=[{
+			"body": malformed_latest,
+			"user": {"login": "github-actions[bot]", "id": 41898282},
+			"author_association": "MEMBER",
+		}],
 		tracking_body=rewindable_body,
 		issue_labels={10: ["ai:implementing"]},
 	)
@@ -13460,24 +14601,19 @@ def test_integration_sync_conflict_uses_sync_specific_retry_budget_default_one()
 		issue_labels={10: ["ai:implementing"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
+		codex_json={"action": "redispatch_resolver", "guidance": "Preserve both branches' validated intent."},
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Integration judge invoked" in body for body in tracking_bodies), (
 		"expected integration judge invocation comment after a single unresolved tick "
 		"on an orchestrator/project-* branch (INTEGRATION_SYNC_CONFLICT_MAX_RETRIES=1)"
 	)
-	assert result["review_dispatches"] == [], (
-		"expected NO additional resolver dispatch when the sync-specific retry "
-		"budget is exhausted; got: " + str(result["review_dispatches"])
-	)
+	assert len(result["review_dispatches"]) == 1
 
 
 def test_integration_sync_conflict_non_orchestrator_branch_keeps_global_budget():
-	# A non-orchestrator integration branch (e.g. a manually-named
-	# integration ref) should NOT trip the new tighter budget; it must
-	# continue to honour the historical INTEGRATION_CONFLICT_MAX_RETRIES=3
-	# default. unresolved_ticks=1 should NOT escalate; the resolver
-	# should still be dispatched.
+	# State-auth branch authorization fails closed before retry-budget
+	# selection when a signed project state names a non-canonical branch.
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "feature/manual-integration"
 	state["integration_conflict_unresolved_ticks"] = 1
@@ -13493,9 +14629,92 @@ def test_integration_sync_conflict_non_orchestrator_branch_keeps_global_budget()
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert not any("Integration judge invoked" in body for body in tracking_bodies), (
-		"expected NO integration judge invocation for non-orchestrator/project-* "
-		"branch with unresolved_ticks=1 (global budget INTEGRATION_CONFLICT_MAX_RETRIES=3 still applies)"
+		"expected no integration judge invocation for a non-canonical project branch"
 	)
+	assert result["review_dispatches"] == []
+	assert "non-canonical integration branch" in (result["stdout"] + result["stderr"])
+
+
+def test_integration_sync_conflict_non_orchestrator_branch_escalates_after_global_budget():
+	# The identifier is retained for compatibility; canonical branch binding
+	# now rejects this state before the historical global budget is evaluated.
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "feature/manual-integration"
+	state["integration_conflict_unresolved_ticks"] = 3
+	state["integration_conflict_dispatch_ts"] = 9999999999
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "feature/manual-integration"],
+		merge_conflict_on_sync=True,
+		codex_json={"action": "redispatch_resolver", "guidance": "Preserve both branches' validated intent."},
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert not any("Integration judge invoked" in body for body in tracking_bodies)
+	assert result["review_dispatches"] == []
+	assert result["latest_state"]["status"] != "failed"
+	assert "non-canonical integration branch" in (result["stdout"] + result["stderr"])
+
+
+def test_integration_conflict_invalid_judge_output_defers_without_terminalizing():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		codex_json={},
+	)
+	assert result["latest_state"]["status"] == "in_progress"
+	assert result["latest_state"]["integration_sync_status"] != "failed"
+	assert result["latest_state"]["integration_conflict_total_dispatches"] == 1
+	assert result["latest_state"]["integration_conflict_judge_retry_ts"] > 0
+	assert result["review_dispatches"] == []
+	assert "preserving conflict state for the next poll tick" in result["stdout"]
+	retry_result = _run_poller(
+		state=result["latest_state"], enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"], merge_conflict_on_sync=True,
+	)
+	assert retry_result["latest_state"]["integration_conflict_total_dispatches"] == 1
+	assert "Judge retry cooldown active" in retry_result["stdout"]
+
+
+def test_integration_conflict_missing_head_sha_defers_without_consuming_lifetime_budget():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 1
+	state["integration_conflict_total_dispatches"] = 2
+	state["final_merge_pr"] = 905
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		prs=[{
+			"number": 905,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"headSha": "",
+			"mergeable": False,
+			"mergeable_state": "dirty",
+			"body": "",
+		}],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+	)
+	assert result["latest_state"]["status"] == "in_progress"
+	assert result["latest_state"]["integration_conflict_total_dispatches"] == 2
+	assert result["review_dispatches"] == []
+	assert "current head SHA is unavailable" in (result["stdout"] + result["stderr"])
 
 
 def test_integration_sync_conflict_existing_three_tick_test_still_escalates():
@@ -13516,6 +14735,7 @@ def test_integration_sync_conflict_existing_three_tick_test_still_escalates():
 		issue_labels={10: ["ai:implementing"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
+		codex_json={"action": "redispatch_resolver", "guidance": "Preserve both branches' validated intent."},
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Integration judge invoked" in body for body in tracking_bodies)
@@ -16162,7 +17382,7 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in wf_body
 	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in wf_body
 	assert (
-		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh '
+		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py orchestrate_state_v2.py review_conflict_resolve.sh '
 		'review_conflict_prepare.sh render_prompt.py opencode_helpers.sh write_opencode_config.sh"'
 	) in stage_helper_body
 	assert 'SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in stage_helper_body
