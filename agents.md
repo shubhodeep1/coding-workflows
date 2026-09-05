@@ -443,6 +443,17 @@ through one consolidated `ai:orchestrator-managed` issue; a merged fix advances
 `security_pass_cycle`, clears the recorded SHA, and re-runs the pass. Persistent
 findings after `MAX_SECURITY_PASS_CYCLES` (default `3`) terminalize as
 `ai:security-pass-failed`; `/re-security-pass` resets the bounded loop.
+A consolidated fix issue that orchestrator stall recovery closed and re-issued
+is *not* a failed fix: `close_and_reissue` re-points wave state only (both
+writes are gated on a non-null `local_id`, which a security-pass fix issue
+never has), so before terminalizing, `resolve_security_pass_fix_successor`
+looks for the live successor by the durable `- Tracking issue: #<N>` and
+``- Local ID: `security-pass-fix-cycle-<K>` `` body markers that survive
+re-issue, adopts it into `security_pass_active_fix_issues`, and logs
+`SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED`. Both markers must match, so
+another project or another cycle is never adopted. An inconclusive lookup
+(API or parse failure) retains `security-pass-fixing` for retry rather than
+reading a transient read failure as evidence of a failed fix.
 Setting `ENABLE_SECURITY_PASS=false` remains the immediate operator kill switch.
 If an externally merged final PR has already deleted its integration branch,
 the only permitted analysis fallback is that PR's verified immutable head SHA;
@@ -600,6 +611,7 @@ and shipped:
 - `SECURITY_PASS_CLEAN`
 - `SECURITY_PASS_BLOCKED`
 - `SECURITY_PASS_FIX_ISSUE_CREATED`
+- `SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED`
 - `SECURITY_PASS_FAILED`
 - `SECURITY_PASS_SKIPPED_DISABLED`
 
@@ -714,6 +726,7 @@ LOG_PREFIX.name=SECURITY_PASS_STARTED
 LOG_PREFIX.name=SECURITY_PASS_CLEAN
 LOG_PREFIX.name=SECURITY_PASS_BLOCKED
 LOG_PREFIX.name=SECURITY_PASS_FIX_ISSUE_CREATED
+LOG_PREFIX.name=SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED
 LOG_PREFIX.name=SECURITY_PASS_FAILED
 LOG_PREFIX.name=SECURITY_PASS_SKIPPED_DISABLED
 LOG_PREFIX.name=SEMBLE_QUERY
