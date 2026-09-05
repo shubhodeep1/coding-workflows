@@ -904,13 +904,14 @@ allow the command. The guard falls back to git history alone, fetching
 sessions where the API does not):
 
 1. If the branch sits on merge-commit side history already in
-   `origin/<default>`, and origin either no longer has the branch or holds a
-   tip fully contained in `origin/<default>`, the command is **blocked** with
-   the same remediation as the API path.
-2. Otherwise git history is **inconclusive** (a rebuilt branch and a squash-
-   or rebase-merged one look identical): a `git push` or an MCP push is routed
-   through the harness permission prompt (`permissionDecision: ask`) so a
-   human confirms the PR is still open, and a bare `git commit` is allowed
+   `origin/<default>` and origin still holds a branch tip fully contained in
+   `origin/<default>`, the command is **blocked** with the same remediation as
+   the API path.
+2. Otherwise git history is **inconclusive** (an absent remote ref could be a
+   deleted merged branch or a never-pushed branch, and a rebuilt branch and a
+   squash- or rebase-merged one look identical): a `git push` or an MCP push
+   is routed through the harness permission prompt (`permissionDecision: ask`)
+   so a human confirms the PR is still open, and a bare `git commit` is allowed
    with a warning, since the work only strands once pushed.
 
 Only the cases where nothing branch-shaped can be checked at all — an

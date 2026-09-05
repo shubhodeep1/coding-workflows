@@ -935,18 +935,36 @@ def test_merge_commit_reset_branch_is_allowed(merge_commit_repo) -> None:
 	assert _ask_decision(proc) is None
 
 
-def test_history_fallback_blocks_when_origin_dropped_the_merged_branch(merge_commit_repo) -> None:
-	"""API gated (HTTP 403, as Claude Code Web's proxy answers), branch auto-
-	deleted after merge, HEAD on merged side history → block from git alone."""
+def test_history_fallback_asks_when_origin_dropped_the_merged_branch(merge_commit_repo) -> None:
+	"""An absent remote ref could be a deleted branch or one never pushed."""
 	repo, stub_bin, _, _ = merge_commit_repo
 	_stub_gh(stub_bin, None)
 	_git(repo, "push", "-q", "origin", "--delete", "feature/x")
-	for command in ("git commit -m next", "git push -u origin feature/x"):
-		proc = _run_hook_payload(repo, stub_bin, _bash_payload(command))
-		assert proc.returncode == 2, proc.stdout + proc.stderr
-		assert "git history alone" in proc.stderr
-		assert "no longer has a `feature/x` branch" in proc.stderr
-		assert "git checkout -B feature/x origin/main" in proc.stderr
+	commit_proc = _run_hook_payload(repo, stub_bin, _bash_payload("git commit -m next"))
+	assert commit_proc.returncode == 0, commit_proc.stdout + commit_proc.stderr
+	assert "never-pushed branch" in commit_proc.stdout
+	assert _ask_decision(commit_proc) is None
+	push_proc = _run_hook_payload(repo, stub_bin, _bash_payload("git push -u origin feature/x"))
+	assert push_proc.returncode == 0, push_proc.stdout + push_proc.stderr
+	assert _ask_decision(push_proc) is not None
+
+
+def test_history_fallback_never_pushed_stacked_branch_is_inconclusive(merge_commit_repo) -> None:
+	"""A new branch based on merged side history must not be destructively reset."""
+	repo, stub_bin, _, _ = merge_commit_repo
+	_stub_gh(stub_bin, None)
+	_git(repo, "checkout", "-q", "-b", "feature/never-pushed")
+	commit_proc = _run_hook_payload(repo, stub_bin, _bash_payload("git commit -m next"))
+	assert commit_proc.returncode == 0, commit_proc.stdout + commit_proc.stderr
+	assert "never-pushed branch" in commit_proc.stdout
+	(repo / "stacked.txt").write_text("stacked\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "stacked work")
+	push_proc = _run_hook_payload(
+		repo, stub_bin, _bash_payload("git push -u origin feature/never-pushed")
+	)
+	assert push_proc.returncode == 0, push_proc.stdout + push_proc.stderr
+	assert _ask_decision(push_proc) is not None
 
 
 def test_history_fallback_blocks_when_remote_branch_is_contained_in_main(merge_commit_repo) -> None:
@@ -1038,6 +1056,22 @@ def test_mcp_push_uses_history_fallback_when_api_is_gated(merge_commit_repo) -> 
 	proc = _run_hook_payload(repo, stub_bin, _mcp_payload())
 	assert proc.returncode == 2, proc.stdout + proc.stderr
 	assert "fully contained in origin/main" in proc.stderr
+
+
+def test_mcp_push_asks_when_remote_tip_fetch_fails(merge_commit_repo, monkeypatch, capsys) -> None:
+	repo, _, merged_sha, _ = merge_commit_repo
+	monkeypatch.setattr(guard, "remote_branch_tip", lambda branch, cwd: merged_sha)
+	monkeypatch.setattr(guard, "fetch_from_origin", lambda refs, cwd: False)
+	monkeypatch.setattr(
+		guard, "query_pull_requests", lambda *args: pytest.fail("API lookup must not run")
+	)
+	payload = {**_mcp_payload(), "cwd": str(repo)}
+	assert guard.evaluate(payload) == (0, "")
+	decision = _ask_decision(
+		subprocess.CompletedProcess([], 0, stdout=capsys.readouterr().out, stderr="")
+	)
+	assert decision is not None
+	assert "could not fetch origin/feature/x" in decision["systemMessage"]
 
 
 @pytest.mark.parametrize("gated", [False, True])

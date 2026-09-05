@@ -37,13 +37,13 @@ network failure, or Claude Code Web's agent proxy answering HTTP 403 — the
 guard does not silently allow. It falls back to git history alone, fetching
 the default branch through the git remote (which works in exactly the sessions
 where the API does not):
-  - branch sits on merge-commit side history already in the default branch,
-    and origin either no longer has the branch or holds a tip fully contained
-    in the default branch → BLOCK, same remediation as the API path;
-  - anything else is inconclusive (a squash- or rebase-merged PR leaves no git
-    trace) → a `git push` or an MCP push asks the human to confirm; a bare
-    `git commit` is allowed with a warning, since the work strands only on
-    push.
+  - branch sits on merge-commit side history already in the default branch and
+    origin holds a tip fully contained in the default branch → BLOCK, same
+    remediation as the API path;
+  - anything else is inconclusive (an absent remote ref could be deleted or
+    never pushed, and a squash- or rebase-merged PR leaves no git trace) → a
+    `git push` or an MCP push asks the human to confirm; a bare `git commit` is
+    allowed with a warning, since the work strands only on push.
 Only the cases where nothing branch-shaped can be checked at all — unparseable
 payload, not a git repo, detached HEAD, underivable `<owner>/<repo>` — still
 allow with a warning.
@@ -517,7 +517,7 @@ def fetch_from_origin(refs: list[str], cwd: str) -> bool:
 	if not refs:
 		return True
 	code, _, _ = _run(
-		["git", "fetch", "--quiet", "origin", *refs], cwd, _GIT_REMOTE_TIMEOUT_SECONDS
+		["git", "fetch", "--quiet", "origin", "--", *refs], cwd, _GIT_REMOTE_TIMEOUT_SECONDS
 	)
 	return code == 0
 
@@ -567,8 +567,8 @@ def git_history_verdict(tip: str, branch: str, base: str, cwd: str) -> tuple[str
 
 	VERDICT_STRANDED: `tip` forks off merged side history of the default
 	branch (a merge-commit merge already absorbed this branch) and origin
-	either no longer has the branch or holds a tip fully contained in the
-	default branch. Nothing an open PR could still be carrying.
+	holds a tip fully contained in the default branch. Nothing an open PR
+	could still be carrying.
 
 	VERDICT_INCONCLUSIVE: git shows nothing wrong, which is also what a
 	squash- or rebase-merged PR looks like. The caller must ask rather than
@@ -578,8 +578,8 @@ def git_history_verdict(tip: str, branch: str, base: str, cwd: str) -> tuple[str
 	failed, no merge base).
 
 	A branch that legitimately forks off side history — one stacked on another
-	branch that has since merged — keeps unmerged commits on origin and is
-	therefore reported inconclusive, never stranded.
+	branch that has since merged — is reported inconclusive when it keeps
+	unmerged commits on origin or has never been pushed there.
 	"""
 	if not base:
 		return VERDICT_UNAVAILABLE, "default branch unknown"
@@ -604,9 +604,9 @@ def git_history_verdict(tip: str, branch: str, base: str, cwd: str) -> tuple[str
 		)
 	if not remote_tip:
 		return (
-			VERDICT_STRANDED,
-			f"the branch sits on side history that a merge commit already brought "
-			f"into origin/{base}, and origin no longer has a `{branch}` branch",
+			VERDICT_INCONCLUSIVE,
+			f"origin has no branch named `{branch}`, so git cannot distinguish a "
+			f"deleted merged branch from a never-pushed branch",
 		)
 	if is_ancestor_of(remote_tip, base_ref, cwd):
 		return (
@@ -1063,7 +1063,12 @@ def _evaluate_mcp_push(payload: dict) -> tuple[int, str]:
 		if remote_tip == "":
 			# Origin has no such branch: nothing merged to stack on.
 			return 0, ""
-		if remote_tip and fetch_from_origin([base, branch] if base else [branch], cwd):
+		if remote_tip:
+			if not fetch_from_origin([base, branch] if base else [branch], cwd):
+				_request_confirmation(
+					f"could not fetch origin/{branch} in {slug} to verify its ancestry."
+				)
+				return 0, ""
 			tip = remote_tip
 
 	cached = _read_cache(slug, branch)
