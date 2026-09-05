@@ -1074,6 +1074,38 @@ def test_mcp_push_asks_when_remote_tip_fetch_fails(merge_commit_repo, monkeypatc
 	assert "could not fetch origin/feature/x" in decision["systemMessage"]
 
 
+def test_mcp_push_asks_when_remote_tip_lookup_fails(merge_commit_repo, monkeypatch, capsys) -> None:
+	repo, _, _, _ = merge_commit_repo
+	monkeypatch.setattr(guard, "remote_branch_tip", lambda branch, cwd: None)
+	monkeypatch.setattr(
+		guard, "query_pull_requests", lambda *args: pytest.fail("API lookup must not run")
+	)
+	payload = {**_mcp_payload(), "cwd": str(repo)}
+	assert guard.evaluate(payload) == (0, "")
+	decision = _ask_decision(
+		subprocess.CompletedProcess([], 0, stdout=capsys.readouterr().out, stderr="")
+	)
+	assert decision is not None
+	assert "could not list origin's branches" in decision["systemMessage"]
+	assert "no local checkout" not in decision["systemMessage"]
+
+
+def test_remote_only_mcp_push_caches_fresh_pr_snapshot(monkeypatch, tmp_path: Path) -> None:
+	pull_requests = [MERGED_PR]
+	cache_writes: list[tuple[str, str, list[dict]]] = []
+	monkeypatch.setattr(guard, "repo_slug", lambda cwd: "o/local")
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: pull_requests)
+	monkeypatch.setattr(
+		guard,
+		"_write_cache",
+		lambda slug, branch, entries: cache_writes.append((slug, branch, entries)),
+	)
+	payload = {**_mcp_payload(), "cwd": str(tmp_path)}
+	assert guard.evaluate(payload) == (0, "")
+	assert cache_writes == [("o/r", "feature/x", pull_requests)]
+
+
 @pytest.mark.parametrize("gated", [False, True])
 def test_mcp_push_to_another_repository_asks(merge_commit_repo, gated: bool) -> None:
 	"""No local checkout of the target → ancestry cannot be verified → ask."""

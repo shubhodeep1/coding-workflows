@@ -1060,6 +1060,12 @@ def _evaluate_mcp_push(payload: dict) -> tuple[int, str]:
 	tip = ""
 	if is_local_checkout:
 		remote_tip = remote_branch_tip(branch, cwd)
+		if remote_tip is None:
+			_request_confirmation(
+				f"could not list origin's branches while looking up `{branch}` in {slug} "
+				f"to verify its ancestry."
+			)
+			return 0, ""
 		if remote_tip == "":
 			# Origin has no such branch: nothing merged to stack on.
 			return 0, ""
@@ -1078,6 +1084,8 @@ def _evaluate_mcp_push(payload: dict) -> tuple[int, str]:
 		return _unreachable_outcome(str(exc), tip, branch, base, cwd, True, slug)
 
 	if not tip:
+		if cached is None:
+			_write_cache(slug, branch, pull_requests)
 		match = merged_without_open(pull_requests)
 		if match is not None:
 			_request_confirmation(
