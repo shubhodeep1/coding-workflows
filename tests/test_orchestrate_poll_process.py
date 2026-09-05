@@ -763,6 +763,7 @@ def _run_poller(
 	pr_api_sequence: dict[int, list[dict]] | None = None,
 	existing_branches: list[str] | None = None,
 	merge_conflict_on_sync: bool = False,
+	fail_auto_pr_merge: bool = False,
 	blocked_check_shas: list[str] | None = None,
 	validation_workflow_runs: list[dict] | None = None,
 	issue_closed: dict[int, bool] | None = None,
@@ -1144,6 +1145,8 @@ def _run_poller(
 			"active_autofix_runs": active_autofix_runs,
 			"merge_conflict_on_sync": merge_conflict_on_sync,
 			"merge_calls": [],
+			"pr_merge_calls": [],
+			"fail_auto_pr_merge": fail_auto_pr_merge,
 			"blocked_check_shas": blocked_check_shas,
 			"validation_workflow_runs": validation_workflow_runs,
 			"issue_linked_prs": {
@@ -1651,6 +1654,11 @@ if args[0] == 'pr' and len(args) >= 3 and args[1] == 'ready':
 
 if args[0] == 'pr' and len(args) >= 3 and args[1] == 'merge':
 	pr_num = int(args[2])
+	store.setdefault('pr_merge_calls', []).append(list(args[2:]))
+	save()
+	if '--auto' in args and store.get('fail_auto_pr_merge'):
+		print('mock auto merge failure', file=sys.stderr)
+		sys.exit(1)
 	for pr in store.get('prs', []):
 		if pr.get('number') == pr_num:
 			if pr.get('mergeable') is False:
@@ -3244,6 +3252,7 @@ sys.exit(proc.returncode)
 		result["tracking_labels"] = tracking_issue["labels"]
 		result["tracking_closed"] = tracking_issue.get("closed", False)
 		result["merge_calls"] = result.get("merge_calls", [])
+		result["pr_merge_calls"] = result.get("pr_merge_calls", [])
 		result["review_dispatches"] = result.get("review_dispatches", [])
 		result["update_branch_calls"] = result.get("update_branch_calls", [])
 		result["label_create_calls"] = result.get("label_create_calls", [])
@@ -5221,6 +5230,137 @@ def test_wave_judge_uses_default_branch_context_without_integration_metadata():
 	assert "Judge execution context for tracking #192: source=default_branch" in result["stdout"]
 	assert "sentinel_present=false" in result["stdout"]
 	assert "Judge context sentinel for tracking #192:" not in result["stdout"]
+
+
+def _review_blocked_pr_snapshot(head_sha: str, *, pr_number: int = 901) -> dict:
+	return {
+		"number": pr_number,
+		"state": "open",
+		"merged": False,
+		"merged_at": None,
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"headSha": head_sha,
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "Test PR",
+		"body": "Body",
+	}
+
+
+def _run_review_blocked_merge_decision(
+	*,
+	action: str,
+	judged_head_sha: str,
+	live_head_sha: str,
+	fail_auto_pr_merge: bool = False,
+) -> dict:
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	judged_pr_snapshot = _review_blocked_pr_snapshot(judged_head_sha)
+	live_pr_snapshot = _review_blocked_pr_snapshot(live_head_sha)
+	decision = {
+		"action": action,
+		"justification": "the reviewed change is shippable",
+		"fix_description": "",
+		"remaining_issues_summary": "none",
+	}
+	if action == "merge_with_followup":
+		decision["followup_issue"] = {
+			"title": "Track deferred review gap",
+			"body": "Apply the deferred non-blocking correction.",
+		}
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 901},
+		prs=[dict(judged_pr_snapshot)],
+		existing_branches=["main"],
+		# Reconciliation consumes two snapshots, the initial handler fetch and
+		# comment-context hydration consume two more, and the fifth is live.
+		pr_api_sequence={
+			901: [dict(judged_pr_snapshot) for _ in range(4)] + [dict(live_pr_snapshot)],
+		},
+		codex_json=decision,
+		fail_auto_pr_merge=fail_auto_pr_merge,
+		env_overrides={"ENABLE_AUTO_MERGE": "true"},
+	)
+
+
+def test_review_blocked_merge_refuses_head_changed_after_judge_snapshot():
+	judged_head_sha = "a" * 40
+	result = _run_review_blocked_merge_decision(
+		action="merge",
+		judged_head_sha=judged_head_sha,
+		live_head_sha="b" * 40,
+	)
+	assert result["pr_merge_calls"] == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert "ai:ready-to-merge" not in result["issues"]["10"]["labels"]
+	assert "live head changed or could not be bound to the judged snapshot" in result["stdout"]
+
+
+def test_review_blocked_merge_auto_command_is_bound_to_judged_head():
+	judged_head_sha = "c" * 40
+	result = _run_review_blocked_merge_decision(
+		action="merge",
+		judged_head_sha=judged_head_sha,
+		live_head_sha=judged_head_sha,
+	)
+	assert len(result["pr_merge_calls"]) == 1
+	assert result["pr_merge_calls"][0][-2:] == ["--match-head-commit", judged_head_sha]
+	assert "--auto" in result["pr_merge_calls"][0]
+	assert "ai:ready-to-merge" in result["issues"]["10"]["labels"]
+
+
+def test_review_blocked_merge_direct_fallback_keeps_judged_head_guard():
+	judged_head_sha = "d" * 40
+	result = _run_review_blocked_merge_decision(
+		action="merge",
+		judged_head_sha=judged_head_sha,
+		live_head_sha=judged_head_sha,
+		fail_auto_pr_merge=True,
+	)
+	assert len(result["pr_merge_calls"]) == 2
+	assert "--auto" in result["pr_merge_calls"][0]
+	assert "--auto" not in result["pr_merge_calls"][1]
+	assert all(
+		call[-2:] == ["--match-head-commit", judged_head_sha]
+		for call in result["pr_merge_calls"]
+	)
+
+
+def test_review_blocked_merge_with_followup_refuses_stale_judged_head():
+	result = _run_review_blocked_merge_decision(
+		action="merge_with_followup",
+		judged_head_sha="e" * 40,
+		live_head_sha="f" * 40,
+	)
+	assert result["pr_merge_calls"] == []
+	assert result.get("created_issues", []) == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert "Judge-approved merge_with_followup" in result["stdout"]
+
+
+def test_review_blocked_merge_with_followup_binds_merge_to_judged_head():
+	judged_head_sha = "1" * 40
+	result = _run_review_blocked_merge_decision(
+		action="merge_with_followup",
+		judged_head_sha=judged_head_sha,
+		live_head_sha=judged_head_sha,
+	)
+	assert len(result["pr_merge_calls"]) == 1
+	assert result["pr_merge_calls"][0][-2:] == ["--match-head-commit", judged_head_sha]
+	assert result.get("created_issues") == [
+		{
+			"number": 900,
+			"title": "Track deferred review gap",
+			"labels": ["ai:clarification", "ai:orchestrator-managed"],
+		},
+	]
 
 
 def test_review_blocked_merged_followup_retargets_to_integration_branch():
