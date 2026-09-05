@@ -9125,6 +9125,8 @@ def test_in_progress_judge_does_not_advance_when_fixups_added_to_current_wave():
 		"justification": "need fix-up",
 		"assessment": "Wave 1 merged but needs a fix",
 		"new_issues": [
+			"malformed scalar entry",
+			42,
 			{"id": "fixup-1", "title": "Fix-up 1", "body": "Fix the thing"},
 		],
 		"issues_to_revert": [],
@@ -9367,6 +9369,8 @@ def test_judge_repeat_fingerprint_breaker_escalates_after_limit():
 	assert third_state["judge_fingerprint_repeat_count"] == 3
 	assert third_state["recovery_count"] == 1
 	assert len(third.get("created_issues", [])) == 0
+	assert "RECOVERY_BUDGET_ACCOUNTING tracking_issue=192 charge=0" in third["stdout"]
+	assert 'reason="repeat-fingerprint breaker tripped; no recovery budget charge"' in third["stdout"]
 	assert "ai:blocked" in third["tracking_labels"]
 	tracking_bodies = [c.get("body", "") for c in third["issues"]["192"]["comments"]]
 	completion_comment = next(body for body in tracking_bodies if "<!-- orchestrator:completion-status -->" in body)
@@ -9498,8 +9502,10 @@ def test_recovery_exhausted_still_files_judge_fixup_issues_and_resume_dispatches
 	verdict = _failed_verdict(
 		"ambiguous payout send is auto-retried in backend/payout.py:99",
 		[
+			"malformed scalar entry",
+			42,
 			{"id": "guard-ambiguous-payout-retry", "title": "Guard ambiguous payout retry", "body": "Do not auto-retry ambiguous sends."},
-			{"id": "read-reward-split-from-epoch", "title": "Read reward split from epoch", "body": "Stop hard-coding the split."},
+			{"id": 17, "title": "Read reward split from epoch", "body": "Stop hard-coding the split."},
 			# Malformed entry with a stale mapping: skipped by the creation
 			# loop and must NOT be reported as filed.
 			{"id": "stale-titleless", "body": "no title"},
@@ -9525,10 +9531,10 @@ def test_recovery_exhausted_still_files_judge_fixup_issues_and_resume_dispatches
 	assert [c["title"] for c in created] == ["Guard ambiguous payout retry", "Read reward split from epoch"]
 	created_numbers = [c["number"] for c in created]
 	assert ls["issue_number_map"]["guard-ambiguous-payout-retry"] == created_numbers[0]
-	assert ls["issue_number_map"]["read-reward-split-from-epoch"] == created_numbers[1]
+	assert ls["issue_number_map"]["17"] == created_numbers[1]
 	wave_issues = {i["id"]: i for i in ls["waves"][0]["issues"]}
 	assert wave_issues["guard-ambiguous-payout-retry"]["status"] == "pending"
-	assert wave_issues["read-reward-split-from-epoch"]["status"] == "pending"
+	assert wave_issues["17"]["status"] == "pending"
 	# The exhausted verdict's fingerprint joins the ledger so a post-resume
 	# repeat of it is charged.
 	assert ls["judge_last_fingerprint"] in ls["judge_failed_fingerprints"]
@@ -9536,13 +9542,15 @@ def test_recovery_exhausted_still_files_judge_fixup_issues_and_resume_dispatches
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	failed_comment = next(body for body in tracking_bodies if body.startswith("## Project Failed"))
 	refs = f"#{created_numbers[0]}, #{created_numbers[1]}"
-	assert f"**Fix-up issues filed from this verdict:** {refs}\n" in failed_comment
+	assert f"**Fix-up issues tracked for this verdict:** {refs}\n" in failed_comment
 	assert "#777" not in failed_comment
 	assert "#778" not in failed_comment
 	assert "Skipping malformed judge fix-up entry (id='stale-titleless', title='')" in (result["stdout"] + result["stderr"])
 	completion_comment = next(body for body in tracking_bodies if "<!-- orchestrator:completion-status -->" in body)
 	assert "<!-- status:failed -->" in completion_comment
-	assert f"Fix-up issues filed from the final verdict: {refs}" in completion_comment
+	assert f"Fix-up issues tracked for the final verdict: {refs}" in completion_comment
+	assert "RECOVERY_BUDGET_ACCOUNTING tracking_issue=192 charge=0" in result["stdout"]
+	assert 'reason="recovery budget already exhausted; no additional charge"' in result["stdout"]
 	assert not any(body.startswith("## ❌ Judge repeat-fingerprint breaker triggered") for body in tracking_bodies)
 
 	# /judge_resume --reset-recovery: the poller resumes with the filed
@@ -9568,7 +9576,7 @@ def test_recovery_exhausted_still_files_judge_fixup_issues_and_resume_dispatches
 	resumed_wave = {i["id"]: i for i in rs["waves"][0]["issues"]}
 	assert set(created_numbers) == {
 		resumed_wave["guard-ambiguous-payout-retry"]["github_issue"],
-		resumed_wave["read-reward-split-from-epoch"]["github_issue"],
+		resumed_wave["17"]["github_issue"],
 	}
 
 
@@ -9590,6 +9598,8 @@ def test_judge_fixup_creation_skips_malformed_entries_without_aborting_cycle():
 		codex_json=_failed_verdict(
 			"settlement writes are not idempotent in backend/settle.py:12",
 			[
+				"malformed scalar entry",
+				42,
 				{"id": "no-title-entry", "body": "missing title"},
 				{"title": "No id entry", "body": "missing id"},
 				{"id": "well-formed", "title": "Make settlement writes idempotent", "body": "Use an upsert."},
@@ -9602,6 +9612,7 @@ def test_judge_fixup_creation_skips_malformed_entries_without_aborting_cycle():
 	assert set(ls["issue_number_map"]) == {"issue-1", "well-formed"}
 	assert {i["id"] for i in ls["waves"][0]["issues"]} == {"issue-1", "well-formed"}
 	out = result["stdout"] + result["stderr"]
+	assert "Processing 5 judge fix-up candidate(s)..." in out
 	assert "Skipping malformed judge fix-up entry (id='no-title-entry', title='')" in out
 	assert "Skipping malformed judge fix-up entry (id='', title='No id entry')" in out
 

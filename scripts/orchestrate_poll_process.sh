@@ -5157,8 +5157,8 @@ PY
 # a human had to re-derive them (tele-funtoken-msg-scoring#3928, cycle 9).
 create_judge_fixup_issues_from_verdict() {
       if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
-        echo "Creating ${NEW_ISSUES_COUNT} fix-up issue(s)..."
-        echo "${JUDGE_JSON}" | jq -c '.new_issues[]?' | while read -r fix_issue; do
+        echo "Processing ${NEW_ISSUES_COUNT} judge fix-up candidate(s)..."
+        echo "${JUDGE_JSON}" | jq -c '.new_issues[]? | select(type == "object")' | while read -r fix_issue; do
           FIX_TITLE="$(echo "${fix_issue}" | jq -r '.title // ""')"
           FIX_BODY="$(echo "${fix_issue}" | jq -r '.body // ""' | sed 's/\\n/\n/g')"
           FIX_ID="$(echo "${fix_issue}" | jq -r '.id // ""')"
@@ -18744,7 +18744,7 @@ ${PR_DIFF}
 
 ${JUDGE_ASSESSMENT}
 
-New fix-up issues: ${NEW_ISSUES_COUNT}
+New fix-up issue candidates: ${NEW_ISSUES_COUNT}
 PRs to revert: ${REVERT_COUNT}"
 
   gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
@@ -18849,6 +18849,7 @@ All waves have merged and the judge is satisfied. Transitioning to runtime valid
 
       if [ "${JUDGE_FINGERPRINT_REPEAT_COUNT}" -gt "${JUDGE_REPEAT_FINGERPRINT_MAX}" ]; then
         echo "Judge repeat fingerprint cap exceeded (${JUDGE_FINGERPRINT_REPEAT_COUNT}/${JUDGE_REPEAT_FINGERPRINT_MAX}). Escalating to ai:blocked."
+        echo "RECOVERY_BUDGET_ACCOUNTING tracking_issue=${TRACKING_NUM} charge=0 recovery_count_before=${RECOVERY_COUNT} max=${MAX_RECOVERY_ATTEMPTS} fingerprint_seen_before=${JUDGE_FINGERPRINT_SEEN_BEFORE} distinct_findings_flag=${RECOVERY_COUNT_DISTINCT_FINDINGS} reason=\"repeat-fingerprint breaker tripped; no recovery budget charge\""
 
         jq '.status = "failed" | .judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
@@ -18876,6 +18877,7 @@ To avoid repeating the same recovery loop, the orchestrator is not creating addi
       # ---------------------------------------------------------------
       if [ "${RECOVERY_COUNT}" -ge "${MAX_RECOVERY_ATTEMPTS}" ]; then
         echo "Recovery attempts exhausted (${RECOVERY_COUNT}/${MAX_RECOVERY_ATTEMPTS}). Stopping."
+        echo "RECOVERY_BUDGET_ACCOUNTING tracking_issue=${TRACKING_NUM} charge=0 recovery_count_before=${RECOVERY_COUNT} max=${MAX_RECOVERY_ATTEMPTS} fingerprint_seen_before=${JUDGE_FINGERPRINT_SEEN_BEFORE} distinct_findings_flag=${RECOVERY_COUNT_DISTINCT_FINDINGS} reason=\"recovery budget already exhausted; no additional charge\""
 
         # Still file the judge's fix-up issues so the diagnosis is not lost.
         # They carry ai:clarification, so the consumer pipeline starts on
@@ -18887,7 +18889,7 @@ To avoid repeating the same recovery loop, the orchestrator is not creating addi
           # Same validity predicate as create_judge_fixup_issues_from_verdict
           # (non-empty id AND title): an entry the loop skipped must not be
           # reported as filed, even if a stale issue_number_map row exists.
-          EXHAUSTED_FIXUP_IDS_JSON="$(echo "${JUDGE_JSON}" | jq -c '[.new_issues[]? | select((((.id // "") | tostring) as $i | $i != "" and $i != "null") and (((.title // "") | tostring) as $t | $t != "" and $t != "null")) | .id]' 2>/dev/null || echo '[]')"
+          EXHAUSTED_FIXUP_IDS_JSON="$(echo "${JUDGE_JSON}" | jq -c '[.new_issues[]? | select(type == "object") | select((((.id // "") | tostring) as $i | $i != "" and $i != "null") and (((.title // "") | tostring) as $t | $t != "" and $t != "null")) | (.id | tostring)]' 2>/dev/null || echo '[]')"
           EXHAUSTED_FIXUP_REFS="$(jq -r --argjson ids "${EXHAUSTED_FIXUP_IDS_JSON}" \
             '[ $ids[] as $id | (.issue_number_map[$id] // empty) | "#\(.)" ] | join(", ")' "${STATE_FILE}" 2>/dev/null || echo "")"
         fi
@@ -18908,14 +18910,14 @@ To avoid repeating the same recovery loop, the orchestrator is not creating addi
 
 Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) but the judge still reports failure. Manual intervention required.
 
-**Fix-up issues filed from this verdict:** ${EXHAUSTED_FIXUP_REFS}
+**Fix-up issues tracked for this verdict:** ${EXHAUSTED_FIXUP_REFS}
 They are tracked in the current wave; post \`/judge_resume\` (optionally with \`--reset-recovery\`) once they merge, or to let the poller merge and re-judge them.
 
 **Assessment:** ${JUDGE_ASSESSMENT}" >/dev/null
 
         set_failed_completion_status_comment \
-          "Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}), but the judge still reports failure. Manual intervention required. Fix-up issues filed from the final verdict: ${EXHAUSTED_FIXUP_REFS}. See the latest \"## Project Failed\" tracking comment for the diagnostic detail."
-        tg_notify "Project #${TRACKING_NUM} FAILED after ${RECOVERY_COUNT} recovery attempt(s). Fix-up issues filed: ${EXHAUSTED_FIXUP_REFS}. Manual intervention needed (/judge_resume)." "CRITICAL"
+          "Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}), but the judge still reports failure. Manual intervention required. Fix-up issues tracked for the final verdict: ${EXHAUSTED_FIXUP_REFS}. See the latest \"## Project Failed\" tracking comment for the diagnostic detail."
+        tg_notify "Project #${TRACKING_NUM} FAILED after ${RECOVERY_COUNT} recovery attempt(s). Fix-up issues tracked: ${EXHAUSTED_FIXUP_REFS}. Manual intervention needed (/judge_resume)." "CRITICAL"
         tg_cleanup_msgs "${TRACKING_NUM}"
         continue
       fi
@@ -18999,7 +19001,7 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
 
       post_state_comment || true
 
-      tg_notify "Orchestrator auto-recovery (budget used $((RECOVERY_COUNT + RECOVERY_BUDGET_CHARGE))/${MAX_RECOVERY_ATTEMPTS}; ${RECOVERY_BUDGET_CHARGE_REASON}) started for #${TRACKING_NUM}: ${NEW_ISSUES_COUNT} fix-up issues, ${REVERT_COUNT} reverts." "WARNING"
+      tg_notify "Orchestrator auto-recovery (budget used $((RECOVERY_COUNT + RECOVERY_BUDGET_CHARGE))/${MAX_RECOVERY_ATTEMPTS}; ${RECOVERY_BUDGET_CHARGE_REASON}) started for #${TRACKING_NUM}: ${NEW_ISSUES_COUNT} fix-up candidates, ${REVERT_COUNT} reverts." "WARNING"
       ;;
 
     in_progress)
@@ -19009,8 +19011,8 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
       WAVE_ISSUE_COUNT_BEFORE="$(jq --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | length' "${STATE_FILE}")"
       WAVE_ISSUE_TRACKING_BEFORE="$(jq -c --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | map({id, github_issue, status}) | sort_by(.id)' "${STATE_FILE}")"
       if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
-        echo "Creating ${NEW_ISSUES_COUNT} new issue(s) from judge..."
-        echo "${JUDGE_JSON}" | jq -c '.new_issues[]?' | while read -r new_issue; do
+        echo "Processing ${NEW_ISSUES_COUNT} new issue candidate(s) from judge..."
+        echo "${JUDGE_JSON}" | jq -c '.new_issues[]? | select(type == "object")' | while read -r new_issue; do
           NEW_TITLE="$(echo "${new_issue}" | jq -r '.title // ""')"
           NEW_BODY="$(echo "${new_issue}" | jq -r '.body // ""' | sed 's/\\n/\n/g')"
           NEW_ID="$(echo "${new_issue}" | jq -r '.id // ""')"
