@@ -11435,6 +11435,16 @@ def test_state_auth_rejects_cross_context_replay():
 			capture_output=True,
 		)
 		assert login_changed.returncode == 0
+		custom_branch_result = subprocess.run(
+			[
+				"python3", str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"verify", "--state-file", str(signed_file),
+				*base_context[:5], "feature/manual-integration", *base_context[6:],
+			],
+			env=env,
+			capture_output=True,
+		)
+		assert custom_branch_result.returncode == 2
 
 
 def test_state_auth_key_rotation_accepts_retained_previous_key_and_rejects_unknown_key():
@@ -13753,11 +13763,8 @@ def test_integration_sync_conflict_uses_sync_specific_retry_budget_default_one()
 
 
 def test_integration_sync_conflict_non_orchestrator_branch_keeps_global_budget():
-	# A non-orchestrator integration branch (e.g. a manually-named
-	# integration ref) should NOT trip the new tighter budget; it must
-	# continue to honour the historical INTEGRATION_CONFLICT_MAX_RETRIES=3
-	# default. unresolved_ticks=1 should NOT escalate; the resolver
-	# should still be dispatched.
+	# State-auth branch authorization fails closed before retry-budget
+	# selection when a signed project state names a non-canonical branch.
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "feature/manual-integration"
 	state["integration_conflict_unresolved_ticks"] = 1
@@ -13773,12 +13780,15 @@ def test_integration_sync_conflict_non_orchestrator_branch_keeps_global_budget()
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert not any("Integration judge invoked" in body for body in tracking_bodies), (
-		"expected NO integration judge invocation for non-orchestrator/project-* "
-		"branch with unresolved_ticks=1 (global budget INTEGRATION_CONFLICT_MAX_RETRIES=3 still applies)"
+		"expected no integration judge invocation for a non-canonical project branch"
 	)
+	assert result["review_dispatches"] == []
+	assert "non-canonical integration branch" in (result["stdout"] + result["stderr"])
 
 
 def test_integration_sync_conflict_non_orchestrator_branch_escalates_after_global_budget():
+	# The identifier is retained for compatibility; canonical branch binding
+	# now rejects this state before the historical global budget is evaluated.
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "feature/manual-integration"
 	state["integration_conflict_unresolved_ticks"] = 3
@@ -13793,10 +13803,10 @@ def test_integration_sync_conflict_non_orchestrator_branch_escalates_after_globa
 		codex_json={"action": "redispatch_resolver", "guidance": "Preserve both branches' validated intent."},
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
-	assert any("Integration judge invoked" in body for body in tracking_bodies)
-	assert len(result["review_dispatches"]) == 1
-	assert result["latest_state"]["integration_sync_status"] != "failed"
-	assert "invalid integration branch" not in (result["stdout"] + result["stderr"])
+	assert not any("Integration judge invoked" in body for body in tracking_bodies)
+	assert result["review_dispatches"] == []
+	assert result["latest_state"]["status"] != "failed"
+	assert "non-canonical integration branch" in (result["stdout"] + result["stderr"])
 
 
 def test_integration_conflict_invalid_judge_output_defers_without_terminalizing():
@@ -13815,8 +13825,16 @@ def test_integration_conflict_invalid_judge_output_defers_without_terminalizing(
 	assert result["latest_state"]["status"] == "in_progress"
 	assert result["latest_state"]["integration_sync_status"] != "failed"
 	assert result["latest_state"]["integration_conflict_total_dispatches"] == 1
+	assert result["latest_state"]["integration_conflict_judge_retry_ts"] > 0
 	assert result["review_dispatches"] == []
 	assert "preserving conflict state for the next poll tick" in result["stdout"]
+	retry_result = _run_poller(
+		state=result["latest_state"], enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"], merge_conflict_on_sync=True,
+	)
+	assert retry_result["latest_state"]["integration_conflict_total_dispatches"] == 1
+	assert "Judge retry cooldown active" in retry_result["stdout"]
 
 
 def test_integration_conflict_missing_head_sha_defers_without_consuming_lifetime_budget():

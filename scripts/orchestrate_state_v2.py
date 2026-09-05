@@ -154,8 +154,11 @@ def _validated_auth_context(args: argparse.Namespace) -> tuple[dict[str, Any] | 
 		return None, "repository must be an owner/repo slug"
 	if tracking_issue < 1:
 		return None, "tracking issue must be a positive integer"
-	if STATE_AUTH_BRANCH_RE.fullmatch(integration_branch) is None:
-		return None, "integration branch is invalid"
+	if (
+		STATE_AUTH_BRANCH_RE.fullmatch(integration_branch) is None
+		or integration_branch != f"orchestrator/project-{tracking_issue}"
+	):
+		return None, "integration branch does not match the tracking issue"
 	if producer_id < 1:
 		return None, "producer id must be a positive integer"
 	if not producer_login or len(producer_login) > 100:

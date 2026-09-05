@@ -2413,7 +2413,11 @@ is_valid_orchestrator_state_json() {
 	local state_json="$1"
 	local expected_tracking_num="${2:-${TRACKING_NUM:-}}"
 	local branch_name_re='^[A-Za-z0-9._/-]{1,255}$'
-	printf '%s' "${state_json}" | jq -e --arg branch_name_re "${branch_name_re}" '
+	local expected_integration_branch=""
+	if [[ "${expected_tracking_num}" =~ ^[0-9]+$ ]]; then
+		expected_integration_branch="orchestrator/project-${expected_tracking_num}"
+	fi
+	printf '%s' "${state_json}" | jq -e --arg branch_name_re "${branch_name_re}" --arg expected_branch "${expected_integration_branch}" '
 		type == "object" and
 		(.schema_version == "orchestrate_state.v1") and
 		(.status | type == "string") and
@@ -2423,7 +2427,10 @@ is_valid_orchestrator_state_json() {
 		(.issue_number_map | type == "object") and
 		(.pending_issue_defs | type == "object") and
 		((.integration_branch // "") | type == "string") and
-		(((.integration_branch // "") == "") or ((.integration_branch // "") | test($branch_name_re)))
+		(((.integration_branch // "") == "") or (
+			((.integration_branch // "") | test($branch_name_re)) and
+			((.integration_branch // "") == $expected_branch)
+		))
 	' >/dev/null 2>&1
 }
 
@@ -2518,11 +2525,11 @@ extract_latest_valid_orchestrator_state() {
     else
 		candidate_state="$(cat "${_v2_payload_file}")"
 		candidate_integration_branch="$(printf '%s' "${candidate_state}" | jq -r '.integration_branch // ""' 2>/dev/null || echo "")"
-		if [ -n "${candidate_integration_branch}" ] && ! [[ "${candidate_integration_branch}" =~ ^[A-Za-z0-9._/-]{1,255}$ ]]; then
+		if [ -n "${candidate_integration_branch}" ] && [ "${candidate_integration_branch}" != "${expected_integration_branch}" ]; then
 			EXTRACTED_STATE_BRANCH_MISMATCH_COUNT=$((EXTRACTED_STATE_BRANCH_MISMATCH_COUNT + 1))
 		fi
 		if is_valid_orchestrator_state_json "${candidate_state}" "${expected_tracking_num}"; then
-			candidate_verification_branch="${candidate_integration_branch:-${expected_integration_branch}}"
+			candidate_verification_branch="${expected_integration_branch}"
 			candidate_auth_rc=1
 			python3 scripts/orchestrate_state_v2.py verify \
 				--state-file "${_v2_payload_file}" \
@@ -2569,11 +2576,11 @@ extract_latest_valid_orchestrator_state() {
 	candidate_state="$(extract_orchestrator_state_payload "${candidate_body}")"
 	[ -n "${candidate_state}" ] || continue
 	candidate_integration_branch="$(printf '%s' "${candidate_state}" | jq -r '.integration_branch // ""' 2>/dev/null || echo "")"
-	if [ -n "${candidate_integration_branch}" ] && ! [[ "${candidate_integration_branch}" =~ ^[A-Za-z0-9._/-]{1,255}$ ]]; then
+	if [ -n "${candidate_integration_branch}" ] && [ "${candidate_integration_branch}" != "${expected_integration_branch}" ]; then
 		EXTRACTED_STATE_BRANCH_MISMATCH_COUNT=$((EXTRACTED_STATE_BRANCH_MISMATCH_COUNT + 1))
 	fi
 	if is_valid_orchestrator_state_json "${candidate_state}" "${expected_tracking_num}"; then
-		candidate_verification_branch="${candidate_integration_branch:-${expected_integration_branch}}"
+		candidate_verification_branch="${expected_integration_branch}"
 		candidate_auth_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v1_auth.XXXXXX")"
 		printf '%s' "${candidate_state}" > "${candidate_auth_file}"
 		candidate_auth_rc=1
@@ -5250,6 +5257,7 @@ ensure_integration_conflict_state_fields() {
         integration_sync_last_error: (.integration_sync_last_error // ""),
         integration_conflict_dispatch_count: (.integration_conflict_dispatch_count // 0),
         integration_conflict_dispatch_ts: (.integration_conflict_dispatch_ts // 0),
+        integration_conflict_judge_retry_ts: (.integration_conflict_judge_retry_ts // 0),
         integration_conflict_unresolved_ticks: (.integration_conflict_unresolved_ticks // 0),
         integration_conflict_total_dispatches: (.integration_conflict_total_dispatches // 0),
         merged_issue_fingerprints: (.merged_issue_fingerprints // {}),
@@ -7882,6 +7890,7 @@ _attempt_branch_rebuild_after_escalation() {
       .integration_conflict_unresolved_ticks = 0 |
       .integration_conflict_dispatch_count = 0 |
       .integration_conflict_dispatch_ts = 0 |
+      .integration_conflict_judge_retry_ts = 0 |
       .integration_conflict_total_dispatches = 0' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment || true
@@ -8001,7 +8010,8 @@ heal_integration_branch_conflict() {
         echo "  [integration-heal] Final PR #${final_pr} head advanced from ${resolver_retry_head_sha} to ${final_pr_head_sha} since the persisted resolver retry state; resetting per-head conflict counters."
         jq '.integration_conflict_unresolved_ticks = 0 |
             .integration_conflict_dispatch_count = 0 |
-            .integration_conflict_dispatch_ts = 0' \
+            .integration_conflict_dispatch_ts = 0 |
+            .integration_conflict_judge_retry_ts = 0' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       fi
     fi
@@ -8017,6 +8027,8 @@ heal_integration_branch_conflict() {
   unresolved_ticks="$(jq -r '.integration_conflict_unresolved_ticks // 0' "${STATE_FILE}")"
   local total_dispatches
   total_dispatches="$(jq -r '.integration_conflict_total_dispatches // 0' "${STATE_FILE}")"
+  local judge_retry_ts
+  judge_retry_ts="$(jq -r '(.integration_conflict_judge_retry_ts // 0) | if type == "number" and . >= 0 then floor else 0 end' "${STATE_FILE}")"
 
   # Lifetime cap: once we've issued INTEGRATION_CONFLICT_LIFETIME_MAX
   # total resolver+judge dispatches across all retry episodes for this
@@ -8139,6 +8151,10 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
 		echo "::warning::Integration judge deferred for PR #${final_pr}: current head SHA is unavailable; preserving conflict state without consuming the lifetime budget."
 		return 0
 	fi
+    if [ "${judge_retry_ts}" -gt 0 ] && [ $((now_ts - judge_retry_ts)) -lt "${CONFLICT_DISPATCH_COOLDOWN_SECS}" ]; then
+      echo "  [integration-heal] Judge retry cooldown active; deferring another judge attempt for PR #${final_pr}."
+      return 0
+    fi
     local _integration_judge_rc=0
     invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" "${final_pr_head_sha}" || _integration_judge_rc=$?
     if [ "${_integration_judge_rc}" -eq 0 ]; then
@@ -8150,6 +8166,7 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
       jq --argjson total "${total_dispatches}" \
         '.integration_sync_status = "healing" |
          .integration_conflict_unresolved_ticks = 0 |
+         .integration_conflict_judge_retry_ts = 0 |
          .integration_conflict_total_dispatches = $total |
          .integration_sync_last_error = ""' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
@@ -8161,8 +8178,9 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did n
     fi
     if [ "${_integration_judge_rc}" -eq 2 ]; then
       total_dispatches=$((total_dispatches + 1))
-      jq --argjson total "${total_dispatches}" \
-        '.integration_conflict_total_dispatches = $total' \
+      jq --argjson total "${total_dispatches}" --argjson retry_ts "${now_ts}" \
+        '.integration_conflict_total_dispatches = $total |
+         .integration_conflict_judge_retry_ts = $retry_ts' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment || true
       echo "::warning::Integration judge could not produce an actionable decision for PR #${final_pr}; preserving conflict state for the next poll tick."
@@ -8274,7 +8292,8 @@ mark_integration_sync_clean() {
   if [ "${prev_status}" != "clean" ]; then
     jq '.integration_sync_status = "clean" |
         .integration_sync_last_error = "" |
-        .integration_conflict_unresolved_ticks = 0' \
+        .integration_conflict_unresolved_ticks = 0 |
+        .integration_conflict_judge_retry_ts = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_tracking_comment "## ✅ Integration self-healing resolved
 
@@ -8300,8 +8319,8 @@ sync_default_into_integration_branch() {
 	if [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
 		expected_integration_branch="orchestrator/project-${TRACKING_NUM}"
 	fi
-	if ! [[ "${integration_branch}" =~ ^[A-Za-z0-9._/-]{1,255}$ ]]; then
-		echo "::warning::Integration sync rejected: integration=${integration_branch} outcome=ineligible reason=invalid_branch"
+	if [ -z "${expected_integration_branch}" ] || [ "${integration_branch}" != "${expected_integration_branch}" ]; then
+		echo "::warning::Integration sync rejected: integration=${integration_branch} outcome=ineligible reason=branch_binding_mismatch"
 		return 1
 	fi
 
@@ -8740,7 +8759,8 @@ Unable to create or locate the final integration PR from \`${integration_branch}
        .final_merge_error = "" |
        .integration_sync_status = "clean" |
        .integration_sync_last_error = "" |
-       .integration_conflict_unresolved_ticks = 0' \
+       .integration_conflict_unresolved_ticks = 0 |
+       .integration_conflict_judge_retry_ts = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 	mark_integration_branch_squash_fresh
     post_state_comment || true
@@ -12890,7 +12910,7 @@ run_standalone_stall_recovery() {
         return
       fi
 		if [ "${EXTRACTED_STATE_BRANCH_MISMATCH_COUNT:-0}" -gt 0 ]; then
-			echo "::warning::Authenticated state has an invalid integration branch while identifying orchestrator-managed issues; skipping standalone stall recovery this cycle." >&2
+			echo "::warning::Authenticated state has a non-canonical integration branch while identifying orchestrator-managed issues; skipping standalone stall recovery this cycle." >&2
 			return
 		fi
       managed_nums="$(printf '%s' "${t_state_json}" | jq -r '.waves[]?.issues[]?.github_issue // empty' 2>/dev/null || true)"
@@ -14701,7 +14721,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       echo "::warning::Rejected ${EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT} unauthenticated orchestrator state comment(s) for tracking issue #${TRACKING_NUM}; continuing reconstruction from trusted project inputs only."
     fi
 		if [ "${EXTRACTED_STATE_BRANCH_MISMATCH_COUNT:-0}" -gt 0 ]; then
-			echo "::warning::Rejected authenticated orchestrator state for tracking issue #${TRACKING_NUM} because its integration branch name is invalid; skipping state reconstruction this cycle."
+			echo "::warning::Rejected authenticated orchestrator state for tracking issue #${TRACKING_NUM} because its integration branch is not orchestrator/project-${TRACKING_NUM}; skipping state reconstruction this cycle."
 			continue
 		fi
     if [ "${STATE_COMMENT_COUNT}" -gt 0 ]; then
