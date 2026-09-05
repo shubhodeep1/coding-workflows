@@ -9606,6 +9606,36 @@ def test_judge_fixup_creation_skips_malformed_entries_without_aborting_cycle():
 	assert "Skipping malformed judge fix-up entry (id='', title='No id entry')" in out
 
 
+def test_judge_non_array_new_issues_is_treated_as_empty_without_aborting_cycle():
+	"""`new_issues` that is not an array (string here; null/number behave the
+	same) must count as zero fix-ups. Previously `.new_issues | length` was
+	non-zero for a string and `.new_issues[]` then failed under pipefail,
+	aborting the poll cycle."""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		judge_repeat_fingerprint_max="2",
+		issue_labels={10: ["ai:merged"]},
+		codex_json={
+			"status": "failed",
+			"justification": "judge emitted a malformed new_issues field in backend/x.py:1",
+			"assessment": "malformed",
+			"new_issues": "not-an-array",
+			"issues_to_revert": None,
+		},
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "in_progress"
+	assert result.get("created_issues", []) == []
+	assert set(ls["issue_number_map"]) == {"issue-1"}
+	assert "New issues: 0, Reverts: 0" in result["stdout"]
+	assert "RECOVERY_BUDGET_ACCOUNTING tracking_issue=192 charge=0" in result["stdout"]
+
+
 def _backpressure_3928_shape_prs() -> list[dict]:
 	return [
 		{

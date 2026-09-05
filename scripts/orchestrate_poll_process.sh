@@ -5158,7 +5158,7 @@ PY
 create_judge_fixup_issues_from_verdict() {
       if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
         echo "Creating ${NEW_ISSUES_COUNT} fix-up issue(s)..."
-        echo "${JUDGE_JSON}" | jq -c '.new_issues[]' | while read -r fix_issue; do
+        echo "${JUDGE_JSON}" | jq -c '.new_issues[]?' | while read -r fix_issue; do
           FIX_TITLE="$(echo "${fix_issue}" | jq -r '.title // ""')"
           FIX_BODY="$(echo "${fix_issue}" | jq -r '.body // ""' | sed 's/\\n/\n/g')"
           FIX_ID="$(echo "${fix_issue}" | jq -r '.id // ""')"
@@ -18687,8 +18687,12 @@ ${PR_DIFF}
     JUDGE_JUSTIFICATION="no justification provided"
   fi
   JUDGE_ASSESSMENT="$(echo "${JUDGE_JSON}" | jq -r '.assessment // ""')"
-  NEW_ISSUES_COUNT="$(echo "${JUDGE_JSON}" | jq '.new_issues | length')"
-  REVERT_COUNT="$(echo "${JUDGE_JSON}" | jq '.issues_to_revert | length')"
+  # Judge JSON is untrusted: only an array counts. A null / string / number
+  # value would otherwise yield a non-zero `length` and then make the
+  # `.new_issues[]` iteration below fail under set -o pipefail, aborting the
+  # whole poll cycle instead of just this verdict's fix-ups.
+  NEW_ISSUES_COUNT="$(echo "${JUDGE_JSON}" | jq '(.new_issues // []) | if type == "array" then length else 0 end')"
+  REVERT_COUNT="$(echo "${JUDGE_JSON}" | jq '(.issues_to_revert // []) | if type == "array" then length else 0 end')"
 
   JUDGE_JUSTIFICATION_NORM="$(normalize_judge_justification_for_fingerprint "${JUDGE_JUSTIFICATION_RAW}")"
   if [ -n "${JUDGE_JUSTIFICATION_NORM}" ]; then
@@ -18940,7 +18944,7 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
       # Revert problematic PRs if judge requested
       if [ "${REVERT_COUNT}" -gt 0 ]; then
         echo "Reverting ${REVERT_COUNT} PR(s)..."
-        echo "${JUDGE_JSON}" | jq -r '.issues_to_revert[]' | while read -r revert_issue; do
+        echo "${JUDGE_JSON}" | jq -r '.issues_to_revert[]?' | while read -r revert_issue; do
           # Find PR linked to this issue
           PR_TO_REVERT="$(_issue_cross_ref_pr_number_last "${revert_issue}" 2>/dev/null || echo "")"
           if [[ "${PR_TO_REVERT}" =~ ^[0-9]+$ ]]; then
@@ -19006,7 +19010,7 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
       WAVE_ISSUE_TRACKING_BEFORE="$(jq -c --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | map({id, github_issue, status}) | sort_by(.id)' "${STATE_FILE}")"
       if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
         echo "Creating ${NEW_ISSUES_COUNT} new issue(s) from judge..."
-        echo "${JUDGE_JSON}" | jq -c '.new_issues[]' | while read -r new_issue; do
+        echo "${JUDGE_JSON}" | jq -c '.new_issues[]?' | while read -r new_issue; do
           NEW_TITLE="$(echo "${new_issue}" | jq -r '.title // ""')"
           NEW_BODY="$(echo "${new_issue}" | jq -r '.body // ""' | sed 's/\\n/\n/g')"
           NEW_ID="$(echo "${new_issue}" | jq -r '.id // ""')"
