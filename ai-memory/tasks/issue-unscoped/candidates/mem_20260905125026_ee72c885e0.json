@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:4495-4500 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The state-read validation in `resolve_security_pass_fix_successor` was previously using fallback behavior that could silently compute the wrong Local ID marker when jq fails or when security_pass_cycle is non-numeric\n  WHY: This would cause the helper to return RC=1 (no successor) instead of RC=2 (inconclusive), incorrectly terminalizing a project when the lookup should be treated as inconclusive\n- scripts/orchestrate_poll_process.sh:4520-4522 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The jq guard `if length == 0 or (all(.[]; type == \"array\") | not) then error(...)` treats an empty managed-issues array as a jq error, causing RC=2 (inconclusive) instead of RC=1 (no successor)\n  WHY: A repo with no other ai:orchestrator-managed issues will have its predecessor treated as inconclusive; every tick re-issues the same warning line and never falls through to security_pass_closed_fix_failure\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:4495-4500 | confidence=5\n  PROBLEM: The state-read validation in `resolve_security_pass_fix_successor` was previously using fallback behavior that could silently compute the wrong Local ID marker when jq fails or when security_pass_cycle is non-numeric\n  WHY: This would cause the helper to return RC=1 (no successor) instead of RC=2 (inconclusive), incorrectly terminalizing a project when the lookup should be treated as inconclusive\n- scripts/orchestrate_poll_process.sh:4520-4522 | confidence=5\n  PROBLEM: The jq guard `if length == 0 or (all(.[]; type == \"array\") | not) then error(...)` treats an empty managed-issues array as a jq error, causing RC=2 (inconclusive) instead of RC=1 (no successor)\n  WHY: A repo with no other ai:orchestrator-managed issues will have its predecessor treated as inconclusive; every tick re-issues the same warning line and never falls through to security_pass_closed_fix_failure\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "4d1382a16583331f9aa7b55e408b273b34b646d76526ee2721f72723e72ea893",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4003,
+    "run_id": "33963874090",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33963874090",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260905125026_ee72c885e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4003,
+    "run_id": "33963874090"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-05T12:50:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
