@@ -693,6 +693,10 @@ jobs:
           CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}
           MAX_RECOVERY_ATTEMPTS: ${{ vars.MAX_RECOVERY_ATTEMPTS || '3' }}
           JUDGE_REPEAT_FINGERPRINT_MAX: ${{ vars.JUDGE_REPEAT_FINGERPRINT_MAX || '2' }}
+          # Recovery-budget accounting: false (default) charges MAX_RECOVERY_ATTEMPTS
+          # only on a repeat of an already-seen judge-failure fingerprint; true
+          # restores the legacy every-failed-verdict accounting.
+          RECOVERY_COUNT_DISTINCT_FINDINGS: ${{ vars.RECOVERY_COUNT_DISTINCT_FINDINGS || 'false' }}
           MAX_VALIDATION_RECOVERY_ATTEMPTS: ${{ vars.MAX_VALIDATION_RECOVERY_ATTEMPTS || '2' }}
           MAX_VALIDATION_FIX_BATCH_CYCLES: ${{ vars.MAX_VALIDATION_FIX_BATCH_CYCLES || '30' }}
           BRANCH_REBUILD_ENABLED: ${{ vars.BRANCH_REBUILD_ENABLED || 'false' }}

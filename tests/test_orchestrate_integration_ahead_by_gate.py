@@ -204,7 +204,12 @@ POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 GH_HELPERS_SCRIPT = REPO_ROOT / "scripts" / "gh_helpers.sh"
 
 
-def _make_gh_stub(tmp: Path, *, ahead_by_response: str | None) -> Path:
+def _make_gh_stub(
+	tmp: Path,
+	*,
+	ahead_by_response: str | None,
+	commit_parent_counts: list[int] | None = None,
+) -> Path:
 	"""Write a fake ``gh`` to ``tmp/bin/gh`` that responds to the calls our
 	tests exercise.
 
@@ -212,6 +217,13 @@ def _make_gh_stub(tmp: Path, *, ahead_by_response: str | None) -> Path:
 	* ``"<integer>"``: respond with ``{"ahead_by": <integer>}`` (success)
 	* ``"error"``: exit non-zero, simulating a compare API failure
 	* ``None``: should never be called; emit a diagnostic and fail
+
+	``commit_parent_counts`` optionally adds a ``commits`` list to the
+	compare payload, one entry per integer giving that commit's parent
+	count (1 = squash/regular commit, 2 = merge commit). ``None`` omits
+	the key entirely, which the helper must treat as "work count unknown".
+	Any ``--jq`` filter other than the legacy ``.ahead_by`` is evaluated
+	with the real ``jq`` against the full payload.
 	"""
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir(parents=True, exist_ok=True)
@@ -222,6 +234,7 @@ def _make_gh_stub(tmp: Path, *, ahead_by_response: str | None) -> Path:
 		json.dumps(
 			{
 				"ahead_by_response": ahead_by_response,
+				"commit_parent_counts": commit_parent_counts,
 				"calls_path": str(calls_path),
 			}
 		),
@@ -265,10 +278,22 @@ if args and args[0] == "api":
         except (TypeError, ValueError):
             sys.stderr.write("test bug: ahead_by_response not int/error: %r\\n" % (resp,))
             sys.exit(99)
+        payload = {{"ahead_by": ahead, "behind_by": 0}}
+        parent_counts = state.get("commit_parent_counts")
+        if parent_counts is not None:
+            payload["commits"] = [
+                {{"sha": "c%04d" % idx, "parents": [{{"sha": "p%d" % j}} for j in range(int(n))]}}
+                for idx, n in enumerate(parent_counts)
+            ]
         if jq and jq.strip() == ".ahead_by":
             sys.stdout.write(str(ahead))
+        elif jq:
+            import subprocess
+            p = subprocess.run(["jq", "-r", jq], input=json.dumps(payload), capture_output=True, text=True)
+            sys.stdout.write(p.stdout)
+            sys.exit(p.returncode)
         else:
-            sys.stdout.write(json.dumps({{"ahead_by": ahead, "behind_by": 0}}))
+            sys.stdout.write(json.dumps(payload))
         sys.exit(0)
 
     if path and re.match(r"^repos/[^/]+/[^/]+$", path):
@@ -392,6 +417,62 @@ def _run_shell(
 # ---------------------------------------------------------------------------
 # Tests — shell helper _integration_branch_ahead_of_default
 # ---------------------------------------------------------------------------
+
+def test_helper_work_commit_side_output_excludes_merge_commits(tmp_path):
+	"""The tele-funtoken-msg-scoring#3928 shape: ahead_by=26 of which 15 are
+	the poller's own sync-merge commits. The OUTVAR form must assign the raw
+	ahead_by to the named variable AND set INTEGRATION_AHEAD_BY_WORK_COMMITS
+	to the non-merge count from the same compare call."""
+	_make_gh_stub(tmp_path, ahead_by_response="26", commit_parent_counts=[1] * 11 + [2] * 15)
+	result = _run_shell(
+		tmp_path,
+		'_integration_branch_ahead_of_default "orchestrator/project-192" "main" probe_ahead; '
+		'echo "ahead=${probe_ahead} work=${INTEGRATION_AHEAD_BY_WORK_COMMITS}"',
+	)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == "ahead=26 work=11"
+	compare_calls = [c for c in _read_gh_calls(tmp_path) if "/compare/" in " ".join(c["argv"])]
+	assert len(compare_calls) == 1, "work count must come from the single existing compare call"
+
+
+def test_helper_work_commit_side_output_unknown_when_commits_absent(tmp_path):
+	"""A compare payload without a `commits` list (older fixtures, partial
+	API responses) leaves the work count unknown — callers fall back to the
+	raw ahead_by — while the echoed ahead_by is unchanged."""
+	_make_gh_stub(tmp_path, ahead_by_response="7")
+	result = _run_shell(
+		tmp_path,
+		'_integration_branch_ahead_of_default "orchestrator/project-192" "main" probe_ahead; '
+		'echo "ahead=${probe_ahead} work=[${INTEGRATION_AHEAD_BY_WORK_COMMITS}]"',
+	)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == "ahead=7 work=[]"
+
+
+def test_helper_work_commit_side_output_unknown_when_commits_truncated(tmp_path):
+	"""GitHub caps compare `commits` at 250; a list shorter than ahead_by
+	must not be trusted for the non-merge count."""
+	_make_gh_stub(tmp_path, ahead_by_response="30", commit_parent_counts=[1] * 12)
+	result = _run_shell(
+		tmp_path,
+		'_integration_branch_ahead_of_default "orchestrator/project-192" "main" probe_ahead; '
+		'echo "ahead=${probe_ahead} work=[${INTEGRATION_AHEAD_BY_WORK_COMMITS}]"',
+	)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == "ahead=30 work=[]"
+
+
+def test_helper_legacy_echo_form_still_prints_ahead_by(tmp_path):
+	"""Command-substitution callers (finalize / check-wave paths) keep the
+	stdout contract: exactly the ahead_by integer, nothing else."""
+	_make_gh_stub(tmp_path, ahead_by_response="4", commit_parent_counts=[1, 2, 1, 2])
+	result = _run_shell(
+		tmp_path,
+		'value="$(_integration_branch_ahead_of_default "orchestrator/project-192" "main")"; echo "[${value}]"',
+	)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == "[4]"
+
 
 def test_helper_returns_ahead_by_count_on_api_success(tmp_path):
 	_make_gh_stub(tmp_path, ahead_by_response="5")

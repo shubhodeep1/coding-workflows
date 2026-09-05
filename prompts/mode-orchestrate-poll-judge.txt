@@ -62,3 +62,10 @@ text:
 `new_issues`: empty array if no fixes needed. `issues_to_revert`: empty
 array unless a merged PR is actively breaking the build or contradicting
 the spec.
+
+Before you flag a merged PR or a wave as contradicting the plan, quote in
+your justification the exact plan sentence (invariant, requirement, or
+acceptance criterion) you believe is violated. If you cannot quote such a
+sentence, the behaviour is not a plan contradiction: do not fail the
+project on it, and do not raise a fix-up that reverses a fix-up an
+earlier cycle requested unless the quoted plan text demands the reversal.
