@@ -146,6 +146,33 @@ def test_contract_list_union_uses_isolated_hash_locked_pyyaml_before_git_credent
 		assert "persist-credentials: false" in checkout_block
 
 
+def test_poller_state_auth_and_readonly_model_security_contract() -> None:
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert "ORCHESTRATOR_STATE_AUTH_KEYRING:\n        required: true" in wf
+	assert "ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}" in wf
+	assert 'git remote set-url origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}.git"' in wf
+	assert 'echo "GIT_CONFIG_KEY_0=credential.helper"' in wf
+	assert 'echo "GIT_CONFIG_VALUE_0=${trusted_credential_helper}"' in wf
+	assert "https://x-access-token:${GH_TOKEN}" not in wf
+	assert "poller_run_sanitized_command()" in poller
+	assert "poller_run_readonly_model()" in poller
+	assert "--sandbox read-only" in poller
+	assert "-c web_search=disabled" in poller
+	assert "-c shell_environment_policy.ignore_default_excludes=false" in poller
+	assert "--sandbox danger-full-access" not in poller
+	assert "x-access-token:${GH_TOKEN}" not in poller
+	runner_block = poller.split("poller_run_sanitized_command() {", 1)[1].split("\n}", 1)[0]
+	for credential_name in (
+		"GH_TOKEN",
+		"GH_PAT",
+		"TG_BOT_SECRET",
+		"TG_ADMIN_CHAT_ID",
+		"ORCHESTRATOR_STATE_AUTH_KEYRING",
+	):
+		assert credential_name not in runner_block
+
+
 def main() -> int:
 	test_stall_control_env_defaults_are_declared()
 	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
@@ -156,6 +183,7 @@ def main() -> int:
 	test_security_pass_dark_launch_env_and_assets_are_wired()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
 	test_contract_list_union_uses_isolated_hash_locked_pyyaml_before_git_credentials()
+	test_poller_state_auth_and_readonly_model_security_contract()
 	return 0
 
 

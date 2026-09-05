@@ -16,7 +16,6 @@ from typing import Any
 
 CONTRACT_PATH_RE = re.compile(r"^db/contracts/[^/]+\.ya?ml$")
 LIST_ITEM_RE = re.compile(r"^([ \t]+)- \S.*(?:\r?\n)?$")
-TOP_LEVEL_KEY_RE = re.compile(r"^([^\s:#][^:]*):(?:\s*(?:#.*)?)?(?:\r?\n)?$")
 MARKER_RE = re.compile(r"^(?:<<<<<<<|=======|>>>>>>>)", re.MULTILINE)
 ALLOWED_KEYS = {"read_entrypoints", "write_entrypoints"}
 MAX_INPUT_BYTES = 1_048_576
@@ -91,19 +90,11 @@ def _read_bounded_text(input_path: Path) -> str:
 		raise IneligibleError("input_not_utf8") from error
 
 
-def _nearest_top_level_key(lines: list[str], marker_index: int) -> str | None:
-	for preceding_line in reversed(lines[:marker_index]):
-		match = TOP_LEVEL_KEY_RE.match(preceding_line)
-		if match:
-			return match.group(1)
-	return None
-
-
-def _parse_and_merge_hunks(marked_text: str) -> tuple[str, str, set[str]]:
+def _parse_and_merge_hunks(marked_text: str) -> tuple[str, str, list[tuple[int, int]]]:
 	lines = marked_text.splitlines(keepends=True)
 	merged_lines: list[str] = []
 	auto_merged_lines: list[str] = []
-	affected_keys: set[str] = set()
+	hunk_line_ranges: list[tuple[int, int]] = []
 	line_index = 0
 
 	while line_index < len(lines):
@@ -113,7 +104,6 @@ def _parse_and_merge_hunks(marked_text: str) -> tuple[str, str, set[str]]:
 			line_index += 1
 			continue
 
-		marker_index = line_index
 		line_index += 1
 		ours_lines: list[str] = []
 		while line_index < len(lines) and not lines[line_index].startswith("======="):
@@ -133,10 +123,6 @@ def _parse_and_merge_hunks(marked_text: str) -> tuple[str, str, set[str]]:
 
 		if not ours_lines or not theirs_lines:
 			raise IneligibleError("hunk_one_sided")
-		entrypoint_key = _nearest_top_level_key(lines, marker_index)
-		if entrypoint_key not in ALLOWED_KEYS:
-			raise IneligibleError("hunk_outside_entrypoints")
-
 		common_indent: str | None = None
 		for candidate_line in ours_lines + theirs_lines:
 			item_match = LIST_ITEM_RE.match(candidate_line)
@@ -147,15 +133,81 @@ def _parse_and_merge_hunks(marked_text: str) -> tuple[str, str, set[str]]:
 			elif item_match.group(1) != common_indent:
 				raise IneligibleError("hunk_non_list_line")
 
+		hunk_start_line = len(merged_lines)
 		merged_lines.extend(ours_lines)
 		merged_lines.extend(line for line in theirs_lines if line not in ours_lines)
+		hunk_line_ranges.append((hunk_start_line, len(merged_lines)))
 		auto_merged_lines.extend(ours_lines)
-		affected_keys.add(entrypoint_key)
 
 	merged_text = "".join(merged_lines)
 	if MARKER_RE.search(merged_text):
 		raise IneligibleError("markers_remain")
-	return merged_text, "".join(auto_merged_lines), affected_keys
+	return merged_text, "".join(auto_merged_lines), hunk_line_ranges
+
+
+def _validate_hunk_parent_nodes(
+	yaml_module: Any,
+	merged_text: str,
+	hunk_line_ranges: list[tuple[int, int]],
+) -> set[str]:
+	try:
+		root_node = yaml_module.compose(merged_text, Loader=yaml_module.SafeLoader)
+	except Exception as error:
+		raise IneligibleError("yaml_parse_failed") from error
+	if not isinstance(root_node, yaml_module.nodes.MappingNode):
+		raise IneligibleError("hunk_outside_entrypoints")
+	allowed_sequences: list[tuple[str, Any]] = []
+	for key_node, value_node in root_node.value:
+		if (
+			isinstance(key_node, yaml_module.nodes.ScalarNode)
+			and key_node.value in ALLOWED_KEYS
+			and isinstance(value_node, yaml_module.nodes.SequenceNode)
+		):
+			allowed_sequences.append((key_node.value, value_node))
+	affected_keys: set[str] = set()
+	for hunk_start_line, hunk_end_line in hunk_line_ranges:
+		parent_keys = [
+			key
+			for key, sequence_node in allowed_sequences
+			if hunk_start_line >= sequence_node.start_mark.line
+			and hunk_end_line <= sequence_node.end_mark.line
+		]
+		if len(parent_keys) != 1:
+			raise IneligibleError("hunk_outside_entrypoints")
+		affected_keys.add(parent_keys[0])
+	return affected_keys
+
+
+def _deep_equal_cycle_safe(
+	first_value: Any,
+	second_value: Any,
+	seen_pairs: set[tuple[int, int]] | None = None,
+) -> bool:
+	if first_value is second_value:
+		return True
+	if type(first_value) is not type(second_value):
+		return False
+	if isinstance(first_value, (str, int, float, bool, type(None), bytes)):
+		return first_value == second_value
+	if seen_pairs is None:
+		seen_pairs = set()
+	pair = (id(first_value), id(second_value))
+	if pair in seen_pairs:
+		return True
+	seen_pairs.add(pair)
+	if isinstance(first_value, list):
+		return len(first_value) == len(second_value) and all(
+			_deep_equal_cycle_safe(first_item, second_item, seen_pairs)
+			for first_item, second_item in zip(first_value, second_value)
+		)
+	if isinstance(first_value, dict):
+		if len(first_value) != len(second_value) or set(first_value) != set(second_value):
+			return False
+		return all(
+			_deep_equal_cycle_safe(first_value[key], second_value[key], seen_pairs)
+			for key in first_value
+		)
+	return first_value == second_value
 
 
 def _validated_entrypoint_lists(document: dict[Any, Any]) -> dict[str, list[str]]:
@@ -213,7 +265,7 @@ def _validate_result(
 	theirs_text: str,
 	merged_text: str,
 	auto_merged_text: str,
-	affected_keys: set[str],
+	hunk_line_ranges: list[tuple[int, int]],
 ) -> None:
 	base_data = _safe_load(yaml_module, base_text)
 	ours_data = _safe_load(yaml_module, ours_text)
@@ -226,6 +278,7 @@ def _validate_result(
 		_validated_entrypoint_lists(data)
 		for data in (base_data, ours_data, theirs_data, merged_data, auto_merged_data)
 	]
+	affected_keys = _validate_hunk_parent_nodes(yaml_module, merged_text, hunk_line_ranges)
 
 	for affected_key in affected_keys:
 		lists = [
@@ -245,7 +298,9 @@ def _validate_result(
 		):
 			raise IneligibleError("list_not_union")
 
-	if set(merged_data) != set(auto_merged_data):
+	merged_unaffected = {key: value for key, value in merged_data.items() if key not in ALLOWED_KEYS}
+	auto_merged_unaffected = {key: value for key, value in auto_merged_data.items() if key not in ALLOWED_KEYS}
+	if not _deep_equal_cycle_safe(merged_unaffected, auto_merged_unaffected):
 		raise IneligibleError("list_not_union")
 
 
@@ -301,7 +356,7 @@ def _merge(args: argparse.Namespace) -> None:
 	if merge_result.returncode < 0 or merge_result.returncode > 127:
 		raise RuntimeError("git merge-file failed")
 
-	merged_text, auto_merged_text, affected_keys = _parse_and_merge_hunks(merge_result.stdout)
+	merged_text, auto_merged_text, hunk_line_ranges = _parse_and_merge_hunks(merge_result.stdout)
 	yaml_module = _load_yaml_module()
 	_validate_result(
 		yaml_module,
@@ -310,7 +365,7 @@ def _merge(args: argparse.Namespace) -> None:
 		theirs_text,
 		merged_text,
 		auto_merged_text,
-		affected_keys,
+		hunk_line_ranges,
 	)
 	_write_output(Path(args.out), merged_text)
 

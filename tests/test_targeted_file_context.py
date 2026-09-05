@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import targeted_file_context as targeted_file_context_module  # noqa: E402
 
 from targeted_file_context import (  # noqa: E402
+	MAX_TARGET_PATHS,
 	SEMBLE_QUERY_TIMEOUT_SECS,
 	emit_context,
 	extract_paths_from_plan,
@@ -294,9 +295,8 @@ def test_total_budget_overflow_skips_with_marker_not_truncation() -> None:
 	"would overflow total budget" marker so the model uses its
 	native read tool instead.
 
-	Every path the caller passes is reported (inlined or marker) —
-	there is no separate file-count cap, so a long path list never
-	"silently drops" entries past some N."""
+	Paths within the bounded accepted set are represented when complete
+	fragments fit; rendered output remains under the hard byte limit."""
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "src").mkdir()
@@ -322,7 +322,7 @@ def test_total_budget_overflow_skips_with_marker_not_truncation() -> None:
 		# The marker line carries the budget context for the operator /
 		# model.
 		assert "max_bytes=50000" in context
-		# Every path appears (inlined or marker) — no silent drops.
+		# This small accepted path set still fits as complete inline/marker fragments.
 		for name in ("src/a.py", "src/b.py", "src/c.py", "src/d.py"):
 			assert name in context, f"path {name} missing from output"
 
@@ -369,7 +369,7 @@ def test_overflow_uses_semble_chunks_when_query_succeeds() -> None:
 			context = emit_context(
 				["src/big.py"],
 				root,
-				max_bytes=100,
+				max_bytes=1024,
 				semble_bin=str(semble),
 				semble_index=str(root / ".semble-index"),
 				semble_query_text="task summary",
@@ -377,11 +377,10 @@ def test_overflow_uses_semble_chunks_when_query_succeeds() -> None:
 			)
 
 		assert "chunk-retrieved via semble" in context
-		assert "truncated to 100 byte(s) to fit the remaining total budget" in context
-		assert f"\n{'x' * 100}\n--- END FILE: src/big.py ---" in context
+		assert f"\n{'x' * 150}\n--- END FILE: src/big.py ---" in context
 		assert "--- FILE: src/big.py (12000 bytes; would overflow total budget" not in context
 		assert "src/big.py" in context
-		assert "100 byte(s) of source content" in context
+		assert len(context.encode("utf-8")) <= 1024
 		assert "SEMBLE_QUERY" not in context
 		telemetry = stderr.getvalue()
 		assert "SEMBLE_QUERY target=overflow file=src/big.py chunks=20 bytes=" in telemetry
@@ -403,9 +402,8 @@ def test_empty_semble_clamp_stops_later_overflow_queries() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "src").mkdir()
-		(root / "src" / "small.py").write_text("a" * 9, encoding="utf-8")
 		for name in ("big.py", "later.py"):
-			(root / "src" / name).write_text("b" * 100, encoding="utf-8")
+			(root / "src" / name).write_text("b" * 1000, encoding="utf-8")
 		original_query = targeted_file_context_module._run_semble_query
 		query_calls: list[str] = []
 
@@ -416,9 +414,9 @@ def test_empty_semble_clamp_stops_later_overflow_queries() -> None:
 		targeted_file_context_module._run_semble_query = _query_once
 		try:
 			context = emit_context(
-				["src/small.py", "src/big.py", "src/later.py"],
+				["src/big.py", "src/later.py"],
 				root,
-				max_bytes=10,
+				max_bytes=320,
 				semble_query_text="task summary",
 			)
 		finally:
@@ -426,8 +424,7 @@ def test_empty_semble_clamp_stops_later_overflow_queries() -> None:
 
 		assert len(query_calls) == 1
 		assert "chunk-retrieved via semble" not in context
-		assert "src/big.py" in context
-		assert "src/later.py" in context
+		assert len(context.encode("utf-8")) <= 320
 
 
 def test_overflow_marker_remains_default_fallback_when_semble_unavailable() -> None:
@@ -441,7 +438,7 @@ def test_overflow_marker_remains_default_fallback_when_semble_unavailable() -> N
 			context = emit_context(
 				["src/big.py"],
 				root,
-				max_bytes=100,
+				max_bytes=1024,
 				semble_bin=str(root / "missing_semble"),
 				semble_index=str(root / ".semble-index"),
 				semble_query_text="task summary",
@@ -466,7 +463,7 @@ def test_overflow_read_fallback_emits_bounded_head_body() -> None:
 		context = emit_context(
 			["src/big.py"],
 			root,
-			max_bytes=128,
+			max_bytes=1024,
 			semble_bin=str(root / "missing_semble"),
 			semble_index=str(root / ".semble-index"),
 			semble_query_text="task summary",
@@ -474,7 +471,8 @@ def test_overflow_read_fallback_emits_bounded_head_body() -> None:
 		)
 
 		assert "overflow fallback read head" in context
-		assert "truncated to 128 byte(s)" in context
+		assert "truncated to" in context
+		assert len(context.encode("utf-8")) <= 1024
 		assert "line\nline\nline\n" in context
 		assert "SEMBLE_FALLBACK" not in context
 		assert "--- FILE: src/big.py (15000 bytes; would overflow total budget" not in context
@@ -498,7 +496,7 @@ def test_overflow_marker_fallback_does_not_read_file_bytes() -> None:
 			context = emit_context(
 				["src/big.py"],
 				root,
-				max_bytes=100,
+				max_bytes=1024,
 				semble_bin=str(root / "missing_semble"),
 				semble_index=str(root / ".semble-index"),
 				semble_query_text="task summary",
@@ -520,7 +518,7 @@ def test_overflow_read_fallback_counts_rendered_bytes_in_budget() -> None:
 		context = emit_context(
 			["src/big.py", "src/small.py"],
 			root,
-			max_bytes=128,
+			max_bytes=1024,
 			semble_bin=str(root / "missing_semble"),
 			semble_index=str(root / ".semble-index"),
 			semble_query_text="task summary",
@@ -528,8 +526,7 @@ def test_overflow_read_fallback_counts_rendered_bytes_in_budget() -> None:
 		)
 
 		assert "overflow fallback read head" in context
-		assert "--- FILE: src/small.py (20 bytes; would overflow total budget" in context
-		assert "Included 2 entries (0 inlined, 1 marker-only, 0 semble, 1 read), 128 byte(s) of source content." in context
+		assert len(context.encode("utf-8")) <= 1024
 
 
 def test_semble_query_timeout_falls_back_cleanly() -> None:
@@ -551,7 +548,7 @@ def test_semble_query_timeout_falls_back_cleanly() -> None:
 			context = emit_context(
 				["src/big.py"],
 				root,
-				max_bytes=100,
+				max_bytes=1024,
 				semble_bin=str(timeout_semble),
 				semble_index=str(root / ".semble-index"),
 				semble_query_text="task summary",
@@ -578,7 +575,7 @@ def test_semble_query_oserror_falls_back_cleanly() -> None:
 				context = emit_context(
 					["src/big.py"],
 					root,
-					max_bytes=100,
+					max_bytes=1024,
 					semble_bin=str(root / "fake_semble"),
 					semble_index=str(root / ".semble-index"),
 					semble_query_text="task summary",
@@ -610,7 +607,7 @@ def test_semble_query_exception_timeout_falls_back_cleanly() -> None:
 				context = emit_context(
 					["src/big.py"],
 					root,
-					max_bytes=100,
+					max_bytes=1024,
 					semble_bin=str(root / "fake_semble"),
 					semble_index=str(root / ".semble-index"),
 					semble_query_text="task summary",
@@ -634,7 +631,7 @@ def test_overflow_off_fallback_emits_no_representation_and_no_marker_count() -> 
 		context = emit_context(
 			["src/big.py"],
 			root,
-			max_bytes=100,
+			max_bytes=1024,
 			semble_bin=str(root / "missing_semble"),
 			semble_index=str(root / ".semble-index"),
 			semble_query_text="task summary",
@@ -674,16 +671,42 @@ def test_missing_input_emits_safe_empty_block() -> None:
 
 
 def test_disabled_by_zero_max_bytes() -> None:
-	"""Set max_bytes=0 to disable inlining entirely — block becomes a
-	single-line "(disabled)" marker."""
+	"""Set max_bytes=0 to disable targeted context without marker overhead."""
 	with tempfile.TemporaryDirectory() as tmp:
 		context = emit_context(
 			["whatever"],
 			Path(tmp),
 			max_bytes=0,
 		)
-		assert "targeted context disabled" in context
-		assert "max_bytes=0" in context
+		assert context == ""
+
+
+def test_path_count_and_rendered_output_are_strictly_bounded() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		paths = [f"missing/path-{index}.py" for index in range(MAX_TARGET_PATHS * 4)]
+		context = emit_context(paths, root, max_bytes=4096, header_text="bounded")
+		assert len(context.encode("utf-8")) <= 4096
+		assert context.count("--- FILE:") <= MAX_TARGET_PATHS
+		assert "path-1023.py" not in context
+		assert "Omitted" in context
+
+
+def test_emit_context_normalizes_raw_paths_before_filesystem_access() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "clean.py").write_text("normalized = True\n", encoding="utf-8")
+		context = emit_context(
+			[" src/clean.py, ", "not a probable path"],
+			root,
+			max_bytes=1024,
+		)
+		assert "--- FILE: src/clean.py " in context
+		assert "normalized = True" in context
+		assert "src/clean.py," not in context
+		assert "not a probable path" not in context
+		assert "Omitted 1 path(s)" in context
 
 
 def test_paths_file_extracts_destination_from_rename_porcelain() -> None:
