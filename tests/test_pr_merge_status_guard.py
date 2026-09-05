@@ -401,6 +401,8 @@ def test_default_branch_uses_remote_head_when_local_refs_are_missing(monkeypatch
 			("git", "rev-parse", "--verify", "refs/remotes/origin/main"): (1, "", ""),
 			("git", "rev-parse", "--verify", "refs/remotes/origin/master"): (1, "", ""),
 			(
+				"env",
+				"GIT_TERMINAL_PROMPT=0",
 				"git",
 				"ls-remote",
 				"--symref",
@@ -420,7 +422,7 @@ def test_default_branch_does_not_guess_local_main_over_remote_head(monkeypatch) 
 	def _fake_run(argv, cwd, timeout):
 		lookup = {
 			("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): (1, "", ""),
-			("git", "ls-remote", "--symref", "origin", "HEAD"): (
+			("env", "GIT_TERMINAL_PROMPT=0", "git", "ls-remote", "--symref", "origin", "HEAD"): (
 				0,
 				"ref: refs/heads/trunk\tHEAD\n0123456789abcdef\tHEAD\n",
 				"",
@@ -438,7 +440,7 @@ def test_default_branch_returns_empty_when_only_local_main_exists(monkeypatch) -
 	def _fake_run(argv, cwd, timeout):
 		lookup = {
 			("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): (1, "", ""),
-			("git", "ls-remote", "--symref", "origin", "HEAD"): (1, "", ""),
+			("env", "GIT_TERMINAL_PROMPT=0", "git", "ls-remote", "--symref", "origin", "HEAD"): (1, "", ""),
 		}
 		result = lookup.get(tuple(argv))
 		assert result is not None, f"unexpected argv: {argv}"
@@ -446,6 +448,19 @@ def test_default_branch_returns_empty_when_only_local_main_exists(monkeypatch) -
 
 	monkeypatch.setattr(guard, "_run", _fake_run)
 	assert guard.default_branch("/repo") == ""
+
+
+def test_remote_history_operations_disable_terminal_prompts(monkeypatch) -> None:
+	observed_calls: list[list[str]] = []
+
+	def _fake_run(argv, cwd, timeout):
+		observed_calls.append(argv)
+		return 0, "", ""
+
+	monkeypatch.setattr(guard, "_run", _fake_run)
+	assert guard.remote_branch_tip("feature/x", "/repo") == ""
+	assert guard.fetch_from_origin(["main"], "/repo") is True
+	assert all(call[:3] == ["env", "GIT_TERMINAL_PROMPT=0", "git"] for call in observed_calls)
 
 
 # ──────────────────────────────────────────────────────────────────

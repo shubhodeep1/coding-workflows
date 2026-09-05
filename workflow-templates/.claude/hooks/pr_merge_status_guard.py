@@ -430,7 +430,11 @@ def default_branch(cwd: str) -> str:
 			ref = ref[len("origin/") :]
 		if ref:
 			return ref
-	code, out, _ = _run(["git", "ls-remote", "--symref", "origin", "HEAD"], cwd, _GIT_TIMEOUT_SECONDS)
+	code, out, _ = _run(
+		["env", "GIT_TERMINAL_PROMPT=0", "git", "ls-remote", "--symref", "origin", "HEAD"],
+		cwd,
+		_GIT_TIMEOUT_SECONDS,
+	)
 	if code == 0:
 		match = _REMOTE_HEAD_BRANCH_RE.search(out)
 		if match:
