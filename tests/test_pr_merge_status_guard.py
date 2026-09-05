@@ -451,16 +451,19 @@ def test_default_branch_returns_empty_when_only_local_main_exists(monkeypatch) -
 
 
 def test_remote_history_operations_disable_terminal_prompts(monkeypatch) -> None:
-	observed_calls: list[list[str]] = []
+	observed_calls: list[tuple[list[str], int]] = []
 
 	def _fake_run(argv, cwd, timeout):
-		observed_calls.append(argv)
+		observed_calls.append((argv, timeout))
 		return 0, "", ""
 
 	monkeypatch.setattr(guard, "_run", _fake_run)
+	assert guard.default_branch("/repo") == ""
 	assert guard.remote_branch_tip("feature/x", "/repo") == ""
 	assert guard.fetch_from_origin(["main"], "/repo") is True
-	assert all(call[:3] == ["env", "GIT_TERMINAL_PROMPT=0", "git"] for call in observed_calls)
+	remote_calls = [call for call in observed_calls if call[0][:3] == ["env", "GIT_TERMINAL_PROMPT=0", "git"]]
+	assert len(remote_calls) == 3
+	assert all(timeout == guard._GIT_REMOTE_TIMEOUT_SECONDS for _, timeout in remote_calls)
 
 
 # ──────────────────────────────────────────────────────────────────
