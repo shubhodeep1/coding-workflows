@@ -3756,6 +3756,46 @@ def test_security_pass_closed_fix_successor_lookup_failure_retains_fixing_state(
 	assert "successor lookup was inconclusive" in combined_log
 	assert "SECURITY_PASS_FAILED" not in combined_log
 
+
+def test_security_pass_fix_successor_malformed_state_is_inconclusive() -> None:
+	"""State parse and type failures must return the helper's retry code."""
+	poller_source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	successor_helper = _extract_bash_function(
+		poller_source, "resolve_security_pass_fix_successor() {"
+	)
+	with tempfile.TemporaryDirectory() as temp_dir:
+		temp_path = Path(temp_dir)
+		state_path = temp_path / "state.json"
+		harness_path = temp_path / "harness.sh"
+		api_call_path = temp_path / "api-called"
+		harness_path.write_text(
+			"set -uo pipefail\n"
+			f"STATE_FILE={str(state_path)!r}\n"
+			f"RUNTIME_DIR={str(temp_path)!r}\n"
+			"TRACKING_NUM=192\n"
+			"GITHUB_REPOSITORY=owner/repo\n"
+			f"API_CALL_PATH={str(api_call_path)!r}\n"
+			'gh_retry_to_file() { : > "${API_CALL_PATH}"; return 0; }\n'
+			+ successor_helper
+			+ "\ncheck_invalid_state() {\n"
+			+ '\tprintf \'%s\' "$1" > "${STATE_FILE}"\n'
+			+ "\tlocal invalid_state_rc=0\n"
+			+ "\tresolve_security_pass_fix_successor 900 || invalid_state_rc=$?\n"
+			+ "\tprintf '%s\\n' \"${invalid_state_rc}\"\n"
+			+ "}\n"
+			+ "check_invalid_state '{\"security_pass_cycle\":'\n"
+			+ "check_invalid_state '{\"security_pass_cycle\":\"invalid\"}'\n",
+			encoding="utf-8",
+		)
+		result = subprocess.run(
+			["bash", str(harness_path)], capture_output=True, text=True, check=False
+		)
+
+		assert result.returncode == 0, result.stderr
+		assert result.stdout.splitlines() == ["2", "2"]
+		assert not api_call_path.exists()
+
+
 def test_security_pass_judge_validation_route_blocks_then_clean_pass_dispatches() -> None:
 	blocked_state = _base_state()
 	blocked_state["integration_branch"] = "orchestrator/project-192"

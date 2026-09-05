@@ -4492,9 +4492,11 @@ resolve_security_pass_fix_successor() {
 
   [[ "${closed_issue_num}" =~ ^[0-9]+$ ]] || return 2
 
-  security_pass_successor_cycles="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  if ! security_pass_successor_cycles="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}" 2>/dev/null)"; then
+    return 2
+  fi
   if ! [[ "${security_pass_successor_cycles}" =~ ^[0-9]+$ ]]; then
-    security_pass_successor_cycles=0
+    return 2
   fi
   security_pass_successor_local_id="security-pass-fix-cycle-$((security_pass_successor_cycles + 1))"
 
