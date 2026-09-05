@@ -874,13 +874,51 @@ forever; ancestry is what separates "stacking on merged history" from
 "fresh work that reuses the name". No override flag is needed, and the
 guard goes quiet as soon as the branch is reset — before the new PR exists.
 
+Condition 3 is refined for repositories that merge with **merge commits**.
+There the merged head *is* an ancestor of the default branch, so after the
+reset it is an ancestor of `HEAD` too and plain ancestry would block the
+very remediation §21.A prescribes. The guard therefore also looks at where
+the branch forks off `origin/<default>`: a fork point on the default
+branch's first-parent chain means the branch was rebuilt from the default
+branch (allow); a fork point on merged side history means the branch is
+still sitting on the merged commits (block). Squash- and rebase-merged PRs
+never put the merged head into the default branch, so plain ancestry
+already decides for them.
+
+The same hook guards the GitHub MCP push tools — `mcp__github__push_files`
+and `mcp__github__create_or_update_file` — through a second `PreToolUse`
+matcher in `.claude/settings.json`. Those tools write to a remote branch
+without a local `git push`, so the remote branch tip (fetched via
+`git ls-remote` + `git fetch`) takes the role `HEAD` plays for a local
+commit. When the target repository is not the local checkout, ancestry
+cannot be verified and a merged-PR match **asks** for confirmation instead
+of blocking, because a block there could never self-clear.
+
 ### C) Fail-open contract
 
-Any inability to answer the question — `gh` missing, token expired or
-unauthenticated, network failure, unparseable hook payload, detached HEAD,
-not a git repo, undeterminable `<owner>/<repo>` — **allows** the command and
-emits a warning naming the branch. A guard that hard-blocks every commit
-whenever a token lapses would cost more than the bug it prevents.
+An unreachable GitHub API — `gh` missing, token expired or unauthenticated,
+network failure, or Claude Code Web's agent proxy answering HTTP 403 as it
+does for sessions without the GitHub App connected — does **not** silently
+allow the command. The guard falls back to git history alone, fetching
+`origin/<default>` through the git remote (which works in exactly the
+sessions where the API does not):
+
+1. If the branch sits on merge-commit side history already in
+   `origin/<default>`, and origin either no longer has the branch or holds a
+   tip fully contained in `origin/<default>`, the command is **blocked** with
+   the same remediation as the API path.
+2. Otherwise git history is **inconclusive** (a rebuilt branch and a squash-
+   or rebase-merged one look identical): a `git push` or an MCP push is routed
+   through the harness permission prompt (`permissionDecision: ask`) so a
+   human confirms the PR is still open, and a bare `git commit` is allowed
+   with a warning, since the work only strands once pushed.
+
+Only the cases where nothing branch-shaped can be checked at all — an
+unparseable hook payload, detached HEAD, not a git repo, an undeterminable
+`<owner>/<repo>` — still **allow** the command and emit a warning naming the
+branch. A guard that hard-blocks every commit whenever the environment is
+broken would cost more than the bug it prevents; asking on a push is the
+compromise.
 
 The merged-PR check is skipped on the default branch and when
 `CLAUDE_PR_MERGE_GUARD=off` is set (default: unset, i.e. enabled). The API-write
@@ -893,6 +931,10 @@ Per §15, the guard issues **one** API call per guarded command — a single
 caches the result for 300 seconds keyed on `<slug>/<branch>`. Cached data may
 satisfy an *allow*; a *block* is always re-verified against a live call first,
 so opening a new PR clears the guard immediately instead of after the TTL.
+
+The git-history fallback in §21.C issues no GitHub API calls at all: one
+`git ls-remote` for the branch and one `git fetch` for the default branch
+(plus the branch, when origin still has it), both through the git remote.
 
 The call goes over REST (`gh api repos/<slug>/pulls`), **not** `gh pr list`.
 Claude Code Web's agent proxy serves only a pinned set of GraphQL operations
