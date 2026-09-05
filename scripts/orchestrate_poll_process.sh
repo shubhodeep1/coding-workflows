@@ -18880,7 +18880,10 @@ To avoid repeating the same recovery loop, the orchestrator is not creating addi
         create_judge_fixup_issues_from_verdict
         EXHAUSTED_FIXUP_REFS=""
         if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
-          EXHAUSTED_FIXUP_IDS_JSON="$(echo "${JUDGE_JSON}" | jq -c '[.new_issues[]?.id // empty | select(. != null)]' 2>/dev/null || echo '[]')"
+          # Same validity predicate as create_judge_fixup_issues_from_verdict
+          # (non-empty id AND title): an entry the loop skipped must not be
+          # reported as filed, even if a stale issue_number_map row exists.
+          EXHAUSTED_FIXUP_IDS_JSON="$(echo "${JUDGE_JSON}" | jq -c '[.new_issues[]? | select(((.id // "") | tostring) != "" and ((.title // "") | tostring) != "") | .id]' 2>/dev/null || echo '[]')"
           EXHAUSTED_FIXUP_REFS="$(jq -r --argjson ids "${EXHAUSTED_FIXUP_IDS_JSON}" \
             '[ $ids[] as $id | (.issue_number_map[$id] // empty) | "#\(.)" ] | join(", ")' "${STATE_FILE}" 2>/dev/null || echo "")"
         fi
