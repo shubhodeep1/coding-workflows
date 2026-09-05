@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4005,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4005\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/4006\",\"pr_number\":4006,\"branch\":\"ai/issue-4005\",\"run_id\":\"33972765412\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/33972765412\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"changelog.d/review-blocked-stale-head-merge.md\",\"scripts/orchestrate_poll_process.sh\",\"scripts/targeted_file_context.py\",\"tests/test_orchestrate_poll_process.py\"]}",
+  "fingerprint": "c88c92db4f53f71a22f61643e68c69ea7be670a802a7160ef15e845d95df740f",
+  "lineage": {
+    "issue_number": 4005,
+    "parent_ids": [],
+    "pr_number": 4006,
+    "run_id": "33972765412",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33972765412",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/4006"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260905153144_e95bec2e97",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4005,
+    "level": "run",
+    "pr_number": 4006,
+    "run_id": "33972765412"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4005: https://github.com/shubhodeep1/coding-workflows/pull/4006",
+  "timestamps": {
+    "created_at": "2026-09-05T15:31:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
