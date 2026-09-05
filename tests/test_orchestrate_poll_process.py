@@ -9563,6 +9563,40 @@ def test_recovery_exhausted_still_files_judge_fixup_issues_and_resume_dispatches
 	}
 
 
+def test_judge_fixup_creation_skips_malformed_entries_without_aborting_cycle():
+	"""Judge JSON is untrusted LLM output. An entry with no title would make
+	`gh issue create` fail and abort the poll cycle under `set -e`; one with
+	no id could never be tracked in issue_number_map / the wave and would
+	be recreated next cycle. Both must be skipped with a warning while the
+	well-formed entry is still filed and the recovery cycle completes."""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		judge_repeat_fingerprint_max="2",
+		issue_labels={10: ["ai:merged"]},
+		codex_json=_failed_verdict(
+			"settlement writes are not idempotent in backend/settle.py:12",
+			[
+				{"id": "no-title-entry", "body": "missing title"},
+				{"title": "No id entry", "body": "missing id"},
+				{"id": "well-formed", "title": "Make settlement writes idempotent", "body": "Use an upsert."},
+			],
+		),
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "in_progress"
+	assert [c["title"] for c in result.get("created_issues", [])] == ["Make settlement writes idempotent"]
+	assert set(ls["issue_number_map"]) == {"issue-1", "well-formed"}
+	assert {i["id"] for i in ls["waves"][0]["issues"]} == {"issue-1", "well-formed"}
+	out = result["stdout"] + result["stderr"]
+	assert "Skipping malformed judge fix-up entry (id='no-title-entry', title='')" in out
+	assert "Skipping malformed judge fix-up entry (id='', title='No id entry')" in out
+
+
 def _backpressure_3928_shape_prs() -> list[dict]:
 	return [
 		{

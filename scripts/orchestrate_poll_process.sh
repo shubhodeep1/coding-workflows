@@ -5159,9 +5159,20 @@ create_judge_fixup_issues_from_verdict() {
       if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
         echo "Creating ${NEW_ISSUES_COUNT} fix-up issue(s)..."
         echo "${JUDGE_JSON}" | jq -c '.new_issues[]' | while read -r fix_issue; do
-          FIX_TITLE="$(echo "${fix_issue}" | jq -r '.title')"
-          FIX_BODY="$(echo "${fix_issue}" | jq -r '.body' | sed 's/\\n/\n/g')"
-          FIX_ID="$(echo "${fix_issue}" | jq -r '.id')"
+          FIX_TITLE="$(echo "${fix_issue}" | jq -r '.title // ""')"
+          FIX_BODY="$(echo "${fix_issue}" | jq -r '.body // ""' | sed 's/\\n/\n/g')"
+          FIX_ID="$(echo "${fix_issue}" | jq -r '.id // ""')"
+
+          # Judge JSON is untrusted LLM output. An entry without a non-empty
+          # title would make `gh issue create` fail (aborting the cycle under
+          # set -e); one without an id could never be recorded in
+          # issue_number_map / the wave, so the next cycle would recreate it.
+          # Skip such entries with a warning instead of trusting them.
+          if [ -z "${FIX_TITLE}" ] || [ "${FIX_TITLE}" = "null" ] \
+            || [ -z "${FIX_ID}" ] || [ "${FIX_ID}" = "null" ]; then
+            echo "::warning::Skipping malformed judge fix-up entry (id='${FIX_ID}', title='${FIX_TITLE}') for tracking issue #${TRACKING_NUM}: both id and title are required."
+            continue
+          fi
 
           # --- Dedup guard: skip if this local ID already has a GitHub issue ---
           if [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
@@ -18993,9 +19004,18 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
       if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
         echo "Creating ${NEW_ISSUES_COUNT} new issue(s) from judge..."
         echo "${JUDGE_JSON}" | jq -c '.new_issues[]' | while read -r new_issue; do
-          NEW_TITLE="$(echo "${new_issue}" | jq -r '.title')"
-          NEW_BODY="$(echo "${new_issue}" | jq -r '.body' | sed 's/\\n/\n/g')"
-          NEW_ID="$(echo "${new_issue}" | jq -r '.id')"
+          NEW_TITLE="$(echo "${new_issue}" | jq -r '.title // ""')"
+          NEW_BODY="$(echo "${new_issue}" | jq -r '.body // ""' | sed 's/\\n/\n/g')"
+          NEW_ID="$(echo "${new_issue}" | jq -r '.id // ""')"
+
+          # Same guard as create_judge_fixup_issues_from_verdict: judge JSON
+          # is untrusted, and an entry without id+title cannot be created and
+          # tracked safely.
+          if [ -z "${NEW_TITLE}" ] || [ "${NEW_TITLE}" = "null" ] \
+            || [ -z "${NEW_ID}" ] || [ "${NEW_ID}" = "null" ]; then
+            echo "::warning::Skipping malformed judge new-issue entry (id='${NEW_ID}', title='${NEW_TITLE}') for tracking issue #${TRACKING_NUM}: both id and title are required."
+            continue
+          fi
 
           # --- Dedup guard: skip if this local ID already has a GitHub issue ---
           if [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
