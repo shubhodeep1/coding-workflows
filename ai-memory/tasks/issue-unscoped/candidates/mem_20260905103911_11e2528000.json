@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:remote_branch_tip() and fetch_from_origin() calls | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Git credential prompts can be triggered during remote operations, creating interactive prompts that could hang the hook\n  WHY: The hook could hang waiting for user input when it should fail fast\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:remote_branch_tip() and fetch_from_origin() calls | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Git credential prompts can be triggered during remote operations, creating interactive prompts that could hang the hook\n  WHY: The hook could hang waiting for user input when it should fail fast\n- .claude/hooks/pr_merge_status_guard.py:433 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The pre-existing `git ls-remote --symref origin HEAD` call in `default_branch()` lacks `GIT_TERMINAL_PROMPT=0`\n  WHY: If the origin remote requires credentials and no credential helper is configured, this `ls-remote` will block waiting for interactive input until the 5-second `_GIT_TIMEOUT_SECONDS` fires\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:433 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The pre-existing `git ls-remote --symref origin HEAD` call in `default_branch()` lacks `GIT_TERMINAL_PROMPT=0`\n  WHY: If the origin remote requires credentials and no credential helper is configured, this `ls-remote` will block waiting for interactive input until the 5-second `_GIT_TIMEOUT_SECONDS` fires\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The guard must never block the session or hang waiting for user input\"\n  expected_change_site: Remote git operations in pr_merge_status_guard.py\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The remote_branch_tip() and fetch_from_origin() functions call _run() without GIT_TERMINAL_PROMPT=0, which can trigger credential prompts\n- requirement: \"All hardened paths should have corresponding tests\"\n  expected_change_site: tests/test_pr_merge_status_guard.py\n  confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: No new tests verify GIT_TERMINAL_PROMPT=0 behavior for remote operations\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: .claude/hooks/pr_merge_status_guard.py\n  Code: remote_branch_tip() and fetch_from_origin() calls lack GIT_TERMINAL_PROMPT=0\n  Problem: Git credential prompts can be triggered during remote operations, creating interactive prompts that could hang the hook\n  Runtime impact: The hook could hang waiting for user input when it should fail fast\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- File: workflow-templates/.claude/hooks/pr_merge_status_guard.py\n  Code: remote_branch_tip() and fetch_from_origin() calls lack GIT_TERMINAL_PROMPT=0\n  Problem: Git credential prompts can be triggered during remote operations, creating interactive prompts that could hang the hook\n  Runtime impact: The hook could hang waiting for user input when it should fail fast\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"The guard must never block the session or hang waiting for user input\"\n  Expected change site: Remote git operations in pr_merge_status_guard.py\n  Evidence of absence: The remote_branch_tip() and fetch_from_origin() functions call _run() without GIT_TERMINAL_PROMPT=0, which can trigger credential prompts\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"All hardened paths should have corresponding tests\"\n  Expected change site: tests/test_pr_merge_status_guard.py\n  Evidence of absence: No new tests verify GIT_TERMINAL_PROMPT=0 behavior for remote operations\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: .claude/hooks/pr_merge_status_guard.py\n  Line or code reference: line 433 \u2014 `default_branch()` fallback `git ls-remote --symref origin HEAD`\n  Problem: The LAST RUN DIFF hardened `remote_branch_tip()` (line 503) and `fetch_from_origin()` (line 522) with `env GIT_TERMINAL_PROMPT=0` to prevent credential prompts from hanging the hook, but the pre-existing `git ls-remote --symref origin HEAD` call in `default_branch()` at line 433 is a network-bound git call with the same credential-prompt risk and was not hardened.\n  Why it fails at runtime: If the origin remote requires credentials and no credential helper is configured, this `ls-remote` will block waiting for interactive input until the 5-second `_GIT_TIMEOUT_SECONDS` fires. The two new probes have a 15-second timeout (`_GIT_REMOTE_TIMEOUT_SECONDS`), so this older call would time out sooner \u2014 but it still wastes 5 seconds of the hook budget on a prompt that cannot be answered, and the same `GIT_TERMINAL_PROMPT=0` fix applied to the other two probes would make it fail fast instead. The workflow-templates mirror at line 433 has the same gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- File: workflow-templates/.claude/hooks/pr_merge_status_guard.py\n  Line or code reference: line 433 \u2014 `default_branch()` fallback `git ls-remote --symref origin HEAD`\n  Problem: The LAST RUN DIFF hardened `remote_branch_tip()` (line 503) and `fetch_from_origin()` (line 522) with `env GIT_TERMINAL_PROMPT=0` to prevent credential prompts from hanging the hook, but the pre-existing `git ls-remote --symref origin HEAD` call in `default_branch()` at line 433 is a network-bound git call with the same credential-prompt risk and was not hardened.\n  Why it fails at runtime: If the origin remote requires credentials and no credential helper is configured, this `ls-remote` will block waiting for interactive input until the 5-second `_GIT_TIMEOUT_SECONDS` fires. The two new probes have a 15-second timeout (`_GIT_REMOTE_TIMEOUT_SECONDS`), so this older call would time out sooner \u2014 but it still wastes 5 seconds of the hook budget on a prompt that cannot be answered, and the same `GIT_TERMINAL_PROMPT=0` fix applied to the other two probes would make it fail fast instead. The workflow-templates mirror at line 433 has the same gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "aa105b9d3c7fc6981f198cf34914575610df1f7ba69791a13a72aaa62dba957c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4002,
+    "run_id": "33957585867",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "33957585867",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260905103911_11e2528000",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4002,
+    "run_id": "33957585867"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-05T10:39:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
