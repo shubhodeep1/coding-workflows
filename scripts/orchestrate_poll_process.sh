@@ -17194,8 +17194,11 @@ sys.exit(1)
 **Remaining issues:** ${RB_REMAINING}
 **Requested fix:** ${RB_FIX_DESC}"
 
-      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
-        -f body="${RB_COMMENT}" >/dev/null 2>&1 || true
+      RB_COMMENT_POSTED="false"
+      if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
+        -f body="${RB_COMMENT}" >/dev/null 2>&1; then
+        RB_COMMENT_POSTED="true"
+      fi
 
       case "${RB_ACTION}" in
         merge)
@@ -17284,20 +17287,57 @@ sys.exit(1)
           elif [ -z "${RB_FIX_HEAD_SHA}" ] || [ -z "${RB_FIX_EXPECTED_HEAD_SHA}" ] \
             || [ "${RB_FIX_HEAD_SHA}" != "${RB_FIX_EXPECTED_HEAD_SHA}" ]; then
             echo "::warning::Judge chose fix for PR #${RB_PR}, but its head changed or could not be bound to the judged snapshot; no actuator action taken."
+          elif [ "${RB_COMMENT_POSTED}" != "true" ]; then
+            echo "::warning::Judge chose fix for PR #${RB_PR}, but the bounded guidance comment could not be published; no actuator action taken."
+          elif ! git check-ref-format "refs/heads/${RB_FIX_HEAD_REF}" >/dev/null 2>&1; then
+            echo "::warning::Judge chose fix for PR #${RB_PR}, but its live head ref is invalid; no actuator action taken."
           else
-            _rb_fix_dispatch_rc=0
-            _dispatch_review_for_conflicts "${RB_PR}" "${RB_FIX_HEAD_REF}" || _rb_fix_dispatch_rc=$?
-            if [ "${_rb_fix_dispatch_rc}" -eq 0 ]; then
-              gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
-                --remove-label 'ai:review-blocked' 2>/dev/null || true
-              jq ".review_blocked_retries[\"${rb_issue}\"] = $((RETRY_COUNT + 1))" \
-                "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-              REVIEW_BLOCKED_STATE_CHANGED=true
-              echo "  Trusted actuator dispatched review/autofix for PR #${RB_PR}."
-            elif [ "${_rb_fix_dispatch_rc}" -eq 2 ]; then
-              echo "  Review/autofix is already active for PR #${RB_PR}; leaving review-blocked state for convergence."
+            RB_FIX_REMOTE_TRACKING_REF="refs/remotes/origin/${RB_FIX_HEAD_REF}"
+            RB_FIX_FETCHED_HEAD_SHA=""
+            RB_FIX_HEAD_TREE_SHA=""
+            RB_FIX_BOUNDARY_COMMIT_SHA=""
+            if ! git fetch --no-tags origin "+refs/heads/${RB_FIX_HEAD_REF}:${RB_FIX_REMOTE_TRACKING_REF}" >/dev/null 2>&1; then
+              echo "::warning::Could not fetch the bound head for judge-requested fix on PR #${RB_PR}; no actuator action taken."
             else
-              echo "::warning::Could not dispatch review/autofix for judge-requested fix on PR #${RB_PR}."
+              RB_FIX_FETCHED_HEAD_SHA="$(git rev-parse --verify "${RB_FIX_REMOTE_TRACKING_REF}^{commit}" 2>/dev/null || echo '')"
+              if [ "${RB_FIX_FETCHED_HEAD_SHA}" != "${RB_FIX_EXPECTED_HEAD_SHA}" ]; then
+                echo "::warning::Judge-requested fix for PR #${RB_PR} raced a head update during fetch; no actuator action taken."
+              else
+                RB_FIX_HEAD_TREE_SHA="$(git rev-parse --verify "${RB_FIX_FETCHED_HEAD_SHA}^{tree}" 2>/dev/null || echo '')"
+                if [ -n "${RB_FIX_HEAD_TREE_SHA}" ]; then
+                  RB_FIX_BOUNDARY_COMMIT_SHA="$(
+                    GIT_AUTHOR_NAME="codex-bot" \
+                    GIT_AUTHOR_EMAIL="codex@users.noreply.github.com" \
+                    GIT_COMMITTER_NAME="codex-bot" \
+                    GIT_COMMITTER_EMAIL="codex@users.noreply.github.com" \
+                    git commit-tree "${RB_FIX_HEAD_TREE_SHA}" -p "${RB_FIX_FETCHED_HEAD_SHA}" <<EOF
+[judge-fix] request review-blocked correction for #${rb_issue}
+
+Trusted actuator created this no-tree-change boundary so review/autofix
+can apply the bounded guidance posted on PR #${RB_PR}.
+Retry $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}.
+EOF
+                  )"
+                fi
+                if ! [[ "${RB_FIX_BOUNDARY_COMMIT_SHA}" =~ ^[0-9a-f]{40,64}$ ]]; then
+                  echo "::warning::Could not create the [judge-fix] boundary commit for PR #${RB_PR}; no actuator action taken."
+                elif ! git push origin "${RB_FIX_BOUNDARY_COMMIT_SHA}:refs/heads/${RB_FIX_HEAD_REF}" >/dev/null 2>&1; then
+                  echo "::warning::Could not push the [judge-fix] boundary for PR #${RB_PR}; the head may have advanced, so no review dispatch was attempted."
+                else
+                  _rb_fix_dispatch_rc=0
+                  _dispatch_review_for_conflicts "${RB_PR}" "${RB_FIX_HEAD_REF}" || _rb_fix_dispatch_rc=$?
+                  if [ "${_rb_fix_dispatch_rc}" -eq 0 ] || [ "${_rb_fix_dispatch_rc}" -eq 2 ]; then
+                    gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+                      --remove-label 'ai:review-blocked' 2>/dev/null || true
+                    jq ".review_blocked_retries[\"${rb_issue}\"] = $((RETRY_COUNT + 1))" \
+                      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+                    REVIEW_BLOCKED_STATE_CHANGED=true
+                    echo "  Trusted actuator pushed a [judge-fix] boundary and accepted review/autofix continuation for PR #${RB_PR}."
+                  else
+                    echo "::warning::Pushed the [judge-fix] boundary for PR #${RB_PR}, but could not dispatch review/autofix; the synchronize event remains the fallback."
+                  fi
+                fi
+              fi
             fi
           fi
           ;;

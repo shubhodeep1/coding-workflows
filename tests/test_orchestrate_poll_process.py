@@ -2583,6 +2583,19 @@ if len(args) >= 2 and args[0] == 'push' and os.environ.get('MOCK_GIT_PUSH_SUCCES
 	store_path.write_text(json.dumps(store), encoding='utf-8')
 	sys.exit(0)
 
+if args and args[0] == 'commit-tree':
+	commit_message = sys.stdin.read()
+	proc = subprocess.run([real_git, *args], input=commit_message, capture_output=True, text=True)
+	store.setdefault('git_commit_tree_calls', []).append({
+		'args': args[1:],
+		'message': commit_message,
+		'sha': proc.stdout.strip(),
+	})
+	store_path.write_text(json.dumps(store), encoding='utf-8')
+	sys.stdout.write(proc.stdout)
+	sys.stderr.write(proc.stderr)
+	sys.exit(proc.returncode)
+
 if args and args[0] == 'checkout' and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '') == 'true':
 	sys.exit(1)
 
@@ -5528,6 +5541,7 @@ def test_review_blocked_fix_dispatches_existing_review_actuator_for_open_pr():
 		"baseRefName": "main",
 		"headRefName": "ai/issue-10",
 		"headRefFromApi": "ai/issue-10",
+		"headSha": "__default_head__",
 		"mergeable": True,
 		"mergeable_state": "clean",
 		"title": "Test PR",
@@ -5547,10 +5561,57 @@ def test_review_blocked_fix_dispatches_existing_review_actuator_for_open_pr():
 			"fix_description": "Apply the validated correction through review/autofix.",
 			"remaining_issues_summary": "one correction remains",
 		},
+		mock_git_push_success=True,
 	)
 	assert any(dispatch["pr_number"] == 901 for dispatch in result["review_dispatches"])
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
-	assert "Trusted actuator dispatched review/autofix for PR #901" in result["stdout"]
+	assert len(result.get("git_commit_tree_calls", [])) == 1
+	boundary_call = result["git_commit_tree_calls"][0]
+	assert boundary_call["message"].startswith("[judge-fix] request review-blocked correction for #10\n")
+	assert boundary_call["args"][1:] == ["-p", result["prs"][0]["headSha"]]
+	assert any(
+		len(push_call) == 2
+		and push_call[0] == "origin"
+		and re.fullmatch(r"[0-9a-f]{40}:refs/heads/ai/issue-10", push_call[1])
+		for push_call in result.get("git_push_calls", [])
+	)
+	assert "pushed a [judge-fix] boundary" in result["stdout"]
+
+
+def test_review_blocked_fix_does_not_dispatch_when_boundary_push_fails():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 901},
+		prs=[{
+			"number": 901,
+			"state": "open",
+			"merged": False,
+			"merged_at": None,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"headSha": "__default_head__",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"title": "Test PR",
+			"body": "Body",
+		}],
+		existing_branches=["main"],
+		codex_json={
+			"action": "fix",
+			"justification": "review should apply a bounded correction",
+			"fix_description": "Apply the validated correction through review/autofix.",
+			"remaining_issues_summary": "one correction remains",
+		},
+	)
+	assert result["review_dispatches"] == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") is None
+	assert "Could not push the [judge-fix] boundary" in (result["stdout"] + result["stderr"])
 
 
 def test_review_blocked_oversized_fix_decision_performs_no_actuator_action():
