@@ -24,7 +24,7 @@ name: AI Orchestrate Poller (Reusable)
       OPENROUTER_API_KEY:
         required: true
       ORCHESTRATOR_STATE_AUTH_KEYRING:
-        required: false
+        required: true
       TG_BOT_SECRET:
         required: false
 

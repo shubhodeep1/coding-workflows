@@ -692,6 +692,23 @@ def test_path_count_and_rendered_output_are_strictly_bounded() -> None:
 		assert "Omitted" in context
 
 
+def test_emit_context_normalizes_raw_paths_before_filesystem_access() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "clean.py").write_text("normalized = True\n", encoding="utf-8")
+		context = emit_context(
+			[" src/clean.py, ", "not a probable path"],
+			root,
+			max_bytes=1024,
+		)
+		assert "--- FILE: src/clean.py " in context
+		assert "normalized = True" in context
+		assert "src/clean.py," not in context
+		assert "not a probable path" not in context
+		assert "Omitted 1 path(s)" in context
+
+
 def test_paths_file_extracts_destination_from_rename_porcelain() -> None:
 	"""`git status --porcelain` rename / copy entries have the form
 	`R  old/path.py -> new/path.py`. The destination path is what's

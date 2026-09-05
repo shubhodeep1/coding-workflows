@@ -13819,6 +13819,37 @@ def test_integration_conflict_invalid_judge_output_defers_without_terminalizing(
 	assert "preserving conflict state for the next poll tick" in result["stdout"]
 
 
+def test_integration_conflict_missing_head_sha_defers_without_consuming_lifetime_budget():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 1
+	state["integration_conflict_total_dispatches"] = 2
+	state["final_merge_pr"] = 905
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		prs=[{
+			"number": 905,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"headSha": "",
+			"mergeable": False,
+			"mergeable_state": "dirty",
+			"body": "",
+		}],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+	)
+	assert result["latest_state"]["status"] == "in_progress"
+	assert result["latest_state"]["integration_conflict_total_dispatches"] == 2
+	assert result["review_dispatches"] == []
+	assert "current head SHA is unavailable" in (result["stdout"] + result["stderr"])
+
+
 def test_integration_sync_conflict_existing_three_tick_test_still_escalates():
 	# Belt-and-braces: the historical
 	# test_sync_conflict_escalates_to_judge_immediately_after_retry_budget_exhausted

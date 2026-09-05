@@ -6267,7 +6267,7 @@ invoke_judge_for_integration_conflict() {
 	[[ "${final_pr}" =~ ^[1-9][0-9]*$ ]] || return 1
 	[[ "${integration_branch}" =~ ^[A-Za-z0-9._/-]{1,255}$ ]] || return 1
 	[[ "${default_branch}" =~ ^[A-Za-z0-9._/-]{1,255}$ ]] || return 1
-  [ -n "${expected_head_sha}" ] || return 2
+	[ -n "${expected_head_sha}" ] || return 1
 
   echo "  [integration-heal] Escalating to judge for final PR #${final_pr} (${integration_branch} -> ${default_branch})."
 
@@ -8135,6 +8135,10 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
   # Circuit breaker: after MAX retries, escalate to judge instead of
   # dispatching one more resolver run.
   if [ "${unresolved_ticks}" -ge "${effective_max_retries}" ]; then
+	if [ -z "${final_pr_head_sha}" ]; then
+		echo "::warning::Integration judge deferred for PR #${final_pr}: current head SHA is unavailable; preserving conflict state without consuming the lifetime budget."
+		return 0
+	fi
     local _integration_judge_rc=0
     invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" "${final_pr_head_sha}" || _integration_judge_rc=$?
     if [ "${_integration_judge_rc}" -eq 0 ]; then

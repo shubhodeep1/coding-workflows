@@ -584,10 +584,14 @@ def emit_context(
 	repo_root_resolved = repo_root.resolve()
 	bounded_paths: list[str] = []
 	for raw_path in paths[:MAX_TARGET_PATHS]:
-		if not isinstance(raw_path, str) or len(raw_path.encode("utf-8")) > MAX_TARGET_PATH_BYTES:
+		if not isinstance(raw_path, str):
 			omitted_entries += 1
 			continue
-		bounded_paths.append(raw_path)
+		normalized_candidate_path = normalize_path(raw_path)
+		if normalized_candidate_path is None:
+			omitted_entries += 1
+			continue
+		bounded_paths.append(normalized_candidate_path)
 	omitted_entries += max(0, len(paths) - MAX_TARGET_PATHS)
 
 	for rel in bounded_paths:

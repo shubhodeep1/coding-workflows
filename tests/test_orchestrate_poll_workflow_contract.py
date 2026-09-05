@@ -149,7 +149,7 @@ def test_contract_list_union_uses_isolated_hash_locked_pyyaml_before_git_credent
 def test_poller_state_auth_and_readonly_model_security_contract() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
-	assert "ORCHESTRATOR_STATE_AUTH_KEYRING:" in wf
+	assert "ORCHESTRATOR_STATE_AUTH_KEYRING:\n        required: true" in wf
 	assert "ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}" in wf
 	assert 'git remote set-url origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}.git"' in wf
 	assert 'echo "GIT_CONFIG_KEY_0=credential.helper"' in wf
