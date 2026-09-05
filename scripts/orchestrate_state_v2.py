@@ -113,6 +113,7 @@ STATE_AUTH_MIN_KEY_BYTES = 32
 STATE_AUTH_MAX_KEY_BYTES = 64
 STATE_AUTH_MAX_KEYRING_BYTES = 8192
 STATE_AUTH_KEY_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+STATE_AUTH_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,255}$")
 STATE_AUTH_MAX_GENERATION = 9_223_372_036_854_775_807
 
 V2_OPENER_RE = re.compile(
@@ -153,8 +154,8 @@ def _validated_auth_context(args: argparse.Namespace) -> tuple[dict[str, Any] | 
 		return None, "repository must be an owner/repo slug"
 	if tracking_issue < 1:
 		return None, "tracking issue must be a positive integer"
-	if integration_branch != f"orchestrator/project-{tracking_issue}":
-		return None, "integration branch does not match the tracking issue"
+	if STATE_AUTH_BRANCH_RE.fullmatch(integration_branch) is None:
+		return None, "integration branch is invalid"
 	if producer_id < 1:
 		return None, "producer id must be a positive integer"
 	if not producer_login or len(producer_login) > 100:

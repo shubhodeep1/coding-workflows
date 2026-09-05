@@ -549,6 +549,7 @@ def emit_context(
 	read_fallback_rendered = 0
 	off_suppressed = 0
 	omitted_entries = 0
+	semble_overflow_budget_exhausted = False
 	semble_max_chunks = _normalize_semble_max_chunks(semble_max_chunks)
 
 	def append_complete(fragment: str) -> bool:
@@ -633,7 +634,7 @@ def emit_context(
 				continue
 
 		remaining_bytes = content_byte_limit - rendered_bytes
-		if semble_query_text and remaining_bytes > 0:
+		if semble_query_text and remaining_bytes > 0 and not semble_overflow_budget_exhausted:
 			query_start = time.monotonic()
 			success, payload = _run_semble_query(
 				f"{rel}\n{semble_query_text}",
@@ -677,6 +678,7 @@ def emit_context(
 					semble_rendered += 1
 					continue
 				payload = "budget-exhausted"
+			semble_overflow_budget_exhausted = True
 			_log_semble_event(
 				"SEMBLE_FALLBACK",
 				target="overflow",

@@ -402,9 +402,8 @@ def test_empty_semble_clamp_stops_later_overflow_queries() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "src").mkdir()
-		(root / "src" / "small.py").write_text("a" * 9, encoding="utf-8")
 		for name in ("big.py", "later.py"):
-			(root / "src" / name).write_text("b" * 100, encoding="utf-8")
+			(root / "src" / name).write_text("b" * 1000, encoding="utf-8")
 		original_query = targeted_file_context_module._run_semble_query
 		query_calls: list[str] = []
 
@@ -415,17 +414,17 @@ def test_empty_semble_clamp_stops_later_overflow_queries() -> None:
 		targeted_file_context_module._run_semble_query = _query_once
 		try:
 			context = emit_context(
-				["src/small.py", "src/big.py", "src/later.py"],
+				["src/big.py", "src/later.py"],
 				root,
-				max_bytes=10,
+				max_bytes=320,
 				semble_query_text="task summary",
 			)
 		finally:
 			targeted_file_context_module._run_semble_query = original_query
 
-		assert len(query_calls) == 0
+		assert len(query_calls) == 1
 		assert "chunk-retrieved via semble" not in context
-		assert len(context.encode("utf-8")) <= 10
+		assert len(context.encode("utf-8")) <= 320
 
 
 def test_overflow_marker_remains_default_fallback_when_semble_unavailable() -> None:

@@ -5286,7 +5286,7 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 
 	followup_prs = [pr for pr in result["prs"] if int(pr.get("number", 0)) != 901]
 	assert followup_prs == []
-	assert "Judge chose fix for already-merged PR #901" in (result["stdout"] + result["stderr"])
+	assert "normalizing to merge_with_followup" in (result["stdout"] + result["stderr"])
 
 
 def test_review_blocked_merged_followup_refuses_default_base_when_active_integration_branch_unavailable():
@@ -5361,7 +5361,7 @@ def test_review_blocked_merged_followup_refuses_default_base_when_active_integra
 
 
 	assert len(result["prs"]) == 1
-	assert "Judge chose fix for already-merged PR #901" in (result["stdout"] + result["stderr"])
+	assert "normalizing to merge_with_followup" in (result["stdout"] + result["stderr"])
 
 
 def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_context():
@@ -5437,7 +5437,7 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 
 	followup_prs = [pr for pr in result["prs"] if int(pr.get("number", 0)) != 901]
 	assert followup_prs == []
-	assert "Judge chose fix for already-merged PR #901" in (result["stdout"] + result["stderr"])
+	assert "normalizing to merge_with_followup" in (result["stdout"] + result["stderr"])
 
 
 def test_review_blocked_followup_refusal_increments_retry_counter():
@@ -5586,7 +5586,79 @@ def test_review_blocked_oversized_fix_decision_performs_no_actuator_action():
 	)
 	assert result["review_dispatches"] == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") is None
-	assert "invalid or oversized decision" in (result["stdout"] + result["stderr"])
+	assert "invalid, oversized, or disallowed decision" in (result["stdout"] + result["stderr"])
+
+
+def test_review_blocked_final_fix_decision_performs_no_actuator_action():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	state["review_blocked_retries"]["10"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 903},
+		prs=[{
+			"number": 903,
+			"state": "open",
+			"merged": False,
+			"merged_at": None,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"title": "Test PR",
+			"body": "Body",
+		}],
+		existing_branches=["main"],
+		codex_json={
+			"action": "fix",
+			"justification": "retry despite the final-action boundary",
+			"fix_description": "This must not dispatch after retry exhaustion.",
+			"remaining_issues_summary": "one correction remains",
+		},
+	)
+	assert result["review_dispatches"] == []
+	assert result["latest_state"]["review_blocked_retries"]["10"] == 2
+	assert "normalizing to close_and_reissue" in (result["stdout"] + result["stderr"])
+	assert "ai:closed" in result["issues"]["10"]["labels"]
+
+
+def test_review_blocked_close_and_reissue_requires_replacement_details():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 904},
+		prs=[{
+			"number": 904,
+			"state": "open",
+			"merged": False,
+			"merged_at": None,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"title": "Test PR",
+			"body": "Body",
+		}],
+		existing_branches=["main"],
+		codex_json={
+			"action": "close_and_reissue",
+			"justification": "replacement details are missing",
+			"fix_description": "",
+			"remaining_issues_summary": "one correction remains",
+		},
+	)
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert "ai:closed" not in result["issues"]["10"]["labels"]
+	assert "invalid, oversized, or disallowed decision" in (result["stdout"] + result["stderr"])
 
 
 def test_sync_superseded_sets_state_once_and_skips_future_sync_attempts():
@@ -13704,6 +13776,47 @@ def test_integration_sync_conflict_non_orchestrator_branch_keeps_global_budget()
 		"expected NO integration judge invocation for non-orchestrator/project-* "
 		"branch with unresolved_ticks=1 (global budget INTEGRATION_CONFLICT_MAX_RETRIES=3 still applies)"
 	)
+
+
+def test_integration_sync_conflict_non_orchestrator_branch_escalates_after_global_budget():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "feature/manual-integration"
+	state["integration_conflict_unresolved_ticks"] = 3
+	state["integration_conflict_dispatch_ts"] = 9999999999
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "feature/manual-integration"],
+		merge_conflict_on_sync=True,
+		codex_json={"action": "redispatch_resolver", "guidance": "Preserve both branches' validated intent."},
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("Integration judge invoked" in body for body in tracking_bodies)
+	assert len(result["review_dispatches"]) == 1
+	assert result["latest_state"]["integration_sync_status"] != "failed"
+	assert "invalid integration branch" not in (result["stdout"] + result["stderr"])
+
+
+def test_integration_conflict_invalid_judge_output_defers_without_terminalizing():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		codex_json={},
+	)
+	assert result["latest_state"]["status"] == "in_progress"
+	assert result["latest_state"]["integration_sync_status"] != "failed"
+	assert result["latest_state"]["integration_conflict_total_dispatches"] == 1
+	assert result["review_dispatches"] == []
+	assert "preserving conflict state for the next poll tick" in result["stdout"]
 
 
 def test_integration_sync_conflict_existing_three_tick_test_still_escalates():

@@ -170,7 +170,7 @@ fi
 
 # Run untrusted model-facing commands without GitHub, Telegram, state-auth,
 # Git, or other ambient credentials. Codex keeps provider access, while its
-# tool sandbox is always read-only and network-disabled.
+# spawned tools cannot inherit secret-named variables.
 poller_run_sanitized_command() {
   local -a sanitized_command_environment=(env -i \
     HOME="${HOME:-}" \
@@ -204,6 +204,8 @@ poller_run_readonly_model() {
     codex --ask-for-approval never \
       -c model_verbosity=low \
       -c include_apply_patch_tool=true \
+      -c web_search=disabled \
+      -c shell_environment_policy.ignore_default_excludes=false \
       exec --skip-git-repo-check \
       --model "${model_name}" \
       --sandbox read-only \
@@ -2408,24 +2410,21 @@ extract_orchestrator_state_payload() {
 }
 
 is_valid_orchestrator_state_json() {
-  local state_json="$1"
-  local expected_tracking_num="${2:-${TRACKING_NUM:-}}"
-  local expected_integration_branch=""
-  if [[ "${expected_tracking_num}" =~ ^[0-9]+$ ]]; then
-    expected_integration_branch="orchestrator/project-${expected_tracking_num}"
-  fi
-  printf '%s' "${state_json}" | jq -e --arg expected_branch "${expected_integration_branch}" '
-    type == "object" and
-    (.schema_version == "orchestrate_state.v1") and
-    (.status | type == "string") and
-    (.waves | type == "array") and
-    (.current_wave | type == "number") and
-    (.total_waves | type == "number") and
-    (.issue_number_map | type == "object") and
-    (.pending_issue_defs | type == "object") and
-    ((.integration_branch // "") | type == "string") and
-    (((.integration_branch // "") == "") or ((.integration_branch // "") == $expected_branch))
-  ' >/dev/null 2>&1
+	local state_json="$1"
+	local expected_tracking_num="${2:-${TRACKING_NUM:-}}"
+	local branch_name_re='^[A-Za-z0-9._/-]{1,255}$'
+	printf '%s' "${state_json}" | jq -e --arg branch_name_re "${branch_name_re}" '
+		type == "object" and
+		(.schema_version == "orchestrate_state.v1") and
+		(.status | type == "string") and
+		(.waves | type == "array") and
+		(.current_wave | type == "number") and
+		(.total_waves | type == "number") and
+		(.issue_number_map | type == "object") and
+		(.pending_issue_defs | type == "object") and
+		((.integration_branch // "") | type == "string") and
+		(((.integration_branch // "") == "") or ((.integration_branch // "") | test($branch_name_re)))
+	' >/dev/null 2>&1
 }
 
 extract_latest_valid_orchestrator_state() {
@@ -2439,7 +2438,7 @@ extract_latest_valid_orchestrator_state() {
   local trusted_comments_json
   local expected_integration_branch=""
   local candidate_integration_branch
-  local candidate_auth_file candidate_auth_rc
+	local candidate_auth_file candidate_auth_rc candidate_verification_branch
 
   EXTRACTED_STATE_JSON=""
   EXTRACTED_STATE_FALLBACK_USED="false"
@@ -2517,21 +2516,22 @@ extract_latest_valid_orchestrator_state() {
     elif [ "${_v2_payload_bytes}" -gt $((8 * 1024 * 1024)) ]; then
       echo "::warning::V2 state extract payload is ${_v2_payload_bytes} bytes (>8 MiB cap); rejecting and falling back to V1 for issue #${TRACKING_NUM:-?}." >&2
     else
-      candidate_state="$(cat "${_v2_payload_file}")"
-      candidate_integration_branch="$(printf '%s' "${candidate_state}" | jq -r '.integration_branch // ""' 2>/dev/null || echo "")"
-      if [ -n "${candidate_integration_branch}" ] && [ "${candidate_integration_branch}" != "${expected_integration_branch}" ]; then
-        EXTRACTED_STATE_BRANCH_MISMATCH_COUNT=$((EXTRACTED_STATE_BRANCH_MISMATCH_COUNT + 1))
-      fi
-      if is_valid_orchestrator_state_json "${candidate_state}" "${expected_tracking_num}"; then
-        candidate_auth_rc=1
-        python3 scripts/orchestrate_state_v2.py verify \
-          --state-file "${_v2_payload_file}" \
-          --repository "${GITHUB_REPOSITORY}" \
-          --tracking-issue "${expected_tracking_num}" \
-          --integration-branch "${expected_integration_branch}" \
-          --producer-id "${ORCHESTRATOR_STATE_PRODUCER_ID}" \
-          --producer-login "${ORCHESTRATOR_STATE_PRODUCER_LOGIN}" >/dev/null 2>&1 \
-          && candidate_auth_rc=0
+		candidate_state="$(cat "${_v2_payload_file}")"
+		candidate_integration_branch="$(printf '%s' "${candidate_state}" | jq -r '.integration_branch // ""' 2>/dev/null || echo "")"
+		if [ -n "${candidate_integration_branch}" ] && ! [[ "${candidate_integration_branch}" =~ ^[A-Za-z0-9._/-]{1,255}$ ]]; then
+			EXTRACTED_STATE_BRANCH_MISMATCH_COUNT=$((EXTRACTED_STATE_BRANCH_MISMATCH_COUNT + 1))
+		fi
+		if is_valid_orchestrator_state_json "${candidate_state}" "${expected_tracking_num}"; then
+			candidate_verification_branch="${candidate_integration_branch:-${expected_integration_branch}}"
+			candidate_auth_rc=1
+			python3 scripts/orchestrate_state_v2.py verify \
+				--state-file "${_v2_payload_file}" \
+				--repository "${GITHUB_REPOSITORY}" \
+				--tracking-issue "${expected_tracking_num}" \
+				--integration-branch "${candidate_verification_branch}" \
+				--producer-id "${ORCHESTRATOR_STATE_PRODUCER_ID}" \
+				--producer-login "${ORCHESTRATOR_STATE_PRODUCER_LOGIN}" >/dev/null 2>&1 \
+				&& candidate_auth_rc=0
         if [ "${candidate_auth_rc}" -eq 0 ]; then
           EXTRACTED_STATE_JSON="${candidate_state}"
           if ! printf '%s' "${candidate_state}" | jq -e '
@@ -2566,24 +2566,25 @@ extract_latest_valid_orchestrator_state() {
     candidate_id="$(printf '%s' "${candidate}" | jq -r '.id // empty' 2>/dev/null || echo "")"
     [ -n "${latest_state_comment_id}" ] || latest_state_comment_id="${candidate_id}"
     candidate_body="$(printf '%s' "${candidate}" | jq -r '.body // ""' 2>/dev/null || echo "")"
-    candidate_state="$(extract_orchestrator_state_payload "${candidate_body}")"
-    [ -n "${candidate_state}" ] || continue
-    candidate_integration_branch="$(printf '%s' "${candidate_state}" | jq -r '.integration_branch // ""' 2>/dev/null || echo "")"
-    if [ -n "${candidate_integration_branch}" ] && [ "${candidate_integration_branch}" != "${expected_integration_branch}" ]; then
-      EXTRACTED_STATE_BRANCH_MISMATCH_COUNT=$((EXTRACTED_STATE_BRANCH_MISMATCH_COUNT + 1))
-    fi
-    if is_valid_orchestrator_state_json "${candidate_state}" "${expected_tracking_num}"; then
-      candidate_auth_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v1_auth.XXXXXX")"
-      printf '%s' "${candidate_state}" > "${candidate_auth_file}"
-      candidate_auth_rc=1
-      python3 scripts/orchestrate_state_v2.py verify \
-        --state-file "${candidate_auth_file}" \
-        --repository "${GITHUB_REPOSITORY}" \
-        --tracking-issue "${expected_tracking_num}" \
-        --integration-branch "${expected_integration_branch}" \
-        --producer-id "${ORCHESTRATOR_STATE_PRODUCER_ID}" \
-        --producer-login "${ORCHESTRATOR_STATE_PRODUCER_LOGIN}" >/dev/null 2>&1 \
-        && candidate_auth_rc=0
+	candidate_state="$(extract_orchestrator_state_payload "${candidate_body}")"
+	[ -n "${candidate_state}" ] || continue
+	candidate_integration_branch="$(printf '%s' "${candidate_state}" | jq -r '.integration_branch // ""' 2>/dev/null || echo "")"
+	if [ -n "${candidate_integration_branch}" ] && ! [[ "${candidate_integration_branch}" =~ ^[A-Za-z0-9._/-]{1,255}$ ]]; then
+		EXTRACTED_STATE_BRANCH_MISMATCH_COUNT=$((EXTRACTED_STATE_BRANCH_MISMATCH_COUNT + 1))
+	fi
+	if is_valid_orchestrator_state_json "${candidate_state}" "${expected_tracking_num}"; then
+		candidate_verification_branch="${candidate_integration_branch:-${expected_integration_branch}}"
+		candidate_auth_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v1_auth.XXXXXX")"
+		printf '%s' "${candidate_state}" > "${candidate_auth_file}"
+		candidate_auth_rc=1
+		python3 scripts/orchestrate_state_v2.py verify \
+			--state-file "${candidate_auth_file}" \
+			--repository "${GITHUB_REPOSITORY}" \
+			--tracking-issue "${expected_tracking_num}" \
+			--integration-branch "${candidate_verification_branch}" \
+			--producer-id "${ORCHESTRATOR_STATE_PRODUCER_ID}" \
+			--producer-login "${ORCHESTRATOR_STATE_PRODUCER_LOGIN}" >/dev/null 2>&1 \
+			&& candidate_auth_rc=0
       rm -f "${candidate_auth_file}"
       if [ "${candidate_auth_rc}" -ne 0 ] \
         && printf '%s' "${candidate_state}" | jq -e 'has("state_auth")' >/dev/null 2>&1; then
@@ -6255,18 +6256,18 @@ EOF
 # than issue-scoped.
 #
 # Usage: invoke_judge_for_integration_conflict <final_pr> <integration_branch> <default_branch> <expected_head_sha>
-# Returns: 0 on successful invocation (not necessarily successful resolution),
-#          1 on setup/dispatch failure.
+# Returns: 0 on accepted resolver redispatch, 1 on invalid trusted input,
+#          2 on a retryable model, API, or dispatch failure.
 invoke_judge_for_integration_conflict() {
   local final_pr="$1"
   local integration_branch="$2"
   local default_branch="$3"
   local expected_head_sha="$4"
 
-  [[ "${final_pr}" =~ ^[1-9][0-9]*$ ]] || return 1
-  [ "${integration_branch}" = "orchestrator/project-${TRACKING_NUM}" ] || return 1
-  [[ "${default_branch}" =~ ^[A-Za-z0-9._/-]{1,255}$ ]] || return 1
-  [ -n "${expected_head_sha}" ] || return 1
+	[[ "${final_pr}" =~ ^[1-9][0-9]*$ ]] || return 1
+	[[ "${integration_branch}" =~ ^[A-Za-z0-9._/-]{1,255}$ ]] || return 1
+	[[ "${default_branch}" =~ ^[A-Za-z0-9._/-]{1,255}$ ]] || return 1
+  [ -n "${expected_head_sha}" ] || return 2
 
   echo "  [integration-heal] Escalating to judge for final PR #${final_pr} (${integration_branch} -> ${default_branch})."
 
@@ -6286,7 +6287,7 @@ invoke_judge_for_integration_conflict() {
 
   if ! assemble_judge_static_context "${judge_static_file}"; then
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
-    return 1
+    return 2
   fi
 
   local pr_diff
@@ -6402,7 +6403,7 @@ invoke_judge_for_integration_conflict() {
   if ! poller_run_readonly_model "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/integration_judge.log" "${MODEL_EDITOR:-openai/gpt-5.6-sol}"; then
     echo "::warning::Judge exec failed for integration conflict on PR #${final_pr}."
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
-    return 1
+    return 2
   fi
 
   local judge_decision judge_guidance resolver_dispatch_rc live_pr_json live_pr_state live_pr_head_sha live_pr_head_ref
@@ -6414,7 +6415,7 @@ invoke_judge_for_integration_conflict() {
     ' >/dev/null 2>&1; then
     echo "::warning::Integration-conflict judge returned an invalid or oversized decision for PR #${final_pr}."
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
-    return 1
+    return 2
   fi
   judge_guidance="$(printf '%s' "${judge_decision}" | jq -r '.guidance')"
   # The earlier final-PR payload is intentionally not reused: the model call
@@ -6428,7 +6429,7 @@ invoke_judge_for_integration_conflict() {
     || [ "${live_pr_head_ref}" != "${integration_branch}" ]; then
     echo "::warning::Integration-conflict judge decision no longer matches the live PR state/head for #${final_pr}; no actuator action taken."
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
-    return 1
+    return 2
   fi
   # Existing PR metadata reads cannot carry new judge guidance to the resolver;
   # one bounded comment is therefore required before the existing dispatch.
@@ -6438,7 +6439,7 @@ invoke_judge_for_integration_conflict() {
 ${judge_guidance}" >/dev/null 2>&1; then
     echo "::warning::Could not publish bounded integration-conflict guidance for PR #${final_pr}."
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
-    return 1
+    return 2
   fi
   resolver_dispatch_rc=0
   _dispatch_review_for_conflicts "${final_pr}" "${integration_branch}" || resolver_dispatch_rc=$?
@@ -6447,7 +6448,7 @@ ${judge_guidance}" >/dev/null 2>&1; then
     echo "  [integration-heal] Trusted actuator accepted judge guidance for PR #${final_pr}."
     return 0
   fi
-  return 1
+  return 2
 }
 
 # _refresh_integration_resolver_tooling — copy the resolver toolchain
@@ -8134,7 +8135,9 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
   # Circuit breaker: after MAX retries, escalate to judge instead of
   # dispatching one more resolver run.
   if [ "${unresolved_ticks}" -ge "${effective_max_retries}" ]; then
-    if invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" "${final_pr_head_sha}"; then
+    local _integration_judge_rc=0
+    invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" "${final_pr_head_sha}" || _integration_judge_rc=$?
+    if [ "${_integration_judge_rc}" -eq 0 ]; then
       # Reset unresolved ticks so the resolver loop can resume after
       # the judge's push. Keep dispatch_count as audit trail.
       # integration_conflict_total_dispatches counts judge invocations
@@ -8150,6 +8153,15 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
       post_tracking_comment "## 🛠️ Integration judge invoked
 
 Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did not become mergeable after ${effective_max_retries} automated resolver attempts. The judge has been invoked with full PR context to resolve conflicts. The poller will retry merge on the next tick."
+      return 0
+    fi
+    if [ "${_integration_judge_rc}" -eq 2 ]; then
+      total_dispatches=$((total_dispatches + 1))
+      jq --argjson total "${total_dispatches}" \
+        '.integration_conflict_total_dispatches = $total' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment || true
+      echo "::warning::Integration judge could not produce an actionable decision for PR #${final_pr}; preserving conflict state for the next poll tick."
       return 0
     fi
     jq --arg err "judge escalation failed: ${error_msg}" \
@@ -8281,13 +8293,13 @@ sync_default_into_integration_branch() {
   if [ "${integration_branch}" = "${default_branch}" ]; then
     return 0
   fi
-  if [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
-    expected_integration_branch="orchestrator/project-${TRACKING_NUM}"
-  fi
-  if [ -z "${expected_integration_branch}" ] || [ "${integration_branch}" != "${expected_integration_branch}" ]; then
-    echo "::warning::Integration sync rejected: integration=${integration_branch} outcome=ineligible reason=branch_binding_mismatch"
-    return 1
-  fi
+	if [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
+		expected_integration_branch="orchestrator/project-${TRACKING_NUM}"
+	fi
+	if ! [[ "${integration_branch}" =~ ^[A-Za-z0-9._/-]{1,255}$ ]]; then
+		echo "::warning::Integration sync rejected: integration=${integration_branch} outcome=ineligible reason=invalid_branch"
+		return 1
+	fi
 
   sync_status="$(jq -r '.sync.status // "active"' "${STATE_FILE}")"
   prev_conflict_fingerprint="$(jq -r '.sync.last_conflict_fingerprint // ""' "${STATE_FILE}")"
@@ -12873,10 +12885,10 @@ run_standalone_stall_recovery() {
         echo "::warning::State-comment authentication failed while identifying orchestrator-managed issues; skipping standalone stall recovery this cycle." >&2
         return
       fi
-      if [ "${EXTRACTED_STATE_BRANCH_MISMATCH_COUNT:-0}" -gt 0 ]; then
-        echo "::warning::Authenticated state branch mismatch while identifying orchestrator-managed issues; skipping standalone stall recovery this cycle." >&2
-        return
-      fi
+		if [ "${EXTRACTED_STATE_BRANCH_MISMATCH_COUNT:-0}" -gt 0 ]; then
+			echo "::warning::Authenticated state has an invalid integration branch while identifying orchestrator-managed issues; skipping standalone stall recovery this cycle." >&2
+			return
+		fi
       managed_nums="$(printf '%s' "${t_state_json}" | jq -r '.waves[]?.issues[]?.github_issue // empty' 2>/dev/null || true)"
       if [ -n "${managed_nums}" ]; then
         orchestrator_managed_set="${orchestrator_managed_set}"$'\n'"${managed_nums}"
@@ -14684,10 +14696,10 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     if [ "${EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT:-0}" -gt 0 ]; then
       echo "::warning::Rejected ${EXTRACTED_STATE_UNTRUSTED_MARKER_COUNT} unauthenticated orchestrator state comment(s) for tracking issue #${TRACKING_NUM}; continuing reconstruction from trusted project inputs only."
     fi
-    if [ "${EXTRACTED_STATE_BRANCH_MISMATCH_COUNT:-0}" -gt 0 ]; then
-      echo "::warning::Rejected authenticated orchestrator state for tracking issue #${TRACKING_NUM} because its integration branch is not orchestrator/project-${TRACKING_NUM}; skipping state reconstruction this cycle."
-      continue
-    fi
+		if [ "${EXTRACTED_STATE_BRANCH_MISMATCH_COUNT:-0}" -gt 0 ]; then
+			echo "::warning::Rejected authenticated orchestrator state for tracking issue #${TRACKING_NUM} because its integration branch name is invalid; skipping state reconstruction this cycle."
+			continue
+		fi
     if [ "${STATE_COMMENT_COUNT}" -gt 0 ]; then
       echo "::warning::No valid ORCHESTRATOR_STATE_V1 comment found for tracking issue #${TRACKING_NUM}. Attempting state reconstruction..."
     else
@@ -16936,7 +16948,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       IS_FINAL="false"
       if [ "${RETRY_COUNT}" -ge "${MAX_REVIEW_BLOCKED_RETRIES}" ]; then
         IS_FINAL="true"
-        echo "  Retries exhausted — judge will make final decision (merge or close+reissue)."
+        echo "  Retries exhausted — judge will make final decision (merge, merge_with_followup, or close+reissue)."
       fi
 
       # The review-blocked judge is decision-only. It never receives a writable
@@ -17082,17 +17094,59 @@ sys.exit(1)
         continue
       fi
 
-      if ! printf '%s' "${RB_JUDGE_JSON}" | jq -e '
+      RB_RAW_ACTION="$(printf '%s' "${RB_JUDGE_JSON}" | jq -r '.action // empty' 2>/dev/null || echo '')"
+      if [ "${RB_RAW_ACTION}" = "fix" ] \
+        && printf '%s' "${RB_JUDGE_JSON}" | jq -e '(.fix_description | type == "string" and length > 0 and length <= 4000)' >/dev/null 2>&1; then
+        if [ "${RB_TARGET_MERGED}" = "true" ]; then
+          RB_JUDGE_JSON="$(printf '%s' "${RB_JUDGE_JSON}" | jq -c --arg issue "${rb_issue}" --arg pr "${RB_PR}" '
+            .action = "merge_with_followup"
+            | .followup_issue = {
+                title: ("Follow-up fixes for issue #" + $issue),
+                body: ("PR #" + $pr + " was already merged. Apply the deferred review-blocked fix below.\n\n" + .fix_description)
+              }
+          ')"
+          echo "::warning::Judge chose fix for already-merged PR #${RB_PR}; normalizing to merge_with_followup."
+        elif [ "${IS_FINAL}" = "true" ]; then
+          RB_JUDGE_JSON="$(printf '%s' "${RB_JUDGE_JSON}" | jq -c --arg issue "${rb_issue}" --arg pr "${RB_PR}" '
+            .action = "close_and_reissue"
+            | .new_issue = {
+                title: ("Rework review-blocked issue #" + $issue),
+                body: ("PR #" + $pr + " exhausted its review-blocked fix budget. Rework the issue with this required correction:\n\n" + .fix_description)
+              }
+          ')"
+          echo "::warning::Judge chose fix after retries were exhausted for PR #${RB_PR}; normalizing to close_and_reissue."
+        fi
+      fi
+
+      if ! printf '%s' "${RB_JUDGE_JSON}" | jq -e \
+        --argjson is_final "${IS_FINAL}" \
+        --argjson target_merged "${RB_TARGET_MERGED}" '
           type == "object"
           and (.action | IN("merge", "fix", "merge_with_followup", "close_and_reissue"))
+          and ($is_final == false or .action != "fix")
+          and ($target_merged == false or .action != "fix")
           and ((.justification // "") | type == "string" and length <= 4000)
           and ((.fix_description // "") | type == "string" and length <= 4000)
+          and (.action != "fix" or ((.fix_description // "") | length > 0))
           and ((.remaining_issues_summary // "") | type == "string" and length <= 4000)
           and ((.followup_issue // {}) | type == "object")
           and (((.followup_issue // {}).title // "") | type == "string" and length <= 240)
           and (((.followup_issue // {}).body // "") | type == "string" and length <= 12000)
+          and (.action != "merge_with_followup" or (
+            ((.followup_issue // {}).title // "") | length > 0
+          ) and (
+            ((.followup_issue // {}).body // "") | length > 0
+          ))
+          and ((.new_issue // {}) | type == "object")
+          and (((.new_issue // {}).title // "") | type == "string" and length <= 240)
+          and (((.new_issue // {}).body // "") | type == "string" and length <= 12000)
+          and (.action != "close_and_reissue" or (
+            ((.new_issue // {}).title // "") | length > 0
+          ) and (
+            ((.new_issue // {}).body // "") | length > 0
+          ))
         ' >/dev/null 2>&1; then
-        echo "::warning::Review-blocked judge returned an invalid or oversized decision for #${rb_issue}; no actuator action taken."
+        echo "::warning::Review-blocked judge returned an invalid, oversized, or disallowed decision for #${rb_issue}; no actuator action taken."
         continue
       fi
 

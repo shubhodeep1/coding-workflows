@@ -158,6 +158,8 @@ def test_poller_state_auth_and_readonly_model_security_contract() -> None:
 	assert "poller_run_sanitized_command()" in poller
 	assert "poller_run_readonly_model()" in poller
 	assert "--sandbox read-only" in poller
+	assert "-c web_search=disabled" in poller
+	assert "-c shell_environment_policy.ignore_default_excludes=false" in poller
 	assert "--sandbox danger-full-access" not in poller
 	assert "x-access-token:${GH_TOKEN}" not in poller
 	runner_block = poller.split("poller_run_sanitized_command() {", 1)[1].split("\n}", 1)[0]
