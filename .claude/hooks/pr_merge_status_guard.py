@@ -500,7 +500,9 @@ def remote_branch_tip(branch: str, cwd: str) -> str | None:
 	branch; None when origin could not be queried."""
 	ref = f"refs/heads/{branch}"
 	code, out, _ = _run(
-		["git", "ls-remote", "--heads", "origin", ref], cwd, _GIT_REMOTE_TIMEOUT_SECONDS
+		["env", "GIT_TERMINAL_PROMPT=0", "git", "ls-remote", "--heads", "origin", ref],
+		cwd,
+		_GIT_REMOTE_TIMEOUT_SECONDS,
 	)
 	if code != 0:
 		return None
@@ -517,7 +519,9 @@ def fetch_from_origin(refs: list[str], cwd: str) -> bool:
 	if not refs:
 		return True
 	code, _, _ = _run(
-		["git", "fetch", "--quiet", "origin", "--", *refs], cwd, _GIT_REMOTE_TIMEOUT_SECONDS
+		["env", "GIT_TERMINAL_PROMPT=0", "git", "fetch", "--quiet", "origin", "--", *refs],
+		cwd,
+		_GIT_REMOTE_TIMEOUT_SECONDS,
 	)
 	return code == 0
 
