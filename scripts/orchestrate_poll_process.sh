@@ -17310,7 +17310,7 @@ sys.exit(1)
                     GIT_AUTHOR_EMAIL="codex@users.noreply.github.com" \
                     GIT_COMMITTER_NAME="codex-bot" \
                     GIT_COMMITTER_EMAIL="codex@users.noreply.github.com" \
-                    git commit-tree "${RB_FIX_HEAD_TREE_SHA}" -p "${RB_FIX_FETCHED_HEAD_SHA}" <<EOF
+                    git commit-tree "${RB_FIX_HEAD_TREE_SHA}" -p "${RB_FIX_FETCHED_HEAD_SHA}" <<EOF || echo ''
 [judge-fix] request review-blocked correction for #${rb_issue}
 
 Trusted actuator created this no-tree-change boundary so review/autofix

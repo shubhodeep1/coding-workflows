@@ -2583,6 +2583,10 @@ if len(args) >= 2 and args[0] == 'push' and os.environ.get('MOCK_GIT_PUSH_SUCCES
 	store_path.write_text(json.dumps(store), encoding='utf-8')
 	sys.exit(0)
 
+if args and args[0] == 'commit-tree' and os.environ.get('MOCK_GIT_COMMIT_TREE_FAIL', '') == 'true':
+	sys.stdin.read()
+	sys.exit(1)
+
 if args and args[0] == 'commit-tree':
 	commit_message = sys.stdin.read()
 	proc = subprocess.run([real_git, *args], input=commit_message, capture_output=True, text=True)
@@ -3167,9 +3171,9 @@ sys.exit(proc.returncode)
 				"STATE_FILE": str(runtime_dir / "state.json"),
 				"JUDGE_PROMPT_FILE": str(runtime_dir / "judge_prompt.txt"),
 				"JUDGE_OUTPUT_FILE": str(runtime_dir / "judge_output.txt"),
-					"GH_TOKEN": "test-token",
-					"ORCHESTRATOR_STATE_AUTH_KEYRING": _state_auth_keyring(),
-					"OPENROUTER_API_KEY": "test-openrouter",
+				"GH_TOKEN": "test-token",
+				"ORCHESTRATOR_STATE_AUTH_KEYRING": _state_auth_keyring(),
+				"OPENROUTER_API_KEY": "test-openrouter",
 				"GITHUB_REPOSITORY": "owner/repo",
 				"MODEL_EDITOR": "openai/gpt-5.4",
 				"MODEL_REASONING_EFFORT_JUDGE": "xhigh",
@@ -5612,6 +5616,46 @@ def test_review_blocked_fix_does_not_dispatch_when_boundary_push_fails():
 	assert result["review_dispatches"] == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") is None
 	assert "Could not push the [judge-fix] boundary" in (result["stdout"] + result["stderr"])
+
+
+def test_review_blocked_fix_commit_tree_failure_continues_without_dispatch_or_retry():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 901},
+		prs=[{
+			"number": 901,
+			"state": "open",
+			"merged": False,
+			"merged_at": None,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"headSha": "__default_head__",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"title": "Test PR",
+			"body": "Body",
+		}],
+		existing_branches=["main"],
+		codex_json={
+			"action": "fix",
+			"justification": "review should apply a bounded correction",
+			"fix_description": "Apply the validated correction through review/autofix.",
+			"remaining_issues_summary": "one correction remains",
+		},
+		mock_git_push_success=True,
+		env_overrides={"MOCK_GIT_COMMIT_TREE_FAIL": "true"},
+	)
+	assert result["review_dispatches"] == []
+	assert result.get("git_push_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") is None
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert "Could not create the [judge-fix] boundary commit" in (result["stdout"] + result["stderr"])
 
 
 def test_review_blocked_oversized_fix_decision_performs_no_actuator_action():
