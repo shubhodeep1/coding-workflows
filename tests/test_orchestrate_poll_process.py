@@ -812,6 +812,7 @@ def _run_poller(
 	compare_ahead_by: int = 0,
 	compare_ahead_by_sequence: list[int] | None = None,
 	compare_ahead_by_force_error: bool = False,
+	compare_commit_parent_counts: list[int] | None = None,
 	mock_validation_history_payload: dict | None = None,
 	mock_validation_history_get_exit_code: int = 0,
 	mock_validation_history_get_json: dict | None = None,
@@ -1188,6 +1189,9 @@ def _run_poller(
 			"compare_ahead_by": int(compare_ahead_by),
 			"compare_ahead_by_sequence": list(compare_ahead_by_sequence),
 			"compare_ahead_by_force_error": bool(compare_ahead_by_force_error),
+			"compare_commit_parent_counts": (
+				None if compare_commit_parent_counts is None else [int(n) for n in compare_commit_parent_counts]
+			),
 			"mock_validation_history_payload": mock_validation_history_payload,
 			"mock_validation_history_get_exit_code": mock_validation_history_get_exit_code,
 			"mock_validation_history_get_json": mock_validation_history_get_json,
@@ -2452,10 +2456,28 @@ if args[0] == 'api':
 				save()
 		else:
 			ahead_by = int(store.get('compare_ahead_by', 0))
+		compare_payload = {'ahead_by': ahead_by, 'behind_by': 0}
+		# Optional commit topology for the backpressure work-commit count:
+		# 'compare_commit_parent_counts' is a list of per-commit parent
+		# counts (1 = squash/regular commit, 2 = merge commit such as the
+		# poller's own `chore: sync main` merges). When absent the payload
+		# carries no `commits` key, which the helper treats as "unknown"
+		# and falls back to raw ahead_by — the pre-existing semantics that
+		# older tests pin.
+		parent_counts = store.get('compare_commit_parent_counts')
+		if parent_counts is not None:
+			compare_payload['commits'] = [
+				{'sha': 'c%04d' % idx, 'parents': [{'sha': 'p%d' % j} for j in range(int(n))]}
+				for idx, n in enumerate(parent_counts)
+			]
 		if jq == '.ahead_by':
 			print(ahead_by)
+		elif jq:
+			p = subprocess.run(['jq', '-r', jq], input=json.dumps(compare_payload), capture_output=True, text=True)
+			sys.stdout.write(p.stdout)
+			sys.exit(p.returncode)
 		else:
-			print(json.dumps({'ahead_by': ahead_by, 'behind_by': 0}))
+			print(json.dumps(compare_payload))
 		sys.exit(0)
 
 	m = re.search(r'/actions/runs(?:\?.*)?$', path)
@@ -3747,6 +3769,196 @@ def test_security_pass_closed_fix_without_merged_pr_terminalizes_recoverably() -
 	assert result["security_audit_capture"] is None
 	assert "SECURITY_PASS_FAILED reason=fix_issue_closed_without_merged_pr" in result["stdout"] + result["stderr"]
 	assert any("/re-security-pass" in comment["body"] for comment in result["issues"]["192"]["comments"])
+
+
+def _security_pass_reissued_fix_body(tracking_issue: int, cycle: int, parent_issue: int) -> str:
+	"""Body a stall-recovery re-issue of a security-pass fix issue carries.
+
+	`execute_stall_recovery_action` -> close_and_reissue copies the original
+	issue body verbatim and appends its footer, so both durable orchestrator
+	markers survive into the successor.
+	"""
+	return f"""Refs #{tracking_issue}
+
+---
+**Orchestrator metadata** (do not edit)
+- Tracking issue: #{tracking_issue}
+- Local ID: `security-pass-fix-cycle-{cycle}`
+- Managed by: AI Orchestrator
+
+---
+
+**⚠️ Re-issued from #{parent_issue}** — the previous issue stalled in the `ai:implementing` phase for 122 minutes despite 3 recovery attempt(s).
+"""
+
+
+def test_security_pass_closed_fix_adopts_stall_recovery_successor() -> None:
+	"""A closed-and-re-issued fix issue must be tracked, not failed.
+
+	Regression for project #3965: stall recovery closed security-pass fix
+	issue #3990 and re-issued it as #3993, but close_and_reissue only
+	re-points wave state (gated on a non-null local_id), so
+	security_pass_active_fix_issues stayed pinned to the closed
+	predecessor and the whole project was failed out from under a live
+	successor that later merged.
+	"""
+	state = _base_state(status="security-pass-fixing")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 1,
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [900],
+			"security_pass_head_sha": "audited-head",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			900: ["ai:closed", "ai:orchestrator-managed"],
+			901: ["ai:implementing", "ai:orchestrator-managed"],
+		},
+		issue_bodies={901: _security_pass_reissued_fix_body(192, 2, 900)},
+		issue_closed={900: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	for persisted_state in (result["state_on_disk"], result["latest_state"]):
+		assert persisted_state["status"] == "security-pass-fixing"
+		assert persisted_state["security_pass_status"] == "blocked"
+		assert persisted_state["security_pass_active_fix_issues"] == [901]
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	assert result["security_audit_capture"] is None
+	combined_log = result["stdout"] + result["stderr"]
+	assert (
+		"SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED tracking_issue=192 "
+		"closed_issue=900 successor=901" in combined_log
+	)
+	assert "SECURITY_PASS_FAILED" not in combined_log
+	tracking_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	assert any("re-issued as #901" in body for body in tracking_comments)
+	assert not any("/re-security-pass" in body for body in tracking_comments)
+
+
+def test_security_pass_closed_fix_ignores_other_project_and_other_cycle_markers() -> None:
+	"""Successor adoption must match both durable markers, not just one."""
+	state = _base_state(status="security-pass-fixing")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 1,
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [900],
+			"security_pass_head_sha": "audited-head",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			900: ["ai:closed", "ai:orchestrator-managed"],
+			# Right cycle, wrong project.
+			902: ["ai:implementing", "ai:orchestrator-managed"],
+			# Right project, wrong cycle.
+			903: ["ai:implementing", "ai:orchestrator-managed"],
+		},
+		issue_bodies={
+			902: _security_pass_reissued_fix_body(1920, 2, 900),
+			903: _security_pass_reissued_fix_body(192, 3, 900),
+		},
+		issue_closed={900: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["security_pass_status"] == "failed"
+	assert result["latest_state"]["security_pass_active_fix_issues"] == []
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED" not in combined_log
+	assert "SECURITY_PASS_FAILED reason=fix_issue_closed_without_merged_pr" in combined_log
+
+
+def test_security_pass_closed_fix_successor_lookup_failure_retains_fixing_state() -> None:
+	"""An inconclusive successor lookup must retry, never terminalize.
+
+	Same fail-closed contract create_security_pass_fix_issue uses for its
+	dedupe lookup: a transient read failure must not be read as evidence.
+	"""
+	state = _base_state(status="security-pass-fixing")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 1,
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [900],
+			"security_pass_head_sha": "audited-head",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		fail_security_pass_managed_issue_lookup=True,
+		issue_labels={10: ["ai:merged"], 900: ["ai:closed", "ai:orchestrator-managed"]},
+		issue_closed={900: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result["latest_state"]["status"] == "security-pass-fixing"
+	assert result["latest_state"]["security_pass_status"] == "blocked"
+	assert result["latest_state"]["security_pass_active_fix_issues"] == [900]
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "successor lookup was inconclusive" in combined_log
+	assert "SECURITY_PASS_FAILED" not in combined_log
+
+
+def test_security_pass_fix_successor_malformed_state_is_inconclusive() -> None:
+	"""State parse and type failures must return the helper's retry code."""
+	poller_source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	successor_helper = _extract_bash_function(
+		poller_source, "resolve_security_pass_fix_successor() {"
+	)
+	with tempfile.TemporaryDirectory() as temp_dir:
+		temp_path = Path(temp_dir)
+		state_path = temp_path / "state.json"
+		harness_path = temp_path / "harness.sh"
+		api_call_path = temp_path / "api-called"
+		harness_path.write_text(
+			"set -uo pipefail\n"
+			f"STATE_FILE={str(state_path)!r}\n"
+			f"RUNTIME_DIR={str(temp_path)!r}\n"
+			"TRACKING_NUM=192\n"
+			"GITHUB_REPOSITORY=owner/repo\n"
+			f"API_CALL_PATH={str(api_call_path)!r}\n"
+			'gh_retry_to_file() { : > "${API_CALL_PATH}"; return 0; }\n'
+			+ successor_helper
+			+ "\ncheck_invalid_state() {\n"
+			+ '\tprintf \'%s\' "$1" > "${STATE_FILE}"\n'
+			+ "\tlocal invalid_state_rc=0\n"
+			+ "\tresolve_security_pass_fix_successor 900 || invalid_state_rc=$?\n"
+			+ "\tprintf '%s\\n' \"${invalid_state_rc}\"\n"
+			+ "}\n"
+			+ "check_invalid_state '{\"security_pass_cycle\":'\n"
+			+ "check_invalid_state '{\"security_pass_cycle\":\"invalid\"}'\n",
+			encoding="utf-8",
+		)
+		result = subprocess.run(
+			["bash", str(harness_path)], capture_output=True, text=True, check=False
+		)
+
+		assert result.returncode == 0, result.stderr
+		assert result.stdout.splitlines() == ["2", "2"]
+		assert not api_call_path.exists()
 
 
 def test_security_pass_judge_validation_route_blocks_then_clean_pass_dispatches() -> None:
@@ -9740,6 +9952,8 @@ def test_in_progress_judge_does_not_advance_when_fixups_added_to_current_wave():
 		"justification": "need fix-up",
 		"assessment": "Wave 1 merged but needs a fix",
 		"new_issues": [
+			"malformed scalar entry",
+			42,
 			{"id": "fixup-1", "title": "Fix-up 1", "body": "Fix the thing"},
 		],
 		"issues_to_revert": [],
@@ -9936,7 +10150,11 @@ def test_judge_repeat_fingerprint_breaker_escalates_after_limit():
 		codex_json=judge_json,
 	)
 	first_state = first["latest_state"]
-	assert first_state["recovery_count"] == 1
+	# A first-time finding is not charged against MAX_RECOVERY_ATTEMPTS
+	# (RECOVERY_COUNT_DISTINCT_FINDINGS defaults to false); it is recorded in
+	# the seen-on-failure ledger so the repeat below is charged.
+	assert first_state["recovery_count"] == 0
+	assert first_state["judge_failed_fingerprints"] == [first_state["judge_last_fingerprint"]]
 	assert first_state["judge_fingerprint_repeat_count"] == 1
 	assert first_state["judge_last_fingerprint"]
 	assert first_state["status"] == "in_progress"
@@ -9952,7 +10170,8 @@ def test_judge_repeat_fingerprint_breaker_escalates_after_limit():
 		codex_json=judge_json,
 	)
 	second_state = second["latest_state"]
-	assert second_state["recovery_count"] == 2
+	# Same fingerprint again: already in the ledger, so this cycle IS charged.
+	assert second_state["recovery_count"] == 1
 	assert second_state["judge_fingerprint_repeat_count"] == 2
 	assert second_state["status"] == "in_progress"
 	assert len(second.get("created_issues", [])) == 0
@@ -9975,8 +10194,10 @@ def test_judge_repeat_fingerprint_breaker_escalates_after_limit():
 	third_state = third["latest_state"]
 	assert third_state["status"] == "failed"
 	assert third_state["judge_fingerprint_repeat_count"] == 3
-	assert third_state["recovery_count"] == 2
+	assert third_state["recovery_count"] == 1
 	assert len(third.get("created_issues", [])) == 0
+	assert "RECOVERY_BUDGET_ACCOUNTING tracking_issue=192 charge=0" in third["stdout"]
+	assert 'reason="repeat-fingerprint breaker tripped; no recovery budget charge"' in third["stdout"]
 	assert "ai:blocked" in third["tracking_labels"]
 	tracking_bodies = [c.get("body", "") for c in third["issues"]["192"]["comments"]]
 	completion_comment = next(body for body in tracking_bodies if "<!-- orchestrator:completion-status -->" in body)
@@ -9991,6 +10212,386 @@ def test_judge_repeat_fingerprint_breaker_escalates_after_limit():
 	assert ":987" not in breaker_comment
 	assert "2026-01-01T12:39:56Z" not in breaker_comment
 	assert "cycle 7/10" not in breaker_comment
+
+
+def _failed_verdict(justification: str, new_issues: list[dict] | None = None) -> dict:
+	return {
+		"status": "failed",
+		"justification": justification,
+		"assessment": "assessment for: " + justification,
+		"new_issues": list(new_issues or []),
+		"issues_to_revert": [],
+	}
+
+
+def test_recovery_budget_not_consumed_by_distinct_findings_but_charged_on_any_repeat():
+	"""Regression for tele-funtoken-msg-scoring#3928: five consecutive failed
+	verdicts, each a *different* real defect that the dispatched fix-up
+	fixed, exhausted MAX_RECOVERY_ATTEMPTS=3 while the consecutive-repeat
+	breaker never fired. With RECOVERY_COUNT_DISTINCT_FINDINGS=false (the
+	default) a never-seen fingerprint is free; any fingerprint already in
+	the project's seen-on-failure ledger (consecutive OR ping-pong) is
+	charged, so a genuine A/B/A/B loop still burns budget."""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	findings = [
+		"draft epochs must run pool discovery in backend/sync.py:10",
+		"draft epochs must stay sync-inert in backend/sync.py:20",
+		"PoolManager cursor identity is unbound in backend/cursor.py:30",
+		"late email verification breaks the frozen cohort in backend/cohort.py:40",
+	]
+	current = state
+	for idx, justification in enumerate(findings):
+		result = _run_poller(
+			state=current,
+			enable_validation="false",
+			max_validate_cycles="3",
+			enable_clean_wave_judge_skip="false",
+			judge_repeat_fingerprint_max="2",
+			issue_labels={10: ["ai:merged"]},
+			codex_json=_failed_verdict(justification),
+			env_overrides={"MAX_RECOVERY_ATTEMPTS": "3"},
+		)
+		current = result["latest_state"]
+		assert current["status"] == "in_progress", f"cycle {idx + 1} must keep recovering"
+		assert current["recovery_count"] == 0, f"cycle {idx + 1}: a new finding must not consume budget"
+		assert len(current["judge_failed_fingerprints"]) == idx + 1
+		assert current["judge_fingerprint_repeat_count"] == 1
+		assert "RECOVERY_BUDGET_ACCOUNTING tracking_issue=192 charge=0" in result["stdout"]
+		assert 'reason="new finding; not charged against MAX_RECOVERY_ATTEMPTS"' in result["stdout"]
+
+	# Ping-pong back to the first finding (not the immediately previous one,
+	# so the consecutive-repeat breaker stays quiet) — this IS charged.
+	result = _run_poller(
+		state=current,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		judge_repeat_fingerprint_max="2",
+		issue_labels={10: ["ai:merged"]},
+		codex_json=_failed_verdict(findings[0]),
+		env_overrides={"MAX_RECOVERY_ATTEMPTS": "3"},
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "in_progress"
+	assert ls["recovery_count"] == 1
+	assert ls["judge_fingerprint_repeat_count"] == 1
+	assert len(ls["judge_failed_fingerprints"]) == 4
+	assert "RECOVERY_BUDGET_ACCOUNTING tracking_issue=192 charge=1" in result["stdout"]
+	assert "fingerprint_seen_before=true" in result["stdout"]
+	assert "ai:blocked" not in result["tracking_labels"]
+
+
+def test_recovery_budget_legacy_flag_charges_every_failed_verdict():
+	"""RECOVERY_COUNT_DISTINCT_FINDINGS=true restores the pre-#3928
+	accounting: every failed verdict consumes one recovery attempt even
+	when its fingerprint has never been seen."""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	first = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		judge_repeat_fingerprint_max="5",
+		issue_labels={10: ["ai:merged"]},
+		codex_json=_failed_verdict("first distinct finding in a.py:1"),
+		env_overrides={"RECOVERY_COUNT_DISTINCT_FINDINGS": "true"},
+	)
+	second = _run_poller(
+		state=first["latest_state"],
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		judge_repeat_fingerprint_max="5",
+		issue_labels={10: ["ai:merged"]},
+		codex_json=_failed_verdict("second distinct finding in b.py:2"),
+		env_overrides={"RECOVERY_COUNT_DISTINCT_FINDINGS": "true"},
+	)
+	assert first["latest_state"]["recovery_count"] == 1
+	assert second["latest_state"]["recovery_count"] == 2
+	assert "distinct_findings_flag=true" in second["stdout"]
+	assert len(second["latest_state"]["judge_failed_fingerprints"]) == 2
+
+
+def test_recovery_exhausted_still_files_judge_fixup_issues_and_resume_dispatches_them():
+	"""Regression for tele-funtoken-msg-scoring#3928 cycle 9: the exhausted
+	arm posted "New fix-up issues: 2" and then "Project Failed" without ever
+	creating the two issues, so a human had to re-derive the judge's
+	findings. The exhausted arm must now file them, track them in the
+	current wave, cite them in the failure comment, and keep the project
+	`failed` until a human posts /judge_resume — after which the poller
+	tracks the filed issues with no further human action."""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state["recovery_count"] = 3
+	state["judge_failed_fingerprints"] = ["older-fingerprint"]
+	verdict = _failed_verdict(
+		"ambiguous payout send is auto-retried in backend/payout.py:99",
+		[
+			"malformed scalar entry",
+			42,
+			{"id": "guard-ambiguous-payout-retry", "title": "Guard ambiguous payout retry", "body": "Do not auto-retry ambiguous sends."},
+			{"id": 17, "title": "Read reward split from epoch", "body": "Stop hard-coding the split."},
+			# Malformed entry with a stale mapping: skipped by the creation
+			# loop and must NOT be reported as filed.
+			{"id": "stale-titleless", "body": "no title"},
+			{"id": "stale-null-title", "title": "null", "body": "literal null title"},
+		],
+	)
+	state["issue_number_map"]["stale-titleless"] = 777
+	state["issue_number_map"]["stale-null-title"] = 778
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		judge_repeat_fingerprint_max="2",
+		issue_labels={10: ["ai:merged"]},
+		codex_json=verdict,
+		env_overrides={"MAX_RECOVERY_ATTEMPTS": "3"},
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "failed"
+	assert ls["recovery_count"] == 3
+	created = result.get("created_issues", [])
+	assert [c["title"] for c in created] == ["Guard ambiguous payout retry", "Read reward split from epoch"]
+	created_numbers = [c["number"] for c in created]
+	assert ls["issue_number_map"]["guard-ambiguous-payout-retry"] == created_numbers[0]
+	assert ls["issue_number_map"]["17"] == created_numbers[1]
+	wave_issues = {i["id"]: i for i in ls["waves"][0]["issues"]}
+	assert wave_issues["guard-ambiguous-payout-retry"]["status"] == "pending"
+	assert wave_issues["17"]["status"] == "pending"
+	# The exhausted verdict's fingerprint joins the ledger so a post-resume
+	# repeat of it is charged.
+	assert ls["judge_last_fingerprint"] in ls["judge_failed_fingerprints"]
+	assert "older-fingerprint" in ls["judge_failed_fingerprints"]
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	failed_comment = next(body for body in tracking_bodies if body.startswith("## Project Failed"))
+	refs = f"#{created_numbers[0]}, #{created_numbers[1]}"
+	assert f"**Fix-up issues tracked for this verdict:** {refs}\n" in failed_comment
+	assert "#777" not in failed_comment
+	assert "#778" not in failed_comment
+	assert "Skipping malformed judge fix-up entry (id='stale-titleless', title='')" in (result["stdout"] + result["stderr"])
+	completion_comment = next(body for body in tracking_bodies if "<!-- orchestrator:completion-status -->" in body)
+	assert "<!-- status:failed -->" in completion_comment
+	assert f"Fix-up issues tracked for the final verdict: {refs}" in completion_comment
+	assert "RECOVERY_BUDGET_ACCOUNTING tracking_issue=192 charge=0" in result["stdout"]
+	assert 'reason="recovery budget already exhausted; no additional charge"' in result["stdout"]
+	assert not any(body.startswith("## ❌ Judge repeat-fingerprint breaker triggered") for body in tracking_bodies)
+
+	# /judge_resume --reset-recovery: the poller resumes with the filed
+	# fix-ups still pending in the wave (so it tracks/merges them and
+	# re-judges once they land) and clears the seen-fingerprint ledger.
+	resumed = _run_poller(
+		state=ls,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=result["tracking_labels"],
+		issue_labels={
+			10: ["ai:merged"],
+			created_numbers[0]: ["ai:implementing"],
+			created_numbers[1]: ["ai:implementing"],
+		},
+		tracking_comments=["/judge_resume --reset-recovery"],
+	)
+	rs = resumed["latest_state"]
+	assert rs["status"] == "in_progress"
+	assert rs["recovery_count"] == 0
+	assert rs["judge_failed_fingerprints"] == []
+	assert "recovery_count: reset (3 -> 0); judge_failed_fingerprints: cleared" in resumed["stdout"]
+	resumed_wave = {i["id"]: i for i in rs["waves"][0]["issues"]}
+	assert set(created_numbers) == {
+		resumed_wave["guard-ambiguous-payout-retry"]["github_issue"],
+		resumed_wave["17"]["github_issue"],
+	}
+
+
+def test_judge_fixup_creation_skips_malformed_entries_without_aborting_cycle():
+	"""Judge JSON is untrusted LLM output. An entry with no title would make
+	`gh issue create` fail and abort the poll cycle under `set -e`; one with
+	no id could never be tracked in issue_number_map / the wave and would
+	be recreated next cycle. Both must be skipped with a warning while the
+	well-formed entry is still filed and the recovery cycle completes."""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		judge_repeat_fingerprint_max="2",
+		issue_labels={10: ["ai:merged"]},
+		codex_json=_failed_verdict(
+			"settlement writes are not idempotent in backend/settle.py:12",
+			[
+				"malformed scalar entry",
+				42,
+				{"id": "no-title-entry", "body": "missing title"},
+				{"title": "No id entry", "body": "missing id"},
+				{"id": "well-formed", "title": "Make settlement writes idempotent", "body": "Use an upsert."},
+			],
+		),
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "in_progress"
+	assert [c["title"] for c in result.get("created_issues", [])] == ["Make settlement writes idempotent"]
+	assert set(ls["issue_number_map"]) == {"issue-1", "well-formed"}
+	assert {i["id"] for i in ls["waves"][0]["issues"]} == {"issue-1", "well-formed"}
+	out = result["stdout"] + result["stderr"]
+	assert "Processing 5 judge fix-up candidate(s)..." in out
+	assert "Skipping malformed judge fix-up entry (id='no-title-entry', title='')" in out
+	assert "Skipping malformed judge fix-up entry (id='', title='No id entry')" in out
+
+
+def test_judge_non_array_new_issues_is_treated_as_empty_without_aborting_cycle():
+	"""`new_issues` that is not an array (string here; null/number behave the
+	same) must count as zero fix-ups. Previously `.new_issues | length` was
+	non-zero for a string and `.new_issues[]` then failed under pipefail,
+	aborting the poll cycle."""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		judge_repeat_fingerprint_max="2",
+		issue_labels={10: ["ai:merged"]},
+		codex_json={
+			"status": "failed",
+			"justification": "judge emitted a malformed new_issues field in backend/x.py:1",
+			"assessment": "malformed",
+			"new_issues": "not-an-array",
+			"issues_to_revert": None,
+		},
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "in_progress"
+	assert result.get("created_issues", []) == []
+	assert set(ls["issue_number_map"]) == {"issue-1"}
+	assert "New issues: 0, Reverts: 0" in result["stdout"]
+	assert "RECOVERY_BUDGET_ACCOUNTING tracking_issue=192 charge=0" in result["stdout"]
+
+
+def _backpressure_3928_shape_prs() -> list[dict]:
+	return [
+		{
+			"number": 470,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+		{
+			"number": 910,
+			"state": "open",
+			"baseRefName": "orchestrator/project-192",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"headSha": "sha910",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+
+
+def test_integration_backpressure_ignores_sync_merge_commits_in_3928_shape():
+	"""Regression for tele-funtoken-msg-scoring#3928: 5 planned phases + 6
+	judge fix-ups = 11 squash commits, plus 15 poller-authored
+	`chore: sync main into orchestrator/project-3928` merge commits, gave a
+	raw ahead_by of 26 against an effective threshold of
+	max(10, 5 planned + 20 margin) = 25 — backpressure tripped on the
+	poller's own sync merges and would have blocked the very fix-up merge
+	needed to converge. The gate must evaluate non-merge commits only (11)
+	while containment still sees the raw ahead_by."""
+	state = _base_state(status="in_progress")
+	state["total_issues"] = 5
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 470
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 910},
+		prs=_backpressure_3928_shape_prs(),
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=26,
+		compare_commit_parent_counts=[1] * 11 + [2] * 15,
+		env_overrides={
+			"ORCH_INTEGRATION_MAX_AHEAD_COMMITS": "10",
+			"ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN": "20",
+		},
+	)
+	assert "ai:integration-backpressure" not in result["tracking_labels"]
+	assert 910 in result.get("merged_prs", [])
+	assert "BACKPRESSURE_TRIGGERED" not in (result["stdout"] + result["stderr"])
+	# Containment still fails closed on the raw figure: 26 ahead means the
+	# project is not complete even though every wave issue is merged.
+	assert result["latest_state"]["status"] == "in_progress"
+
+
+def test_integration_backpressure_still_trips_on_real_work_drift_in_3928_shape():
+	"""Control for the sync-merge exclusion: the same raw ahead_by of 26
+	made of 26 squash commits (no sync merges) is genuine over-drift and
+	must still trip backpressure at the 25 threshold, with the log line
+	carrying both the raw and the work figures."""
+	state = _base_state(status="in_progress")
+	state["total_issues"] = 5
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 470
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 910},
+		prs=_backpressure_3928_shape_prs(),
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=26,
+		compare_commit_parent_counts=[1] * 26,
+		env_overrides={
+			"ORCH_INTEGRATION_MAX_AHEAD_COMMITS": "10",
+			"ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN": "20",
+		},
+	)
+	assert "ai:integration-backpressure" in result["tracking_labels"]
+	assert result.get("merged_prs", []) == []
+	assert "BACKPRESSURE_TRIGGERED tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=26 threshold=10 effective_threshold=25 final_pr=470 raw_ahead_by=26 work_ahead_by=26" in (result["stdout"] + result["stderr"])
+
+
+def test_integration_backpressure_falls_back_to_raw_ahead_by_when_compare_commits_truncated():
+	"""GitHub caps the compare `commits` list at 250 entries. When the list
+	is shorter than ahead_by the non-merge count would under-count, so the
+	gate must fall back to the raw ahead_by (fail closed toward
+	backpressure) rather than trust a partial topology."""
+	state = _base_state(status="in_progress")
+	state["total_issues"] = 5
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 470
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 910},
+		prs=_backpressure_3928_shape_prs(),
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=26,
+		# Only 20 of the 26 commits listed: treat the work count as unknown.
+		compare_commit_parent_counts=[2] * 20,
+		env_overrides={
+			"ORCH_INTEGRATION_MAX_AHEAD_COMMITS": "10",
+			"ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN": "20",
+		},
+	)
+	assert "ai:integration-backpressure" in result["tracking_labels"]
+	assert result.get("merged_prs", []) == []
+	assert "ahead_by=26 threshold=10 effective_threshold=25 final_pr=470 raw_ahead_by=26 work_ahead_by=unknown" in (result["stdout"] + result["stderr"])
 
 
 def test_judge_repeat_fingerprint_normalization_resets_on_material_change():
@@ -10028,7 +10629,10 @@ def test_judge_repeat_fingerprint_normalization_resets_on_material_change():
 	)
 	ls = second["latest_state"]
 	assert ls["judge_fingerprint_repeat_count"] == 1
-	assert ls["recovery_count"] == 2
+	# Two materially different findings: neither is a repeat, so neither
+	# consumes MAX_RECOVERY_ATTEMPTS budget; both land in the ledger.
+	assert ls["recovery_count"] == 0
+	assert len(ls["judge_failed_fingerprints"]) == 2
 	assert ls["status"] == "in_progress"
 	assert len(second.get("created_issues", [])) == 0
 
@@ -17901,6 +18505,127 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 	assert '"event":"slowest"' not in pass_output.getvalue()
 
 
+def _extract_bash_function(script: str, signature: str) -> str:
+	"""Return the source of one top-level bash function, from its
+	``signature`` line through the first line that is exactly ``}``."""
+	start = script.index(signature)
+	end = script.index("\n}\n", start) + 3
+	return script[start:end]
+
+
+def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
+	"""Regression for PR #3991 / issue #3990: stall recovery closed a
+	green, fully reviewed tooling fix on ``claude/…`` targeting ``main``
+	purely because its body said ``Refs #3990`` (a timeline
+	cross-reference).  ``close_linked_pr`` must now skip such
+	cross-reference-only PRs, still close the ``ai/issue-<n>`` PR and a
+	PR whose body carries a close keyword, keep skipping non-open PRs,
+	and treat an API failure as unknown state — all with exactly one
+	``pulls/<n>`` request per candidate."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helper = _extract_bash_function(script, "_linked_pr_is_issue_implementation()\n{")
+	closer = _extract_bash_function(script, "close_linked_pr() {")
+	with tempfile.TemporaryDirectory() as tmp:
+		closed_log = Path(tmp) / "closed.txt"
+		api_log = Path(tmp) / "api.txt"
+		harness = Path(tmp) / "harness.sh"
+		harness.write_text(
+			"set -euo pipefail\n"
+			"GITHUB_REPOSITORY=o/r\n"
+			f"CLOSED_LOG={str(closed_log)!r}\n"
+			f"API_LOG={str(api_log)!r}\n"
+			'gh_retry() { "$@"; }\n'
+			"_safe_gh_jq() {\n"
+			'  echo "$1" >> "$API_LOG"\n'
+			'  case "${1##*/}" in\n'
+			"    101) printf '%s' '{\"state\":\"open\",\"head_ref\":\"claude/some-fix\",\"base_ref\":\"main\",\"body\":\"Tooling fix.\\n\\nRefs #77\"}' ;;\n"
+			"    102) printf '%s' '{\"state\":\"open\",\"head_ref\":\"ai/issue-77\",\"base_ref\":\"orchestrator/project-9\",\"body\":\"impl\"}' ;;\n"
+			"    103) printf '%s' '{\"state\":\"open\",\"head_ref\":\"feature/x\",\"base_ref\":\"orchestrator/project-9\",\"body\":\"Closes #77\"}' ;;\n"
+			"    104) printf '%s' '{\"state\":\"closed\",\"head_ref\":\"ai/issue-77\",\"base_ref\":\"main\",\"body\":\"\"}' ;;\n"
+			"    105) return 1 ;;\n"
+			"  esac\n"
+			"}\n"
+			'gh() { if [ "$1" = pr ] && [ "$2" = close ]; then echo "$3" >> "$CLOSED_LOG"; return 0; fi; return 1; }\n'
+			"_find_all_linked_prs() { printf '101\\n102\\n103\\n104\\n105\\n'; }\n"
+			+ helper + "\n" + closer + "\n"
+			'close_linked_pr 77 "why"\n',
+			encoding="utf-8",
+		)
+		result = subprocess.run(
+			["bash", str(harness)],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		out = result.stdout
+		closed = closed_log.read_text(encoding="utf-8").split() if closed_log.exists() else []
+		assert closed == ["102", "103"], (closed, out)
+		assert (
+			"close_linked_pr: skipping PR #101 for issue #77 (cross-reference only; "
+			"head=claude/some-fix does not match the issue's implementation branch pattern "
+			"and the body carries no close keyword; base=main is shown for context" in out
+		), out
+		assert "close_linked_pr: closing linked PR #102 for issue #77 (state=open)." in out
+		assert "close_linked_pr: closing linked PR #103 for issue #77 (state=open)." in out
+		assert "close_linked_pr: skipping PR #104 for issue #77 (state=closed)." in out
+		assert "close_linked_pr: skipping PR #105 for issue #77 (state=unknown)." in out
+		assert "close_linked_pr: issue=#77 scanned=5 closed=2" in out
+		# §15: exactly one pulls/<n> request per candidate, none extra.
+		api_calls = api_log.read_text(encoding="utf-8").split()
+		assert sorted(api_calls) == sorted(f"repos/o/r/pulls/{n}" for n in (101, 102, 103, 104, 105)), api_calls
+
+
+def test_linked_pr_is_issue_implementation_predicate_contract():
+	"""The predicate accepts the orchestrator branch convention and a
+	body close keyword for the exact issue number, and rejects
+	cross-reference-only bodies, neighbouring issue numbers, and
+	non-numeric issue ids.  It must issue no ``gh`` calls."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helper = _extract_bash_function(script, "_linked_pr_is_issue_implementation()\n{")
+	cases = [
+		("77", "ai/issue-77", "", 0),
+		("77", "ai/77", "", 0),
+		("77", "ai-implement-77", "", 0),
+		("77", "ai-77", "", 0),
+		("77", "refs/heads/ai/issue-77", "", 0),
+		("77", "ai/issue-770", "", 1),
+		("77", "ai/issue-77a", "", 1),
+		("77", "ai/issue-77_x", "", 1),
+		("77", "ai/issue-77-retry", "", 0),
+		("77", "claude/some-fix", "Refs #77", 1),
+		("77", "claude/some-fix", "prefixes #77", 1),
+		("77", "claude/some-fix", "Closes #77", 0),
+		("77", "claude/some-fix", "fixes: #77 and more", 0),
+		("77", "claude/some-fix", "Resolved #775", 1),
+		("77", "claude/some-fix", "closes #7", 1),
+		("77", "claude/some-fix", "Closes #77a", 1),
+		("77", "claude/some-fix", "Closes #77_x", 1),
+		("77", "claude/some-fix", "Closes #77.", 0),
+		("77", "claude/some-fix", "Closes #77)", 0),
+		("abc", "ai/issue-abc", "Closes #abc", 1),
+	]
+	with tempfile.TemporaryDirectory() as tmp:
+		harness = Path(tmp) / "harness.sh"
+		lines = [
+			"set -uo pipefail\n",
+			'gh() { echo "UNEXPECTED gh $*" >&2; exit 99; }\n',
+			helper,
+			"\n",
+		]
+		for issue, head, body, expected in cases:
+			lines.append(
+				f'if _linked_pr_is_issue_implementation {issue!r} {head!r} {body!r}; then rc=0; else rc=$?; fi; '
+				f'echo "{issue}|{head}|{body}|$rc"\n'
+			)
+		harness.write_text("".join(lines), encoding="utf-8")
+		result = subprocess.run(["bash", str(harness)], capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stderr
+		got = {line.rsplit("|", 1)[0]: int(line.rsplit("|", 1)[1]) for line in result.stdout.splitlines() if line}
+		for issue, head, body, expected in cases:
+			assert got[f"{issue}|{head}|{body}"] == expected, (issue, head, body, got)
+
+
 def main() -> int:
 	# Force line-buffered stdout so PASS/FAIL messages surface to CI logs as
 	# each test completes, instead of sitting in Python's default block buffer
@@ -17927,6 +18652,76 @@ def main() -> int:
 	else:
 		test_funcs = list(tests_by_name.values())
 	return _run_selected_tests(test_funcs)
+
+
+def test_reset_implementing_to_awaiting_approval_for_retrigger_contract():
+	"""The shared stall-recovery label swap issues exactly one ``gh issue
+	edit`` moving ``ai:implementing`` back to ``ai:awaiting-approval``,
+	returns 0 on success, and on failure warns and returns 1 without
+	aborting the caller (which still posts ``/approved``)."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helper = _extract_bash_function(script, "_reset_implementing_to_awaiting_approval_for_retrigger()\n{")
+	with tempfile.TemporaryDirectory() as tmp:
+		gh_log = Path(tmp) / "gh.txt"
+		harness = Path(tmp) / "harness.sh"
+		harness.write_text(
+			"set -euo pipefail\n"
+			"GITHUB_REPOSITORY=o/r\n"
+			f"GH_LOG={str(gh_log)!r}\n"
+			'gh_retry() { "$@"; }\n'
+			'gh() { printf \'%s\\n\' "$*" >> "$GH_LOG"; return "${GH_RC:-0}"; }\n'
+			+ helper + "\n"
+			"rc=0\n"
+			"_reset_implementing_to_awaiting_approval_for_retrigger 77 || rc=$?\n"
+			'echo "rc=${rc}"\n',
+			encoding="utf-8",
+		)
+		expected_call = "issue edit 77 --repo o/r --remove-label ai:implementing --add-label ai:awaiting-approval"
+		for gh_rc, want_rc in ((0, 0), (1, 1)):
+			if gh_log.exists():
+				gh_log.unlink()
+			result = subprocess.run(
+				["bash", str(harness)],
+				capture_output=True,
+				text=True,
+				check=False,
+				env={**os.environ, "GH_RC": str(gh_rc)},
+			)
+			assert result.returncode == 0, result.stderr
+			assert f"rc={want_rc}" in result.stdout, result.stdout
+			# §15: exactly one API call regardless of outcome.
+			assert gh_log.read_text(encoding="utf-8").splitlines() == [expected_call]
+			warning = "::warning::Failed to swap ai:implementing"
+			if want_rc:
+				assert warning in result.stdout, result.stdout
+				assert "/approved retrigger may no-op" in result.stdout, result.stdout
+			else:
+				assert warning not in result.stdout, result.stdout
+
+
+def test_stall_recovery_retrigger_implement_arms_swap_label_before_posting_approved():
+	"""Regression for issues #3990 / #3993: the standalone
+	``retrigger_implement`` arm posted ``/approved`` while the issue still
+	carried ``ai:implementing``, so ``implement.yml``'s precheck skipped
+	with ``reason=already_implementing`` and the re-trigger was a no-op.
+	Both the managed and the standalone arm must call the shared swap
+	helper before posting the comment."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	swap_call = '_reset_implementing_to_awaiting_approval_for_retrigger "${issue_num}" || true'
+	for arm_anchor in (
+		"      local _retrigger_implement_rc=0\n",  # managed: execute_stall_recovery_action
+		"        local _std_retrigger_implement_rc=0\n",  # standalone: run_standalone_stall_recovery
+	):
+		assert script.count(arm_anchor) == 1, arm_anchor
+		anchor_at = script.index(arm_anchor)
+		arm_at = script.rindex("retrigger_implement)", 0, anchor_at)
+		arm_prefix = script[arm_at:anchor_at]
+		assert swap_call in arm_prefix, arm_prefix
+		# The /approved comment is posted (gh api … comments with a heredoc
+		# body) only after the rc variable is declared, so nothing in the
+		# prefix may already post it.
+		assert "gh api" not in arm_prefix, arm_prefix
+		assert "\n/approved\n" not in arm_prefix, arm_prefix
 
 
 if __name__ == "__main__":

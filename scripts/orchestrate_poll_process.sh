@@ -1568,6 +1568,24 @@ if ! [[ "${JUDGE_REPEAT_FINGERPRINT_MAX}" =~ ^[0-9]+$ ]] || [ "${JUDGE_REPEAT_FI
   JUDGE_REPEAT_FINGERPRINT_MAX="2"
 fi
 
+# Recovery-budget accounting for judge failures whose normalized fingerprint
+# has never been seen on an earlier failed verdict of the same project.
+#   false (default) — a brand-new finding does NOT consume MAX_RECOVERY_ATTEMPTS;
+#                     only a fingerprint already recorded in the state's
+#                     judge_failed_fingerprints list (a repeat, consecutive or
+#                     ping-pong) is charged. Empty fingerprints are always
+#                     charged. MAX_JUDGE_CYCLES remains the absolute cap.
+#   true            — legacy behaviour: every failed verdict consumes budget.
+# Motivation: tele-funtoken-msg-scoring#3928 fixed a distinct defect on each
+# of five consecutive judge cycles and was killed by the budget while the
+# repeat-fingerprint breaker (the loop detector) never fired.
+RECOVERY_COUNT_DISTINCT_FINDINGS="${RECOVERY_COUNT_DISTINCT_FINDINGS:-false}"
+if is_truthy "${RECOVERY_COUNT_DISTINCT_FINDINGS}"; then
+  RECOVERY_COUNT_DISTINCT_FINDINGS="true"
+else
+  RECOVERY_COUNT_DISTINCT_FINDINGS="false"
+fi
+
 MAX_VALIDATION_RECOVERY_ATTEMPTS="${MAX_VALIDATION_RECOVERY_ATTEMPTS:-2}"
 if ! [[ "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" -lt 0 ]; then
   echo "::warning::MAX_VALIDATION_RECOVERY_ATTEMPTS must be a non-negative integer; defaulting to 2"
@@ -3157,6 +3175,62 @@ _find_all_linked_prs()
 	} | grep -E '^[0-9]+$' | sort -u
 }
 
+# _linked_pr_is_issue_implementation — Decide whether a PR surfaced by
+# _find_all_linked_prs is plausibly the issue's OWN implementation PR, as
+# opposed to an unrelated PR that merely mentions the issue.
+#
+# The timeline cross-reference strategy inside _find_all_linked_prs
+# returns every PR whose body or comments contain `#<n>`, and CLAUDE.md
+# §19 requires exactly that (`Refs #<n>`) for semantic linkage.  Without
+# this filter, close_linked_pr treated any rule-following tooling fix
+# that cited a stalled issue as the issue's implementation PR and closed
+# it unmerged: PR #3991 (branch claude/…, base main, a fix for the very
+# bug that stalled issue #3990) was closed that way while green and fully
+# reviewed, even though the stall judge had recorded that its head did
+# not match the integration branch.
+#
+# Args:
+#   issue_num  — the stalled issue
+#   head_ref   — the candidate PR's head branch name
+#   body       — the candidate PR's body (may be empty)
+# Returns 0 (treat as the implementation PR) when either:
+#   - head_ref matches the orchestrator branch convention for the issue:
+#     `ai/issue-<n>`, `ai/<n>`, `ai-implement-<n>` or `ai-<n>`, optionally
+#     under a path prefix (`refs/heads/ai/issue-<n>`) and optionally
+#     followed by a non-word suffix (`ai/issue-<n>-retry`, `ai/<n>-<slug>`).
+#     This is the same family cancel_zombie_runs_for_issue matches, with a
+#     stricter trailing boundary (non-word-or-end rather than
+#     non-digit-or-end, see below); or
+#   - body carries a GitHub auto-close keyword targeting the issue.  This
+#     authorization check is stricter than _linked_prs_by_body_reference's
+#     broad candidate filter: it adds leading and ASCII non-word boundaries.
+# Returns 1 otherwise (cross-reference only).
+# The base branch is deliberately not consulted: matching it against the
+# issue's integration branch would need the issue body (one extra API
+# call per candidate, §15), and a close keyword already expresses the
+# author's intent unambiguously.  Issues no API calls.
+_linked_pr_is_issue_implementation()
+{
+	local issue_num="$1"
+	local head_ref="${2:-}"
+	local body="${3:-}"
+	[[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+	# Trailing boundary is a non-word character or end of line (same as the
+	# body keyword below; cancel_zombie_runs_for_issue uses the looser
+	# `([^0-9]|$)`), so `ai/issue-77a` / `ai/issue-77_x` are not treated as
+	# issue 77; `ai/issue-77-retry` and `ai/77-slug` still are.
+	if printf '%s\n' "${head_ref}" | grep -Eq "(^|/)(ai/(issue-)?|ai-(implement-)?)${issue_num}([^0-9A-Za-z_]|$)"; then
+		return 0
+	fi
+	# Keyword substrings inside larger words are rejected, and the trailing
+	# boundary is a non-word character or end of line, so neither
+	# `prefixes #77` nor `Closes #77a` targets issue 77.
+	if printf '%s\n' "${body}" | grep -Eiq "(^|[^[:alnum:]_-])(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#${issue_num}([^0-9A-Za-z_]|$)"; then
+		return 0
+	fi
+	return 1
+}
+
 # _resolve_linked_pr_fresh_by_branch — Deterministic fallback for a linked
 # PR's head-commit timestamp when the issue→PR cross-reference timeline (the
 # single source that feeds BOTH stall-freshness guards: the detect_stalls
@@ -3954,15 +4028,31 @@ _branch_head_sha() {
 #
 # API hygiene (§15): callers in tight inner loops should cache the result for
 # the cycle rather than re-invoking per iteration.
+#
+# Side output (same compare call, no extra API request — §15): the global
+# INTEGRATION_AHEAD_BY_WORK_COMMITS is set to the number of non-merge commits
+# in the compare's `commits` list, i.e. the integration branch's own work
+# (sub-issue squash merges, fix-up squashes) with the poller's
+# `chore: sync <default> into <integration>` merge commits excluded. It is
+# set to "" when unknown: special-case returns above, API/parse failure, or
+# a compare whose `commits` list is truncated (GitHub caps it at 250) so the
+# non-merge count would under-count. Callers that need the side output must
+# pass the optional third argument OUTVAR: the ahead_by value is then
+# assigned to that variable via printf -v instead of echoed, so the helper
+# can run in the caller's shell (command substitution would run it in a
+# subshell and lose the global). Backpressure is the only consumer; the
+# containment / eager-PR / staleness gates keep using the raw ahead_by.
 _integration_branch_ahead_of_default() {
   local integration_branch="$1"
   local default_branch="${2:-main}"
+  local ahead_outvar="${3:-}"
+  INTEGRATION_AHEAD_BY_WORK_COMMITS=""
   if [ -z "${integration_branch}" ] || [ -z "${default_branch}" ]; then
-    echo "0"
+    _integration_branch_ahead_of_default_emit "0" "${ahead_outvar}"
     return 0
   fi
   if [ "${integration_branch}" = "${default_branch}" ]; then
-    echo "0"
+    _integration_branch_ahead_of_default_emit "0" "${ahead_outvar}"
     return 0
   fi
   # If the integration branch is gone (deleted by `gh pr merge --delete-branch`
@@ -3972,34 +4062,75 @@ _integration_branch_ahead_of_default() {
   # still there), so a flaky API does NOT mask drift here — it falls through
   # to the compare call below, which can then fail closed as usual.
   if ! integration_branch_exists "${integration_branch}"; then
-    echo "0"
+    _integration_branch_ahead_of_default_emit "0" "${ahead_outvar}"
     return 0
   fi
   local integration_ref default_ref
   integration_ref="$(printf '%s' "${integration_branch}" | jq -sRr '@uri')"
   default_ref="$(printf '%s' "${default_branch}" | jq -sRr '@uri')"
-  local ahead_by
-  if ! ahead_by="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/compare/${default_ref}...${integration_ref}" --jq '.ahead_by')"; then
+  # One compare call yields ahead_by AND the non-merge commit count. The
+  # `commits` list carries each commit's parents, so merge commits (two or
+  # more parents — the poller's own sync merges) are identifiable without a
+  # second request. Output line 1: ahead_by; line 2: non-merge count or ""
+  # when the list is truncated / absent.
+  local compare_summary ahead_by work_commits
+  if ! compare_summary="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/compare/${default_ref}...${integration_ref}" --jq '
+    (.ahead_by // "" | tostring),
+    (if ((.commits // null) | type) == "array" and ((.commits | length) >= (.ahead_by // 0))
+     then ([.commits[] | select(((.parents // []) | length) < 2)] | length | tostring)
+     else "" end)')"; then
     return 1
   fi
+  ahead_by="$(printf '%s\n' "${compare_summary}" | sed -n '1p')"
+  work_commits="$(printf '%s\n' "${compare_summary}" | sed -n '2p')"
   if ! [[ "${ahead_by}" =~ ^[0-9]+$ ]]; then
     return 1
   fi
-  echo "${ahead_by}"
+  if [[ "${work_commits}" =~ ^[0-9]+$ ]] && [ "${work_commits}" -le "${ahead_by}" ]; then
+    INTEGRATION_AHEAD_BY_WORK_COMMITS="${work_commits}"
+  else
+    INTEGRATION_AHEAD_BY_WORK_COMMITS=""
+  fi
+  _integration_branch_ahead_of_default_emit "${ahead_by}" "${ahead_outvar}"
   return 0
 }
 
+# Emit helper for _integration_branch_ahead_of_default: echo the value when no
+# OUTVAR was requested (legacy command-substitution callers), otherwise assign
+# it in the caller's shell.
+_integration_branch_ahead_of_default_emit() {
+  local value="$1"
+  local outvar="${2:-}"
+  if [ -n "${outvar}" ]; then
+    printf -v "${outvar}" '%s' "${value}"
+  else
+    echo "${value}"
+  fi
+}
+
+# Sets, for the current cycle:
+#   CWS_AHEAD_BY              — raw compare ahead_by (containment, eager final
+#                               PR, staleness). "" = unknown, fail closed.
+#   CWS_WORK_AHEAD_BY         — non-merge commits ahead (sync merges excluded),
+#                               or "" when the compare could not supply it.
+#   CWS_BACKPRESSURE_AHEAD_BY — the figure the backpressure gate evaluates:
+#                               CWS_WORK_AHEAD_BY when known, else CWS_AHEAD_BY.
+#                               Counting the poller's own `chore: sync main`
+#                               merges toward backpressure self-deadlocked
+#                               tele-funtoken-msg-scoring#3928 (26 ahead, 15 of
+#                               them sync merges, threshold 25).
 compute_cycle_integration_ahead_by() {
 	CWS_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
 	[ "${CWS_INTEGRATION_BRANCH}" = "null" ] && CWS_INTEGRATION_BRANCH=""
 	CWS_DEFAULT_BRANCH=""
+	CWS_WORK_AHEAD_BY=""
 	if [ -n "${CWS_INTEGRATION_BRANCH}" ]; then
 		CWS_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "")"
 		if [ -z "${CWS_DEFAULT_BRANCH}" ]; then
 			CWS_AHEAD_BY=""
 			echo "::warning::  [check-wave-status] Could not resolve default branch via GitHub API; passing empty ahead_by so check-wave-status fails closed and keeps project_complete=false."
-		elif CWS_AHEAD_BY="$(_integration_branch_ahead_of_default "${CWS_INTEGRATION_BRANCH}" "${CWS_DEFAULT_BRANCH}")"; then
-			:
+		elif _integration_branch_ahead_of_default "${CWS_INTEGRATION_BRANCH}" "${CWS_DEFAULT_BRANCH}" CWS_AHEAD_BY; then
+			CWS_WORK_AHEAD_BY="${INTEGRATION_AHEAD_BY_WORK_COMMITS:-}"
 		else
 			CWS_AHEAD_BY=""
 			echo "::warning::  [check-wave-status] Compare API failed for ${CWS_DEFAULT_BRANCH}...${CWS_INTEGRATION_BRANCH}; failing closed (project_complete forced to false this tick)."
@@ -4008,6 +4139,12 @@ compute_cycle_integration_ahead_by() {
 		# No integration branch (default-branch-only flow): ahead_by is trivially
 		# 0 since there is no integration→default merge gate to honour.
 		CWS_AHEAD_BY="0"
+		CWS_WORK_AHEAD_BY="0"
+	fi
+	if [[ "${CWS_WORK_AHEAD_BY}" =~ ^[0-9]+$ ]]; then
+		CWS_BACKPRESSURE_AHEAD_BY="${CWS_WORK_AHEAD_BY}"
+	else
+		CWS_BACKPRESSURE_AHEAD_BY="${CWS_AHEAD_BY}"
 	fi
 }
 
@@ -4081,7 +4218,7 @@ refresh_integration_backpressure_gate_after_merge() {
 	fi
 
 	INTEGRATION_BACKPRESSURE_BLOCK_MERGES="false"
-	if integration_backpressure_active_for_ahead_by "${CWS_AHEAD_BY}"; then
+	if integration_backpressure_active_for_ahead_by "${CWS_BACKPRESSURE_AHEAD_BY}"; then
 		INTEGRATION_BACKPRESSURE_BLOCK_MERGES="true"
 	fi
 	return 0
@@ -4145,7 +4282,7 @@ reconcile_integration_backpressure_label() {
 			if gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
 				--add-label "${label_name}" >/dev/null 2>&1; then
 				TRACKING_LABELS="$(printf '%s' "${TRACKING_LABELS:-[]}" | jq -c --arg label "${label_name}" '(. + [$label]) | unique' 2>/dev/null || echo '["ai:integration-backpressure"]')"
-				echo "BACKPRESSURE_TRIGGERED tracking_issue=${TRACKING_NUM} integration_branch=${integration_branch} default_branch=${default_branch:-unknown} ahead_by=${ahead_by} threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS} effective_threshold=${effective_threshold} final_pr=${final_pr:-0}"
+				echo "BACKPRESSURE_TRIGGERED tracking_issue=${TRACKING_NUM} integration_branch=${integration_branch} default_branch=${default_branch:-unknown} ahead_by=${ahead_by} threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS} effective_threshold=${effective_threshold} final_pr=${final_pr:-0} raw_ahead_by=${CWS_AHEAD_BY:-unknown} work_ahead_by=${CWS_WORK_AHEAD_BY:-unknown}"
 			else
 				echo "::warning::[backpressure] failed to add ${label_name} to tracking issue #${TRACKING_NUM}; merge gate remains active this cycle." >&2
 			fi
@@ -4162,7 +4299,7 @@ reconcile_integration_backpressure_label() {
 		if gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
 			--remove-label "${label_name}" >/dev/null 2>&1; then
 			TRACKING_LABELS="$(printf '%s' "${TRACKING_LABELS:-[]}" | jq -c --arg label "${label_name}" 'map(select(. != $label))' 2>/dev/null || echo '[]')"
-			echo "BACKPRESSURE_CLEARED tracking_issue=${TRACKING_NUM} integration_branch=${integration_branch} default_branch=${default_branch:-unknown} ahead_by=${ahead_by} threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS} effective_threshold=${effective_threshold} final_pr=${final_pr:-0}"
+			echo "BACKPRESSURE_CLEARED tracking_issue=${TRACKING_NUM} integration_branch=${integration_branch} default_branch=${default_branch:-unknown} ahead_by=${ahead_by} threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS} effective_threshold=${effective_threshold} final_pr=${final_pr:-0} raw_ahead_by=${CWS_AHEAD_BY:-unknown} work_ahead_by=${CWS_WORK_AHEAD_BY:-unknown}"
 		else
 			echo "::warning::[backpressure] failed to remove ${label_name} from tracking issue #${TRACKING_NUM}; will retry after the next numeric compare result." >&2
 		fi
@@ -4608,6 +4745,117 @@ Manual intervention is required. After addressing the findings, comment \`/re-se
   set_failed_completion_status_comment \
     "The project security pass still reports ${finding_count} blocking finding(s) after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} completed fix cycle(s). Manual intervention is required; use \`/re-security-pass\` after addressing the findings."
   tg_notify "Project #${TRACKING_NUM} security pass FAILED after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} fix cycles with ${finding_count} finding(s) remaining. Manual intervention required." "CRITICAL"
+}
+
+# resolve_security_pass_fix_successor <closed_issue_num>
+#
+# Resolve the live successor of a security-pass consolidated fix issue
+# that orchestrator stall recovery closed and re-issued.
+#
+# Why this exists: execute_stall_recovery_action's `close_and_reissue`
+# arm re-points *wave* state only — it rewrites `.issue_number_map` and
+# `.waves[].issues[].github_issue`, and both writes are gated on a
+# non-null `local_id`.  A security-pass consolidated fix issue is not a
+# wave issue, so the stall judge reports `local_id: null`, the re-point
+# is skipped, and `.security_pass_active_fix_issues` stays pinned to the
+# closed predecessor.  The next poll tick then reads that issue as
+# closed-without-merge and security_pass_closed_fix_failure fails the
+# whole project, demanding a human `/re-security-pass` — even though a
+# live successor is already moving through the normal pipeline and
+# usually merges.  Project #3965 lost two completed fix cycles this way:
+# fix issue #3990 was closed and re-issued as #3993 -> #3996 at
+# 2026-09-04T01:52Z, the project was failed at 01:59Z, and #3996's fix
+# merged at 18:18Z against a project that had already been reset to
+# cycle 0 by the operator's `/re-security-pass`.
+#
+# Resolution uses the durable body markers `- Tracking issue: #<N>` and
+# "- Local ID: `security-pass-fix-cycle-<K>`", which survive re-issue
+# because stall recovery copies the original body verbatim and appends
+# its footer.  This is the same marker contract, the same single
+# paginated managed-issue listing, and the same jq shape that
+# create_security_pass_fix_issue's dedupe lookup already relies on.
+#
+# API cost (§15): one paginated `GET /issues?state=open&labels=
+# ai:orchestrator-managed` page walk, issued only on the
+# closed-without-merged-PR branch — never on an ordinary poll tick, and
+# never once the successor has been adopted into state.  No cycle-local
+# cache can serve it: ACTIVE_WORKFLOW_ISSUES holds only
+# workflow-active numbers, _candidate_details_json only known
+# candidates, and STALL_MANAGED_LINKED_PR_CACHE only state-known
+# stalled issues — a stall-recovery successor is in none of them on the
+# tick that first observes the predecessor closed.
+#
+# Args:
+#   closed_issue_num — the fix issue number recorded in state
+# Stdout:
+#   successor issue number on a confirmed match; empty otherwise
+# Returns:
+#   0 — successor found (number on stdout)
+#   1 — lookup succeeded and no successor exists
+#   2 — lookup inconclusive (API or parse failure).  Callers MUST retain
+#       the fixing state and retry rather than terminalize the project,
+#       mirroring the fail-closed dedupe contract established for
+#       create_security_pass_fix_issue.
+resolve_security_pass_fix_successor() {
+  local closed_issue_num="$1"
+  local security_pass_successor_local_id security_pass_successor_cycles
+  local security_pass_successor_pages_file security_pass_successor_jq_error_file
+  local security_pass_successor_number
+
+  [[ "${closed_issue_num}" =~ ^[0-9]+$ ]] || return 2
+
+  if ! security_pass_successor_cycles="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}" 2>/dev/null)"; then
+    return 2
+  fi
+  if ! [[ "${security_pass_successor_cycles}" =~ ^[0-9]+$ ]]; then
+    return 2
+  fi
+  security_pass_successor_local_id="security-pass-fix-cycle-$((security_pass_successor_cycles + 1))"
+
+  security_pass_successor_pages_file="${RUNTIME_DIR}/security_pass_successor_${TRACKING_NUM}_${closed_issue_num}.json"
+  security_pass_successor_jq_error_file="${security_pass_successor_pages_file}.jq.err"
+  rm -f "${security_pass_successor_pages_file}" "${security_pass_successor_jq_error_file}"
+  if ! gh_retry_to_file "${security_pass_successor_pages_file}" gh api --paginate --method GET \
+    "repos/${GITHUB_REPOSITORY}/issues" \
+    -f state=open \
+    -f labels="ai:orchestrator-managed" \
+    -f per_page=100; then
+    rm -f "${security_pass_successor_pages_file}"
+    return 2
+  fi
+  if [ ! -s "${security_pass_successor_pages_file}" ]; then
+    rm -f "${security_pass_successor_pages_file}"
+    return 2
+  fi
+  if ! security_pass_successor_number="$(jq -sr \
+    --arg tracking_marker "- Tracking issue: #${TRACKING_NUM}" \
+    --arg local_id_marker "- Local ID: \`${security_pass_successor_local_id}\`" \
+    --argjson closed_issue "${closed_issue_num}" '
+      if length == 0 or (all(.[]; type == "array") | not) then
+        error("managed-issue pagination output must contain JSON arrays")
+      else
+        [
+          .[][]
+          | select(.pull_request | not)
+          | select(.number != $closed_issue)
+          | select(
+              (((.body // "") | split("\n") | index($tracking_marker)) != null)
+              and (((.body // "") | split("\n") | index($local_id_marker)) != null)
+            )
+          | .number
+          | select(type == "number" and . > 0)
+        ] | max // empty
+      end
+    ' "${security_pass_successor_pages_file}" 2>"${security_pass_successor_jq_error_file}")"; then
+    rm -f "${security_pass_successor_pages_file}" "${security_pass_successor_jq_error_file}"
+    return 2
+  fi
+  rm -f "${security_pass_successor_pages_file}" "${security_pass_successor_jq_error_file}"
+  if [[ "${security_pass_successor_number}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "${security_pass_successor_number}"
+    return 0
+  fi
+  return 1
 }
 
 security_pass_closed_fix_failure() {
@@ -5298,6 +5546,84 @@ for raw in reversed(matches):
     raise SystemExit(0)
 raise SystemExit(0)
 PY
+}
+
+# Create the judge's `new_issues` as fix-up GitHub issues and record them in
+# the current wave of STATE_FILE. Reads the loop globals JUDGE_JSON,
+# NEW_ISSUES_COUNT, JUDGE_CYCLE, WAVE_IDX, TRACKING_NUM and STATE_FILE. No-op
+# when NEW_ISSUES_COUNT is 0. Idempotent per local id via issue_number_map:
+# an id that already maps to an open (non-merged, non-closed) issue is
+# re-attached to the wave instead of being recreated. Called from both the
+# in-budget auto-recovery arm and the recovery-exhausted arm of the failed
+# judge verdict — the latter used to `continue` before reaching this loop,
+# so the findings existed only as prose in the "Project Failed" comment and
+# a human had to re-derive them (tele-funtoken-msg-scoring#3928, cycle 9).
+create_judge_fixup_issues_from_verdict() {
+      if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
+        echo "Processing ${NEW_ISSUES_COUNT} judge fix-up candidate(s)..."
+        echo "${JUDGE_JSON}" | jq -c '.new_issues[]? | select(type == "object")' | while read -r fix_issue; do
+          FIX_TITLE="$(echo "${fix_issue}" | jq -r '.title // ""')"
+          FIX_BODY="$(echo "${fix_issue}" | jq -r '.body // ""' | sed 's/\\n/\n/g')"
+          FIX_ID="$(echo "${fix_issue}" | jq -r '.id // ""')"
+
+          # Judge JSON is untrusted LLM output. An entry without a non-empty
+          # title would make `gh issue create` fail (aborting the cycle under
+          # set -e); one without an id could never be recorded in
+          # issue_number_map / the wave, so the next cycle would recreate it.
+          # Skip such entries with a warning instead of trusting them.
+          if [ -z "${FIX_TITLE}" ] || [ "${FIX_TITLE}" = "null" ] \
+            || [ -z "${FIX_ID}" ] || [ "${FIX_ID}" = "null" ]; then
+            echo "::warning::Skipping malformed judge fix-up entry (id='${FIX_ID}', title='${FIX_TITLE}') for tracking issue #${TRACKING_NUM}: both id and title are required."
+            continue
+          fi
+
+          # --- Dedup guard: skip if this local ID already has a GitHub issue ---
+          if [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
+            EXISTING_NUM="$(jq -r --arg fix_id "${FIX_ID}" '.issue_number_map[$fix_id] // empty' "${STATE_FILE}")"
+            if [ -n "${EXISTING_NUM}" ]; then
+              EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
+              if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
+                jq --arg fix_id "${FIX_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" \
+                  '.issue_number_map[$fix_id] = $existing_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $existing_num, "status": "pending"}]' \
+                  "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+                echo "  ${FIX_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate fix-up."
+                continue
+              fi
+              echo "  ${FIX_ID}: prior issue #${EXISTING_NUM} is already merged/closed, allowing new fix-up."
+            fi
+          fi
+
+          FULL_FIX_BODY="${FIX_BODY}
+
+---
+**Orchestrator metadata** (do not edit)
+- Tracking issue: #${TRACKING_NUM}
+- Integration branch: $(jq -r '.integration_branch // ""' "${STATE_FILE}")
+- Local ID: \`${FIX_ID}\`
+- Type: judge-fix-up (cycle $((JUDGE_CYCLE + 1)))
+- Managed by: AI Orchestrator"
+
+          ensure_label_exists "ai:clarification"
+          ensure_label_exists "ai:orchestrator-managed"
+          FIX_URL="$(gh_retry gh issue create \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${FIX_TITLE}" \
+            --body "${FULL_FIX_BODY}" \
+            --label "ai:clarification" \
+            --label "ai:orchestrator-managed")"
+          echo "  Created fix-up: ${FIX_URL}"
+
+          # Record in state so subsequent cycles/iterations won't recreate,
+          # and add to the current wave so the poller tracks merge progress.
+          FIX_URL_CLEAN="$(printf '%s\n' "${FIX_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+          FIX_NEW_NUM="$(basename "${FIX_URL_CLEAN%%[?#]*}")"
+          if [[ "${FIX_NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
+            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
+              '.issue_number_map[$fix_id] = $fix_new_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $fix_new_num, "status": "pending"}]' \
+              "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          fi
+        done
+      fi
 }
 
 normalize_judge_justification_for_fingerprint() {
@@ -10513,16 +10839,35 @@ close_linked_pr() {
   while IFS= read -r pr_num; do
     [[ "${pr_num}" =~ ^[0-9]+$ ]] || continue
     scanned=$((scanned + 1))
-    local pr_state
-    pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.state' | grep -xE 'open|closed|merged' || echo "")"
-    if [ "${pr_state}" = "open" ]; then
-      echo "  close_linked_pr: closing linked PR #${pr_num} for issue #${issue_num} (state=open)."
-      if gh_retry gh pr close "${pr_num}" --repo "${GITHUB_REPOSITORY}" \
-          --comment "${close_reason}" 2>/dev/null; then
-        closed=$((closed + 1))
-      fi
-    else
+    # One `pulls/<n>` request per candidate (§15): the same call that
+    # answers "is it still open?" also carries the head ref and body the
+    # implementation-PR filter below needs, so its --jq is extended rather
+    # than issuing a second request.  A failed call yields an empty blob,
+    # which parses to state="" and is skipped as unknown, exactly as the
+    # previous `.state`-only lookup behaved.
+    local pr_meta_json pr_state pr_head_ref pr_base_ref pr_body
+    pr_meta_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" \
+      --jq '{state: (.state // ""), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), body: (.body // "")}' || echo "")"
+    pr_state="$(printf '%s' "${pr_meta_json}" | jq -r '.state // ""' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+    pr_head_ref="$(printf '%s' "${pr_meta_json}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
+    pr_base_ref="$(printf '%s' "${pr_meta_json}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
+    pr_body="$(printf '%s' "${pr_meta_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+    if [ "${pr_state}" != "open" ]; then
       echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (state=${pr_state:-unknown})."
+      continue
+    fi
+    # Only the issue's own implementation PR is closed.  A PR that merely
+    # cross-references the issue from an unrelated branch (see
+    # _linked_pr_is_issue_implementation) is left open and logged so the
+    # skip leaves the same trail the other outcomes do.
+    if ! _linked_pr_is_issue_implementation "${issue_num}" "${pr_head_ref}" "${pr_body}"; then
+      echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (cross-reference only; head=${pr_head_ref:-?} does not match the issue's implementation branch pattern and the body carries no close keyword; base=${pr_base_ref:-?} is shown for context and is not evaluated)."
+      continue
+    fi
+    echo "  close_linked_pr: closing linked PR #${pr_num} for issue #${issue_num} (state=open)."
+    if gh_retry gh pr close "${pr_num}" --repo "${GITHUB_REPOSITORY}" \
+        --comment "${close_reason}" 2>/dev/null; then
+      closed=$((closed + 1))
     fi
   done <<< "${pr_nums}"
   echo "  close_linked_pr: issue=#${issue_num} scanned=${scanned} closed=${closed}"
@@ -10549,6 +10894,12 @@ close_linked_pr() {
 #   - issue body lacks the "Re-issued from #<n>" marker (i.e. it is the
 #     original task, not itself a re-issue — still a gap but not Gap 2)
 #   - issue has at least one linked PR per _find_all_linked_prs
+#     (the BROAD set, on purpose: this helper only surfaces a warning and
+#     never blocks recovery, so it errs toward silence rather than paying
+#     one `pulls/<n>` request per candidate (§15) to apply the
+#     _linked_pr_is_issue_implementation filter that close_linked_pr
+#     uses.  A cross-reference-only PR can therefore suppress the Gap-2
+#     signal; close_linked_pr will still leave that PR open.)
 #
 # Fail-open on every underlying call; the surfacing is best-effort and
 # must never block stall recovery.
@@ -10917,6 +11268,35 @@ sys.exit(1)
 " "${file_path}" 2>> "${parse_log}" || echo ""
 }
 
+# Swap ai:implementing -> ai:awaiting-approval before a stall-recovery
+# /approved re-trigger of the implement phase.
+#
+# The implement workflow precheck ("Precheck approval phase label" in
+# implement.yml) skips with reason=already_implementing while ai:implementing
+# is present and with reason=wrong_phase while ai:awaiting-approval is absent.
+# A stalled issue still carries ai:implementing from the failed run, so the
+# label must be moved back BEFORE the /approved comment is posted; otherwise
+# the re-triggered run exits at the precheck in a few seconds with conclusion
+# "success", no PR and no diagnostics, and the stall clock keeps running
+# until the judge closes and re-issues (issues #3990 / #3993, implement runs
+# 33837705036 and 33846524770).
+#
+# Shared by the managed arm (execute_stall_recovery_action) and the standalone
+# arm (run_standalone_stall_recovery) so both re-triggers use one contract.
+# Issues exactly one gh call. Fail-open: on failure it emits a ::warning and
+# returns 1; callers still post /approved so a transient label error never
+# suppresses the re-trigger.
+_reset_implementing_to_awaiting_approval_for_retrigger()
+{
+  local issue_num="$1"
+  if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+    --remove-label 'ai:implementing' --add-label 'ai:awaiting-approval' >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "::warning::Failed to swap ai:implementing → ai:awaiting-approval for issue #${issue_num}; /approved retrigger may no-op if label state is unchanged."
+  return 1
+}
+
 execute_stall_recovery_action() {
   local issue_num="$1"
   local phase="$2"
@@ -11054,11 +11434,9 @@ STALL_EOF
       # still carries ai:implementing from the previous run, so we must
       # swap the label back to ai:awaiting-approval BEFORE posting
       # /approved; otherwise the re-triggered workflow will no-op and the
-      # stall recovery loops forever.
-      if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
-        --remove-label 'ai:implementing' --add-label 'ai:awaiting-approval' >/dev/null 2>&1; then
-        echo "::warning::Failed to swap ai:implementing → ai:awaiting-approval for issue #${issue_num}; /approved retrigger may no-op if label state is unchanged."
-      fi
+      # stall recovery loops forever. Shared with the standalone arm via
+      # _reset_implementing_to_awaiting_approval_for_retrigger.
+      _reset_implementing_to_awaiting_approval_for_retrigger "${issue_num}" || true
       local _retrigger_implement_rc=0
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
         -f body="$(cat <<'STALL_EOF'
@@ -13477,6 +13855,11 @@ STALL_EOF
         took_action="true"
         ;;
       retrigger_implement)
+        # Same precheck gate as the managed arm in execute_stall_recovery_action:
+        # without this swap the /approved below fires an implement run that
+        # exits at "Precheck approval phase label" with
+        # reason=already_implementing and never reaches the editor.
+        _reset_implementing_to_awaiting_approval_for_retrigger "${issue_num}" || true
         local _std_retrigger_implement_rc=0
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /approved
@@ -14894,6 +15277,46 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
         set_tracking_phase_label "ai:security-pass"
         PROJECT_STATUS="security-pass"
       elif [ "${SECURITY_FIX_STATE}" = "closed" ]; then
+        # A closed fix issue is not automatically a failed fix.  Orchestrator
+        # stall recovery closes a stalled issue and immediately re-issues it
+        # (execute_stall_recovery_action -> close_and_reissue), but only
+        # re-points wave state, which a security-pass fix issue does not have
+        # (the stall judge reports `local_id: null` for it).  Adopt the live
+        # successor before terminalizing, or the project is failed out from
+        # under a replacement issue that is still in the pipeline.  See
+        # resolve_security_pass_fix_successor for the incident this closes.
+        SECURITY_FIX_SUCCESSOR=""
+        SECURITY_FIX_SUCCESSOR_RC=0
+        SECURITY_FIX_SUCCESSOR="$(resolve_security_pass_fix_successor "${SECURITY_FIX_ISSUE}")" \
+          || SECURITY_FIX_SUCCESSOR_RC=$?
+        if [ "${SECURITY_FIX_SUCCESSOR_RC}" -eq 2 ]; then
+          echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE} is closed without merged-PR evidence, but the stall-recovery successor lookup was inconclusive; retaining fixing state for retry."
+          continue
+        fi
+        if [ "${SECURITY_FIX_SUCCESSOR_RC}" -eq 0 ] && [[ "${SECURITY_FIX_SUCCESSOR}" =~ ^[0-9]+$ ]]; then
+          echo "SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED tracking_issue=${TRACKING_NUM} closed_issue=${SECURITY_FIX_ISSUE} successor=${SECURITY_FIX_SUCCESSOR}"
+          if jq --argjson successor "${SECURITY_FIX_SUCCESSOR}" \
+            '.security_pass_active_fix_issues = [$successor]' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+            :
+          else
+            rm -f "${STATE_FILE}.tmp" || true
+            echo "::warning::Security-pass successor #${SECURITY_FIX_SUCCESSOR} could not be persisted for tracking issue #${TRACKING_NUM}; retaining fixing state for retry."
+            continue
+          fi
+          post_state_comment || true
+          post_tracking_comment "## 🔁 Security-pass fix issue re-issued
+
+Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall recovery and re-issued as #${SECURITY_FIX_SUCCESSOR}. Tracking the successor; completion remains gated until it merges and a clean re-audit passes."
+          COMPLETION_STATUS_STATE_CHANGED="false"
+          update_completion_status_comment "waiting" \
+            "## Completion status"$'\n\n'"**State:** \`security-pass-fixing\`"$'\n\n'"Security-pass fix issue #${SECURITY_FIX_SUCCESSOR} (re-issued from #${SECURITY_FIX_ISSUE}) is in the normal delivery pipeline. Completion remains gated until it merges and a clean current-head re-audit passes." \
+            || true
+          if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+            post_state_comment || true
+          fi
+          continue
+        fi
         echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} reason=fix_issue_closed_without_merged_pr issue=${SECURITY_FIX_ISSUE}"
         security_pass_closed_fix_failure "${SECURITY_FIX_ISSUE}"
         continue
@@ -15702,14 +16125,19 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
       fi
 
       RESUME_SUMMARY="judge_stall_cycles: ${STALL_ACTION}; recovery_count: ${RECOVERY_ACTION}"
+      if [ "${RESET_RECOVERY}" = "true" ]; then
+        RESUME_SUMMARY+="; judge_failed_fingerprints: cleared"
+      fi
       echo "  /judge_resume requested for project #${TRACKING_NUM}. ${RESUME_SUMMARY}. Status failed -> in_progress."
 
       jq \
         --argjson new_judge_stall "${NEW_JUDGE_STALL}" \
         --argjson new_recovery "${NEW_RECOVERY}" \
+        --arg reset_recovery "${RESET_RECOVERY}" \
         '.status = "in_progress" |
          .judge_stall_cycles = $new_judge_stall |
-         .recovery_count = $new_recovery' \
+         .recovery_count = $new_recovery |
+         (if $reset_recovery == "true" then .judge_failed_fingerprints = [] else . end)' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment || true
       post_tracking_comment "## ▶️ Project resumed via /judge_resume
@@ -15763,7 +16191,7 @@ The poller will resume processing on the next cycle."
   # staleness alert all reuse the same compare probe.
   compute_cycle_integration_ahead_by
   INTEGRATION_BACKPRESSURE_BLOCK_MERGES="false"
-  if integration_backpressure_active_for_ahead_by "${CWS_AHEAD_BY}"; then
+  if integration_backpressure_active_for_ahead_by "${CWS_BACKPRESSURE_AHEAD_BY}"; then
     INTEGRATION_BACKPRESSURE_BLOCK_MERGES="true"
   fi
 
@@ -15882,7 +16310,7 @@ The poller will resume processing on the next cycle."
             elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${PW_PR}" "${_pw_head_sha}"; then
               if [ "${INTEGRATION_BACKPRESSURE_BLOCK_MERGES:-false}" = "true" ]; then
                 _integration_backpressure_effective_threshold _bws_effective_threshold
-                echo "  [backward-scan] Backpressure active (ahead_by=${CWS_AHEAD_BY}, threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}, effective_threshold=${_bws_effective_threshold}); deferring auto-merge of PR #${PW_PR} for prior-wave issue #${pw_inum}."
+                echo "  [backward-scan] Backpressure active (ahead_by=${CWS_BACKPRESSURE_AHEAD_BY}, threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}, effective_threshold=${_bws_effective_threshold}); deferring auto-merge of PR #${PW_PR} for prior-wave issue #${pw_inum}."
                 continue
               fi
               if gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
@@ -16342,7 +16770,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   if [[ "${EAGER_FINAL_PR_EFFECTIVE}" =~ ^[0-9]+$ ]]; then
     maybe_apply_force_merge_bypass "${EAGER_FINAL_PR_EFFECTIVE}" "${CWS_INTEGRATION_BRANCH}" "${CWS_AHEAD_BY}" || true
   fi
-  reconcile_integration_backpressure_label "${CWS_INTEGRATION_BRANCH}" "${CWS_DEFAULT_BRANCH:-}" "${CWS_AHEAD_BY}" "${EAGER_FINAL_PR_EFFECTIVE}" || true
+  reconcile_integration_backpressure_label "${CWS_INTEGRATION_BRANCH}" "${CWS_DEFAULT_BRANCH:-}" "${CWS_BACKPRESSURE_AHEAD_BY}" "${EAGER_FINAL_PR_EFFECTIVE}" || true
 
   # ---------------------------------------------------------------
   # Maintain the pinned "completion status" comment on the tracking
@@ -16521,7 +16949,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
         if [ "${INTEGRATION_BACKPRESSURE_BLOCK_MERGES:-false}" = "true" ]; then
           _integration_backpressure_effective_threshold _rtm_effective_threshold
-          echo "  [backpressure] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue}: integration branch ahead_by=${CWS_AHEAD_BY} meets effective threshold ${_rtm_effective_threshold} (configured floor ORCH_INTEGRATION_MAX_AHEAD_COMMITS=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS})."
+          echo "  [backpressure] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue}: integration branch ahead_by=${CWS_BACKPRESSURE_AHEAD_BY} meets effective threshold ${_rtm_effective_threshold} (configured floor ORCH_INTEGRATION_MAX_AHEAD_COMMITS=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS})."
           continue
         fi
         if _pr_checks_completed "${RTM_PR}" "${_rtm_head_sha}"; then
@@ -18730,8 +19158,12 @@ ${PR_DIFF}
     JUDGE_JUSTIFICATION="no justification provided"
   fi
   JUDGE_ASSESSMENT="$(echo "${JUDGE_JSON}" | jq -r '.assessment // ""')"
-  NEW_ISSUES_COUNT="$(echo "${JUDGE_JSON}" | jq '.new_issues | length')"
-  REVERT_COUNT="$(echo "${JUDGE_JSON}" | jq '.issues_to_revert | length')"
+  # Judge JSON is untrusted: only an array counts. A null / string / number
+  # value would otherwise yield a non-zero `length` and then make the
+  # `.new_issues[]` iteration below fail under set -o pipefail, aborting the
+  # whole poll cycle instead of just this verdict's fix-ups.
+  NEW_ISSUES_COUNT="$(echo "${JUDGE_JSON}" | jq '(.new_issues // []) | if type == "array" then length else 0 end')"
+  REVERT_COUNT="$(echo "${JUDGE_JSON}" | jq '(.issues_to_revert // []) | if type == "array" then length else 0 end')"
 
   JUDGE_JUSTIFICATION_NORM="$(normalize_judge_justification_for_fingerprint "${JUDGE_JUSTIFICATION_RAW}")"
   if [ -n "${JUDGE_JUSTIFICATION_NORM}" ]; then
@@ -18758,6 +19190,15 @@ ${PR_DIFF}
   jq --arg fp "${JUDGE_FINGERPRINT}" --argjson repeat_count "${JUDGE_FINGERPRINT_REPEAT_COUNT}" \
     '.judge_last_fingerprint = $fp | .judge_fingerprint_repeat_count = $repeat_count' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  # Has this normalized fingerprint already appeared on an earlier *failed*
+  # verdict of this project (consecutive or ping-pong)? Read before the
+  # failed) arm appends the current one to judge_failed_fingerprints. An
+  # empty fingerprint never matches; the failed) arm charges it anyway.
+  JUDGE_FINGERPRINT_SEEN_BEFORE="false"
+  if [ -n "${JUDGE_FINGERPRINT}" ] \
+    && jq -e --arg fp "${JUDGE_FINGERPRINT}" '((.judge_failed_fingerprints // []) | index($fp)) != null' "${STATE_FILE}" >/dev/null 2>&1; then
+    JUDGE_FINGERPRINT_SEEN_BEFORE="true"
+  fi
 
   echo "Judge verdict: ${JUDGE_STATUS}"
   echo "Justification: ${JUDGE_JUSTIFICATION}"
@@ -18774,7 +19215,7 @@ ${PR_DIFF}
 
 ${JUDGE_ASSESSMENT}
 
-New fix-up issues: ${NEW_ISSUES_COUNT}
+New fix-up issue candidates: ${NEW_ISSUES_COUNT}
 PRs to revert: ${REVERT_COUNT}"
 
   gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
@@ -18879,6 +19320,7 @@ All waves have merged and the judge is satisfied. Transitioning to runtime valid
 
       if [ "${JUDGE_FINGERPRINT_REPEAT_COUNT}" -gt "${JUDGE_REPEAT_FINGERPRINT_MAX}" ]; then
         echo "Judge repeat fingerprint cap exceeded (${JUDGE_FINGERPRINT_REPEAT_COUNT}/${JUDGE_REPEAT_FINGERPRINT_MAX}). Escalating to ai:blocked."
+        echo "RECOVERY_BUDGET_ACCOUNTING tracking_issue=${TRACKING_NUM} charge=0 recovery_count_before=${RECOVERY_COUNT} max=${MAX_RECOVERY_ATTEMPTS} fingerprint_seen_before=${JUDGE_FINGERPRINT_SEEN_BEFORE} distinct_findings_flag=${RECOVERY_COUNT_DISTINCT_FINDINGS} reason=\"repeat-fingerprint breaker tripped; no recovery budget charge\""
 
         jq '.status = "failed" | .judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
@@ -18906,7 +19348,30 @@ To avoid repeating the same recovery loop, the orchestrator is not creating addi
       # ---------------------------------------------------------------
       if [ "${RECOVERY_COUNT}" -ge "${MAX_RECOVERY_ATTEMPTS}" ]; then
         echo "Recovery attempts exhausted (${RECOVERY_COUNT}/${MAX_RECOVERY_ATTEMPTS}). Stopping."
-        jq '.status = "failed" | .judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        echo "RECOVERY_BUDGET_ACCOUNTING tracking_issue=${TRACKING_NUM} charge=0 recovery_count_before=${RECOVERY_COUNT} max=${MAX_RECOVERY_ATTEMPTS} fingerprint_seen_before=${JUDGE_FINGERPRINT_SEEN_BEFORE} distinct_findings_flag=${RECOVERY_COUNT_DISTINCT_FINDINGS} reason=\"recovery budget already exhausted; no additional charge\""
+
+        # Still file the judge's fix-up issues so the diagnosis is not lost.
+        # They carry ai:clarification, so the consumer pipeline starts on
+        # them immediately; the poller only tracks/merges them and re-runs
+        # the judge once a human posts /judge_resume (status stays failed).
+        create_judge_fixup_issues_from_verdict
+        EXHAUSTED_FIXUP_REFS=""
+        if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
+          # Same validity predicate as create_judge_fixup_issues_from_verdict
+          # (non-empty id AND title): an entry the loop skipped must not be
+          # reported as filed, even if a stale issue_number_map row exists.
+          EXHAUSTED_FIXUP_IDS_JSON="$(echo "${JUDGE_JSON}" | jq -c '[.new_issues[]? | select(type == "object") | select((((.id // "") | tostring) as $i | $i != "" and $i != "null") and (((.title // "") | tostring) as $t | $t != "" and $t != "null")) | (.id | tostring)]' 2>/dev/null || echo '[]')"
+          EXHAUSTED_FIXUP_REFS="$(jq -r --argjson ids "${EXHAUSTED_FIXUP_IDS_JSON}" \
+            '[ $ids[] as $id | (.issue_number_map[$id] // empty) | "#\(.)" ] | join(", ")' "${STATE_FILE}" 2>/dev/null || echo "")"
+        fi
+        if [ -z "${EXHAUSTED_FIXUP_REFS}" ]; then
+          EXHAUSTED_FIXUP_REFS="none"
+        fi
+
+        jq --arg fp "${JUDGE_FINGERPRINT}" \
+          '.status = "failed" | .judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1) |
+           .judge_failed_fingerprints = (((.judge_failed_fingerprints // []) + (if $fp == "" then [] else [$fp] end)) | unique)' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
         post_state_comment || true
         handle_comprehensive_release_callback_if_needed "failed" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
@@ -18916,21 +19381,43 @@ To avoid repeating the same recovery loop, the orchestrator is not creating addi
 
 Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) but the judge still reports failure. Manual intervention required.
 
+**Fix-up issues tracked for this verdict:** ${EXHAUSTED_FIXUP_REFS}
+They are tracked in the current wave; post \`/judge_resume\` (optionally with \`--reset-recovery\`) once they merge, or to let the poller merge and re-judge them.
+
 **Assessment:** ${JUDGE_ASSESSMENT}" >/dev/null
 
         set_failed_completion_status_comment \
-          "Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}), but the judge still reports failure. Manual intervention required. See the latest \"## Project Failed\" tracking comment for the diagnostic detail."
-        tg_notify "Project #${TRACKING_NUM} FAILED after ${RECOVERY_COUNT} recovery attempt(s). Manual intervention needed." "CRITICAL"
+          "Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}), but the judge still reports failure. Manual intervention required. Fix-up issues tracked for the final verdict: ${EXHAUSTED_FIXUP_REFS}. See the latest \"## Project Failed\" tracking comment for the diagnostic detail."
+        tg_notify "Project #${TRACKING_NUM} FAILED after ${RECOVERY_COUNT} recovery attempt(s). Fix-up issues tracked: ${EXHAUSTED_FIXUP_REFS}. Manual intervention needed (/judge_resume)." "CRITICAL"
         tg_cleanup_msgs "${TRACKING_NUM}"
         continue
       fi
 
-      echo "Attempting auto-recovery ($((RECOVERY_COUNT + 1))/${MAX_RECOVERY_ATTEMPTS})..."
+      # Recovery-budget accounting for this failed verdict (see
+      # RECOVERY_COUNT_DISTINCT_FINDINGS). Decided before the attempt banner so
+      # the logged budget matches what is persisted below.
+      RECOVERY_BUDGET_CHARGE=1
+      RECOVERY_BUDGET_CHARGE_REASON="legacy accounting: every failed verdict is charged (RECOVERY_COUNT_DISTINCT_FINDINGS=true)"
+      if [ "${RECOVERY_COUNT_DISTINCT_FINDINGS}" != "true" ]; then
+        if [ -z "${JUDGE_FINGERPRINT}" ]; then
+          RECOVERY_BUDGET_CHARGE=1
+          RECOVERY_BUDGET_CHARGE_REASON="empty judge fingerprint; charged conservatively"
+        elif [ "${JUDGE_FINGERPRINT_SEEN_BEFORE}" = "true" ]; then
+          RECOVERY_BUDGET_CHARGE=1
+          RECOVERY_BUDGET_CHARGE_REASON="fingerprint already seen on an earlier failed verdict of this project"
+        else
+          RECOVERY_BUDGET_CHARGE=0
+          RECOVERY_BUDGET_CHARGE_REASON="new finding; not charged against MAX_RECOVERY_ATTEMPTS"
+        fi
+      fi
+      echo "RECOVERY_BUDGET_ACCOUNTING tracking_issue=${TRACKING_NUM} charge=${RECOVERY_BUDGET_CHARGE} recovery_count_before=${RECOVERY_COUNT} max=${MAX_RECOVERY_ATTEMPTS} fingerprint_seen_before=${JUDGE_FINGERPRINT_SEEN_BEFORE} distinct_findings_flag=${RECOVERY_COUNT_DISTINCT_FINDINGS} reason=\"${RECOVERY_BUDGET_CHARGE_REASON}\""
+
+      echo "Attempting auto-recovery (budget used after this cycle: $((RECOVERY_COUNT + RECOVERY_BUDGET_CHARGE))/${MAX_RECOVERY_ATTEMPTS})..."
 
       # Revert problematic PRs if judge requested
       if [ "${REVERT_COUNT}" -gt 0 ]; then
         echo "Reverting ${REVERT_COUNT} PR(s)..."
-        echo "${JUDGE_JSON}" | jq -r '.issues_to_revert[]' | while read -r revert_issue; do
+        echo "${JUDGE_JSON}" | jq -r '.issues_to_revert[]?' | while read -r revert_issue; do
           # Find PR linked to this issue
           PR_TO_REVERT="$(_issue_cross_ref_pr_number_last "${revert_issue}" 2>/dev/null || echo "")"
           if [[ "${PR_TO_REVERT}" =~ ^[0-9]+$ ]]; then
@@ -18969,69 +19456,23 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
         done
       fi
 
-      # Create fix-up issues from judge
-      if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
-        echo "Creating ${NEW_ISSUES_COUNT} fix-up issue(s)..."
-        echo "${JUDGE_JSON}" | jq -c '.new_issues[]' | while read -r fix_issue; do
-          FIX_TITLE="$(echo "${fix_issue}" | jq -r '.title')"
-          FIX_BODY="$(echo "${fix_issue}" | jq -r '.body' | sed 's/\\n/\n/g')"
-          FIX_ID="$(echo "${fix_issue}" | jq -r '.id')"
+      # Create fix-up issues from judge (shared with the recovery-exhausted
+      # arm above so the judge's findings are never discarded).
+      create_judge_fixup_issues_from_verdict
 
-          # --- Dedup guard: skip if this local ID already has a GitHub issue ---
-          if [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
-            EXISTING_NUM="$(jq -r --arg fix_id "${FIX_ID}" '.issue_number_map[$fix_id] // empty' "${STATE_FILE}")"
-            if [ -n "${EXISTING_NUM}" ]; then
-              EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
-              if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
-                jq --arg fix_id "${FIX_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" \
-                  '.issue_number_map[$fix_id] = $existing_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $existing_num, "status": "pending"}]' \
-                  "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-                echo "  ${FIX_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate fix-up."
-                continue
-              fi
-              echo "  ${FIX_ID}: prior issue #${EXISTING_NUM} is already merged/closed, allowing new fix-up."
-            fi
-          fi
-
-          FULL_FIX_BODY="${FIX_BODY}
-
----
-**Orchestrator metadata** (do not edit)
-- Tracking issue: #${TRACKING_NUM}
-- Integration branch: $(jq -r '.integration_branch // ""' "${STATE_FILE}")
-- Local ID: \`${FIX_ID}\`
-- Type: judge-fix-up (cycle $((JUDGE_CYCLE + 1)))
-- Managed by: AI Orchestrator"
-
-          ensure_label_exists "ai:clarification"
-          ensure_label_exists "ai:orchestrator-managed"
-          FIX_URL="$(gh_retry gh issue create \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "${FIX_TITLE}" \
-            --body "${FULL_FIX_BODY}" \
-            --label "ai:clarification" \
-            --label "ai:orchestrator-managed")"
-          echo "  Created fix-up: ${FIX_URL}"
-
-          # Record in state so subsequent cycles/iterations won't recreate,
-          # and add to the current wave so the poller tracks merge progress.
-          FIX_URL_CLEAN="$(printf '%s\n' "${FIX_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
-          FIX_NEW_NUM="$(basename "${FIX_URL_CLEAN%%[?#]*}")"
-          if [[ "${FIX_NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
-            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
-              '.issue_number_map[$fix_id] = $fix_new_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $fix_new_num, "status": "pending"}]' \
-              "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-          fi
-        done
-      fi
-
-      # Update state — increment recovery_count (replaces old recovery_attempted boolean)
-      jq '.judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1) | .recovery_count = ((.recovery_count // (if .recovery_attempted == true then 1 else 0 end)) + 1) | .status = "in_progress"' \
+      # Update state — add the budget charge to recovery_count (replaces the old
+      # recovery_attempted boolean) and record the fingerprint in the
+      # seen-on-failure ledger so a later repeat of it is charged.
+      jq --argjson charge "${RECOVERY_BUDGET_CHARGE}" --arg fp "${JUDGE_FINGERPRINT}" \
+        '.judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1) |
+         .recovery_count = ((.recovery_count // (if .recovery_attempted == true then 1 else 0 end)) + $charge) |
+         .judge_failed_fingerprints = (((.judge_failed_fingerprints // []) + (if $fp == "" then [] else [$fp] end)) | unique) |
+         .status = "in_progress"' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
       post_state_comment || true
 
-      tg_notify "Orchestrator auto-recovery ($((RECOVERY_COUNT + 1))/${MAX_RECOVERY_ATTEMPTS}) started for #${TRACKING_NUM}: ${NEW_ISSUES_COUNT} fix-up issues, ${REVERT_COUNT} reverts." "WARNING"
+      tg_notify "Orchestrator auto-recovery (budget used $((RECOVERY_COUNT + RECOVERY_BUDGET_CHARGE))/${MAX_RECOVERY_ATTEMPTS}; ${RECOVERY_BUDGET_CHARGE_REASON}) started for #${TRACKING_NUM}: ${NEW_ISSUES_COUNT} fix-up candidates, ${REVERT_COUNT} reverts." "WARNING"
       ;;
 
     in_progress)
@@ -19041,11 +19482,20 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
       WAVE_ISSUE_COUNT_BEFORE="$(jq --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | length' "${STATE_FILE}")"
       WAVE_ISSUE_TRACKING_BEFORE="$(jq -c --argjson widx "${WAVE_IDX}" '.waves[$widx].issues | map({id, github_issue, status}) | sort_by(.id)' "${STATE_FILE}")"
       if [ "${NEW_ISSUES_COUNT}" -gt 0 ]; then
-        echo "Creating ${NEW_ISSUES_COUNT} new issue(s) from judge..."
-        echo "${JUDGE_JSON}" | jq -c '.new_issues[]' | while read -r new_issue; do
-          NEW_TITLE="$(echo "${new_issue}" | jq -r '.title')"
-          NEW_BODY="$(echo "${new_issue}" | jq -r '.body' | sed 's/\\n/\n/g')"
-          NEW_ID="$(echo "${new_issue}" | jq -r '.id')"
+        echo "Processing ${NEW_ISSUES_COUNT} new issue candidate(s) from judge..."
+        echo "${JUDGE_JSON}" | jq -c '.new_issues[]? | select(type == "object")' | while read -r new_issue; do
+          NEW_TITLE="$(echo "${new_issue}" | jq -r '.title // ""')"
+          NEW_BODY="$(echo "${new_issue}" | jq -r '.body // ""' | sed 's/\\n/\n/g')"
+          NEW_ID="$(echo "${new_issue}" | jq -r '.id // ""')"
+
+          # Same guard as create_judge_fixup_issues_from_verdict: judge JSON
+          # is untrusted, and an entry without id+title cannot be created and
+          # tracked safely.
+          if [ -z "${NEW_TITLE}" ] || [ "${NEW_TITLE}" = "null" ] \
+            || [ -z "${NEW_ID}" ] || [ "${NEW_ID}" = "null" ]; then
+            echo "::warning::Skipping malformed judge new-issue entry (id='${NEW_ID}', title='${NEW_TITLE}') for tracking issue #${TRACKING_NUM}: both id and title are required."
+            continue
+          fi
 
           # --- Dedup guard: skip if this local ID already has a GitHub issue ---
           if [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then

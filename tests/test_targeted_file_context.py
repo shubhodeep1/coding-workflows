@@ -807,6 +807,129 @@ def test_cli_rejects_unknown_fallback_mode() -> None:
 		assert "invalid choice" in stderr.getvalue()
 
 
+def test_semble_overflow_blocks_stay_within_total_budget() -> None:
+	"""Semble overflow content and its wrappers stay inside the hard cap.
+
+	The first overflowing path may consume the available content budget. Later
+	paths may be summarized as omitted when even their complete markers do not
+	fit; they must never push the rendered block beyond ``max_bytes``.
+	"""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		names = ["src/a.py", "src/b.py", "src/c.py", "src/d.py", "src/e.py"]
+		for rel in names:
+			(root / rel).write_text("x = 1\n" * 4000, encoding="utf-8")
+		semble = root / "fake_semble.py"
+		_make_fake_semble_script(semble, stdout="chunk line\n" * 5000)
+
+		max_bytes = 10_000
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			context = emit_context(
+				names,
+				root,
+				max_bytes=max_bytes,
+				semble_bin=str(semble),
+				semble_index=str(root / ".semble-index"),
+				semble_query_text="task summary",
+				semble_max_chunks=6,
+			)
+
+		chunk_bytes = sum(
+			len(line.encode("utf-8")) + 1
+			for line in context.splitlines()
+			if line.startswith("chunk line")
+		)
+		assert chunk_bytes <= max_bytes
+		assert len(context.encode("utf-8")) <= max_bytes
+		assert "truncated to" in context
+		assert "read with read tool for the rest" in context
+		assert names[0] in context
+		assert "Omitted" in context
+
+
+def test_semble_overflow_query_skipped_once_budget_is_exhausted() -> None:
+	"""No Semble subprocess runs when the rendered content budget is zero."""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		(root / "src" / "big.py").write_text("y = 1\n" * 4000, encoding="utf-8")
+		semble = root / "fake_semble.py"
+		_make_fake_semble_script(semble, stdout="chunk 1\nchunk 2\n")
+
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			context = emit_context(
+				["src/big.py"],
+				root,
+				max_bytes=100,
+				header_text="",
+				semble_bin=str(semble),
+				semble_index=str(root / ".semble-index"),
+				semble_query_text="task summary",
+				semble_max_chunks=6,
+			)
+
+		assert len(context.encode("utf-8")) <= 100
+		assert "chunk-retrieved via semble" not in context
+		assert "SEMBLE_QUERY target=overflow file=src/big.py" not in stderr.getvalue()
+
+
+def test_semble_overflow_empty_clamp_marks_budget_exhausted() -> None:
+	"""An empty UTF-8 clamp logs once and suppresses later queries."""
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		for name in ("a.py", "b.py", "c.py"):
+			(root / "src" / name).write_text("x = 1\n" * 400, encoding="utf-8")
+		semble = root / "fake_semble.py"
+		_make_fake_semble_script(semble, stdout="é secret chunk text\n" * 50)
+
+		preamble_bytes = len("=== TARGETED FILE CONTEXT ===\n\n\n".encode("utf-8"))
+		max_bytes = 256 + preamble_bytes + 1
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			context = emit_context(
+				["src/a.py", "src/b.py", "src/c.py"],
+				root,
+				max_bytes=max_bytes,
+				header_text="",
+				semble_bin=str(semble),
+				semble_index=str(root / ".semble-index"),
+				semble_query_text="task summary",
+				semble_max_chunks=6,
+			)
+
+		assert len(context.encode("utf-8")) <= max_bytes
+		assert "chunk-retrieved via semble" not in context
+		assert "secret chunk text" not in context
+		assert "Omitted 3 path(s)" in context
+		telemetry = stderr.getvalue()
+		assert "SEMBLE_QUERY" not in telemetry
+		assert telemetry.count("SEMBLE_FALLBACK") == 1
+		assert "SEMBLE_FALLBACK target=overflow file=src/a.py reason=budget-exhausted" in telemetry
+		assert "secret chunk text" not in telemetry
+
+
+def test_clamp_text_to_byte_budget_prefers_whole_lines() -> None:
+	clamp = targeted_file_context_module._clamp_text_to_byte_budget
+
+	assert clamp("abc\ndef", 100) == ("abc\ndef", False)
+	assert clamp("abc\ndef", 7) == ("abc\ndef", False)
+	# 4 bytes fits "abc" but not "abc\ndef" (7 bytes).
+	clamped, was_clamped = clamp("abc\ndef", 4)
+	assert (clamped, was_clamped) == ("abc", True)
+	# First line alone overshoots: fall back to a byte prefix rather than
+	# rendering an empty block.
+	clamped, was_clamped = clamp("abcdefgh", 3)
+	assert (clamped, was_clamped) == ("abc", True)
+	assert clamp("abc", 0) == ("", True)
+	# Never splits a multi-byte character.
+	clamped, _ = clamp("\u00e9\u00e9\u00e9", 3)
+	assert clamped == "\u00e9"
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0

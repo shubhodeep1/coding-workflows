@@ -173,6 +173,7 @@ changelog.d/3965-sync-contract-list-union.md
 changelog.d/3967-slash-command-model-pins.md
 changelog.d/3971-deploy-activate-best-model.md
 changelog.d/3972-blocked-already-satisfied-noop.md
+changelog.d/3973-immutable-consumer-workflow-pins.md
 changelog.d/3996-forged-state-resolver-scope.md
 changelog.d/433-readme-wrapper-predicate-examples.md
 changelog.d/changelog-fragment-workflow.md
@@ -518,6 +519,7 @@ scripts/verify_integration_fingerprints.py
 scripts/watchdog_helpers.sh
 scripts/workflow_retro.py
 scripts/workflow_retro_fanout.sh
+scripts/workflow_wrapper_refs.py
 scripts/workspace_init.sh
 scripts/workspace_safety_check.sh
 scripts/worktree_gc.sh

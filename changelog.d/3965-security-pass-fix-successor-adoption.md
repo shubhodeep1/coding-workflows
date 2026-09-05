@@ -1,0 +1,17 @@
+<!-- changelog: fixed -->
+- **A security-pass fix issue that stall recovery closes and re-issues no longer fails the whole orchestrator project.** The poller now adopts the replacement issue and keeps waiting, instead of terminalizing the project under a fix that is still in the pipeline.
+
+The mandatory project security pass parks a project in `security-pass-fixing` and pins one consolidated fix issue in `security_pass_active_fix_issues`. When that fix issue stalls, orchestrator stall recovery closes it and immediately re-issues the same body as a new issue. The re-issue path (`execute_stall_recovery_action` → `close_and_reissue`) only re-points *wave* state — `.issue_number_map` and `.waves[].issues[].github_issue` — and both writes are gated on a non-null `local_id`. A consolidated security-pass fix issue is not a wave issue, so the stall judge reports `local_id: null`, the re-point is skipped, and the pinned number keeps pointing at the closed predecessor. On the next poll tick the `security-pass-fixing` arm read that issue as closed without merged-PR evidence and `security_pass_closed_fix_failure` marked the entire project `failed` / `ai:security-pass-failed`, requiring an operator `/re-security-pass`. Before terminalizing, `scripts/orchestrate_poll_process.sh` now resolves the live successor through the durable `- Tracking issue: #<N>` and ``- Local ID: `security-pass-fix-cycle-<K>` `` body markers that survive re-issue, adopts it into `security_pass_active_fix_issues`, and posts a tracking comment naming both issues.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Extra API cost | 1 paginated `GET /issues?state=open&labels=ai:orchestrator-managed`, only on the closed-without-merge branch |
+| New structured log key | `SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED` |
+| Incident | Project #3965: fix issue #3990 closed and re-issued as #3993 → #3996 at 2026-09-04T01:52Z; project failed at 01:59Z; #3996's fix merged at 18:18Z against an already-reset project |
+| Fix cycles lost to the incident | 2 of 3 (`security_pass_cycle` went back to 0 on the operator's `/re-security-pass`) |
+
+What this means for operators: a stalled security-pass fix issue is now handled entirely by the existing stall-recovery ladder. `/re-security-pass` is still the recovery command for a fix that genuinely closed without merging, and that path is unchanged — a closed fix issue with no matching open successor still fails the project exactly as before. An inconclusive successor lookup, meaning an API or parse failure, keeps the project in `security-pass-fixing` and retries on the next tick rather than reading a transient read failure as evidence of a failed fix.
+
+### For contributors
+
+New helper `resolve_security_pass_fix_successor` returns 0 on a confirmed successor, 1 on a successful lookup with no successor, and 2 on an inconclusive lookup, mirroring the fail-closed dedupe contract `create_security_pass_fix_issue` already uses for the same managed-issue listing. Matching requires both body markers, so another project's fix issue or a different cycle of the same project is never adopted. Regression coverage lives in `tests/test_orchestrate_poll_process.py`. The equivalent gap on the validation path, where `validation_active_fix_issues` is likewise never re-pointed by `close_and_reissue`, is untouched by this change and still routes a re-issued validation fix-up to `mark_validation_failed`.

@@ -1794,6 +1794,11 @@ jobs:
           # read tool" marker so the model uses its native read flow. Set
           # MAX_BYTES=0 to disable inlining entirely.
           TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
+          # Warning threshold for the assembled-prompt size guard below the
+          # prompt assembly. Repo variables are not exported to the shell on
+          # their own, so this is what makes the documented override reach
+          # the guard; the shell-side default remains as a fail-open.
+          IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS: ${{ vars.IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS || '1048576' }}
           # Required by the Fix #5 diagnostics-posting branch. Without
           # this, `[ -n "${GH_TOKEN:-}" ]` at the gh-issue-comment guard
           # is always false and the per-attempt failure diagnostics
@@ -2011,6 +2016,42 @@ jobs:
             echo "=== IMPLEMENTATION CONTEXT ==="
             cat "${IMPLEMENTATION_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
+
+          # Safety net: codex-cli hard-caps `turn/start` stdin at 1,048,576
+          # characters. Overshooting fails EVERY attempt before the editor
+          # runs, with only an opaque "Input exceeds the maximum length of
+          # 1048576 characters" on stderr — the attempt then looks like an
+          # ordinary no-actionable-output bail, so the retry loop, the stall
+          # recovery, and the stall judge all react to the wrong signal. On
+          # run 33796624872 (issue #3990) that chain closed a security-pass
+          # fix issue and gated project #3965 on `ai:security-pass-failed`.
+          # The per-file clamp in scripts/targeted_file_context.py is the
+          # prevention; this line is the diagnosis, and mirrors the guards in
+          # scripts/review_run_reviewers.sh and scripts/review_rb_judge.sh.
+          # The cap is a CHARACTER count, so measure characters (`wc -m`
+          # under a UTF-8 locale) and compare in that unit; bytes are logged
+          # alongside for operators reading the byte-denominated budgets.
+          # Under a non-UTF-8 locale `wc -m` degrades to a byte count, which
+          # is >= the character count and therefore only ever warns early.
+          IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS="${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS:-1048576}"
+          if ! [[ "${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS}" =~ ^[1-9][0-9]*$ ]]; then
+            IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS=1048576
+          fi
+          implement_prompt_assembled_bytes="$(wc -c < "${CODEX_PROMPT_FILE}" 2>/dev/null | tr -d '[:space:]' || printf '0')"
+          if ! [[ "${implement_prompt_assembled_bytes}" =~ ^[0-9]+$ ]]; then
+            implement_prompt_assembled_bytes=0
+          fi
+          # `|| true` (not `|| printf '0'`) so a failed `wc -m` leaves this
+          # EMPTY and the numeric check below falls back to the byte count;
+          # a forced `0` would pass that check and silently under-report.
+          implement_prompt_assembled_chars="$(LC_ALL=C.UTF-8 wc -m < "${CODEX_PROMPT_FILE}" 2>/dev/null | tr -d '[:space:]' || true)"
+          if ! [[ "${implement_prompt_assembled_chars}" =~ ^[0-9]+$ ]]; then
+            implement_prompt_assembled_chars="${implement_prompt_assembled_bytes}"
+          fi
+          echo "Implement prompt assembled size: ${implement_prompt_assembled_chars} characters (${implement_prompt_assembled_bytes} bytes); codex turn/start stdin cap: ${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS} characters."
+          if [ "${implement_prompt_assembled_chars}" -ge "${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS}" ]; then
+            echo "::warning::Implement prompt is ${implement_prompt_assembled_chars} characters (${implement_prompt_assembled_bytes} bytes), at or over codex's ${IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS}-character turn/start stdin cap. Every attempt will fail with 'Input exceeds the maximum length' before the editor runs. Lower TARGETED_FILE_CONTEXT_MAX_BYTES, or shrink pre_assembled_static.txt / the memory context / the issue-comment context."
+          fi
 
           # ── Shared event-idle stall guard for the implement editor ──
           # scripts/codex_stall_guard.sh owns per-pid heartbeats and the

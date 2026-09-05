@@ -27,7 +27,17 @@
           {
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pr_merge_status_guard.py",
-            "timeout": 60
+            "timeout": 90
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__github__push_files|mcp__github__create_or_update_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pr_merge_status_guard.py",
+            "timeout": 90
           }
         ]
       }

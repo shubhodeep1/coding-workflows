@@ -145,7 +145,9 @@ def _readme_wrapper_example(template_name: str) -> dict:
 	fence_start += len("```yaml\n")
 	fence_end = readme.find("\n```", fence_start)
 	assert fence_end >= 0, f"README missing closing fence for {template_name}.yml example"
-	return yaml.safe_load(readme[fence_start:fence_end])
+	raw_example = readme[fence_start:fence_end]
+	assert "@<40-character-release-sha> # stable" in raw_example
+	return yaml.safe_load(raw_example)
 
 
 def test_readme_core_wrapper_examples_carry_reusable_predicates() -> None:
@@ -161,7 +163,7 @@ def test_readme_core_wrapper_examples_carry_reusable_predicates() -> None:
 		assert " ".join(predicate.split()) == _canonical_predicate(job_name), (
 			f"README {template_name}.yml example predicate drifted from the reusable workflow"
 		)
-		expected_uses = f"shubhodeep1/coding-workflows/.github/workflows/{PHASE_WORKFLOWS[job_name][0].rsplit('/', 1)[1]}@stable"
+		expected_uses = f"shubhodeep1/coding-workflows/.github/workflows/{PHASE_WORKFLOWS[job_name][0].rsplit('/', 1)[1]}@<40-character-release-sha>"
 		assert example["jobs"][job_name]["uses"] == expected_uses
 
 

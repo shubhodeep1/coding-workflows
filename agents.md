@@ -349,6 +349,20 @@ PROFILE.name=core manifest=workflow-templates/profiles/core.txt wrappers=ai-clar
 PROFILE.name=standard manifest=workflow-templates/profiles/standard.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml,ai-orchestrate.yml,ai-orchestrate-poll.yml,ai-orchestrate-clarify-respond.yml,ai-validate.yml,ai-sync-labels.yml,review_rb_judge_dispatch.yml
 PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-cancel-on-pr-close.yml,ai-check-failure-triage.yml,ai-clarify.yml,ai-implement.yml,ai-issue-pr-status.yml,ai-memory-maintenance.yml,ai-orchestrate-clarify-respond.yml,ai-orchestrate-poll.yml,ai-orchestrate.yml,ai-plan.yml,ai-review.yml,ai-security-audit.yml,ai-sync-labels.yml,ai-update-workflows.yml,ai-validate.yml,review_rb_judge_dispatch.yml
 
+## Immutable consumer wrapper pins
+
+- Canonical `workflow-templates/*.yml` files retain `@stable` as a delivery-time
+  render token. Installed consumer wrappers must use
+  `@<40-character-release-sha> # stable` instead.
+- `scripts/workflow_wrapper_refs.py` is the single renderer used by the updater,
+  drift audit, and `/seed-repo`; do not duplicate its substitution rules.
+- `.github/workflows/update_workflows.yml` renders every top-level wrapper before
+  any consumer mutation, updates an existing `ai-update-workflows.yml` regardless
+  of profile, and never creates that self-updater when absent.
+- Stable-release repository dispatch payloads carry both `version` and the peeled
+  commit `sha`. Consumers validate the payload but independently resolve current
+  `stable`, so delayed events cannot downgrade installed pins.
+
 ---
 
 ## Optional `.github/ai` operator surfaces
@@ -443,6 +457,17 @@ through one consolidated `ai:orchestrator-managed` issue; a merged fix advances
 `security_pass_cycle`, clears the recorded SHA, and re-runs the pass. Persistent
 findings after `MAX_SECURITY_PASS_CYCLES` (default `3`) terminalize as
 `ai:security-pass-failed`; `/re-security-pass` resets the bounded loop.
+A consolidated fix issue that orchestrator stall recovery closed and re-issued
+is *not* a failed fix: `close_and_reissue` re-points wave state only (both
+writes are gated on a non-null `local_id`, which a security-pass fix issue
+never has), so before terminalizing, `resolve_security_pass_fix_successor`
+looks for the live successor by the durable `- Tracking issue: #<N>` and
+``- Local ID: `security-pass-fix-cycle-<K>` `` body markers that survive
+re-issue, adopts it into `security_pass_active_fix_issues`, and logs
+`SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED`. Both markers must match, so
+another project or another cycle is never adopted. An inconclusive lookup
+(API or parse failure) retains `security-pass-fixing` for retry rather than
+reading a transient read failure as evidence of a failed fix.
 Setting `ENABLE_SECURITY_PASS=false` remains the immediate operator kill switch.
 If an externally merged final PR has already deleted its integration branch,
 the only permitted analysis fallback is that PR's verified immutable head SHA;
@@ -569,6 +594,7 @@ and shipped:
 - `FORCE_MERGE_BYPASS`
 - `BACKPRESSURE_TRIGGERED`
 - `BACKPRESSURE_CLEARED`
+- `RECOVERY_BUDGET_ACCOUNTING`
 - `VALIDATION_DISCOVERY_STARTED`
 - `VALIDATION_DISCOVERY_AGREE`
 - `VALIDATION_DISCOVERY_DISAGREE`
@@ -600,6 +626,7 @@ and shipped:
 - `SECURITY_PASS_CLEAN`
 - `SECURITY_PASS_BLOCKED`
 - `SECURITY_PASS_FIX_ISSUE_CREATED`
+- `SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED`
 - `SECURITY_PASS_FAILED`
 - `SECURITY_PASS_SKIPPED_DISABLED`
 - `SYNC_LIST_UNION_V1`
@@ -685,6 +712,7 @@ LOG_PREFIX.name=HARNESS_ERROR_DETECTED
 LOG_PREFIX.name=FORCE_MERGE_BYPASS
 LOG_PREFIX.name=BACKPRESSURE_TRIGGERED
 LOG_PREFIX.name=BACKPRESSURE_CLEARED
+LOG_PREFIX.name=RECOVERY_BUDGET_ACCOUNTING
 LOG_PREFIX.name=VALIDATION_DISCOVERY_STARTED
 LOG_PREFIX.name=VALIDATION_DISCOVERY_AGREE
 LOG_PREFIX.name=VALIDATION_DISCOVERY_DISAGREE
@@ -716,6 +744,7 @@ LOG_PREFIX.name=SECURITY_PASS_STARTED
 LOG_PREFIX.name=SECURITY_PASS_CLEAN
 LOG_PREFIX.name=SECURITY_PASS_BLOCKED
 LOG_PREFIX.name=SECURITY_PASS_FIX_ISSUE_CREATED
+LOG_PREFIX.name=SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED
 LOG_PREFIX.name=SECURITY_PASS_FAILED
 LOG_PREFIX.name=SECURITY_PASS_SKIPPED_DISABLED
 LOG_PREFIX.name=SYNC_LIST_UNION_V1

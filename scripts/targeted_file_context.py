@@ -549,6 +549,8 @@ def emit_context(
 	read_fallback_rendered = 0
 	off_suppressed = 0
 	omitted_entries = 0
+	# Stop spending subprocess time after an overflow query cannot produce a
+	# complete fragment within the remaining rendered-output budget.
 	semble_overflow_budget_exhausted = False
 	semble_max_chunks = _normalize_semble_max_chunks(semble_max_chunks)
 

@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from workflow_wrapper_refs import pin_reusable_workflow_refs
+
 
 REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # Transient GitHub API failures (intermittent 5xx "Unicorn" HTML pages, secondary
@@ -197,7 +199,10 @@ def normalize_workflow_text(text: str) -> str:
 	return "\n".join(normalized_lines) + "\n"
 
 
-def load_expected_templates(templates_dir: Path) -> dict[str, str]:
+def load_expected_templates(
+	templates_dir: Path,
+	stable_sha: str | None = None,
+) -> dict[str, str]:
 	if not templates_dir.is_dir():
 		raise ValueError(f"templates directory not found: {templates_dir}")
 
@@ -205,7 +210,10 @@ def load_expected_templates(templates_dir: Path) -> dict[str, str]:
 	for path in sorted(templates_dir.glob("ai-*.yml")):
 		if not path.is_file():
 			continue
-		templates[path.name] = normalize_workflow_text(path.read_text(encoding="utf-8"))
+		template_text = path.read_text(encoding="utf-8")
+		if stable_sha is not None:
+			template_text = pin_reusable_workflow_refs(template_text, stable_sha)
+		templates[path.name] = normalize_workflow_text(template_text)
 
 	if not templates:
 		raise ValueError(f"no ai-*.yml templates found under {templates_dir}")
@@ -546,6 +554,11 @@ def parse_args() -> argparse.Namespace:
 		help="Directory containing canonical ai-*.yml workflow templates",
 	)
 	parser.add_argument(
+		"--stable-sha",
+		required=True,
+		help="Peeled 40-character commit SHA for the current stable release",
+	)
+	parser.add_argument(
 		"--output",
 		type=Path,
 		default=None,
@@ -568,7 +581,7 @@ def main() -> int:
 
 	try:
 		repositories = load_target_repositories(args.consumer_repos)
-		expected_templates = load_expected_templates(args.templates_dir)
+		expected_templates = load_expected_templates(args.templates_dir, args.stable_sha)
 	except (OSError, ValueError) as exc:
 		print(f"ERROR: {exc}", file=sys.stderr)
 		return 1
