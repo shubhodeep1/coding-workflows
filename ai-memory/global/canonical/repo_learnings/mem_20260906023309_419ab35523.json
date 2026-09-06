@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Orchestrator and review automation favors fail-closed handling for invalid, forged, stale, or ambiguous state.",
   "timestamps": {
     "created_at": "2026-09-06T02:33:09Z",
