@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.93,
+  "details": "Changes to `scripts/orchestrate_poll_process.sh` commonly require synchronized updates to workflow files and contract-focused tests. Future planning should inspect the shell implementation, workflow YAML, and corresponding `tests/test_orchestrate_poll_process.py` coverage together rather than treating them as independent components.",
+  "fingerprint": "d1216184065ac34470d04a1a0a13fd657f1192086f747e503dc918576d323e1b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34006645075",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34006645075",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3987",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3996",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3998",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4000",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4005",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3989",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3997",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3999",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4001",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4006"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260906023144_ee2396a643",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "The repository treats orchestrator behavior as a contract spanning shell scripts, GitHub Actions workflows, and Python tests.",
+  "timestamps": {
+    "created_at": "2026-09-06T02:31:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
