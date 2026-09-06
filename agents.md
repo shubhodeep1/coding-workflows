@@ -469,8 +469,10 @@ The tick-level reconcile sites run only on the `merge_conflict` and
 wave-status paths and every security-pass transition `continue`s before
 reaching them, which is why #3965 kept rendering `Status: passed` after it
 had failed. The wrapper is hash-gated through
-`reconcile_tracking_issue_body_from_state`: an unchanged body costs no API
-call, a changed one costs the single `gh issue edit`. It fails open.
+`reconcile_tracking_issue_body_from_state`: with `project_body_snapshot`
+present, an unchanged body costs no API call; legacy state without the
+snapshot first fetches the live issue body as its render template. A changed
+body costs the single `gh issue edit`. It fails open.
 A consolidated fix issue that orchestrator stall recovery closed and re-issued
 is *not* a failed fix: `close_and_reissue` re-points wave state only (both
 writes are gated on a non-null `local_id`, which a security-pass fix issue
@@ -641,6 +643,7 @@ and shipped:
 - `SECURITY_PASS_BLOCKED`
 - `SECURITY_PASS_FIX_ISSUE_CREATED`
 - `SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED`
+- `SECURITY_PASS_CYCLE_BUDGET_RESET`
 - `SECURITY_PASS_FAILED`
 - `SECURITY_PASS_SKIPPED_DISABLED`
 
@@ -757,6 +760,7 @@ LOG_PREFIX.name=SECURITY_PASS_CLEAN
 LOG_PREFIX.name=SECURITY_PASS_BLOCKED
 LOG_PREFIX.name=SECURITY_PASS_FIX_ISSUE_CREATED
 LOG_PREFIX.name=SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED
+LOG_PREFIX.name=SECURITY_PASS_CYCLE_BUDGET_RESET
 LOG_PREFIX.name=SECURITY_PASS_FAILED
 LOG_PREFIX.name=SECURITY_PASS_SKIPPED_DISABLED
 LOG_PREFIX.name=SEMBLE_QUERY

@@ -23,7 +23,8 @@ On #3965 the issue body still read `Status: passed` with the previously audited 
 | The numbers that matter | Value |
 | --- | --- |
 | Return transitions that now re-render the body | 7 |
-| Extra API calls when the body is unchanged | 0 |
+| Extra API calls when the body is unchanged and `project_body_snapshot` is present | 0 |
+| Legacy state without `project_body_snapshot` | 1 live issue-body fetch per transition |
 | API calls when the body changes | 1 `gh issue edit` |
 
 What this means for operators: the security-pass block on a tracking issue is trustworthy at a glance. `Status`, `Completed fix cycles`, `Audited integration SHA`, and `Active fix issue` reflect the current state on each return transition, not the last clean pass.

@@ -4474,11 +4474,12 @@ security_pass_current_head_is_valid() {
 #
 # Call it between the state write and post_state_comment so the persisted
 # tracking_body_sync_hash rides the state comment already being posted.
-# The underlying reconcile hash-gates on tracking_body_sync_hash: an
-# unchanged body costs no API call, a changed one costs the single
-# `gh issue edit` (plus the existing readiness refresh when a final PR is
-# open).  Fails open -- a render or edit failure is a warning, never a
-# reason to skip the transition.
+# The underlying reconcile hash-gates on tracking_body_sync_hash.  With
+# project_body_snapshot present, an unchanged body costs no API call; legacy
+# state without it first fetches the live issue body as its render template.
+# A changed body costs the single `gh issue edit` (plus the existing readiness
+# refresh when a final PR is open).  Fails open -- a render or edit failure is
+# a warning, never a reason to skip the transition.
 #
 # Unlike the tick-level callers this does NOT gate on a non-empty
 # integration branch or final PR: the body render reads only state, and
