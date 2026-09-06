@@ -4865,12 +4865,12 @@ run_security_pass_inline() {
   # fresh budget cannot let unaudited code through -- it only restores the fix
   # loop those findings are entitled to.
   if [ "${prior_security_status}" = "passed" ]; then
-    echo "SECURITY_PASS_CYCLE_BUDGET_RESET tracking_issue=${TRACKING_NUM} reason=head_advanced_after_clean_pass head_sha=${current_head_sha}"
-    if jq '.security_pass_cycle = 0' "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null; then
-      mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    if jq '.security_pass_cycle = 0' "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null \
+      && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      echo "SECURITY_PASS_CYCLE_BUDGET_RESET tracking_issue=${TRACKING_NUM} reason=head_advanced_after_clean_pass head_sha=${current_head_sha}"
     else
       rm -f "${STATE_FILE}.tmp"
-      echo "::warning::Could not reset the security-pass fix-cycle budget after the audited head advanced; the previous budget stands."
+      echo "::warning::Could not reset the security-pass fix-cycle budget for tracking issue #${TRACKING_NUM} after the audited head advanced to ${current_head_sha}; the previous budget stands."
     fi
   fi
 

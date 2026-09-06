@@ -3581,7 +3581,7 @@ def test_security_pass_head_advance_after_clean_pass_restores_fix_cycle_budget()
 	assert latest_state["security_pass_status"] == "blocked"
 	assert latest_state["security_pass_cycle"] == 0
 	assert latest_state["security_pass_active_fix_issues"] != []
-	assert result["tracking_labels"] != ["ai:security-pass-failed"]
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" in combined_log
 	assert "reason=head_advanced_after_clean_pass" in combined_log

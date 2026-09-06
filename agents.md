@@ -448,8 +448,8 @@ chain: when the integration head advances past a `passed` SHA (a
 `chore: sync <default> into <integration>` merge, a resolver/judge conflict
 resolution, or a merged fix PR), `run_security_pass_inline` resets
 `security_pass_cycle` to `0` before the re-audit and logs
-`SECURITY_PASS_CYCLE_BUDGET_RESET tracking_issue=<N>
-reason=head_advanced_after_clean_pass head_sha=<sha>`. Findings in the
+`SECURITY_PASS_CYCLE_BUDGET_RESET ... reason=head_advanced_after_clean_pass`
+with the tracking issue number and the new head SHA. Findings in the
 newly-arrived code then get their own fix cycles instead of terminalizing the
 project on sight. The reset fires only from a `passed` prior status; a
 `blocked` chain keeps its spent budget. Completion still requires a clean
