@@ -470,3 +470,177 @@ No exact-word `TODO`, `FIXME`, `HACK`, or `XXX` markers were found.
 | Code modularization | 13 | Large |
 | Expression size reduction | 0 | Small |
 | Medium/Low fixes | 9 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-06)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is directly implementable; `NEEDS_VERIFICATION` requires specified validation; `RISKY_SKIP` must not be auto-implemented because pagination, retries, races, or poller recovery semantics are involved.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — Standalone reissue fetches one issue twice
+
+- **ID:** `MERGE-001`
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `scripts/orchestrate_poll_process.sh:13580-13588`
+- **Current call count:** 2
+- **Proposed call count:** 1
+- **Endpoint(s):** `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence:**
+  ```bash
+  orig_title="$(gh_retry _safe_gh_jq ".../issues/${issue_num}" --jq '.title' || echo "")"
+  orig_body="$(gh_retry _safe_gh_jq ".../issues/${issue_num}" --jq '.body // ""' || echo "")"
+  ```
+  Both adjacent calls use identical scope and authentication, with no intervening mutation.
+- **Proposed fix:** In `run_standalone_stall_recovery()`, fetch one issue JSON object into `orig_issue_json`, then derive `.title` and `.body // ""` locally.
+- **Safety rationale:** This is inside `orchestrate_poll_process.sh` and its standalone stall-recovery path, which mandates `RISKY_SKIP`; combining failures would also change the existing independent fail-open behavior.
+- **Downstream signal:** Do not auto-implement; manually verify that a failed combined fetch preserves the current reissue fallback and recovery-budget behavior.
+
+#### MERGE-002 — Implementation-failed reissue fetches title and body separately
+
+- **ID:** `MERGE-002`
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `scripts/orchestrate_poll_process.sh:18138-18148`
+- **Current call count:** 2
+- **Proposed call count:** 1
+- **Endpoint(s):** `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence:**
+  ```bash
+  IF_TITLE="$(gh_retry _safe_gh_jq ".../issues/${if_issue}" --jq '.title' || echo "")"
+  IF_BODY="$(gh_retry _safe_gh_jq ".../issues/${if_issue}" --jq '.body' || echo "")"
+  ```
+- **Proposed fix:** Fetch one fresh issue object before `sync_implementation_fixup_blockers`, then parse both fields locally. A shared `_fetch_issue_title_body_json` helper could also cover `API-002` and `MERGE-001`.
+- **Safety rationale:** The calls are in the poller’s race-sensitive reissue path, so the explicit `orchestrate_poll_process.sh` trigger requires `RISKY_SKIP`.
+- **Downstream signal:** Do not auto-implement; manually test API failure, concurrent issue edits, no-op reissue limits, and post-Codex blocker reissues.
+
+#### MERGE-003 — Standalone candidate discovery performs eight overlapping searches
+
+- **ID:** `MERGE-003`
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `scripts/orchestrate_poll_process.sh:11870-11918`, `scripts/orchestrate_poll_process.sh:12745-12769`
+- **Current call count:** 8 logical calls: seven label-filtered `gh issue list` calls plus one marker GraphQL call
+- **Proposed call count:** 1 common-path aliased GraphQL call
+- **Endpoint(s):** GitHub GraphQL issue searches for seven labels and two comment markers
+- **Evidence:**
+  ```bash
+  for lbl in ai:clarification ai:planning ai:awaiting-approval \
+    ai:implementing ai:done ai:ready-to-merge ai:review-blocked; do
+    by_label="$(gh_retry gh issue list ... --label "${lbl}" ...)"
+  done
+
+  _markers_resp="$(_fetch_standalone_marker_issues_graphql)"
+  ```
+- **Proposed fix:** Extend and rename `_fetch_standalone_marker_issues_graphql` to return label and marker aliases together. Include `pageInfo.hasNextPage` per alias and retain the existing label-specific and marker-specific fallbacks.
+- **Safety rationale:** This executes in the poller’s stall-recovery path and changes implicit/explicit pagination boundaries, both mandatory `RISKY_SKIP` triggers.
+- **Downstream signal:** Do not auto-implement; manually verify all nine aliases, more-than-100-result fallbacks, partial GraphQL errors, deduplication, and candidate ordering.
+
+#### MERGE-004 — PR metadata collection bypasses an existing consolidated GraphQL helper
+
+- **ID:** `MERGE-004`
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `scripts/review_collect_pr_metadata.sh:209-226`, `scripts/review_collect_pr_metadata.sh:251-269`, `scripts/gh_helpers.sh:714-748`, `scripts/gh_helpers.sh:751-915`
+- **Current call count:** 4 normally; 5 when `REVIEW_BREAK_GLASS_ENABLED` is enabled
+- **Proposed call count:** 1 common-path GraphQL call
+- **Endpoint(s):**
+  - `GET /repos/{owner}/{repo}/pulls/{pr}`
+  - `GET /repos/{owner}/{repo}/issues/{pr}/comments`
+  - `GET /repos/{owner}/{repo}/pulls/{pr}/reviews`
+  - `GET /repos/{owner}/{repo}/pulls/{pr}/comments`
+  - GraphQL `closingIssuesReferences`
+- **Evidence:**
+  ```bash
+  gh_retry "${PR_PAYLOAD_FILE}" api ".../pulls/${PR_NUMBER}"
+  gh_retry "${issue_comments_raw}" api --paginate ".../issues/${PR_NUMBER}/comments"
+  gh_retry "${reviews_raw}" api --paginate ".../pulls/${PR_NUMBER}/reviews"
+  gh_retry "${review_comments_raw}" api --paginate ".../pulls/${PR_NUMBER}/comments"
+  ```
+  `gh_pr_with_all_comments()` already consolidates PR metadata, issue comments, and review comments through one GraphQL request with REST fallback.
+- **Proposed fix:** Extend `gh_pr_with_all_comments()` with raw comment identifiers/timestamps, optional top-level review fields, and `closingIssuesReferences`; update `review_collect_pr_metadata.sh` to populate all existing `PR_*` files from that result.
+- **Safety rationale:** Three existing reads are paginated, and changing REST/GraphQL output shapes can affect review-thread identity and break-glass behavior, mandating `RISKY_SKIP`.
+- **Downstream signal:** Do not auto-implement; manually prove REST/GraphQL parity for IDs, timestamps, review state, path/line fields, ordering, page-boundary fallback, and all existing metadata-helper contract tests.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — Final merge check gate re-fetches its existing PR snapshot
+
+- **ID:** `REUSE-001`
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `scripts/orchestrate_poll_process.sh:8435-8445`, `scripts/orchestrate_poll_process.sh:8491-8507`, `scripts/orchestrate_poll_process.sh:8526-8529`, `scripts/pr_checks_lib.sh:143-167`
+- **Current call count:** 2 PR metadata reads on the non-draft path; 3 after draft promotion
+- **Proposed call count:** 1 and 2 respectively
+- **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls/{pr}`; check-runs and branch-protection calls remain unchanged
+- **Evidence:**
+  ```bash
+  pr_json="$(_fetch_pr_json "${final_pr}")"
+  ...
+  ! _pr_checks_completed "${final_pr}" "" "${default_branch}"
+  ```
+  Passing an empty head SHA causes `_pr_checks_completed()` to fetch the same PR again at `scripts/pr_checks_lib.sh:160-166`.
+- **Proposed fix:** Extract `.head.sha` from the latest `pr_json` snapshot and call `_pr_checks_completed "${final_pr}" "${pr_head_sha}" "${default_branch}"`; retain helper fallback when the extracted SHA is empty.
+- **Safety rationale:** This guards a poller merge race, and all calls inside `orchestrate_poll_process.sh` require `RISKY_SKIP`.
+- **Downstream signal:** Do not auto-implement; manually verify draft promotion, concurrent head changes, empty-SHA fallback, and match-head merge protections.
+
+#### REUSE-002 — Standalone merge check discards cached implementation-PR metadata
+
+- **ID:** `REUSE-002`
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `scripts/orchestrate_poll_process.sh:12331-12342`, `scripts/orchestrate_poll_process.sh:12346-12389`, `scripts/orchestrate_poll_process.sh:13487-13509`, `scripts/pr_checks_lib.sh:143-167`
+- **Current call count:** 2 reads of the selected PR object
+- **Proposed call count:** 1
+- **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls/{pr}`; `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` remains unchanged
+- **Evidence:**
+  ```bash
+  merge_pr_json="${STALL_IMPL_PR_JSON:-}"
+  ...
+  _pr_checks_completed "${merge_pr}"
+  ```
+  `_resolve_issue_implementation_pr()` documents `STALL_IMPL_PR_JSON` as a full PR payload, but omitting the helper’s second argument triggers another PR fetch.
+- **Proposed fix:** Extract `.head.sha` from `merge_pr_json` and call `_pr_checks_completed "${merge_pr}" "${merge_head_sha}"`. Keep the third argument omitted to preserve the legacy all-check-runs policy.
+- **Safety rationale:** The call is inside standalone stall recovery immediately before a merge attempt, an explicit `RISKY_SKIP` path.
+- **Downstream signal:** Do not auto-implement; manually verify missing-SHA fallback, implementation-PR identity checks, and unchanged legacy check-filter semantics.
+
+#### REUSE-003 — Tracking state comments are downloaded again after the main poll loop
+
+- **ID:** `REUSE-003`
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `scripts/orchestrate_poll_process.sh:12716-12742`, `scripts/orchestrate_poll_process.sh:14459-14484`, `scripts/orchestrate_poll_process.sh:19627-19631`
+- **Current call count:** `2N` logical paginated comment reads for `N` tracking issues
+- **Proposed call count:** `N` common path, with direct reads only for cache misses
+- **Endpoint(s):** `GET /repos/{owner}/{repo}/issues/{tracking_issue}/comments?per_page=100`
+- **Evidence:**
+  ```bash
+  COMMENTS='[]'
+  if gh_retry_to_file ... gh api --paginate \
+    ".../issues/${TRACKING_NUM}/comments?per_page=100"; then
+  ```
+  After the tracking loop finishes, `run_standalone_stall_recovery()` iterates the same tracking issues and repeats the paginated comments request solely to reconstruct the managed-child set.
+- **Proposed fix:** Persist a per-tracking-issue final parsed state snapshot under `RUNTIME_DIR`; have `run_standalone_stall_recovery()` derive managed issue numbers from those snapshots and retain the current comments request only when a snapshot is absent or invalid.
+- **Safety rationale:** Pagination, intervening state-comment mutations, and the poller’s race-defense contract all mandate `RISKY_SKIP`.
+- **Downstream signal:** Do not auto-implement; manually prove every successful `post_state_comment` refreshes the snapshot and every skipped, failed, or reconstructed tracker retains the authoritative REST fallback.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — Same-endpoint consolidation is valid, but the final-merge poller path requires manual race and fallback review.
+- API-002: RISKY_SKIP — Poller stall recovery prohibits auto-implementation; a shared fresh issue-object helper can also cover `MERGE-001` and `MERGE-002`.
+- API-003: RISKY_SKIP — Paginated active-run snapshots and status-transition races must be validated before changing query scope.
+- API-004: RISKY_SKIP — The cached default branch is reusable, but this is an upstream-race-sensitive poller conflict path.
+- BATCH-001: RISKY_SKIP — Paginated state comments and partial GraphQL histories require authoritative REST fallback.
+- BATCH-002: NEEDS_VERIFICATION — Verify GraphQL author/committer attribution parity, batch ordering, and fail-open behavior before replacing per-commit REST reads.
+- BATCH-003: RISKY_SKIP — The calls execute inside the poller and preserve separate label-origin and pagination semantics.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | BATCH-002 |
+| RISKY_SKIP | 13 | MERGE-001, MERGE-002, MERGE-003, MERGE-004, REUSE-001, REUSE-002, REUSE-003, API-001, API-002, API-003, API-004, BATCH-001, BATCH-003 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
