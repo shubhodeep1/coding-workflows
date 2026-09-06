@@ -4461,6 +4461,42 @@ security_pass_current_head_is_valid() {
   ' "${STATE_FILE}" >/dev/null 2>&1
 }
 
+# reconcile_tracking_body_after_security_pass_transition
+#
+# Re-render the tracking issue body from state after a security-pass state
+# transition so the `<!-- orchestrator:security-pass -->` block matches the
+# label and any alert comment the same transition posts.  The tick-level
+# reconcile sites run only on the merge_conflict and wave-status paths, while
+# security-pass paths otherwise leave the tick or begin a long-running audit
+# before reaching either.  In #3965, the body froze at the last synced clean pass
+# (`Status: passed`, SHA 75048a2c) while the label read
+# ai:security-pass-failed and state recorded `failed` at 56f71c8f.
+#
+# Call it between the state write and post_state_comment so the persisted
+# tracking_body_sync_hash rides the state comment already being posted.
+# The underlying reconcile hash-gates on tracking_body_sync_hash.  With
+# project_body_snapshot present, an unchanged body costs no API call; legacy
+# state without it first fetches the live issue body as its render template.
+# A changed body costs the single `gh issue edit` (plus the existing readiness
+# refresh when a final PR is open).  Fails open -- a render or edit failure is
+# a warning, never a reason to skip the transition.
+#
+# Unlike the tick-level callers this does NOT gate on a non-empty
+# integration branch or final PR: the body render reads only state, and
+# the two arguments feed only the readiness refresh, which already guards
+# itself on a numeric open final PR.  The transitions that fire with no
+# integration branch at all (security_pass_fail_closed "no integration
+# branch to audit") are exactly the ones a guard would silently skip.
+reconcile_tracking_body_after_security_pass_transition() {
+  local transition_final_pr transition_integration_branch
+  transition_final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+  transition_integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || true)"
+  [[ "${transition_final_pr}" =~ ^[0-9]+$ ]] || transition_final_pr=""
+  TRACKING_BODY_SYNC_STATE_CHANGED="false"
+  reconcile_tracking_issue_body_from_state "${transition_final_pr}" "${transition_integration_branch}" || true
+  return 0
+}
+
 security_pass_fail_closed() {
   local failure_reason="$1"
   local failure_detail="$2"
@@ -4473,6 +4509,7 @@ security_pass_fail_closed() {
     | .security_pass_head_sha = ""
     | .security_pass_active_fix_issues = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass"
   COMPLETION_STATUS_STATE_CHANGED="false"
@@ -4504,6 +4541,7 @@ security_pass_terminal_failure() {
     | .security_pass_head_sha = $head_sha
     | .security_pass_active_fix_issues = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-failed"
   post_tracking_comment "## ❌ Project security pass exhausted
@@ -4637,6 +4675,7 @@ security_pass_closed_fix_failure() {
     | .security_pass_head_sha = ""
     | .security_pass_active_fix_issues = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-failed"
   post_tracking_comment "## ❌ Project security-pass fix did not merge
@@ -4789,6 +4828,7 @@ PY
     | .security_pass_status = "blocked"
     | .security_pass_active_fix_issues = [$issue_number]
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-fixing"
   if [[ "${security_pass_fix_action}" = "created consolidated fix issue" ]]; then
@@ -4849,6 +4889,30 @@ run_security_pass_inline() {
   if security_pass_current_head_is_valid "${current_head_sha}"; then
     return 0
   fi
+  # A recorded clean pass that no longer matches the current head means new
+  # commits landed after that audit -- a `chore: sync <default> into
+  # <integration>` merge, a resolver/judge conflict resolution, or a fix PR.
+  # `security_pass_cycle` bounds *persistent* findings: consecutive fix cycles
+  # that failed to clear the same audit.  A proven-clean audit breaks that
+  # chain, so carrying the spent budget across the invalidation terminalizes
+  # the project on the first finding in the newly-arrived code without ever
+  # granting it a fix cycle.  Incident: project #3965 passed at 75048a2c with
+  # the budget already at 3/3, a routine `chore: sync main into
+  # orchestrator/project-3965` merge advanced the head to 56f71c8f, and the
+  # re-audit's 2 findings went straight to security_pass_terminal_failure with
+  # zero cycles spent on them.  Completion still requires a clean SHA-bound
+  # pass at the current head (security_pass_current_head_is_valid above), so a
+  # fresh budget cannot let unaudited code through -- it only restores the fix
+  # loop those findings are entitled to.
+  if [ "${prior_security_status}" = "passed" ]; then
+    if jq '.security_pass_cycle = 0' "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null \
+      && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      echo "SECURITY_PASS_CYCLE_BUDGET_RESET tracking_issue=${TRACKING_NUM} reason=head_advanced_after_clean_pass head_sha=${current_head_sha}"
+    else
+      rm -f "${STATE_FILE}.tmp"
+      echo "::warning::Could not reset the security-pass fix-cycle budget for tracking issue #${TRACKING_NUM} after the audited head advanced to ${current_head_sha}; the previous budget stands."
+    fi
+  fi
 
   for required_security_asset in \
     scripts/security_audit.sh \
@@ -4908,6 +4972,7 @@ run_security_pass_inline() {
     | .security_pass_head_sha = ""
     | .security_pass_active_fix_issues = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass"
   echo "SECURITY_PASS_STARTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} base_sha=${merge_base_sha}"
@@ -4983,6 +5048,7 @@ run_security_pass_inline() {
       | .security_pass_head_sha = ""
       | .security_pass_active_fix_issues = []
     ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    reconcile_tracking_body_after_security_pass_transition
     post_state_comment || true
     echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} reason=head_changed_during_audit"
     return 1
@@ -4998,6 +5064,7 @@ run_security_pass_inline() {
   if [ "${finding_count}" -eq 0 ]; then
     jq '.status = "in_progress" | .security_pass_active_fix_issues = []' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    reconcile_tracking_body_after_security_pass_transition
     post_state_comment || true
     echo "SECURITY_PASS_CLEAN tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha}"
     return 0
@@ -14717,6 +14784,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
             echo "::warning::Security-pass successor #${SECURITY_FIX_SUCCESSOR} could not be persisted for tracking issue #${TRACKING_NUM}; retaining fixing state for retry."
             continue
           fi
+          reconcile_tracking_body_after_security_pass_transition
           post_state_comment || true
           post_tracking_comment "## 🔁 Security-pass fix issue re-issued
 
@@ -15289,6 +15357,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
         | .security_pass_active_fix_issues = []
         | .security_pass_head_sha = ""
       ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      reconcile_tracking_body_after_security_pass_transition
       post_state_comment || true
       set_tracking_phase_label "ai:security-pass"
       post_tracking_comment "<!-- re-security-pass-dedup:${RE_SECURITY_PASS_COMMENT_ID} -->

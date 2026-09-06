@@ -443,6 +443,37 @@ through one consolidated `ai:orchestrator-managed` issue; a merged fix advances
 `security_pass_cycle`, clears the recorded SHA, and re-runs the pass. Persistent
 findings after `MAX_SECURITY_PASS_CYCLES` (default `3`) terminalize as
 `ai:security-pass-failed`; `/re-security-pass` resets the bounded loop.
+The budget bounds *persistent* findings, so a recorded clean pass breaks the
+chain: when the integration head advances past a `passed` SHA (a
+`chore: sync <default> into <integration>` merge, a resolver/judge conflict
+resolution, or a merged fix PR), `run_security_pass_inline` resets
+`security_pass_cycle` to `0` before the re-audit and logs
+`SECURITY_PASS_CYCLE_BUDGET_RESET ... reason=head_advanced_after_clean_pass`
+with the tracking issue number and the new head SHA. Findings in the
+newly-arrived code then get their own fix cycles instead of terminalizing the
+project on sight. The reset fires only from a `passed` prior status; a
+`blocked` chain keeps its spent budget. Completion still requires a clean
+SHA-bound pass at the current head, so a fresh budget never admits unaudited
+code.
+Every security-pass transition that exits its current path or starts the long-running audit also keeps the tracking issue body honest:
+`security_pass_fail_closed`, `security_pass_terminal_failure`,
+`security_pass_closed_fix_failure`, the `blocked` write in
+`create_security_pass_fix_issue`, the running, clean/pass, and
+head-changed/pending writes in `run_security_pass_inline`, the stall-recovery
+successor adoption, and the `/re-security-pass` reset call
+`reconcile_tracking_body_after_security_pass_transition` between their
+state write and `post_state_comment`, so the rendered
+`<!-- orchestrator:security-pass -->` block matches the label and alert
+comment the same transition posts and the persisted
+`tracking_body_sync_hash` rides the state comment already being posted.
+The tick-level reconcile sites run only on the `merge_conflict` and
+wave-status paths and these security-pass paths leave the tick before reaching
+them, which is why #3965 kept rendering `Status: passed` after it had failed.
+The wrapper is hash-gated through
+`reconcile_tracking_issue_body_from_state`: with `project_body_snapshot`
+present, an unchanged body costs no API call; legacy state without the
+snapshot first fetches the live issue body as its render template. A changed
+body costs the single `gh issue edit`. It fails open.
 A consolidated fix issue that orchestrator stall recovery closed and re-issued
 is *not* a failed fix: `close_and_reissue` re-points wave state only (both
 writes are gated on a non-null `local_id`, which a security-pass fix issue
@@ -613,6 +644,7 @@ and shipped:
 - `SECURITY_PASS_BLOCKED`
 - `SECURITY_PASS_FIX_ISSUE_CREATED`
 - `SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED`
+- `SECURITY_PASS_CYCLE_BUDGET_RESET`
 - `SECURITY_PASS_FAILED`
 - `SECURITY_PASS_SKIPPED_DISABLED`
 
@@ -729,6 +761,7 @@ LOG_PREFIX.name=SECURITY_PASS_CLEAN
 LOG_PREFIX.name=SECURITY_PASS_BLOCKED
 LOG_PREFIX.name=SECURITY_PASS_FIX_ISSUE_CREATED
 LOG_PREFIX.name=SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED
+LOG_PREFIX.name=SECURITY_PASS_CYCLE_BUDGET_RESET
 LOG_PREFIX.name=SECURITY_PASS_FAILED
 LOG_PREFIX.name=SECURITY_PASS_SKIPPED_DISABLED
 LOG_PREFIX.name=SEMBLE_QUERY
@@ -910,7 +943,7 @@ depend on it.
 | `REVIEW_DIATAXIS_LENS_ENABLED` | `true` | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined only (no separate workflow toggle yet): keep it `low` severity and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-integration-head security gate before validation or finalization. Set to `false` for the immediate operator kill switch and legacy completion behavior. |
-| `MAX_SECURITY_PASS_CYCLES` | `3` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. |
+| `MAX_SECURITY_PASS_CYCLES` | `3` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. Resets to `0` when an advancing integration head invalidates a recorded clean pass. |
 | `SECURITY_PASS_CONFIDENCE_GATE` | `8` | Minimum 1-10 confidence score for findings that block the project security pass. |
 
 ## Integration-sync verifier + bootstrap contract
