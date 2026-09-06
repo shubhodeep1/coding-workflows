@@ -112,6 +112,7 @@ analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
 analysis/workflow-optimization-2026-08-30.md
+analysis/workflow-optimization-2026-09-03.md
 changelog.d/.gitkeep
 changelog.d/3738-merge-precheck-promisor-recovery.md
 changelog.d/3763-changes-lost-redispatch-get-method.md
@@ -166,10 +167,15 @@ changelog.d/3939-plan-parser-blockquote-support.md
 changelog.d/3947-security-pass-deleted-branch-recovery.md
 changelog.d/3957-blocker-only-plan-blocked-routing.md
 changelog.d/3963-reissue-preserve-baseline-default-true.md
+changelog.d/3965-security-pass-fix-successor-adoption.md
+changelog.d/3967-plan-blocker-prompt-routing.md
 changelog.d/3967-slash-command-model-pins.md
 changelog.d/3971-deploy-activate-best-model.md
 changelog.d/3972-blocked-already-satisfied-noop.md
 changelog.d/3973-immutable-consumer-workflow-pins.md
+changelog.d/3990-implement-prompt-stdin-cap.md
+changelog.d/3994-stall-recovery-linked-pr-scope.md
+changelog.d/4004-recovery-budget-fixups-backpressure.md
 changelog.d/433-readme-wrapper-predicate-examples.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
@@ -180,6 +186,7 @@ changelog.d/digitalocean-token-access.md
 changelog.d/github-token-access.md
 changelog.d/investigate-issue-attached-upstream-autochain.md
 changelog.d/merged-pr-commit-guard.md
+changelog.d/merged-pr-guard-offline-fallback.md
 changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md
 changelog.d/orchestrator-security-pass-phase-2-audit-engine.md
 changelog.d/orchestrator-security-pass-phase-3-dark-launch.md
