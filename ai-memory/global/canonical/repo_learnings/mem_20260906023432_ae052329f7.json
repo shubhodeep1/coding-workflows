@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "State and contract synchronization logic requires strict validation rather than permissive YAML or list merging.",
   "timestamps": {
     "created_at": "2026-09-06T02:34:32Z",
