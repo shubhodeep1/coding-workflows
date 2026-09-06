@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-4010` at `621c5ed4de1fbcbcd13f75aa277a14535f2f3d6a`  \nIntegration branch metadata matches the checkout.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`  \nScope-mode justification: The acceptance criteria require an exact, one-file replacement. Following \u00a76 priorities, correctness and backward compatibility require avoiding companion-file updates, cleanup, or sibling-output dependencies.\n\n## Automation and lifecycle\n\n- Modify an existing tracked fixture; introduce no scripts.\n- Existing entry point: `.github/workflows/internal-implement.yml`, triggered by an approved issue comment and delegating to `implement.yml`.\n- No new scheduler wiring, supervisor, database operation, or removal-registry entry.\n\n## Clarification interpretation\n\nNo clarification questions were required. The orchestrator auto-answer confirms continuation with the issue\u2019s exact acceptance criteria.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Replace its entire contents with exactly two logical lines:\n    1. `status: ok`\n    2. `decompose-run: 34005835217`\n  - Remove the existing `run_id` and `updated-by` lines.\n\nNo other file may change, including the sibling canary, specification, tests, documentation, or changelog.\n\n## Functions or modules to implement\n\nNone. This is an exact plain-text fixture update.\n\n## Data structures affected\n\nThe canary changes from a three-line `status`/`run_id`/`updated-by` record to a two-line `status`/`decompose-run` record.\n\n## API or interface changes\n\nThe file-content contract of `tests/e2e_smoke_canary.txt` changes to the exact two-line value specified above. No public API, endpoint, CLI, or environment-variable interface changes.\n\n## Decisions\n\n### D1 \u2014 Replace the complete canary contents\n\n- **Chosen:** Write the exact two requested lines with a conventional final newline.\n- **Alternatives considered:** Change only line two; retain the third line; update companion specifications and tests.\n- **Why:** Partial editing would violate \u201cdo not add any other lines,\u201d while companion updates would violate the one-file scope.\n\n## Security considerations\n\n- Trust boundary: treat issue and comment text as untrusted; use only the fixed literals in the acceptance criteria.\n- Authorization: no endpoint or new execution surface is introduced; the existing implementation workflow retains its approval predicate.\n- Validation: compare the resulting bytes exactly and verify the changed-path set.\n- Abuse cases: extra injected lines, copied sibling output, or unrelated file edits must fail verification.\n- No secrets, money handling, network calls, or external inputs are involved.\n\n## Risks and edge cases\n\n- Existing smoke-test helpers and `tests/e2e_smoke_canary_spec.txt` describe a three-line `run_id` format. This conflicts with the requested fixture content, but the explicit one-file acceptance criteria take precedence for this issue.\n- Ensure there are exactly two logical lines; no blank third line or trailing spaces.\n- Do not inspect, copy, or depend on the sibling issue\u2019s output.\n- Preserve the clean worktree outside the declared target.\n\n## Implementation steps\n\n1. Replace `tests/e2e_smoke_canary.txt` with the exact two-line payload.\n2. Verify byte-for-byte content, including the final newline.\n3. Confirm the complete diff contains only `tests/e2e_smoke_canary.txt`.\n\nEstimated implementation time: under 5 minutes.\n\n## Testing considerations\n\n- Assert the file bytes equal:\n  `b\"status: ok\\ndecompose-run: 34005835217\\n\"`.\n- Check that `git diff --name-only HEAD` reports only `tests/e2e_smoke_canary.txt`.\n- Review the final diff to ensure there are two added lines and no unrelated changes.\n\n## Assumptions\n\n- A single terminal newline is permitted and does not constitute an additional logical line.\n- The requested divergence from the existing three-line canary contract is intentional.\n\n## Missing-context notes\n\nNone.\n\n## Pre-execution self-check\n\nPLAN_SELF_CHECK: WARNING: Existing smoke-test contracts expect the prior three-line format, but updating them is explicitly outside this issue\u2019s allowed scope.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "2bf5bbc2c84db72ddd09763f6139244ba68492cc9a84b1dddf849f3979fcf338",
+  "lineage": {
+    "issue_number": 4011,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34006048569",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34006048569",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4011"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260906022109_7b90904cd2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4011,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34006048569"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4011",
+  "timestamps": {
+    "created_at": "2026-09-06T02:21:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
