@@ -3790,6 +3790,73 @@ def test_security_pass_blocked_transition_rerenders_tracking_body_security_block
 	assert [call["issue"] for call in result["issue_body_edit_calls"]] == [192]
 
 
+def test_security_pass_fail_closed_without_integration_branch_rerenders_tracking_body() -> None:
+	"""A fail-closed transition with no integration branch must still re-render.
+
+	The body render reads only state; the reconcile's two arguments feed the
+	readiness refresh, which guards itself.  Gating the wrapper on a non-empty
+	integration branch or final PR would silently skip exactly this path.
+	"""
+	tracking_body = """## Project: Test Project
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+
+### Wave 1
+
+- [x] **issue-1**: First task (priority 1)
+
+<!-- orchestrator:security-pass -->
+### Security pass
+- Status: `passed`
+- Completed fix cycles: 0
+- Audited integration SHA: `stale-passed-head`
+- Active fix issue: none
+<!-- /orchestrator:security-pass -->
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
+	state = _base_state(status="security-pass")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state.update(
+		{
+			"integration_branch": "",
+			"final_merge_pr": None,
+			"project_body_snapshot": tracking_body,
+			"tracking_body_sync_hash": hashlib.sha256(tracking_body.encode("utf-8")).hexdigest(),
+			"security_pass_cycle": 0,
+			"security_pass_status": "passed",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "stale-passed-head",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		tracking_labels=["ai:orchestrator-tracking", "ai:security-pass"],
+		tracking_body=tracking_body,
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "security-pass"
+	assert latest_state["security_pass_status"] == "failed"
+	assert latest_state["security_pass_head_sha"] == ""
+	assert "SECURITY_PASS_FAILED reason=engine_unavailable" in result["stdout"] + result["stderr"]
+	rendered_body = result["issues"]["192"]["body"]
+	assert "- Status: `failed`" in rendered_body
+	assert "- Status: `passed`" not in rendered_body
+	assert "- Audited integration SHA: `none`" in rendered_body
+	assert "stale-passed-head" not in rendered_body
+	assert [call["issue"] for call in result["issue_body_edit_calls"]] == [192]
+
+
 def test_re_security_pass_resets_terminal_state_and_reaudits() -> None:
 	state = _base_state(status="failed")
 	state.update(

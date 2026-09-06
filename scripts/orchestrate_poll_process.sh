@@ -4479,14 +4479,18 @@ security_pass_current_head_is_valid() {
 # `gh issue edit` (plus the existing readiness refresh when a final PR is
 # open).  Fails open -- a render or edit failure is a warning, never a
 # reason to skip the transition.
+#
+# Unlike the tick-level callers this does NOT gate on a non-empty
+# integration branch or final PR: the body render reads only state, and
+# the two arguments feed only the readiness refresh, which already guards
+# itself on a numeric open final PR.  The transitions that fire with no
+# integration branch at all (security_pass_fail_closed "no integration
+# branch to audit") are exactly the ones a guard would silently skip.
 reconcile_tracking_body_after_security_pass_transition() {
   local transition_final_pr transition_integration_branch
   transition_final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
   transition_integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || true)"
   [[ "${transition_final_pr}" =~ ^[0-9]+$ ]] || transition_final_pr=""
-  if [ -z "${transition_integration_branch}" ] && [ -z "${transition_final_pr}" ]; then
-    return 0
-  fi
   TRACKING_BODY_SYNC_STATE_CHANGED="false"
   reconcile_tracking_issue_body_from_state "${transition_final_pr}" "${transition_integration_branch}" || true
   return 0
