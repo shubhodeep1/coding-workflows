@@ -5046,6 +5046,7 @@ run_security_pass_inline() {
       | .security_pass_head_sha = ""
       | .security_pass_active_fix_issues = []
     ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    reconcile_tracking_body_after_security_pass_transition
     post_state_comment || true
     echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} reason=head_changed_during_audit"
     return 1
@@ -5061,6 +5062,7 @@ run_security_pass_inline() {
   if [ "${finding_count}" -eq 0 ]; then
     jq '.status = "in_progress" | .security_pass_active_fix_issues = []' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    reconcile_tracking_body_after_security_pass_transition
     post_state_comment || true
     echo "SECURITY_PASS_CLEAN tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha}"
     return 0

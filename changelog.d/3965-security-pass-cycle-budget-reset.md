@@ -16,17 +16,17 @@ What this means for operators: a project that reaches a clean security pass and 
 
 The reset lives next to the `security_pass_current_head_is_valid` early return in `scripts/orchestrate_poll_process.sh`, which is the single point both security-pass entrypoints funnel through. `ensure_security_pass_before_completion` delegates to `run_security_pass_inline`, so patching the inner call site covers both. A `jq` failure while rewriting the budget is non-fatal: the previous budget stands and the run emits a warning. Two tests cover the split — one asserts the fresh budget and the created fix issue after a head advance from `passed`, the other asserts that a `blocked` prior status still terminalizes on exhaustion.
 
-- **The tracking issue body no longer advertises a clean security pass after the pass has failed.** Every security-pass state transition now re-renders the `### Security pass` block on the tracking issue before posting its state comment.
+- **The tracking issue body no longer advertises stale security-pass state.** Every security-pass return transition now re-renders the `### Security pass` block on the tracking issue before posting its state comment.
 
-On #3965 the issue body still read `Status: passed` with the previously audited SHA while the label said `ai:security-pass-failed` and the alert comment reported exhaustion, because the body was only re-rendered on the merge-conflict and wave-status paths and every security-pass transition returned before reaching them. The `blocked`, fail-closed, terminal-failure, closed-fix-failure, and `/re-security-pass` transitions now call a shared reconcile step between the state write and the state comment, so the persisted body hash rides the comment already being posted.
+On #3965 the issue body still read `Status: passed` with the previously audited SHA while the label said `ai:security-pass-failed` and the alert comment reported exhaustion, because the body was only re-rendered on the merge-conflict and wave-status paths and every security-pass transition returned before reaching them. The `passed`, head-changed `pending`, `blocked`, fail-closed, terminal-failure, closed-fix-failure, and `/re-security-pass` transitions now call a shared reconcile step between the state write and the state comment, so the persisted body hash rides the comment already being posted.
 
 | The numbers that matter | Value |
 | --- | --- |
-| Transitions that now re-render the body | 5 |
+| Return transitions that now re-render the body | 7 |
 | Extra API calls when the body is unchanged | 0 |
 | API calls when the body changes | 1 `gh issue edit` |
 
-What this means for operators: the security-pass block on a tracking issue is trustworthy at a glance. `Status`, `Completed fix cycles`, `Audited integration SHA`, and `Active fix issue` reflect the current state on every transition, not the last clean pass.
+What this means for operators: the security-pass block on a tracking issue is trustworthy at a glance. `Status`, `Completed fix cycles`, `Audited integration SHA`, and `Active fix issue` reflect the current state on each return transition, not the last clean pass.
 
 ### For contributors
 

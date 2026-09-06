@@ -455,10 +455,11 @@ project on sight. The reset fires only from a `passed` prior status; a
 `blocked` chain keeps its spent budget. Completion still requires a clean
 SHA-bound pass at the current head, so a fresh budget never admits unaudited
 code.
-Every security-pass transition also keeps the tracking issue body honest:
+Every security-pass return transition also keeps the tracking issue body honest:
 `security_pass_fail_closed`, `security_pass_terminal_failure`,
 `security_pass_closed_fix_failure`, the `blocked` write in
-`create_security_pass_fix_issue`, and the `/re-security-pass` reset call
+`create_security_pass_fix_issue`, the clean/pass and head-changed/pending writes
+in `run_security_pass_inline`, and the `/re-security-pass` reset call
 `reconcile_tracking_body_after_security_pass_transition` between their
 state write and `post_state_comment`, so the rendered
 `<!-- orchestrator:security-pass -->` block matches the label and alert

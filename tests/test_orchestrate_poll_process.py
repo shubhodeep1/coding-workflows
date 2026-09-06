@@ -3244,9 +3244,32 @@ def test_security_pass_flag_off_releases_security_owned_states() -> None:
 
 def test_security_pass_clean_result_is_sha_bound_and_allows_completion() -> None:
 	prior_alert_marker = "<!-- tg_cleanup:501,502 -->"
+	tracking_body = """## Project: Test Project
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-192`
+
+### Wave 1
+
+- [x] **issue-1**: First task (priority 1)
+
+<!-- orchestrator:security-pass -->
+### Security pass
+- Status: `pending`
+- Completed fix cycles: 0
+- Audited integration SHA: `none`
+- Active fix issue: none
+<!-- /orchestrator:security-pass -->
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
 	state = _base_state()
 	state["integration_branch"] = "orchestrator/project-192"
-	state["project_body_snapshot"] = "untrusted project snapshot"
+	state["project_body_snapshot"] = tracking_body
+	state["tracking_body_sync_hash"] = hashlib.sha256(tracking_body.encode("utf-8")).hexdigest()
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
@@ -3255,6 +3278,7 @@ def test_security_pass_clean_result_is_sha_bound_and_allows_completion() -> None
 		security_audit_payload=_security_audit_findings_payload(),
 		capture_telegram_calls=True,
 		tracking_comments=[prior_alert_marker],
+		tracking_body=tracking_body,
 		issue_labels={10: ["ai:merged"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		env_overrides={"WORKFLOW_EDITOR_MODEL": "openai/security-test-model"},
@@ -3269,6 +3293,10 @@ def test_security_pass_clean_result_is_sha_bound_and_allows_completion() -> None
 	assert capture["confidence_gate"] == "8"
 	assert capture["model"] == "openai/security-test-model"
 	assert capture["diff_base"] != capture["diff_head"]
+	rendered_body = result["issues"]["192"]["body"]
+	assert "- Status: `passed`" in rendered_body
+	assert f"- Audited integration SHA: `{capture['diff_head']}`" in rendered_body
+	assert result["issue_body_edit_calls"][-1] == {"issue": 192, "body": rendered_body}
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_STARTED" in combined_log
 	assert "SECURITY_PASS_CLEAN" in combined_log
@@ -4660,6 +4688,28 @@ def test_security_pass_deleted_branch_rejects_inconsistent_final_pr_metadata() -
 
 
 def test_security_pass_deleted_branch_rechecks_verified_pr_head_after_audit() -> None:
+	tracking_body = """## Project: Test Project
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-192`
+
+### Wave 1
+
+- [x] **issue-1**: First task (priority 1)
+
+<!-- orchestrator:security-pass -->
+### Security pass
+- Status: `passed`
+- Completed fix cycles: 0
+- Audited integration SHA: `stale-passed-head`
+- Active fix issue: none
+<!-- /orchestrator:security-pass -->
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
 	final_pr = {
 		"number": 401,
 		"state": "closed",
@@ -4674,6 +4724,10 @@ def test_security_pass_deleted_branch_rechecks_verified_pr_head_after_audit() ->
 			"integration_branch": "orchestrator/project-192",
 			"final_merge_pr": 401,
 			"final_merge_status": "pending",
+			"project_body_snapshot": tracking_body,
+			"tracking_body_sync_hash": hashlib.sha256(tracking_body.encode("utf-8")).hexdigest(),
+			"security_pass_status": "passed",
+			"security_pass_head_sha": "stale-passed-head",
 		}
 	)
 	result = _run_poller(
@@ -4682,6 +4736,7 @@ def test_security_pass_deleted_branch_rechecks_verified_pr_head_after_audit() ->
 		max_validate_cycles="3",
 		enable_security_pass="true",
 		security_audit_payload=_security_audit_findings_payload(),
+		tracking_body=tracking_body,
 		issue_labels={10: ["ai:merged"]},
 		prs=[final_pr],
 		existing_branches=["main"],
@@ -4693,6 +4748,12 @@ def test_security_pass_deleted_branch_rechecks_verified_pr_head_after_audit() ->
 	assert result["latest_state"]["security_pass_status"] == "pending"
 	assert result["latest_state"]["final_merge_status"] == "pending"
 	assert result["security_audit_capture"] is not None
+	rendered_body = result["issues"]["192"]["body"]
+	assert "- Status: `pending`" in rendered_body
+	assert "- Status: `passed`" not in rendered_body
+	assert "- Audited integration SHA: `none`" in rendered_body
+	assert "stale-passed-head" not in rendered_body
+	assert [call["issue"] for call in result["issue_body_edit_calls"]] == [192]
 	assert "SECURITY_PASS_BLOCKED tracking_issue=192 reason=head_changed_during_audit" in result["stdout"] + result["stderr"]
 
 
