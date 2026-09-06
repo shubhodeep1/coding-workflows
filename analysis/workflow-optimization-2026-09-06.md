@@ -230,3 +230,243 @@ Queueing, compute and retry overhead are evidenced separately; merge/conflict ov
 | Zero-record / fail-open / disabled retrieves | 0 / 0 / 0 |
 | Start events requiring >1 push attempt | 2 |
 | Recent poll event writes | 18/18 successful, one attempt |
+
+## Deep Audit — Workflows & Scripts (2026-09-06)
+
+### Section 1: Bug & Correctness Sweep
+
+#### SEC-001 — Updater sources a helper from the caller owner’s repository
+
+- **ID:** `SEC-001`
+- **File path and line range:** `.github/workflows/update_workflows.yml:629-645`
+- **Severity:** High
+- **Category tag:** `security`
+- **Description:** The workflow fetches and sources `tg_helpers.sh` from `${{ github.repository_owner }}/coding-workflows@stable`, while its canonical template source is explicitly `shubhodeep1/coding-workflows`. In a consumer organization, a sibling repository named `coding-workflows` can therefore supply shell code executed with `GH_PAT` present.
+- **Recommended fix:** Reuse `scripts/tg_helpers.sh` from the already-fetched canonical upstream checkout at `steps.fetch.outputs.upstream_dir`, pinned to `steps.fetch.outputs.upstream_sha`. Remove the second `gh api` fetch entirely.
+
+#### SEC-002 — Attachment downloader permits SSRF through untrusted issue URLs
+
+- **ID:** `SEC-002`
+- **File path and line range:** `scripts/issue_attachment_bundle.py:129-174`
+- **Severity:** Medium
+- **Category tag:** `security`
+- **Description:** `_download()` accepts both HTTP and HTTPS, performs no private, loopback, link-local, or metadata-address validation, and lets `urllib` follow redirects automatically. The CLI feeds it URLs extracted from issue-body text. No current workflow invocation was found, limiting present reachability. [NEEDS VERIFICATION]
+- **Recommended fix:** Require HTTPS, reject user-info URLs, resolve and reject every non-public address, and install a redirect handler that validates each `Location` before following it. Add SSRF tests covering `127.0.0.1`, `::1`, RFC1918, link-local, and public-to-private redirects.
+
+#### BUG-001 — Forward pagination skips comments after deletion
+
+- **ID:** `BUG-001`
+- **File path and line range:** `scripts/tg_helpers.sh:330-374,399-445`
+- **Severity:** Medium
+- **Category tag:** `bug`
+- **Description:** Both cleanup functions fetch page N, delete matching comments from that issue, then increment to page N+1. Deletions shift later comments toward earlier pages, so comments originally on page 2 can move to page 1 and never be visited.
+- **Recommended fix:** Fetch and snapshot all matching comment IDs before deleting anything, then delete from the snapshot. Alternatively, repeatedly fetch page 1 until no matching markers remain.
+
+#### BUG-002 — Telegram marker updates can lose message IDs
+
+- **ID:** `BUG-002`
+- **File path and line range:** `scripts/tg_helpers.sh:155-206,227-277`
+- **Severity:** Medium
+- **Category tag:** `bug`
+- **Description:** `tg_store_msg_id()` and `tg_store_phase_msg_id()` use an unlocked GET–modify–PATCH sequence. Inference: concurrent phase workflows can read the same old body and overwrite each other, permanently dropping one message ID from later cleanup.
+- **Recommended fix:** Use one append-only marker comment per message ID. If retaining aggregation, re-read and verify after PATCH, then merge and retry with a bounded backoff when the submitted ID is absent.
+
+#### BUG-003 — Invalid alert levels are silently classified as DEBUG
+
+- **ID:** `BUG-003`
+- **File path and line range:** `.github/workflows/review_autofix.yml:6391-6430`; `scripts/orchestrate_poll_process.sh:19453`; `scripts/tg_helpers.sh:53-74`
+- **Severity:** Medium
+- **Category tag:** `bug`
+- **Description:** Callers pass `WARN` and `INFO`, but the helper only recognizes `DEBUG`, `WARNING`, `ERROR`, `CRITICAL`, and `SILENT`. Unknown values receive numeric level 0, so these alerts disappear when `ALERT_MSG_LEVEL` is `WARNING` or higher and receive an incorrect critical icon otherwise.
+- **Recommended fix:** Replace `WARN` with `WARNING` and classify the `INFO` call explicitly as `DEBUG` or `WARNING`. Also normalize `WARN` as an alias or reject unknown levels with a warning.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001 — Final PR metadata is fetched twice
+
+- **ID:** `API-001`
+- **File path and line range:** `scripts/orchestrate_poll_process.sh:8361-8373`
+- **Severity:** Medium
+- **Category tag:** `api-redundancy`
+- **Description:** When `final_pr_json_snapshot` is unavailable, the same `/pulls/{final_pr}` endpoint is called separately for `.state` and `.merged_at`. Current count: 2 calls. Proposed count: 1 call.
+- **Recommended fix:** Fetch one PR object and derive both fields locally. Extend the poller’s existing `_fetch_pr_json`/cycle-local snapshot pattern.
+
+#### API-002 — Reissue path fetches one issue separately for title and body
+
+- **ID:** `API-002`
+- **File path and line range:** `scripts/orchestrate_poll_process.sh:11211-11213`
+- **Severity:** Low
+- **Category tag:** `api-redundancy`
+- **Description:** Two consecutive `/issues/{issue_num}` calls extract title and body independently. Current count: 2 calls. Proposed count: 1 call.
+- **Recommended fix:** Fetch `{title,body}` once and parse both values locally, following the poller’s existing cached JSON-object pattern.
+
+#### API-003 — Review sweep uses six fixed active-run snapshots
+
+- **ID:** `API-003`
+- **File path and line range:** `.github/workflows/review_autofix_sweep.yml:123-224`
+- **Severity:** Medium
+- **Category tag:** `api-redundancy`
+- **Description:** Each non-empty sweep queries three statuses for each of two workflow files. Current count: 6 logical paginated calls per tick. Proposed count: 1 repository-wide paginated run snapshot, filtered locally by workflow path, status, and head branch. [NEEDS VERIFICATION]
+- **Recommended fix:** Port the `_load_actions_runs_cached` repository-snapshot pattern from `orchestrate_poll_process.sh`. Validate page-boundary behavior before removing the workflow-scoped fallback.
+
+#### API-004 — Merge-conflict path re-reads the default branch
+
+- **ID:** `API-004`
+- **File path and line range:** `scripts/orchestrate_poll_process.sh:14893-14916`
+- **Severity:** Low
+- **Category tag:** `api-redundancy`
+- **Description:** When `DEFAULT_BRANCH_TRACKING` starts empty, line 14894 populates it, but the immediately following merge-conflict branch fetches the same repository field again. Current count: up to 2 calls. Proposed count: 1 call.
+- **Recommended fix:** Set `FINAL_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING}"` and retain the existing fallback only when the cached value is empty.
+
+#### BATCH-001 — Tracking comments are fetched once per tracking issue
+
+- **ID:** `BATCH-001`
+- **File path and line range:** `scripts/orchestrate_poll_process.sh:14443-14470`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** The main tracking loop performs one paginated comments request for every tracking issue. Current count: N logical calls, potentially multiple underlying pages each. Proposed common-path count: `ceil(N/10)` aliased GraphQL calls, with REST fallback for nodes whose comment connection reports additional pages. [NEEDS VERIFICATION]
+- **Recommended fix:** Extend `_fetch_candidate_issue_details_graphql` with latest-comment nodes and pagination metadata. Preserve the existing REST path for oversized histories and incomplete GraphQL responses.
+
+#### BATCH-002 — Commit attribution is fetched per advancing commit
+
+- **ID:** `BATCH-002`
+- **File path and line range:** `scripts/check_external_branch_advance.sh:163-202`
+- **Severity:** Low
+- **Category tag:** `api-batching`
+- **Description:** Each self-subject commit triggers an individual `/commits/{sha}` request. Current count: K calls. Proposed count: `ceil(K/50)` GraphQL alias batches. [NEEDS VERIFICATION]
+- **Recommended fix:** Extend the aliased-query pattern used by `_fetch_candidate_issue_details_graphql`, requesting commit author and committer user logins. Retain REST fallback if GraphQL attribution differs.
+
+#### BATCH-003 — Merged and ready issue discovery uses two list calls
+
+- **ID:** `BATCH-003`
+- **File path and line range:** `scripts/orchestrate_poll_process.sh:3437-3467`
+- **Severity:** Low
+- **Category tag:** `api-batching`
+- **Description:** `close_merged_issues_sweep()` independently lists `ai:merged` and `ai:ready-to-merge` issues. Current count: 2 calls. Proposed count: 1 aliased GraphQL query. [NEEDS VERIFICATION]
+- **Recommended fix:** Query both label searches as GraphQL aliases and preserve the current deduplication/origin policy. Follow the poller’s documented batched-query and fail-open REST pattern.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Integration-ref bootstrap is copied across five workflows
+
+- **ID:** `DUP-001`
+- **File path and line range:** `.github/workflows/clarify.yml:70-129`; `.github/workflows/plan.yml:133-195`; `.github/workflows/implement.yml:332-391`; `.github/workflows/validate.yml:103-162`; `.github/workflows/orchestrate_clarify_respond.yml:124-183`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** The authenticated clone, fallback checkout, log redaction, cleanup trap, and resolver invocation are nearly identical in five workflows.
+- **Recommended fix:** Add `scripts/resolve_integration_ref_bootstrap.sh` with signature `resolve_integration_ref_bootstrap <repo> <issue> <source-repo> <source-ref> <github-output>`. Reduce each workflow to fetching the immutable bootstrap and invoking it.
+
+#### DUP-002 — Prompt-budget warning helpers are triplicated
+
+- **ID:** `DUP-002`
+- **File path and line range:** `scripts/review_run_reviewers.sh:17-33,69-106`; `scripts/review_apply_fixes.sh:32-48,164-201`; `scripts/review_rb_judge.sh:247-330`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** Prompt-budget lifecycle fallbacks and `emit_context_budget_warn_for_prompt()` are maintained independently across reviewer, editor, and judge paths.
+- **Recommended fix:** Move them to `scripts/prompt_budget_helpers.sh`, exposing `prompt_budget_init <bytes>`, `prompt_budget_embed <path> <cap> <mode>`, `prompt_budget_cleanup`, and `emit_context_budget_warn_for_prompt <phase> <path> <model>`.
+
+#### DUP-003 — Phase-label fallbacks duplicate the canonical helper
+
+- **ID:** `DUP-003`
+- **File path and line range:** `.github/workflows/issue_pr_status.yml:313-327`; `.github/workflows/review_autofix.yml:5041-5080,5225-5270,6603-6624`; `scripts/label_helpers.sh:128-222`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** Multiple inline implementations recreate `ensure_label_exists()` and `set_issue_phase_label_resilient()`, with different colors, return behavior, and label-replacement semantics.
+- **Recommended fix:** Make `scripts/label_helpers.sh` a required staged asset for these jobs and use its existing signatures: `ensure_label_exists <label> [repo]` and `set_issue_phase_label_resilient <issue> <label> <repo>`.
+
+No workflow pair exceeded the requested greater-than-70% near-duplicate threshold; the highest measured pair was exactly 70%.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+All 45 workflows parsed successfully. No expression-bearing `run:` block reached the 15,000-character Medium threshold, no `if:` expression approached the limit, and no workflow exceeded 800 KB.
+
+| Workflow | Largest interpolated `run:` block | Headroom to 21,000 |
+|---|---:|---:|
+| `implement.yml` | 12,608 | 8,392 |
+| `validate.yml` | 10,986 | 10,014 |
+| `workflow-log-analysis.yml` | 10,884 | 10,116 |
+| `orchestrate_poll.yml` | 9,745 | 11,255 |
+| `plan.yml` | 9,402 | 11,598 |
+| `review_autofix.yml` | 9,203 | 11,797 |
+| `test-and-mark-stable.yml` | 8,473 | 12,527 |
+
+Largest workflow: `review_autofix.yml`, approximately 453,925 characters, leaving approximately 594,651 characters before the 1 MB limit. No `EXPR-*` finding is warranted at current sizes.
+
+### Section 5: Cross-Cutting Concerns
+
+#### CONSIST-001 — Documented review thread reuse is intentionally bypassed
+
+- **ID:** `CONSIST-001`
+- **File path and line range:** `scripts/review_apply_fixes.sh:697-710,1599-1601`; `scripts/review_conflict_resolve.sh:131-173,1667-1669`; `README.md:120`
+- **Severity:** Medium
+- **Category tag:** `consistency`
+- **Description:** The documented `CODEX_THREAD_REUSE_ENABLED` contract includes `review_autofix`, but both OpenCode editor and conflict-resolver paths explicitly log that they always use fresh full prompts. Their thread-reuse helper functions are definition-only.
+- **Recommended fix:** Either implement OpenCode session continuation for these paths or remove `review_autofix` from the documented supported phases and delete the inert helper scaffolding.
+
+#### CONSIST-002 — GitHub mutations bypass `curl_gh_api`
+
+- **ID:** `CONSIST-002`
+- **File path and line range:** `scripts/tg_helpers.sh:20-29,169-205,241-277,364-368,435-439`
+- **Severity:** Medium
+- **Category tag:** `consistency`
+- **Description:** The script loads the reset-aware `curl_gh_api` helper but only uses it for reads. GitHub comment POST, PATCH, and DELETE operations use raw `curl ... || true`, bypassing rate-limit detection, reset-aware backoff, and structured errors.
+- **Recommended fix:** Route every `api.github.com` operation through `curl_gh_api`; retain raw curl only for Telegram endpoints.
+
+#### DEAD-001 — Standalone-state reader is unreachable
+
+- **ID:** `DEAD-001`
+- **File path and line range:** `scripts/orchestrate_poll_process.sh:10546-10553`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** Repository-wide search finds no caller of `read_standalone_state_json()`. The live loop parses its already-fetched comments payload directly.
+- **Recommended fix:** Remove the function and its latent paginated API path, preserving `_extract_standalone_state_json_from_comments()` as the sole reader.
+
+#### DEAD-002 — Reviewer compatibility functions have no callers
+
+- **ID:** `DEAD-002`
+- **File path and line range:** `scripts/review_run_reviewers.sh:664-692,3562-3583`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `is_mcp_incompatible_model()`, `strip_all_mcp_server_blocks()`, and `reviewer_patch_reasoning_config_file()` are definition-only after the OpenCode cutover; two are explicit no-ops.
+- **Recommended fix:** Remove them and update tests/docs that pin their presence, or move genuine compatibility behavior into a versioned adapter that has an exercised caller.
+
+#### SHELL-001 — Scalar/array identifier reuse fails shellcheck
+
+- **ID:** `SHELL-001`
+- **File path and line range:** `scripts/codex_thread_reuse.sh:490-494,806-856`
+- **Severity:** Low
+- **Category tag:** `shellcheck`
+- **Description:** `cmd` is an array in `codex_thread_reuse_run_once()` and a scalar command selector in `codex_thread_reuse_main()`. Shellcheck emits SC2178 and SC2128. Function scoping prevents a demonstrated runtime failure, but the collision obscures genuine array misuse.
+- **Recommended fix:** Rename the scalar to `subcommand` and keep `cmd` reserved for command arrays.
+
+#### DEBT-001 — Temporary checkout diagnostics remain always enabled
+
+- **ID:** `DEBT-001`
+- **File path and line range:** `.github/workflows/test-and-mark-stable.yml:273-282,3462-3465,3754-3757,5017-5020,5186-5189`
+- **Severity:** Low
+- **Category tag:** `tech-debt`
+- **Description:** An `if: always()` diagnostic anchor is instantiated in five jobs, with comments explicitly saying to remove it after diagnosing checkout exit 128. It adds repeated Git commands to every release gate.
+- **Recommended fix:** Link the diagnostic to a tracked failure condition or feature flag, then remove all five instances once the checkout fault is resolved.
+
+No exact-word `TODO`, `FIXME`, `HACK`, or `XXX` markers were found.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | SEC-001 |
+| Medium | 12 | BUG-001, BUG-002, BUG-003, SEC-002, API-001, API-003, BATCH-001, DUP-001, DUP-002, DUP-003, CONSIST-001, CONSIST-002 |
+| Low | 8 | API-002, API-004, BATCH-002, BATCH-003, DEAD-001, DEAD-002, SHELL-001, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 1 | Small |
+| API call optimization | 3 | Large |
+| Code modularization | 13 | Large |
+| Expression size reduction | 0 | Small |
+| Medium/Low fixes | 9 | Medium |
