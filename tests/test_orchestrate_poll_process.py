@@ -3545,6 +3545,92 @@ def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
 	)
 
 
+def test_security_pass_head_advance_after_clean_pass_restores_fix_cycle_budget() -> None:
+	"""A clean pass invalidated by new commits gets a fresh bounded fix loop.
+
+	Regression for project #3965: the pass went clean at the audited head with
+	the budget already spent (3/3), a routine `chore: sync main into
+	orchestrator/project-3965` merge advanced the integration head, and the
+	re-audit's findings were terminalized immediately without ever being
+	granted a fix cycle.  `security_pass_cycle` bounds *persistent* findings,
+	so a proven-clean audit must break that chain.
+	"""
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 3,
+			"security_pass_status": "passed",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "head-audited-before-the-sync-merge",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		capture_telegram_calls=True,
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "security-pass-fixing"
+	assert latest_state["security_pass_status"] == "blocked"
+	assert latest_state["security_pass_cycle"] == 0
+	assert latest_state["security_pass_active_fix_issues"] != []
+	assert result["tracking_labels"] != ["ai:security-pass-failed"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" in combined_log
+	assert "reason=head_advanced_after_clean_pass" in combined_log
+	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" not in combined_log
+	assert not any(
+		"security pass FAILED" in notification["message"]
+		for notification in result["telegram_notifications"]
+	)
+
+
+def test_security_pass_exhaustion_still_terminalizes_from_blocked_status() -> None:
+	"""The budget reset must not fire for a still-unresolved fix chain.
+
+	Only a recorded clean pass breaks the persistent-findings chain.  A
+	`blocked` prior status means the previous cycle's findings were never
+	cleared, so the spent budget stands and exhaustion still terminalizes.
+	"""
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 3,
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "stale-head",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_status"] == "failed"
+	assert latest_state["security_pass_cycle"] == 3
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" in combined_log
+	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" not in combined_log
+
+
+
+
 def test_re_security_pass_resets_terminal_state_and_reaudits() -> None:
 	state = _base_state(status="failed")
 	state.update(

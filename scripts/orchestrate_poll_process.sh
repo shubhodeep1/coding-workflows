@@ -4849,6 +4849,30 @@ run_security_pass_inline() {
   if security_pass_current_head_is_valid "${current_head_sha}"; then
     return 0
   fi
+  # A recorded clean pass that no longer matches the current head means new
+  # commits landed after that audit -- a `chore: sync <default> into
+  # <integration>` merge, a resolver/judge conflict resolution, or a fix PR.
+  # `security_pass_cycle` bounds *persistent* findings: consecutive fix cycles
+  # that failed to clear the same audit.  A proven-clean audit breaks that
+  # chain, so carrying the spent budget across the invalidation terminalizes
+  # the project on the first finding in the newly-arrived code without ever
+  # granting it a fix cycle.  Incident: project #3965 passed at 75048a2c with
+  # the budget already at 3/3, a routine `chore: sync main into
+  # orchestrator/project-3965` merge advanced the head to 56f71c8f, and the
+  # re-audit's 2 findings went straight to security_pass_terminal_failure with
+  # zero cycles spent on them.  Completion still requires a clean SHA-bound
+  # pass at the current head (security_pass_current_head_is_valid above), so a
+  # fresh budget cannot let unaudited code through -- it only restores the fix
+  # loop those findings are entitled to.
+  if [ "${prior_security_status}" = "passed" ]; then
+    echo "SECURITY_PASS_CYCLE_BUDGET_RESET tracking_issue=${TRACKING_NUM} reason=head_advanced_after_clean_pass head_sha=${current_head_sha}"
+    if jq '.security_pass_cycle = 0' "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null; then
+      mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    else
+      rm -f "${STATE_FILE}.tmp"
+      echo "::warning::Could not reset the security-pass fix-cycle budget after the audited head advanced; the previous budget stands."
+    fi
+  fi
 
   for required_security_asset in \
     scripts/security_audit.sh \

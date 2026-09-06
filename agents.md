@@ -443,6 +443,18 @@ through one consolidated `ai:orchestrator-managed` issue; a merged fix advances
 `security_pass_cycle`, clears the recorded SHA, and re-runs the pass. Persistent
 findings after `MAX_SECURITY_PASS_CYCLES` (default `3`) terminalize as
 `ai:security-pass-failed`; `/re-security-pass` resets the bounded loop.
+The budget bounds *persistent* findings, so a recorded clean pass breaks the
+chain: when the integration head advances past a `passed` SHA (a
+`chore: sync <default> into <integration>` merge, a resolver/judge conflict
+resolution, or a merged fix PR), `run_security_pass_inline` resets
+`security_pass_cycle` to `0` before the re-audit and logs
+`SECURITY_PASS_CYCLE_BUDGET_RESET tracking_issue=<N>
+reason=head_advanced_after_clean_pass head_sha=<sha>`. Findings in the
+newly-arrived code then get their own fix cycles instead of terminalizing the
+project on sight. The reset fires only from a `passed` prior status; a
+`blocked` chain keeps its spent budget. Completion still requires a clean
+SHA-bound pass at the current head, so a fresh budget never admits unaudited
+code.
 A consolidated fix issue that orchestrator stall recovery closed and re-issued
 is *not* a failed fix: `close_and_reissue` re-points wave state only (both
 writes are gated on a non-null `local_id`, which a security-pass fix issue
@@ -910,7 +922,7 @@ depend on it.
 | `REVIEW_DIATAXIS_LENS_ENABLED` | `true` | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined only (no separate workflow toggle yet): keep it `low` severity and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-integration-head security gate before validation or finalization. Set to `false` for the immediate operator kill switch and legacy completion behavior. |
-| `MAX_SECURITY_PASS_CYCLES` | `3` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. |
+| `MAX_SECURITY_PASS_CYCLES` | `3` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. Resets to `0` when an advancing integration head invalidates a recorded clean pass. |
 | `SECURITY_PASS_CONFIDENCE_GATE` | `8` | Minimum 1-10 confidence score for findings that block the project security pass. |
 
 ## Integration-sync verifier + bootstrap contract
