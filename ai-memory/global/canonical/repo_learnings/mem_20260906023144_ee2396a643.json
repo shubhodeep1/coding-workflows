@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "The repository treats orchestrator behavior as a contract spanning shell scripts, GitHub Actions workflows, and Python tests.",
   "timestamps": {
     "created_at": "2026-09-06T02:31:44Z",
