@@ -14783,6 +14783,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
             echo "::warning::Security-pass successor #${SECURITY_FIX_SUCCESSOR} could not be persisted for tracking issue #${TRACKING_NUM}; retaining fixing state for retry."
             continue
           fi
+          reconcile_tracking_body_after_security_pass_transition
           post_state_comment || true
           post_tracking_comment "## 🔁 Security-pass fix issue re-issued
 

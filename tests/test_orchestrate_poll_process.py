@@ -3999,10 +3999,34 @@ def test_security_pass_closed_fix_adopts_stall_recovery_successor() -> None:
 	predecessor and the whole project was failed out from under a live
 	successor that later merged.
 	"""
+	tracking_body = """## Project: Test Project
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-192`
+
+### Wave 1
+
+- [x] **issue-1**: First task (priority 1)
+
+<!-- orchestrator:security-pass -->
+### Security pass
+- Status: `blocked`
+- Completed fix cycles: 1
+- Audited integration SHA: `audited-head`
+- Active fix issue: #900
+<!-- /orchestrator:security-pass -->
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
 	state = _base_state(status="security-pass-fixing")
 	state.update(
 		{
 			"integration_branch": "orchestrator/project-192",
+			"project_body_snapshot": tracking_body,
+			"tracking_body_sync_hash": hashlib.sha256(tracking_body.encode("utf-8")).hexdigest(),
 			"security_pass_cycle": 1,
 			"security_pass_status": "blocked",
 			"security_pass_active_fix_issues": [900],
@@ -4021,6 +4045,7 @@ def test_security_pass_closed_fix_adopts_stall_recovery_successor() -> None:
 		},
 		issue_bodies={901: _security_pass_reissued_fix_body(192, 2, 900)},
 		issue_closed={900: True},
+		tracking_body=tracking_body,
 		existing_branches=["main", "orchestrator/project-192"],
 	)
 
@@ -4036,6 +4061,13 @@ def test_security_pass_closed_fix_adopts_stall_recovery_successor() -> None:
 		"closed_issue=900 successor=901" in combined_log
 	)
 	assert "SECURITY_PASS_FAILED" not in combined_log
+	rendered_body = result["issues"]["192"]["body"]
+	assert "- Active fix issue: #901" in rendered_body
+	assert "- Active fix issue: #900" not in rendered_body
+	assert [call["issue"] for call in result["issue_body_edit_calls"]] == [192]
+	assert result["latest_state"]["tracking_body_sync_hash"] == hashlib.sha256(
+		rendered_body.encode("utf-8")
+	).hexdigest()
 	tracking_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]]
 	assert any("re-issued as #901" in body for body in tracking_comments)
 	assert not any("/re-security-pass" in body for body in tracking_comments)

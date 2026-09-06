@@ -455,20 +455,21 @@ project on sight. The reset fires only from a `passed` prior status; a
 `blocked` chain keeps its spent budget. Completion still requires a clean
 SHA-bound pass at the current head, so a fresh budget never admits unaudited
 code.
-Every security-pass return transition also keeps the tracking issue body honest:
+Every security-pass transition that exits its current path also keeps the tracking issue body honest:
 `security_pass_fail_closed`, `security_pass_terminal_failure`,
 `security_pass_closed_fix_failure`, the `blocked` write in
 `create_security_pass_fix_issue`, the clean/pass and head-changed/pending writes
-in `run_security_pass_inline`, and the `/re-security-pass` reset call
+in `run_security_pass_inline`, the stall-recovery successor adoption, and the
+`/re-security-pass` reset call
 `reconcile_tracking_body_after_security_pass_transition` between their
 state write and `post_state_comment`, so the rendered
 `<!-- orchestrator:security-pass -->` block matches the label and alert
 comment the same transition posts and the persisted
 `tracking_body_sync_hash` rides the state comment already being posted.
 The tick-level reconcile sites run only on the `merge_conflict` and
-wave-status paths and every security-pass transition `continue`s before
-reaching them, which is why #3965 kept rendering `Status: passed` after it
-had failed. The wrapper is hash-gated through
+wave-status paths and these security-pass paths leave the tick before reaching
+them, which is why #3965 kept rendering `Status: passed` after it had failed.
+The wrapper is hash-gated through
 `reconcile_tracking_issue_body_from_state`: with `project_body_snapshot`
 present, an unchanged body costs no API call; legacy state without the
 snapshot first fetches the live issue body as its render template. A changed
