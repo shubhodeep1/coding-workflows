@@ -15,3 +15,19 @@ What this means for operators: a project that reaches a clean security pass and 
 ### For contributors
 
 The reset lives next to the `security_pass_current_head_is_valid` early return in `scripts/orchestrate_poll_process.sh`, which is the single point both security-pass entrypoints funnel through. `ensure_security_pass_before_completion` delegates to `run_security_pass_inline`, so patching the inner call site covers both. A `jq` failure while rewriting the budget is non-fatal: the previous budget stands and the run emits a warning. Two tests cover the split — one asserts the fresh budget and the created fix issue after a head advance from `passed`, the other asserts that a `blocked` prior status still terminalizes on exhaustion.
+
+- **The tracking issue body no longer advertises a clean security pass after the pass has failed.** Every security-pass state transition now re-renders the `### Security pass` block on the tracking issue before posting its state comment.
+
+On #3965 the issue body still read `Status: passed` with the previously audited SHA while the label said `ai:security-pass-failed` and the alert comment reported exhaustion, because the body was only re-rendered on the merge-conflict and wave-status paths and every security-pass transition returned before reaching them. The `blocked`, fail-closed, terminal-failure, closed-fix-failure, and `/re-security-pass` transitions now call a shared reconcile step between the state write and the state comment, so the persisted body hash rides the comment already being posted.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Transitions that now re-render the body | 5 |
+| Extra API calls when the body is unchanged | 0 |
+| API calls when the body changes | 1 `gh issue edit` |
+
+What this means for operators: the security-pass block on a tracking issue is trustworthy at a glance. `Status`, `Completed fix cycles`, `Audited integration SHA`, and `Active fix issue` reflect the current state on every transition, not the last clean pass.
+
+### For contributors
+
+The reconcile is `reconcile_tracking_body_after_security_pass_transition` in `scripts/orchestrate_poll_process.sh`, a thin wrapper over the existing hash-gated `reconcile_tracking_issue_body_from_state`. It reads `final_merge_pr` and `integration_branch` from state, mirrors the existing callers' guard, and fails open. Already-stale issues such as #3965 are not self-healed on the steady-state `failed` tick, by design, to avoid a per-tick live-body fetch for legacy states with no `project_body_snapshot`; they re-render on the next transition, for example `/re-security-pass`. Two tests cover the terminal-failure and `blocked` transitions, including a second tick that asserts no edit is issued when the body is unchanged.

@@ -4461,6 +4461,37 @@ security_pass_current_head_is_valid() {
   ' "${STATE_FILE}" >/dev/null 2>&1
 }
 
+# reconcile_tracking_body_after_security_pass_transition
+#
+# Re-render the tracking issue body from state after a security-pass state
+# transition so the `<!-- orchestrator:security-pass -->` block matches the
+# label and alert comment the same transition posts.  The tick-level
+# reconcile sites run only on the merge_conflict and wave-status paths, and
+# every security-pass transition `continue`s before reaching either, so the
+# body froze at whatever was last synced -- for #3965 that was the clean pass
+# (`Status: passed`, SHA 75048a2c) while the label read
+# ai:security-pass-failed and state recorded `failed` at 56f71c8f.
+#
+# Call it between the state write and post_state_comment so the persisted
+# tracking_body_sync_hash rides the state comment already being posted.
+# The underlying reconcile hash-gates on tracking_body_sync_hash: an
+# unchanged body costs no API call, a changed one costs the single
+# `gh issue edit` (plus the existing readiness refresh when a final PR is
+# open).  Fails open -- a render or edit failure is a warning, never a
+# reason to skip the transition.
+reconcile_tracking_body_after_security_pass_transition() {
+  local transition_final_pr transition_integration_branch
+  transition_final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+  transition_integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || true)"
+  [[ "${transition_final_pr}" =~ ^[0-9]+$ ]] || transition_final_pr=""
+  if [ -z "${transition_integration_branch}" ] && [ -z "${transition_final_pr}" ]; then
+    return 0
+  fi
+  TRACKING_BODY_SYNC_STATE_CHANGED="false"
+  reconcile_tracking_issue_body_from_state "${transition_final_pr}" "${transition_integration_branch}" || true
+  return 0
+}
+
 security_pass_fail_closed() {
   local failure_reason="$1"
   local failure_detail="$2"
@@ -4473,6 +4504,7 @@ security_pass_fail_closed() {
     | .security_pass_head_sha = ""
     | .security_pass_active_fix_issues = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass"
   COMPLETION_STATUS_STATE_CHANGED="false"
@@ -4504,6 +4536,7 @@ security_pass_terminal_failure() {
     | .security_pass_head_sha = $head_sha
     | .security_pass_active_fix_issues = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-failed"
   post_tracking_comment "## ❌ Project security pass exhausted
@@ -4637,6 +4670,7 @@ security_pass_closed_fix_failure() {
     | .security_pass_head_sha = ""
     | .security_pass_active_fix_issues = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-failed"
   post_tracking_comment "## ❌ Project security-pass fix did not merge
@@ -4789,6 +4823,7 @@ PY
     | .security_pass_status = "blocked"
     | .security_pass_active_fix_issues = [$issue_number]
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-fixing"
   if [[ "${security_pass_fix_action}" = "created consolidated fix issue" ]]; then
@@ -15313,6 +15348,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
         | .security_pass_active_fix_issues = []
         | .security_pass_head_sha = ""
       ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      reconcile_tracking_body_after_security_pass_transition
       post_state_comment || true
       set_tracking_phase_label "ai:security-pass"
       post_tracking_comment "<!-- re-security-pass-dedup:${RE_SECURITY_PASS_COMMENT_ID} -->

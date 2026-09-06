@@ -455,6 +455,21 @@ project on sight. The reset fires only from a `passed` prior status; a
 `blocked` chain keeps its spent budget. Completion still requires a clean
 SHA-bound pass at the current head, so a fresh budget never admits unaudited
 code.
+Every security-pass transition also keeps the tracking issue body honest:
+`security_pass_fail_closed`, `security_pass_terminal_failure`,
+`security_pass_closed_fix_failure`, the `blocked` write in
+`create_security_pass_fix_issue`, and the `/re-security-pass` reset call
+`reconcile_tracking_body_after_security_pass_transition` between their
+state write and `post_state_comment`, so the rendered
+`<!-- orchestrator:security-pass -->` block matches the label and alert
+comment the same transition posts and the persisted
+`tracking_body_sync_hash` rides the state comment already being posted.
+The tick-level reconcile sites run only on the `merge_conflict` and
+wave-status paths and every security-pass transition `continue`s before
+reaching them, which is why #3965 kept rendering `Status: passed` after it
+had failed. The wrapper is hash-gated through
+`reconcile_tracking_issue_body_from_state`: an unchanged body costs no API
+call, a changed one costs the single `gh issue edit`. It fails open.
 A consolidated fix issue that orchestrator stall recovery closed and re-issued
 is *not* a failed fix: `close_and_reissue` re-points wave state only (both
 writes are gated on a non-null `local_id`, which a security-pass fix issue
