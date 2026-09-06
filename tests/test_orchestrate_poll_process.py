@@ -970,6 +970,7 @@ def _run_poller(
 				"  'diff_head': os.environ.get('SECURITY_AUDIT_DIFF_HEAD'),\n"
 				"  'confidence_gate': os.environ.get('SECURITY_AUDIT_CONFIDENCE_GATE'),\n"
 				"  'model': os.environ.get('WORKFLOW_EDITOR_MODEL'),\n"
+				"  'tracking_body': json.loads(Path(os.environ['GH_MOCK_STORE']).read_text(encoding='utf-8'))['issues']['192']['body'],\n"
 				"}), encoding='utf-8')\n"
 				"PY\n"
 				f"if [ {int(security_audit_exit_code)} -ne 0 ]; then exit {int(security_audit_exit_code)}; fi\n"
@@ -3293,6 +3294,9 @@ def test_security_pass_clean_result_is_sha_bound_and_allows_completion() -> None
 	assert capture["confidence_gate"] == "8"
 	assert capture["model"] == "openai/security-test-model"
 	assert capture["diff_base"] != capture["diff_head"]
+	assert "- Status: `running`" in capture["tracking_body"]
+	assert "- Status: `pending`" not in capture["tracking_body"]
+	assert "- Audited integration SHA: `none`" in capture["tracking_body"]
 	rendered_body = result["issues"]["192"]["body"]
 	assert "- Status: `passed`" in rendered_body
 	assert f"- Audited integration SHA: `{capture['diff_head']}`" in rendered_body
@@ -3657,8 +3661,6 @@ def test_security_pass_exhaustion_still_terminalizes_from_blocked_status() -> No
 	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" not in combined_log
 
 
-
-
 def test_security_pass_terminal_failure_rerenders_tracking_body_security_block() -> None:
 	"""The tracking body must not keep advertising a clean pass after exhaustion.
 
@@ -3731,7 +3733,7 @@ Summary text.
 	assert stale_passed_sha not in rendered_body
 	assert "- Completed fix cycles: 3" in rendered_body
 	assert rendered_body.count("<!-- orchestrator:security-pass -->") == 1
-	assert [call["issue"] for call in first["issue_body_edit_calls"]] == [192]
+	assert first["issue_body_edit_calls"][-1] == {"issue": 192, "body": rendered_body}
 	assert latest_state["tracking_body_sync_hash"] == hashlib.sha256(rendered_body.encode("utf-8")).hexdigest()
 
 	first_tracking_comments = [
@@ -3815,7 +3817,7 @@ def test_security_pass_blocked_transition_rerenders_tracking_body_security_block
 	assert "- Status: `passed`" not in rendered_body
 	assert f"- Active fix issue: #{fix_issues[0]}" in rendered_body
 	assert "stale-passed-head" not in rendered_body
-	assert [call["issue"] for call in result["issue_body_edit_calls"]] == [192]
+	assert result["issue_body_edit_calls"][-1] == {"issue": 192, "body": rendered_body}
 
 
 def test_security_pass_fail_closed_without_integration_branch_rerenders_tracking_body() -> None:
@@ -3882,7 +3884,7 @@ def test_security_pass_fail_closed_without_integration_branch_rerenders_tracking
 	assert "- Status: `passed`" not in rendered_body
 	assert "- Audited integration SHA: `none`" in rendered_body
 	assert "stale-passed-head" not in rendered_body
-	assert [call["issue"] for call in result["issue_body_edit_calls"]] == [192]
+	assert result["issue_body_edit_calls"][-1] == {"issue": 192, "body": rendered_body}
 
 
 def test_re_security_pass_resets_terminal_state_and_reaudits() -> None:
@@ -4785,7 +4787,7 @@ def test_security_pass_deleted_branch_rechecks_verified_pr_head_after_audit() ->
 	assert "- Status: `passed`" not in rendered_body
 	assert "- Audited integration SHA: `none`" in rendered_body
 	assert "stale-passed-head" not in rendered_body
-	assert [call["issue"] for call in result["issue_body_edit_calls"]] == [192]
+	assert result["issue_body_edit_calls"][-1] == {"issue": 192, "body": rendered_body}
 	assert "SECURITY_PASS_BLOCKED tracking_issue=192 reason=head_changed_during_audit" in result["stdout"] + result["stderr"]
 
 

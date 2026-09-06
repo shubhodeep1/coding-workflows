@@ -4465,10 +4465,10 @@ security_pass_current_head_is_valid() {
 #
 # Re-render the tracking issue body from state after a security-pass state
 # transition so the `<!-- orchestrator:security-pass -->` block matches the
-# label and alert comment the same transition posts.  The tick-level
-# reconcile sites run only on the merge_conflict and wave-status paths, and
-# every security-pass transition `continue`s before reaching either, so the
-# body froze at whatever was last synced -- for #3965 that was the clean pass
+# label and any alert comment the same transition posts.  The tick-level
+# reconcile sites run only on the merge_conflict and wave-status paths, while
+# security-pass paths otherwise leave the tick or begin a long-running audit
+# before reaching either.  In #3965, the body froze at the last synced clean pass
 # (`Status: passed`, SHA 75048a2c) while the label read
 # ai:security-pass-failed and state recorded `failed` at 56f71c8f.
 #
@@ -4972,6 +4972,7 @@ run_security_pass_inline() {
     | .security_pass_head_sha = ""
     | .security_pass_active_fix_issues = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass"
   echo "SECURITY_PASS_STARTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} base_sha=${merge_base_sha}"
