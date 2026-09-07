@@ -5611,8 +5611,11 @@ def test_review_blocked_close_and_reissue_rechecks_head_after_replacement_creati
 	)
 	assert len(result.get("created_issues", [])) == 1
 	assert result.get("closed_prs", []) == []
+	assert result.get("closed_issues", []) == [900]
+	assert result["issues"]["900"]["closed"] is True
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 	assert "head changed while the replacement issue was being created" in result["stdout"]
+	assert "Closed stale replacement issue #900" in result["stdout"]
 	assert not any(
 		"closed PR #901 and reissued" in notification["message"]
 		for notification in result["telegram_notifications"]

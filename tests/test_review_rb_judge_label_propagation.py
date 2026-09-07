@@ -299,6 +299,11 @@ if args[:2] == ["issue", "create"]:
 	print(f"https://github.com/{repo}/issues/{next_num}")
 	sys.exit(0)
 
+if args[:2] == ["issue", "close"]:
+	state.setdefault("issue_close_args", []).append(args)
+	save()
+	sys.exit(0)
+
 if args[:2] == ["pr", "close"]:
 	state.setdefault("pr_close_args", []).append(args)
 	save()
@@ -511,6 +516,7 @@ def _run_close_and_reissue(
 			"FIRST_ISSUE_LABELS_JSON": json.dumps(parent_label_set),
 			"JUDGE_JSON": judge_json,
 			"RB_ACTION": "close_and_reissue",
+			"RB_APPROVAL_REQUEST_ID": "review_blocked_approval_20260907010101_0123456789",
 			"REISSUE_PRESERVE_BASELINE_ENABLED": reissue_preserve_baseline_enabled,
 			"GITHUB_RUN_ID": "777",
 			"GITHUB_RUN_ATTEMPT": "1",
@@ -636,10 +642,12 @@ def test_close_and_reissue_rechecks_head_after_replacement_creation() -> None:
 	)
 
 	assert len(state.get("issue_create_args", [])) == 1
+	assert len(state.get("issue_close_args", [])) == 1
 	assert state.get("pr_close_args", []) == []
 	assert "judge_handled=true" in state["_github_output"]
 	assert "approved_close_precondition_failed" in state["_github_output"]
 	assert "head changed while the replacement issue was being created" in state["_stdout"]
+	assert "Closed stale replacement issue" in state["_stdout"]
 
 
 def test_review_blocked_prompt_includes_phase_e_schema_fields() -> None:
@@ -1914,7 +1922,8 @@ def test_merge_with_followup_refuses_unapproved_live_or_merged_head() -> None:
 		)
 		assert state.get("issue_create_args", []) == []
 		assert "pr_merge_calls" not in state
-		assert "judge_handled=true" not in state["_github_output"]
+		assert "judge_handled=true" in state["_github_output"]
+		assert "judge_action=skip" in state["_github_output"]
 		assert "judge_skip_reason=approved_merge_precondition_failed" in state["_github_output"]
 
 

@@ -159,6 +159,7 @@ def test_approval_request_ids_use_the_canonical_generator() -> None:
 	text = (REPO_ROOT / "scripts" / "gh_helpers.sh").read_text(encoding="utf-8")
 	assert 'make_record_id("review_blocked_approval")' in text
 	assert "REVIEW_BLOCKED_APPROVAL_V1" in text
+	assert "is:issue is:open in:body review-blocked-approval-request:" in text
 
 
 def test_approval_pending_is_handled_without_critical_alerts() -> None:
@@ -172,6 +173,10 @@ def test_approval_pending_is_handled_without_critical_alerts() -> None:
 	assert 'while [ "${RB_MERGE_POLL_INDEX}" -lt "${RB_MERGE_POLL_ATTEMPTS}" ]' in judge_text
 	assert 'if .mergeable == true then "true" elif .mergeable == false then "false" else empty end' in judge_text
 	assert 'echo "judge_skip_reason=mergeability_pending"' in judge_text
+	merge_head_refusal = judge_text[judge_text.index('if [ "${RB_MERGE_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]'):]
+	merge_head_refusal = merge_head_refusal[:merge_head_refusal.index("elif [")]
+	assert 'echo "judge_handled=true" >> "$GITHUB_OUTPUT"' in merge_head_refusal
+	assert 'echo "judge_action=skip" >> "$GITHUB_OUTPUT"' in merge_head_refusal
 	assert judge_text.count('echo "judge_handled=true" >> "$GITHUB_OUTPUT"') >= 7
 
 	workflow_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")

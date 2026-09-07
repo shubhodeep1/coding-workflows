@@ -18120,6 +18120,17 @@ EOF
                 LOCAL_ID=""
                 echo "::warning::Replacement issue was created but PR #${RB_PR} could not be closed; leaving issue #${rb_issue} review-blocked."
               fi
+              if [ "${RB_REISSUE_CLOSE_CONFIRMED}" != "true" ]; then
+                if gh_retry gh issue close "${NEW_NUM}" --repo "${GITHUB_REPOSITORY}" \
+                  --comment "Closed because approved reissue request ${RB_APPROVAL_REQUEST_ID} became stale before source PR #${RB_PR} could close." 2>/dev/null; then
+                  if type review_blocked_post_consumed_marker >/dev/null 2>&1; then
+                    review_blocked_post_consumed_marker "${GITHUB_REPOSITORY}" "${RB_PR}" "${RB_APPROVAL_REQUEST_ID}" "replacement_neutralized" || true
+                  fi
+                  echo "  Closed stale replacement issue #${NEW_NUM}."
+                else
+                  echo "::warning::Could not close stale replacement issue #${NEW_NUM}; manual cleanup may be required."
+                fi
+              fi
             else
               LOCAL_ID=""
               echo "::warning::Replacement issue was not created; leaving issue #${rb_issue} review-blocked."

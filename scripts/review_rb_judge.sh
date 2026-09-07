@@ -1765,6 +1765,8 @@ case "${RB_ACTION}" in
     RB_MERGE_CONFIRMED=false
     if [ "${RB_MERGE_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]; then
       echo "::warning::Approved merge refused because PR #${PR_NUMBER} head changed after the decision."
+      echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+      echo "judge_action=skip" >> "$GITHUB_OUTPUT"
     elif [ "${RB_MERGE_ALREADY_MERGED}" = "true" ]; then
       RB_MERGE_CONFIRMED=true
     elif [ "${RB_MERGE_STATE}" = "open" ] && [ "${RB_MERGEABLE}" = "true" ] \
@@ -1785,7 +1787,9 @@ case "${RB_ACTION}" in
       echo "judge_handled=true" >> "$GITHUB_OUTPUT"
       echo "judge_action=merge" >> "$GITHUB_OUTPUT"
     else
-      if [ "${RB_MERGE_STATE}" = "open" ] && [ -z "${RB_MERGEABLE}" ]; then
+      if [ "${RB_MERGE_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]; then
+        echo "judge_skip_reason=approved_merge_precondition_failed" >> "$GITHUB_OUTPUT"
+      elif [ "${RB_MERGE_STATE}" = "open" ] && [ -z "${RB_MERGEABLE}" ]; then
         echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"
       elif [ "${RB_MERGE_STATE}" = "open" ] && [ "${RB_MERGEABLE}" = "false" ]; then
         echo "judge_skip_reason=merge_conflict" >> "$GITHUB_OUTPUT"
@@ -2118,6 +2122,8 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
 
       if [ "${PR_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]; then
         echo "::warning::Approved merge_with_followup refused because PR #${PR_NUMBER} head changed after the decision."
+        echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+        echo "judge_action=skip" >> "$GITHUB_OUTPUT"
         echo "judge_skip_reason=approved_merge_precondition_failed" >> "$GITHUB_OUTPUT"
       elif [ "${PR_MERGED}" = "true" ]; then
         echo "PR #${PR_NUMBER} already merged (merged=true) — proceeding with follow-up creation against the merged base."
@@ -2559,6 +2565,7 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
     echo "REISSUE_MODE requested_raw=${RB_REISSUE_MODE_RAW:-<empty>} effective=${RB_EFFECTIVE_REISSUE_MODE} feature_flag=${REISSUE_PRESERVE_BASELINE_ENABLED:-true}"
 
     if [ "${RB_REPLACEMENT_CREATED}" = "true" ]; then
+      RB_REISSUE_CLOSE_CONFIRMED=false
       # Baseline and issue creation may take long enough for the head to move;
       # re-read immediately before the unguarded close mutation.
       RB_CLOSE_FINAL_JSON="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
@@ -2587,9 +2594,21 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
         fi
         echo "judge_handled=true" >> "$GITHUB_OUTPUT"
         echo "judge_action=close_and_reissue" >> "$GITHUB_OUTPUT"
+        RB_REISSUE_CLOSE_CONFIRMED=true
       else
         echo "::warning::Replacement issue was created but PR #${PR_NUMBER} could not be closed."
         echo "judge_skip_reason=approved_close_failed" >> "$GITHUB_OUTPUT"
+      fi
+      if [ "${RB_REISSUE_CLOSE_CONFIRMED}" != "true" ]; then
+        if gh_retry gh issue close "${NEW_URL}" --repo "${REPOSITORY}" \
+          --comment "Closed because approved reissue request ${RB_APPROVAL_REQUEST_ID} became stale before source PR #${PR_NUMBER} could close." 2>/dev/null; then
+          if command -v review_blocked_post_consumed_marker >/dev/null 2>&1; then
+            review_blocked_post_consumed_marker "${REPOSITORY}" "${PR_NUMBER}" "${RB_APPROVAL_REQUEST_ID}" "replacement_neutralized" || true
+          fi
+          echo "Closed stale replacement issue ${NEW_URL}."
+        else
+          echo "::warning::Could not close stale replacement issue ${NEW_URL}; manual cleanup may be required."
+        fi
       fi
     else
       echo "judge_skip_reason=replacement_issue_create_failed" >> "$GITHUB_OUTPUT"

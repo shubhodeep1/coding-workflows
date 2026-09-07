@@ -1072,7 +1072,7 @@ review_blocked_find_issue_for_request()
 	# by a durable body marker. One bounded search call is required for retry
 	# deduplication; failures intentionally return empty and preserve legacy flow.
 	gh_retry gh api -X GET search/issues \
-		-f q="repo:${repository} is:issue in:body review-blocked-approval-request:${request_id}" \
+		-f q="repo:${repository} is:issue is:open in:body review-blocked-approval-request:${request_id}" \
 		--jq '.items // [] | map(select((.body // "") | contains("<!-- review-blocked-approval-request:'"${request_id}"' -->"))) | first | .html_url // empty' \
 		2>/dev/null || true
 }
