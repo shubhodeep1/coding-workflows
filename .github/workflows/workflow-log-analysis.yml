@@ -1159,9 +1159,15 @@ jobs:
         id: commit_report
         if: steps.analyze.outputs.analysis_status == 'completed'
         env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           REPORT_RETENTION_DAYS: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS || '30' }}
         run: |
           set -euo pipefail
+
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
 
           REPORT_FILE="${{ steps.analyze.outputs.report_file }}"
           if [ "${GITHUB_REF_TYPE:-}" != "branch" ]; then
@@ -1755,6 +1761,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+
           if [ "${GITHUB_REF_TYPE:-}" != "branch" ]; then
             echo "::error::Deep audit commit requires a branch ref for report push (got ref_type='${GITHUB_REF_TYPE:-unknown}', ref_name='${GITHUB_REF_NAME:-unknown}')."
             exit 1
@@ -2257,6 +2268,11 @@ jobs:
           REPORT_FILE: ${{ needs.analyze-commit-notify.outputs.report_file }}
         run: |
           set -euo pipefail
+
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
 
           if [ "${GITHUB_REF_TYPE:-}" != "branch" ]; then
             echo "::error::API redundancy commit requires a branch ref for report push (got ref_type='${GITHUB_REF_TYPE:-unknown}', ref_name='${GITHUB_REF_NAME:-unknown}')."

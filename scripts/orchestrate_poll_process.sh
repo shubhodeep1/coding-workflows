@@ -17591,6 +17591,11 @@ sys.exit(1)
           ))
         ' >/dev/null 2>&1; then
         echo "::warning::Review-blocked judge returned an invalid, oversized, or disallowed decision for #${rb_issue}; no actuator action taken."
+        RB_REJECTION_COMMENT="## Orchestrator Review-Blocked Judge — Decision Refused
+
+The advisory judge returned an invalid, oversized, or disallowed decision for issue #${rb_issue}. No actuator action was taken; the issue remains review-blocked for a safe retry."
+        gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
+          -f body="${RB_REJECTION_COMMENT}" >/dev/null 2>&1 || true
         continue
       fi
 
@@ -17623,9 +17628,11 @@ sys.exit(1)
       esac
 
       RB_COMMENT_POSTED="false"
-      if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
-        -f body="${RB_COMMENT}" >/dev/null 2>&1; then
-        RB_COMMENT_POSTED="true"
+      if [ -z "${RB_PENDING_APPROVAL_REQUEST}" ]; then
+        if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
+          -f body="${RB_COMMENT}" >/dev/null 2>&1; then
+          RB_COMMENT_POSTED="true"
+        fi
       fi
 
       RB_APPROVAL_REQUEST_ID=""
@@ -17649,6 +17656,7 @@ sys.exit(1)
             RB_APPROVAL_REQUEST="$(review_blocked_build_approval_request "${RB_PR}" "${rb_issue}" "${RB_EXPECTED_HEAD_SHA}" "${RB_JUDGE_JSON}")"
             if ! review_blocked_post_approval_request "${GITHUB_REPOSITORY}" "${RB_PR}" "${RB_APPROVAL_REQUEST}"; then
               echo "::warning::Could not publish review-blocked approval request for PR #${RB_PR}; refusing terminal action."
+              continue
             fi
             echo "  Terminal recommendation for PR #${RB_PR} remains pending trusted human approval."
             REVIEW_BLOCKED_STATE_CHANGED=true

@@ -148,7 +148,7 @@ memory_ensure_branch()
 	fi
 
 	# Check if branch exists on remote
-	if git ls-remote --heads origin "${branch}" 2>/dev/null | grep -q "${branch}"; then
+	if _memory_git ls-remote --heads origin "${branch}" 2>/dev/null | grep -q "${branch}"; then
 		return 0
 	fi
 
@@ -177,7 +177,7 @@ memory_ensure_branch()
 		echo "AI memory branch — created automatically." > ai-memory/README.md
 		git add ai-memory/README.md
 		git commit --quiet -m "Initialize ai-memory branch"
-		git push origin "${branch}" 2>&1
+		_memory_git push origin "${branch}" 2>&1
 	) || {
 		_memory_warn "ensure-branch: failed to create '${branch}' (fail-open)"
 		rm -rf "${temp_dir}"
@@ -932,7 +932,7 @@ memory_force_tick_put()
 			:
 		else
 			git commit --quiet -m "ai-memory: update force tick #${tracking_issue}"
-			git push origin "${memory_branch}" >/dev/null 2>&1
+			_memory_git push origin "${memory_branch}" >/dev/null 2>&1
 		fi
 	) || {
 		rm -rf "${tmp_dir}"

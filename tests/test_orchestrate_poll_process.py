@@ -5560,6 +5560,8 @@ def test_review_blocked_merge_waits_for_authenticated_approval():
 	assert result["pr_merge_calls"] == []
 	assert "pending trusted human approval" in result["stdout"]
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	pr_comment_bodies = [comment.get("body", "") for comment in result["issues"]["901"]["comments"]]
+	assert not any("Orchestrator Review-Blocked Judge" in body for body in pr_comment_bodies)
 
 
 def test_review_blocked_close_and_reissue_runs_after_authenticated_approval():

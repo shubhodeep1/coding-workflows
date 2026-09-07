@@ -427,6 +427,10 @@ jobs:
           BRANCH_NAME: ${{ steps.branch.outputs.branch_name }}
         run: |
           set -euo pipefail
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
           git add docs/validation-improvements.md prompts/mode-validate-*.txt
           git commit -m "[skip ai] validation prompt self-heal from ${CONSUMER_REPO} (${APPLIED} patch(es))"
 

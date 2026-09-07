@@ -1700,6 +1700,7 @@ case "${RB_ACTION}" in
         echo "judge_skip_reason=approval_request_publish_failed" >> "$GITHUB_OUTPUT"
         exit 0
       fi
+      echo "judge_handled=true" >> "$GITHUB_OUTPUT"
       echo "judge_action=approval_pending" >> "$GITHUB_OUTPUT"
       echo "judge_skip_reason=approval_pending" >> "$GITHUB_OUTPUT"
       exit 0
@@ -1707,6 +1708,7 @@ case "${RB_ACTION}" in
     RB_APPROVAL_STATUS="$(review_blocked_approval_status "${PR_COMMENTS}" "${RB_APPROVAL_REQUEST}")"
     if [ "$(printf '%s' "${RB_APPROVAL_STATUS}" | jq -r '.status // empty')" != "approved" ]; then
       echo "Review-blocked terminal recommendation remains pending trusted human approval."
+      echo "judge_handled=true" >> "$GITHUB_OUTPUT"
       echo "judge_action=approval_pending" >> "$GITHUB_OUTPUT"
       echo "judge_skip_reason=approval_pending" >> "$GITHUB_OUTPUT"
       exit 0
@@ -1722,12 +1724,31 @@ esac
 case "${RB_ACTION}" in
   merge)
     echo "Judge says merge PR #${PR_NUMBER} as-is."
-    RB_MERGE_LIVE_JSON="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
-    RB_MERGE_STATE="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.state // empty')"
-    RB_MERGEABLE="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.mergeable // empty')"
-    RB_MERGE_HEAD_SHA="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.head.sha // empty')"
-    RB_MERGE_BASE_REF="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.base.ref // empty')"
-    RB_MERGE_ALREADY_MERGED="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '(.merged_at != null) or (.merged == true)')"
+    RB_MERGE_LIVE_JSON="{}"
+    RB_MERGE_STATE=""
+    RB_MERGEABLE=""
+    RB_MERGE_HEAD_SHA=""
+    RB_MERGE_BASE_REF=""
+    RB_MERGE_ALREADY_MERGED="false"
+    RB_MERGE_POLL_ATTEMPTS="${PR_MERGEABLE_POLL_ATTEMPTS:-6}"
+    RB_MERGE_POLL_SLEEP="${PR_MERGEABLE_POLL_SLEEP:-5}"
+    RB_MERGE_POLL_INDEX=0
+    while [ "${RB_MERGE_POLL_INDEX}" -lt "${RB_MERGE_POLL_ATTEMPTS}" ]; do
+      RB_MERGE_LIVE_JSON="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+      RB_MERGE_STATE="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.state // empty')"
+      RB_MERGEABLE="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.mergeable // empty')"
+      RB_MERGE_HEAD_SHA="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.head.sha // empty')"
+      RB_MERGE_BASE_REF="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.base.ref // empty')"
+      RB_MERGE_ALREADY_MERGED="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '(.merged_at != null) or (.merged == true)')"
+      if [ "${RB_MERGE_STATE}" != "open" ] || [ -n "${RB_MERGEABLE}" ]; then
+        break
+      fi
+      RB_MERGE_POLL_INDEX=$((RB_MERGE_POLL_INDEX + 1))
+      if [ "${RB_MERGE_POLL_INDEX}" -lt "${RB_MERGE_POLL_ATTEMPTS}" ]; then
+        echo "PR #${PR_NUMBER} mergeable=null (GitHub still computing); retrying in ${RB_MERGE_POLL_SLEEP}s (${RB_MERGE_POLL_INDEX}/${RB_MERGE_POLL_ATTEMPTS})."
+        sleep "${RB_MERGE_POLL_SLEEP}"
+      fi
+    done
     RB_MERGE_CONFIRMED=false
     if [ "${RB_MERGE_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]; then
       echo "::warning::Approved merge refused because PR #${PR_NUMBER} head changed after the decision."
@@ -1751,7 +1772,13 @@ case "${RB_ACTION}" in
       echo "judge_handled=true" >> "$GITHUB_OUTPUT"
       echo "judge_action=merge" >> "$GITHUB_OUTPUT"
     else
-      echo "judge_skip_reason=approved_merge_precondition_failed" >> "$GITHUB_OUTPUT"
+      if [ "${RB_MERGE_STATE}" = "open" ] && [ -z "${RB_MERGEABLE}" ]; then
+        echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"
+      elif [ "${RB_MERGE_STATE}" = "open" ] && [ "${RB_MERGEABLE}" = "false" ]; then
+        echo "judge_skip_reason=merge_conflict" >> "$GITHUB_OUTPUT"
+      else
+        echo "judge_skip_reason=approved_merge_precondition_failed" >> "$GITHUB_OUTPUT"
+      fi
     fi
     ;;
 

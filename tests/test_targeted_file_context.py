@@ -664,6 +664,9 @@ def test_sensitive_target_paths_are_rejected_case_insensitively() -> None:
 	blocked = [
 		".git/config",
 		"nested/.GIT/config",
+		".gitconfig",
+		"nested/.GIT-CREDENTIALS",
+		".gitmodules",
 		".env",
 		"config/.env.production",
 		".netrc",

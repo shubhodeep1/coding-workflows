@@ -55,6 +55,40 @@ def test_production_git_urls_do_not_embed_tokens() -> None:
 		assert credential_url.search(text) is None, relative_path
 
 
+def test_networked_git_steps_use_ephemeral_authentication() -> None:
+	expected_steps = {
+		"review_autofix.yml": [
+			"Checkout PR head branch",
+			"Count autofix iterations",
+			"Generate diff context",
+			"Pre-review deterministic merge-topology gate",
+			"Detect merge conflicts",
+			"Push all pending commits",
+		],
+		"update_workflows.yml": ["Commit and push updates"],
+		"validation-improvements-intake.yml": ["Commit, push, and open draft PR"],
+		"workflow-log-analysis.yml": [
+			"Commit and push report",
+			"Commit and push deep audit section",
+			"Commit and push API redundancy section",
+		],
+	}
+	for workflow_name, step_names in expected_steps.items():
+		text = (REPO_ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+		for step_name in step_names:
+			step_start = text.index(f"- name: {step_name}")
+			step_end = text.find("\n      - name:", step_start + 1)
+			step_block = text[step_start : step_end if step_end >= 0 else None]
+			assert "GIT_CONFIG_VALUE_0" in step_block, f"{workflow_name}: {step_name}"
+		if workflow_name == "review_autofix.yml":
+			assert 'echo "GIT_CONFIG_VALUE_0=' not in text, "Git auth must not persist into model steps"
+
+	memory_helpers = (REPO_ROOT / "scripts" / "memory_helpers.sh").read_text(encoding="utf-8")
+	assert '_memory_git ls-remote --heads origin "${branch}"' in memory_helpers
+	assert '_memory_git push origin "${branch}"' in memory_helpers
+	assert '_memory_git push origin "${memory_branch}"' in memory_helpers
+
+
 def _approval_status(comments: list[dict[str, object]], request: dict[str, object]) -> dict[str, object]:
 	command = (
 		"source scripts/gh_helpers.sh; "
@@ -114,6 +148,20 @@ def test_approval_request_ids_use_the_canonical_generator() -> None:
 	text = (REPO_ROOT / "scripts" / "gh_helpers.sh").read_text(encoding="utf-8")
 	assert 'make_record_id("review_blocked_approval")' in text
 	assert "REVIEW_BLOCKED_APPROVAL_V1" in text
+
+
+def test_approval_pending_is_handled_without_critical_alerts() -> None:
+	judge_text = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	approval_start = judge_text.index('RB_APPROVAL_REQUEST_ID=""')
+	approval_end = judge_text.index("# Execute judge action", approval_start)
+	approval_block = judge_text[approval_start:approval_end]
+	assert approval_block.count('echo "judge_handled=true" >> "$GITHUB_OUTPUT"') == 2
+	assert 'while [ "${RB_MERGE_POLL_INDEX}" -lt "${RB_MERGE_POLL_ATTEMPTS}" ]' in judge_text
+	assert 'echo "judge_skip_reason=mergeability_pending"' in judge_text
+
+	workflow_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	assert "approval_pending)" in workflow_text
+	assert "suppressing duplicate alert" in workflow_text
 
 
 def test_outsider_cannot_forge_request_or_consumed_markers() -> None:
