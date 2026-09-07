@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow and helper-script interfaces are enforced through contract tests rather than relying only on runtime tests.",
   "timestamps": {
     "created_at": "2026-09-07T05:09:20Z",
