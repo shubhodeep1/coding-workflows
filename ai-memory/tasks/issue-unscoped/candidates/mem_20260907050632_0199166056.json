@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.93,
+  "details": "Recent changes repeatedly harden state authorization, YAML bounds, author identity, resolver scope, stale heads, deleted branches, and forged state. Future orchestration work should preserve fail-closed behavior and explicit validation before acting on state or GitHub-derived data.",
+  "fingerprint": "7efc72d77c7210fad4728bb93204964d4d82f216577cf15472027655c0a978b0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34085426557",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34085426557",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3987",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3996",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3998",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4000",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4005",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3989",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3997",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3999",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4001",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4006"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260907050632_0199166056",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "The orchestration flow treats persisted state and external inputs as untrusted and validates them defensively.",
+  "timestamps": {
+    "created_at": "2026-09-07T05:06:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
