@@ -608,6 +608,17 @@ def test_schema_accepts_legacy_and_new_substate_entries_additively() -> None:
 	validator.validate(stall_entry)
 
 
+def test_workflows_export_ledger_limits_from_repository_variables() -> None:
+	expected_ledger_mappings = (
+		"LEDGER_TOKENS_LOG_MAX_BYTES: ${{ vars.LEDGER_TOKENS_LOG_MAX_BYTES || '1048576' }}",
+		"LEDGER_EMIT_TIMEOUT_SECONDS: ${{ vars.LEDGER_EMIT_TIMEOUT_SECONDS || '120' }}",
+	)
+	for ledger_workflow_name in ("implement.yml", "review_autofix.yml", "validate.yml"):
+		ledger_workflow_text = (REPO_ROOT / ".github" / "workflows" / ledger_workflow_name).read_text(encoding="utf-8")
+		for expected_ledger_mapping in expected_ledger_mappings:
+			assert expected_ledger_mapping in ledger_workflow_text, (ledger_workflow_name, expected_ledger_mapping)
+
+
 def test_scoped_callsites_reference_the_run_substate_helper() -> None:
 	for relative_path, required_snippets in STATIC_WIRING_CONTRACTS.items():
 		text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
