@@ -275,3 +275,183 @@ Non-skipped success rate: **96.94%**.
 - No aggregate judge-cycle counter.
 - Collector summaries may capture initialization values instead of final MCP availability.
 - Cost parsing currently double-counts archives containing both aggregate and granular logs.
+
+## Deep Audit — Workflows & Scripts (2026-09-07)
+
+### Section 1: Bug & Correctness Sweep
+
+Audit coverage: 46 workflows, 77 shell scripts, and 56 Python scripts. YAML lint, Bash syntax, Python AST parsing, workflow-script reference checks, ShellCheck error-level checks, and focused repository contract tests passed.
+
+#### SEC-001 — Fork PRs can enter the trusted deterministic auto-merge path
+
+- **ID:** `SEC-001`
+- **File path and line range:** `.github/workflows/review_autofix_sweep.yml:93-107,280-297`; `.github/workflows/internal-review.yml:53-66`; `.github/workflows/review_autofix.yml:510-607,1080-1224,2388-2414`
+- **Severity:** Critical
+- **Category tag:** `security`
+- **Description:** The sweep dispatches `internal-review.yml` for fork PRs, merely omitting `--ref` when `head_repo != REPOSITORY`. The dispatched workflow inherits secrets. Before the later head-repository writability check, the reusable workflow can classify a fork PR as `docs_only` or `small_diff`; `deterministic-skip-merge` then receives `GH_PAT` and executes `gh pr merge --squash --auto` without reviewer or editor execution. Thus an external fork PR within the default 10-addition/10-deletion threshold can be enabled for auto-merge by a trusted scheduled dispatch. Non-skipped fork PRs also reach secret-bearing reviewer/editor setup because `CAN_PUSH=false` is not part of those step conditions.
+- **Recommended fix:** Apply the same same-repository guard used by `check_failure_triage.yml:135-145`: skip fork PRs in the sweep before dispatch. Add defense-in-depth to `review_autofix.yml` by including `.head.repo.full_name` in the gate’s existing PR fetch and forcing `should_run=false`, `deterministic_skip=false` for mismatches. Add a contract test asserting fork PRs can never reach `deterministic-skip-merge` or secret-bearing writer steps.
+
+#### BUG-001 — Active-run API failures are interpreted as “no active review”
+
+- **ID:** `BUG-001`
+- **File path and line range:** `.github/workflows/review_autofix_sweep.yml:159-205,222-265`
+- **Severity:** Medium
+- **Category tag:** `bug`
+- **Description:** Each status fetch ends with `|| true`. If queued, in-progress, or pending requests fail, `jq -s` still succeeds and produces `{"active":{},"stale":[]}`. The sweep then dispatches another review. This was reproduced directly with the workflow’s exact jq program and empty input.
+- **Recommended fix:** Capture each status request’s return code. If any snapshot is incomplete, mark that workflow’s state `unknown` and skip dispatch for the tick. Route requests through `gh_retry`; do not convert failed requests into valid empty snapshots.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001 — Final-PR state and merge status use duplicate GETs
+
+- **ID:** `API-001`
+- **File path and line range:** `scripts/orchestrate_poll_process.sh:8428-8440`
+- **Severity:** Low
+- **Category tag:** `api-redundancy`
+- **Description:** When `final_pr_json_snapshot` cannot be reused, the same `pulls/<final_pr>` endpoint is fetched twice consecutively: once for `.state` and once for `.merged_at`.
+- **Current/proposed calls:** 2 GETs → 1 GET.
+- **Recommended fix:** Fetch one object through `_fetch_pr_json` or `_safe_gh_jq`, then extract both fields locally. Extend the existing final-PR snapshot reuse pattern.
+
+#### API-002 — Feature sweep re-fetches head SHA already available from PR listing
+
+- **ID:** `API-002`
+- **File path and line range:** `scripts/orchestrate_poll_process.sh:16626-16658`
+- **Severity:** Low
+- **Category tag:** `api-redundancy`
+- **Description:** The initial `gh pr list` requests merge state but omits `headRefOid`. Every behind PR therefore incurs a separate `pulls/<n>` GET before its update-branch request.
+- **Current/proposed calls:** For `N` behind PRs, `1 + 2N` → `1 + N`.
+- **Recommended fix:** Add `headRefOid` to the existing `--json` field list and consume it locally, following `_merge_probe_refresh`’s list-and-cache pattern at `scripts/orchestrate_poll_process.sh:813-822`.
+
+#### BATCH-001 — Standalone recovery performs seven phase-label list calls
+
+- **ID:** `BATCH-001`
+- **File path and line range:** `scripts/orchestrate_poll_process.sh:11937-11985,12791-12841`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** Candidate discovery loops over seven phase labels with one `gh issue list` per label, then separately invokes the two-alias marker GraphQL helper.
+- **Current/proposed calls:** 7 label-list calls + 1 marker query = 8 → 1 common-path GraphQL query.
+- **Recommended fix:** Extend `_fetch_standalone_marker_issues_graphql` with aliases for the seven phase-label searches and return one deduplicated candidate object. Preserve paginated REST fallback independently for aliases reporting `hasNextPage`.
+
+#### BATCH-002 — Review metadata bypasses the existing consolidated PR-context helper
+
+- **ID:** `BATCH-002`
+- **File path and line range:** `scripts/review_collect_pr_metadata.sh:63-68,209-226`; `scripts/gh_helpers.sh:751-915`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** The collector separately fetches PR metadata, issue comments, review comments, and optionally top-level reviews. `gh_pr_with_all_comments` already combines the first three data families through GraphQL, but the collector shadows `gh_retry` with an incompatible output-file signature, preventing safe reuse.
+- **Current/proposed calls:** Context family 3 calls normally or 4 with break-glass → 1. Including linked-issue lookup, 4/5 → 2.
+- **Recommended fix:** Rename the local wrapper to `review_metadata_gh_to_file`, extend `gh_pr_with_all_comments` to return raw IDs/timestamps/top-level review state needed by `PR_ALL_COMMENTS_CONTEXT_FILE`, and derive all three artifact files from that response.
+
+The existing report already records the sweep’s healthy-path workflow-status reduction from six requests to three; it is not duplicated here.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Prompt-budget telemetry wrapper is copied three times
+
+- **ID:** `DUP-001`
+- **File path and line range:** `scripts/review_apply_fixes.sh:164-202`; `scripts/review_rb_judge.sh:256-294`; `scripts/review_run_reviewers.sh:69-107`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** `emit_context_budget_warn_for_prompt` is byte-for-byte duplicated across three critical model paths. Any telemetry or budget-gate correction must be applied three times.
+- **Recommended fix:** Move it to `scripts/codex_helpers.sh` with signature `emit_context_budget_warn_for_prompt <phase> <prompt_path> <model>`, retaining `cost_audit.py::build_context_budget_warn_line_for_file` as the calculation authority.
+
+#### DUP-002 — Bounded Semble query-section rendering is triplicated
+
+- **ID:** `DUP-002`
+- **File path and line range:** `scripts/review_apply_fixes.sh:909-918`; `scripts/review_conflict_prepare.sh:596-605`; `scripts/review_run_reviewers.sh:1760-1769`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** Identical `append_semble_query_section` implementations appear in three scripts.
+- **Recommended fix:** Add `semble_append_query_section <label> <path> [max_bytes]` to `scripts/semble_helpers.sh` and update all three callers.
+
+#### DUP-003 — Support-file staging remains duplicated across phase workflows
+
+- **ID:** `DUP-003`
+- **File path and line range:** `.github/workflows/clarify.yml:216-351`; `.github/workflows/implement.yml:853-1132`; `.github/workflows/orchestrate.yml:341-469`; `.github/workflows/orchestrate_clarify_respond.yml:279-412`; `.github/workflows/orchestrate_poll.yml:333-542`; `scripts/stage_workflow_support.sh:4-225`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** These workflows independently implement branch/main fallback selection, script installation, schema copying, prompt copying, overlay loading, and generated `.gitignore` handling. `validate.yml` already demonstrates manifest-driven staging through `stage_workflow_support.sh`.
+- **Recommended fix:** Generalize the helper to `stage_workflow_support.sh manifest --manifest <path> --target-mode <runtime|in-tree>`. Store one phase manifest per caller and retain phase-specific required/optional/main-primary classifications there.
+
+#### DUP-004 — Thread-reuse asset resolution duplicates an existing helper
+
+- **ID:** `DUP-004`
+- **File path and line range:** `scripts/codex_thread_reuse.sh:407-423`; `scripts/review_apply_fixes.sh:680-710`; `scripts/review_conflict_resolve.sh:150-171`; `scripts/validate_process.sh:2890-2911`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** Three phase-specific asset resolvers duplicate `codex_thread_reuse_resolve_asset`; three equivalent enabled predicates also repeat.
+- **Recommended fix:** Source `codex_thread_reuse.sh` first, call `codex_thread_reuse_resolve_asset <repo_path>`, and add a shared `codex_thread_reuse_enabled` predicate for all callers.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — Implement support-staging expression exceeds the medium-risk threshold
+
+- **ID:** `EXPR-001`
+- **File path and line range:** `.github/workflows/implement.yml:853-1132`
+- **Severity:** Medium
+- **Category tag:** `expression-limit`
+- **Description:** The interpolated `run:` body is approximately **15,162 characters**, exceeding the 15,000-character threshold. Remaining headroom is approximately **5,838 characters** to the hard limit and **2,838 characters** to the high-risk threshold.
+- **Recommended fix:** Replace the inline staging implementation with a phase manifest consumed by `scripts/stage_workflow_support.sh`.
+
+#### EXPR-002 — Validate embeds a large support manifest inside an interpolated run block
+
+- **ID:** `EXPR-002`
+- **File path and line range:** `.github/workflows/validate.yml:205-424`
+- **Severity:** Low
+- **Category tag:** `expression-limit`
+- **Description:** The block is approximately **13,096 characters**, including a large JSON heredoc. It has approximately **7,904 characters** of hard-limit headroom. Every added validation asset expands the expression.
+- **Recommended fix:** Move the manifest to `scripts/support_manifests/validate.json`; keep the workflow step limited to resolving and invoking `stage_workflow_support.sh`.
+
+#### EXPR-003 — Implement preflight guard block has a growing heredoc-heavy expression
+
+- **ID:** `EXPR-003`
+- **File path and line range:** `.github/workflows/implement.yml:2916-3168`
+- **Severity:** Low
+- **Category tag:** `expression-limit`
+- **Description:** The interpolated block is approximately **13,794 characters**, with approximately **7,206 characters** remaining to the hard limit. Multiple multiline output heredocs make future guard additions likely to increase it.
+- **Recommended fix:** Extract the destructive/scope preflight logic to `scripts/implement_preflight_guard.sh` and return structured outputs through `$GITHUB_OUTPUT`.
+
+No interpolated `run:` block exceeds 18,000 characters, no large `if:` expression approaches the limit, and no workflow exceeds 800 KB. The largest workflow is `review_autofix.yml` at 454,419 bytes.
+
+### Section 5: Cross-Cutting Concerns
+
+#### CONSIST-001 — Safety-latch GitHub mutations bypass shared retry handling
+
+- **ID:** `CONSIST-001`
+- **File path and line range:** `scripts/implement_handle_guard_block.sh:33-66,142-195`; `.github/workflows/implement.yml:883-886`
+- **Severity:** Medium
+- **Category tag:** `consistency`
+- **Description:** The destructive and scope-block handlers use raw `gh label`, `gh issue edit`, and `gh issue view` calls. A transient failure can leave `ai:scope-blocked` or `ai:destructive-blocked` absent, so the documented redispatch latch is not active. The script detects this but cannot repair it.
+- **Recommended fix:** Preserve a runtime copy of `gh_helpers.sh` beside the handler and route all latch creation, mutation, verification, and comment calls through `gh_retry`. Keep the current red-job and Telegram fallback behavior.
+
+#### SHELL-001 — Reviewer state contains confirmed unused assignments
+
+- **ID:** `SHELL-001`
+- **File path and line range:** `scripts/review_run_reviewers.sh:753-761,3533-3548,4120-4128`
+- **Severity:** Low
+- **Category tag:** `shellcheck`
+- **Description:** ShellCheck reports SC2034 for `RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE`, `RAW_REVIEWER_SYMBOL_DIFF_SUMMARY_FILE`, `REVIEWER_HEALTH_LAST_OPEN_UNTIL_EPOCH`, and `REVIEWER_ATTEMPT_WD_REASON`. Repository-wide reference checks found assignments but no consumers.
+- **Recommended fix:** Remove the raw aliases if obsolete. Otherwise wire health-open expiry and watchdog reason into `REVIEWER_HEALTH`/slot summary telemetry so the assignments serve a documented contract.
+
+No exact-word `TODO`, `FIXME`, `HACK`, or `XXX` markers were found. Documented reserved/deprecated surfaces are explicitly identified as such and were not treated as integrity failures.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 1 | SEC-001 |
+| High | 0 | — |
+| Medium | 7 | BUG-001, BATCH-001, BATCH-002, DUP-001, DUP-003, EXPR-001, CONSIST-001 |
+| Low | 7 | API-001, API-002, DUP-002, DUP-004, EXPR-002, EXPR-003, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 3 workflows + tests | Medium |
+| API call optimization | 3 scripts | Medium |
+| Code modularization | 10–14 workflows/scripts | Large |
+| Expression size reduction | 2 workflows + support manifests/helpers | Medium |
+| Medium/Low fixes | 3–5 workflows/scripts | Medium |
