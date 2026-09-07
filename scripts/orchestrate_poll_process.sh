@@ -17373,7 +17373,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         RB_PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}" || echo '{}')"
       else
         printf '%s\n' "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments mode=legacy_rest_hydration reason=helper_unavailable owner=${GITHUB_REPOSITORY%%/*} repo=${GITHUB_REPOSITORY##*/} pr=${RB_PR}" >&2
-        RB_PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {id: .id, author: .user.login, author_type: .user.type, author_association: .author_association, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.id // 0))' 2>/dev/null || echo '[]')"
+        RB_PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {id: .id, author: .user.login, author_id: .user.id, author_type: .user.type, author_association: .author_association, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.id // 0))' 2>/dev/null || echo '[]')"
         RB_PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
         RB_PR_CONTEXT_JSON="$(jq -cn --argjson meta "${RB_PRELOADED_META}" --argjson comments "${RB_PR_ISSUE_COMMENTS}" --argjson review_comments "${RB_PR_REVIEW_COMMENTS}" '{meta: $meta, comments: $comments, review_comments: $review_comments}' 2>/dev/null || echo '{}')"
       fi
@@ -17399,8 +17399,14 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       fi
       RB_PENDING_APPROVAL_REQUEST=""
       RB_PENDING_DECISION_JSON=""
-      if type review_blocked_find_pending_request >/dev/null 2>&1 && [ -n "${RB_EXPECTED_HEAD_SHA}" ]; then
-        RB_PENDING_APPROVAL_REQUEST="$(review_blocked_find_pending_request "${PR_COMMENTS}" "${RB_PR}" "${RB_EXPECTED_HEAD_SHA}" || true)"
+      RB_APPROVAL_PRODUCER_ID=""
+      if resolve_orchestrator_state_producer; then
+        RB_APPROVAL_PRODUCER_ID="${ORCHESTRATOR_STATE_PRODUCER_ID}"
+      fi
+      if type review_blocked_find_pending_request >/dev/null 2>&1 \
+        && [ -n "${RB_EXPECTED_HEAD_SHA}" ] \
+        && [[ "${RB_APPROVAL_PRODUCER_ID}" =~ ^[1-9][0-9]*$ ]]; then
+        RB_PENDING_APPROVAL_REQUEST="$(review_blocked_find_pending_request "${PR_COMMENTS}" "${RB_PR}" "${RB_EXPECTED_HEAD_SHA}" "${RB_APPROVAL_PRODUCER_ID}" || true)"
         if [ -n "${RB_PENDING_APPROVAL_REQUEST}" ]; then
           RB_PENDING_DECISION_JSON="$(printf '%s' "${RB_PENDING_APPROVAL_REQUEST}" | jq -c '.decision // empty' 2>/dev/null || true)"
         fi
@@ -17655,6 +17661,10 @@ ${RB_DECISION_REFUSAL_MARKER}"
         merge|merge_with_followup|close_and_reissue)
           if ! type review_blocked_build_approval_request >/dev/null 2>&1; then
             echo "::warning::Review-blocked approval helpers unavailable; refusing terminal action for PR #${RB_PR}."
+            continue
+          fi
+          if ! [[ "${RB_APPROVAL_PRODUCER_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::warning::Authenticated approval-request producer is unavailable; refusing terminal action for PR #${RB_PR}."
             continue
           fi
           if ! [[ "${RB_EXPECTED_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then

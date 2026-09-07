@@ -714,7 +714,7 @@ curl_gh_api()
 # Emits JSON object:
 # {
 #   "meta": {"title", "body", "head_ref", "base_ref", "head_sha"},
-#   "comments": [{"id", "author", "author_type", "author_association", "body", "created_at"}],
+#   "comments": [{"id", "author", "author_id", "author_type", "author_association", "body", "created_at"}],
 #   "review_comments": [{"author", "path", "line", "body"}]
 # }
 #
@@ -748,7 +748,7 @@ _gh_pr_with_all_comments_rest()
 			|| echo '{}')"
 	fi
 	comments_json="$(gh_retry gh api --paginate "repos/${repo_path}/issues/${pr_number}/comments" 2>/dev/null \
-		| jq -c -s 'add // [] | [.[] | {id: .id, author: .user.login, author_type: .user.type, author_association: .author_association, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.id // 0))' 2>/dev/null \
+		| jq -c -s 'add // [] | [.[] | {id: .id, author: .user.login, author_id: .user.id, author_type: .user.type, author_association: .author_association, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.id // 0))' 2>/dev/null \
 		|| echo '[]')"
 	review_comments_json="$(gh_retry gh api --paginate "repos/${repo_path}/pulls/${pr_number}/comments" 2>/dev/null \
 		| jq -c -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null \
@@ -775,7 +775,7 @@ _gh_pr_with_all_comments_rest()
 # Emits JSON object:
 # {
 #   "meta": {"title", "body", "head_ref", "base_ref", "head_sha"},
-#   "comments": [{"id", "author", "author_type", "author_association", "body", "created_at"}],
+#   "comments": [{"id", "author", "author_id", "author_type", "author_association", "body", "created_at"}],
 #   "review_comments": [{"author", "path", "line", "body"}]
 # }
 #
@@ -816,7 +816,12 @@ gh_pr_with_all_comments()
 				comments(first: 100) {
 					nodes {
 						databaseId
-						author { login __typename }
+						author {
+							login
+							__typename
+							... on User { databaseId }
+							... on Bot { databaseId }
+						}
 						authorAssociation
 						body
 						createdAt
@@ -899,6 +904,7 @@ gh_pr_with_all_comments()
 						| {
 							id: (.databaseId // null),
 							author: (.author.login // null),
+							author_id: (.author.databaseId // null),
 							author_type: (if .author.__typename == "User" then "User" else (.author.__typename // null) end),
 							author_association: (.authorAssociation // null),
 							body: (.body // ""),
@@ -948,17 +954,19 @@ review_blocked_find_pending_request()
 	local comments_json="${1:-[]}"
 	local pr_number="${2:?PR number required}"
 	local head_sha="${3:?head SHA required}"
+	local producer_id="${4:?authenticated producer ID required}"
+	[[ "${producer_id}" =~ ^[1-9][0-9]*$ ]] || return 1
 	printf '%s' "${comments_json}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
 import json, re, sys
 comments = json.load(sys.stdin)
-pr = int(sys.argv[1]); head = sys.argv[2]
+pr = int(sys.argv[1]); head = sys.argv[2]; producer_id = int(sys.argv[3])
 request_re = re.compile(r"<!-- REVIEW_BLOCKED_APPROVAL_V1\s*\n(\{.*?\})\s*\nREVIEW_BLOCKED_APPROVAL_V1 -->", re.S)
 consumed_re = re.compile(r"<!-- REVIEW_BLOCKED_APPROVAL_CONSUMED_V1\s*\n(\{.*?\})\s*\nREVIEW_BLOCKED_APPROVAL_CONSUMED_V1 -->", re.S)
 requests = []
 consumed = set()
 for comment in comments if isinstance(comments, list) else []:
     if not isinstance(comment, dict): continue
-    trusted_producer = comment.get("author_type") == "Bot" and comment.get("author") in {"github-actions", "github-actions[bot]", "codex", "codex-bot"}
+    trusted_producer = comment.get("author_id") == producer_id
     if not trusted_producer: continue
     body = comment.get("body", "") if isinstance(comment, dict) else ""
     for match in consumed_re.finditer(body):
@@ -979,7 +987,7 @@ for request in reversed(requests):
     if request.get("request_id") not in consumed:
         print(json.dumps(request, separators=(",", ":"), sort_keys=True))
         break
-' "${pr_number}" "${head_sha}"
+' "${pr_number}" "${head_sha}" "${producer_id}"
 }
 
 review_blocked_build_approval_request()
@@ -1014,7 +1022,7 @@ approved = None
 for comment in comments if isinstance(comments, list) else []:
     if not isinstance(comment, dict) or comment.get("body", "").strip() != command: continue
     if comment.get("author_type") != "User" or comment.get("author_association") not in trusted: continue
-    if (comment.get("created_at") or "") <= request.get("created_at", ""): continue
+    if (comment.get("created_at") or "") < request.get("created_at", ""): continue
     approved = comment
 if approved:
     print(json.dumps({"status":"approved","request_id":request["request_id"],"decision_digest":request["decision_digest"],"approver":approved.get("author"),"approval_comment_id":approved.get("id")}, separators=(",", ":")))

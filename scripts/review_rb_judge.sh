@@ -1061,7 +1061,7 @@ elif type _gh_pr_with_all_comments_rest >/dev/null 2>&1; then
   PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${REPOSITORY%%/*}" "${REPOSITORY##*/}" "${PR_NUMBER}" "${PRELOADED_PR_META}" || echo '{}')"
 else
   printf '%s\n' "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments mode=legacy_rest_hydration reason=helper_unavailable owner=${REPOSITORY%%/*} repo=${REPOSITORY##*/} pr=${PR_NUMBER}" >&2
-  PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
+  PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {id: .id, author: .user.login, author_id: .user.id, author_type: .user.type, author_association: .author_association, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.id // 0))' 2>/dev/null || echo '[]')"
   PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
   PR_CONTEXT_JSON="$(jq -cn --argjson meta "${PRELOADED_PR_META}" --argjson comments "${PR_ISSUE_COMMENTS}" --argjson review_comments "${PR_REVIEW_COMMENTS}" '{meta: $meta, comments: $comments, review_comments: $review_comments}' 2>/dev/null || echo '{}')"
 fi
@@ -1081,8 +1081,16 @@ if [ -z "${POST_REVIEW_HEAD_REF}" ]; then
 fi
 RB_PENDING_APPROVAL_REQUEST=""
 RB_PENDING_DECISION_JSON=""
-if command -v review_blocked_find_pending_request >/dev/null 2>&1 && [ -n "${POST_REVIEW_HEAD_SHA}" ]; then
-  RB_PENDING_APPROVAL_REQUEST="$(review_blocked_find_pending_request "${PR_COMMENTS}" "${PR_NUMBER}" "${POST_REVIEW_HEAD_SHA}" || true)"
+RB_APPROVAL_PRODUCER_JSON="{}"
+RB_APPROVAL_PRODUCER_ID=""
+# Existing PR and comment reads do not identify the principal behind GH_TOKEN.
+# Resolve it once so only that immutable account ID can mint marker comments.
+RB_APPROVAL_PRODUCER_JSON="$(gh_retry gh api user 2>/dev/null || echo '{}')"
+RB_APPROVAL_PRODUCER_ID="$(printf '%s' "${RB_APPROVAL_PRODUCER_JSON}" | jq -r '.id // empty' 2>/dev/null || true)"
+if command -v review_blocked_find_pending_request >/dev/null 2>&1 \
+  && [ -n "${POST_REVIEW_HEAD_SHA}" ] \
+  && [[ "${RB_APPROVAL_PRODUCER_ID}" =~ ^[1-9][0-9]*$ ]]; then
+  RB_PENDING_APPROVAL_REQUEST="$(review_blocked_find_pending_request "${PR_COMMENTS}" "${PR_NUMBER}" "${POST_REVIEW_HEAD_SHA}" "${RB_APPROVAL_PRODUCER_ID}" || true)"
   if [ -n "${RB_PENDING_APPROVAL_REQUEST}" ]; then
     RB_PENDING_DECISION_JSON="$(printf '%s' "${RB_PENDING_APPROVAL_REQUEST}" | jq -c '.decision // empty' 2>/dev/null || true)"
   fi
@@ -1680,6 +1688,11 @@ case "${RB_ACTION}" in
     if ! command -v review_blocked_build_approval_request >/dev/null 2>&1; then
       echo "::warning::Review-blocked approval helpers unavailable; refusing terminal action (fail-closed)."
       echo "judge_skip_reason=approval_helper_unavailable" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
+    if ! [[ "${RB_APPROVAL_PRODUCER_ID}" =~ ^[1-9][0-9]*$ ]]; then
+      echo "::warning::Authenticated approval-request producer is unavailable; refusing terminal action (fail-closed)."
+      echo "judge_skip_reason=approval_producer_unresolved" >> "$GITHUB_OUTPUT"
       exit 0
     fi
     if ! [[ "${POST_REVIEW_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then

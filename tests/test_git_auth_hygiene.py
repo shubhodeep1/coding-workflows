@@ -118,10 +118,10 @@ def _approval_status(comments: list[dict[str, object]], request: dict[str, objec
 	return json.loads(result.stdout)
 
 
-def _pending_request(comments: list[dict[str, object]], head_sha: str) -> str:
+def _pending_request(comments: list[dict[str, object]], head_sha: str, producer_id: int = 41898282) -> str:
 	command = (
 		"source scripts/gh_helpers.sh; "
-		"review_blocked_find_pending_request \"$COMMENTS\" 12 \"$HEAD_SHA\""
+		"review_blocked_find_pending_request \"$COMMENTS\" 12 \"$HEAD_SHA\" \"$PRODUCER_ID\""
 	)
 	result = subprocess.run(
 		["bash", "-c", command],
@@ -130,6 +130,7 @@ def _pending_request(comments: list[dict[str, object]], head_sha: str) -> str:
 			"PATH": "/usr/bin:/bin",
 			"COMMENTS": json.dumps(comments, separators=(",", ":")),
 			"HEAD_SHA": head_sha,
+			"PRODUCER_ID": str(producer_id),
 		},
 		check=True,
 		text=True,
@@ -151,6 +152,7 @@ def test_review_blocked_approval_accepts_only_exact_trusted_user_command() -> No
 	assert _approval_status([{**base, "body": command, "author_association": "NONE"}], request)["status"] == "pending"
 	assert _approval_status([{**base, "body": command, "author_type": "Bot"}], request)["status"] == "pending"
 	assert _approval_status([{**base, "body": command, "created_at": "2026-09-07T00:59:00Z"}], request)["status"] == "pending"
+	assert _approval_status([{**base, "body": command, "created_at": request["created_at"]}], request)["status"] == "approved"
 
 
 def test_approval_request_ids_use_the_canonical_generator() -> None:
@@ -197,21 +199,22 @@ def test_outsider_cannot_forge_request_or_consumed_markers() -> None:
 		"decision": {"action": "merge"},
 	}
 	body = "<!-- REVIEW_BLOCKED_APPROVAL_V1\n" + json.dumps(request) + "\nREVIEW_BLOCKED_APPROVAL_V1 -->"
-	outsider = {"body": body, "author": "outsider", "author_type": "User", "author_association": "NONE"}
+	outsider = {"body": body, "author": "outsider", "author_id": 1001, "author_type": "User", "author_association": "NONE"}
 	assert _pending_request([outsider], head_sha) == ""
-	trusted_human = {"body": body, "author": "maintainer", "author_type": "User", "author_association": "OWNER"}
+	trusted_human = {"body": body, "author": "maintainer", "author_id": 1002, "author_type": "User", "author_association": "OWNER"}
 	assert _pending_request([trusted_human], head_sha) == ""
-	producer = {"body": body, "author": "github-actions[bot]", "author_type": "Bot", "author_association": "NONE"}
+	producer = {"body": body, "author": "workflow-pat-owner", "author_id": 41898282, "author_type": "User", "author_association": "OWNER"}
 	forged_consumed = {
 		"body": "<!-- REVIEW_BLOCKED_APPROVAL_CONSUMED_V1\n"
 		+ json.dumps({"request_id": request["request_id"]})
 		+ "\nREVIEW_BLOCKED_APPROVAL_CONSUMED_V1 -->",
 		"author": "outsider",
+		"author_id": 1001,
 		"author_type": "User",
 		"author_association": "NONE",
 	}
 	assert json.loads(_pending_request([producer, forged_consumed], head_sha))["request_id"] == request["request_id"]
-	trusted_human_consumed = {**forged_consumed, "author": "maintainer", "author_association": "MEMBER"}
+	trusted_human_consumed = {**forged_consumed, "author": "maintainer", "author_id": 1002, "author_association": "MEMBER"}
 	assert json.loads(_pending_request([producer, trusted_human_consumed], head_sha))["request_id"] == request["request_id"]
 
 
