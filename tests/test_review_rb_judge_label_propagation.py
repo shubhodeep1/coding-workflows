@@ -340,7 +340,14 @@ if args[:1] == ["api"]:
 	matched = None
 	for pattern, resp in api_responses.items():
 		if pattern and pattern in path:
-			matched = resp
+			if isinstance(resp, list) and resp:
+				sequence_indexes = state.setdefault("api_response_sequence_indexes", {})
+				sequence_index = int(sequence_indexes.get(pattern, 0))
+				matched = resp[min(sequence_index, len(resp) - 1)]
+				if sequence_index < len(resp) - 1:
+					sequence_indexes[pattern] = sequence_index + 1
+			else:
+				matched = resp
 			break
 	save()
 	if matched is not None:
@@ -394,7 +401,7 @@ set -euo pipefail
 {xpg_echo_line}gh_retry() {{ "$@"; }}
 ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
 _resilient_phase_swap() {{ :; }}
-_safe_gh_jq() {{ :; }}
+_safe_gh_jq() {{ gh api "$@"; }}
 flag_enabled() {{ case "${{1,,}}" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac; }}
 
 GITHUB_OUTPUT="{github_output}"
@@ -416,6 +423,9 @@ def _run_close_and_reissue(
 	pr_view_head_ref_oid: str | None = None,
 	precreate_baseline_branch: bool = False,
 	enable_xpg_echo: bool = False,
+	approved_close_head_sha: str | None = None,
+	live_close_head_sha: str | None = None,
+	final_close_head_sha: str | None = None,
 ) -> dict:
 	"""Run the close_and_reissue branch with FIRST_ISSUE_LABELS_JSON
 	pre-seeded to ``parent_label_set`` and return the captured gh
@@ -435,17 +445,31 @@ def _run_close_and_reissue(
 		run_cwd = tmp_path
 		repo_head_before = ""
 		repo_branch_before = ""
+		resolved_live_close_head_sha = live_close_head_sha or "a" * 40
 		if repo_files is not None:
 			run_cwd, repo_head_before, repo_branch_before = _bootstrap_repo_with_remote(tmp_path, repo_files)
 			resolved_head_ref_oid = pr_view_head_ref_oid or repo_head_before
 			if resolved_head_ref_oid == "__UPPER_REPO_HEAD__":
 				resolved_head_ref_oid = repo_head_before.upper()
 			mock_state["pr_view_head_ref_oid"] = resolved_head_ref_oid
+			resolved_live_close_head_sha = live_close_head_sha or resolved_head_ref_oid
 			if precreate_baseline_branch:
 				expected_baseline_branch = f"ai/reissue-baseline/pr-42-{repo_head_before[:12]}-777-1"
 				_git(["git", "branch", expected_baseline_branch], cwd=run_cwd)
 		elif pr_view_head_ref_oid is not None:
 			mock_state["pr_view_head_ref_oid"] = pr_view_head_ref_oid
+			resolved_live_close_head_sha = live_close_head_sha or pr_view_head_ref_oid
+		initial_close_response = {
+			"state": "open",
+			"head": {"sha": resolved_live_close_head_sha},
+		}
+		final_close_response = {
+			"state": "open",
+			"head": {"sha": final_close_head_sha or resolved_live_close_head_sha},
+		}
+		mock_state["api_responses"] = {
+			"pulls/42": [initial_close_response, final_close_response],
+		}
 		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
 
 		labels_file = runtime_dir / "ensure_labels.txt"
@@ -490,6 +514,7 @@ def _run_close_and_reissue(
 			"REISSUE_PRESERVE_BASELINE_ENABLED": reissue_preserve_baseline_enabled,
 			"GITHUB_RUN_ID": "777",
 			"GITHUB_RUN_ATTEMPT": "1",
+			"POST_REVIEW_HEAD_SHA": approved_close_head_sha or resolved_live_close_head_sha.lower(),
 		}
 		run_env = _sanitized_git_env(env)
 
@@ -586,6 +611,33 @@ def test_empty_parent_label_set_does_not_propagate() -> None:
 		f"reissue must NOT inherit ai:orchestrator-managed when parent "
 		f"label set is empty; got args: {args}"
 	)
+
+
+def test_close_and_reissue_refuses_head_changed_after_approval() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		approved_close_head_sha="a" * 40,
+		live_close_head_sha="b" * 40,
+	)
+
+	assert state.get("issue_create_args", []) == []
+	assert state.get("pr_close_args", []) == []
+	assert "approved_close_precondition_failed" in state["_github_output"]
+	assert "head changed after the decision" in state["_stdout"]
+
+
+def test_close_and_reissue_rechecks_head_after_replacement_creation() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		approved_close_head_sha="a" * 40,
+		live_close_head_sha="a" * 40,
+		final_close_head_sha="b" * 40,
+	)
+
+	assert len(state.get("issue_create_args", [])) == 1
+	assert state.get("pr_close_args", []) == []
+	assert "approved_close_precondition_failed" in state["_github_output"]
+	assert "head changed while the replacement issue was being created" in state["_stdout"]
 
 
 def test_review_blocked_prompt_includes_phase_e_schema_fields() -> None:

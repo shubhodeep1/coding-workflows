@@ -5479,6 +5479,7 @@ def _run_review_blocked_merge_decision(
 	live_head_sha: str,
 	fail_auto_pr_merge: bool = False,
 	approved: bool = True,
+	final_close_head_sha: str | None = None,
 ) -> dict:
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
@@ -5529,6 +5530,9 @@ def _run_review_blocked_merge_decision(
 			"user": {"login": "maintainer", "type": "User"},
 			"author_association": "MEMBER",
 		})
+	pr_sequence = [dict(judged_pr_snapshot) for _ in range(5)] + [dict(live_pr_snapshot)]
+	if final_close_head_sha is not None:
+		pr_sequence.append(_review_blocked_pr_snapshot(final_close_head_sha))
 	return _run_poller(
 		state=state,
 		enable_validation="false",
@@ -5538,11 +5542,9 @@ def _run_review_blocked_merge_decision(
 		issue_linked_prs={10: 901},
 		prs=[dict(judged_pr_snapshot)],
 		existing_branches=["main"],
-		# Reconciliation consumes two snapshots, the initial handler fetch and
-		# comment-context hydration consume two more, and the fifth is live.
-		pr_api_sequence={
-			901: [dict(judged_pr_snapshot) for _ in range(4)] + [dict(live_pr_snapshot)],
-		},
+		# Reconciliation, handler prechecks, and comment hydration consume five
+		# snapshots before the action performs its first live-head check.
+		pr_api_sequence={901: pr_sequence},
 		codex_json=decision,
 		fail_auto_pr_merge=fail_auto_pr_merge,
 		env_overrides={"ENABLE_AUTO_MERGE": "true"},
@@ -5577,6 +5579,31 @@ def test_review_blocked_close_and_reissue_runs_after_authenticated_approval():
 		"labels": ["ai:clarification", "ai:orchestrator-managed"],
 	}]
 	assert "ai:closed" in result["issues"]["10"]["labels"]
+
+
+def test_review_blocked_close_and_reissue_refuses_stale_approved_head():
+	result = _run_review_blocked_merge_decision(
+		action="close_and_reissue",
+		judged_head_sha="8" * 40,
+		live_head_sha="9" * 40,
+	)
+	assert result.get("created_issues", []) == []
+	assert result.get("closed_prs", []) == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert "live head changed or could not be bound to the approved snapshot" in result["stdout"]
+
+
+def test_review_blocked_close_and_reissue_rechecks_head_after_replacement_creation():
+	result = _run_review_blocked_merge_decision(
+		action="close_and_reissue",
+		judged_head_sha="8" * 40,
+		live_head_sha="8" * 40,
+		final_close_head_sha="9" * 40,
+	)
+	assert len(result.get("created_issues", [])) == 1
+	assert result.get("closed_prs", []) == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert "head changed while the replacement issue was being created" in result["stdout"]
 
 
 def test_review_blocked_merge_refuses_head_changed_after_judge_snapshot():

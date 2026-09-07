@@ -18043,6 +18043,17 @@ EOF
           # Discard any accidental file modifications from the combined
           # judge call; close_and_reissue operates via GitHub API only.
           rb_cleanup_combined_workspace
+          # Reuse the existing PR-fetch helper immediately before mutation so
+          # approval cannot close or reissue a head that changed after the
+          # request was minted and approved.
+          _rb_close_live_json="$(_fetch_pr_json "${RB_PR}")"
+          _rb_close_live_state="$(_jq_field "${_rb_close_live_json}" '.state' 'open|closed')"
+          _rb_close_live_head_sha="$(_jq_field "${_rb_close_live_json}" '.head.sha')"
+          if [ "${_rb_close_live_head_sha}" != "${RB_EXPECTED_HEAD_SHA}" ]; then
+            echo "::warning::Judge-approved close_and_reissue for PR #${RB_PR} refused because its live head changed or could not be bound to the approved snapshot. Leaving issue in ai:review-blocked."
+          elif [ "${_rb_close_live_state}" != "open" ]; then
+            echo "::warning::Judge-approved close_and_reissue for PR #${RB_PR} refused because the PR is no longer open. Leaving issue in ai:review-blocked."
+          else
           # Create replacement issue
           NEW_ISSUE_TITLE="$(echo "${RB_JUDGE_JSON}" | jq -r '.new_issue.title // empty')"
           NEW_ISSUE_BODY="$(echo "${RB_JUDGE_JSON}" | jq -r '.new_issue.body // empty' | sed 's/\\n/\n/g')"
@@ -18081,18 +18092,35 @@ EOF
             # Create/reuse the replacement before closing the source PR. A
             # failed replacement must leave the original review-blocked PR
             # open so no approved work disappears without a successor.
-            if [[ "${NEW_NUM}" =~ ^[0-9]+$ ]] && gh_retry gh pr close "${RB_PR}" --repo "${GITHUB_REPOSITORY}" \
-              --comment "Closed after approved review-blocked reissue request ${RB_APPROVAL_REQUEST_ID}; replacement: #${NEW_NUM}." \
-              2>/dev/null; then
-              ensure_label_exists "ai:closed"
-              gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
-                --remove-label 'ai:review-blocked' --remove-label 'ai:done' \
-                --add-label 'ai:closed' 2>/dev/null || true
-              review_blocked_post_consumed_marker "${GITHUB_REPOSITORY}" "${RB_PR}" "${RB_APPROVAL_REQUEST_ID}" "closed_and_reissued" || true
-              LOCAL_ID="$(echo "${WAVE_STATUS}" | jq -r ".issues[] | select(.github_issue == \"${rb_issue}\") | .id")"
+            if [[ "${NEW_NUM}" =~ ^[0-9]+$ ]]; then
+              # Recheck after issue creation because the close API has no
+              # match-head guard and a concurrent push must invalidate the
+              # approval before the PR is closed.
+              _rb_close_live_json="$(_fetch_pr_json "${RB_PR}")"
+              _rb_close_live_state="$(_jq_field "${_rb_close_live_json}" '.state' 'open|closed')"
+              _rb_close_live_head_sha="$(_jq_field "${_rb_close_live_json}" '.head.sha')"
+              if [ "${_rb_close_live_head_sha}" != "${RB_EXPECTED_HEAD_SHA}" ]; then
+                LOCAL_ID=""
+                echo "::warning::Judge-approved close_and_reissue for PR #${RB_PR} refused because its head changed while the replacement issue was being created. Leaving issue #${rb_issue} review-blocked."
+              elif [ "${_rb_close_live_state}" != "open" ]; then
+                LOCAL_ID=""
+                echo "::warning::Judge-approved close_and_reissue for PR #${RB_PR} refused because the PR is no longer open. Leaving issue #${rb_issue} review-blocked."
+              elif gh_retry gh pr close "${RB_PR}" --repo "${GITHUB_REPOSITORY}" \
+                --comment "Closed after approved review-blocked reissue request ${RB_APPROVAL_REQUEST_ID}; replacement: #${NEW_NUM}." \
+                2>/dev/null; then
+                ensure_label_exists "ai:closed"
+                gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+                  --remove-label 'ai:review-blocked' --remove-label 'ai:done' \
+                  --add-label 'ai:closed' 2>/dev/null || true
+                review_blocked_post_consumed_marker "${GITHUB_REPOSITORY}" "${RB_PR}" "${RB_APPROVAL_REQUEST_ID}" "closed_and_reissued" || true
+                LOCAL_ID="$(echo "${WAVE_STATUS}" | jq -r ".issues[] | select(.github_issue == \"${rb_issue}\") | .id")"
+              else
+                LOCAL_ID=""
+                echo "::warning::Replacement issue was created but PR #${RB_PR} could not be closed; leaving issue #${rb_issue} review-blocked."
+              fi
             else
               LOCAL_ID=""
-              echo "::warning::Replacement issue was not created or PR #${RB_PR} could not be closed; leaving issue #${rb_issue} review-blocked."
+              echo "::warning::Replacement issue was not created; leaving issue #${rb_issue} review-blocked."
             fi
             if [ -n "${LOCAL_ID}" ] && [ "${LOCAL_ID}" != "null" ]; then
               jq ".issue_number_map[\"${LOCAL_ID}\"] = ${NEW_NUM}" \
@@ -18106,6 +18134,7 @@ EOF
           else
             echo "::warning::Judge chose close_and_reissue but provided no new issue details."
             tg_notify "Orchestrator closed PR #${RB_PR} (issue #${rb_issue}) but could not create replacement issue."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+          fi
           fi
 
           REVIEW_BLOCKED_STATE_CHANGED=true
