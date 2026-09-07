@@ -252,6 +252,7 @@ emit_deduped_run_event()
 import fcntl
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -306,13 +307,22 @@ with lock_path.open("a+", encoding="utf-8") as handle:
 	# touches the ai-memory store, so an unbounded call here would hold the
 	# exclusive flock above and stall the caller's job with no log line until
 	# the runner's own timeout cancelled it.  Bound it and fail open.
+	# Contract (README / agents.md): a positive finite number of seconds
+	# bounds the call, exactly `0` disables the bound, and anything else --
+	# empty, negative, `nan`, `inf`, or non-numeric -- falls back to the
+	# default.  Only `0` may remove the safety bound; a typo never should.
 	emit_timeout_raw = (os.environ.get("LEDGER_EMIT_TIMEOUT_SECONDS") or "").strip()
-	try:
-		emit_timeout = float(emit_timeout_raw) if emit_timeout_raw else 120.0
-	except ValueError:
-		emit_timeout = 120.0
-	if emit_timeout <= 0:
-		emit_timeout = None
+	emit_timeout = 120.0
+	if emit_timeout_raw:
+		try:
+			emit_timeout_parsed = float(emit_timeout_raw)
+		except ValueError:
+			emit_timeout_parsed = None
+		if emit_timeout_parsed is not None and math.isfinite(emit_timeout_parsed):
+			if emit_timeout_parsed == 0:
+				emit_timeout = None
+			elif emit_timeout_parsed > 0:
+				emit_timeout = emit_timeout_parsed
 
 	try:
 		completed = subprocess.run(

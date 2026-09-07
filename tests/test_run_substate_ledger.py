@@ -500,6 +500,76 @@ def test_hung_record_run_event_times_out_instead_of_stalling_the_caller() -> Non
 		assert "timeout" in result.stderr, result.stderr
 
 
+def test_invalid_emit_timeout_literals_keep_the_default_bound() -> None:
+	"""Only an exact `0` may remove the emit bound; a typo never should.
+
+	Copilot review on PR #4028 (discussion_r3946877779): the first cut treated
+	any value <= 0 as "disable", so `-1` silently removed the safety bound,
+	and `float()` accepts `nan` / `inf`, which reach `subprocess.run` as
+	non-finite timeouts.  All three must fall back to the documented 120 s
+	default.  Each case runs against a 600 s stub, so a disabled bound shows
+	up as a helper that is still running long after the default would have
+	fired; the cases run concurrently to keep the wall cost near one bound.
+	"""
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		hanging_stub = tmp_path / "hanging_ai_memory.py"
+		hanging_stub.write_text("import time\n\ntime.sleep(600)\n", encoding="utf-8")
+
+		procs: dict[str, subprocess.Popen[str]] = {}
+		started = time.monotonic()
+		for raw_value in ("-1", "nan", "inf"):
+			case_dir = tmp_path / f"case-{raw_value}"
+			case_dir.mkdir()
+			procs[raw_value] = subprocess.Popen(
+				[
+					"bash",
+					str(HELPER_SCRIPT),
+					"--run-id",
+					"run-4028",
+					"--workflow",
+					"implement",
+					"--phase",
+					"implement",
+					"--mode",
+					"implement",
+					"--repo-root",
+					str(case_dir),
+					"--actor",
+					"codex-bot",
+					"--substate",
+					"Succeeded",
+					"--attempt",
+					"1",
+				],
+				env={
+					**os.environ,
+					"PYTHONDONTWRITEBYTECODE": "1",
+					"LEDGER_AI_MEMORY_SCRIPT": str(hanging_stub),
+					"LEDGER_SUBSTATES_SEEN_FILE": str(case_dir / "seen.txt"),
+					"RUNNER_TEMP": str(case_dir),
+					"LEDGER_EMIT_TIMEOUT_SECONDS": raw_value,
+				},
+				stdout=subprocess.PIPE,
+				stderr=subprocess.PIPE,
+				text=True,
+			)
+
+		for raw_value, proc in procs.items():
+			try:
+				stdout, stderr = proc.communicate(timeout=240)
+			except subprocess.TimeoutExpired:
+				proc.kill()
+				raise AssertionError(f"LEDGER_EMIT_TIMEOUT_SECONDS={raw_value!r} disabled the bound")
+			assert proc.returncode == 0, (raw_value, stderr)
+			assert stdout == "", (raw_value, stdout)
+			assert "record-run-event failed (timeout:" in stderr, (raw_value, stderr)
+			assert "exceeded 120.0s" in stderr, (raw_value, stderr)
+
+		elapsed = time.monotonic() - started
+		assert 100 < elapsed < 240, elapsed
+
+
 def test_schema_accepts_legacy_and_new_substate_entries_additively() -> None:
 	_require_jsonschema()
 	validator = jsonschema.Draft202012Validator(_schema())
