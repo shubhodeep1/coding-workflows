@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "The repository includes auditing and update workflows for detecting consumer drift and enforcing pinned workflow refs, with tests covering release-tag refspecs and update guardrails. Changes involving reusable workflows or templates should preserve immutable references and update drift/audit expectations.",
+  "fingerprint": "9ad22e57f1947648bb77f6e59ec250980d119bf6cb591520423378581048aa11",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34085426557",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34085426557",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3987",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3996",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3998",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4000",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4005",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3989",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3997",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3999",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4001",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4006"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260907051209_152fcf7158",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Consumer workflows are expected to use immutable workflow references and repository guardrails check for drift.",
+  "timestamps": {
+    "created_at": "2026-09-07T05:12:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
