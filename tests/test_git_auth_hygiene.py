@@ -157,11 +157,14 @@ def test_approval_pending_is_handled_without_critical_alerts() -> None:
 	approval_block = judge_text[approval_start:approval_end]
 	assert approval_block.count('echo "judge_handled=true" >> "$GITHUB_OUTPUT"') == 2
 	assert 'while [ "${RB_MERGE_POLL_INDEX}" -lt "${RB_MERGE_POLL_ATTEMPTS}" ]' in judge_text
+	assert 'if .mergeable == true then "true" elif .mergeable == false then "false" else empty end' in judge_text
 	assert 'echo "judge_skip_reason=mergeability_pending"' in judge_text
+	assert judge_text.count('echo "judge_handled=true" >> "$GITHUB_OUTPUT"') >= 7
 
 	workflow_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
 	assert "approval_pending)" in workflow_text
 	assert "suppressing duplicate alert" in workflow_text
+	assert "Review-blocked refusal was already recorded" in workflow_text
 
 
 def test_outsider_cannot_forge_request_or_consumed_markers() -> None:

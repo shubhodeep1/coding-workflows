@@ -935,8 +935,9 @@ gh_pr_with_all_comments()
 }
 
 # Review-blocked terminal decisions are model recommendations until a trusted
-# human approves the exact request and decision digest on the PR. These helpers
-# consume the already-prefetched PR comments; they add no read API calls.
+# human approves the exact request and decision digest on the PR. Approval and
+# refusal checks consume prefetched PR comments; replacement-issue dedup uses
+# one bounded search/issues read.
 review_blocked_decision_digest()
 {
 	printf '%s' "${1:?decision JSON required}" | jq -cS . | sha256sum | awk '{print $1}'

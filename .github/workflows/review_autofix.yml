@@ -6574,6 +6574,9 @@ jobs:
               approval_pending)
                 echo "Review-blocked terminal recommendation is awaiting trusted human approval; suppressing duplicate alert."
                 exit 0 ;;
+              skip)
+                echo "Review-blocked refusal was already recorded; suppressing duplicate alert."
+                exit 0 ;;
               merge)
                 MSG="Review-blocked judge merged PR as-is" ;;
               fix)

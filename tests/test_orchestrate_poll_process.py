@@ -6127,11 +6127,17 @@ def test_review_blocked_final_fix_decision_performs_no_actuator_action():
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
 	state["review_blocked_retries"]["10"] = 2
+	refused_head_sha = "7" * 40
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		issue_labels={10: ["ai:review-blocked"]},
+		issue_labels={10: ["ai:review-blocked"], 903: []},
+		issue_comments={903: [{
+			"body": f"<!-- REVIEW_BLOCKED_DECISION_REFUSED_V1 issue=10 head={refused_head_sha} -->",
+			"user": {"login": "outsider", "type": "User"},
+			"author_association": "NONE",
+		}]},
 		issue_linked_prs={10: 903},
 		prs=[{
 			"number": 903,
@@ -6141,6 +6147,7 @@ def test_review_blocked_final_fix_decision_performs_no_actuator_action():
 			"baseRefName": "main",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
+			"headSha": refused_head_sha,
 			"mergeable": True,
 			"mergeable_state": "clean",
 			"title": "Test PR",
@@ -6157,8 +6164,58 @@ def test_review_blocked_final_fix_decision_performs_no_actuator_action():
 	assert result["review_dispatches"] == []
 	assert result["latest_state"]["review_blocked_retries"]["10"] == 2
 	assert "invalid, oversized, or disallowed decision" in (result["stdout"] + result["stderr"])
+	assert "Review-blocked judge attempt 1/2" in result["stdout"]
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 	assert "ai:closed" not in result["issues"]["10"]["labels"]
+	refusal_comments = [
+		comment.get("body", "")
+		for comment in result["issues"]["903"]["comments"]
+		if "Orchestrator Review-Blocked Judge — Decision Refused" in comment.get("body", "")
+	]
+	assert len(refusal_comments) == 1
+	assert f"issue=10 head={refused_head_sha}" in refusal_comments[0]
+
+
+def test_review_blocked_trusted_refusal_marker_stops_same_head_judge_loop():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	state["review_blocked_retries"]["10"] = 2
+	refused_head_sha = "6" * 40
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"], 903: []},
+		issue_comments={903: [{
+			"body": f"<!-- REVIEW_BLOCKED_DECISION_REFUSED_V1 issue=10 head={refused_head_sha} -->",
+			"user": {"login": "github-actions[bot]", "type": "Bot"},
+			"author_association": "NONE",
+		}]},
+		issue_linked_prs={10: 903},
+		prs=[{
+			"number": 903,
+			"state": "open",
+			"merged": False,
+			"merged_at": None,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"headSha": refused_head_sha,
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"title": "Test PR",
+			"body": "Body",
+		}],
+		existing_branches=["main"],
+		codex_json={
+			"action": "fix",
+			"justification": "retry despite the final-action boundary",
+			"fix_description": "This model call must be skipped.",
+			"remaining_issues_summary": "one correction remains",
+		},
+	)
+	assert "skipping repeated judge invocation" in result["stdout"]
+	assert "Review-blocked judge attempt" not in result["stdout"]
 
 
 def test_review_blocked_close_and_reissue_requires_replacement_details():

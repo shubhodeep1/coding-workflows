@@ -1736,7 +1736,7 @@ case "${RB_ACTION}" in
     while [ "${RB_MERGE_POLL_INDEX}" -lt "${RB_MERGE_POLL_ATTEMPTS}" ]; do
       RB_MERGE_LIVE_JSON="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
       RB_MERGE_STATE="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.state // empty')"
-      RB_MERGEABLE="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.mergeable // empty')"
+      RB_MERGEABLE="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r 'if .mergeable == true then "true" elif .mergeable == false then "false" else empty end')"
       RB_MERGE_HEAD_SHA="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.head.sha // empty')"
       RB_MERGE_BASE_REF="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.base.ref // empty')"
       RB_MERGE_ALREADY_MERGED="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '(.merged_at != null) or (.merged == true)')"
@@ -1785,6 +1785,7 @@ case "${RB_ACTION}" in
   fix)
     if [ "${IS_FINAL}" = "true" ]; then
       echo "::warning::Judge returned 'fix' after retries were exhausted; refusing invalid final action."
+      echo "judge_handled=true" >> "$GITHUB_OUTPUT"
       echo "judge_action=skip" >> "$GITHUB_OUTPUT"
       echo "judge_skip_reason=invalid_final_fix" >> "$GITHUB_OUTPUT"
     else
@@ -1977,11 +1978,13 @@ ${RB_FIX_DESC}"
           fi
         else
           echo "::warning::Judge fix staged no effective changes; refusing to reinterpret fix as merge."
+          echo "judge_handled=true" >> "$GITHUB_OUTPUT"
           echo "judge_action=skip" >> "$GITHUB_OUTPUT"
           echo "judge_skip_reason=fix_no_effective_changes" >> "$GITHUB_OUTPUT"
         fi
       else
         echo "::warning::Judge fix produced no file changes; refusing to reinterpret fix as merge."
+        echo "judge_handled=true" >> "$GITHUB_OUTPUT"
         echo "judge_action=skip" >> "$GITHUB_OUTPUT"
         echo "judge_skip_reason=fix_no_changes" >> "$GITHUB_OUTPUT"
       fi

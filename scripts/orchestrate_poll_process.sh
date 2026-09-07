@@ -17384,6 +17384,19 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         PR_META="$(echo "${_rb_pr_json}" | jq '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo "{}")"
       fi
       RB_EXPECTED_HEAD_SHA="$(printf '%s' "${PR_META}" | jq -r '.head_sha // empty' 2>/dev/null || true)"
+      RB_DECISION_REFUSAL_MARKER=""
+      if [[ "${RB_EXPECTED_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+        RB_DECISION_REFUSAL_MARKER="<!-- REVIEW_BLOCKED_DECISION_REFUSED_V1 issue=${rb_issue} head=${RB_EXPECTED_HEAD_SHA} -->"
+      fi
+      if [ -n "${RB_DECISION_REFUSAL_MARKER}" ] && printf '%s' "${PR_COMMENTS}" | jq -e --arg marker "${RB_DECISION_REFUSAL_MARKER}" '
+        any(.[]?; (
+          ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+          or ((.author_type // "") == "Bot" and ((.author // "") | IN("github-actions", "github-actions[bot]", "codex", "codex-bot")))
+        ) and ((.body // "") | contains($marker)))
+      ' >/dev/null 2>&1; then
+        echo "  Review-blocked decision was already refused for issue #${rb_issue} at head ${RB_EXPECTED_HEAD_SHA}; skipping repeated judge invocation."
+        continue
+      fi
       RB_PENDING_APPROVAL_REQUEST=""
       RB_PENDING_DECISION_JSON=""
       if type review_blocked_find_pending_request >/dev/null 2>&1 && [ -n "${RB_EXPECTED_HEAD_SHA}" ]; then
@@ -17593,7 +17606,9 @@ sys.exit(1)
         echo "::warning::Review-blocked judge returned an invalid, oversized, or disallowed decision for #${rb_issue}; no actuator action taken."
         RB_REJECTION_COMMENT="## Orchestrator Review-Blocked Judge — Decision Refused
 
-The advisory judge returned an invalid, oversized, or disallowed decision for issue #${rb_issue}. No actuator action was taken; the issue remains review-blocked for a safe retry."
+The advisory judge returned an invalid, oversized, or disallowed decision for issue #${rb_issue}. No actuator action was taken; the issue remains review-blocked for a safe retry.
+
+${RB_DECISION_REFUSAL_MARKER}"
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
           -f body="${RB_REJECTION_COMMENT}" >/dev/null 2>&1 || true
         continue
