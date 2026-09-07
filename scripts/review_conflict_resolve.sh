@@ -2251,7 +2251,22 @@ done
 # bootstrap-generated scripts/.gitignore.
 if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
   rm -f ./pre_assembled_static.txt
-  rm -f unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md
+  # Consumer repos may track their own copy of these root files:
+  # CLAUDE.md §22.C / §24.F require a repo-owned agents.md carrying
+  # DigitalOcean / Cloudflare resource IDs. The staged workflow copies
+  # live out of tree (SUPPORT_ROOT_DIR), so a tracked root file here is
+  # the consumer's own content, never a workflow artifact. Removing it
+  # unconditionally deleted binance-blessings' agents.md in an
+  # [ai-merge-resolve] commit (PR #255, b974f8b) and spawned fix-up
+  # issue #268. Only untracked copies are artifacts to clean.
+  for _root_artifact in unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md; do
+    if git ls-files --error-unmatch -- "${_root_artifact}" >/dev/null 2>&1; then
+      echo "ROOT_ARTIFACT_CLEANUP_KEPT_TRACKED path=${_root_artifact} reason=tracked_in_consumer_repo"
+      continue
+    fi
+    rm -f "${_root_artifact}"
+  done
+  unset _root_artifact
 fi
 
 if [ -n "$(git status --porcelain)" ]; then
