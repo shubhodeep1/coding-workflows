@@ -3180,8 +3180,11 @@ jobs:
         # and resolver on a head that the older PR's merge will conflict
         # again. cancel_on_pr_close.yml (on merge) and orchestrate_poll.yml
         # (every tick) release the queue. Fail-open: any API failure or a
-        # missing script continues to the reviewer path.
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CAN_PUSH == 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.FORCE_RB_JUDGE != 'true' && env.MERGE_TRAIN_ENABLED == 'true'
+        # missing script continues to the reviewer path. MERGE_TRAIN_ENABLED
+        # is evaluated by the script (true/1/yes/on, case-insensitive), not
+        # here, so this gate and the release paths in orchestrate_poll.yml /
+        # cancel_on_pr_close.yml read the repo variable the same way.
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CAN_PUSH == 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.FORCE_RB_JUDGE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
