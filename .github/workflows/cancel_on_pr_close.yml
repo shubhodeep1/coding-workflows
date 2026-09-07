@@ -87,6 +87,15 @@ jobs:
 
           mkdir -p scripts
           install -m 0755 "${src}" scripts/gh_helpers.sh
+          for helper in review_merge_train.sh label_helpers.sh; do
+            src=".codex-workflow-src/scripts/${helper}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${helper}" ]; then
+              src=".codex-workflow-src-main/scripts/${helper}"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0755 "${src}" "scripts/${helper}"
+            fi
+          done
 
       - name: Cancel queued/in-progress runs for closed PR branch
         shell: bash
@@ -196,4 +205,35 @@ jobs:
               "because matching runs" \
               "finished before cancellation" \
               "requests completed."
+          fi
+
+      - name: Release merge-queued PRs (merge train)
+        # A merged ai/issue-* PR may have been blocking younger PRs that edit
+        # the same files (scripts/review_merge_train.sh). Re-evaluate the
+        # queue on this base right away so the next PR in line gets its
+        # review run without waiting for the poll backstop. Fail-open.
+        if: github.event.pull_request.merged == true
+        shell: bash
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
+          MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
+          MERGE_TRAIN_ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          case "${PR_HEAD_REF}" in
+            ai/issue-*) ;;
+            *)
+              echo "Merged PR #${PR_NUMBER} head '${PR_HEAD_REF}' is not an ai/issue-* branch; merge-train release still runs (base may have moved for queued PRs)."
+              ;;
+          esac
+          if [ ! -f scripts/review_merge_train.sh ]; then
+            echo "merge-train release skipped: scripts/review_merge_train.sh not staged from shubhodeep1/coding-workflows@${SCRIPT_REF}."
+            exit 0
+          fi
+          _mt_rc=0
+          SUPPORT_SCRIPTS_DIR="$(pwd)/scripts" bash scripts/review_merge_train.sh release || _mt_rc=$?
+          if [ "${_mt_rc}" -ne 0 ]; then
+            echo "::warning::review_merge_train.sh release exited ${_mt_rc}; ignoring (fail-open)."
           fi

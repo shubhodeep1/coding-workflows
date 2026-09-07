@@ -16623,6 +16623,14 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       echo "  Issue #${ip_issue}: PR #${IP_PR} state=${IP_PR_STATE} mergeable=${IP_MERGEABLE}, skipping."
       continue
     fi
+    # Merge-train queued PRs (scripts/review_merge_train.sh) wait for an
+    # older overlapping PR to merge; resolving their conflicts now would be
+    # redone after that merge. The train releases them (and their review
+    # run resolves the conflict pre-review) once the blockers are gone.
+    if printf '%s' "${_ip_pr_json}" | jq -e '[.labels[]?.name] | index("ai:merge-queued")' >/dev/null 2>&1; then
+      echo "  Issue #${ip_issue}: PR #${IP_PR} is ai:merge-queued (merge train); skipping conflict dispatch until released."
+      continue
+    fi
     echo "  Issue #${ip_issue} has PR #${IP_PR} with merge conflicts. Running Codex conflict resolution..."
 
     _ip_head_sha="$(_jq_field "${_ip_pr_json}" '.head.sha')"
