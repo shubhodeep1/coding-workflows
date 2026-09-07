@@ -3420,6 +3420,45 @@ def test_blocked_already_satisfied_regexes_classify_real_verdicts() -> None:
 	assert _is_success_noop("BLOCKED: No repository changes are required.")
 	assert _is_success_noop("BLOCKED: Nothing to do; the index already exists.")
 
+	# Verbatim verdict from run 34125645374 attempt 1
+	# (tele-funtoken-msg-scoring issue #4090). The plan phase emitted
+	# "Files likely to change: None." because the remediation had already
+	# landed in PR #4075; the run then failed with an ERROR alert instead
+	# of closing the issue through the success-no-op path.
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires validation only; existing "
+		"remediation passed all 74 targeted tests, so no repository edit "
+		"is permitted."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires verification-only checks; no repository "
+		"change is permitted."
+	)
+
+	# Validation-only wording without an affirmative no-edit statement is not
+	# sufficient: work may remain or the phrase itself may be negated.
+	assert not _is_success_noop(
+		"BLOCKED: This is not validation-only work; the plan requires repository edits."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires validation only for phase 1; phase 2 "
+		"still requires repository edits."
+	)
+
+	# The validation-only branch must still yield to the real-obstacle veto.
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires validation only and no repository edit "
+		"is permitted, but pytest is unavailable in the runner."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires validation-only checks and no repository "
+		"edit is permitted, but the fixture database is inaccessible."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires validation only and no repository edit "
+		"is permitted, but the harness is broken."
+	)
+
 	# Real obstacles must keep failing.
 	assert not _is_success_noop("BLOCKED: scope-lock-violation file=scripts/x.py")
 	assert not _is_success_noop(
