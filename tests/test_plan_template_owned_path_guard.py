@@ -260,6 +260,81 @@ def test_prose_mention_outside_files_section_is_allowed() -> None:
 	assert returncode == 0, output
 
 
+def test_negative_sublist_inside_files_section_is_allowed() -> None:
+	"""A "No changes are expected to:" list is not a list of edit targets.
+
+	Verbatim shape from binance-blessings issue #268 (run 34127286952): the
+	plan restored a single root `agents.md` and closed the Files section with
+	the files it deliberately left alone.  `scripts/build_static_context.sh`
+	appeared only in that negative list and the guard hard-failed the plan
+	phase on it, routing a correct one-file plan back to a human.
+	"""
+	plan_text = (
+		"## Files likely to change\n\n"
+		"- `agents.md` — recreate using the current default-branch version.\n\n"
+		"No changes are expected to:\n\n"
+		"- `.ai/.workspace_source_manifest.txt`, which already lists `agents.md`.\n"
+		"- `CLAUDE.md`, which already accepts the lowercase file.\n"
+		"- `scripts/build_static_context.sh`, which already conditionally\n"
+		"  includes `agents.md`.\n\n"
+		"## Functions or modules to implement\n\nNone.\n"
+	)
+	returncode, output = _run_guard(plan_text, FETCHED_HELPERS)
+	assert returncode == 0, output
+	assert "scripts/build_static_context.sh" not in output
+
+
+@pytest.mark.parametrize(
+	"lead_in",
+	[
+		"No changes are expected to:",
+		"Not changing:",
+		"None of these files change:",
+		"Nothing below is modified:",
+		"Unchanged:",
+		"- No changes to `scripts/render_prompt.sh`.",
+	],
+)
+def test_negative_lead_in_variants_suppress_the_list(lead_in: str) -> None:
+	plan_text = (
+		"## Files likely to change\n\n- `README.md`\n\n"
+		f"{lead_in}\n\n- `scripts/render_prompt.sh`\n\n"
+		"## Decisions\n\nNone.\n"
+	)
+	returncode, output = _run_guard(plan_text, FETCHED_HELPERS)
+	assert returncode == 0, output
+
+
+def test_positive_lead_in_after_a_negative_list_resumes_scanning() -> None:
+	"""Suppression must end at the next non-list line, not at the section end.
+
+	Otherwise a plan could hide a real template-owned target behind an
+	earlier negative list.
+	"""
+	plan_text = (
+		"## Files likely to change\n\n"
+		"No changes are expected to:\n\n"
+		"- `scripts/run_validation_repo_checks.sh`\n\n"
+		"Files to change:\n\n"
+		"- `scripts/render_prompt.sh`\n\n"
+		"## Decisions\n\nNone.\n"
+	)
+	returncode, output = _run_guard(plan_text, FETCHED_HELPERS)
+	assert returncode == 1, output
+	assert "scripts/render_prompt.sh" in output
+
+
+def test_template_path_negated_only_after_the_path_is_still_rejected() -> None:
+	"""Conservative direction: the negation must lead the line to suppress it."""
+	plan_text = (
+		"## Files likely to change\n\n"
+		"- `scripts/render_prompt.sh` — no changes needed here.\n\n"
+		"## Decisions\n\nNone.\n"
+	)
+	returncode, output = _run_guard(plan_text, FETCHED_HELPERS)
+	assert returncode == 1, output
+
+
 def test_guard_skips_the_canonical_coding_workflows_repository() -> None:
 	"""In coding-workflows these paths are the source of truth."""
 	workflow = yaml.safe_load(PLAN_WORKFLOW.read_text())
