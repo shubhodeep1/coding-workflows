@@ -2266,6 +2266,9 @@ if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
   for _rs_cleanup_artifact in pre_assembled_static.txt unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md; do
     if git ls-files --error-unmatch -- "${_rs_cleanup_artifact}" >/dev/null 2>&1; then
       echo "Preserving repo-tracked path during artifact cleanup: ${_rs_cleanup_artifact}"
+      if [ "${_rs_cleanup_artifact}" = "pre_assembled_static.txt" ]; then
+        git restore --source=HEAD --worktree -- "${_rs_cleanup_artifact}"
+      fi
       continue
     fi
     rm -f -- "${_rs_cleanup_artifact}"

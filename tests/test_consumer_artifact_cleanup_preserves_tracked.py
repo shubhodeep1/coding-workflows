@@ -136,7 +136,10 @@ def test_cleanup_preserves_tracked_agents_md() -> None:
 			# The staging pass that follows each cleanup block must not record
 			# a deletion — that is what turned the working-tree rm into a
 			# committed data loss on PR #255.
-			_git(repo, "add", "-u")
+			if script_rel == "scripts/orchestrate_poll_process.sh":
+				_git(repo, "add", "-A")
+			else:
+				_git(repo, "add", "-u")
 			staged = _git(repo, "diff", "--cached", "--name-status").strip()
 			assert staged == "", f"{script_rel}: cleanup staged {staged!r} for commit"
 
@@ -236,6 +239,33 @@ def test_implement_cleanup_preserves_tracked_static_context() -> None:
 		assert not (repo / UNTRACKED_ARTIFACT).exists()
 
 
+def test_review_cleanup_restores_tracked_static_context() -> None:
+	"""Review editor, resolver, and judge cleanup restore tracked context."""
+	for script_rel, loop_var in (
+		("scripts/review_commit_changes.sh", "_artifact"),
+		("scripts/review_conflict_resolve.sh", "_rs_cleanup_artifact"),
+		("scripts/review_rb_judge.sh", "_rb_cleanup_artifact"),
+	):
+		block = _extract_cleanup_block(script_rel, loop_var)
+		with tempfile.TemporaryDirectory(prefix="artifact-cleanup-") as raw_tmp:
+			repo = _make_consumer_repo(Path(raw_tmp), UNTRACKED_ARTIFACT)
+			expected = (repo / UNTRACKED_ARTIFACT).read_text(encoding="utf-8")
+			(repo / UNTRACKED_ARTIFACT).write_text("generated static context\n", encoding="utf-8")
+
+			subprocess.run(
+				["bash", "-euo", "pipefail", "-c", block],
+				cwd=repo,
+				check=True,
+				capture_output=True,
+				env=_temp_repo_env(),
+				text=True,
+			)
+
+			assert (repo / UNTRACKED_ARTIFACT).read_text(encoding="utf-8") == expected
+			_git(repo, "add", "-u")
+			assert _git(repo, "diff", "--cached", "--name-status").strip() == ""
+
+
 def main() -> int:
 	tests = [
 		test_cleanup_preserves_tracked_agents_md,
@@ -243,6 +273,7 @@ def main() -> int:
 		test_no_unguarded_agents_md_removal_remains,
 		test_poller_restores_bootstrap_overwrite,
 		test_implement_cleanup_preserves_tracked_static_context,
+		test_review_cleanup_restores_tracked_static_context,
 	]
 	passed = 0
 	failed = 0

@@ -1917,6 +1917,9 @@ __EDIT_DISCIPLINE__
               ai-memory; do
               if git ls-files --error-unmatch -- "${_rb_cleanup_artifact}" >/dev/null 2>&1; then
                 echo "Preserving repo-tracked path during artifact cleanup: ${_rb_cleanup_artifact}"
+                if [ "${_rb_cleanup_artifact}" = "pre_assembled_static.txt" ]; then
+                  git restore --source=HEAD --worktree -- "${_rb_cleanup_artifact}"
+                fi
                 continue
               fi
               rm -rf -- "${_rb_cleanup_artifact}"
