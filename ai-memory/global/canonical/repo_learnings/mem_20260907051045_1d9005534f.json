@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Contract-list synchronization must preserve the union of declared inputs and reject malformed or duplicate YAML safely.",
   "timestamps": {
     "created_at": "2026-09-07T05:10:45Z",
