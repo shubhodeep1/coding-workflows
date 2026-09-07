@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "The orchestration flow treats persisted state and external inputs as untrusted and validates them defensively.",
   "timestamps": {
     "created_at": "2026-09-07T05:06:32Z",
