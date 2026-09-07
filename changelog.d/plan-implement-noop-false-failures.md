@@ -8,7 +8,7 @@ Both defects turned a correct outcome into an ERROR Telegram alert and sent a wo
 | Plan-phase false positive | binance-blessings issue #268, run 34127286952 |
 | Implement-phase false failure | tele-funtoken-msg-scoring issue #4090, run 34125645374 |
 | Path wrongly rejected | `scripts/build_static_context.sh` |
-| New regression tests | 9 |
+| New plan-guard regression cases | 12 |
 
 What this means for operators: a plan that lists unchanged files as context now reaches the implementation phase, and an issue whose fix already shipped closes itself through the existing no-op path. Both previously produced an ERROR alert that needed manual triage.
 

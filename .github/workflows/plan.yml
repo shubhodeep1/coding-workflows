@@ -1521,21 +1521,22 @@ jobs:
           # `scripts/build_static_context.sh` under "No changes are
           # expected to:" as context, and the guard hard-failed the plan
           # phase on a path the plan had just promised not to touch.
-          # A lead-in line that opens with a negation AND names a
-          # change-ish word starts the suppressed region; it runs through
+          # A standalone lead-in line that opens with a negation AND names
+          # a change-ish word starts the suppressed region; it runs through
           # the blank lines, list items, and wrapped continuation lines
           # that belong to that list, and any other non-blank line ends
           # it so a later positive lead-in ("Files to change:") resumes
           # scanning.  A path mentioned positively first and negated only
           # later in the same line still counts as a target, matching the
-          # conservative rejections below.
+          # conservative rejections below.  A bullet-prefixed negative is
+          # scanned normally so it cannot hide positive sibling bullets.
           FILES_SECTION_FILE="${RUNTIME_DIR}/files_section.txt"
           perl -ne '
             BEGIN { $in = 0; $neg = 0 }
             if (/^\s{0,3}#{1,6}\s*Files\b[^\n]*\bchange\b/i) { $in = 1; $neg = 0; next; }
             if ($in && /^\s{0,3}#{1,6}\s+\S/) { $in = 0; $neg = 0; }
             next unless $in;
-            if (/^\s*(?:[-*+]\s+|\d+[.)]\s+)?(?:\*\*|__)?\s*(?:no|not|none|nothing|unchanged)\b/i
+            if (/^\s*(?:\*\*|__)?\s*(?:no|not|none|nothing|unchanged)\b/i
                 && /(?:chang|modif|edit|touch|affect|updat)/i) { $neg = 1; next; }
             if ($neg) {
               next if /^\s*$/;

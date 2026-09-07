@@ -292,7 +292,6 @@ def test_negative_sublist_inside_files_section_is_allowed() -> None:
 		"None of these files change:",
 		"Nothing below is modified:",
 		"Unchanged:",
-		"- No changes to `scripts/render_prompt.sh`.",
 	],
 )
 def test_negative_lead_in_variants_suppress_the_list(lead_in: str) -> None:
@@ -303,6 +302,22 @@ def test_negative_lead_in_variants_suppress_the_list(lead_in: str) -> None:
 	)
 	returncode, output = _run_guard(plan_text, FETCHED_HELPERS)
 	assert returncode == 0, output
+
+
+@pytest.mark.parametrize("negative_item_prefix", ["- ", "1. "])
+@pytest.mark.parametrize("negative_item_separator", ["\n", "\n\n"])
+def test_negative_list_item_does_not_hide_later_template_target(
+	negative_item_prefix: str, negative_item_separator: str
+) -> None:
+	plan_text = (
+		"## Files likely to change\n\n"
+		f"{negative_item_prefix}No changes to `README.md`."
+		f"{negative_item_separator}- `scripts/render_prompt.sh`\n\n"
+		"## Decisions\n\nNone.\n"
+	)
+	returncode, output = _run_guard(plan_text, FETCHED_HELPERS)
+	assert returncode == 1, output
+	assert "scripts/render_prompt.sh" in output
 
 
 def test_positive_lead_in_after_a_negative_list_resumes_scanning() -> None:

@@ -2198,7 +2198,8 @@ jobs:
           # either half keeps the pre-existing failure behaviour, so a
           # miss costs a false failure (today's behaviour), never a
           # falsely-closed issue.
-          # `(validation|verification)[- ]only` was added for run
+          # An affirmative validation-only + no-edit-permitted branch was
+          # added for run
           # 34125645374 (tele-funtoken-msg-scoring issue #4090). Plan
           # phase emitted "Files likely to change: None." for a log-scan
           # issue whose remediation had already landed in PR #4075,
@@ -2208,13 +2209,14 @@ jobs:
           # repository edit is permitted.` Neither half of the classifier
           # matched ("permitted" is not "required/needed/necessary", and
           # nothing said "already"), so a correct no-op became a hard
-          # failure with an ERROR Telegram alert. A plan the model reports
-          # as validation-only is the same success-no-op case the branches
-          # above cover; the real-obstacle veto still applies, so a verdict
-          # that says validation is blocked (failed, unavailable, denied)
-          # keeps failing.
-          BLOCKED_ALREADY_SATISFIED_REGEX='(requires?[[:space:]]+no[[:space:]]+([a-z-]+[[:space:]]+){0,3}(edit|change|modification|diff|patch)s?|no[[:space:]]+([a-z-]+[[:space:]]+){0,3}(edit|change|modification|diff|patch)s?[[:space:]]+(are[[:space:]]+|is[[:space:]]+|were[[:space:]]+|was[[:space:]]+)?(required|needed|necessary)|nothing[[:space:]]+to[[:space:]]+(do|change|implement|apply)|(validation|verification)[- ]only|already[[:space:]]+(implemented|present|satisfied|applied|in[[:space:]]+place|aligned|complete|completed|done|exists|enforced|up[- ]to[- ]date))'
-          BLOCKED_REAL_OBSTACLE_REGEX='(scope-lock-violation|\<cannot\>|\<can[[:space:]]not\>|\<can.?t\>|\<unable\>|\<unavailable\>|\<not[[:space:]]available\>|\<inaccessible\>|\<no[[:space:]]access\>|\<denied\>|\<forbidden\>|\<not[[:space:]]permitted\>|\<no[[:space:]]permission\>|\<missing\>|\<absent\>|\<fail(s|ed|ing|ure|ures)?\>|\<errors?\>|\<conflict(s|ed|ing)?\>|\<ambiguous\>|\<unclear\>|\<insufficient\>|\<needs?[[:space:]]human\>|\<requires?[[:space:]]human\>|\<blocked[[:space:]]by\>|\<out[- ]of[- ]scope\>|\<timed?[[:space:]]out\>|\<timeout\>)'
+          # failure with an ERROR Telegram alert. The branch requires both
+          # affirmative validation-only wording and an explicit statement
+          # that no edit is permitted, so negated or partial-work wording
+          # cannot close an unfinished issue. The real-obstacle veto still
+          # applies, so a verdict that says validation is blocked keeps
+          # failing.
+          BLOCKED_ALREADY_SATISFIED_REGEX='(requires?[[:space:]]+no[[:space:]]+([a-z-]+[[:space:]]+){0,3}(edit|change|modification|diff|patch)s?|no[[:space:]]+([a-z-]+[[:space:]]+){0,3}(edit|change|modification|diff|patch)s?[[:space:]]+(are[[:space:]]+|is[[:space:]]+|were[[:space:]]+|was[[:space:]]+)?(required|needed|necessary)|nothing[[:space:]]+to[[:space:]]+(do|change|implement|apply)|requires?[[:space:]]+(validation|verification)[- ]only.*no[[:space:]]+([a-z-]+[[:space:]]+){0,3}(edit|change|modification|diff|patch)s?[[:space:]]+(are[[:space:]]+|is[[:space:]]+|were[[:space:]]+|was[[:space:]]+)?permitted|already[[:space:]]+(implemented|present|satisfied|applied|in[[:space:]]+place|aligned|complete|completed|done|exists|enforced|up[- ]to[- ]date))'
+          BLOCKED_REAL_OBSTACLE_REGEX='(scope-lock-violation|\<cannot\>|\<can[[:space:]]not\>|\<can.?t\>|\<unable\>|\<unavailable\>|\<not[[:space:]]available\>|\<inaccessible\>|\<no[[:space:]]access\>|\<denied\>|\<forbidden\>|\<not[[:space:]]permitted\>|\<no[[:space:]]permission\>|\<missing\>|\<absent\>|\<broken\>|\<lacks?\>|does[[:space:]]+not[[:space:]]+exist|\<fail(s|ed|ing|ure|ures)?\>|\<errors?\>|\<conflict(s|ed|ing)?\>|\<ambiguous\>|\<unclear\>|\<insufficient\>|\<needs?[[:space:]]human\>|\<requires?[[:space:]]human\>|\<blocked[[:space:]]by\>|\<out[- ]of[- ]scope\>|\<timed?[[:space:]]out\>|\<timeout\>)'
 
           # Salvage gate. Returns 0 iff at least one path in the porcelain
           # delta passed in carries a non-whitespace change vs HEAD/index
