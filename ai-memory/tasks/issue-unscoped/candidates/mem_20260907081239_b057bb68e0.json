@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:4458-4459 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The `cell()` helper does not neutralize GitHub `@`-mention or `#`-issue autolink tokens in untrusted security-finding prose before it is posted in tracking comments or fix-issue bodies.\n  WHY: Finding text containing `@username` can trigger unwanted notifications and text containing `#123` can create unrelated issue autolinks; severity was reported as MAJOR by three reviewers and NIT for the `#` case by one reviewer, so the higher severity is used.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:4458-4459, the `cell()` function inside `render_security_pass_findings_table` | severity=MAJOR | confidence=4\n  PROBLEM: The `cell()` helper escapes pipe characters with `\\` and normalizes whitespace but does not neutralize `@`-mentions or `#`-issue autolinks.\n  WHY: Audit finding prose fields can carry `@username` or `#123` patterns, and when the rendered table is posted via `post_tracking_comment` or embedded in a fix-issue body, GitHub renders those as real notifications and cross-references.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:lines 4458-4459 (the `cell()` helper inside `render_security_pass_findings_table`) | severity=MAJOR | confidence=4\n  PROBLEM: `cell()` escapes `|` and collapses whitespace but does not neutralize GitHub autolink tokens.\n  WHY: Findings JSON prose fields come from an LLM-driven security audit and are untrusted input; `@username` triggers a real mention notification and `#NNN` auto-links to an arbitrary issue when posted.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/orchestrate_poll_process.sh:cell() at lines 4458-4459 inside render_security_pass_findings_table; output consumed by post_tracking_comment at 4521-4529 and by the fix-issue body at 4566-4587 | severity=MAJOR | confidence=3\n  PROBLEM: cell() escapes only the pipe character; it does not neutralize GitHub mention tokens.\n  WHY: Finding prose fields are security-engine output derived from audited repository content and are posted verbatim into a tracking-issue comment and a fix-issue body; GitHub processes @-mentions server-side and can notify the referenced user.\n\n- scripts/orchestrate_poll_process.sh:cell() at lines 4458-4459 (same site) | severity=NIT | confidence=3\n  PROBLEM: cell() also does not neutralize #issue-reference autolink tokens.\n  WHY: A #123 sequence in finding prose autolinks to issue #123 in the consumer repo when the tracking comment or fix-issue body is posted, cross-referencing an unrelated issue.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:render_security_pass_findings_table(), cell() function at line 4459 | severity=MAJOR | confidence=4\n  PROBLEM: The cell() function escapes pipe characters but does not neutralize @-mentions.\n  WHY: The security audit findings JSON contains LLM-generated prose fields that are rendered verbatim into GitHub tracking-issue comments and fix-issue bodies, where @username creates mention notifications.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "f9caada1fa6c3fcc1740f87595ed6d2ba06691f0d99ebe7dc4c75fc8c0a59b77",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4031,
+    "run_id": "34091354533",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34091354533",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260907081239_b057bb68e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4031,
+    "run_id": "34091354533"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-07T08:12:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
