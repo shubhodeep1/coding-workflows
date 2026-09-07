@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`  \nScope-mode justification: The one-file edit fully satisfies the acceptance criteria without expansion. Per \u00a76 priorities, correctness and backward compatibility require preserving all content after line 2.\n\n## Planning reference\n\n- Commit: `ebb86862965e73a25ac18586605ecf78021d5737`\n- Branch: `orchestrator/project-4023`\n- Integration metadata matches the checked-out branch.\n\n## Automation integration\n\n- Modifies an existing fixture only; no new script.\n- Existing entry point: `.github/workflows/test-and-mark-stable.yml`, `workflow_dispatch` \u2192 `orchestrate-decompose-test`.\n- No new scheduler wiring, supervisor, database operation, or removal-registry entry.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Keep line 1 as `status: ok`.\n  - Replace line 2 with `decompose-run: 34084178579`.\n  - Preserve line 3 (`updated-by: ai-pipeline`) and any later content unchanged.\n\n## Functions or modules\n\nNone. This is a line-oriented fixture update.\n\n## Data structures affected\n\n- Smoke-canary text record:\n  - Line 1: status.\n  - Line 2: orchestrate run identifier.\n  - Lines 3+: opaque unrelated metadata.\n\n## API/interface changes\n\nNo runtime API changes. The fixture\u2019s second-line marker changes from `run_id` to `decompose-run` for this orchestrate smoke run.\n\n## Decisions\n\n### D1 \u2014 Apply a positional line replacement\n\n- **Chosen:** Replace only the second line and preserve all subsequent lines verbatim.\n- **Alternatives considered:** Rewrite the entire file or append another run marker.\n- **Why:** A positional replacement exactly matches the acceptance criteria and minimizes accidental content loss.\n\n## Security considerations\n\n- Trust boundary: the issue-provided run ID is written only as the fixed decimal value `34084178579`.\n- Authorization: no endpoint, worker, or external surface is introduced.\n- Validation: restrict the edit to the declared path and verify no other files changed.\n- Abuse cases: prevent path drift, unrelated edits, or deletion of trailing fixture metadata.\n- No secrets, payment data, or money-handling behavior is involved.\n\n## Risks and edge cases\n\n- Rewriting the whole file could remove unrelated trailing content.\n- Appending rather than replacing could leave the old line 2 in place.\n- Current line 1 already complies; it should remain byte-for-byte correct.\n- No issue/codebase conflict was found.\n\n## Testing considerations\n\n- Verify lines 1 and 2 exactly.\n- Verify line 3 and any later lines remain unchanged.\n- Run `git diff --check`.\n- Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n- No new automated test is warranted for this fixture-only update.\n\n## Assumptions and missing context\n\n- The automatic clarification answer adds no requirements.\n- Existing content after line 2 is unrelated and must be preserved.\n- No required context is missing.\n\n## Pre-execution self-check\n\n- Requirements are unambiguous.\n- The target exists and is clean.\n- The branch matches orchestrator metadata.\n- The plan changes exactly one declared file.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d7d0b14b4aebda8ceb6d3fce0c25e360d0466a307fdfa58a27c1ca512eb69f7d",
+  "lineage": {
+    "issue_number": 4024,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34084502397",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34084502397",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4024"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260907045330_724983ebe6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4024,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34084502397"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4024",
+  "timestamps": {
+    "created_at": "2026-09-07T04:53:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
