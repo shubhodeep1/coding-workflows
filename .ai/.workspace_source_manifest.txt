@@ -166,10 +166,15 @@ changelog.d/3939-plan-parser-blockquote-support.md
 changelog.d/3947-security-pass-deleted-branch-recovery.md
 changelog.d/3957-blocker-only-plan-blocked-routing.md
 changelog.d/3963-reissue-preserve-baseline-default-true.md
+changelog.d/3965-orchestrator-state-author-identity.md
+changelog.d/3965-security-pass-fix-cycle-2.md
+changelog.d/3965-security-pass-pyyaml-duplicate-key-hardening.md
+changelog.d/3965-sync-contract-list-union.md
 changelog.d/3967-slash-command-model-pins.md
 changelog.d/3971-deploy-activate-best-model.md
 changelog.d/3972-blocked-already-satisfied-noop.md
 changelog.d/3973-immutable-consumer-workflow-pins.md
+changelog.d/3996-forged-state-resolver-scope.md
 changelog.d/433-readme-wrapper-predicate-examples.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
@@ -184,7 +189,9 @@ changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md
 changelog.d/orchestrator-security-pass-phase-2-audit-engine.md
 changelog.d/orchestrator-security-pass-phase-3-dark-launch.md
 changelog.d/orchestrator-security-pass-phase-4-default-on.md
+changelog.d/orchestrator-state-auth-yaml-bounds.md
 changelog.d/review-autofix-per-slot-attempt-prompts.md
+changelog.d/review-blocked-stale-head-merge.md
 changelog.d/reviewer-model-refresh-2026-08.md
 changelog.d/seed-repo-command.md
 changelog.d/stall-recovery-dead-end-fixes.md
@@ -489,6 +496,8 @@ scripts/slop_scan_local.py
 scripts/stage_workflow_support.sh
 scripts/summarize_reviewer_consensus.sh
 scripts/summarize_unselected_runs.py
+scripts/sync_contract_list_union.py
+scripts/sync_contract_list_union.requirements.txt
 scripts/targeted_file_context.py
 scripts/task_state.py
 scripts/templates/serena_project.yml.j2
@@ -775,6 +784,7 @@ tests/test_state_snapshot.py
 tests/test_subissue_closing_pr.py
 tests/test_summarize_reviewer_consensus_sandbox_pin.py
 tests/test_summarize_unselected_runs.py
+tests/test_sync_contract_list_union.py
 tests/test_targeted_file_context.py
 tests/test_task_state.py
 tests/test_task_state_unblock.py

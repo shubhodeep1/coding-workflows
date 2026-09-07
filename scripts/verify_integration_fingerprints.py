@@ -22,7 +22,7 @@ Three constraint kinds per merged sub-issue:
                            intent is enforced regardless of where in
                            the consumer repo's tree the file lives.
 
-Four modes:
+Five modes:
 
   1. Default (verify): exit 0 if all fingerprints are satisfied, 1 on
      violation, 2 on plumbing failure. Used by the conflict-resolver
@@ -55,6 +55,11 @@ Four modes:
      resolver-introduced regressions. Pre-existing drift emits
      PRE_EXISTING_FINGERPRINT_DRIFT_V1 markers and passes.
 
+  5. --export-resolver-safe-fingerprints <state.json>: validate full
+     authenticated orchestrator state and print only bounded, literal,
+     merged-issue fingerprints that are safe to use for resolver scope
+     expansion. Authentication is verified by the caller before this mode.
+
 Exit codes:
   0 — verify: all fingerprints satisfied (or none recorded — fail-open
       empty).  list-violated-files: always (prints zero or more paths).
@@ -77,6 +82,8 @@ Inputs:
   default ``strict`` preserves the legacy behaviour byte-for-byte.
   Optional flag ``--baseline-fingerprints-state <out>`` — capture mode.
   Optional flag ``--compare-against-baseline <in>`` — compare mode.
+  Optional flag ``--export-resolver-safe-fingerprints`` — resolver-safe
+  export mode; the positional input is a full orchestrator state file.
   Optional env INTEGRATION_BRANCH_NAME — included in the summary line
   for operator log readability.
 
@@ -94,6 +101,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -122,6 +130,20 @@ RATIO_TIER_MIN_PERCENT = 95
 FINGERPRINT_QUARANTINE_SCHEMA_VERSION = "v1"
 FINGERPRINT_QUARANTINE_RUNS_DEFAULT = 3
 _QUARANTINE_MARKER_CACHE: dict[str, set[str]] = {}
+RESOLVER_SAFE_MAX_ISSUES = 4096
+RESOLVER_SAFE_MAX_PATTERNS_PER_KIND = 4096
+RESOLVER_SAFE_MAX_STRING_LENGTH = 4096
+RESOLVER_SAFE_REGEX_PATH_PREFIXES = (
+	".github/",
+	"scripts/",
+	"prompts/",
+	"ai-memory/",
+	"tests/",
+	"workflow-templates/",
+	"docs/",
+	"db/contracts/",
+)
+RESOLVER_SAFE_REGEX_ROOT_PATHS = {"agents.md", "README.md", "CLAUDE.md"}
 
 
 def _normalize_ref(ref: str | None) -> str | None:
@@ -181,6 +203,123 @@ def _load_fingerprints(path: str) -> tuple[dict[str, Any] | None, str | None]:
 	if not isinstance(data, dict):
 		return None, "fingerprints file is not a JSON object"
 	return data, None
+
+
+def _resolver_safe_path(raw_path: Any, *, regex_pattern: bool) -> str | None:
+	if not isinstance(raw_path, str) or not raw_path or len(raw_path) > RESOLVER_SAFE_MAX_STRING_LENGTH:
+		return None
+	if re.search(r"[\x00-\x1f\x7f]", raw_path) is not None or "\\" in raw_path or raw_path.startswith("/"):
+		return None
+	if posixpath.normpath(raw_path) != raw_path:
+		return None
+	path_parts = raw_path.split("/")
+	if any(part in ("", ".", "..", ".git") for part in path_parts):
+		return None
+	if regex_pattern and not (
+		raw_path in RESOLVER_SAFE_REGEX_ROOT_PATHS
+		or any(raw_path.startswith(prefix) for prefix in RESOLVER_SAFE_REGEX_PATH_PREFIXES)
+	):
+		return None
+	return raw_path
+
+
+def _resolver_safe_pattern(raw_pattern: Any) -> str | None:
+	if (
+		not isinstance(raw_pattern, str)
+		or not raw_pattern
+		or len(raw_pattern) > RESOLVER_SAFE_MAX_STRING_LENGTH
+		or not _looks_like_re_escape_output(raw_pattern)
+	):
+		return None
+	try:
+		re.compile(raw_pattern)
+	except re.error:
+		return None
+	return raw_pattern
+
+
+def export_resolver_safe_fingerprints(state_document: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+	if state_document.get("schema_version") != "orchestrate_state.v1":
+		return None, "unsupported orchestrator state schema"
+	waves = state_document.get("waves")
+	fingerprint_entries = state_document.get("merged_issue_fingerprints", {})
+	if not isinstance(waves, list) or not isinstance(fingerprint_entries, dict):
+		return None, "orchestrator state has invalid waves or fingerprints"
+	merged_issue_numbers: set[int] = set()
+	for wave in waves:
+		if not isinstance(wave, dict) or not isinstance(wave.get("issues", []), list):
+			continue
+		for wave_issue in wave.get("issues", []):
+			if not isinstance(wave_issue, dict) or wave_issue.get("status") != "merged":
+				continue
+			issue_number = wave_issue.get("github_issue")
+			if isinstance(issue_number, int) and not isinstance(issue_number, bool) and issue_number > 0:
+				merged_issue_numbers.add(issue_number)
+	if len(merged_issue_numbers) > RESOLVER_SAFE_MAX_ISSUES or len(fingerprint_entries) > RESOLVER_SAFE_MAX_ISSUES:
+		return None, "orchestrator state exceeds the resolver-safe issue limit"
+
+	sanitized_entries: dict[str, Any] = {}
+	for raw_issue_key, raw_entry in fingerprint_entries.items():
+		if (
+			not isinstance(raw_issue_key, str)
+			or len(raw_issue_key) > 19
+			or re.fullmatch(r"[1-9][0-9]*", raw_issue_key) is None
+		):
+			print("::warning::resolver-safe fingerprint export omitted an entry with an invalid issue key.", file=sys.stderr)
+			continue
+		issue_number = int(raw_issue_key)
+		if not isinstance(raw_entry, dict) or issue_number not in merged_issue_numbers:
+			print(f"::warning::resolver-safe fingerprint export omitted issue #{issue_number}: issue is not a merged wave entry.", file=sys.stderr)
+			continue
+		entry_issue = raw_entry.get("issue")
+		pr_number = raw_entry.get("pr")
+		if (
+			not isinstance(entry_issue, int)
+			or isinstance(entry_issue, bool)
+			or entry_issue != issue_number
+			or not isinstance(pr_number, int)
+			or isinstance(pr_number, bool)
+			or pr_number < 1
+			or pr_number > 9_223_372_036_854_775_807
+		):
+			print(f"::warning::resolver-safe fingerprint export omitted issue #{issue_number}: issue/PR provenance is invalid.", file=sys.stderr)
+			continue
+		sanitized_entry: dict[str, Any] = {
+			"issue": issue_number,
+			"pr": pr_number,
+			"must_contain": [],
+			"must_not_contain": [],
+			"must_not_exist": [],
+		}
+		captured_at = raw_entry.get("captured_at")
+		if isinstance(captured_at, str) and 0 < len(captured_at) <= 100:
+			sanitized_entry["captured_at"] = captured_at
+		entry_is_valid = True
+		for kind in ("must_contain", "must_not_contain", "must_not_exist"):
+			raw_patterns = raw_entry.get(kind, [])
+			if not isinstance(raw_patterns, list) or len(raw_patterns) > RESOLVER_SAFE_MAX_PATTERNS_PER_KIND:
+				entry_is_valid = False
+				break
+			for raw_fingerprint in raw_patterns:
+				if not isinstance(raw_fingerprint, dict):
+					continue
+				safe_path = _resolver_safe_path(
+					raw_fingerprint.get("file"),
+					regex_pattern=kind != "must_not_exist",
+				)
+				if safe_path is None:
+					continue
+				if kind == "must_not_exist":
+					sanitized_entry[kind].append({"file": safe_path})
+					continue
+				safe_pattern = _resolver_safe_pattern(raw_fingerprint.get("regex"))
+				if safe_pattern is not None:
+					sanitized_entry[kind].append({"file": safe_path, "regex": safe_pattern})
+		if not entry_is_valid:
+			print(f"::warning::resolver-safe fingerprint export omitted issue #{issue_number}: pattern list exceeds structural limits.", file=sys.stderr)
+			continue
+		sanitized_entries[raw_issue_key] = sanitized_entry
+	return sanitized_entries, None
 
 
 def _read_file_result(
@@ -2300,12 +2439,17 @@ def main(argv: list[str] | None = None) -> int:
 	# bootstrap on older script refs.  Both flags may appear in any
 	# order before the positional fingerprints path.
 	list_mode = False
+	export_safe_mode = False
 	ref: str | None = None
 	baseline_out_path: str | None = None
 	compare_baseline_path: str | None = None
 	verification_tier = "strict"
 	cli_ref_supplied = False
 	while args:
+		if args[0] == "--export-resolver-safe-fingerprints":
+			export_safe_mode = True
+			args = args[1:]
+			continue
 		if args[0] == "--list-violated-files":
 			list_mode = True
 			args = args[1:]
@@ -2442,6 +2586,14 @@ def main(argv: list[str] | None = None) -> int:
 		print(f"::warning::{err}; skipping verification.", flush=True, file=sys.stderr)
 		return 2
 	assert data is not None  # for type narrowing
+	if export_safe_mode:
+		safe_fingerprints, export_error = export_resolver_safe_fingerprints(data)
+		if export_error is not None:
+			print(f"::warning::resolver-safe fingerprint export failed: {export_error}.", file=sys.stderr)
+			return 2
+		assert safe_fingerprints is not None
+		print(json.dumps(safe_fingerprints, ensure_ascii=False, sort_keys=True, separators=(",", ":")), flush=True)
+		return 0
 
 	if baseline_out_path is not None:
 		return capture_baseline_state(data, baseline_out_path, branch, ref=ref)
