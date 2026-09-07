@@ -1479,6 +1479,7 @@ def _run_merge_with_followup(
 	pr_mergeable: object = True,  # bool or None (=mergeability still computing)
 	pr_merged: bool = False,  # GitHub's `.merged` field — authoritative did-this-land signal
 	pr_head_sha: str = "abcdef1234567890abcdef1234567890abcdef12",
+	post_review_head_sha: str | None = None,
 	enable_auto_merge: str = "true",
 	issue_create_should_fail: bool = False,
 	check_runs_state: str = "success",  # "success" (all complete + green) or "pending" (one in_progress)
@@ -1595,6 +1596,7 @@ def _run_merge_with_followup(
 			"JUDGE_JSON": judge_json,
 			"RB_ACTION": "merge_with_followup",
 			"ENABLE_AUTO_MERGE": enable_auto_merge,
+			"POST_REVIEW_HEAD_SHA": post_review_head_sha or pr_head_sha,
 			# Speed up both polling loops — one attempt is enough
 			# because the mock returns the configured value
 			# deterministically on the first call (sync merge succeeds
@@ -1843,6 +1845,23 @@ def test_merge_with_followup_creates_followup_when_pr_already_merged() -> None:
 		f"is already merged (.merged=true). Got: {creates}"
 	)
 	assert "judge_handled=true" in state["_github_output"]
+
+
+def test_merge_with_followup_refuses_unapproved_live_or_merged_head() -> None:
+	approved_head_sha = "a" * 40
+	for pr_state, pr_mergeable, pr_merged in (("open", True, False), ("closed", None, True)):
+		state = _run_merge_with_followup(
+			parent_label_set=["ai:orchestrator-managed"],
+			pr_state=pr_state,
+			pr_mergeable=pr_mergeable,
+			pr_merged=pr_merged,
+			pr_head_sha="b" * 40,
+			post_review_head_sha=approved_head_sha,
+		)
+		assert state.get("issue_create_args", []) == []
+		assert "pr_merge_calls" not in state
+		assert "judge_handled=true" not in state["_github_output"]
+		assert "judge_skip_reason=approved_merge_precondition_failed" in state["_github_output"]
 
 
 def test_merge_with_followup_skips_when_pr_closed_without_merge() -> None:

@@ -2116,7 +2116,10 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
       # stall-recovery cycle to materialize the follow-up.
       MERGE_CONFIRMED="false"
 
-      if [ "${PR_MERGED}" = "true" ]; then
+      if [ "${PR_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]; then
+        echo "::warning::Approved merge_with_followup refused because PR #${PR_NUMBER} head changed after the decision."
+        echo "judge_skip_reason=approved_merge_precondition_failed" >> "$GITHUB_OUTPUT"
+      elif [ "${PR_MERGED}" = "true" ]; then
         echo "PR #${PR_NUMBER} already merged (merged=true) — proceeding with follow-up creation against the merged base."
         MERGE_CONFIRMED="true"
       elif [ "${PR_STATE}" = "closed" ]; then
@@ -2187,15 +2190,15 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
             # gh_retry — see the `merge)` branch for the rationale
             # (best-effort, non-transient failure backoff cost).
             #
-            # `--match-head-commit "${PR_HEAD_SHA}"` binds the merge to
-            # the head SHA the mergeability poll just observed. If a
+            # `--match-head-commit "${POST_REVIEW_HEAD_SHA}"` binds the
+            # merge to the approved head SHA. If a
             # concurrent push lands between the poll and this merge,
             # GitHub rejects it — preventing unjudged code from
             # landing under merge_with_followup's authority. The
-            # PR_HEAD_SHA non-empty check above guarantees we never
+            # head equality check above guarantees we never
             # fall back to an unbound merge: the check-runs gate
             # requires PR_HEAD_SHA, so reaching here means it's set.
-            _match_head_arg=(--match-head-commit "${PR_HEAD_SHA}")
+            _match_head_arg=(--match-head-commit "${POST_REVIEW_HEAD_SHA}")
             if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash "${_match_head_arg[@]}" 2>/dev/null; then
               echo "PR #${PR_NUMBER} merged synchronously."
               MERGE_CONFIRMED="true"
