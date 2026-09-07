@@ -306,6 +306,10 @@ if args[:2] == ["issue", "close"]:
 
 if args[:2] == ["pr", "close"]:
 	state.setdefault("pr_close_args", []).append(args)
+	if state.get("pr_close_should_fail", False):
+		save()
+		sys.stderr.write("mock gh: simulated PR close failure\n")
+		sys.exit(1)
 	save()
 	sys.exit(0)
 
@@ -431,6 +435,7 @@ def _run_close_and_reissue(
 	approved_close_head_sha: str | None = None,
 	live_close_head_sha: str | None = None,
 	final_close_head_sha: str | None = None,
+	pr_close_should_fail: bool = False,
 ) -> dict:
 	"""Run the close_and_reissue branch with FIRST_ISSUE_LABELS_JSON
 	pre-seeded to ``parent_label_set`` and return the captured gh
@@ -475,6 +480,7 @@ def _run_close_and_reissue(
 		mock_state["api_responses"] = {
 			"pulls/42": [initial_close_response, final_close_response],
 		}
+		mock_state["pr_close_should_fail"] = pr_close_should_fail
 		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
 
 		labels_file = runtime_dir / "ensure_labels.txt"
@@ -648,6 +654,21 @@ def test_close_and_reissue_rechecks_head_after_replacement_creation() -> None:
 	assert "approved_close_precondition_failed" in state["_github_output"]
 	assert "head changed while the replacement issue was being created" in state["_stdout"]
 	assert "Closed stale replacement issue" in state["_stdout"]
+
+
+def test_close_and_reissue_preserves_retry_state_when_pr_close_fails() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		pr_close_should_fail=True,
+	)
+
+	assert len(state.get("issue_create_args", [])) == 1
+	assert len(state.get("pr_close_args", [])) == 1
+	assert state.get("issue_close_args", []) == []
+	assert "judge_handled=true" in state["_github_output"]
+	assert "judge_action=skip" in state["_github_output"]
+	assert "judge_skip_reason=approved_close_failed" in state["_github_output"]
+	assert "Closed stale replacement issue" not in state["_stdout"]
 
 
 def test_review_blocked_prompt_includes_phase_e_schema_fields() -> None:

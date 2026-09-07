@@ -764,6 +764,7 @@ def _run_poller(
 	existing_branches: list[str] | None = None,
 	merge_conflict_on_sync: bool = False,
 	fail_auto_pr_merge: bool = False,
+	fail_pr_close: bool = False,
 	blocked_check_shas: list[str] | None = None,
 	validation_workflow_runs: list[dict] | None = None,
 	issue_closed: dict[int, bool] | None = None,
@@ -1148,6 +1149,7 @@ def _run_poller(
 			"merge_calls": [],
 			"pr_merge_calls": [],
 			"fail_auto_pr_merge": fail_auto_pr_merge,
+			"fail_pr_close": fail_pr_close,
 			"blocked_check_shas": blocked_check_shas,
 			"validation_workflow_runs": validation_workflow_runs,
 			"issue_linked_prs": {
@@ -1658,6 +1660,9 @@ if args[0] == 'pr' and len(args) >= 3 and args[1] == 'ready':
 
 if args[0] == 'pr' and len(args) >= 3 and args[1] == 'close':
 	pr_num = int(args[2])
+	if store.get('fail_pr_close'):
+		print('mock PR close failure', file=sys.stderr)
+		sys.exit(1)
 	for pr in store.get('prs', []):
 		if pr.get('number') == pr_num:
 			pr['state'] = 'closed'
@@ -5478,6 +5483,7 @@ def _run_review_blocked_merge_decision(
 	judged_head_sha: str,
 	live_head_sha: str,
 	fail_auto_pr_merge: bool = False,
+	fail_pr_close: bool = False,
 	approved: bool = True,
 	final_close_head_sha: str | None = None,
 ) -> dict:
@@ -5547,8 +5553,9 @@ def _run_review_blocked_merge_decision(
 		pr_api_sequence={901: pr_sequence},
 		codex_json=decision,
 		fail_auto_pr_merge=fail_auto_pr_merge,
+		fail_pr_close=fail_pr_close,
 		capture_telegram_calls=True,
-		env_overrides={"ENABLE_AUTO_MERGE": "true"},
+		env_overrides={"ENABLE_AUTO_MERGE": "true", "GH_RETRY_MAX_ATTEMPTS": "1"},
 	)
 
 
@@ -5616,6 +5623,31 @@ def test_review_blocked_close_and_reissue_rechecks_head_after_replacement_creati
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 	assert "head changed while the replacement issue was being created" in result["stdout"]
 	assert "Closed stale replacement issue #900" in result["stdout"]
+	assert not any(
+		"closed PR #901 and reissued" in notification["message"]
+		for notification in result["telegram_notifications"]
+	)
+
+
+def test_review_blocked_close_and_reissue_preserves_retry_state_when_close_fails():
+	judged_head_sha = "8" * 40
+	result = _run_review_blocked_merge_decision(
+		action="close_and_reissue",
+		judged_head_sha=judged_head_sha,
+		live_head_sha=judged_head_sha,
+		fail_pr_close=True,
+	)
+	assert len(result.get("created_issues", [])) == 1
+	assert result.get("closed_prs", []) == []
+	assert result.get("closed_issues", []) == []
+	assert result["issues"]["900"]["closed"] is False
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert "could not be closed; leaving issue #10 review-blocked" in result["stdout"]
+	assert "Closed stale replacement issue" not in result["stdout"]
+	assert not any(
+		"REVIEW_BLOCKED_APPROVAL_CONSUMED_V1" in comment.get("body", "")
+		for comment in result["issues"]["901"]["comments"]
+	)
 	assert not any(
 		"closed PR #901 and reissued" in notification["message"]
 		for notification in result["telegram_notifications"]

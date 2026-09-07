@@ -2566,6 +2566,7 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
 
     if [ "${RB_REPLACEMENT_CREATED}" = "true" ]; then
       RB_REISSUE_CLOSE_CONFIRMED=false
+      RB_REISSUE_REPLACEMENT_STALE=false
       # Baseline and issue creation may take long enough for the head to move;
       # re-read immediately before the unguarded close mutation.
       RB_CLOSE_FINAL_JSON="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
@@ -2576,11 +2577,13 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
         echo "judge_handled=true" >> "$GITHUB_OUTPUT"
         echo "judge_action=skip" >> "$GITHUB_OUTPUT"
         echo "judge_skip_reason=approved_close_precondition_failed" >> "$GITHUB_OUTPUT"
+        RB_REISSUE_REPLACEMENT_STALE=true
       elif [ "${RB_CLOSE_FINAL_STATE}" != "open" ]; then
         echo "::warning::Approved close_and_reissue refused because PR #${PR_NUMBER} is no longer open."
         echo "judge_handled=true" >> "$GITHUB_OUTPUT"
         echo "judge_action=skip" >> "$GITHUB_OUTPUT"
         echo "judge_skip_reason=approved_close_precondition_failed" >> "$GITHUB_OUTPUT"
+        RB_REISSUE_REPLACEMENT_STALE=true
       elif gh_retry gh pr close "${PR_NUMBER}" --repo "${REPOSITORY}" \
         --comment "Closed after approved review-blocked reissue request ${RB_APPROVAL_REQUEST_ID:-not-applicable}; replacement: ${NEW_URL}." \
         2>/dev/null; then
@@ -2597,9 +2600,11 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
         RB_REISSUE_CLOSE_CONFIRMED=true
       else
         echo "::warning::Replacement issue was created but PR #${PR_NUMBER} could not be closed."
+        echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+        echo "judge_action=skip" >> "$GITHUB_OUTPUT"
         echo "judge_skip_reason=approved_close_failed" >> "$GITHUB_OUTPUT"
       fi
-      if [ "${RB_REISSUE_CLOSE_CONFIRMED}" != "true" ]; then
+      if [ "${RB_REISSUE_REPLACEMENT_STALE}" = "true" ]; then
         if gh_retry gh issue close "${NEW_URL}" --repo "${REPOSITORY}" \
           --comment "Closed because approved reissue request ${RB_APPROVAL_REQUEST_ID} became stale before source PR #${PR_NUMBER} could close." 2>/dev/null; then
           if command -v review_blocked_post_consumed_marker >/dev/null 2>&1; then

@@ -18093,6 +18093,7 @@ EOF
             # failed replacement must leave the original review-blocked PR
             # open so no approved work disappears without a successor.
             RB_REISSUE_CLOSE_CONFIRMED=false
+            RB_REISSUE_REPLACEMENT_STALE=false
             if [[ "${NEW_NUM}" =~ ^[0-9]+$ ]]; then
               # Recheck after issue creation because the close API has no
               # match-head guard and a concurrent push must invalidate the
@@ -18102,9 +18103,11 @@ EOF
               _rb_close_live_head_sha="$(_jq_field "${_rb_close_live_json}" '.head.sha')"
               if [ "${_rb_close_live_head_sha}" != "${RB_EXPECTED_HEAD_SHA}" ]; then
                 LOCAL_ID=""
+                RB_REISSUE_REPLACEMENT_STALE=true
                 echo "::warning::Judge-approved close_and_reissue for PR #${RB_PR} refused because its head changed while the replacement issue was being created. Leaving issue #${rb_issue} review-blocked."
               elif [ "${_rb_close_live_state}" != "open" ]; then
                 LOCAL_ID=""
+                RB_REISSUE_REPLACEMENT_STALE=true
                 echo "::warning::Judge-approved close_and_reissue for PR #${RB_PR} refused because the PR is no longer open. Leaving issue #${rb_issue} review-blocked."
               elif gh_retry gh pr close "${RB_PR}" --repo "${GITHUB_REPOSITORY}" \
                 --comment "Closed after approved review-blocked reissue request ${RB_APPROVAL_REQUEST_ID}; replacement: #${NEW_NUM}." \
@@ -18120,7 +18123,7 @@ EOF
                 LOCAL_ID=""
                 echo "::warning::Replacement issue was created but PR #${RB_PR} could not be closed; leaving issue #${rb_issue} review-blocked."
               fi
-              if [ "${RB_REISSUE_CLOSE_CONFIRMED}" != "true" ]; then
+              if [ "${RB_REISSUE_REPLACEMENT_STALE}" = "true" ]; then
                 if gh_retry gh issue close "${NEW_NUM}" --repo "${GITHUB_REPOSITORY}" \
                   --comment "Closed because approved reissue request ${RB_APPROVAL_REQUEST_ID} became stale before source PR #${RB_PR} could close." 2>/dev/null; then
                   if type review_blocked_post_consumed_marker >/dev/null 2>&1; then
