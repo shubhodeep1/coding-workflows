@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -356,6 +357,147 @@ def test_helper_maps_terminal_substates_and_token_payloads() -> None:
 		assert by_attempt[5]["event_type"] == "codex_stall_killed"
 		assert by_attempt[5]["status"] == "stalled"
 		assert "run_substate" not in by_attempt[5]["metadata"]
+
+
+def test_large_token_log_is_read_from_the_tail_and_stays_fast() -> None:
+	"""A multi-megabyte editor log must not cost the caller its job budget.
+
+	`parse_usage_from_text` probes every `{` in the document, and
+	json.JSONDecodeError's constructor counts newlines from byte 0 on each
+	failed probe, so scanning the whole file is quadratic in its length.
+	Run 34074649678 (issue #4017) lost a 3-hour implement job to two such
+	calls on a 30 MB codex log.  The helper now reads only the trailing
+	`LEDGER_TOKENS_LOG_MAX_BYTES`, which still carries the answer because
+	every parser keeps its last match.
+	"""
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		big_log = tmp_path / "codex_log_attempt_1.txt"
+		# `{`-dense filler, shaped like the diff/JSON noise a real editor log
+		# carries, followed by the trailing summary codex actually emits.
+		filler = "exec bash -lc {\"cmd\": broken, {nested {deeper\n" * 120_000
+		big_log.write_text(filler + "tokens used\n455,766\n", encoding="utf-8")
+		assert big_log.stat().st_size > 4_000_000
+
+		started = time.monotonic()
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Succeeded",
+			"--attempt",
+			"1",
+			"--tokens-log-file",
+			str(big_log),
+		)
+		elapsed = time.monotonic() - started
+
+		assert events[-1]["metadata"]["tokens"] == {"total": 455766}
+		# Unbounded, this same log takes minutes; the bound puts it in seconds.
+		assert elapsed < 30, elapsed
+
+
+def test_token_log_tail_bound_is_configurable_and_can_be_disabled() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		log_path = tmp_path / "usage.log"
+		head_line = (
+			"INFO: openrouter usage phase=validate call=1 model=openai/gpt-5.4 "
+			"prompt_tokens=8 completion_tokens=2 total_tokens=10\n"
+		)
+		log_path.write_text(head_line + ("filler line\n" * 4000), encoding="utf-8")
+		assert log_path.stat().st_size > 40_000
+
+		# A tail smaller than the file drops the leading usage line entirely.
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Succeeded",
+			"--attempt",
+			"1",
+			"--tokens-log-file",
+			str(log_path),
+			extra_env={"LEDGER_TOKENS_LOG_MAX_BYTES": "512"},
+		)
+		assert "tokens" not in events[-1]["metadata"]
+
+		# 0 disables the bound, so the whole file is parsed again.
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Succeeded",
+			"--attempt",
+			"2",
+			"--tokens-log-file",
+			str(log_path),
+			extra_env={"LEDGER_TOKENS_LOG_MAX_BYTES": "0"},
+		)
+		assert events[-1]["metadata"]["tokens"] == {"input": 8, "output": 2, "total": 10}
+
+		# A file under the bound is still read whole, unchanged from before.
+		small_log = tmp_path / "small.log"
+		small_log.write_text(head_line, encoding="utf-8")
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Succeeded",
+			"--attempt",
+			"3",
+			"--tokens-log-file",
+			str(small_log),
+		)
+		assert events[-1]["metadata"]["tokens"] == {"input": 8, "output": 2, "total": 10}
+
+
+def test_hung_record_run_event_times_out_instead_of_stalling_the_caller() -> None:
+	"""A wedged ai-memory write must fail open, not hold the job hostage."""
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		hanging_stub = tmp_path / "hanging_ai_memory.py"
+		hanging_stub.write_text(
+			"import time\n\ntime.sleep(600)\n",
+			encoding="utf-8",
+		)
+
+		started = time.monotonic()
+		result = subprocess.run(
+			[
+				"bash",
+				str(HELPER_SCRIPT),
+				"--run-id",
+				"run-4017",
+				"--workflow",
+				"implement",
+				"--phase",
+				"implement",
+				"--mode",
+				"implement",
+				"--repo-root",
+				str(tmp_path),
+				"--actor",
+				"codex-bot",
+				"--substate",
+				"Succeeded",
+				"--attempt",
+				"1",
+			],
+			env={
+				**os.environ,
+				"PYTHONDONTWRITEBYTECODE": "1",
+				"LEDGER_AI_MEMORY_SCRIPT": str(hanging_stub),
+				"LEDGER_SUBSTATES_SEEN_FILE": str(tmp_path / "seen.txt"),
+				"RUNNER_TEMP": str(tmp_path),
+				"LEDGER_EMIT_TIMEOUT_SECONDS": "3",
+			},
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		elapsed = time.monotonic() - started
+
+		assert result.returncode == 0, result.stderr
+		assert elapsed < 60, elapsed
+		assert "record-run-event failed" in result.stderr, result.stderr
+		assert "timeout" in result.stderr, result.stderr
 
 
 def test_schema_accepts_legacy_and_new_substate_entries_additively() -> None:
