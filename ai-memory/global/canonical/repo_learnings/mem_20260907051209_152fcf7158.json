@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Consumer workflows are expected to use immutable workflow references and repository guardrails check for drift.",
   "timestamps": {
     "created_at": "2026-09-07T05:12:09Z",
