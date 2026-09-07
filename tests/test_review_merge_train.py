@@ -268,10 +268,14 @@ def test_release_keeps_label_when_dispatch_fails(tmp_path: Path) -> None:
 	]), encoding="utf-8")
 	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
 	(fixtures / "dispatch_fail").touch()
-	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
 	assert result.returncode == 0, result.stderr
 	assert "could not be dispatched" in result.stdout
 	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+	assert "issues/4077/labels/ai%3Amerge-queued" not in log_text, (
+		"the label must survive a failed dispatch so the next release run retries the PR"
+	)
+	assert "merge-train:released" not in log_text
 
 
 def test_usage_error_for_unknown_subcommand(tmp_path: Path) -> None:

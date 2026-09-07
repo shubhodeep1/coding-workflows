@@ -334,15 +334,18 @@ _mt_release() {
 			_mt_log "MERGE_TRAIN_STILL_QUEUED pr=${num} blockers=$(printf '%s\n' "${blockers}" | sed 's/:.*//' | paste -sd, -)"
 			continue
 		fi
-		gh_retry gh api -X DELETE "repos/${MT_REPO}/issues/${num}/labels/$(printf '%s' "${MT_LABEL}" | jq -sRr @uri)" >/dev/null 2>&1 \
-			|| _mt_warn "merge-train release: could not remove ${MT_LABEL} from PR #${num}."
+		# Dispatch first, then drop the label: `release` selects queued PRs
+		# by label, so removing it before a failed dispatch would strand the
+		# PR until some other event re-ran its review.
 		if _mt_dispatch_review "${num}" "${head}"; then
+			gh_retry gh api -X DELETE "repos/${MT_REPO}/issues/${num}/labels/$(printf '%s' "${MT_LABEL}" | jq -sRr @uri)" >/dev/null 2>&1 \
+				|| _mt_warn "merge-train release: could not remove ${MT_LABEL} from PR #${num}; the gate drops it on the dispatched run."
 			_mt_upsert_comment "${num}" "${MT_RELEASED_MARKER}" "${MT_RELEASED_MARKER}
 **Merge train released.** Every older PR that edited the same files has merged or closed; the review/autofix run was re-dispatched on \`${head}\`."
 			released=$((released + 1))
 			_mt_log "MERGE_TRAIN_RELEASED pr=${num} source=release"
 		else
-			_mt_warn "merge-train release: PR #${num} unblocked but the review workflow could not be dispatched; the next pull_request event or poll tick retries."
+			_mt_warn "merge-train release: PR #${num} unblocked but the review workflow could not be dispatched; ${MT_LABEL} stays so the next merge event or poll tick retries."
 		fi
 	done < <(printf '%s\n' "${prs_json}")
 	_mt_log "MERGE_TRAIN_RELEASE_SUMMARY examined=${examined} released=${released} base_filter=${base_filter:-*}"
