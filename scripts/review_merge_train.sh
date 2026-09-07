@@ -49,8 +49,11 @@
 #   release: 1 list call (open PRs, all bases, 100 per page) + 1 recent-runs
 #            call that prevents dispatch beside an active review + files calls
 #            as above, cached per PR for the run; per released PR 1 label-removal
-#            claim, 1 comment, 1 workflow dispatch. A failed dispatch restores
-#            the label so the next release invocation retries it.
+#            claim, 1 comment, 1 workflow dispatch. A failed dispatch tries to
+#            restore the label (best-effort, +1 call) so the next release
+#            invocation retries it; if that restore fails too, a ::warning:: is
+#            logged and the PR stays unlabelled until its next review-triggering
+#            event (push, re-run, or orchestrator stall recovery).
 #
 # Fail-open contract: any API failure, missing input or unexpected shape logs
 # a ::warning:: and exits 0 WITHOUT queuing (gate) or WITHOUT releasing
