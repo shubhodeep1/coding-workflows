@@ -4488,7 +4488,7 @@ security_pass_terminal_failure() {
   local finding_count="$2"
   local completed_cycles="$3"
   local findings_file="${4:-}"
-  local exhausted_findings_table=""
+  local exhausted_findings_table="" exhausted_findings_table_bytes=0
 
   echo "SECURITY_PASS_FAILED reason=cycle_exhausted tracking_issue=${TRACKING_NUM} cycles=${completed_cycles} findings=${finding_count}"
   # The findings file lives only in the runner's RUNTIME_DIR, so this comment
@@ -4498,9 +4498,14 @@ security_pass_terminal_failure() {
     if ! exhausted_findings_table="$(render_security_pass_findings_table "${findings_file}" 2>/dev/null)"; then
       exhausted_findings_table=""
       echo "::warning::Could not render the remaining security-pass findings for tracking issue #${TRACKING_NUM}; the exhaustion comment will carry the count only."
-    elif [ "${#exhausted_findings_table}" -gt 60000 ]; then
+    else
       # post_tracking_comment skips bodies over GitHub's 65536-byte limit
-      # outright; a count-only comment beats losing the transition record.
+      # outright, measured in bytes (wc -c), so budget the table in bytes
+      # too: ${#var} counts characters and under-reports non-ASCII text.
+      exhausted_findings_table_bytes="$(printf '%s' "${exhausted_findings_table}" | wc -c | tr -d '[:space:]')"
+    fi
+    if [ -n "${exhausted_findings_table}" ] && [ "${exhausted_findings_table_bytes}" -gt 60000 ]; then
+      # A count-only comment beats losing the transition record.
       exhausted_findings_table=""
       echo "::warning::Remaining security-pass findings table for tracking issue #${TRACKING_NUM} exceeds the comment budget; the exhaustion comment will carry the count only."
     fi

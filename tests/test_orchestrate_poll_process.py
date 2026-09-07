@@ -3594,6 +3594,51 @@ def test_re_security_pass_resets_terminal_state_and_reaudits() -> None:
 	assert result["git_fetch_calls"]["refs/heads/main:refs/remotes/origin/main"] >= 1
 
 
+def test_security_pass_cycle_exhaustion_drops_oversized_findings_table_by_bytes() -> None:
+	"""The exhaustion comment budgets the findings table in bytes, not characters.
+
+	``post_tracking_comment`` refuses bodies over GitHub's 65536-byte limit using
+	``wc -c``, so a table of ~31k two-byte characters (under 60000 characters but
+	over 60000 bytes) must fall back to the count-only comment instead of losing
+	the whole terminal-transition record.
+	"""
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 3,
+			"security_pass_status": "pending",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "",
+		}
+	)
+	oversized_finding = _security_pass_test_finding()
+	oversized_finding["exploit_scenario"] = "\u00e9" * 31000
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([oversized_finding]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result["latest_state"]["status"] == "failed"
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" in result["stdout"] + result["stderr"]
+	assert "exceeds the comment budget" in result["stdout"] + result["stderr"]
+	exhaustion_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## \u274c Project security pass exhausted")
+	]
+	assert len(exhaustion_comments) == 1
+	assert "still reports 1 blocking finding(s) after 3/3 completed fix cycle(s)" in exhaustion_comments[0]
+	assert "### Remaining blocking findings" not in exhaustion_comments[0]
+	assert "| SEC-TEST-1 |" not in exhaustion_comments[0]
+
+
 def test_security_pass_invalid_engine_output_fails_closed() -> None:
 	state = _base_state()
 	state["integration_branch"] = "orchestrator/project-192"
