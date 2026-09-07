@@ -1899,12 +1899,29 @@ __EDIT_DISCIPLINE__
             : # self-repo or unknown — keep files; consumer-repo-only cleanup
             ;;
           *)
-            rm -f ./pre_assembled_static.txt
-            rm -f unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md
-            rm -f scripts/git_ref_health_check.sh scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/codex_model_catalog.json
-            rm -f scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py
-            rm -f scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh
-            rm -rf ai-memory
+            # Never delete a path the consumer repo actually TRACKS.
+            # The staging pass below runs `git add -u`, which records a
+            # working-tree deletion as a real deletion in the commit and
+            # silently drops a repo-owned file.  A consumer repo may own a
+            # root-level `agents.md` (CLAUDE.md §22.C / §24.F record
+            # DigitalOcean and Cloudflare resource IDs there), which collides
+            # with the workflow-staged artifact of the same name.  Same bug
+            # class as PRs #917/#931 and as the binance-blessings PR #255
+            # incident fixed in scripts/review_conflict_resolve.sh.
+            # Mirrors the guard in scripts/review_commit_changes.sh.
+            for _rb_cleanup_artifact in \
+              pre_assembled_static.txt unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md \
+              scripts/git_ref_health_check.sh scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/codex_model_catalog.json \
+              scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py \
+              scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh \
+              ai-memory; do
+              if git ls-files --error-unmatch -- "${_rb_cleanup_artifact}" >/dev/null 2>&1; then
+                echo "Preserving repo-tracked path during artifact cleanup: ${_rb_cleanup_artifact}"
+                continue
+              fi
+              rm -rf -- "${_rb_cleanup_artifact}"
+            done
+            unset _rb_cleanup_artifact
             ;;
         esac
         unset _rb_origin_url

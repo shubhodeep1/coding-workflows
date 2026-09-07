@@ -17495,13 +17495,31 @@ sys.exit(1)
                   : # self-repo or unknown — keep files; consumer-repo-only cleanup
                   ;;
                 *)
-                  rm -f ./pre_assembled_static.txt
-                  rm -f unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md
-                  rm -f scripts/git_ref_health_check.sh \
-                    scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
-                    scripts/codex_model_catalog.json
-                  rm -rf .github/prompts .github/scripts
-                  rm -f .github/ai/orchestrate_schema.v1.json
+                  # Never delete a path the consumer repo actually TRACKS.
+                  # The staging pass below runs `git add -A`, which records a
+                  # working-tree deletion as a real deletion in the commit and
+                  # silently drops a repo-owned file.  A consumer repo may own
+                  # a root-level `agents.md` (CLAUDE.md §22.C / §24.F record
+                  # DigitalOcean and Cloudflare resource IDs there), which
+                  # collides with the workflow-staged artifact of the same
+                  # name.  The git-remote-URL gate above stops this block from
+                  # running against the coding-workflows checkout itself
+                  # (PRs #917/#931); this per-path guard is the second layer,
+                  # for consumer repos that legitimately track one of these
+                  # names.  Mirrors scripts/review_commit_changes.sh.
+                  for _orch_cleanup_artifact in \
+                    pre_assembled_static.txt unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md \
+                    scripts/git_ref_health_check.sh scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
+                    scripts/codex_model_catalog.json \
+                    .github/prompts .github/scripts \
+                    .github/ai/orchestrate_schema.v1.json; do
+                    if git ls-files --error-unmatch -- "${_orch_cleanup_artifact}" >/dev/null 2>&1; then
+                      echo "Preserving repo-tracked path during artifact cleanup: ${_orch_cleanup_artifact}"
+                      continue
+                    fi
+                    rm -rf -- "${_orch_cleanup_artifact}"
+                  done
+                  unset _orch_cleanup_artifact
                   ;;
               esac
               unset _orig_origin_url
