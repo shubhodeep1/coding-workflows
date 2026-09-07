@@ -3537,6 +3537,22 @@ def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
 		comment_body.startswith(f"{prior_alert_marker[:-4]},") and comment_body.endswith(" -->")
 		for comment_body in tracking_comment_bodies
 	)
+	# Regression for tele-funtoken-msg-scoring#3928: the findings file lives
+	# only in the runner's RUNTIME_DIR, so the exhaustion comment must carry
+	# the remaining findings table or the operator asked to intervene has
+	# nothing to act on.
+	exhaustion_comments = [
+		comment_body
+		for comment_body in tracking_comment_bodies
+		if comment_body.startswith("## ❌ Project security pass exhausted")
+	]
+	assert len(exhaustion_comments) == 1
+	exhaustion_comment = exhaustion_comments[0]
+	assert "still reports 1 blocking finding(s) after 3/3 completed fix cycle(s)" in exhaustion_comment
+	assert "### Remaining blocking findings (integration head `" in exhaustion_comment
+	assert "| ID | Category | Severity | Confidence | Location | Exploit scenario | Recommendation |" in exhaustion_comment
+	assert "| SEC-TEST-1 | A01: Broken Access Control | high | 9 | scripts/example.py:1 |" in exhaustion_comment
+	assert "Enforce authorisation before the state mutation." in exhaustion_comment
 	assert any(
 		notification["issue"] == "192"
 		and notification["level"] == "CRITICAL"

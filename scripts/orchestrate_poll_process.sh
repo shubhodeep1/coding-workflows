@@ -4436,12 +4436,75 @@ Completion remains gated. The scheduled poller will retry automatically."
   fi
 }
 
+# Render the kept findings of a findings-JSON security audit as one markdown
+# table (header + one row per finding). Used by both the consolidated fix
+# issue body and the cycle-exhaustion tracking comment so an operator always
+# sees the same rows the poller acted on. Prints the table to stdout; a
+# non-zero exit means the findings file was unreadable or malformed.
+render_security_pass_findings_table() {
+  local findings_file="$1"
+  python3 - "${findings_file}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+findings_path = Path(sys.argv[1])
+payload = json.loads(findings_path.read_text(encoding="utf-8"))
+findings = payload["findings"]
+
+
+def cell(value: object) -> str:
+	return " ".join(str(value).replace("|", "\\|").split())
+
+
+lines = [
+	"| ID | Category | Severity | Confidence | Location | Exploit scenario | Recommendation |",
+	"|---|---|---|---:|---|---|---|",
+]
+for finding in findings:
+	lines.append(
+		"| "
+		+ " | ".join(
+			[
+				cell(finding["finding_id"]),
+				cell(finding["owasp_or_stride_category"]),
+				cell(finding["severity"]),
+				cell(finding["confidence"]),
+				cell(f"{finding['file']}:{finding['line']}"),
+				cell(finding["exploit_scenario"]),
+				cell(finding["recommendation"]),
+			]
+		)
+		+ " |"
+	)
+sys.stdout.write("\n".join(lines) + "\n")
+PY
+}
+
 security_pass_terminal_failure() {
   local integration_head_sha="$1"
   local finding_count="$2"
   local completed_cycles="$3"
+  local findings_file="${4:-}"
+  local exhausted_findings_table=""
 
   echo "SECURITY_PASS_FAILED reason=cycle_exhausted tracking_issue=${TRACKING_NUM} cycles=${completed_cycles} findings=${finding_count}"
+  # The findings file lives only in the runner's RUNTIME_DIR, so this comment
+  # is the operator's sole record of what still blocks completion. Rendering
+  # is best-effort: a render failure must never stop the terminal transition.
+  if [ -n "${findings_file}" ] && [ -s "${findings_file}" ]; then
+    if ! exhausted_findings_table="$(render_security_pass_findings_table "${findings_file}" 2>/dev/null)"; then
+      exhausted_findings_table=""
+      echo "::warning::Could not render the remaining security-pass findings for tracking issue #${TRACKING_NUM}; the exhaustion comment will carry the count only."
+    elif [ "${#exhausted_findings_table}" -gt 60000 ]; then
+      # post_tracking_comment skips bodies over GitHub's 65536-byte limit
+      # outright; a count-only comment beats losing the transition record.
+      exhausted_findings_table=""
+      echo "::warning::Remaining security-pass findings table for tracking issue #${TRACKING_NUM} exceeds the comment budget; the exhaustion comment will carry the count only."
+    fi
+  fi
   jq --arg head_sha "${integration_head_sha}" '
     .status = "failed"
     | .security_pass_status = "failed"
@@ -4454,7 +4517,11 @@ security_pass_terminal_failure() {
 
 The security pass still reports ${finding_count} blocking finding(s) after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} completed fix cycle(s).
 
-Manual intervention is required. After addressing the findings, comment \`/re-security-pass\` to reset the bounded fix loop."
+Manual intervention is required. After addressing the findings, comment \`/re-security-pass\` to reset the bounded fix loop.${exhausted_findings_table:+
+
+### Remaining blocking findings (integration head \`${integration_head_sha}\`)
+
+${exhausted_findings_table}}"
   set_failed_completion_status_comment \
     "The project security pass still reports ${finding_count} blocking finding(s) after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} completed fix cycle(s). Manual intervention is required; use \`/re-security-pass\` after addressing the findings."
   tg_notify "Project #${TRACKING_NUM} security pass FAILED after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} fix cycles with ${finding_count} finding(s) remaining. Manual intervention required." "CRITICAL"
@@ -4486,54 +4553,33 @@ create_security_pass_fix_issue() {
   local integration_branch="$3"
   local issue_body_file issue_url issue_number local_id security_pass_fix_action
   local security_pass_managed_issues_pages_file security_pass_managed_issues_jq_error_file
+  local findings_table_file
 
   issue_body_file="${RUNTIME_DIR}/security_pass_fix_${TRACKING_NUM}_${completed_cycles}.md"
   local_id="security-pass-fix-cycle-$((completed_cycles + 1))"
-  if ! python3 - "${findings_file}" "${issue_body_file}" "${TRACKING_NUM}" "${integration_branch}" "${local_id}" <<'PY'
+  findings_table_file="${RUNTIME_DIR}/security_pass_fix_${TRACKING_NUM}_${completed_cycles}.table.md"
+  if ! render_security_pass_findings_table "${findings_file}" > "${findings_table_file}"; then
+    return 1
+  fi
+  if ! python3 - "${findings_table_file}" "${issue_body_file}" "${TRACKING_NUM}" "${integration_branch}" "${local_id}" <<'PY'
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
-findings_path = Path(sys.argv[1])
+table_path = Path(sys.argv[1])
 body_path = Path(sys.argv[2])
 tracking_issue = sys.argv[3]
 integration_branch = sys.argv[4]
 local_id = sys.argv[5]
-
-payload = json.loads(findings_path.read_text(encoding="utf-8"))
-findings = payload["findings"]
-
-
-def cell(value: object) -> str:
-	return " ".join(str(value).replace("|", "\\|").split())
-
 
 lines = [
 	f"Refs #{tracking_issue}",
 	"",
 	"The mandatory project security pass found the following blocking issues. Address every row through the normal clarify, plan, implement, and review pipeline.",
 	"",
-	"| ID | Category | Severity | Confidence | Location | Exploit scenario | Recommendation |",
-	"|---|---|---|---:|---|---|---|",
 ]
-for finding in findings:
-	lines.append(
-		"| "
-		+ " | ".join(
-			[
-				cell(finding["finding_id"]),
-				cell(finding["owasp_or_stride_category"]),
-				cell(finding["severity"]),
-				cell(finding["confidence"]),
-				cell(f"{finding['file']}:{finding['line']}"),
-				cell(finding["exploit_scenario"]),
-				cell(finding["recommendation"]),
-			]
-		)
-		+ " |"
-	)
+lines.extend(table_path.read_text(encoding="utf-8").splitlines())
 lines.extend(
 	[
 		"",
@@ -4838,7 +4884,7 @@ run_security_pass_inline() {
 
   echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} findings=${finding_count} cycle=${completed_cycles}"
   if [ "${completed_cycles}" -ge "${MAX_SECURITY_PASS_CYCLES}" ]; then
-    security_pass_terminal_failure "${current_head_sha}" "${finding_count}" "${completed_cycles}"
+    security_pass_terminal_failure "${current_head_sha}" "${finding_count}" "${completed_cycles}" "${findings_file}"
     return 1
   fi
   if [ -n "${verified_analysis_ref}" ] \
