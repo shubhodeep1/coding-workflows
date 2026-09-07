@@ -12129,7 +12129,7 @@ _fetch_candidate_issue_details_graphql() {
                   __typename
                   ... on PullRequest {
                     number state merged
-                    labels(first: 50) { nodes { name } }
+                    labels(first: 100) { nodes { name } }
                     mergedAt
                     headRefName
                     headRefOid
@@ -12272,7 +12272,7 @@ _fetch_linked_pr_status_graphql() {
                   __typename
                   ... on PullRequest {
                     number state merged
-                    labels(first: 50) { nodes { name } }
+                    labels(first: 100) { nodes { name } }
                     repository { nameWithOwner }
                     commits(last: 1) { nodes { commit { pushedDate committedDate } } }
                   }
@@ -12353,13 +12353,17 @@ _single_issue_linked_pr_status_graphql() {
 }
 
 # Accept both the batched GraphQL label shape ([string]) and a full REST PR
-# payload ([{name:string}]). Missing or malformed labels fail open.
+# payload ([{name:string}]). Only an explicitly open, unmerged PR can wait in
+# the train; missing/malformed state or labels fail open to normal recovery.
 _linked_pr_is_merge_queued()
 {
   local linked_json="$1"
   [ -n "${linked_json}" ] && [ "${linked_json}" != "null" ] && [ "${linked_json}" != "{}" ] || return 1
   printf '%s' "${linked_json}" | jq -e '
-    [(.labels // [])[]?
+    select(type == "object")
+    | select(((.state // "") | ascii_downcase) == "open")
+    | select((.merged // false) != true)
+    | [(.labels // [])[]?
       | if type == "string" then .
         elif type == "object" then (.name // empty)
         else empty

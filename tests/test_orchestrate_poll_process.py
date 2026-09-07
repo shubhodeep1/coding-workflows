@@ -8598,6 +8598,41 @@ def test_standalone_stall_recovery_skips_merge_train_queued_pr_without_judge():
 	)
 
 
+def test_standalone_stall_recovery_reconciles_merged_pr_with_stale_merge_train_label():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 2,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 419},
+		mock_gh_issue_list_label_filter=True,
+		prs=[{
+			"number": 419,
+			"body": "Closes #501",
+			"state": "closed",
+			"merged": True,
+			"merged_at": "2026-09-07T21:30:00Z",
+			"headRefName": "ai/issue-501",
+			"labels": ["ai:merge-queued"],
+		}],
+	)
+	assert "ai:merged" in result["issues"]["501"]["labels"]
+	assert "linked PR #419 is MERGED" in result["stdout"]
+	assert "reason=merge_train_queued pr=419" not in result["stdout"]
+
+
 def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_branch_but_matching_sha():
 	state = _base_state(status="complete")
 	standalone_state_comment = (
@@ -12611,6 +12646,43 @@ def test_retrigger_review_skips_merge_train_queued_pr_without_consuming_stall_bu
 	assert result.get("git_push_calls", []) == []
 	assert result["review_dispatches"] == []
 	assert "reason=merge_train_queued pr=87 phase=ai:done action=retrigger_review" in result["stdout"]
+
+
+def test_managed_stall_recovery_reconciles_merged_pr_with_stale_merge_train_label():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 88},
+		prs=[{
+			"number": 88,
+			"body": "Closes #10",
+			"state": "closed",
+			"merged": True,
+			"merged_at": "2026-09-07T21:30:00Z",
+			"headRefName": "ai/issue-10",
+			"labels": ["ai:merge-queued"],
+		}],
+	)
+	assert "ai:merged" in result["issues"]["10"]["labels"]
+	assert "ai:done" not in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["status"] == "merged"
+	assert "reason=merge_train_queued pr=88" not in result["stdout"]
+
+
+def test_linked_pr_graphql_queries_request_full_label_page():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	candidate_helper = script.split("_fetch_candidate_issue_details_graphql()", 1)[1].split("_fetch_linked_pr_status_graphql()", 1)[0]
+	linked_status_helper = script.split("_fetch_linked_pr_status_graphql()", 1)[1].split("_single_issue_linked_pr_status_graphql()", 1)[0]
+	assert "labels(first: 100) { nodes { name } }" in candidate_helper
+	assert "labels(first: 100) { nodes { name } }" in linked_status_helper
 
 
 def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure():
