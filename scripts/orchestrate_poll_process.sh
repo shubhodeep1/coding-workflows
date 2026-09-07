@@ -17373,7 +17373,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         RB_PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}" || echo '{}')"
       else
         printf '%s\n' "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments mode=legacy_rest_hydration reason=helper_unavailable owner=${GITHUB_REPOSITORY%%/*} repo=${GITHUB_REPOSITORY##*/} pr=${RB_PR}" >&2
-        RB_PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
+        RB_PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {id: .id, author: .user.login, author_type: .user.type, author_association: .author_association, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.id // 0))' 2>/dev/null || echo '[]')"
         RB_PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
         RB_PR_CONTEXT_JSON="$(jq -cn --argjson meta "${RB_PRELOADED_META}" --argjson comments "${RB_PR_ISSUE_COMMENTS}" --argjson review_comments "${RB_PR_REVIEW_COMMENTS}" '{meta: $meta, comments: $comments, review_comments: $review_comments}' 2>/dev/null || echo '{}')"
       fi
@@ -17382,6 +17382,15 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       PR_META="$(printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -c '.meta // {}' 2>/dev/null || echo "{}")"
       if [ "${PR_META}" = "{}" ]; then
         PR_META="$(echo "${_rb_pr_json}" | jq '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo "{}")"
+      fi
+      RB_EXPECTED_HEAD_SHA="$(printf '%s' "${PR_META}" | jq -r '.head_sha // empty' 2>/dev/null || true)"
+      RB_PENDING_APPROVAL_REQUEST=""
+      RB_PENDING_DECISION_JSON=""
+      if type review_blocked_find_pending_request >/dev/null 2>&1 && [ -n "${RB_EXPECTED_HEAD_SHA}" ]; then
+        RB_PENDING_APPROVAL_REQUEST="$(review_blocked_find_pending_request "${PR_COMMENTS}" "${RB_PR}" "${RB_EXPECTED_HEAD_SHA}" || true)"
+        if [ -n "${RB_PENDING_APPROVAL_REQUEST}" ]; then
+          RB_PENDING_DECISION_JSON="$(printf '%s' "${RB_PENDING_APPROVAL_REQUEST}" | jq -c '.decision // empty' 2>/dev/null || true)"
+        fi
       fi
       ISSUE_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '.body' || echo "")"
       RB_JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/rb_judge_semble_query_${rb_issue}.txt"
@@ -17479,6 +17488,11 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 
       # Run the judge
       RB_JUDGE_SUCCESS=false
+      if [ -n "${RB_PENDING_DECISION_JSON}" ]; then
+        printf '%s\n' "${RB_PENDING_DECISION_JSON}" > "${RB_JUDGE_OUTPUT_FILE}"
+        RB_JUDGE_SUCCESS=true
+        echo "  Reusing pending review-blocked approval request; skipping a new model decision."
+      else
       for attempt in 1 2; do
         echo "  Review-blocked judge attempt ${attempt}/2..."
         sanitize_codex_prompt_file "${RB_JUDGE_PROMPT_FILE}"
@@ -17491,6 +17505,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
           sleep 10
         fi
       done
+      fi
 
       if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then
         echo "::warning::Review-blocked judge failed for issue #${rb_issue}"
@@ -17547,29 +17562,6 @@ sys.exit(1)
       fi
 
       RB_RAW_ACTION="$(printf '%s' "${RB_JUDGE_JSON}" | jq -r '.action // empty' 2>/dev/null || echo '')"
-      if [ "${RB_RAW_ACTION}" = "fix" ] \
-        && printf '%s' "${RB_JUDGE_JSON}" | jq -e '(.fix_description | type == "string" and length > 0 and length <= 4000)' >/dev/null 2>&1; then
-        if [ "${RB_TARGET_MERGED}" = "true" ]; then
-          RB_JUDGE_JSON="$(printf '%s' "${RB_JUDGE_JSON}" | jq -c --arg issue "${rb_issue}" --arg pr "${RB_PR}" '
-            .action = "merge_with_followup"
-            | .followup_issue = {
-                title: ("Follow-up fixes for issue #" + $issue),
-                body: ("PR #" + $pr + " was already merged. Apply the deferred review-blocked fix below.\n\n" + .fix_description)
-              }
-          ')"
-          echo "::warning::Judge chose fix for already-merged PR #${RB_PR}; normalizing to merge_with_followup."
-        elif [ "${IS_FINAL}" = "true" ]; then
-          RB_JUDGE_JSON="$(printf '%s' "${RB_JUDGE_JSON}" | jq -c --arg issue "${rb_issue}" --arg pr "${RB_PR}" '
-            .action = "close_and_reissue"
-            | .new_issue = {
-                title: ("Rework review-blocked issue #" + $issue),
-                body: ("PR #" + $pr + " exhausted its review-blocked fix budget. Rework the issue with this required correction:\n\n" + .fix_description)
-              }
-          ')"
-          echo "::warning::Judge chose fix after retries were exhausted for PR #${RB_PR}; normalizing to close_and_reissue."
-        fi
-      fi
-
       if ! printf '%s' "${RB_JUDGE_JSON}" | jq -e \
         --argjson is_final "${IS_FINAL}" \
         --argjson target_merged "${RB_TARGET_MERGED}" '
@@ -17622,11 +17614,55 @@ sys.exit(1)
 **Remaining issues:** ${RB_REMAINING}
 **Requested fix:** ${RB_FIX_DESC}"
 
+      case "${RB_ACTION}" in
+        merge|merge_with_followup|close_and_reissue)
+          RB_COMMENT="${RB_COMMENT}
+
+**Status:** Human approval is required before this terminal recommendation can execute."
+          ;;
+      esac
+
       RB_COMMENT_POSTED="false"
       if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
         -f body="${RB_COMMENT}" >/dev/null 2>&1; then
         RB_COMMENT_POSTED="true"
       fi
+
+      RB_APPROVAL_REQUEST_ID=""
+      case "${RB_ACTION}" in
+        merge|merge_with_followup|close_and_reissue)
+          if ! type review_blocked_build_approval_request >/dev/null 2>&1; then
+            echo "::warning::Review-blocked approval helpers unavailable; refusing terminal action for PR #${RB_PR}."
+            continue
+          fi
+          if ! [[ "${RB_EXPECTED_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::warning::Current head SHA for PR #${RB_PR} is unavailable or invalid; refusing terminal approval request."
+            continue
+          fi
+          RB_DECISION_DIGEST="$(review_blocked_decision_digest "${RB_JUDGE_JSON}")"
+          RB_APPROVAL_REQUEST=""
+          if [ -n "${RB_PENDING_APPROVAL_REQUEST}" ] \
+            && [ "$(printf '%s' "${RB_PENDING_APPROVAL_REQUEST}" | jq -r '.decision_digest // empty')" = "${RB_DECISION_DIGEST}" ] \
+            && [ "$(printf '%s' "${RB_PENDING_APPROVAL_REQUEST}" | jq -r '.action // empty')" = "${RB_ACTION}" ]; then
+            RB_APPROVAL_REQUEST="${RB_PENDING_APPROVAL_REQUEST}"
+          else
+            RB_APPROVAL_REQUEST="$(review_blocked_build_approval_request "${RB_PR}" "${rb_issue}" "${RB_EXPECTED_HEAD_SHA}" "${RB_JUDGE_JSON}")"
+            if ! review_blocked_post_approval_request "${GITHUB_REPOSITORY}" "${RB_PR}" "${RB_APPROVAL_REQUEST}"; then
+              echo "::warning::Could not publish review-blocked approval request for PR #${RB_PR}; refusing terminal action."
+            fi
+            echo "  Terminal recommendation for PR #${RB_PR} remains pending trusted human approval."
+            REVIEW_BLOCKED_STATE_CHANGED=true
+            continue
+          fi
+          RB_APPROVAL_STATUS="$(review_blocked_approval_status "${PR_COMMENTS}" "${RB_APPROVAL_REQUEST}")"
+          if [ "$(printf '%s' "${RB_APPROVAL_STATUS}" | jq -r '.status // empty')" != "approved" ]; then
+            echo "  Terminal recommendation for PR #${RB_PR} remains pending trusted human approval."
+            continue
+          fi
+          RB_APPROVAL_REQUEST_ID="$(printf '%s' "${RB_APPROVAL_REQUEST}" | jq -r '.request_id')"
+          echo "  Authenticated human approval accepted for request ${RB_APPROVAL_REQUEST_ID}."
+          ;;
+      esac
 
       case "${RB_ACTION}" in
         merge)
@@ -17695,6 +17731,7 @@ sys.exit(1)
             ensure_label_exists "ai:ready-to-merge"
             gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
               --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
+            review_blocked_post_consumed_marker "${GITHUB_REPOSITORY}" "${RB_PR}" "${RB_APPROVAL_REQUEST_ID}" "merged" || true
             tg_notify "Orchestrator judge merged review-blocked PR #${RB_PR} (issue #${rb_issue}): ${RB_JUSTIFICATION}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
           fi
           ;;
@@ -17906,6 +17943,8 @@ EOF
               RB_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
               FULL_FOLLOWUP_BODY="${FOLLOWUP_BODY}
 
+<!-- review-blocked-approval-request:${RB_APPROVAL_REQUEST_ID} -->
+
 ---
 **Orchestrator metadata** (do not edit)
 - Tracking issue: #${TRACKING_NUM}
@@ -17925,7 +17964,10 @@ EOF
               # merged but the deferred gap has no durable tracking.
               FOLLOWUP_URL=""
               FOLLOWUP_NUM=""
-              if FOLLOWUP_URL="$(gh_retry gh issue create \
+              FOLLOWUP_URL="$(review_blocked_find_issue_for_request "${GITHUB_REPOSITORY}" "${RB_APPROVAL_REQUEST_ID}" || true)"
+              if [ -n "${FOLLOWUP_URL}" ]; then
+                echo "  Reusing follow-up issue for approval request ${RB_APPROVAL_REQUEST_ID}: ${FOLLOWUP_URL}"
+              elif FOLLOWUP_URL="$(gh_retry gh issue create \
                   --repo "${GITHUB_REPOSITORY}" \
                   --title "${FOLLOWUP_TITLE}" \
                   --body "${FULL_FOLLOWUP_BODY}" \
@@ -17949,6 +17991,8 @@ EOF
                 gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                   --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
 
+                review_blocked_post_consumed_marker "${GITHUB_REPOSITORY}" "${RB_PR}" "${RB_APPROVAL_REQUEST_ID}" "merged_with_followup" || true
+
                 tg_notify "Orchestrator judge merge_with_followup: PR #${RB_PR} merged (issue #${rb_issue}); follow-up issue #${FOLLOWUP_NUM} created for deferred gap. ${RB_JUSTIFICATION}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Parent issue: $(_gh_url "issues/${rb_issue}")"$'\n'"Follow-up: $(_gh_url "issues/${FOLLOWUP_NUM}")" "DEBUG"
               fi
               REVIEW_BLOCKED_STATE_CHANGED=true
@@ -17965,17 +18009,6 @@ EOF
           # Discard any accidental file modifications from the combined
           # judge call; close_and_reissue operates via GitHub API only.
           rb_cleanup_combined_workspace
-          # Close the PR
-          gh_retry gh pr close "${RB_PR}" --repo "${GITHUB_REPOSITORY}" \
-            --comment "Closed by orchestrator judge — the approach needs rework. A new issue will be created with refined guidance." \
-            2>/dev/null || true
-
-          # Label issue as closed
-          ensure_label_exists "ai:closed"
-          gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
-            --remove-label 'ai:review-blocked' --remove-label 'ai:done' \
-            --add-label 'ai:closed' 2>/dev/null || true
-
           # Create replacement issue
           NEW_ISSUE_TITLE="$(echo "${RB_JUDGE_JSON}" | jq -r '.new_issue.title // empty')"
           NEW_ISSUE_BODY="$(echo "${RB_JUDGE_JSON}" | jq -r '.new_issue.body // empty' | sed 's/\\n/\n/g')"
@@ -17983,29 +18016,51 @@ EOF
             RB_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
             FULL_NEW_BODY="${NEW_ISSUE_BODY}
 
+<!-- review-blocked-approval-request:${RB_APPROVAL_REQUEST_ID} -->
+
 ---
 **Orchestrator metadata** (do not edit)
 - Tracking issue: #${TRACKING_NUM}
 - Integration branch: ${RB_INTEGRATION_BRANCH}
 - Replaces: #${rb_issue} (PR #${RB_PR} closed — approach rework)
 - Type: review-blocked-reissue
+- Approval request: ${RB_APPROVAL_REQUEST_ID}
 - Managed by: AI Orchestrator"
 
             ensure_label_exists "ai:clarification"
             ensure_label_exists "ai:orchestrator-managed"
-            NEW_URL="$(gh_retry gh issue create \
-              --repo "${GITHUB_REPOSITORY}" \
-              --title "${NEW_ISSUE_TITLE}" \
-              --body "${FULL_NEW_BODY}" \
-              --label "ai:clarification" \
-              --label "ai:orchestrator-managed")"
+            NEW_URL="$(review_blocked_find_issue_for_request "${GITHUB_REPOSITORY}" "${RB_APPROVAL_REQUEST_ID}" || true)"
+            if [ -z "${NEW_URL}" ]; then
+              NEW_URL="$(gh_retry gh issue create \
+                --repo "${GITHUB_REPOSITORY}" \
+                --title "${NEW_ISSUE_TITLE}" \
+                --body "${FULL_NEW_BODY}" \
+                --label "ai:clarification" \
+                --label "ai:orchestrator-managed")"
+            else
+              echo "  Reusing replacement issue for approval request ${RB_APPROVAL_REQUEST_ID}: ${NEW_URL}"
+            fi
             NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
             NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
             echo "  Created replacement issue #${NEW_NUM}: ${NEW_ISSUE_TITLE}"
 
-            # Get local_id for the blocked issue and remap it
-            LOCAL_ID="$(echo "${WAVE_STATUS}" | jq -r ".issues[] | select(.github_issue == \"${rb_issue}\") | .id")"
-            if [[ "${NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${LOCAL_ID}" ] && [ "${LOCAL_ID}" != "null" ]; then
+            # Create/reuse the replacement before closing the source PR. A
+            # failed replacement must leave the original review-blocked PR
+            # open so no approved work disappears without a successor.
+            if [[ "${NEW_NUM}" =~ ^[0-9]+$ ]] && gh_retry gh pr close "${RB_PR}" --repo "${GITHUB_REPOSITORY}" \
+              --comment "Closed after approved review-blocked reissue request ${RB_APPROVAL_REQUEST_ID}; replacement: #${NEW_NUM}." \
+              2>/dev/null; then
+              ensure_label_exists "ai:closed"
+              gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
+                --remove-label 'ai:review-blocked' --remove-label 'ai:done' \
+                --add-label 'ai:closed' 2>/dev/null || true
+              review_blocked_post_consumed_marker "${GITHUB_REPOSITORY}" "${RB_PR}" "${RB_APPROVAL_REQUEST_ID}" "closed_and_reissued" || true
+              LOCAL_ID="$(echo "${WAVE_STATUS}" | jq -r ".issues[] | select(.github_issue == \"${rb_issue}\") | .id")"
+            else
+              LOCAL_ID=""
+              echo "::warning::Replacement issue was not created or PR #${RB_PR} could not be closed; leaving issue #${rb_issue} review-blocked."
+            fi
+            if [ -n "${LOCAL_ID}" ] && [ "${LOCAL_ID}" != "null" ]; then
               jq ".issue_number_map[\"${LOCAL_ID}\"] = ${NEW_NUM}" \
                 "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
               # Update the wave entry

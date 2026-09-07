@@ -1079,6 +1079,14 @@ fi
 if [ -z "${POST_REVIEW_HEAD_REF}" ]; then
   POST_REVIEW_HEAD_REF="${TARGET_BRANCH:-}"
 fi
+RB_PENDING_APPROVAL_REQUEST=""
+RB_PENDING_DECISION_JSON=""
+if command -v review_blocked_find_pending_request >/dev/null 2>&1 && [ -n "${POST_REVIEW_HEAD_SHA}" ]; then
+  RB_PENDING_APPROVAL_REQUEST="$(review_blocked_find_pending_request "${PR_COMMENTS}" "${PR_NUMBER}" "${POST_REVIEW_HEAD_SHA}" || true)"
+  if [ -n "${RB_PENDING_APPROVAL_REQUEST}" ]; then
+    RB_PENDING_DECISION_JSON="$(printf '%s' "${RB_PENDING_APPROVAL_REQUEST}" | jq -c '.decision // empty' 2>/dev/null || true)"
+  fi
+fi
 RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE="${RUNTIME_DIR}/rb_judge_prior_round_decisions.txt"
 if command -v render_review_rb_prior_round_decisions_file >/dev/null 2>&1; then
   render_review_rb_prior_round_decisions_file "${REVIEW_LEDGER_PATH}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE}"
@@ -1359,6 +1367,11 @@ PY
 RB_JUDGE_PROMPT_SIZE_LOGGED=false
 JUDGE_SUCCESS=false
 JUDGE_STDERR_FILE="${RUNTIME_DIR}/rb_judge_stderr.txt"
+if [ -n "${RB_PENDING_DECISION_JSON}" ]; then
+  printf '%s\n' "${RB_PENDING_DECISION_JSON}" > "${RB_JUDGE_OUTPUT}"
+  JUDGE_SUCCESS=true
+  echo "Reusing pending review-blocked approval request; skipping a new model decision."
+else
 for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   attempt="$((attempt_idx + 1))"
   level="${JUDGE_ATTEMPT_LEVELS[$attempt_idx]}"
@@ -1465,6 +1478,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
     sleep 10
   fi
 done
+fi
 
 if [ "${JUDGE_SUCCESS}" != "true" ]; then
   opencode_emit_failure_alert review_rb_judge reviewer "${MODEL_EDITOR}" "${rc:-1}" attempts_exhausted || true
@@ -1648,11 +1662,59 @@ RB_JUDGE_COMMENT_FILE="${RUNTIME_DIR}/rb_judge_comment.md"
   echo "**Remaining issues:** ${RB_REMAINING}"
 } > "${RB_JUDGE_COMMENT_FILE}"
 
+case "${RB_ACTION}" in
+  merge|merge_with_followup|close_and_reissue)
+    printf '\n**Status:** Human approval is required before this terminal recommendation can execute.\n' >> "${RB_JUDGE_COMMENT_FILE}"
+    ;;
+esac
+
 post_review_blocked_assessment \
   "${RB_JUDGE_COMMENT_FILE}" \
   "${RB_OUTBOUND_REVIEW_STATE}" \
   "${POST_REVIEW_HEAD_SHA}" \
   "${POST_REVIEW_HEAD_REF}" || true
+
+RB_APPROVAL_REQUEST_ID=""
+case "${RB_ACTION}" in
+  merge|merge_with_followup|close_and_reissue)
+    if ! command -v review_blocked_build_approval_request >/dev/null 2>&1; then
+      echo "::warning::Review-blocked approval helpers unavailable; refusing terminal action (fail-closed)."
+      echo "judge_skip_reason=approval_helper_unavailable" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
+    if ! [[ "${POST_REVIEW_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "::warning::Current PR head SHA is unavailable or invalid; refusing terminal approval request."
+      echo "judge_skip_reason=approval_head_unresolved" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
+    RB_DECISION_DIGEST="$(review_blocked_decision_digest "${JUDGE_JSON}")"
+    RB_APPROVAL_REQUEST=""
+    if [ -n "${RB_PENDING_APPROVAL_REQUEST}" ] \
+      && [ "$(printf '%s' "${RB_PENDING_APPROVAL_REQUEST}" | jq -r '.decision_digest // empty')" = "${RB_DECISION_DIGEST}" ] \
+      && [ "$(printf '%s' "${RB_PENDING_APPROVAL_REQUEST}" | jq -r '.action // empty')" = "${RB_ACTION}" ]; then
+      RB_APPROVAL_REQUEST="${RB_PENDING_APPROVAL_REQUEST}"
+    else
+      RB_APPROVAL_REQUEST="$(review_blocked_build_approval_request "${PR_NUMBER}" "${FIRST_ISSUE:-0}" "${POST_REVIEW_HEAD_SHA}" "${JUDGE_JSON}")"
+      if ! review_blocked_post_approval_request "${REPOSITORY}" "${PR_NUMBER}" "${RB_APPROVAL_REQUEST}"; then
+        echo "::warning::Could not publish review-blocked approval request; refusing terminal action."
+        echo "judge_skip_reason=approval_request_publish_failed" >> "$GITHUB_OUTPUT"
+        exit 0
+      fi
+      echo "judge_action=approval_pending" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=approval_pending" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
+    RB_APPROVAL_STATUS="$(review_blocked_approval_status "${PR_COMMENTS}" "${RB_APPROVAL_REQUEST}")"
+    if [ "$(printf '%s' "${RB_APPROVAL_STATUS}" | jq -r '.status // empty')" != "approved" ]; then
+      echo "Review-blocked terminal recommendation remains pending trusted human approval."
+      echo "judge_action=approval_pending" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=approval_pending" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
+    RB_APPROVAL_REQUEST_ID="$(printf '%s' "${RB_APPROVAL_REQUEST}" | jq -r '.request_id')"
+    echo "Authenticated human approval accepted for request ${RB_APPROVAL_REQUEST_ID}."
+    ;;
+esac
 
 # -----------------------------------------------------------
 # Execute judge action
@@ -1660,98 +1722,44 @@ post_review_blocked_assessment \
 case "${RB_ACTION}" in
   merge)
     echo "Judge says merge PR #${PR_NUMBER} as-is."
-
-    # Label linked issues ready-to-merge
-    ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
-    while IFS= read -r issue_number; do
-      [ -n "${issue_number}" ] || continue
-      _resilient_phase_swap "${issue_number}" "ai:ready-to-merge" || true
-    done <<< "${ISSUE_NUMBERS}"
-
-    # Attempt merge.
-    #
-    # GitHub's REST `pulls` API returns `mergeable` as one of three values:
-    #   - true   : merge is clean
-    #   - false  : real merge conflicts
-    #   - null   : GitHub has not finished computing mergeability yet
-    #              (typical immediately after a push). Mergeability is
-    #              computed asynchronously, so we must poll briefly before
-    #              treating an empty value as a hard failure — otherwise a
-    #              transient `null` is indistinguishable from a real conflict
-    #              in the log.
-    PR_STATE=""
-    PR_MERGEABLE=""
-    _mergeable_attempts="${PR_MERGEABLE_POLL_ATTEMPTS:-6}"
-    _mergeable_sleep="${PR_MERGEABLE_POLL_SLEEP:-5}"
-    _attempt=0
-    while [ "${_attempt}" -lt "${_mergeable_attempts}" ]; do
-      # Use _safe_gh_jq (via gh_retry) so a failed `gh api` response
-      # emits no stdout — preventing the error JSON body from being
-      # concatenated with the `|| echo '{}'` fallback, which would
-      # yield invalid JSON and break the downstream `jq` parses below.
-      _pr_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
-      # GitHub's REST /pulls/{N} returns .state as one of `open` or
-      # `closed` (never `merged` — merged PRs are state=closed +
-      # merged=true). Drop the unreachable `merged` alt for clarity;
-      # this branch only acts when state=open anyway.
-      PR_STATE="$(printf '%s\n' "${_pr_json}" | jq -r '.state // ""' | grep -xE 'open|closed' || echo "")"
-      PR_MERGEABLE="$(printf '%s\n' "${_pr_json}" | jq -r '.mergeable // ""' | grep -xE 'true|false' || echo "")"
-      # Stop polling as soon as state is terminal or mergeability is known.
-      if [ "${PR_STATE}" != "open" ] || [ -n "${PR_MERGEABLE}" ]; then
-        break
-      fi
-      _attempt=$((_attempt + 1))
-      if [ "${_attempt}" -lt "${_mergeable_attempts}" ]; then
-        echo "PR #${PR_NUMBER} mergeable=null (GitHub still computing); retrying in ${_mergeable_sleep}s (${_attempt}/${_mergeable_attempts})."
-        sleep "${_mergeable_sleep}"
-      fi
-    done
-
-    if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
-      if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
-        # NOTE: gh pr merge is intentionally NOT wrapped with gh_retry.
-        # These calls are best-effort (trailing `|| true`); non-
-        # transient failures (branch protection, permissions, merge
-        # queue, 422 merge commit conflicts, etc.) would otherwise
-        # incur ~31s of exponential backoff under gh_retry before
-        # reaching the `|| true` fallthrough. Rate-limit alerts still
-        # fire through every other gh_retry-wrapped call in this
-        # script.
-        gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
-          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
-      fi
-    elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
-      echo "::warning::PR #${PR_NUMBER} has merge conflicts (mergeable=false); judge cannot merge as-is."
-      echo "PR #${PR_NUMBER} state=${PR_STATE} mergeable=false, merge conflicts present."
-    else
-      echo "PR #${PR_NUMBER} state=${PR_STATE} mergeable=${PR_MERGEABLE:-null}, cannot merge yet (mergeability still computing or PR not open)."
+    RB_MERGE_LIVE_JSON="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+    RB_MERGE_STATE="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.state // empty')"
+    RB_MERGEABLE="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.mergeable // empty')"
+    RB_MERGE_HEAD_SHA="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.head.sha // empty')"
+    RB_MERGE_BASE_REF="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '.base.ref // empty')"
+    RB_MERGE_ALREADY_MERGED="$(printf '%s' "${RB_MERGE_LIVE_JSON}" | jq -r '(.merged_at != null) or (.merged == true)')"
+    RB_MERGE_CONFIRMED=false
+    if [ "${RB_MERGE_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]; then
+      echo "::warning::Approved merge refused because PR #${PR_NUMBER} head changed after the decision."
+    elif [ "${RB_MERGE_ALREADY_MERGED}" = "true" ]; then
+      RB_MERGE_CONFIRMED=true
+    elif [ "${RB_MERGE_STATE}" = "open" ] && [ "${RB_MERGEABLE}" = "true" ] \
+      && command -v _pr_checks_completed >/dev/null 2>&1 \
+      && PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_CHECKS_SELF_RUN_ID="${GITHUB_RUN_ID:-}" \
+        _pr_checks_completed "${PR_NUMBER}" "${RB_MERGE_HEAD_SHA}" "${RB_MERGE_BASE_REF}" \
+      && [ "${ENABLE_AUTO_MERGE}" = "true" ] \
+      && gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_MERGE_HEAD_SHA}" 2>/dev/null; then
+      RB_MERGE_CONFIRMED=true
     fi
-
-    echo "judge_handled=true" >> "$GITHUB_OUTPUT"
-    echo "judge_action=merge" >> "$GITHUB_OUTPUT"
-    ;;
-
-  fix)
-    if [ "${IS_FINAL}" = "true" ]; then
-      echo "Judge returned 'fix' but retries exhausted — treating as merge."
-
+    if [ "${RB_MERGE_CONFIRMED}" = "true" ]; then
       ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
       while IFS= read -r issue_number; do
         [ -n "${issue_number}" ] || continue
         _resilient_phase_swap "${issue_number}" "ai:ready-to-merge" || true
       done <<< "${ISSUE_NUMBERS}"
-
-      # GitHub's REST /pulls/{N} returns .state as one of `open` or
-      # `closed`; drop the unreachable `merged` alt.
-      PR_STATE="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed' || echo "")"
-      if [ "${PR_STATE}" = "open" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
-        # Best-effort merge — see note above re: gh_retry.
-        gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
-          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
-      fi
-
+      review_blocked_post_consumed_marker "${REPOSITORY}" "${PR_NUMBER}" "${RB_APPROVAL_REQUEST_ID}" "merged" || true
       echo "judge_handled=true" >> "$GITHUB_OUTPUT"
       echo "judge_action=merge" >> "$GITHUB_OUTPUT"
+    else
+      echo "judge_skip_reason=approved_merge_precondition_failed" >> "$GITHUB_OUTPUT"
+    fi
+    ;;
+
+  fix)
+    if [ "${IS_FINAL}" = "true" ]; then
+      echo "::warning::Judge returned 'fix' after retries were exhausted; refusing invalid final action."
+      echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=invalid_final_fix" >> "$GITHUB_OUTPUT"
     else
       echo "Judge is applying fixes to PR #${PR_NUMBER}..."
 
@@ -1932,8 +1940,8 @@ Review-blocked judge applied fixes to unblock the review pipeline.
 Retry $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}.
 
 ${RB_FIX_DESC}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}"
-          if git push origin "HEAD:${TARGET_BRANCH}"; then
+          git remote set-url origin "${GITHUB_SERVER_URL:-https://github.com}/${REPOSITORY}"
+          if git_with_github_auth push origin "HEAD:${TARGET_BRANCH}"; then
             echo "Pushed [judge-fix] commit to ${TARGET_BRANCH}."
             echo "judge_handled=true" >> "$GITHUB_OUTPUT"
             echo "judge_action=fix" >> "$GITHUB_OUTPUT"
@@ -1941,26 +1949,14 @@ ${RB_FIX_DESC}"
             echo "::warning::Failed to push judge fix — falling back to manual intervention."
           fi
         else
-          echo "Judge staged no effective changes. Treating as merge."
-          ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
-          while IFS= read -r issue_number; do
-            [ -n "${issue_number}" ] || continue
-            gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
-              --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
-          done <<< "${ISSUE_NUMBERS}"
-          echo "judge_handled=true" >> "$GITHUB_OUTPUT"
-          echo "judge_action=merge" >> "$GITHUB_OUTPUT"
+          echo "::warning::Judge fix staged no effective changes; refusing to reinterpret fix as merge."
+          echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+          echo "judge_skip_reason=fix_no_effective_changes" >> "$GITHUB_OUTPUT"
         fi
       else
-        echo "Judge produced no file changes. Treating as merge."
-        ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
-        while IFS= read -r issue_number; do
-          [ -n "${issue_number}" ] || continue
-          gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" \
-            --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
-        done <<< "${ISSUE_NUMBERS}"
-        echo "judge_handled=true" >> "$GITHUB_OUTPUT"
-        echo "judge_action=merge" >> "$GITHUB_OUTPUT"
+        echo "::warning::Judge fix produced no file changes; refusing to reinterpret fix as merge."
+        echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+        echo "judge_skip_reason=fix_no_changes" >> "$GITHUB_OUTPUT"
       fi
     fi
     ;;
@@ -2188,6 +2184,8 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         # warning).
         FULL_FOLLOWUP_BODY="${FOLLOWUP_BODY}
 
+<!-- review-blocked-approval-request:${RB_APPROVAL_REQUEST_ID:-not-applicable} -->
+
 ---
 **Merge-with-followup metadata**
 - Source PR: #${PR_NUMBER} (review-blocked judge merged with deferred gap tracked here)
@@ -2225,7 +2223,12 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         # so stall recovery / the next judge run notices and re-tries
         # follow-up creation.
         FOLLOWUP_URL=""
-        if FOLLOWUP_URL="$(gh_retry gh issue create \
+        if command -v review_blocked_find_issue_for_request >/dev/null 2>&1 && [ -n "${RB_APPROVAL_REQUEST_ID:-}" ]; then
+          FOLLOWUP_URL="$(review_blocked_find_issue_for_request "${REPOSITORY}" "${RB_APPROVAL_REQUEST_ID}" || true)"
+        fi
+        if [ -n "${FOLLOWUP_URL}" ]; then
+          echo "Reusing follow-up issue for approval request ${RB_APPROVAL_REQUEST_ID}: ${FOLLOWUP_URL}"
+        elif FOLLOWUP_URL="$(gh_retry gh issue create \
             --repo "${REPOSITORY}" \
             --title "${FOLLOWUP_TITLE}" \
             --body "${FULL_FOLLOWUP_BODY}" \
@@ -2258,6 +2261,9 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
 
           echo "judge_handled=true" >> "$GITHUB_OUTPUT"
           echo "judge_action=merge_with_followup" >> "$GITHUB_OUTPUT"
+          if command -v review_blocked_post_consumed_marker >/dev/null 2>&1 && [ -n "${RB_APPROVAL_REQUEST_ID:-}" ]; then
+            review_blocked_post_consumed_marker "${REPOSITORY}" "${PR_NUMBER}" "${RB_APPROVAL_REQUEST_ID}" "merged_with_followup" || true
+          fi
         fi
       fi
     fi
@@ -2316,7 +2322,11 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
       while :; do
         push_exit=0
         : > "${push_log}"
-        git -C "${worktree_dir}" push -u origin "HEAD:refs/heads/${baseline_branch}" >"${push_log}" 2>&1 || push_exit=$?
+        if command -v git_with_github_auth >/dev/null 2>&1; then
+          git_with_github_auth -C "${worktree_dir}" push -u origin "HEAD:refs/heads/${baseline_branch}" >"${push_log}" 2>&1 || push_exit=$?
+        else
+          git -C "${worktree_dir}" push -u origin "HEAD:refs/heads/${baseline_branch}" >"${push_log}" 2>&1 || push_exit=$?
+        fi
         cat "${push_log}" >&2 || true
         if [ "${push_exit}" -eq 0 ]; then
           exit 0
@@ -2333,18 +2343,6 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
 
     echo "Judge says close PR #${PR_NUMBER} and reissue."
 
-    # Close the PR
-    gh_retry gh pr close "${PR_NUMBER}" --repo "${REPOSITORY}" \
-      --comment "Closed by review-blocked judge — the approach needs rework. A new issue will be created with refined guidance." \
-      2>/dev/null || true
-
-    # Label linked issues as closed
-    ensure_label_exists "ai:closed" "${REPOSITORY}"
-    while IFS= read -r issue_number; do
-      [ -n "${issue_number}" ] || continue
-      _resilient_phase_swap "${issue_number}" "ai:closed" || true
-    done <<< "${ISSUE_NUMBERS}"
-
     # Create replacement issue
     NEW_ISSUE_TITLE="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.new_issue.title // empty')"
     NEW_ISSUE_BODY="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.new_issue.body // empty')"
@@ -2357,6 +2355,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
     RB_INVALID_FILE=""
     RB_FILES_CSV=""
     RB_REISSUE_FILES=()
+    RB_REPLACEMENT_CREATED="false"
 
     if [ -n "${NEW_ISSUE_TITLE}" ] && [ -n "${NEW_ISSUE_BODY}" ]; then
       if [ "${RB_REQUESTED_REISSUE_MODE}" = "spot-fix" ]; then
@@ -2440,6 +2439,8 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
 
       FULL_NEW_BODY="${NEW_ISSUE_BODY}
 
+<!-- review-blocked-approval-request:${RB_APPROVAL_REQUEST_ID:-not-applicable} -->
+
 ---
 **Review-blocked reissue metadata**
 - Replaces: ${FIRST_ISSUE:+#${FIRST_ISSUE} }(PR #${PR_NUMBER} closed — approach rework)
@@ -2450,7 +2451,6 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
 - files_touched:
 $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
       fi
-
       # Propagate ai:orchestrator-managed from the parent issue when it
       # carries that label.  Without this, an orchestrator-managed
       # parent's reissue lands with only ai:clarification (added later
@@ -2467,12 +2467,21 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
         echo "Propagating ai:orchestrator-managed from parent issue #${FIRST_ISSUE} to review-blocked reissue."
       fi
 
-      NEW_URL="$(gh_retry gh issue create \
-        --repo "${REPOSITORY}" \
-        --title "${NEW_ISSUE_TITLE}" \
-        --body "${FULL_NEW_BODY}" \
-        ${RB_PROPAGATE_LABELS[@]+"${RB_PROPAGATE_LABELS[@]}"})"
+      NEW_URL=""
+      if command -v review_blocked_find_issue_for_request >/dev/null 2>&1 && [ -n "${RB_APPROVAL_REQUEST_ID:-}" ]; then
+        NEW_URL="$(review_blocked_find_issue_for_request "${REPOSITORY}" "${RB_APPROVAL_REQUEST_ID}" || true)"
+      fi
+      if [ -z "${NEW_URL}" ]; then
+        NEW_URL="$(gh_retry gh issue create \
+          --repo "${REPOSITORY}" \
+          --title "${NEW_ISSUE_TITLE}" \
+          --body "${FULL_NEW_BODY}" \
+          ${RB_PROPAGATE_LABELS[@]+"${RB_PROPAGATE_LABELS[@]}"})"
+      else
+        echo "Reusing replacement issue for approval request ${RB_APPROVAL_REQUEST_ID}: ${NEW_URL}"
+      fi
       echo "Created replacement issue: ${NEW_URL}"
+      [ -n "${NEW_URL}" ] && RB_REPLACEMENT_CREATED="true"
     else
       if [ "${RB_REQUESTED_REISSUE_MODE}" = "spot-fix" ]; then
         RB_EFFECTIVE_REISSUE_MODE="redo"
@@ -2484,8 +2493,27 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
 
     echo "REISSUE_MODE requested_raw=${RB_REISSUE_MODE_RAW:-<empty>} effective=${RB_EFFECTIVE_REISSUE_MODE} feature_flag=${REISSUE_PRESERVE_BASELINE_ENABLED:-true}"
 
-    echo "judge_handled=true" >> "$GITHUB_OUTPUT"
-    echo "judge_action=close_and_reissue" >> "$GITHUB_OUTPUT"
+    if [ "${RB_REPLACEMENT_CREATED}" = "true" ]; then
+      if gh_retry gh pr close "${PR_NUMBER}" --repo "${REPOSITORY}" \
+        --comment "Closed after approved review-blocked reissue request ${RB_APPROVAL_REQUEST_ID:-not-applicable}; replacement: ${NEW_URL}." \
+        2>/dev/null; then
+        ensure_label_exists "ai:closed" "${REPOSITORY}"
+        while IFS= read -r issue_number; do
+          [ -n "${issue_number}" ] || continue
+          _resilient_phase_swap "${issue_number}" "ai:closed" || true
+        done <<< "${ISSUE_NUMBERS}"
+        if command -v review_blocked_post_consumed_marker >/dev/null 2>&1 && [ -n "${RB_APPROVAL_REQUEST_ID:-}" ]; then
+          review_blocked_post_consumed_marker "${REPOSITORY}" "${PR_NUMBER}" "${RB_APPROVAL_REQUEST_ID}" "closed_and_reissued" || true
+        fi
+        echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+        echo "judge_action=close_and_reissue" >> "$GITHUB_OUTPUT"
+      else
+        echo "::warning::Replacement issue was created but PR #${PR_NUMBER} could not be closed."
+        echo "judge_skip_reason=approved_close_failed" >> "$GITHUB_OUTPUT"
+      fi
+    else
+      echo "judge_skip_reason=replacement_issue_create_failed" >> "$GITHUB_OUTPUT"
+    fi
     ;;
 
   *)

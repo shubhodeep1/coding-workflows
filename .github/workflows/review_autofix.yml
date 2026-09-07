@@ -907,6 +907,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Dispatch standalone validate for orchestrator short-circuit issues
         run: |
           set -euo pipefail
@@ -1054,6 +1055,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Force orchestrate poll after merged PR handling
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -1437,6 +1439,7 @@ jobs:
           filter: blob:none
           token: ${{ secrets.GH_PAT }}
 
+          persist-credentials: false
       - name: Show disk usage (post checkout)
         run: df -h /
 
@@ -1449,7 +1452,11 @@ jobs:
           SERVER_HOST="${GITHUB_SERVER_URL#https://}"
           SERVER_HOST="${SERVER_HOST#http://}"
           SERVER_HOST="${SERVER_HOST%/}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+          git remote set-url origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}"
 
       - name: Resolve workflow support ref
         run: |
@@ -1472,6 +1479,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Checkout workflow support source fallback
         if: ${{ steps.checkout_support_source.outcome == 'failure' }}
         uses: actions/checkout@v5
@@ -1482,6 +1490,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Ensure workflow support source checkout
         run: |
           set -euo pipefail
@@ -1501,6 +1510,7 @@ jobs:
           path: .codex-workflow-src-main
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Stage workflow support files
         run: |
           set -euo pipefail
@@ -5497,7 +5507,11 @@ jobs:
             echo "::warning::check_external_branch_advance.sh missing from support scripts; fail-open (skipping pre-push gate)."
           fi
 
-          git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+          git remote set-url origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}"
           echo "Pushing pending commits to ${TARGET_BRANCH}..."
 
           # Retry non-fast-forward rejections with fetch+merge.  A concurrent

@@ -74,6 +74,7 @@ jobs:
         with:
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -209,6 +210,7 @@ jobs:
         with:
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -692,6 +694,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || github.token }}
 
+          persist-credentials: false
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -1379,6 +1382,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || github.token }}
 
+          persist-credentials: false
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -1890,6 +1894,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || github.token }}
 
+          persist-credentials: false
       - name: Setup Python
         uses: actions/setup-python@v6
         with:

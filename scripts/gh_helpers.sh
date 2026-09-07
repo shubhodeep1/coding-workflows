@@ -461,6 +461,20 @@ gh_retry()
 	return 1
 }
 
+# Run one networked git command with GitHub authentication that exists only
+# for that child process. The token is never written to repository config.
+git_with_github_auth()
+{
+	local auth_token="${GH_PAT:-${GH_TOKEN:-}}"
+	local auth_header=""
+	if [ -z "${auth_token}" ]; then
+		git "$@"
+		return
+	fi
+	auth_header="$(printf 'x-access-token:%s' "${auth_token}" | base64 | tr -d '\n')"
+	git -c "http.extraHeader=Authorization: Basic ${auth_header}" "$@"
+}
+
 # ---------------------------------------------------------------
 # gh_retry_to_file — Like gh_retry but captures stdout to a file.
 #
@@ -700,7 +714,7 @@ curl_gh_api()
 # Emits JSON object:
 # {
 #   "meta": {"title", "body", "head_ref", "base_ref", "head_sha"},
-#   "comments": [{"author", "body", "created_at"}],
+#   "comments": [{"id", "author", "author_type", "author_association", "body", "created_at"}],
 #   "review_comments": [{"author", "path", "line", "body"}]
 # }
 #
@@ -734,7 +748,7 @@ _gh_pr_with_all_comments_rest()
 			|| echo '{}')"
 	fi
 	comments_json="$(gh_retry gh api --paginate "repos/${repo_path}/issues/${pr_number}/comments" 2>/dev/null \
-		| jq -c -s 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null \
+		| jq -c -s 'add // [] | [.[] | {id: .id, author: .user.login, author_type: .user.type, author_association: .author_association, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.id // 0))' 2>/dev/null \
 		|| echo '[]')"
 	review_comments_json="$(gh_retry gh api --paginate "repos/${repo_path}/pulls/${pr_number}/comments" 2>/dev/null \
 		| jq -c -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null \
@@ -761,7 +775,7 @@ _gh_pr_with_all_comments_rest()
 # Emits JSON object:
 # {
 #   "meta": {"title", "body", "head_ref", "base_ref", "head_sha"},
-#   "comments": [{"author", "body", "created_at"}],
+#   "comments": [{"id", "author", "author_type", "author_association", "body", "created_at"}],
 #   "review_comments": [{"author", "path", "line", "body"}]
 # }
 #
@@ -801,7 +815,9 @@ gh_pr_with_all_comments()
 				headRefOid
 				comments(first: 100) {
 					nodes {
-						author { login }
+						databaseId
+						author { login __typename }
+						authorAssociation
 						body
 						createdAt
 					}
@@ -881,12 +897,15 @@ gh_pr_with_all_comments()
 					[
 						($pr.comments.nodes // [])[]
 						| {
+							id: (.databaseId // null),
 							author: (.author.login // null),
+							author_type: (if .author.__typename == "User" then "User" else (.author.__typename // null) end),
+							author_association: (.authorAssociation // null),
 							body: (.body // ""),
 							created_at: (.createdAt // null)
 						}
 					]
-					| sort_by((.created_at // ""), (.author // ""), (.body // ""))
+					| sort_by((.created_at // ""), (.id // 0))
 				),
 				review_comments: (
 					[
@@ -913,6 +932,143 @@ gh_pr_with_all_comments()
 	rm -f "${_gql_file:-}"
 	echo "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments reason=${_fallback_reason:-unknown} owner=${owner} repo=${repo} pr=${pr_number}" >&2
 	_gh_pr_with_all_comments_rest "${owner}" "${repo}" "${pr_number}" "${preloaded_meta_json}"
+}
+
+# Review-blocked terminal decisions are model recommendations until a trusted
+# human approves the exact request and decision digest on the PR. These helpers
+# consume the already-prefetched PR comments; they add no read API calls.
+review_blocked_decision_digest()
+{
+	printf '%s' "${1:?decision JSON required}" | jq -cS . | sha256sum | awk '{print $1}'
+}
+
+review_blocked_find_pending_request()
+{
+	local comments_json="${1:-[]}"
+	local pr_number="${2:?PR number required}"
+	local head_sha="${3:?head SHA required}"
+	printf '%s' "${comments_json}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import json, re, sys
+comments = json.load(sys.stdin)
+pr = int(sys.argv[1]); head = sys.argv[2]
+request_re = re.compile(r"<!-- REVIEW_BLOCKED_APPROVAL_V1\s*\n(\{.*?\})\s*\nREVIEW_BLOCKED_APPROVAL_V1 -->", re.S)
+consumed_re = re.compile(r"<!-- REVIEW_BLOCKED_APPROVAL_CONSUMED_V1\s*\n(\{.*?\})\s*\nREVIEW_BLOCKED_APPROVAL_CONSUMED_V1 -->", re.S)
+requests = []
+consumed = set()
+trusted = {"OWNER", "MEMBER", "COLLABORATOR"}
+for comment in comments if isinstance(comments, list) else []:
+    if not isinstance(comment, dict): continue
+    trusted_producer = comment.get("author_association") in trusted or (
+        comment.get("author_type") == "Bot" and comment.get("author") in {"github-actions", "github-actions[bot]", "codex", "codex-bot"}
+    )
+    if not trusted_producer: continue
+    body = comment.get("body", "") if isinstance(comment, dict) else ""
+    for match in consumed_re.finditer(body):
+        try: consumed.add(json.loads(match.group(1)).get("request_id"))
+        except (json.JSONDecodeError, TypeError): pass
+    for match in request_re.finditer(body):
+        try: request = json.loads(match.group(1))
+        except (json.JSONDecodeError, TypeError): continue
+        if request.get("schema_version") != "review_blocked_approval.v1": continue
+        if request.get("pr_number") != pr or request.get("head_sha") != head: continue
+        if request.get("action") not in {"merge", "merge_with_followup", "close_and_reissue"}: continue
+        if not isinstance(request.get("decision"), dict): continue
+        if request["decision"].get("action") != request.get("action"): continue
+        if not re.fullmatch(r"review_blocked_approval_\d{14}_[0-9a-f]{10}", str(request.get("request_id", ""))): continue
+        if not re.fullmatch(r"[0-9a-f]{64}", str(request.get("decision_digest", ""))): continue
+        requests.append(request)
+for request in reversed(requests):
+    if request.get("request_id") not in consumed:
+        print(json.dumps(request, separators=(",", ":"), sort_keys=True))
+        break
+' "${pr_number}" "${head_sha}"
+}
+
+review_blocked_build_approval_request()
+{
+	local pr_number="${1:?PR number required}"
+	local issue_number="${2:-0}"
+	local head_sha="${3:?head SHA required}"
+	local decision_json="${4:?decision JSON required}"
+	local action request_id decision_digest created_at helper_dir
+	action="$(printf '%s' "${decision_json}" | jq -r '.action // empty')"
+	decision_digest="$(review_blocked_decision_digest "${decision_json}")"
+	helper_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	request_id="$(PYTHONPATH="${helper_dir}:${PYTHONPATH:-}" PYTHONDONTWRITEBYTECODE=1 python3 -c 'from ai_memory_lib import make_record_id; print(make_record_id("review_blocked_approval"))')" || return 1
+	created_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+	jq -cn --arg request_id "${request_id}" --argjson pr_number "${pr_number}" \
+		--argjson issue_number "${issue_number:-0}" --arg action "${action}" \
+		--arg head_sha "${head_sha}" --arg decision_digest "${decision_digest}" \
+		--arg created_at "${created_at}" --argjson decision "${decision_json}" \
+		'{schema_version:"review_blocked_approval.v1",request_id:$request_id,pr_number:$pr_number,linked_issue_number:$issue_number,action:$action,head_sha:$head_sha,decision_digest:$decision_digest,created_at:$created_at,decision:$decision}'
+}
+
+review_blocked_approval_status()
+{
+	local comments_json="${1:-[]}"
+	local request_json="${2:?request JSON required}"
+	printf '%s' "${comments_json}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import json, sys
+comments = json.load(sys.stdin); request = json.loads(sys.argv[1])
+command = "/review-blocked-approve {} {}".format(request["request_id"], request["decision_digest"])
+trusted = {"OWNER", "MEMBER", "COLLABORATOR"}
+approved = None
+for comment in comments if isinstance(comments, list) else []:
+    if not isinstance(comment, dict) or comment.get("body", "").strip() != command: continue
+    if comment.get("author_type") != "User" or comment.get("author_association") not in trusted: continue
+    if (comment.get("created_at") or "") <= request.get("created_at", ""): continue
+    approved = comment
+if approved:
+    print(json.dumps({"status":"approved","request_id":request["request_id"],"decision_digest":request["decision_digest"],"approver":approved.get("author"),"approval_comment_id":approved.get("id")}, separators=(",", ":")))
+else:
+    print(json.dumps({"status":"pending","request_id":request["request_id"],"decision_digest":request["decision_digest"]}, separators=(",", ":")))
+' "${request_json}"
+}
+
+review_blocked_post_approval_request()
+{
+	local repository="${1:?repository required}"
+	local pr_number="${2:?PR number required}"
+	local request_json="${3:?request JSON required}"
+	local request_id decision_digest action head_sha body
+	request_id="$(printf '%s' "${request_json}" | jq -r '.request_id')"
+	decision_digest="$(printf '%s' "${request_json}" | jq -r '.decision_digest')"
+	action="$(printf '%s' "${request_json}" | jq -r '.action')"
+	head_sha="$(printf '%s' "${request_json}" | jq -r '.head_sha')"
+	body="## Review-Blocked Judge — Human Approval Required
+
+The model recommends **${action}**, but no terminal PR mutation has run. A trusted repository owner, member, or collaborator must approve this exact request at head \`${head_sha}\` by posting:
+
+\`/review-blocked-approve ${request_id} ${decision_digest}\`
+
+<!-- REVIEW_BLOCKED_APPROVAL_V1
+${request_json}
+REVIEW_BLOCKED_APPROVAL_V1 -->"
+	gh_retry gh api "repos/${repository}/issues/${pr_number}/comments" -f body="${body}" >/dev/null
+}
+
+review_blocked_post_consumed_marker()
+{
+	local repository="${1:?repository required}" pr_number="${2:?PR number required}"
+	local request_id="${3:?request ID required}" result="${4:?result required}"
+	local consumed_at body
+	consumed_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+	body="<!-- REVIEW_BLOCKED_APPROVAL_CONSUMED_V1
+$(jq -cn --arg request_id "${request_id}" --arg result "${result}" --arg consumed_at "${consumed_at}" '{schema_version:"review_blocked_approval_consumed.v1",request_id:$request_id,result:$result,consumed_at:$consumed_at}')
+REVIEW_BLOCKED_APPROVAL_CONSUMED_V1 -->"
+	gh_retry gh api "repos/${repository}/issues/${pr_number}/comments" -f body="${body}" >/dev/null
+}
+
+review_blocked_find_issue_for_request()
+{
+	local repository="${1:?repository required}" request_id="${2:?request ID required}"
+	# Audited existing calls: PR comment hydration cannot find repository issues
+	# by a durable body marker. One bounded search call is required for retry
+	# deduplication; failures intentionally return empty and preserve legacy flow.
+	gh_retry gh api -X GET search/issues \
+		-f q="repo:${repository} is:issue in:body review-blocked-approval-request:${request_id}" \
+		--jq '.items // [] | map(select((.body // "") | contains("<!-- review-blocked-approval-request:'"${request_id}"' -->"))) | first | .html_url // empty' \
+		2>/dev/null || true
 }
 
 _gh_issue_timeline_with_cross_refs_rest()

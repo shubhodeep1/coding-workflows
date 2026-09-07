@@ -1656,6 +1656,17 @@ if args[0] == 'pr' and len(args) >= 3 and args[1] == 'ready':
 	print('not found', file=sys.stderr)
 	sys.exit(1)
 
+if args[0] == 'pr' and len(args) >= 3 and args[1] == 'close':
+	pr_num = int(args[2])
+	for pr in store.get('prs', []):
+		if pr.get('number') == pr_num:
+			pr['state'] = 'closed'
+			store.setdefault('closed_prs', []).append(pr_num)
+			save()
+			sys.exit(0)
+	print('not found', file=sys.stderr)
+	sys.exit(1)
+
 if args[0] == 'pr' and len(args) >= 3 and args[1] == 'merge':
 	pr_num = int(args[2])
 	store.setdefault('pr_merge_calls', []).append(list(args[2:]))
@@ -5467,6 +5478,7 @@ def _run_review_blocked_merge_decision(
 	judged_head_sha: str,
 	live_head_sha: str,
 	fail_auto_pr_merge: bool = False,
+	approved: bool = True,
 ) -> dict:
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
@@ -5483,11 +5495,46 @@ def _run_review_blocked_merge_decision(
 			"title": "Track deferred review gap",
 			"body": "Apply the deferred non-blocking correction.",
 		}
+	elif action == "close_and_reissue":
+		decision["new_issue"] = {
+			"title": "Rework the blocked change",
+			"body": "Implement the corrected approach.",
+		}
+	decision_canonical = json.dumps(decision, sort_keys=True, separators=(",", ":"))
+	decision_digest = hashlib.sha256((decision_canonical + "\n").encode("utf-8")).hexdigest()
+	request_id = "review_blocked_approval_20260907010101_0123456789"
+	request = {
+		"schema_version": "review_blocked_approval.v1",
+		"request_id": request_id,
+		"pr_number": 901,
+		"linked_issue_number": 10,
+		"action": action,
+		"head_sha": judged_head_sha,
+		"decision_digest": decision_digest,
+		"created_at": "2026-09-07T01:00:00Z",
+		"decision": decision,
+	}
+	pr_comments = [{
+		"body": "<!-- REVIEW_BLOCKED_APPROVAL_V1\n"
+		+ json.dumps(request, sort_keys=True, separators=(",", ":"))
+		+ "\nREVIEW_BLOCKED_APPROVAL_V1 -->",
+		"created_at": "2026-09-07T01:00:00Z",
+		"user": {"login": "github-actions[bot]", "type": "Bot"},
+		"author_association": "NONE",
+	}]
+	if approved:
+		pr_comments.append({
+			"body": f"/review-blocked-approve {request_id} {decision_digest}",
+			"created_at": "2026-09-07T01:01:00Z",
+			"user": {"login": "maintainer", "type": "User"},
+			"author_association": "MEMBER",
+		})
 	return _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		issue_labels={10: ["ai:review-blocked"]},
+		issue_labels={10: ["ai:review-blocked"], 901: []},
+		issue_comments={901: pr_comments},
 		issue_linked_prs={10: 901},
 		prs=[dict(judged_pr_snapshot)],
 		existing_branches=["main"],
@@ -5500,6 +5547,34 @@ def _run_review_blocked_merge_decision(
 		fail_auto_pr_merge=fail_auto_pr_merge,
 		env_overrides={"ENABLE_AUTO_MERGE": "true"},
 	)
+
+
+def test_review_blocked_merge_waits_for_authenticated_approval():
+	judged_head_sha = "9" * 40
+	result = _run_review_blocked_merge_decision(
+		action="merge",
+		judged_head_sha=judged_head_sha,
+		live_head_sha=judged_head_sha,
+		approved=False,
+	)
+	assert result["pr_merge_calls"] == []
+	assert "pending trusted human approval" in result["stdout"]
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+
+
+def test_review_blocked_close_and_reissue_runs_after_authenticated_approval():
+	judged_head_sha = "8" * 40
+	result = _run_review_blocked_merge_decision(
+		action="close_and_reissue",
+		judged_head_sha=judged_head_sha,
+		live_head_sha=judged_head_sha,
+	)
+	assert result.get("created_issues") == [{
+		"number": 900,
+		"title": "Rework the blocked change",
+		"labels": ["ai:clarification", "ai:orchestrator-managed"],
+	}]
+	assert "ai:closed" in result["issues"]["10"]["labels"]
 
 
 def test_review_blocked_merge_refuses_head_changed_after_judge_snapshot():
@@ -5655,7 +5730,7 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 
 	followup_prs = [pr for pr in result["prs"] if int(pr.get("number", 0)) != 901]
 	assert followup_prs == []
-	assert "normalizing to merge_with_followup" in (result["stdout"] + result["stderr"])
+	assert "invalid, oversized, or disallowed decision" in (result["stdout"] + result["stderr"])
 
 
 def test_review_blocked_merged_followup_refuses_default_base_when_active_integration_branch_unavailable():
@@ -5730,7 +5805,7 @@ def test_review_blocked_merged_followup_refuses_default_base_when_active_integra
 
 
 	assert len(result["prs"]) == 1
-	assert "normalizing to merge_with_followup" in (result["stdout"] + result["stderr"])
+	assert "invalid, oversized, or disallowed decision" in (result["stdout"] + result["stderr"])
 
 
 def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_context():
@@ -5806,7 +5881,7 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 
 	followup_prs = [pr for pr in result["prs"] if int(pr.get("number", 0)) != 901]
 	assert followup_prs == []
-	assert "normalizing to merge_with_followup" in (result["stdout"] + result["stderr"])
+	assert "invalid, oversized, or disallowed decision" in (result["stdout"] + result["stderr"])
 
 
 def test_review_blocked_followup_refusal_increments_retry_counter():
@@ -6079,8 +6154,9 @@ def test_review_blocked_final_fix_decision_performs_no_actuator_action():
 	)
 	assert result["review_dispatches"] == []
 	assert result["latest_state"]["review_blocked_retries"]["10"] == 2
-	assert "normalizing to close_and_reissue" in (result["stdout"] + result["stderr"])
-	assert "ai:closed" in result["issues"]["10"]["labels"]
+	assert "invalid, oversized, or disallowed decision" in (result["stdout"] + result["stderr"])
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert "ai:closed" not in result["issues"]["10"]["labels"]
 
 
 def test_review_blocked_close_and_reissue_requires_replacement_details():

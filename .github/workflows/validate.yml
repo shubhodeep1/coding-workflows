@@ -168,6 +168,7 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
+          persist-credentials: false
       - name: Log checkout ref
         run: |
           set -euo pipefail
@@ -188,7 +189,11 @@ jobs:
           SERVER_HOST="${GITHUB_SERVER_URL#https://}"
           SERVER_HOST="${SERVER_HOST#http://}"
           SERVER_HOST="${SERVER_HOST%/}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+          git remote set-url origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}"
 
       - name: Setup shared runtime
         id: runtime
@@ -216,7 +221,11 @@ jobs:
             SERVER_HOST="${GITHUB_SERVER_URL#https://}"
             SERVER_HOST="${SERVER_HOST#http://}"
             SERVER_HOST="${SERVER_HOST%/}"
-            WF_REMOTE_URL="https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${wf_source}"
+            git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+            export GIT_CONFIG_COUNT=1
+            export GIT_CONFIG_KEY_0=http.extraHeader
+            export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+            WF_REMOTE_URL="https://${SERVER_HOST}/${wf_source}"
 
             helper_stage_root="${RUNNER_TEMP}/codex-validate-helper-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             helper_stage_dir="${helper_stage_root}/src"

@@ -592,7 +592,6 @@ jobs:
           [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
           git remote set-url origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}.git"
           trusted_credential_helper='!f() { if [ "$1" = get ] && [ -n "${GH_TOKEN:-}" ]; then printf "%s\n" "username=x-access-token" "password=${GH_TOKEN}"; fi; }; f'
-          git config credential.helper "${trusted_credential_helper}"
           {
             echo "GIT_CONFIG_COUNT=1"
             echo "GIT_CONFIG_KEY_0=credential.helper"

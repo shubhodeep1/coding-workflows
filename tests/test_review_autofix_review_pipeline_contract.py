@@ -5991,7 +5991,7 @@ def test_reviewer_iteration_scope_prepare_path_preserves_literal_root_level_trai
 	ledger_text = "\n".join([
 		"issue-1\tNEW\t0\tREADME.:3\tCORRECTNESS & LOGIC\t[]",
 		"issue-2\tPERSISTING\t1\tgo.mod.:2\tCORRECTNESS & LOGIC\t[]",
-		"issue-3\tRESURGENT\t0\t.env.:1\tCORRECTNESS & LOGIC\t[]",
+		"issue-3\tRESURGENT\t0\t.gitignore.:1\tCORRECTNESS & LOGIC\t[]",
 	]) + "\n"
 	result = _run_prepare_reviewer_scope_harness(
 		last_run_changed_text="scripts/review_run_reviewers.sh\n",
@@ -6000,7 +6000,7 @@ def test_reviewer_iteration_scope_prepare_path_preserves_literal_root_level_trai
 			"scripts/review_run_reviewers.sh": "scoped shell target\n",
 			"README.": "literal trailing dot\n",
 			"go.mod.": "module example.com/literal\n",
-			".env.": "TOKEN=test\n",
+			".gitignore.": "literal ignore file\n",
 		},
 	)
 
@@ -6009,14 +6009,14 @@ def test_reviewer_iteration_scope_prepare_path_preserves_literal_root_level_trai
 		"scripts/review_run_reviewers.sh",
 		"README.",
 		"go.mod.",
-		".env.",
+		".gitignore.",
 	]
 	assert "- README. [ledger:NEW]" in result["scope_summary"]
 	assert "- go.mod. [ledger:PERSISTING]" in result["scope_summary"]
-	assert "- .env. [ledger:RESURGENT]" in result["scope_summary"]
+	assert "- .gitignore. [ledger:RESURGENT]" in result["scope_summary"]
 	assert "--- FILE: README." in result["scope_context"]
 	assert "--- FILE: go.mod." in result["scope_context"]
-	assert "--- FILE: .env." in result["scope_context"]
+	assert "--- FILE: .gitignore." in result["scope_context"]
 
 
 def test_reviewer_iteration_scope_prepare_path_preserves_hidden_directory_prefixes() -> None:

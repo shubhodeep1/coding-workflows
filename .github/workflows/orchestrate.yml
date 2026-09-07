@@ -82,6 +82,7 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
+          persist-credentials: false
       - name: Configure git auth for memory helper clones
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -91,7 +92,11 @@ jobs:
           SERVER_HOST="${GITHUB_SERVER_URL#https://}"
           SERVER_HOST="${SERVER_HOST#http://}"
           SERVER_HOST="${SERVER_HOST%/}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+          git remote set-url origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -175,6 +180,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Checkout workflow support source fallback for run-start
         if: ${{ steps.checkout_support_source_run_start.outcome == 'failure' }}
         continue-on-error: true
@@ -186,6 +192,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Checkout workflow support source main snapshot for run-start
         if: ${{ env.SCRIPT_REF != 'main' }}
         continue-on-error: true
@@ -197,6 +204,7 @@ jobs:
           path: .codex-workflow-src-main
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Stage workflow memory support files for run-start
         run: |
           set -euo pipefail
@@ -308,6 +316,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Checkout workflow support source fallback
         if: ${{ steps.checkout_support_source.outcome == 'failure' }}
         uses: actions/checkout@v5
@@ -318,6 +327,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Ensure workflow support source checkout
         run: |
           set -euo pipefail
@@ -337,6 +347,7 @@ jobs:
           path: .codex-workflow-src-main
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Stage workflow support files
         run: |
           set -euo pipefail

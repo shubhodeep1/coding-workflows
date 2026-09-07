@@ -55,13 +55,17 @@ edit-tool choice.
 
 Bounds (defensible default; override per caller):
 
-  --max-bytes (default 102400)    Hard UTF-8 limit for the complete rendered
-	                                  block, including headers, wrappers,
-	                                  markers, fallback content, and summaries.
-	                                  At most 256 paths of at most 1024 UTF-8
-	                                  bytes are accepted before filesystem
-	                                  access. Only complete fragments are
-	                                  appended. Zero emits an empty block.
+  --max-bytes (default 102400)    Total bytes across all inlined files
+                                  (~25k tokens at ~4 b/t). A file that
+                                  would push the cumulative size over
+                                  this cap is NOT head-truncated — it
+                                  gets a "(would overflow total budget —
+                                  read with read tool)" marker so the
+                                  model uses its native targeted-read
+                                  flow instead of being misled by a
+                                  truncated head. At most 256 paths of
+                                  at most 1024 UTF-8 bytes are accepted
+                                  before filesystem access.
 
 Designed to be safe on missing inputs: if the plan has no recognised
 section, --paths-file is empty, and --paths is unset, the output is just
@@ -149,6 +153,19 @@ SEMBLE_READ_FALLBACK_MAX_BYTES = 4096
 SEMBLE_MAX_CHUNKS_CAP = 20
 MAX_TARGET_PATHS = 256
 MAX_TARGET_PATH_BYTES = 1024
+
+
+def is_sensitive_target_path(value: str) -> bool:
+	"""Return true for repository paths that may expose credentials or Git metadata."""
+	parts = [part.lower() for part in value.replace("\\", "/").split("/") if part]
+	if ".git" in parts:
+		return True
+	if any(part.startswith(".env") or part in {".netrc", ".npmrc", ".pypirc"} for part in parts):
+		return True
+	return any(
+		parts[index : index + 2] in ([".docker", "config.json"], [".aws", "credentials"])
+		for index in range(max(0, len(parts) - 1))
+	)
 
 
 def _mirror_event(prefix: str, **fields: object) -> None:
@@ -240,6 +257,8 @@ def normalize_path(value: str) -> str | None:
 	if len(value.encode("utf-8")) > MAX_TARGET_PATH_BYTES:
 		return None
 	if not is_probable_path(value):
+		return None
+	if is_sensitive_target_path(value):
 		return None
 	return value
 

@@ -34,6 +34,7 @@ from targeted_file_context import (  # noqa: E402
 	main as targeted_file_context_main,
 	parse_paths_arg,
 	parse_paths_file,
+	is_sensitive_target_path,
 )
 
 
@@ -657,6 +658,34 @@ def test_path_traversal_outside_repo_root_is_silently_dropped() -> None:
 		# good/file.py doesn't exist either, but it's a valid intra-repo
 		# path. No file content from outside the repo should appear.
 		assert "passwd" not in context
+
+
+def test_sensitive_target_paths_are_rejected_case_insensitively() -> None:
+	blocked = [
+		".git/config",
+		"nested/.GIT/config",
+		".env",
+		"config/.env.production",
+		".netrc",
+		".npmrc",
+		".pypirc",
+		".docker/config.json",
+		"nested/.AWS/CREDENTIALS",
+	]
+	for path in blocked:
+		assert is_sensitive_target_path(path)
+		assert targeted_file_context_module.normalize_path(path) is None
+	assert not is_sensitive_target_path("src/environment.py")
+
+
+def test_sensitive_targets_are_omitted_before_filesystem_access() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / ".git").mkdir()
+		(root / ".git" / "config").write_text("credential = secret\n", encoding="utf-8")
+		context = emit_context([".git/config"], root, max_bytes=1024)
+		assert "credential = secret" not in context
+		assert "Omitted 1 path(s)" in context
 
 
 def test_missing_input_emits_safe_empty_block() -> None:

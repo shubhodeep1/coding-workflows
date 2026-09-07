@@ -22,6 +22,7 @@ jobs:
         with:
           token: ${{ secrets.GH_PAT }}
 
+          persist-credentials: false
       - name: Configure git auth for memory helper clones
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -31,7 +32,11 @@ jobs:
           SERVER_HOST="${GITHUB_SERVER_URL#https://}"
           SERVER_HOST="${SERVER_HOST#http://}"
           SERVER_HOST="${SERVER_HOST%/}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+          git remote set-url origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}"
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -56,7 +61,11 @@ jobs:
           SERVER_HOST="${GITHUB_SERVER_URL#https://}"
           SERVER_HOST="${SERVER_HOST#http://}"
           SERVER_HOST="${SERVER_HOST%/}"
-          WF_REMOTE_URL="https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${wf_source}"
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+          WF_REMOTE_URL="https://${SERVER_HOST}/${wf_source}"
 
           support_stage_root="${RUNNER_TEMP}/codex-issue-pr-status-support-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           support_primary_dir="${support_stage_root}/primary"
@@ -558,7 +567,11 @@ jobs:
           SERVER_HOST="${GITHUB_SERVER_URL#https://}"
           SERVER_HOST="${SERVER_HOST#http://}"
           SERVER_HOST="${SERVER_HOST%/}"
-          WF_REMOTE_URL="https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${wf_source}"
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+          WF_REMOTE_URL="https://${SERVER_HOST}/${wf_source}"
 
           support_stage_root="${RUNNER_TEMP}/codex-issue-pr-status-alert-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           support_primary_dir="${support_stage_root}/primary"
@@ -658,7 +671,11 @@ jobs:
           SERVER_HOST="${GITHUB_SERVER_URL#https://}"
           SERVER_HOST="${SERVER_HOST#http://}"
           SERVER_HOST="${SERVER_HOST%/}"
-          WF_REMOTE_URL="https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${wf_source}"
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+          WF_REMOTE_URL="https://${SERVER_HOST}/${wf_source}"
 
           support_stage_root="${RUNNER_TEMP}/codex-issue-pr-status-cleanup-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           support_primary_dir="${support_stage_root}/primary"
