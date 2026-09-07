@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml: lines 2198-2219 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, deepseek_deepseek-v4-pro]\n  PROBLEM: The new `(validation|verification)[- ]only` branch is unanchored and can match the literal substring anywhere in a BLOCKED verdict, including negated validation-only statements.\n  WHY: A negated verdict such as \"BLOCKED: This isn't validation only; the change is real and significant.\" contains no veto obstacle keyword and can be misclassified as a success-noop; severity differs across reviewers, so the highest severity is used.\n- .github/workflows/plan.yml: lines 1534-1539 (the perl `$neg` suppression block) | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The continuation-line suppression pattern `next if /^\\s{2,}\\S/;` requires at least 2 spaces of indentation, so a continuation line indented with exactly 1 space would reset `$neg` to 0.\n  WHY: Subsequent negative-list items would be printed to the files section and scanned as edit targets, re-creating the false-positive failure the fix is meant to eliminate.\n- .github/workflows/plan.yml: the perl one-liner at lines 1525-1536, specifically the `if ($neg) { next if /^\\s*$/; next if /^\\s*(?:[-*+]\\s|\\d+[.)]\\s)/; next if /^\\s{2,}\\S/; $neg = 0; }` block | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The negative-list suppression ends at any non-blank, non-list-item, non-indented-continuation line, so prose in the middle of a \"No changes are expected to:\" section can re-enable scanning.\n  WHY: A prose line mentioning a path via inline backticks can place that path in `FILES_SECTION_FILE`, causing the guard to fail on a path the plan explicitly named as unchanged.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/plan.yml: lines 1534-1539 (the perl `$neg` suppression block) | severity=NIT | confidence=2\n  PROBLEM: The continuation-line suppression pattern `next if /^\\s{2,}\\S/;` requires at least 2 spaces of indentation. A continuation line indented with exactly 1 space (e.g. a list item continuation that happens to use a single-space indent) would not be suppressed and would instead reset `$neg` to 0, causing the remaining negative-list items to be printed and scanned as edit targets.\n  WHY: If a plan author formats a wrapped list item continuation in the negative sublist with a single leading space instead of two, the suppression state is prematurely exited. The subsequent negative-list items (still semantically part of the \"No changes are expected to\" list) would then be printed to the files section and would be scanned by the guard as template-owned edit targets, re-creating the false-positive failure the fix is meant to eliminate.\n- .github/workflows/implement.yml: line 2219 (`BLOCKED_ALREADY_SATISFIED_REGEX` assignment) | severity=NIT | confidence=1\n  PROBLEM: The new regex branch `(validation|verification)[- ]only` lacks word-boundary anchors (`\\<...\\>`) unlike the existing real-obstacle regex.\n  WHY: A BLOCKED verdict containing a compound word like \"prevalidation-only-failure\" could match \"validation-only\" as a substring, incorrectly classifying a real failure as a success-no-op if no real-obstacle term also appears.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/implement.yml: lines 2198-2219 (the `BLOCKED_ALREADY_SATISFIED_REGEX` shell assignment) | severity=MAJOR | confidence=4\n  PROBLEM: The new `(validation|verification)[- ]only` branch is unanchored \u2014 it matches the literal substring anywhere in the BLOCKED verdict. Verdicts that negate the validation-only claim (e.g., \"BLOCKED: This isn't validation only; the change is real and significant.\" or \"BLOCKED: We are not at validation only; code edits are needed.\") contain \"validation only\" as a substring and therefore match the new branch, but they do not contain any of the obstacle keywords (`\\<cannot\\>`, `\\<unavailable\\>`, `\\<denied\\>`, etc.), so the BLOCKED_REAL_OBSTACLE_REGEX veto never fires.\n  WHY: A model that wants to refuse the no-op classification (because real changes are needed) but uses a negation form gets caught by the new branch anyway. The issue is then closed or moved to `ai:closed` via the no-op path, sending a working issue back to a human or prematurely closing an orchestrator-managed phase.\n- .github/workflows/plan.yml: the perl one-liner at lines 1525-1536, specifically the `if ($neg) { next if /^\\s*$/; next if /^\\s*(?:[-*+]\\s|\\d+[.)]\\s)/; next if /^\\s{2,}\\S/; $neg = 0; }` block | severity=NIT | confidence=2\n  PROBLEM: The negative-list suppression ends at any non-blank, non-list-item, non-indented-continuation line.\n  WHY: A prose paragraph in the middle of a \"No changes are expected to:\" section that mentions a path via inline backticks can re-enable scanning, placing that path in `FILES_SECTION_FILE`, causing the guard to fail on a path the plan explicitly named as unchanged.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "a1283561a8fe938e7c35ff89689083ea98f8e24308644e898174feda752fe0b1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34131728599",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34131728599",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260907143839_eda15c205c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34131728599"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-07T14:38:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
