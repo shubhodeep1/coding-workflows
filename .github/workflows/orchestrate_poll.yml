@@ -166,8 +166,8 @@ jobs:
         # Runs on EVERY tick, before the tracking-issue gate below exits early
         # for repos with no active orchestrator project, because the merge
         # train (scripts/review_merge_train.sh) also serializes standalone
-        # ai/issue-* PRs. The event path (cancel_on_pr_close.yml on a merged
-        # ai/issue-* PR) releases queued PRs immediately; this is the
+        # ai/issue-* PRs. The event path (cancel_on_pr_close.yml when an
+        # ai/issue-* PR closes) releases queued PRs immediately; this is the
         # backstop for missed events. Fail-open: never fails the poll.
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}

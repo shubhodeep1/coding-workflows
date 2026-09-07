@@ -11063,6 +11063,11 @@ STALL_EOF
         if [ -z "${_rtr_pr_json}" ] || [ "${_rtr_pr_json}" = "{}" ]; then
           _rtr_pr_json="$(_fetch_pr_json "${pr_num}")"
         fi
+        if _linked_pr_is_merge_queued "${_rtr_pr_json}"; then
+          echo "STALL_SKIP issue=${issue_num} reason=merge_train_queued pr=${pr_num} phase=${phase} action=retrigger_review"
+          STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_merge_train"
+          return 1
+        fi
         head_ref="$(_jq_field "${_rtr_pr_json}" '.head.ref')"
         _rtr_mergeable="$(_jq_field "${_rtr_pr_json}" '.mergeable' 'true|false')"
         _rtr_merge_state="$(_jq_field "${_rtr_pr_json}" '.mergeable_state')"
@@ -12124,6 +12129,7 @@ _fetch_candidate_issue_details_graphql() {
                   __typename
                   ... on PullRequest {
                     number state merged
+                    labels(first: 50) { nodes { name } }
                     mergedAt
                     headRefName
                     headRefOid
@@ -12179,6 +12185,7 @@ _fetch_candidate_issue_details_graphql() {
                       number: .number,
                       state: .state,
                       merged: (.merged // false),
+                      labels: [(.labels.nodes // [])[]?.name],
                       merged_at: (.mergedAt // null),
                       merge_commit_sha: (.mergeCommit.oid // null),
                       head_ref: (.headRefName // null),
@@ -12209,13 +12216,14 @@ _fetch_candidate_issue_details_graphql() {
 # _fetch_linked_pr_status_graphql — Batch-fetch latest-linked-PR state
 # for a list of issue numbers via a single GraphQL query per batch.
 # Lighter than _fetch_candidate_issue_details_graphql (only timeline
-# items, no labels/comments) and used by the orchestrator-managed
+# items and linked-PR labels, no issue labels/comments) and used by the orchestrator-managed
 # stall recovery loop, which already has its own label/state source
 # of truth.
 #
 # Input: JSON array of issue numbers, e.g. "[123, 456]"
 # Output: JSON object keyed by stringified issue number:
-#   { "123": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,"headPushedAt":"ISO8601"|null},
+#   { "123": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,
+#              "labels":[string],"headPushedAt":"ISO8601"|null},
 #     "456": null, ... }
 # `headPushedAt` is the linked PR's head commit pushedDate (coalesced
 # to committedDate when pushedDate is null).  Consumed by
@@ -12264,6 +12272,7 @@ _fetch_linked_pr_status_graphql() {
                   __typename
                   ... on PullRequest {
                     number state merged
+                    labels(first: 50) { nodes { name } }
                     repository { nameWithOwner }
                     commits(last: 1) { nodes { commit { pushedDate committedDate } } }
                   }
@@ -12306,6 +12315,7 @@ _fetch_linked_pr_status_graphql() {
                   number: .number,
                   state: .state,
                   merged: (.merged // false),
+                  labels: [(.labels.nodes // [])[]?.name],
                   headPushedAt: (
                     ((.commits.nodes // [])[0].commit.pushedDate)
                     // ((.commits.nodes // [])[0].commit.committedDate)
@@ -12328,7 +12338,7 @@ _fetch_linked_pr_status_graphql() {
 
 # _single_issue_linked_pr_status_graphql — convenience wrapper around
 # _fetch_linked_pr_status_graphql for cache-miss paths.  Returns the
-# same per-issue JSON entry ({number,state,merged,headPushedAt} or
+# same per-issue JSON entry ({number,state,merged,labels,headPushedAt} or
 # null) while keeping the common path batched.
 _single_issue_linked_pr_status_graphql() {
   local issue_num="$1"
@@ -12340,6 +12350,22 @@ _single_issue_linked_pr_status_graphql() {
   local _single_resp
   _single_resp="$(_fetch_linked_pr_status_graphql "[$issue_num]")"
   printf '%s' "${_single_resp}" | jq -c --arg n "${issue_num}" '.[$n] // null' 2>/dev/null || echo "null"
+}
+
+# Accept both the batched GraphQL label shape ([string]) and a full REST PR
+# payload ([{name:string}]). Missing or malformed labels fail open.
+_linked_pr_is_merge_queued()
+{
+  local linked_json="$1"
+  [ -n "${linked_json}" ] && [ "${linked_json}" != "null" ] && [ "${linked_json}" != "{}" ] || return 1
+  printf '%s' "${linked_json}" | jq -e '
+    [(.labels // [])[]?
+      | if type == "string" then .
+        elif type == "object" then (.name // empty)
+        else empty
+        end]
+    | index("ai:merge-queued") != null
+  ' >/dev/null 2>&1
 }
 
 # _pr_json_closes_issue — conservative closing-keyword check used only
@@ -13066,6 +13092,25 @@ PY
       # falling back to the legacy timeline/body heuristics.
       _std_linked_json="$(_single_issue_linked_pr_status_graphql "${issue_num}")"
     fi
+    if [ "${phase}" = "ai:done" ] && { [ -z "${_std_linked_json}" ] || [ "${_std_linked_json}" = "null" ] || [ "${_std_linked_json}" = "{}" ]; }; then
+      # Batch + single-query miss: reuse the established implementation-PR
+      # resolver before any stall judge, conflict dispatch, or empty commit.
+      if _resolve_issue_implementation_pr "${issue_num}"; then
+        _std_linked_json="$(printf '%s' "${STALL_IMPL_PR_JSON}" | jq -c '{
+          number: (.number // null), state: (.state // null), merged: (.merged // false),
+          labels: [(.labels // [])[]? | if type == "object" then (.name // empty) else . end],
+          head_ref: (.head.ref // null), head_sha: (.head.sha // null),
+          mergeable: (.mergeable // null), merge_state_status: (.mergeable_state // null)
+        }' 2>/dev/null || echo "null")"
+      fi
+    fi
+    if [ "${phase}" = "ai:done" ] && _linked_pr_is_merge_queued "${_std_linked_json}"; then
+      echo "STALL_SKIP issue=${issue_num} reason=merge_train_queued pr=$(printf '%s' "${_std_linked_json}" | jq -r '.number // "unknown"') phase=${phase} action=${action}"
+      if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+      fi
+      continue
+    fi
     if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
       echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}' and tagging ai:merged."
       _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
@@ -13224,6 +13269,7 @@ PY
               _std_conflict_linked="$(printf '%s' "${_std_conflict_pr_json_try}" | jq -c '{
                 number: (.number // null),
                 state: (.state // null),
+                labels: [(.labels // [])[]? | if type == "object" then (.name // empty) else . end],
                 head_ref: (.head.ref // null),
                 head_sha: (.head.sha // null),
                 mergeable: (if .mergeable == null then null else (.mergeable | tostring) end),
@@ -13250,6 +13296,14 @@ PY
             fi
           done
         fi
+      fi
+
+      if _linked_pr_is_merge_queued "${_std_conflict_linked}"; then
+        echo "STALL_SKIP issue=${issue_num} reason=merge_train_queued pr=$(printf '%s' "${_std_conflict_linked}" | jq -r '.number // "unknown"') phase=${phase} action=${action}"
+        if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+          write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+        fi
+        continue
       fi
 
       if _check_open_pr_conflict_guard "${issue_num}" "${_std_conflict_linked}"; then
@@ -14058,6 +14112,17 @@ recover_stalled_issue() {
   local _fresh_lpr_entry="null"
   if [ -n "${STALL_MANAGED_LINKED_PR_CACHE:-}" ]; then
     _fresh_lpr_entry="$(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" | jq -c --arg n "${issue_num}" '.[$n] // null' 2>/dev/null || echo "null")"
+  fi
+  if [ "${phase}" = "ai:done" ] && { [ -z "${_fresh_lpr_entry}" ] || [ "${_fresh_lpr_entry}" = "null" ] || [ "${_fresh_lpr_entry}" = "{}" ]; }; then
+    # Fail-open batch miss: resolve the implementation PR once before a
+    # queued PR can enter the stall judge or recovery executor.
+    if _resolve_issue_implementation_pr "${issue_num}"; then
+      _fresh_lpr_entry="${STALL_IMPL_PR_JSON}"
+    fi
+  fi
+  if [ "${phase}" = "ai:done" ] && _linked_pr_is_merge_queued "${_fresh_lpr_entry}"; then
+    echo "STALL_SKIP issue=${issue_num} reason=merge_train_queued pr=$(printf '%s' "${_fresh_lpr_entry}" | jq -r '.number // "unknown"') phase=${phase} action=${action}"
+    return 1  # Intentional train wait; do not consume stall budget or alert.
   fi
   if _check_merged_pr_guard "${issue_num}" "${_fresh_lpr_entry}"; then
     echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action}"
@@ -19856,6 +19921,10 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	S_HEAD_REF="$(echo "${S_PR_JSON}" | jq -r '.head.ref // ""')"
 	if [ -z "${S_HEAD_REF}" ] || [ "${S_HEAD_REF}" = "null" ]; then
 		echo "::warning::Standalone PR #${S_PR} has unavailable head ref from API. Skipping conflict dispatch path."
+		continue
+	fi
+	if _linked_pr_is_merge_queued "${S_PR_JSON}"; then
+		echo "  PR #${S_PR} is ai:merge-queued (merge train); skipping standalone conflict recovery until released."
 		continue
 	fi
 

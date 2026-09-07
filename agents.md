@@ -38,7 +38,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `MERGE_TRAIN_ENABLED`) queues an `ai/issue-*` PR behind older open
    `ai/issue-*` PRs on the same base that edit the same files (label
    `ai:merge-queued`; released by `cancel_on_pr_close.yml` on close and by
-   `orchestrate_poll.yml` every tick), and the merge-topology gate hands a
+   `orchestrate_poll.yml` every tick; managed/standalone conflict and stall
+   recovery treat the label as an intentional wait), and the merge-topology gate hands a
    content conflict to the resolver tail *before* the reviewer/editor spend
    (`PRE_REVIEW_CONFLICT_RESOLVE_ENABLED`, sets `AUTOFIX_PRE_REVIEW_RESOLVE`).
 8. **conflict resolver** (`prompts/conflict-resolver.txt`,

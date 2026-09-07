@@ -3178,7 +3178,7 @@ jobs:
         # labelled ai:merge-queued and this run soft-exits (via the existing
         # AUTOFIX_STALE_BASE_SKIP path) instead of spending reviewers, editor
         # and resolver on a head that the older PR's merge will conflict
-        # again. cancel_on_pr_close.yml (on merge) and orchestrate_poll.yml
+        # again. cancel_on_pr_close.yml (on close) and orchestrate_poll.yml
         # (every tick) release the queue. Fail-open: any API failure or a
         # missing script continues to the reviewer path. MERGE_TRAIN_ENABLED
         # is evaluated by the script (true/1/yes/on, case-insensitive), not
