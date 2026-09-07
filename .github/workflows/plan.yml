@@ -1524,9 +1524,9 @@ jobs:
           # A standalone lead-in line that opens with a negation AND names
           # a change-ish word starts the suppressed region; it runs through
           # the blank lines, list items, and wrapped continuation lines
-          # that belong to that list, and any other non-blank line ends
-          # it so a later positive lead-in ("Files to change:") resumes
-          # scanning.  A path mentioned positively first and negated only
+          # that belong to that list.  A later "Files ... change" lead-in
+          # ends suppression regardless of indentation; otherwise the first
+          # unindented non-blank line ends it.  A path mentioned positively first and negated only
           # later in the same line still counts as a target, matching the
           # conservative rejections below.  A bullet-prefixed negative is
           # scanned normally so it cannot hide positive sibling bullets.
@@ -1538,6 +1538,7 @@ jobs:
             next unless $in;
             if (/^\s*(?:\*\*|__)?\s*(?:no|not|none|nothing|unchanged)\b/i
                 && /(?:chang|modif|edit|touch|affect|updat)/i) { $neg = 1; next; }
+            if ($neg && /^\s*(?:\*\*|__)?\s*Files\b[^\n]*\bchang(?:e|ed|es|ing)\b/i) { $neg = 0; }
             if ($neg) {
               next if /^\s*$/;
               next if /^\s*(?:[-*+]\s|\d+[.)]\s)/;

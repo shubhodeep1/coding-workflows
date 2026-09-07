@@ -339,6 +339,21 @@ def test_positive_lead_in_after_a_negative_list_resumes_scanning() -> None:
 	assert "scripts/render_prompt.sh" in output
 
 
+def test_indented_positive_lead_in_after_negative_list_resumes_scanning() -> None:
+	"""An indented positive lead-in must not look like negative-list prose."""
+	plan_text = (
+		"## Files likely to change\n\n"
+		"No changes are expected to:\n\n"
+		"- `scripts/run_validation_repo_checks.sh`\n\n"
+		"  Files to change:\n\n"
+		"  - `scripts/render_prompt.sh`\n\n"
+		"## Decisions\n\nNone.\n"
+	)
+	returncode, output = _run_guard(plan_text, FETCHED_HELPERS)
+	assert returncode == 1, output
+	assert "scripts/render_prompt.sh" in output
+
+
 def test_template_path_negated_only_after_the_path_is_still_rejected() -> None:
 	"""Conservative direction: the negation must lead the line to suppress it."""
 	plan_text = (
