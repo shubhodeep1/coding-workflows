@@ -1899,27 +1899,32 @@ __EDIT_DISCIPLINE__
             : # self-repo or unknown — keep files; consumer-repo-only cleanup
             ;;
           *)
-            rm -f ./pre_assembled_static.txt
-            # Consumer repos may track their own copy of these root files:
-            # CLAUDE.md §22.C / §24.F require a repo-owned agents.md carrying
-            # DigitalOcean / Cloudflare resource IDs. The staged workflow copies
-            # live out of tree (SUPPORT_ROOT_DIR), so a tracked root file here is
-            # the consumer's own content, never a workflow artifact. Removing it
-            # unconditionally deleted binance-blessings' agents.md in an
-            # [ai-merge-resolve] commit (PR #255, b974f8b) and spawned fix-up
-            # issue #268. Only untracked copies are artifacts to clean.
-            for _root_artifact in unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md; do
-              if git ls-files --error-unmatch -- "${_root_artifact}" >/dev/null 2>&1; then
-                echo "ROOT_ARTIFACT_CLEANUP_KEPT_TRACKED path=${_root_artifact} reason=tracked_in_consumer_repo"
+            # Never delete a path the consumer repo actually TRACKS.
+            # The staging pass below runs `git add -u`, which records a
+            # working-tree deletion as a real deletion in the commit and
+            # silently drops a repo-owned file.  A consumer repo may own a
+            # root-level `agents.md` (CLAUDE.md §22.C / §24.F record
+            # DigitalOcean and Cloudflare resource IDs there), which collides
+            # with the workflow-staged artifact of the same name.  Same bug
+            # class as PRs #917/#931 and as the binance-blessings PR #255
+            # incident fixed in scripts/review_conflict_resolve.sh.
+            # Mirrors the guard in scripts/review_commit_changes.sh.
+            for _rb_cleanup_artifact in \
+              pre_assembled_static.txt unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md \
+              scripts/git_ref_health_check.sh scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/codex_model_catalog.json \
+              scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py \
+              scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh \
+              ai-memory; do
+              if git ls-files --error-unmatch -- "${_rb_cleanup_artifact}" >/dev/null 2>&1; then
+                echo "Preserving repo-tracked path during artifact cleanup: ${_rb_cleanup_artifact}"
+                if [ "${_rb_cleanup_artifact}" = "pre_assembled_static.txt" ]; then
+                  git restore --source=HEAD --worktree -- "${_rb_cleanup_artifact}"
+                fi
                 continue
               fi
-              rm -f "${_root_artifact}"
+              rm -rf -- "${_rb_cleanup_artifact}"
             done
-            unset _root_artifact
-            rm -f scripts/git_ref_health_check.sh scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/codex_model_catalog.json
-            rm -f scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py
-            rm -f scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh
-            rm -rf ai-memory
+            unset _rb_cleanup_artifact
             ;;
         esac
         unset _rb_origin_url

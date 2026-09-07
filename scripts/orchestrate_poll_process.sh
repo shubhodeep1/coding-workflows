@@ -17506,28 +17506,37 @@ sys.exit(1)
                   : # self-repo or unknown — keep files; consumer-repo-only cleanup
                   ;;
                 *)
-                  rm -f ./pre_assembled_static.txt
-                  # Consumer repos may track their own copy of these root files:
-                  # CLAUDE.md §22.C / §24.F require a repo-owned agents.md carrying
-                  # DigitalOcean / Cloudflare resource IDs. The staged workflow copies
-                  # live out of tree (SUPPORT_ROOT_DIR), so a tracked root file here is
-                  # the consumer's own content, never a workflow artifact. Removing it
-                  # unconditionally deleted binance-blessings' agents.md in an
-                  # [ai-merge-resolve] commit (PR #255, b974f8b) and spawned fix-up
-                  # issue #268. Only untracked copies are artifacts to clean.
-                  for _root_artifact in unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md; do
-                    if git ls-files --error-unmatch -- "${_root_artifact}" >/dev/null 2>&1; then
-                      echo "ROOT_ARTIFACT_CLEANUP_KEPT_TRACKED path=${_root_artifact} reason=tracked_in_consumer_repo"
+                  # Never delete a path the consumer repo actually TRACKS.
+                  # The staging pass below runs `git add -A`, which records a
+                  # working-tree deletion as a real deletion in the commit and
+                  # silently drops a repo-owned file.  A consumer repo may own
+                  # a root-level `agents.md` (CLAUDE.md §22.C / §24.F record
+                  # DigitalOcean and Cloudflare resource IDs there), which
+                  # collides with the workflow-staged artifact of the same
+                  # name.  The git-remote-URL gate above stops this block from
+                  # running against the coding-workflows checkout itself
+                  # (PRs #917/#931); this per-path guard is the second layer,
+                  # for consumer repos that legitimately track one of these
+                  # names.  Mirrors scripts/review_commit_changes.sh.
+                  for _orch_cleanup_artifact in \
+                    pre_assembled_static.txt unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md \
+                    scripts/git_ref_health_check.sh scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
+                    scripts/codex_model_catalog.json \
+                    .github/prompts .github/scripts \
+                    .github/ai/orchestrate_schema.v1.json; do
+                    if git ls-files --error-unmatch -- "${_orch_cleanup_artifact}" >/dev/null 2>&1; then
+                      echo "Preserving repo-tracked path during artifact cleanup: ${_orch_cleanup_artifact}"
+                      case "${_orch_cleanup_artifact}" in
+                        scripts/git_ref_health_check.sh|scripts/tg_helpers.sh|scripts/codex_model_catalog.json|.github/ai/orchestrate_schema.v1.json)
+                          # Bootstrap overwrites these paths before the judge runs.
+                          git restore --source=HEAD --worktree -- "${_orch_cleanup_artifact}"
+                          ;;
+                      esac
                       continue
                     fi
-                    rm -f "${_root_artifact}"
+                    rm -rf -- "${_orch_cleanup_artifact}"
                   done
-                  unset _root_artifact
-                  rm -f scripts/git_ref_health_check.sh \
-                    scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
-                    scripts/codex_model_catalog.json
-                  rm -rf .github/prompts .github/scripts
-                  rm -f .github/ai/orchestrate_schema.v1.json
+                  unset _orch_cleanup_artifact
                   ;;
               esac
               unset _orig_origin_url

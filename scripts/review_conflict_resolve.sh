@@ -2249,24 +2249,31 @@ done
 # scripts/label_helpers.sh.  prompts/ is excluded from git add via
 # ':!prompts' patterns; fetched scripts are excluded via the
 # bootstrap-generated scripts/.gitignore.
+# A path the consumer repo actually TRACKS is never an artifact: the
+# staging pass below runs `git add -u`, which records a working-tree
+# deletion in the [ai-merge-resolve] commit and silently drops a
+# repo-owned file.  Consumer repos legitimately own a root-level
+# `agents.md` (CLAUDE.md §22.C / §24.F record DigitalOcean and
+# Cloudflare resource IDs there), and that name collides with the
+# workflow-staged artifact of the same name.  Observed on
+# shubhodeep1/binance-blessings PR #255: merge-resolve commit b974f8b
+# deleted the tracked `agents.md` carrying the production App Platform
+# ID even though BOTH merge parents still had it, and the next review
+# round then dead-ended in a false EDITOR_CHANGES_LOST retry loop
+# (run 34099352704).  Same bug class as PRs #917/#931.
+# Mirrors the guard already used in scripts/review_commit_changes.sh.
 if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-  rm -f ./pre_assembled_static.txt
-  # Consumer repos may track their own copy of these root files:
-  # CLAUDE.md §22.C / §24.F require a repo-owned agents.md carrying
-  # DigitalOcean / Cloudflare resource IDs. The staged workflow copies
-  # live out of tree (SUPPORT_ROOT_DIR), so a tracked root file here is
-  # the consumer's own content, never a workflow artifact. Removing it
-  # unconditionally deleted binance-blessings' agents.md in an
-  # [ai-merge-resolve] commit (PR #255, b974f8b) and spawned fix-up
-  # issue #268. Only untracked copies are artifacts to clean.
-  for _root_artifact in unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md; do
-    if git ls-files --error-unmatch -- "${_root_artifact}" >/dev/null 2>&1; then
-      echo "ROOT_ARTIFACT_CLEANUP_KEPT_TRACKED path=${_root_artifact} reason=tracked_in_consumer_repo"
+  for _rs_cleanup_artifact in pre_assembled_static.txt unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md; do
+    if git ls-files --error-unmatch -- "${_rs_cleanup_artifact}" >/dev/null 2>&1; then
+      echo "Preserving repo-tracked path during artifact cleanup: ${_rs_cleanup_artifact}"
+      if [ "${_rs_cleanup_artifact}" = "pre_assembled_static.txt" ]; then
+        git restore --source=HEAD --worktree -- "${_rs_cleanup_artifact}"
+      fi
       continue
     fi
-    rm -f "${_root_artifact}"
+    rm -f -- "${_rs_cleanup_artifact}"
   done
-  unset _root_artifact
+  unset _rs_cleanup_artifact
 fi
 
 if [ -n "$(git status --porcelain)" ]; then

@@ -45,8 +45,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `integration-sync-conflict-resolver.txt`) — merge-conflict resolution
    inside autofix. In consumer repos the resolver, the review-blocked judge
    and the poller remove workflow-generated root files before committing but
-   keep any root file HEAD tracks (a consumer-owned `agents.md`), logging
-   `ROOT_ARTIFACT_CLEANUP_KEPT_TRACKED`.
+   keep any path HEAD tracks (a consumer-owned `agents.md`), logging
+   `Preserving repo-tracked path during artifact cleanup: <path>`.
 9. **orchestrate** (`orchestrate.yml`, `orchestrate_poll.yml`) — issue
    decomposition + judge polling, including the default-on, current-head
    project security-pass gate before validation/finalization.

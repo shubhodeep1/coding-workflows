@@ -226,10 +226,15 @@ fi
 if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
   for _artifact in pre_assembled_static.txt unattended_system_instructions.md ai_pipeline.md agents.md; do
     if git ls-files --error-unmatch -- "${_artifact}" >/dev/null 2>&1; then
+      echo "Preserving repo-tracked path during artifact cleanup: ${_artifact}"
+      if [ "${_artifact}" = "pre_assembled_static.txt" ]; then
+        git restore --source=HEAD --worktree -- "${_artifact}"
+      fi
       continue
     fi
     rm -f -- "${_artifact}"
   done
+  unset _artifact
 fi
 
 git config user.name "codex-bot"
