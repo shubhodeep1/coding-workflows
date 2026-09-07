@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.92,
+  "details": "Many merged changes modify this script together with tests/test_orchestrate_poll_process.py, even when the feature concerns labels, merges, retries, or failure history. Changes to orchestration behavior should update the script\u2019s regression tests and verify adjacent workflow contracts.",
+  "fingerprint": "3a0b54215bb4ffc867a01b0c9fb20c0d87140de47815473734d4dd7ac8a87f72",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34085426557",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34085426557",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3987",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3996",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3998",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4000",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4005",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3989",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3997",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3999",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4001",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4006"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260907050756_11fecc7846",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Security and review behavior in the orchestrator is centralized around scripts/orchestrate_poll_process.sh and its contract tests.",
+  "timestamps": {
+    "created_at": "2026-09-07T05:07:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
