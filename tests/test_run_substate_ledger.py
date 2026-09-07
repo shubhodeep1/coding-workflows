@@ -396,6 +396,63 @@ def test_large_token_log_is_read_from_the_tail_and_stays_fast() -> None:
 		assert elapsed < 30, elapsed
 
 
+def test_token_log_tail_keeps_a_complete_first_line_when_the_seek_is_line_aligned() -> None:
+	"""A window that starts exactly after a newline must keep its first line.
+
+	Copilot review on PR #4028 (pullrequestreview-5128705403): the tail read
+	always dropped everything up to the first newline in the window, so when
+	the seek point landed exactly on a line boundary it discarded a complete
+	line.  If that line was the only usage line, token metadata was silently
+	lost.  The read now looks one byte behind the window and skips the drop
+	when that byte is a newline.
+	"""
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		window = 4096
+		usage_line = (
+			"INFO: openrouter usage phase=validate call=1 model=openai/gpt-5.4 "
+			"prompt_tokens=8 completion_tokens=2 total_tokens=10\n"
+		)
+		# The usage line is the FIRST line of the window and the rest of the
+		# window carries no token signal, so dropping it loses the tokens.
+		trailing_filler = "x" * (window - len(usage_line) - 1) + "\n"
+		assert len(usage_line + trailing_filler) == window
+		leading_junk = "junk line\n" * 100          # ends with a newline
+
+		aligned_log = tmp_path / "aligned.log"
+		aligned_log.write_text(leading_junk + usage_line + trailing_filler, encoding="utf-8")
+		assert aligned_log.stat().st_size == len(leading_junk) + window
+
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Succeeded",
+			"--attempt",
+			"1",
+			"--tokens-log-file",
+			str(aligned_log),
+			extra_env={"LEDGER_TOKENS_LOG_MAX_BYTES": str(window)},
+		)
+		assert events[-1]["metadata"]["tokens"] == {"input": 8, "output": 2, "total": 10}
+
+		# Control: shift the boundary one byte into the junk so the window
+		# starts mid-line; the partial line is dropped and the usage line,
+		# now second in the window, is still found.
+		shifted_log = tmp_path / "shifted.log"
+		shifted_log.write_text(leading_junk + "jj" + "\n" + usage_line + trailing_filler[:-3] + "\n", encoding="utf-8")
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Succeeded",
+			"--attempt",
+			"2",
+			"--tokens-log-file",
+			str(shifted_log),
+			extra_env={"LEDGER_TOKENS_LOG_MAX_BYTES": str(window)},
+		)
+		assert events[-1]["metadata"]["tokens"] == {"input": 8, "output": 2, "total": 10}
+
+
 def test_token_log_tail_bound_is_configurable_and_can_be_disabled() -> None:
 	with tempfile.TemporaryDirectory() as tmp_dir:
 		tmp_path = Path(tmp_dir)

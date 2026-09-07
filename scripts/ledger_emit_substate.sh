@@ -195,15 +195,21 @@ def read_tokens_log_tail(tokens_log_path, tail_max_bytes):
 	tokens_log_size = tokens_log_path.stat().st_size
 	if tokens_log_size <= tail_max_bytes:
 		return tokens_log_path.read_text(encoding="utf-8", errors="replace")
+	# Read one byte ahead of the window so a seek that lands exactly after a
+	# newline is recognised as already line-aligned.  Without it the first
+	# line of the window, complete though it is, would be dropped below.
+	# tokens_log_size > tail_max_bytes here, so the offset is never negative.
 	with tokens_log_path.open("rb") as tokens_log_handle:
-		tokens_log_handle.seek(tokens_log_size - tail_max_bytes)
+		tokens_log_handle.seek(tokens_log_size - tail_max_bytes - 1)
+		byte_before_window = tokens_log_handle.read(1)
 		tail_chunk = tokens_log_handle.read()
-	# Drop the partial first line, and with it any split UTF-8 sequence at
-	# the seek point.  When the window holds no newline at all, keep it whole
-	# rather than discarding every candidate match in it.
-	first_newline_at = tail_chunk.find(b"\n")
-	if first_newline_at != -1:
-		tail_chunk = tail_chunk[first_newline_at + 1:]
+	if byte_before_window != b"\n":
+		# Drop the partial first line, and with it any split UTF-8 sequence
+		# at the seek point.  When the window holds no newline at all, keep
+		# it whole rather than discarding every candidate match in it.
+		first_newline_at = tail_chunk.find(b"\n")
+		if first_newline_at != -1:
+			tail_chunk = tail_chunk[first_newline_at + 1:]
 	return tail_chunk.decode("utf-8", errors="replace")
 
 
