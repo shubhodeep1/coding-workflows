@@ -3503,6 +3503,8 @@ def test_security_pass_merged_fix_falls_back_to_rest_when_graphql_is_unavailable
 
 def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
 	prior_alert_marker = "<!-- tg_cleanup:501,502 -->"
+	remaining_security_finding = _security_pass_test_finding()
+	remaining_security_finding["exploit_scenario"] = "Notify @security-team about issue #123."
 	state = _base_state(status="security-pass")
 	state.update(
 		{
@@ -3518,7 +3520,7 @@ def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
-		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		security_audit_payload=_security_audit_findings_payload([remaining_security_finding]),
 		capture_telegram_calls=True,
 		tracking_comments=[prior_alert_marker],
 		issue_labels={10: ["ai:merged"]},
@@ -3552,6 +3554,9 @@ def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
 	assert "### Remaining blocking findings (integration head `" in exhaustion_comment
 	assert "| ID | Category | Severity | Confidence | Location | Exploit scenario | Recommendation |" in exhaustion_comment
 	assert "| SEC-TEST-1 | A01: Broken Access Control | high | 9 | scripts/example.py:1 |" in exhaustion_comment
+	assert "Notify @\u200bsecurity-team about issue #\u200b123." in exhaustion_comment
+	assert "@security-team" not in exhaustion_comment
+	assert "#123" not in exhaustion_comment
 	assert "Enforce authorisation before the state mutation." in exhaustion_comment
 	assert any(
 		notification["issue"] == "192"
