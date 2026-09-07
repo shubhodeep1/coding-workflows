@@ -622,6 +622,7 @@ def test_close_and_reissue_refuses_head_changed_after_approval() -> None:
 
 	assert state.get("issue_create_args", []) == []
 	assert state.get("pr_close_args", []) == []
+	assert "judge_handled=true" in state["_github_output"]
 	assert "approved_close_precondition_failed" in state["_github_output"]
 	assert "head changed after the decision" in state["_stdout"]
 
@@ -636,6 +637,7 @@ def test_close_and_reissue_rechecks_head_after_replacement_creation() -> None:
 
 	assert len(state.get("issue_create_args", [])) == 1
 	assert state.get("pr_close_args", []) == []
+	assert "judge_handled=true" in state["_github_output"]
 	assert "approved_close_precondition_failed" in state["_github_output"]
 	assert "head changed while the replacement issue was being created" in state["_stdout"]
 

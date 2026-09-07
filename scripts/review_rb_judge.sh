@@ -2396,11 +2396,13 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
     RB_CLOSE_PREFLIGHT_HEAD_SHA="$(printf '%s' "${RB_CLOSE_PREFLIGHT_JSON}" | jq -r '.head.sha // empty' 2>/dev/null || true)"
     if ! [[ "${RB_CLOSE_PREFLIGHT_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] || [ "${RB_CLOSE_PREFLIGHT_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]; then
       echo "::warning::Approved close_and_reissue refused because PR #${PR_NUMBER} head changed after the decision or could not be resolved."
+      echo "judge_handled=true" >> "$GITHUB_OUTPUT"
       echo "judge_action=skip" >> "$GITHUB_OUTPUT"
       echo "judge_skip_reason=approved_close_precondition_failed" >> "$GITHUB_OUTPUT"
       exit 0
     elif [ "${RB_CLOSE_PREFLIGHT_STATE}" != "open" ]; then
       echo "::warning::Approved close_and_reissue refused because PR #${PR_NUMBER} is no longer open."
+      echo "judge_handled=true" >> "$GITHUB_OUTPUT"
       echo "judge_action=skip" >> "$GITHUB_OUTPUT"
       echo "judge_skip_reason=approved_close_precondition_failed" >> "$GITHUB_OUTPUT"
       exit 0
@@ -2564,10 +2566,12 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
       RB_CLOSE_FINAL_HEAD_SHA="$(printf '%s' "${RB_CLOSE_FINAL_JSON}" | jq -r '.head.sha // empty' 2>/dev/null || true)"
       if ! [[ "${RB_CLOSE_FINAL_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] || [ "${RB_CLOSE_FINAL_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]; then
         echo "::warning::Approved close_and_reissue refused because PR #${PR_NUMBER} head changed while the replacement issue was being created."
+        echo "judge_handled=true" >> "$GITHUB_OUTPUT"
         echo "judge_action=skip" >> "$GITHUB_OUTPUT"
         echo "judge_skip_reason=approved_close_precondition_failed" >> "$GITHUB_OUTPUT"
       elif [ "${RB_CLOSE_FINAL_STATE}" != "open" ]; then
         echo "::warning::Approved close_and_reissue refused because PR #${PR_NUMBER} is no longer open."
+        echo "judge_handled=true" >> "$GITHUB_OUTPUT"
         echo "judge_action=skip" >> "$GITHUB_OUTPUT"
         echo "judge_skip_reason=approved_close_precondition_failed" >> "$GITHUB_OUTPUT"
       elif gh_retry gh pr close "${PR_NUMBER}" --repo "${REPOSITORY}" \
