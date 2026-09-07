@@ -17515,6 +17515,12 @@ sys.exit(1)
                     .github/ai/orchestrate_schema.v1.json; do
                     if git ls-files --error-unmatch -- "${_orch_cleanup_artifact}" >/dev/null 2>&1; then
                       echo "Preserving repo-tracked path during artifact cleanup: ${_orch_cleanup_artifact}"
+                      case "${_orch_cleanup_artifact}" in
+                        scripts/git_ref_health_check.sh|scripts/tg_helpers.sh|scripts/codex_model_catalog.json|.github/ai/orchestrate_schema.v1.json)
+                          # Bootstrap overwrites these paths before the judge runs.
+                          git restore --source=HEAD --worktree -- "${_orch_cleanup_artifact}"
+                          ;;
+                      esac
                       continue
                     fi
                     rm -rf -- "${_orch_cleanup_artifact}"

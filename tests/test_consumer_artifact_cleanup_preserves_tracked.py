@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Consumer-repo artifact cleanup must never delete a repo-TRACKED path.
 
-Three scripts clean workflow-staged artifacts out of a consumer repo's
-working tree before committing: the merge-conflict resolver, the
-review-blocked judge, and the orchestrator poller. Each cleanup is followed
-by a `git add -u` / `git add -A` staging pass, so a working-tree deletion
-performed by the cleanup is recorded in the commit as a real deletion.
+Five sites clean workflow-staged artifacts out of a consumer repo's working
+tree before committing: the merge-conflict resolver and its prepare step,
+the review-blocked judge, the orchestrator poller, and the implement commit
+helper. Each cleanup feeds a later `git add -u` / `git add -A` staging pass,
+so a working-tree deletion is recorded in the commit as a real deletion.
 
 The artifact names are not private to the pipeline. A consumer repo
 legitimately owns a root-level `agents.md` — CLAUDE.md §22.C and §24.F
@@ -28,6 +28,7 @@ untracked artifact of the same name is still removed.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import tempfile
@@ -36,11 +37,17 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# (script path, cleanup loop variable) for each consumer-repo cleanup block.
+# (script path, cleanup loop variable, tracked path, untracked path).
 CLEANUP_SITES = [
-	("scripts/review_conflict_resolve.sh", "_rs_cleanup_artifact"),
-	("scripts/review_rb_judge.sh", "_rb_cleanup_artifact"),
-	("scripts/orchestrate_poll_process.sh", "_orch_cleanup_artifact"),
+	("scripts/review_conflict_resolve.sh", "_rs_cleanup_artifact", "agents.md", "pre_assembled_static.txt"),
+	("scripts/review_rb_judge.sh", "_rb_cleanup_artifact", "agents.md", "pre_assembled_static.txt"),
+	("scripts/orchestrate_poll_process.sh", "_orch_cleanup_artifact", "agents.md", "pre_assembled_static.txt"),
+	(
+		"scripts/review_conflict_prepare.sh",
+		"_conflict_prepare_cleanup_artifact",
+		"scripts/ai_memory.py",
+		"scripts/ai_memory_lib.py",
+	),
 ]
 
 # Artifact name that collides with a documented consumer-owned path.
@@ -70,46 +77,60 @@ def _git(cwd: Path, *args: str) -> str:
 		cwd=cwd,
 		check=True,
 		capture_output=True,
+		env=_temp_repo_env(),
 		text=True,
 	).stdout
 
 
-def _make_consumer_repo(tmp: Path) -> Path:
-	"""A minimal consumer repo that TRACKS agents.md, like binance-blessings."""
+def _temp_repo_env() -> dict[str, str]:
+	"""Return an environment that lets Git discover the throwaway repo."""
+	temp_repo_env = os.environ.copy()
+	for git_env_name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "BASH_ENV", "ENV"):
+		temp_repo_env.pop(git_env_name, None)
+	return temp_repo_env
+
+
+def _make_consumer_repo(tmp: Path, tracked_artifact: str = COLLIDING_ARTIFACT) -> Path:
+	"""A minimal consumer repo that owns one tracked artifact path."""
 	_git(tmp, "init", "-q", "-b", "main")
 	_git(tmp, "config", "user.email", "test@example.com")
 	_git(tmp, "config", "user.name", "test")
-	(tmp / COLLIDING_ARTIFACT).write_text(
+	tracked_path = tmp / tracked_artifact
+	tracked_path.parent.mkdir(parents=True, exist_ok=True)
+	tracked_path.write_text(
 		"# agents.md\n\n## DigitalOcean resources\n\n| binance-blessings | app | id |\n",
 		encoding="utf-8",
 	)
-	_git(tmp, "add", COLLIDING_ARTIFACT)
-	_git(tmp, "commit", "-qm", "consumer repo owns agents.md")
+	_git(tmp, "add", tracked_artifact)
+	_git(tmp, "commit", "-qm", f"consumer repo owns {tracked_artifact}")
 	return tmp
 
 
 def test_cleanup_preserves_tracked_agents_md() -> None:
 	"""The tracked agents.md survives cleanup and no deletion gets staged."""
-	for script_rel, loop_var in CLEANUP_SITES:
+	for script_rel, loop_var, tracked_artifact, untracked_artifact in CLEANUP_SITES:
 		block = _extract_cleanup_block(script_rel, loop_var)
 		with tempfile.TemporaryDirectory(prefix="artifact-cleanup-") as raw_tmp:
-			repo = _make_consumer_repo(Path(raw_tmp))
+			repo = _make_consumer_repo(Path(raw_tmp), tracked_artifact)
 			# The workflow also stages an untracked artifact at the repo root.
-			(repo / UNTRACKED_ARTIFACT).write_text("staged artifact\n", encoding="utf-8")
+			untracked_path = repo / untracked_artifact
+			untracked_path.parent.mkdir(parents=True, exist_ok=True)
+			untracked_path.write_text("staged artifact\n", encoding="utf-8")
 
 			subprocess.run(
 				["bash", "-euo", "pipefail", "-c", block],
 				cwd=repo,
 				check=True,
 				capture_output=True,
+				env=_temp_repo_env(),
 				text=True,
 			)
 
-			assert (repo / COLLIDING_ARTIFACT).exists(), (
-				f"{script_rel}: cleanup deleted the repo-tracked {COLLIDING_ARTIFACT}"
+			assert (repo / tracked_artifact).exists(), (
+				f"{script_rel}: cleanup deleted the repo-tracked {tracked_artifact}"
 			)
-			assert not (repo / UNTRACKED_ARTIFACT).exists(), (
-				f"{script_rel}: cleanup failed to remove the untracked {UNTRACKED_ARTIFACT}"
+			assert not (repo / untracked_artifact).exists(), (
+				f"{script_rel}: cleanup failed to remove the untracked {untracked_artifact}"
 			)
 
 			# The staging pass that follows each cleanup block must not record
@@ -122,7 +143,7 @@ def test_cleanup_preserves_tracked_agents_md() -> None:
 
 def test_cleanup_block_guards_every_path() -> None:
 	"""Each cleanup block routes every removal through the tracked-path guard."""
-	for script_rel, loop_var in CLEANUP_SITES:
+	for script_rel, loop_var, _tracked_artifact, _untracked_artifact in CLEANUP_SITES:
 		block = _extract_cleanup_block(script_rel, loop_var)
 		assert "git ls-files --error-unmatch" in block, (
 			f"{script_rel}: cleanup loop lost its tracked-path guard"
@@ -135,7 +156,7 @@ def test_cleanup_block_guards_every_path() -> None:
 
 def test_no_unguarded_agents_md_removal_remains() -> None:
 	"""No bare `rm ... agents.md` survives outside the guarded loop."""
-	for script_rel, loop_var in CLEANUP_SITES:
+	for script_rel, loop_var, _tracked_artifact, _untracked_artifact in CLEANUP_SITES:
 		text = (REPO_ROOT / script_rel).read_text(encoding="utf-8")
 		block = _extract_cleanup_block(script_rel, loop_var)
 		for line in text.splitlines():
@@ -147,11 +168,81 @@ def test_no_unguarded_agents_md_removal_remains() -> None:
 			)
 
 
+def test_poller_restores_bootstrap_overwrite() -> None:
+	"""Tracked support files overwritten by bootstrap return to HEAD content."""
+	block = _extract_cleanup_block("scripts/orchestrate_poll_process.sh", "_orch_cleanup_artifact")
+	for tracked_artifact in (
+		"scripts/git_ref_health_check.sh",
+		"scripts/tg_helpers.sh",
+		"scripts/codex_model_catalog.json",
+		".github/ai/orchestrate_schema.v1.json",
+	):
+		with tempfile.TemporaryDirectory(prefix="artifact-cleanup-") as raw_tmp:
+			repo = _make_consumer_repo(Path(raw_tmp), tracked_artifact)
+			expected = (repo / tracked_artifact).read_text(encoding="utf-8")
+			(repo / tracked_artifact).write_text("workflow support copy\n", encoding="utf-8")
+
+			subprocess.run(
+				["bash", "-euo", "pipefail", "-c", block],
+				cwd=repo,
+				check=True,
+				capture_output=True,
+				env=_temp_repo_env(),
+				text=True,
+			)
+
+			assert (repo / tracked_artifact).read_text(encoding="utf-8") == expected
+			assert _git(repo, "diff", "--name-only").strip() == ""
+
+
+def test_implement_cleanup_preserves_tracked_static_context() -> None:
+	"""Implement cleanup restores a tracked static-context path from HEAD."""
+	text = (REPO_ROOT / "scripts/implement_commit_changes.sh").read_text(encoding="utf-8")
+	match = re.search(
+		r"^if git ls-files --error-unmatch -- pre_assembled_static\.txt\b.*?^fi$",
+		text,
+		flags=re.S | re.M,
+	)
+	assert match, "implement cleanup guard for pre_assembled_static.txt not found"
+	block = match.group(0)
+	with tempfile.TemporaryDirectory(prefix="artifact-cleanup-") as raw_tmp:
+		repo = _make_consumer_repo(Path(raw_tmp), UNTRACKED_ARTIFACT)
+		expected = (repo / UNTRACKED_ARTIFACT).read_text(encoding="utf-8")
+		(repo / UNTRACKED_ARTIFACT).write_text("generated static context\n", encoding="utf-8")
+
+		subprocess.run(
+			["bash", "-euo", "pipefail", "-c", block],
+			cwd=repo,
+			check=True,
+			capture_output=True,
+			env=_temp_repo_env(),
+			text=True,
+		)
+
+		assert (repo / UNTRACKED_ARTIFACT).read_text(encoding="utf-8") == expected
+		assert _git(repo, "diff", "--name-only").strip() == ""
+
+	with tempfile.TemporaryDirectory(prefix="artifact-cleanup-") as raw_tmp:
+		repo = _make_consumer_repo(Path(raw_tmp), "consumer-owned.txt")
+		(repo / UNTRACKED_ARTIFACT).write_text("generated static context\n", encoding="utf-8")
+		subprocess.run(
+			["bash", "-euo", "pipefail", "-c", block],
+			cwd=repo,
+			check=True,
+			capture_output=True,
+			env=_temp_repo_env(),
+			text=True,
+		)
+		assert not (repo / UNTRACKED_ARTIFACT).exists()
+
+
 def main() -> int:
 	tests = [
 		test_cleanup_preserves_tracked_agents_md,
 		test_cleanup_block_guards_every_path,
 		test_no_unguarded_agents_md_removal_remains,
+		test_poller_restores_bootstrap_overwrite,
+		test_implement_cleanup_preserves_tracked_static_context,
 	]
 	passed = 0
 	failed = 0
