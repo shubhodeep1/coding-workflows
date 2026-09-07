@@ -3121,7 +3121,13 @@ sys.exit(proc.returncode)
 		if codex_touch_file:
 			touch_path = Path(codex_touch_file)
 			if not touch_path.is_absolute():
-				touch_path = runtime_dir / touch_path
+				# Relative paths resolve inside the sandbox git repo, which is
+				# the poller's cwd and the checkout the judge edits. Resolving
+				# them against runtime_dir (outside the repo) meant the mock
+				# judge never changed a tracked tree; the follow-up-PR tests
+				# then only saw a dirty tree because the consumer artifact
+				# cleanup used to delete tracked files (fixed in #4033).
+				touch_path = sandbox / touch_path
 			env["MOCK_CODEX_TOUCH_FILE"] = str(touch_path)
 		if mock_orch_state_v2_pack_mode:
 			env["MOCK_ORCH_STATE_V2_PACK_MODE"] = mock_orch_state_v2_pack_mode
