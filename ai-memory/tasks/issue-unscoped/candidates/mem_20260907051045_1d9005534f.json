@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Recent synchronization work addresses list union semantics, duplicate-key handling, and PyYAML-related security hardening. Code that derives workflow or contract inventories should validate YAML strictly, avoid silently dropping entries, and fail closed on ambiguity.",
+  "fingerprint": "dfff054902ca4709aacd088c1d3065298bc95eae4ea71eed87c259cdfadfe2e7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34085426557",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34085426557",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3987",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3996",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3998",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4000",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4005",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3989",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3997",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3999",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4001",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4006"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260907051045_1d9005534f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Contract-list synchronization must preserve the union of declared inputs and reject malformed or duplicate YAML safely.",
+  "timestamps": {
+    "created_at": "2026-09-07T05:10:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
