@@ -455,3 +455,123 @@ No exact-word `TODO`, `FIXME`, `HACK`, or `XXX` markers were found. Documented r
 | Code modularization | 10–14 workflows/scripts | Large |
 | Expression size reduction | 2 workflows + support manifests/helpers | Medium |
 | Medium/Low fixes | 3–5 workflows/scripts | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-09-07)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is directly actionable; `NEEDS_VERIFICATION` requires specified checks; `RISKY_SKIP` must not be auto-implemented because polling, pagination, recovery, or other safety semantics are involved.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — Clarify fetches overlapping comment histories
+
+- **ID:** `MERGE-001`
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `.github/workflows/clarify.yml:455-486`
+- **Current/proposed calls:** Semantic-cache-enabled path: 2 logical GETs → 1; disabled path remains 1.
+- **Endpoints:** `GET /repos/{repo}/issues/{issue}/comments` with identical ordering but different `per_page` and pagination.
+- **Evidence:**
+  ```bash
+  gh_retry gh api ".../comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+  gh_retry gh api --paginate --slurp ".../comments?sort=created&direction=asc&per_page=100" |
+  ```
+  The paginated result contains the first 50 comments already fetched for `ISSUE_COMMENTS_FILE`.
+- **Proposed fix:** When semantic caching is enabled, fetch all pages once, write `(add // [])[0:50]` to `ISSUE_COMMENTS_FILE`, and render the full array into `THREAD_HISTORY_FILE`. Retain the bounded GET as the fallback if pagination fails.
+- **Safety rationale:** Pagination semantics differ, triggering mandatory `RISKY_SKIP`, and the fallback must preserve the current prompt-success/cache-bypass behavior.
+- **Downstream signal:** Do not auto-implement; manually test 0, 50, 51, 100, and 101-comment threads plus paginated-fetch failure.
+
+#### MERGE-002 — Auto-merge guard separately fetches PR labels and metadata
+
+- **ID:** `MERGE-002`
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `scripts/review_enable_auto_merge.sh:45-76,110-192`
+- **Current/proposed calls:** 2 GETs → 1.
+- **Endpoints:** `GET /repos/{repo}/issues/{pr}/labels?per_page=100`; `GET /repos/{repo}/pulls/{pr}`.
+- **Evidence:**
+  ```bash
+  PR_LABELS_RAW="$(gh_retry gh api --paginate ".../issues/${PR_NUMBER}/labels?per_page=100" ...)"
+  _ORCH_PR_META_JSON="$(gh_retry gh api ".../pulls/${PR_NUMBER}" ...)"
+  ```
+  The PR payload already supplies `labels`, `head.ref`, and `body`.
+- **Proposed fix:** Move the existing PR metadata fetch before the e2e guard, derive `PR_LABELS_RAW` from `.labels[]?.name`, and reuse the payload for head-ref/body checks.
+- **Safety rationale:** The removed call is paginated and protects a safety-critical auto-merge exclusion, requiring `RISKY_SKIP`.
+- **Downstream signal:** Do not auto-implement; manually prove `/pulls/{pr}` returns the complete label set and verify every API/JSON failure still suppresses auto-merge.
+
+#### MERGE-003 — Reissue paths fetch issue title and body separately
+
+- **ID:** `MERGE-003`
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `scripts/orchestrate_poll_process.sh:11278-11280` (`execute_stall_recovery_action`); `scripts/orchestrate_poll_process.sh:13647-13655` (`run_standalone_stall_recovery`); `scripts/orchestrate_poll_process.sh:18213-18215` (implementation-failed sweep).
+- **Current/proposed calls:** Across all three paths, 6 GETs → 3; each path is 2 → 1.
+- **Endpoint:** `GET /repos/{repo}/issues/{issue}`.
+- **Evidence:**
+  ```bash
+  orig_title="$(...issues/${issue_num} --jq '.title...')"
+  orig_body="$(...issues/${issue_num} --jq '.body...')"
+
+  IF_TITLE="$(...issues/${if_issue} --jq '.title')"
+  IF_BODY="$(...issues/${if_issue} --jq '.body')"
+  ```
+- **Proposed fix:** Fetch one issue object per path and extract both `.title` and `.body` locally before closing or reissuing.
+- **Safety rationale:** These calls are inside `orchestrate_poll_process.sh` recovery paths, and consolidation couples two currently independent failure outcomes.
+- **Downstream signal:** Do not auto-implement; manually validate all managed, standalone, and implementation-failed reissue tests under successful and failed issue fetches.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — Failure handling discards freshly fetched PR metadata between adjacent steps
+
+- **ID:** `REUSE-001`
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **File path and line ranges:** `.github/workflows/review_autofix.yml:6574-6592,6594-6650`
+- **Current/proposed calls:** Empty-`PR_META_FILE` fallback path: 2 GETs → 1; retain the second GET when the first fetch fails.
+- **Endpoint:** `GET /repos/{repo}/pulls/{pr}`.
+- **Evidence:**
+  ```bash
+  pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" ...)"
+  ...
+  PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' ...)"
+  ```
+- **Proposed fix:** Have `Check PR state before failure alerts` persist a validated `{title,body}` snapshot under `RUNTIME_DIR`; make `Mark linked issues review-blocked` consult `PR_META_FILE`, then that snapshot, then its existing live fallback.
+- **Safety rationale:** The calls occur in different workflow steps, so the same-step precondition and acceptable cache-staleness window are not statically proven.
+- **Downstream signal:** Verify identical `RUNTIME_DIR` visibility across steps, successful-fetch reuse, retained live fallback after first-fetch failure, and whether concurrent PR title/body edits require a fresh read.
+
+### Dead Calls (DEAD-API-###)
+
+#### DEAD-API-001 — Standalone conflict sweep fetches an unused default branch
+
+- **ID:** `DEAD-API-001`
+- **Safety tag:** `RISKY_SKIP`
+- **File path and line ranges:** `scripts/orchestrate_poll_process.sh:19720-19735,19815-20221`
+- **Current/proposed calls:** 1 unconditional GET per poll tick → 0.
+- **Endpoint:** `GET /repos/{repo}`.
+- **Evidence:**
+  ```bash
+  CONFLICT_SWEEP_FIXED=0
+  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+
+  for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
+  ```
+  No subsequent conflict/noop-suspicious sweep expression or invoked helper consumes this assignment.
+- **Proposed fix:** Remove the assignment at line 19733.
+- **Safety rationale:** Although statically dead, the call is inside `orchestrate_poll_process.sh`, which mandates `RISKY_SKIP` because of its race-defensive orchestration role.
+- **Downstream signal:** Do not auto-implement; manually recheck indirect function reads of global `DEFAULT_BRANCH` and run standalone conflict/noop recovery tests before removal.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — Exact duplicate endpoint, but it is inside `orchestrate_poll_process.sh`.
+- API-002: RISKY_SKIP — Valid reuse opportunity, but it changes a poller recovery path.
+- BATCH-001: RISKY_SKIP — Poller placement and paginated REST fallback require manual page-boundary review.
+- BATCH-002: RISKY_SKIP — Multiple paginated comment/review connections require preserving `hasNextPage`-driven REST fallback semantics.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | REUSE-001 |
+| RISKY_SKIP | 8 | MERGE-001, MERGE-002, MERGE-003, DEAD-API-001, API-001, API-002, BATCH-001, BATCH-002 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
