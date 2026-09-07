@@ -2389,6 +2389,23 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
 
     echo "Judge says close PR #${PR_NUMBER} and reissue."
 
+    # Earlier metadata cannot safely authorize close: the API has no
+    # match-head guard, so bind all preparatory side effects to a fresh read.
+    RB_CLOSE_PREFLIGHT_JSON="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+    RB_CLOSE_PREFLIGHT_STATE="$(printf '%s' "${RB_CLOSE_PREFLIGHT_JSON}" | jq -r '.state // empty' 2>/dev/null || true)"
+    RB_CLOSE_PREFLIGHT_HEAD_SHA="$(printf '%s' "${RB_CLOSE_PREFLIGHT_JSON}" | jq -r '.head.sha // empty' 2>/dev/null || true)"
+    if ! [[ "${RB_CLOSE_PREFLIGHT_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] || [ "${RB_CLOSE_PREFLIGHT_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]; then
+      echo "::warning::Approved close_and_reissue refused because PR #${PR_NUMBER} head changed after the decision or could not be resolved."
+      echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=approved_close_precondition_failed" >> "$GITHUB_OUTPUT"
+      exit 0
+    elif [ "${RB_CLOSE_PREFLIGHT_STATE}" != "open" ]; then
+      echo "::warning::Approved close_and_reissue refused because PR #${PR_NUMBER} is no longer open."
+      echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=approved_close_precondition_failed" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
+
     # Create replacement issue
     NEW_ISSUE_TITLE="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.new_issue.title // empty')"
     NEW_ISSUE_BODY="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.new_issue.body // empty')"
@@ -2540,7 +2557,20 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
     echo "REISSUE_MODE requested_raw=${RB_REISSUE_MODE_RAW:-<empty>} effective=${RB_EFFECTIVE_REISSUE_MODE} feature_flag=${REISSUE_PRESERVE_BASELINE_ENABLED:-true}"
 
     if [ "${RB_REPLACEMENT_CREATED}" = "true" ]; then
-      if gh_retry gh pr close "${PR_NUMBER}" --repo "${REPOSITORY}" \
+      # Baseline and issue creation may take long enough for the head to move;
+      # re-read immediately before the unguarded close mutation.
+      RB_CLOSE_FINAL_JSON="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+      RB_CLOSE_FINAL_STATE="$(printf '%s' "${RB_CLOSE_FINAL_JSON}" | jq -r '.state // empty' 2>/dev/null || true)"
+      RB_CLOSE_FINAL_HEAD_SHA="$(printf '%s' "${RB_CLOSE_FINAL_JSON}" | jq -r '.head.sha // empty' 2>/dev/null || true)"
+      if ! [[ "${RB_CLOSE_FINAL_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] || [ "${RB_CLOSE_FINAL_HEAD_SHA}" != "${POST_REVIEW_HEAD_SHA}" ]; then
+        echo "::warning::Approved close_and_reissue refused because PR #${PR_NUMBER} head changed while the replacement issue was being created."
+        echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+        echo "judge_skip_reason=approved_close_precondition_failed" >> "$GITHUB_OUTPUT"
+      elif [ "${RB_CLOSE_FINAL_STATE}" != "open" ]; then
+        echo "::warning::Approved close_and_reissue refused because PR #${PR_NUMBER} is no longer open."
+        echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+        echo "judge_skip_reason=approved_close_precondition_failed" >> "$GITHUB_OUTPUT"
+      elif gh_retry gh pr close "${PR_NUMBER}" --repo "${REPOSITORY}" \
         --comment "Closed after approved review-blocked reissue request ${RB_APPROVAL_REQUEST_ID:-not-applicable}; replacement: ${NEW_URL}." \
         2>/dev/null; then
         ensure_label_exists "ai:closed" "${REPOSITORY}"

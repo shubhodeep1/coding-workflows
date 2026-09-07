@@ -452,7 +452,7 @@ def _run_close_and_reissue(
 			if resolved_head_ref_oid == "__UPPER_REPO_HEAD__":
 				resolved_head_ref_oid = repo_head_before.upper()
 			mock_state["pr_view_head_ref_oid"] = resolved_head_ref_oid
-			resolved_live_close_head_sha = live_close_head_sha or resolved_head_ref_oid
+			resolved_live_close_head_sha = live_close_head_sha or resolved_head_ref_oid.lower()
 			if precreate_baseline_branch:
 				expected_baseline_branch = f"ai/reissue-baseline/pr-42-{repo_head_before[:12]}-777-1"
 				_git(["git", "branch", expected_baseline_branch], cwd=run_cwd)

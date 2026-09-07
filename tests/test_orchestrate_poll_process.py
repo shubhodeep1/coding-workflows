@@ -5547,6 +5547,7 @@ def _run_review_blocked_merge_decision(
 		pr_api_sequence={901: pr_sequence},
 		codex_json=decision,
 		fail_auto_pr_merge=fail_auto_pr_merge,
+		capture_telegram_calls=True,
 		env_overrides={"ENABLE_AUTO_MERGE": "true"},
 	)
 
@@ -5579,6 +5580,10 @@ def test_review_blocked_close_and_reissue_runs_after_authenticated_approval():
 		"labels": ["ai:clarification", "ai:orchestrator-managed"],
 	}]
 	assert "ai:closed" in result["issues"]["10"]["labels"]
+	assert any(
+		"closed PR #901 and reissued as #900" in notification["message"]
+		for notification in result["telegram_notifications"]
+	)
 
 
 def test_review_blocked_close_and_reissue_refuses_stale_approved_head():
@@ -5591,6 +5596,10 @@ def test_review_blocked_close_and_reissue_refuses_stale_approved_head():
 	assert result.get("closed_prs", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 	assert "live head changed or could not be bound to the approved snapshot" in result["stdout"]
+	assert not any(
+		"closed PR #901 and reissued" in notification["message"]
+		for notification in result["telegram_notifications"]
+	)
 
 
 def test_review_blocked_close_and_reissue_rechecks_head_after_replacement_creation():
@@ -5604,6 +5613,10 @@ def test_review_blocked_close_and_reissue_rechecks_head_after_replacement_creati
 	assert result.get("closed_prs", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 	assert "head changed while the replacement issue was being created" in result["stdout"]
+	assert not any(
+		"closed PR #901 and reissued" in notification["message"]
+		for notification in result["telegram_notifications"]
+	)
 
 
 def test_review_blocked_merge_refuses_head_changed_after_judge_snapshot():

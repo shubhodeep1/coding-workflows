@@ -18092,6 +18092,7 @@ EOF
             # Create/reuse the replacement before closing the source PR. A
             # failed replacement must leave the original review-blocked PR
             # open so no approved work disappears without a successor.
+            RB_REISSUE_CLOSE_CONFIRMED=false
             if [[ "${NEW_NUM}" =~ ^[0-9]+$ ]]; then
               # Recheck after issue creation because the close API has no
               # match-head guard and a concurrent push must invalidate the
@@ -18114,6 +18115,7 @@ EOF
                   --add-label 'ai:closed' 2>/dev/null || true
                 review_blocked_post_consumed_marker "${GITHUB_REPOSITORY}" "${RB_PR}" "${RB_APPROVAL_REQUEST_ID}" "closed_and_reissued" || true
                 LOCAL_ID="$(echo "${WAVE_STATUS}" | jq -r ".issues[] | select(.github_issue == \"${rb_issue}\") | .id")"
+                RB_REISSUE_CLOSE_CONFIRMED=true
               else
                 LOCAL_ID=""
                 echo "::warning::Replacement issue was created but PR #${RB_PR} could not be closed; leaving issue #${rb_issue} review-blocked."
@@ -18130,10 +18132,12 @@ EOF
                 "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
             fi
 
-            tg_notify "Orchestrator closed PR #${RB_PR} and reissued as #${NEW_NUM} (issue #${rb_issue}): ${RB_JUSTIFICATION}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"New issue: $(_gh_url "issues/${NEW_NUM}")"$'\n'"Old issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+            if [ "${RB_REISSUE_CLOSE_CONFIRMED}" = "true" ]; then
+              tg_notify "Orchestrator closed PR #${RB_PR} and reissued as #${NEW_NUM} (issue #${rb_issue}): ${RB_JUSTIFICATION}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"New issue: $(_gh_url "issues/${NEW_NUM}")"$'\n'"Old issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+            fi
           else
             echo "::warning::Judge chose close_and_reissue but provided no new issue details."
-            tg_notify "Orchestrator closed PR #${RB_PR} (issue #${rb_issue}) but could not create replacement issue."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+            tg_notify "Orchestrator could not reissue review-blocked PR #${RB_PR} (issue #${rb_issue}) because replacement details were missing."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
           fi
           fi
 

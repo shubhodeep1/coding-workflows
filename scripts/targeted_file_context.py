@@ -616,10 +616,13 @@ def emit_context(
 	omitted_entries += max(0, len(paths) - MAX_TARGET_PATHS)
 
 	for rel in bounded_paths:
-		abs_path = (repo_root / rel).resolve()
 		try:
-			abs_path.relative_to(repo_root_resolved)
-		except ValueError:
+			abs_path = (repo_root / rel).resolve()
+			resolved_repo_relative_path = abs_path.relative_to(repo_root_resolved).as_posix()
+		except (OSError, RuntimeError, ValueError):
+			omitted_entries += 1
+			continue
+		if is_sensitive_target_path(resolved_repo_relative_path):
 			omitted_entries += 1
 			continue
 		if not abs_path.is_file():

@@ -691,6 +691,28 @@ def test_sensitive_targets_are_omitted_before_filesystem_access() -> None:
 		assert "Omitted 1 path(s)" in context
 
 
+def test_sensitive_symlink_targets_are_omitted_after_resolution() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / ".git").mkdir()
+		(root / ".git" / "config").write_text("git metadata secret\n", encoding="utf-8")
+		(root / ".env.production").write_text("environment secret\n", encoding="utf-8")
+		(root / "src").mkdir()
+		(root / "src" / "settings.py").symlink_to(root / ".env.production")
+		(root / "vendor").mkdir()
+		(root / "vendor" / "repository").symlink_to(root / ".git", target_is_directory=True)
+
+		context = emit_context(
+			["src/settings.py", "vendor/repository/config"],
+			root,
+			max_bytes=2048,
+		)
+
+		assert "environment secret" not in context
+		assert "git metadata secret" not in context
+		assert "Omitted 2 path(s)" in context
+
+
 def test_missing_input_emits_safe_empty_block() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		context = emit_context(
