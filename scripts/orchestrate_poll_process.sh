@@ -4540,6 +4540,7 @@ render_security_pass_findings_table() {
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -4549,7 +4550,9 @@ findings = payload["findings"]
 
 
 def cell(value: object) -> str:
-	return " ".join(str(value).replace("|", "\\|").split())
+	rendered_cell = " ".join(str(value).replace("|", "\\|").split())
+	# Keep audit-generated prose from notifying users or cross-referencing issues.
+	return re.sub(r"#(?=\d)", "#\u200b", rendered_cell.replace("@", "@\u200b"))
 
 
 lines = [
