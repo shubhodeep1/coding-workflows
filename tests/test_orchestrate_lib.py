@@ -277,10 +277,26 @@ def test_validate_decomposition_cycle_detection():
 # ---------------------------------------------------------------------------
 
 def test_compute_waves_no_deps():
-	data = _make_decomposition()
+	# Disjoint files_touched: siblings with declared, non-overlapping scope
+	# stay in one wave. (An EMPTY files_touched is unknown scope and is
+	# serialized; see test_validate_wave_file_partition_empty_scope_is_serialized.)
+	data = _make_decomposition(issues=[
+		{"id": "issue-1", "title": "First task", "body": "Do the first thing", "priority": 1, "files_touched": ["src/one.py"]},
+		{"id": "issue-2", "title": "Second task", "body": "Do the second thing", "priority": 2, "files_touched": ["src/two.py"]},
+	])
 	waves = orchestrate_lib.compute_waves(data)
 	assert len(waves) == 1
 	assert len(waves[0]) == 2
+
+
+def test_compute_waves_no_deps_unknown_scope_serializes():
+	"""Siblings that declare no files_touched cannot be proven disjoint, so
+	the default fixture (no files_touched at all) now yields one wave per
+	issue instead of running them in parallel."""
+	data = _make_decomposition()
+	waves = orchestrate_lib.compute_waves(data)
+	assert [[i["id"] for i in wave] for wave in waves] == [["issue-1"], ["issue-2"]]
+	assert data["partition_serializations"][0]["overlap_type"] == "unknown_scope"
 
 
 def test_compute_waves_with_deps():
@@ -300,9 +316,9 @@ def test_compute_waves_with_deps():
 
 def test_compute_waves_parallel_deps():
 	issues = [
-		{"id": "root", "title": "Root", "body": "Root body", "priority": 1},
-		{"id": "child-1", "title": "Child 1", "body": "Body", "priority": 2},
-		{"id": "child-2", "title": "Child 2", "body": "Body", "priority": 3},
+		{"id": "root", "title": "Root", "body": "Root body", "priority": 1, "files_touched": ["src/root.py"]},
+		{"id": "child-1", "title": "Child 1", "body": "Body", "priority": 2, "files_touched": ["src/c1.py"]},
+		{"id": "child-2", "title": "Child 2", "body": "Body", "priority": 3, "files_touched": ["src/c2.py"]},
 	]
 	edges = [{"from": "root", "to": "child-1"}, {"from": "root", "to": "child-2"}]
 	data = _make_decomposition(issues=issues, edges=edges)
@@ -1845,7 +1861,9 @@ def test_build_tracking_state_has_review_blocked_retries():
 
 def test_build_tracking_state_schema():
 	data = _make_decomposition()
-	waves = orchestrate_lib.compute_waves(data)
+	# Schema test only: skip the partition guard so both issues sit in one
+	# wave as the assertions below expect.
+	waves = orchestrate_lib.compute_waves(data, auto_serialize=False)
 	issue_map = {"issue-1": 10}
 	state = orchestrate_lib.build_tracking_state(data, waves, issue_map, integration_branch="orchestrator/project-42")
 	assert state["schema_version"] == "orchestrate_state.v1"
@@ -2387,9 +2405,12 @@ def test_load_hot_files_wrong_shape_returns_empty_set():
 		assert orchestrate_lib.load_hot_files(p) == set()
 
 
-def test_validate_wave_file_partition_empty_issues_no_overlap():
-	"""Issues with empty files_touched are never flagged — the byte-level
-	poller probe handles unknown-scope issues at merge time."""
+def test_validate_wave_file_partition_empty_scope_is_serialized():
+	"""An empty files_touched list is unknown scope: the guard cannot prove
+	the sibling disjoint from anyone, so it is paired with every other
+	sibling as type=unknown_scope. binance-blessings#249 omitted the list on
+	three phases that all edit twap_router.py specifically to run them in
+	parallel; each sibling merge then conflicted the rest."""
 	data = _make_decomposition(issues=[
 		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": []},
 		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": []},
@@ -2397,7 +2418,59 @@ def test_validate_wave_file_partition_empty_issues_no_overlap():
 	data = orchestrate_lib.validate_decomposition(data)
 	issues_by_id = {i["id"]: i for i in data["issues"]}
 	overlaps = orchestrate_lib.validate_wave_file_partition(["a", "b"], issues_by_id)
-	assert overlaps == []
+	assert overlaps == [{"type": "unknown_scope", "issue_a": "a", "issue_b": "b", "files": []}]
+
+
+def test_validate_wave_file_partition_empty_scope_pairs_with_declared_siblings():
+	"""One unknown-scope sibling is paired with every declared sibling, and
+	the declared siblings still get their own pair/hot_file verdicts."""
+	data = _make_decomposition(issues=[
+		{"id": "known-1", "title": "T", "body": "b", "priority": 1, "files_touched": ["src/x.py"]},
+		{"id": "known-2", "title": "T", "body": "b", "priority": 2, "files_touched": ["src/y.py"]},
+		{"id": "mystery", "title": "T", "body": "b", "priority": 3},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	issues_by_id = {i["id"]: i for i in data["issues"]}
+	overlaps = orchestrate_lib.validate_wave_file_partition(["known-1", "known-2", "mystery"], issues_by_id, hot_files=set())
+	unknown = [o for o in overlaps if o["type"] == "unknown_scope"]
+	assert {(o["issue_a"], o["issue_b"]) for o in unknown} == {("known-1", "mystery"), ("known-2", "mystery")}
+	assert [o for o in overlaps if o["type"] != "unknown_scope"] == []
+
+
+def test_validate_wave_file_partition_single_issue_wave_never_flags():
+	data = _make_decomposition(issues=[
+		{"id": "solo", "title": "T", "body": "b", "priority": 1},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	issues_by_id = {i["id"]: i for i in data["issues"]}
+	assert orchestrate_lib.validate_wave_file_partition(["solo"], issues_by_id) == []
+
+
+def test_compute_waves_serializes_parallel_phases_that_omit_files_touched():
+	"""Regression for binance-blessings#249: phase-2/3/4 shared a Phase-1
+	dependency, declared no files_touched, and were dispatched as one wave.
+	They must now run one after another, ordered by priority then id."""
+	issues = [
+		{"id": "phase-1", "title": "T", "body": "b", "priority": 1, "files_touched": ["lib/candles.py"]},
+		{"id": "phase-4-slice-jitter", "title": "T", "body": "b", "priority": 2},
+		{"id": "phase-2-level-flips", "title": "T", "body": "b", "priority": 2},
+		{"id": "phase-3-sell-guardrails", "title": "T", "body": "b", "priority": 2},
+	]
+	edges = [
+		{"from": "phase-1", "to": "phase-2-level-flips"},
+		{"from": "phase-1", "to": "phase-3-sell-guardrails"},
+		{"from": "phase-1", "to": "phase-4-slice-jitter"},
+	]
+	data = _make_decomposition(issues=issues, edges=edges)
+	data = orchestrate_lib.validate_decomposition(data)
+	waves = orchestrate_lib.compute_waves(data, hot_files=set())
+	assert [[i["id"] for i in wave] for wave in waves] == [
+		["phase-1"],
+		["phase-2-level-flips"],
+		["phase-3-sell-guardrails"],
+		["phase-4-slice-jitter"],
+	]
+	assert all(rec["overlap_type"] == "unknown_scope" for rec in data["partition_serializations"])
 
 
 def test_validate_wave_file_partition_detects_plain_pair_overlap():

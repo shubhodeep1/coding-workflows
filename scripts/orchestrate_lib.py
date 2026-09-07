@@ -790,10 +790,19 @@ def validate_wave_file_partition(
 		separately from pair overlaps so the caller can treat them with a
 		different policy if desired; at present they are serialized the same
 		way.
+	- ``unknown_scope`` overlaps: a sibling whose ``files_touched`` list is
+		empty is paired with EVERY other sibling in the wave (``files`` is
+		``[]``). An empty list means the planner could not, or chose not to,
+		predict the files, so the guard has nothing to prove the siblings
+		are disjoint; the only safe assumption is that they collide.
+		Project binance-blessings#249 omitted ``files_touched`` on three
+		phases that all edit twap_router.py and README.md, explicitly to run
+		them in parallel; every sibling merge then conflicted the remaining
+		PRs and the late resolver ran O(n^2) times. Serializing unknown
+		scope closes that bypass. Two unknown-scope siblings are also paired
+		with each other.
 
-	Issues whose ``files_touched`` list is empty are never flagged — there is
-	nothing to compare. The byte-level pre-merge probe in the poller handles
-	unknown-scope issues at merge time instead.
+	A wave with a single issue never yields overlaps.
 	"""
 	hot = hot_files or set()
 	overlaps: list[dict[str, Any]] = []
@@ -807,11 +816,19 @@ def validate_wave_file_partition(
 	seen_pairs: set[tuple[str, str]] = set()
 	for i, iid_a in enumerate(wave_ids):
 		fa = files_for[iid_a]
-		if not fa:
-			continue
 		for iid_b in wave_ids[i + 1:]:
 			fb = files_for[iid_b]
-			if not fb:
+			if not fa or not fb:
+				pair_key = (iid_a, iid_b)
+				if pair_key in seen_pairs:
+					continue
+				seen_pairs.add(pair_key)
+				overlaps.append({
+					"type": "unknown_scope",
+					"issue_a": iid_a,
+					"issue_b": iid_b,
+					"files": [],
+				})
 				continue
 			common = sorted(fa & fb)
 			if not common:
