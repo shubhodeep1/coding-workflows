@@ -417,6 +417,18 @@ committing the corresponding file:
 - Stall-sidecar markers are emitted as separate ledger event types
   `codex_stall_observed` and `codex_stall_killed` rather than as
   `run_substate` values.
+- Token counts are harvested from the editor log named by `--tokens-log-file`.
+  The helper reads only the trailing `LEDGER_TOKENS_LOG_MAX_BYTES` (default
+  `1048576`, `0` disables the bound), because the `usage`-object scan probes
+  every `{` in the document and `json.JSONDecodeError` counts newlines from
+  byte 0 on each failed probe, making a whole-file scan quadratic in file
+  size. Every parser keeps its last match and editors write their usage
+  summary at the end, so the tail carries the same answer.
+- The `record-run-event` write is bounded by `LEDGER_EMIT_TIMEOUT_SECONDS`
+  (default `120`, `0` disables). It runs while the helper holds the
+  per-dedupe-key `flock`, so an unbounded call would stall the caller's job
+  silently. On expiry the helper warns and fails open without consuming the
+  dedupe key.
 - `scripts/build_state_snapshot.py` builds the poller's `state.json` artifact,
   and `ai-memory/schemas/state_snapshot.v1.json` is the authoritative schema
   for that payload.
