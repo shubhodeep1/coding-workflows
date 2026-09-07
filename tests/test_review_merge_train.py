@@ -59,10 +59,21 @@ case "${method}" in
       repos/*/pulls/*/files) n="${path#*/pulls/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/files_${n}.json" ;;
       repos/*/issues/*/comments) n="${path#*/issues/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/comments_${n}.json" ;;
       repos/*/issues/comments/*) fixture="${FAKE_GH_DIR}/comment_body.json" ;;
+      repos/*/actions/runs) fixture="${FAKE_GH_DIR}/actions_runs.json" ;;
       *) echo "unexpected GET ${path}" >&2; exit 1 ;;
     esac
-    [ -f "${fixture}" ] || { echo "[]"; exit 0; }
+    if [ ! -f "${fixture}" ]; then
+      case "${path}" in
+        repos/*/actions/runs) echo '{"workflow_runs":[]}' ;;
+        *) echo '[]' ;;
+      esac
+      exit 0
+    fi
     if [ -n "${jqf}" ]; then jq -r "${jqf}" "${fixture}"; else cat "${fixture}"; fi
+    ;;
+  DELETE)
+    if [ -f "${FAKE_GH_DIR}/label_delete_fail" ]; then exit 1; fi
+    exit 0
     ;;
   *) exit 0 ;;
 esac
@@ -102,6 +113,10 @@ def _run(subcommand: str, tmp_path: Path, bin_dir: Path, fixtures: Path, log: Pa
 	github_env = tmp_path / "github_env"
 	github_env.touch()
 	run_env = dict(os.environ)
+	# The review workflow exports these names in the editor process. Tests must
+	# opt in explicitly rather than inherit the live PR's paths or base branch.
+	for inherited_name in ("BASE_BRANCH", "PR_DIFF_FILE", "PR_NUMBER", "TARGET_BRANCH"):
+		run_env.pop(inherited_name, None)
 	run_env.update({
 		"PATH": f"{bin_dir}:{os.environ['PATH']}",
 		"FAKE_GH_DIR": str(fixtures),
@@ -192,6 +207,54 @@ def test_gate_releases_stale_label_when_unblocked(tmp_path: Path) -> None:
 	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
 
 
+def test_gate_consumes_prior_queue_marker_as_one_shot_bypass(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([{
+		"id": 99,
+		"body": "<!-- merge-train:queued -->\nReview queued",
+	}]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "result=bypassed blockers=#4075 action=continue" in result.stdout
+	assert "PATCH repos/acme/consumer/issues/comments/99" in log_text
+	assert "labels[]=ai:merge-queued" not in log_text
+	assert "AUTOFIX_MERGE_QUEUED" not in env_out
+	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+
+
+def test_gate_falls_back_to_api_for_git_quoted_paths(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	quoted_path = "src/\u00e9.py"
+	_write_files(fixtures, 4075, [quoted_path])
+	_write_files(fixtures, 4077, [quoted_path])
+	diff = tmp_path / "pr.diff"
+	diff.write_text(
+		r'diff --git "a/src/\303\251.py" "b/src/\303\251.py"' + "\n",
+		encoding="utf-8",
+	)
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", PR_DIFF_FILE=str(diff),
+	)
+	assert result.returncode == 0, result.stderr
+	assert "result=queued blockers=#4075" in result.stdout
+	assert "pulls/4077/files" in log_text
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+
+
 def test_gate_ignores_non_ai_issue_head_and_disabled_flag(tmp_path: Path) -> None:
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	result, log_text, env_out = _run(
@@ -209,6 +272,17 @@ def test_gate_ignores_non_ai_issue_head_and_disabled_flag(tmp_path: Path) -> Non
 	assert result.returncode == 0
 	assert "MERGE_TRAIN_DISABLED" in result.stdout
 	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+
+
+def test_gate_enabled_flag_is_case_insensitive(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	result, _log_text, _env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="7", BASE_BRANCH="main", TARGET_BRANCH="feature/manual", MERGE_TRAIN_ENABLED="yEs",
+	)
+	assert result.returncode == 0
+	assert "result=not_ai_issue_branch" in result.stdout
+	assert "MERGE_TRAIN_DISABLED" not in result.stdout
 
 
 def test_gate_fails_open_on_api_error(tmp_path: Path) -> None:
@@ -272,10 +346,48 @@ def test_release_keeps_label_when_dispatch_fails(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	assert "could not be dispatched" in result.stdout
 	assert "MERGE_TRAIN_RELEASED" not in result.stdout
-	assert "issues/4077/labels/ai%3Amerge-queued" not in log_text, (
-		"the label must survive a failed dispatch so the next release run retries the PR"
-	)
+	assert "DELETE repos/acme/consumer/issues/4077/labels/ai%3Amerge-queued" in log_text
+	assert "POST repos/acme/consumer/issues/4077/labels" in log_text
+	assert "labels[]=ai:merge-queued" in log_text, "failed dispatch must restore the queue label"
 	assert "merge-train:released" not in log_text
+
+
+def test_release_leaves_active_review_queued_without_dispatch(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [{
+		"status": "in_progress",
+		"head_branch": "ai/issue-4064",
+		"path": ".github/workflows/ai-review.yml",
+	}]}), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+	assert "issues/4077/labels/ai%3Amerge-queued" not in log_text
+
+
+def test_release_dispatch_claim_prevents_concurrent_release(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "label_delete_fail").touch()
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_CLAIM_SKIPPED pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_cancel_on_close_releases_train_for_unmerged_prs() -> None:
+	workflow = (REPO_ROOT / ".github" / "workflows" / "cancel_on_pr_close.yml").read_text(encoding="utf-8")
+	release_step = workflow.split("- name: Release merge-queued PRs (merge train)", 1)[1]
+	assert "github.event.pull_request.merged == true" not in release_step
+	assert "whether it merged or not" in release_step
 
 
 def test_usage_error_for_unknown_subcommand(tmp_path: Path) -> None:

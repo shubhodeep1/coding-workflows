@@ -208,11 +208,9 @@ jobs:
           fi
 
       - name: Release merge-queued PRs (merge train)
-        # A merged ai/issue-* PR may have been blocking younger PRs that edit
-        # the same files (scripts/review_merge_train.sh). Re-evaluate the
-        # queue on this base right away so the next PR in line gets its
-        # review run without waiting for the poll backstop. Fail-open.
-        if: github.event.pull_request.merged == true
+        # A closed PR may have been blocking younger PRs that edit the same
+        # files (scripts/review_merge_train.sh), whether it merged or not.
+        # Re-evaluate immediately; core-profile repos have no poll backstop.
         shell: bash
         env:
           BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
@@ -225,7 +223,7 @@ jobs:
           case "${PR_HEAD_REF}" in
             ai/issue-*) ;;
             *)
-              echo "Merged PR #${PR_NUMBER} head '${PR_HEAD_REF}' is not an ai/issue-* branch; merge-train release still runs (base may have moved for queued PRs)."
+              echo "Closed PR #${PR_NUMBER} head '${PR_HEAD_REF}' is not an ai/issue-* branch; merge-train release still runs (the base may have changed for queued PRs)."
               ;;
           esac
           if [ ! -f scripts/review_merge_train.sh ]; then

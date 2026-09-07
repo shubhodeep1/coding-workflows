@@ -14,13 +14,13 @@
 # OLDER open ai/issue-* PR on the same base is queued — labelled
 # ai:merge-queued and its review run soft-exits — until every older
 # overlapping PR is merged or closed. The queue is released by the `release`
-# subcommand, run from cancel_on_pr_close.yml on every merged ai/issue-* PR
+# subcommand, run from cancel_on_pr_close.yml whenever a PR closes
 # (event path, immediate) and from orchestrate_poll.yml on every tick
 # (backstop; runs even when the repo has no active orchestrator project).
 #
 # Usage:
 #   review_merge_train.sh gate      # inside review_autofix.yml, before reviewers
-#   review_merge_train.sh release   # after a PR merges / on every poll tick
+#   review_merge_train.sh release   # after a PR closes / on every poll tick
 #
 # Env (both):
 #   GH_TOKEN, GITHUB_REPOSITORY            required
@@ -43,12 +43,14 @@
 #            ceil(files/100) `pulls/N/files` calls per older ai/issue-* PR,
 #            at most MERGE_TRAIN_MAX_OLDER_PRS PRs; this PR's own paths come
 #            from PR_DIFF_FILE (already fetched by review_collect_pr_metadata.sh)
-#            and only fall back to one `pulls/PR/files` call when that file is
-#            empty; +1 label call and +1-2 comment calls only when the queued
-#            state or blocker set changes.
-#   release: 1 list call (open PRs, all bases, 100 per page) + files calls as
-#            above, cached per PR for the run; per released PR 1 label removal,
-#            1 comment, 1 workflow dispatch.
+#            and fall back to one `pulls/PR/files` call when the diff is empty,
+#            unparseable, or uses Git C-quoted paths; +1 label call and +1-2
+#            comment calls only when the queued state or blocker set changes.
+#   release: 1 list call (open PRs, all bases, 100 per page) + 1 recent-runs
+#            call that prevents dispatch beside an active review + files calls
+#            as above, cached per PR for the run; per released PR 1 label-removal
+#            claim, 1 comment, 1 workflow dispatch. A failed dispatch restores
+#            the label so the next release invocation retries it.
 #
 # Fail-open contract: any API failure, missing input or unexpected shape logs
 # a ::warning:: and exits 0 WITHOUT queuing (gate) or WITHOUT releasing
@@ -77,10 +79,11 @@ MT_MAX_OLDER="${MERGE_TRAIN_MAX_OLDER_PRS:-20}"
 MT_REPO="${GITHUB_REPOSITORY:-}"
 MT_MARKER="<!-- merge-train:queued -->"
 MT_RELEASED_MARKER="<!-- merge-train:released -->"
+MT_BYPASSED_MARKER="<!-- merge-train:bypassed -->"
 [[ "${MT_MAX_OLDER}" =~ ^[0-9]+$ ]] || MT_MAX_OLDER=20
 
-case "${MT_ENABLED}" in
-	true|TRUE|True|1|yes|on) ;;
+case "$(printf '%s' "${MT_ENABLED}" | tr '[:upper:]' '[:lower:]')" in
+	true|1|yes|on) ;;
 	*)
 		_mt_log "MERGE_TRAIN_DISABLED subcommand=${MT_SUBCOMMAND:-none} MERGE_TRAIN_ENABLED=${MT_ENABLED}"
 		exit 0
@@ -121,10 +124,20 @@ _mt_pr_files() {
 _mt_own_files() {
 	local pr="$1" diff_file="${PR_DIFF_FILE:-}"
 	if [ -n "${diff_file}" ] && [ -s "${diff_file}" ]; then
+		# Git C-quotes headers containing non-ASCII/control bytes. The REST
+		# filenames are canonical, so use them rather than compare quoted text.
+		if grep -q '^diff --git "' "${diff_file}"; then
+			_mt_pr_files "${pr}"
+			return $?
+		fi
 		# `diff --git a/<old> b/<new>` — take the b/ side; renames count on
 		# both sides so the old path is included too.
-		sed -n 's#^diff --git a/\(.*\) b/\(.*\)$#\1\n\2#p' "${diff_file}" | sed '/^$/d' | sort -u
-		return 0
+		local parsed_files
+		parsed_files="$(sed -n 's#^diff --git a/\(.*\) b/\(.*\)$#\1\n\2#p' "${diff_file}" | sed '/^$/d' | sort -u)"
+		if [ -n "${parsed_files}" ]; then
+			printf '%s' "${parsed_files}"
+			return 0
+		fi
 	fi
 	_mt_pr_files "${pr}"
 }
@@ -196,13 +209,25 @@ _mt_ensure_label() {
 	fi
 }
 
+# Find the latest comment carrying a marker. An empty result is a successful
+# "not found"; API failure returns non-zero so the gate can fail open.
+_mt_find_marker_comment_id()
+{
+	local pr="$1" marker="$2"
+	gh_retry gh api --paginate "repos/${MT_REPO}/issues/${pr}/comments?per_page=100" \
+		--jq ".[] | select(.body | startswith(\"${marker}\")) | .id" 2>/dev/null | tail -n 1
+}
+
 # Upsert one marker comment per PR so repeated gate runs never spam.
-# $1 = pr, $2 = marker, $3 = body. Skips the write when an identical body
-# already carries the marker.
+# $1 = pr, $2 = marker, $3 = body, $4 = optional already-looked-up comment id.
+# Skips the write when an identical body already carries the marker.
 _mt_upsert_comment() {
-	local pr="$1" marker="$2" body="$3" existing_id existing_body
-	existing_id="$(gh_retry gh api --paginate "repos/${MT_REPO}/issues/${pr}/comments?per_page=100" \
-		--jq ".[] | select(.body | startswith(\"${marker}\")) | .id" 2>/dev/null | tail -n 1 || true)"
+	local pr="$1" marker="$2" body="$3" existing_id="" existing_body
+	if [ "$#" -ge 4 ]; then
+		existing_id="$4"
+	elif ! existing_id="$(_mt_find_marker_comment_id "${pr}" "${marker}")"; then
+		return 1
+	fi
 	if [[ "${existing_id}" =~ ^[0-9]+$ ]]; then
 		existing_body="$(gh_retry gh api "repos/${MT_REPO}/issues/comments/${existing_id}" --jq '.body' 2>/dev/null || true)"
 		if [ "${existing_body}" = "${body}" ]; then
@@ -228,7 +253,7 @@ _mt_has_label() {
 _mt_gate() {
 	local pr="${PR_NUMBER:-}" base="${BASE_BRANCH:-}" head="${TARGET_BRANCH:-}"
 	if ! [[ "${pr}" =~ ^[0-9]+$ ]] || [ -z "${base}" ] || [ -z "${head}" ]; then
-		_mt_warn "merge-train gate: PR_NUMBER/BASE_BRANCH/TARGET_BRANCH missing; fail-open (not queued)."
+		_mt_warn "merge-train gate: invalid inputs PR_NUMBER='${pr}' BASE_BRANCH='${base}' TARGET_BRANCH='${head}'; fail-open (not queued)."
 		return 0
 	fi
 	if [[ "${head}" != "${MT_PREFIX}"* ]]; then
@@ -252,7 +277,7 @@ _mt_gate() {
 		_mt_warn "merge-train gate: could not list files of an older PR; fail-open (not queued)."
 		return 0
 	fi
-	local own_labels
+	local own_labels queued_comment_id
 	own_labels="$(printf '%s\n' "${prs_json}" | jq -r --argjson n "${pr}" 'select(.number == $n) | .labels | join(",")' 2>/dev/null | head -n 1 || true)"
 	if [ -z "${blockers}" ]; then
 		_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=unblocked action=continue"
@@ -260,6 +285,18 @@ _mt_gate() {
 			gh_retry gh api -X DELETE "repos/${MT_REPO}/issues/${pr}/labels/$(printf '%s' "${MT_LABEL}" | jq -sRr @uri)" >/dev/null 2>&1 || true
 			_mt_log "MERGE_TRAIN_RELEASED pr=${pr} source=gate"
 		fi
+		return 0
+	fi
+	if ! queued_comment_id="$(_mt_find_marker_comment_id "${pr}" "${MT_MARKER}")"; then
+		_mt_warn "merge-train gate: could not inspect prior queue state for PR #${pr}; fail-open (not queued)."
+		return 0
+	fi
+	if ! _mt_has_label "${own_labels}" && [[ "${queued_comment_id}" =~ ^[0-9]+$ ]]; then
+		gh_retry gh api -X PATCH "repos/${MT_REPO}/issues/comments/${queued_comment_id}" \
+			-f body="${MT_BYPASSED_MARKER}
+**Merge train bypassed once.** The queue label was removed while older overlapping PRs remain open, so this review run is proceeding. A later run will evaluate the train normally." >/dev/null 2>&1 \
+			|| _mt_warn "merge-train gate: could not persist the one-shot bypass marker for PR #${pr}; this run still proceeds."
+		_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=bypassed blockers=$(printf '%s\n' "${blockers}" | sed 's/:.*//' | paste -sd, -) action=continue"
 		return 0
 	fi
 	local blocker_numbers blocker_lines
@@ -272,12 +309,12 @@ _mt_gate() {
 			|| _mt_warn "merge-train gate: could not add ${MT_LABEL} to PR #${pr}; the run still soft-exits."
 	fi
 	_mt_upsert_comment "${pr}" "${MT_MARKER}" "${MT_MARKER}
-**Review queued (merge train).** This PR edits files that older open PRs on \`${base}\` also change, so its review/autofix run waits until they merge or close. Lowest PR number goes first; the queue is released automatically when a blocker merges (and re-checked on every orchestrator poll tick).
+**Review queued (merge train).** This PR edits files that older open PRs on \`${base}\` also change, so its review/autofix run waits until they merge or close. Lowest PR number goes first; the queue is released automatically when a blocker closes (and re-checked on every orchestrator poll tick).
 
 Blocked by:
 ${blocker_lines}
 
-Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, or remove the \`${MT_LABEL}\` label and re-run the review to bypass it once."
+Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, or remove the \`${MT_LABEL}\` label and re-run the review to bypass it once." "${queued_comment_id}"
 	if [ -n "${GITHUB_ENV:-}" ]; then
 		{
 			echo "AUTOFIX_MERGE_QUEUED=true"
@@ -291,6 +328,14 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 # ---------------------------------------------------------------------------
 # release
 # ---------------------------------------------------------------------------
+# The open-PR list cannot report active workflow runs. One cycle-local Actions
+# lookup covers every queued PR and avoids a per-PR API call inside the loop.
+_mt_inflight_review_branches()
+{
+	gh_retry gh api -X GET "repos/${MT_REPO}/actions/runs?per_page=100" \
+		--jq '.workflow_runs[]? | select(.status == "queued" or .status == "pending" or .status == "in_progress") | select((.path // "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | .head_branch // empty' 2>/dev/null | sort -u
+}
+
 _mt_dispatch_review() {
 	local pr="$1" head="$2" wf
 	local allow_edits="${MERGE_TRAIN_ALLOW_WORKFLOW_EDITS:-true}"
@@ -305,10 +350,14 @@ _mt_dispatch_review() {
 }
 
 _mt_release() {
-	local base_filter="${BASE_BRANCH:-}" prs_json line num head base labels files blockers released=0 examined=0
+	local base_filter="${BASE_BRANCH:-}" prs_json line num head base labels files blockers inflight_review_branches="" released=0 examined=0
 	if ! prs_json="$(_mt_list_open_prs "")"; then
 		_mt_warn "merge-train release: could not list open PRs; fail-open (nothing released)."
 		return 0
+	fi
+	if ! inflight_review_branches="$(_mt_inflight_review_branches)"; then
+		_mt_warn "merge-train release: could not list active review runs; continuing without the dispatch-dedup guard."
+		inflight_review_branches=""
 	fi
 	while IFS= read -r line; do
 		[ -n "${line}" ] || continue
@@ -322,6 +371,10 @@ _mt_release() {
 			continue
 		fi
 		examined=$((examined + 1))
+		if [ -n "${inflight_review_branches}" ] && printf '%s\n' "${inflight_review_branches}" | grep -Fxq -- "${head}"; then
+			_mt_log "MERGE_TRAIN_RELEASE_ACTIVE pr=${num} head=${head} action=leave_queued"
+			continue
+		fi
 		if ! files="$(_mt_pr_files "${num}")"; then
 			_mt_warn "merge-train release: could not list files for queued PR #${num}; leaving it queued."
 			continue
@@ -334,18 +387,21 @@ _mt_release() {
 			_mt_log "MERGE_TRAIN_STILL_QUEUED pr=${num} blockers=$(printf '%s\n' "${blockers}" | sed 's/:.*//' | paste -sd, -)"
 			continue
 		fi
-		# Dispatch first, then drop the label: `release` selects queued PRs
-		# by label, so removing it before a failed dispatch would strand the
-		# PR until some other event re-ran its review.
+		# Claim this release by removing the queue label. Concurrent release
+		# invocations cannot both claim it; restore the label if dispatch fails.
+		if ! gh_retry gh api -X DELETE "repos/${MT_REPO}/issues/${num}/labels/$(printf '%s' "${MT_LABEL}" | jq -sRr @uri)" >/dev/null 2>&1; then
+			_mt_log "MERGE_TRAIN_RELEASE_CLAIM_SKIPPED pr=${num} action=leave_to_peer"
+			continue
+		fi
 		if _mt_dispatch_review "${num}" "${head}"; then
-			gh_retry gh api -X DELETE "repos/${MT_REPO}/issues/${num}/labels/$(printf '%s' "${MT_LABEL}" | jq -sRr @uri)" >/dev/null 2>&1 \
-				|| _mt_warn "merge-train release: could not remove ${MT_LABEL} from PR #${num}; the gate drops it on the dispatched run."
 			_mt_upsert_comment "${num}" "${MT_RELEASED_MARKER}" "${MT_RELEASED_MARKER}
 **Merge train released.** Every older PR that edited the same files has merged or closed; the review/autofix run was re-dispatched on \`${head}\`."
 			released=$((released + 1))
 			_mt_log "MERGE_TRAIN_RELEASED pr=${num} source=release"
 		else
-			_mt_warn "merge-train release: PR #${num} unblocked but the review workflow could not be dispatched; ${MT_LABEL} stays so the next merge event or poll tick retries."
+			gh_retry gh api -X POST "repos/${MT_REPO}/issues/${num}/labels" -f "labels[]=${MT_LABEL}" >/dev/null 2>&1 \
+				|| _mt_warn "merge-train release: dispatch and ${MT_LABEL} restoration both failed for PR #${num}; a later PR event must re-evaluate it."
+			_mt_warn "merge-train release: PR #${num} unblocked but the review workflow could not be dispatched; ${MT_LABEL} was restored for the next close event or poll tick."
 		fi
 	done < <(printf '%s\n' "${prs_json}")
 	_mt_log "MERGE_TRAIN_RELEASE_SUMMARY examined=${examined} released=${released} base_filter=${base_filter:-*}"
