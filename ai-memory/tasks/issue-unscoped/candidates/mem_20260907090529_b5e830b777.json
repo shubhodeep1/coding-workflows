@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/security-pass-convergence-plan.md:steps 8, 22, 28 | severity=high | confidence=4\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: the plan instructs creating changelog fragments without the mandatory `<issue-or-pr>-` numeric prefix required by CLAUDE.md \u00a720.B\n  WHY: \u00a720.B requires fragment paths of the form `changelog.d/<issue-or-pr>-<slug>.md`; the planned bare-slug paths violate that documented contract\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Phase 2 step 15 must specify a single, unambiguous gate for when `SECURITY_AUDIT_NEW_SINCE_SHA` is forwarded to the engine.\n  expected_change_site: docs/plans/security-pass-convergence-plan.md, the step 15 prose in the Phase 2 implementation steps section\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The step 15 bullet says `SECURITY_AUDIT_NEW_SINCE_SHA` is set when non-empty, an ancestor of the head, and the prior status is `blocked`, but also says a `passed` prior status passes the last audited SHA; these clauses are mutually exclusive readings.\n\n- requirement: Phase 2 step 14 must make explicit how `security_pass_rebind_if_no_new_project_lines` obtains `merge_base_sha`.\n  expected_change_site: docs/plans/security-pass-convergence-plan.md, the step 14 paragraph and the Phase 2 approach diagram\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Step 14 says the function receives `merge_base_sha` and is called before the existing `prior_security_status = passed` budget reset, but `scripts/orchestrate_poll_process.sh:4954` computes `merge_base_sha` after that reset.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/plans/security-pass-convergence-plan.md, the step 15 prose in the Phase 2 implementation steps section | severity=NIT | confidence=3\n  PROBLEM: Phase 2 step 15 does not specify a single, unambiguous gate for when `SECURITY_AUDIT_NEW_SINCE_SHA` is forwarded to the engine.\n  WHY: The prose says the env var is set when non-empty, an ancestor of the head, and the prior status is `blocked`, then says a `passed` prior status also passes the last audited SHA, creating mutually exclusive interpretations.\n\n- docs/plans/security-pass-convergence-plan.md, the step 14 paragraph and the Phase 2 approach diagram | severity=NIT | confidence=3\n  PROBLEM: Phase 2 step 14 does not make explicit how `security_pass_rebind_if_no_new_project_lines` obtains `merge_base_sha`.\n  WHY: `scripts/orchestrate_poll_process.sh:4954` computes `merge_base_sha` after the existing `prior_security_status = passed` budget reset, although the planned rebind call is placed before that reset.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- docs/plans/security-pass-convergence-plan.md:step 8 (`changelog.d/security-pass-convergence-engine.md`), step 22 (`changelog.d/security-pass-convergence-poller.md`), and step 28 (`changelog.d/security-pass-convergence-waive.md`) | severity=MAJOR | confidence=4\n  PROBLEM: the plan instructs creating changelog fragments without the mandatory `<issue-or-pr>-` numeric prefix required by CLAUDE.md \u00a720.B\n  WHY: \u00a720.B requires fragment paths of the form `changelog.d/<issue-or-pr>-<slug>.md`; bare slugs violate the documented contract and will be flagged by PR review's fragment checks.\n\n- docs/plans/security-pass-convergence-plan.md:steps 8, 22, 28 | severity=MAJOR | confidence=4\n  PROBLEM: changelog fragment filenames omit the `<issue-or-pr>-` prefix mandated by CLAUDE.md \u00a720.B\n  WHY: the suggested minimal fix is to rename the three planned fragments to `changelog.d/<issue>-security-pass-convergence-engine.md`, `-poller.md`, and `-waive.md`, with numbers assigned when each phase PR opens.\n\n- advisory-followup dedupe in step 18\n  PROBLEM: the advisory-followup dedupe checks the `<!-- ai:security-finding:<id> -->` marker only against open `ai:security` issues plus the per-project `security_pass_followup_issues` state.\n  WHY: a follow-up issue that an operator closes without fixing can be re-filed by a later project that re-encounters the same pre-existing finding; the 5-per-run cap bounds the noise.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "8715a82f9034f8c8b6015a3b7e1137e8b1c19b8def1eb7b07f16331a2c2c3b5e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34101492734",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34101492734",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260907090529_b5e830b777",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34101492734"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-07T09:05:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
