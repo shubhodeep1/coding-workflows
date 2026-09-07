@@ -184,8 +184,11 @@ def read_tokens_log_tail(tokens_log_path, tail_max_bytes):
 	3-hour implement job to two such calls; the log carried no `usage`
 	object at all and its only `tokens used` line sat 20 bytes from EOF).
 
-	A `tail_max_bytes` of 0 or less disables the bound and reads the whole
-	file.
+	A `tail_max_bytes` of exactly 0 disables the bound and reads the whole
+	file.  That is the only disabling value that can reach here: the caller
+	derives it from LEDGER_TOKENS_LOG_MAX_BYTES through parse_int(), which
+	yields a non-negative integer or None, and None becomes the default.
+	The `<= 0` guard below is defensive for direct callers, not a contract.
 	"""
 	if tail_max_bytes <= 0:
 		return tokens_log_path.read_text(encoding="utf-8", errors="replace")
