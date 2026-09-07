@@ -956,12 +956,9 @@ request_re = re.compile(r"<!-- REVIEW_BLOCKED_APPROVAL_V1\s*\n(\{.*?\})\s*\nREVI
 consumed_re = re.compile(r"<!-- REVIEW_BLOCKED_APPROVAL_CONSUMED_V1\s*\n(\{.*?\})\s*\nREVIEW_BLOCKED_APPROVAL_CONSUMED_V1 -->", re.S)
 requests = []
 consumed = set()
-trusted = {"OWNER", "MEMBER", "COLLABORATOR"}
 for comment in comments if isinstance(comments, list) else []:
     if not isinstance(comment, dict): continue
-    trusted_producer = comment.get("author_association") in trusted or (
-        comment.get("author_type") == "Bot" and comment.get("author") in {"github-actions", "github-actions[bot]", "codex", "codex-bot"}
-    )
+    trusted_producer = comment.get("author_type") == "Bot" and comment.get("author") in {"github-actions", "github-actions[bot]", "codex", "codex-bot"}
     if not trusted_producer: continue
     body = comment.get("body", "") if isinstance(comment, dict) else ""
     for match in consumed_re.finditer(body):

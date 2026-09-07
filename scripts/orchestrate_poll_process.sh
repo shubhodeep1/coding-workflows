@@ -17674,6 +17674,7 @@ ${RB_DECISION_REFUSAL_MARKER}"
               continue
             fi
             echo "  Terminal recommendation for PR #${RB_PR} remains pending trusted human approval."
+            tg_notify "Review-blocked terminal recommendation for PR #${RB_PR} requires trusted human approval."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "CRITICAL"
             REVIEW_BLOCKED_STATE_CHANGED=true
             continue
           fi

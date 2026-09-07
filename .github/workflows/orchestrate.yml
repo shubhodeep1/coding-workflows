@@ -888,8 +888,15 @@ jobs:
           done
 
       - name: Validate decomposition JSON
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
 
           # JSON extraction and the author-enumeration count check ran in
           # the previous step's retry loop; ${DECOMPOSITION_FILE} is

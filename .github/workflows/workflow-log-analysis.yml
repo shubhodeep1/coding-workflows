@@ -1468,6 +1468,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
           if [ "${GITHUB_REF_TYPE:-}" != "branch" ]; then
             echo "::error::Deep audit requires a branch ref for report sync/push (got ref_type='${GITHUB_REF_TYPE:-unknown}', ref_name='${GITHUB_REF_NAME:-unknown}')."
             exit 1
@@ -1978,6 +1982,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
           if [ "${GITHUB_REF_TYPE:-}" != "branch" ]; then
             echo "::error::API redundancy pass requires a branch ref for report sync/push (got ref_type='${GITHUB_REF_TYPE:-unknown}', ref_name='${GITHUB_REF_NAME:-unknown}')."
             exit 1

@@ -1702,7 +1702,7 @@ case "${RB_ACTION}" in
       fi
       echo "judge_handled=true" >> "$GITHUB_OUTPUT"
       echo "judge_action=approval_pending" >> "$GITHUB_OUTPUT"
-      echo "judge_skip_reason=approval_pending" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=approval_request_created" >> "$GITHUB_OUTPUT"
       exit 0
     fi
     RB_APPROVAL_STATUS="$(review_blocked_approval_status "${PR_COMMENTS}" "${RB_APPROVAL_REQUEST}")"

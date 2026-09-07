@@ -57,6 +57,7 @@ def test_production_git_urls_do_not_embed_tokens() -> None:
 
 def test_networked_git_steps_use_ephemeral_authentication() -> None:
 	expected_steps = {
+		"orchestrate.yml": ["Validate decomposition JSON"],
 		"review_autofix.yml": [
 			"Checkout PR head branch",
 			"Count autofix iterations",
@@ -68,6 +69,7 @@ def test_networked_git_steps_use_ephemeral_authentication() -> None:
 		"update_workflows.yml": ["Commit and push updates"],
 		"validation-improvements-intake.yml": ["Commit, push, and open draft PR"],
 		"workflow-log-analysis.yml": [
+			"Sync latest report from target branch",
 			"Commit and push report",
 			"Commit and push deep audit section",
 			"Commit and push API redundancy section",
@@ -82,6 +84,13 @@ def test_networked_git_steps_use_ephemeral_authentication() -> None:
 			assert "GIT_CONFIG_VALUE_0" in step_block, f"{workflow_name}: {step_name}"
 		if workflow_name == "review_autofix.yml":
 			assert 'echo "GIT_CONFIG_VALUE_0=' not in text, "Git auth must not persist into model steps"
+		if workflow_name == "workflow-log-analysis.yml":
+			sync_step_matches = list(re.finditer(r"(?m)^      - name: Sync latest report from target branch$", text))
+			assert len(sync_step_matches) == 2
+			for sync_step_match in sync_step_matches:
+				sync_step_end = text.find("\n      - name:", sync_step_match.end())
+				sync_step_block = text[sync_step_match.start() : sync_step_end if sync_step_end >= 0 else None]
+				assert "GIT_CONFIG_VALUE_0" in sync_step_block
 
 	memory_helpers = (REPO_ROOT / "scripts" / "memory_helpers.sh").read_text(encoding="utf-8")
 	assert '_memory_git ls-remote --heads origin "${branch}"' in memory_helpers
@@ -156,6 +165,8 @@ def test_approval_pending_is_handled_without_critical_alerts() -> None:
 	approval_end = judge_text.index("# Execute judge action", approval_start)
 	approval_block = judge_text[approval_start:approval_end]
 	assert approval_block.count('echo "judge_handled=true" >> "$GITHUB_OUTPUT"') == 2
+	assert 'echo "judge_skip_reason=approval_request_created"' in approval_block
+	assert 'echo "judge_skip_reason=approval_pending"' in approval_block
 	assert 'while [ "${RB_MERGE_POLL_INDEX}" -lt "${RB_MERGE_POLL_ATTEMPTS}" ]' in judge_text
 	assert 'if .mergeable == true then "true" elif .mergeable == false then "false" else empty end' in judge_text
 	assert 'echo "judge_skip_reason=mergeability_pending"' in judge_text
@@ -163,8 +174,13 @@ def test_approval_pending_is_handled_without_critical_alerts() -> None:
 
 	workflow_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
 	assert "approval_pending)" in workflow_text
+	assert '[ "${JUDGE_SKIP_REASON}" = "approval_request_created" ]' in workflow_text
+	assert "terminal recommendation needs trusted human approval" in workflow_text
 	assert "suppressing duplicate alert" in workflow_text
 	assert "Review-blocked refusal was already recorded" in workflow_text
+
+	poller_text = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert 'requires trusted human approval."$\'\\n\'' in poller_text
 
 
 def test_outsider_cannot_forge_request_or_consumed_markers() -> None:
@@ -183,6 +199,8 @@ def test_outsider_cannot_forge_request_or_consumed_markers() -> None:
 	body = "<!-- REVIEW_BLOCKED_APPROVAL_V1\n" + json.dumps(request) + "\nREVIEW_BLOCKED_APPROVAL_V1 -->"
 	outsider = {"body": body, "author": "outsider", "author_type": "User", "author_association": "NONE"}
 	assert _pending_request([outsider], head_sha) == ""
+	trusted_human = {"body": body, "author": "maintainer", "author_type": "User", "author_association": "OWNER"}
+	assert _pending_request([trusted_human], head_sha) == ""
 	producer = {"body": body, "author": "github-actions[bot]", "author_type": "Bot", "author_association": "NONE"}
 	forged_consumed = {
 		"body": "<!-- REVIEW_BLOCKED_APPROVAL_CONSUMED_V1\n"
@@ -193,6 +211,8 @@ def test_outsider_cannot_forge_request_or_consumed_markers() -> None:
 		"author_association": "NONE",
 	}
 	assert json.loads(_pending_request([producer, forged_consumed], head_sha))["request_id"] == request["request_id"]
+	trusted_human_consumed = {**forged_consumed, "author": "maintainer", "author_association": "MEMBER"}
+	assert json.loads(_pending_request([producer, trusted_human_consumed], head_sha))["request_id"] == request["request_id"]
 
 
 def main() -> int:
