@@ -4777,19 +4777,17 @@ security_pass_fix_reissue_exhausted() {
   local issue_number="$1"
   local reissue_count="$2"
 
-  # Close the exhausted fix issue: create_security_pass_fix_issue reuses any
-  # OPEN managed issue carrying the same tracking + local-id body markers,
-  # whatever its phase label, so leaving it open would make the audit that
-  # follows /re-security-pass adopt this dead issue again.
-  if ! gh_retry gh issue close "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
-    -c "Closing: implementation failed again after ${reissue_count} re-issue(s) (MAX_SECURITY_PASS_FIX_REISSUES=${MAX_SECURITY_PASS_FIX_REISSUES}). The project security pass is now failed; address the findings manually, then comment \`/re-security-pass\` on the tracking issue." 2>/dev/null; then
-    echo "::warning::Could not close exhausted security-pass fix issue #${issue_number}; retaining fixing state so the next poll retries before /re-security-pass can re-adopt it."
-    return 0
-  fi
+  # De-manage the exhausted issue before closing it so a close failure cannot
+  # make a later /re-security-pass adopt this dead issue again.
   ensure_label_exists "ai:closed"
   gh_retry gh issue edit "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
-    --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null \
-    || echo "::warning::Closed exhausted security-pass fix issue #${issue_number}, but could not update its terminal labels."
+    --remove-label 'ai:implementation-failed' --remove-label 'ai:orchestrator-managed' \
+    --add-label 'ai:closed' 2>/dev/null \
+    || echo "::warning::Could not update terminal labels on exhausted security-pass fix issue #${issue_number}."
+  if ! gh_retry gh issue close "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
+    -c "Closing: implementation failed again after ${reissue_count} re-issue(s) (MAX_SECURITY_PASS_FIX_REISSUES=${MAX_SECURITY_PASS_FIX_REISSUES}). The project security pass is now failed; address the findings manually, then comment \`/re-security-pass\` on the tracking issue." 2>/dev/null; then
+    echo "::warning::Could not close exhausted security-pass fix issue #${issue_number}; terminalizing the project after removing it from managed-issue reuse."
+  fi
   if jq '
     .status = "failed"
     | .security_pass_status = "failed"
@@ -4801,7 +4799,7 @@ security_pass_fix_reissue_exhausted() {
     :
   else
     rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
-    echo "::warning::Closed exhausted security-pass fix issue #${issue_number}, but could not persist the terminal project state; the next poll will reconcile the closed issue."
+    echo "::warning::Could not persist terminal project state after exhausting security-pass fix issue #${issue_number}; the next poll will reconcile the terminal issue."
     return 0
   fi
   echo "SECURITY_PASS_FAILED reason=fix_issue_implementation_failed_reissues_exhausted tracking_issue=${TRACKING_NUM} issue=${issue_number} reissues=${reissue_count} cap=${MAX_SECURITY_PASS_FIX_REISSUES}"
@@ -4958,8 +4956,9 @@ security_pass_handle_failed_fix_issue() {
     # The body carries the durable "- Tracking issue" / "- Local ID" markers
     # that create_security_pass_fix_issue dedups on; copy it verbatim so the
     # successor stays discoverable, and refuse to re-issue without it.
-    issue_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_number}" --jq '.title // ""' || echo "")"
-    issue_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+    issue_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_number}" --jq '{title: (.title // ""), body: (.body // "")}' || echo "")"
+    issue_title="$(printf '%s' "${issue_body}" | jq -r '.title // ""' 2>/dev/null || echo "")"
+    issue_body="$(printf '%s' "${issue_body}" | jq -r '.body // ""' 2>/dev/null || echo "")"
     if [ -z "${issue_body}" ] || [ "${issue_body}" = "null" ]; then
       echo "::warning::Security-pass fix issue #${issue_number} body could not be read; retaining fixing state and retrying the re-issue next poll."
       return 0
@@ -5036,7 +5035,8 @@ REISSUE_EOF
 
   ensure_label_exists "ai:closed"
   gh_retry gh issue edit "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
-    --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
+    --remove-label 'ai:implementation-failed' --remove-label 'ai:orchestrator-managed' \
+    --add-label 'ai:closed' 2>/dev/null || true
   if [ "${mode}" = "post-codex-validation" ]; then
     gh_retry gh issue close "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
       -c "Closing: implementation failed in post-Codex validation. Blocker fix-up issues are no longer open, so this security-pass fix is re-issued as #${new_issue_num} with blocker-sequenced guidance." 2>/dev/null \
@@ -5146,6 +5146,11 @@ PY
         [
           .[][]
           | select(.pull_request | not)
+          | select(
+              ([(.labels // [])[] | if type == "object" then (.name // "") else . end]
+                | map(select(. == "ai:implementation-failed" or . == "ai:closed"))
+                | length) == 0
+            )
           | select(
               (((.body // "") | split("\n") | index($tracking_marker)) != null)
               and (((.body // "") | split("\n") | index($local_id_marker)) != null)

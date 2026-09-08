@@ -1828,6 +1828,7 @@ if args[0] == 'api':
 			managed_issue_payload = {
 				'number': int(managed_issue_num),
 				'body': managed_issue_data.get('body', ''),
+				'labels': [{'name': label} for label in managed_issue_data.get('labels', [])],
 			}
 			if managed_issue_data.get('pull_request'):
 				managed_issue_payload['pull_request'] = managed_issue_data['pull_request']
@@ -2039,6 +2040,7 @@ if args[0] == 'api':
 			print(p.stdout, end='')
 		else:
 			print(json.dumps({'body': issue.get('body', ''), 'state': issue_state}))
+		save()
 		sys.exit(0)
 
 	m = re.search(r'/pulls/(\d+)$', path)
@@ -3455,10 +3457,11 @@ def test_security_pass_reuses_matching_open_fix_issue_after_stale_checkpoint() -
 		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
 		issue_labels={
 			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
 			**prefix_collision_issues,
 			901: ["ai:orchestrator-managed"],
 		},
-		issue_bodies={**prefix_collision_bodies, 901: existing_fix_body},
+		issue_bodies={700: existing_fix_body, **prefix_collision_bodies, 901: existing_fix_body},
 		existing_branches=["main", "orchestrator/project-192"],
 	)
 
@@ -4551,11 +4554,15 @@ def test_security_pass_reissue_adopts_existing_successor_without_duplicate() -> 
 			700: _security_pass_fix_issue_body(192, 2),
 			900: existing_successor_body,
 		},
+		fail_issue_close_for=[700],
 		existing_branches=["main", "orchestrator/project-192"],
 	)
 
 	assert result.get("created_issues", []) == []
-	assert result["closed_issues"] == [700]
+	assert result["closed_issues"] == []
+	assert "ai:closed" in result["issues"]["700"]["labels"]
+	assert "ai:implementation-failed" not in result["issues"]["700"]["labels"]
+	assert "ai:orchestrator-managed" not in result["issues"]["700"]["labels"]
 	assert result["latest_state"]["security_pass_active_fix_issues"] == [900]
 	assert result["latest_state"]["security_pass_fix_reissue_count"] == 1
 	combined_log = result["stdout"] + result["stderr"]
@@ -4587,6 +4594,7 @@ def test_security_pass_implementation_failed_noop_fix_is_reissued_with_noop_guid
 	assert result["latest_state"]["security_pass_fix_reissue_count"] == 1
 	combined_log = result["stdout"] + result["stderr"]
 	assert f"successor={new_issue_num} mode=no-op-implementation reissue=1/2" in combined_log
+	assert sum(path.endswith("/issues/700") for path in result["api_calls"]) == 1
 
 
 def test_security_pass_implementation_failed_reissue_cap_terminalizes_recoverably() -> None:
@@ -4639,13 +4647,15 @@ def test_security_pass_reissue_cap_close_failure_retains_fixing_state() -> None:
 
 	assert result.get("created_issues", []) == []
 	assert result["closed_issues"] == []
-	assert "ai:implementation-failed" in result["issues"]["700"]["labels"]
-	assert result["latest_state"]["status"] == "security-pass-fixing"
-	assert result["latest_state"]["security_pass_active_fix_issues"] == [700]
-	assert result["latest_state"]["security_pass_fix_reissue_count"] == 2
+	assert "ai:closed" in result["issues"]["700"]["labels"]
+	assert "ai:implementation-failed" not in result["issues"]["700"]["labels"]
+	assert "ai:orchestrator-managed" not in result["issues"]["700"]["labels"]
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["security_pass_active_fix_issues"] == []
+	assert "security_pass_fix_reissue_count" not in result["latest_state"]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "Could not close exhausted security-pass fix issue #700" in combined_log
-	assert "SECURITY_PASS_FAILED" not in combined_log
+	assert "SECURITY_PASS_FAILED" in combined_log
 
 
 def test_security_pass_judge_validation_route_blocks_then_clean_pass_dispatches() -> None:
