@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import time
+import unittest
 from pathlib import Path
 
 
@@ -2496,7 +2497,8 @@ sys.exit(1)
 		real_jq = shutil.which("jq")
 		real_python = shutil.which("python3")
 		assert real_git is not None
-		assert real_jq is not None
+		if real_jq is None:
+			raise unittest.SkipTest("jq binary not available in test environment")
 		assert real_python is not None
 		_write_exec(
 			bin_dir / "git",
@@ -2604,7 +2606,7 @@ sys.exit(proc.returncode)
 r'''#!/usr/bin/env bash
 if [ "${MOCK_SECURITY_PASS_REISSUE_STATE_PERSIST_FAIL:-false}" = "true" ]; then
 	for jq_argument in "$@"; do
-		if [[ "${jq_argument}" == *'.security_pass_active_fix_issues = [$successor]'* ]]; then
+		if [ "${jq_argument}" = "reissues" ]; then
 			exit 1
 		fi
 	done
@@ -18133,6 +18135,7 @@ def _run_selected_tests(
 ) -> int:
 	passed = 0
 	failed = 0
+	skipped = 0
 	results: list[tuple[str, int, str]] = []
 	runner_output = sys.stdout
 	for func in test_funcs:
@@ -18173,6 +18176,9 @@ def _run_selected_tests(
 		status = "pass"
 		try:
 			func()
+		except unittest.SkipTest as exc:
+			failure = exc
+			status = "skip"
 		except Exception as exc:
 			failure = exc
 			status = "fail"
@@ -18191,7 +18197,10 @@ def _run_selected_tests(
 		elapsed_ms = _test_elapsed_ms(started_at)
 		results.append((name, elapsed_ms, status))
 		_emit_test_runner_event("complete", name, elapsed_ms, status, runner_output)
-		if failure is None:
+		if status == "skip":
+			print(f"  SKIP  {name}: {failure}", file=runner_output, flush=True)
+			skipped += 1
+		elif failure is None:
 			print(f"  PASS  {name}", file=runner_output, flush=True)
 			passed += 1
 		else:
@@ -18206,8 +18215,11 @@ def _run_selected_tests(
 			"slowest", name, elapsed_ms, status, runner_output, rank=rank
 		)
 
+	summary = f"{passed} passed, {failed} failed"
+	if skipped:
+		summary += f", {skipped} skipped"
 	print(
-		f"\n{passed} passed, {failed} failed, {passed + failed} total",
+		f"\n{summary}, {passed + failed + skipped} total",
 		file=runner_output,
 		flush=True,
 	)
@@ -18228,10 +18240,13 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 	def synthetic_failure():
 		raise RuntimeError("synthetic failure")
 
+	def synthetic_skip():
+		raise unittest.SkipTest("synthetic skip")
+
 	output = io.StringIO()
 	with contextlib.redirect_stdout(output):
 		exit_code = _run_selected_tests(
-			[synthetic_fast, synthetic_slow, synthetic_failure],
+			[synthetic_fast, synthetic_slow, synthetic_failure, synthetic_skip],
 			heartbeat_interval_sec=0.005,
 			slowest_limit=2,
 		)
@@ -18241,7 +18256,8 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 	assert "  PASS  synthetic_fast" in lines
 	assert "  PASS  synthetic_slow" in lines
 	assert "  FAIL  synthetic_failure: synthetic failure" in lines
-	assert lines[-1] == "2 passed, 1 failed, 3 total"
+	assert "  SKIP  synthetic_skip: synthetic skip" in lines
+	assert lines[-1] == "2 passed, 1 failed, 1 skipped, 4 total"
 
 	events = [
 		json.loads(line.removeprefix(_TEST_RUNNER_EVENT_PREFIX))
@@ -18252,6 +18268,7 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 		("synthetic_fast", "pass"),
 		("synthetic_slow", "pass"),
 		("synthetic_failure", "fail"),
+		("synthetic_skip", "skip"),
 	):
 		test_events = [
 			event
@@ -18286,7 +18303,7 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 	)
 	synthetic_thread_names = {
 		f"{_TEST_RUNNER_HEARTBEAT_THREAD_PREFIX}{test_name}"
-		for test_name in ("synthetic_fast", "synthetic_slow", "synthetic_failure")
+		for test_name in ("synthetic_fast", "synthetic_slow", "synthetic_failure", "synthetic_skip")
 	}
 	assert not any(
 		thread.name in synthetic_thread_names
