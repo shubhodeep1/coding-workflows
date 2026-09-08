@@ -4668,9 +4668,10 @@ ${exhausted_findings_table}}"
 # create_security_pass_fix_issue's dedupe lookup already relies on.
 #
 # API cost (§15): one paginated `GET /issues?state=open&labels=
-# ai:orchestrator-managed` page walk, issued only on the
-# closed-without-merged-PR branch — never on an ordinary poll tick, and
-# never once the successor has been adopted into state.  No cycle-local
+# ai:orchestrator-managed` page walk, issued on the
+# closed-without-merged-PR branch or immediately before an implementation-
+# failed reissue — never on an ordinary poll tick, and never once the
+# successor has been adopted into state. No cycle-local
 # cache can serve it: ACTIVE_WORKFLOW_ISSUES holds only
 # workflow-active numbers, _candidate_details_json only known
 # candidates, and STALL_MANAGED_LINKED_PR_CACHE only state-known
@@ -4678,7 +4679,8 @@ ${exhausted_findings_table}}"
 # tick that first observes the predecessor closed.
 #
 # Args:
-#   closed_issue_num — the fix issue number recorded in state
+#   closed_issue_num — the predecessor fix issue number recorded in state;
+#                      it may still be open during create/persist retry dedup
 # Stdout:
 #   successor issue number on a confirmed match; empty otherwise
 # Returns:
@@ -4729,7 +4731,7 @@ resolve_security_pass_fix_successor() {
         [
           .[][]
           | select(.pull_request | not)
-          | select(.number != $closed_issue)
+          | select(.number > $closed_issue)
           | select(
               (((.body // "") | split("\n") | index($tracking_marker)) != null)
               and (((.body // "") | split("\n") | index($local_id_marker)) != null)
@@ -4775,24 +4777,34 @@ security_pass_fix_reissue_exhausted() {
   local issue_number="$1"
   local reissue_count="$2"
 
-  echo "SECURITY_PASS_FAILED reason=fix_issue_implementation_failed_reissues_exhausted tracking_issue=${TRACKING_NUM} issue=${issue_number} reissues=${reissue_count} cap=${MAX_SECURITY_PASS_FIX_REISSUES}"
-  # Close the exhausted fix issue: create_security_pass_fix_issue reuses any
-  # OPEN managed issue carrying the same tracking + local-id body markers,
-  # whatever its phase label, so leaving it open would make the audit that
-  # follows /re-security-pass adopt this dead issue again.
+  # De-manage the exhausted issue before closing it so a close failure cannot
+  # make a later /re-security-pass adopt this dead issue again.
   ensure_label_exists "ai:closed"
   gh_retry gh issue edit "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
-    --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
-  gh_retry gh issue close "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
-    -c "Closing: implementation failed again after ${reissue_count} re-issue(s) (MAX_SECURITY_PASS_FIX_REISSUES=${MAX_SECURITY_PASS_FIX_REISSUES}). The project security pass is now failed; address the findings manually, then comment \`/re-security-pass\` on the tracking issue." 2>/dev/null || true
-  jq '
+    --remove-label 'ai:implementation-failed' --remove-label 'ai:orchestrator-managed' \
+    --add-label 'ai:closed' 2>/dev/null \
+    || echo "::warning::Could not update terminal labels on exhausted security-pass fix issue #${issue_number}."
+  if ! gh_retry gh issue close "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
+    -c "Closing: implementation failed again after ${reissue_count} re-issue(s) (MAX_SECURITY_PASS_FIX_REISSUES=${MAX_SECURITY_PASS_FIX_REISSUES}). The project security pass is now failed; address the findings manually, then comment \`/re-security-pass\` on the tracking issue." 2>/dev/null; then
+    echo "::warning::Could not close exhausted security-pass fix issue #${issue_number}; terminalizing the project after removing it from managed-issue reuse."
+  fi
+  if jq '
     .status = "failed"
     | .security_pass_status = "failed"
     | .security_pass_head_sha = ""
     | .security_pass_active_fix_issues = []
     | del(.security_pass_fix_reissue_count)
     | del(.security_pass_fix_defer)
-  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    :
+  else
+    rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    gh_retry gh issue edit "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
+      --add-label 'ai:implementation-failed' >/dev/null 2>&1 || true
+    echo "::warning::Could not persist terminal project state after exhausting security-pass fix issue #${issue_number}; the next poll will reconcile the terminal issue."
+    return 0
+  fi
+  echo "SECURITY_PASS_FAILED reason=fix_issue_implementation_failed_reissues_exhausted tracking_issue=${TRACKING_NUM} issue=${issue_number} reissues=${reissue_count} cap=${MAX_SECURITY_PASS_FIX_REISSUES}"
   reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-failed"
@@ -4825,7 +4837,7 @@ security_pass_handle_failed_fix_issue() {
   local has_post_codex_context="false" mode="no-op-implementation"
   local defer_reason="" blocker_open_count=0 blocker_unknown_count=0 blocker_status_summary=""
   local blocker_issue blocker_state blockers_csv defer_signature prev_signature
-  local previous_defer_count previous_defer_escalated defer_count defer_escalated should_escalate
+  local defer_count prev_count prev_escalated defer_escalated should_escalate
   local reissue_count issue_title issue_body blockers_md new_body new_issue_url new_issue_num
   local fix_cycle_label
 
@@ -4849,6 +4861,7 @@ security_pass_handle_failed_fix_issue() {
     mode="post-codex-validation"
   elif [ "${has_post_codex_context}" = "true" ]; then
     mode="post-codex-validation"
+    defer_reason="post-codex blocker metadata missing or malformed"
   fi
 
   if [ "${blocker_count}" -gt 0 ]; then
@@ -4881,12 +4894,12 @@ security_pass_handle_failed_fix_issue() {
     [ -n "${blockers_csv}" ] || blockers_csv="(none recorded)"
     defer_signature="${issue_number}|${blocker_status_summary}|${defer_reason}"
     prev_signature="$(jq -r '.security_pass_fix_defer.summary // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
-    previous_defer_count="$(jq -r '.security_pass_fix_defer.count // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
-    previous_defer_escalated="$(jq -r '.security_pass_fix_defer.escalated // false' "${STATE_FILE}" 2>/dev/null || echo false)"
-    [[ "${previous_defer_count}" =~ ^[0-9]+$ ]] || previous_defer_count=0
+    prev_count="$(jq -r '.security_pass_fix_defer.security_pass_defer_count // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+    prev_escalated="$(jq -r '.security_pass_fix_defer.security_pass_defer_escalated // false' "${STATE_FILE}" 2>/dev/null || echo false)"
+    [[ "${prev_count}" =~ ^[0-9]+$ ]] || prev_count=0
     if [ "${defer_signature}" = "${prev_signature}" ]; then
-      defer_count=$((previous_defer_count + 1))
-      defer_escalated="${previous_defer_escalated}"
+      defer_count=$((prev_count + 1))
+      defer_escalated="${prev_escalated}"
     else
       defer_count=1
       defer_escalated="false"
@@ -4896,16 +4909,17 @@ security_pass_handle_failed_fix_issue() {
       should_escalate="true"
       defer_escalated="true"
     fi
-    echo "  Deferring security-pass fix reissue for #${issue_number}: mode=${mode}; blockers=${blockers_csv}; statuses=${blocker_status_summary}; reason=${defer_reason}; cycle=${defer_count}/${MAX_IMPL_FAILED_DEFER_CYCLES}; escalated=${defer_escalated}."
     if jq --arg summary "${defer_signature}" --argjson issue "${issue_number}" \
       --argjson count "${defer_count}" --argjson escalated "${defer_escalated}" \
-      '.security_pass_fix_defer = {issue: $issue, summary: $summary, count: $count, escalated: $escalated}' \
-      "${STATE_FILE}" > "${STATE_FILE}.tmp"; then
-      mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      '.security_pass_fix_defer = {issue: $issue, summary: $summary, security_pass_defer_count: $count, security_pass_defer_escalated: $escalated}' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
       post_state_comment || true
     else
       rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+      echo "::warning::Could not persist security-pass fix deferral state for #${issue_number}; retaining fixing state for retry."
+      return 0
     fi
+    echo "  Deferring security-pass fix reissue for #${issue_number}: mode=${mode}; blockers=${blockers_csv}; statuses=${blocker_status_summary}; reason=${defer_reason}; cycle=${defer_count}/${MAX_IMPL_FAILED_DEFER_CYCLES}; escalated=${defer_escalated}."
     if [ "${should_escalate}" = "true" ]; then
       ensure_label_exists "ai:needs-human"
       gh_retry gh issue edit "${issue_number}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1 || true
@@ -4925,23 +4939,40 @@ security_pass_handle_failed_fix_issue() {
     return 0
   fi
 
-  # The body carries the durable "- Tracking issue" / "- Local ID" markers
-  # that create_security_pass_fix_issue dedups on; copy it verbatim so the
-  # successor stays discoverable, and refuse to re-issue without it.
-  issue_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_number}" --jq '.title // ""' || echo "")"
-  issue_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
-  if [ -z "${issue_body}" ] || [ "${issue_body}" = "null" ]; then
-    echo "::warning::Security-pass fix issue #${issue_number} body could not be read; retaining fixing state and retrying the re-issue next poll."
-    return 0
-  fi
-  if [ -z "${issue_title}" ] || [ "${issue_title}" = "null" ]; then
-    issue_title="[security-pass] Project #${TRACKING_NUM} fix cycle ${fix_cycle_label%%/*}"
+  # A prior poll may have created the successor and then failed to persist
+  # state. Reuse the durable marker lookup before creating another live issue.
+  new_issue_num=""
+  if new_issue_num="$(resolve_security_pass_fix_successor "${issue_number}")"; then
+    echo "Security-pass successor #${new_issue_num} already exists for failed issue #${issue_number}; adopting it instead of creating a duplicate."
+  else
+    case "$?" in
+      1) new_issue_num="" ;;
+      *)
+        echo "::warning::Could not verify whether a successor already exists for security-pass fix issue #${issue_number}; skipping creation to avoid a duplicate. Will retry next poll."
+        return 0
+        ;;
+    esac
   fi
 
-  if [ "${mode}" = "post-codex-validation" ]; then
-    blockers_md="$(printf '%s' "${blockers_json}" | jq -r '.[] | "- #\(.)"' 2>/dev/null || echo "")"
-    [ -n "${blockers_md}" ] || blockers_md="- (none recorded)"
-    new_body="$(cat <<REISSUE_EOF
+  if [ -z "${new_issue_num}" ]; then
+    # The body carries the durable "- Tracking issue" / "- Local ID" markers
+    # that create_security_pass_fix_issue dedups on; copy it verbatim so the
+    # successor stays discoverable, and refuse to re-issue without it.
+    issue_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_number}" --jq '{title: (.title // ""), body: (.body // "")}' || echo "")"
+    issue_title="$(printf '%s' "${issue_body}" | jq -r '.title // ""' 2>/dev/null || echo "")"
+    issue_body="$(printf '%s' "${issue_body}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+    if [ -z "${issue_body}" ] || [ "${issue_body}" = "null" ]; then
+      echo "::warning::Security-pass fix issue #${issue_number} body could not be read; retaining fixing state and retrying the re-issue next poll."
+      return 0
+    fi
+    if [ -z "${issue_title}" ] || [ "${issue_title}" = "null" ]; then
+      issue_title="[security-pass] Project #${TRACKING_NUM} fix cycle ${fix_cycle_label%%/*}"
+    fi
+
+    if [ "${mode}" = "post-codex-validation" ]; then
+      blockers_md="$(printf '%s' "${blockers_json}" | jq -r '.[] | "- #\(.)"' 2>/dev/null || echo "")"
+      [ -n "${blockers_md}" ] || blockers_md="- (none recorded)"
+      new_body="$(cat <<REISSUE_EOF
 ${issue_body}
 
 ---
@@ -4958,8 +4989,8 @@ ${blockers_md}
 - You MUST create or modify files as described in the approved plan. Do NOT only describe changes.
 REISSUE_EOF
 )"
-  else
-    new_body="$(cat <<REISSUE_EOF
+    else
+      new_body="$(cat <<REISSUE_EOF
 ${issue_body}
 
 ---
@@ -4972,56 +5003,54 @@ ${issue_body}
 - If a finding genuinely requires no code change, explain why in a comment instead of silently producing no output.
 REISSUE_EOF
 )"
-  fi
+    fi
 
-  # Create the successor before closing the failed issue: a create failure
-  # then leaves state untouched for a retry, whereas closing first would
-  # hand the next poll a closed issue without merged-PR evidence and fail
-  # the whole pass on a transient API error.
-  ensure_label_exists "ai:clarification"
-  ensure_label_exists "ai:orchestrator-managed"
-  new_issue_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
-    --title "${issue_title}" \
-    --body "${new_body}" \
-    --label "ai:clarification" \
-    --label "ai:orchestrator-managed" 2>/dev/null || echo "")"
-  new_issue_num="$(printf '%s\n' "${new_issue_url}" | grep -oE '/issues/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
-  if ! [[ "${new_issue_num}" =~ ^[0-9]+$ ]]; then
-    echo "::warning::Could not create a replacement for security-pass fix issue #${issue_number}; retaining fixing state and retrying next poll."
-    return 0
+    # Create the successor before closing the failed issue: a create failure
+    # then leaves state untouched for a retry, whereas closing first would
+    # hand the next poll a closed issue without merged-PR evidence and fail
+    # the whole pass on a transient API error.
+    ensure_label_exists "ai:clarification"
+    ensure_label_exists "ai:orchestrator-managed"
+    new_issue_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
+      --title "${issue_title}" \
+      --body "${new_body}" \
+      --label "ai:clarification" \
+      --label "ai:orchestrator-managed" 2>/dev/null || echo "")"
+    new_issue_num="$(printf '%s\n' "${new_issue_url}" | grep -oE '/issues/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
+    if ! [[ "${new_issue_num}" =~ ^[0-9]+$ ]]; then
+      echo "::warning::Could not create a replacement for security-pass fix issue #${issue_number}; retaining fixing state and retrying next poll."
+      return 0
+    fi
   fi
   reissue_count=$((reissue_count + 1))
   if jq --argjson successor "${new_issue_num}" --argjson reissues "${reissue_count}" '
     .security_pass_active_fix_issues = [$successor]
     | .security_pass_fix_reissue_count = $reissues
     | del(.security_pass_fix_defer)
-  ' "${STATE_FILE}" > "${STATE_FILE}.tmp"; then
-    mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    :
   else
     rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
-    if gh_retry gh issue close "${new_issue_num}" --repo "${GITHUB_REPOSITORY}" \
-      -c "Closing: this successor could not be persisted in tracking state. The poller will create a fresh successor on its next retry." 2>/dev/null; then
-      echo "::warning::Security-pass successor #${new_issue_num} could not be persisted for tracking issue #${TRACKING_NUM}; it was closed to prevent duplicate live successors, and the next poll will retry."
-    else
-      echo "::warning::Security-pass successor #${new_issue_num} could not be persisted or closed for tracking issue #${TRACKING_NUM}; it remains open and untracked."
-    fi
+    echo "::warning::Security-pass successor #${new_issue_num} could not be persisted for tracking issue #${TRACKING_NUM}; the next poll will adopt the existing successor instead of creating another."
     return 0
   fi
 
-  reconcile_tracking_body_after_security_pass_transition
-
   ensure_label_exists "ai:closed"
   gh_retry gh issue edit "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
-    --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
+    --remove-label 'ai:implementation-failed' --remove-label 'ai:orchestrator-managed' \
+    --add-label 'ai:closed' 2>/dev/null || true
   if [ "${mode}" = "post-codex-validation" ]; then
     gh_retry gh issue close "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
-      -c "Closing: implementation failed in post-Codex validation. Blocker fix-up issues are no longer open, so this security-pass fix is re-issued as #${new_issue_num} with blocker-sequenced guidance." 2>/dev/null || true
+      -c "Closing: implementation failed in post-Codex validation. Blocker fix-up issues are no longer open, so this security-pass fix is re-issued as #${new_issue_num} with blocker-sequenced guidance." 2>/dev/null \
+      || echo "::warning::Security-pass predecessor #${issue_number} remains open after successor #${new_issue_num} was persisted; close it before using /re-security-pass."
   else
     gh_retry gh issue close "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
-      -c "Closing: implementation produced no changes. Re-issued as #${new_issue_num} with additional guidance." 2>/dev/null || true
+      -c "Closing: implementation produced no changes. Re-issued as #${new_issue_num} with additional guidance." 2>/dev/null \
+      || echo "::warning::Security-pass predecessor #${issue_number} remains open after successor #${new_issue_num} was persisted; close it before using /re-security-pass."
   fi
 
   echo "SECURITY_PASS_FIX_ISSUE_REISSUED tracking_issue=${TRACKING_NUM} failed_issue=${issue_number} successor=${new_issue_num} mode=${mode} reissue=${reissue_count}/${MAX_SECURITY_PASS_FIX_REISSUES}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   post_tracking_comment "## 🔁 Security-pass fix issue re-issued
 
@@ -5119,6 +5148,11 @@ PY
         [
           .[][]
           | select(.pull_request | not)
+          | select(
+              ([(.labels // [])[] | if type == "object" then (.name // "") else . end]
+                | map(select(. == "ai:implementation-failed" or . == "ai:closed"))
+                | length) == 0
+            )
           | select(
               (((.body // "") | split("\n") | index($tracking_marker)) != null)
               and (((.body // "") | split("\n") | index($local_id_marker)) != null)
