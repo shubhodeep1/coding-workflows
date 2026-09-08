@@ -3762,7 +3762,7 @@ jobs:
           # `python3 -m pip` (not bare `pip`) keeps the install and the
           # importability probe on the same interpreter.
           pytest_bootstrap_wanted=false
-          if [ -f pytest.ini ] || [ -f conftest.py ]; then
+          if [ -f pytest.ini ] || [ -f conftest.py ] || [ -f tests/conftest.py ]; then
             pytest_bootstrap_wanted=true
           elif [ -f pyproject.toml ] && grep -q '^\[tool\.pytest\.ini_options\]' pyproject.toml 2>/dev/null; then
             pytest_bootstrap_wanted=true
@@ -3776,7 +3776,8 @@ jobs:
               echo "Repository declares pytest configuration and pytest is already importable."
             else
               echo "Repository declares pytest configuration but pytest is not importable — installing pytest"
-              python3 -m pip install pytest 2>&1 || true
+              python3 -m pip install pytest 2>&1 || \
+                python3 -m pip install --user --break-system-packages pytest 2>&1 || true
               if python3 -c "import pytest" >/dev/null 2>&1; then
                 echo "pytest bootstrap succeeded."
               else

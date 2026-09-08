@@ -6065,6 +6065,7 @@ def _run_dependency_install_step(
 		bin_dir.mkdir()
 		log_path = root / "calls.log"
 		for name, body in repo_files.items():
+			(repo / name).parent.mkdir(parents=True, exist_ok=True)
 			(repo / name).write_text(body)
 		script_path = root / "step.sh"
 		script_path.write_text(script)
@@ -6076,12 +6077,13 @@ def _run_dependency_install_step(
 			'echo "python3 $*" >> "$STUB_CALL_LOG"\n'
 			"case \"$*\" in\n"
 			"  *'import pytest'*) exit %d ;;\n"
+			"  *'-m pip install pytest'*) exit 1 ;;\n"
 			"esac\n"
 			"exit 0\n" % (0 if pytest_importable else 1)
 		)
 		for stub in ("pip", "python3"):
 			(bin_dir / stub).chmod(0o755)
-		env = dict(os.environ)
+		env = _git_clean_env()
 		env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
 		env["STUB_CALL_LOG"] = str(log_path)
 		completed = subprocess.run(
@@ -6111,6 +6113,7 @@ def test_dependency_install_bootstraps_pytest_when_pyproject_declares_it() -> No
 		pytest_importable=False,
 	)
 	assert "-m pip install pytest" in result["calls"], result["calls"]
+	assert "--user --break-system-packages pytest" in result["calls"], result["calls"]
 	assert "pytest is not importable" in result["output"], result["output"]
 
 
@@ -6119,10 +6122,19 @@ def test_dependency_install_warns_when_pytest_bootstrap_does_not_take() -> None:
 		{"pyproject.toml": "[tool.pytest.ini_options]\n"},
 		pytest_importable=False,
 	)
+	assert "-m pip install pytest" in result["calls"], result["calls"]
 	assert (
 		"::warning::pytest is declared by this repository but could not be installed"
 		in result["output"]
 	), result["output"]
+
+
+def test_dependency_install_bootstraps_pytest_for_nested_conftest() -> None:
+	result = _run_dependency_install_step(
+		{"tests/conftest.py": ""},
+		pytest_importable=False,
+	)
+	assert "-m pip install pytest" in result["calls"], result["calls"]
 
 
 def test_dependency_install_skips_pytest_bootstrap_when_already_importable() -> None:
@@ -6231,6 +6243,7 @@ def main() -> int:
 	test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_helper()
 	test_dependency_install_bootstraps_pytest_when_pyproject_declares_it()
 	test_dependency_install_warns_when_pytest_bootstrap_does_not_take()
+	test_dependency_install_bootstraps_pytest_for_nested_conftest()
 	test_dependency_install_skips_pytest_bootstrap_when_already_importable()
 	test_dependency_install_skips_pytest_bootstrap_for_non_pytest_repos()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
