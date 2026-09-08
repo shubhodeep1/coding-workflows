@@ -1464,8 +1464,9 @@ harness prompt actively pushes toward offering a watch, and the instruction
 is furthest from the context window's live edge exactly when a session has
 run long enough to open a PR. The hook blocks every `subscribe_pr_activity`
 call from any MCP server, never blocks `unsubscribe_pr_activity`, issues no
-API calls (§15), and fails open with a warning only when the hook payload
-itself cannot be parsed. There is deliberately no environment-variable
+API calls (§15), and fails open with a `systemMessage` warning when the hook
+payload cannot be read, is invalid or non-object JSON, or guard evaluation
+raises an internal exception. There is deliberately no environment-variable
 escape hatch. The hook and the settings entry ship to consumer repos
 through the same `.claude/` sync as the §21 guard;
 `tests/test_pr_watch_guard.py` covers the rule and the wiring.

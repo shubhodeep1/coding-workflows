@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -175,6 +176,21 @@ def test_malformed_payload_allows_with_warning(stdin_text):
 		assert result.stdout == ""
 
 
+def test_stdin_read_error_allows_with_warning(monkeypatch, capsys):
+	monkeypatch.setattr(guard.sys, "stdin", Mock(read=Mock(side_effect=OSError("read failed"))))
+	assert guard.main() == 0
+	emitted = json.loads(capsys.readouterr().out)
+	assert emitted["systemMessage"] == "PR-watch guard skipped: could not read the hook payload"
+
+
+def test_internal_exception_allows_with_warning(monkeypatch, capsys):
+	monkeypatch.setattr(guard.sys, "stdin", Mock(read=Mock(return_value="{}")))
+	monkeypatch.setattr(guard, "evaluate", Mock(side_effect=RuntimeError("evaluate failed")))
+	assert guard.main() == 0
+	emitted = json.loads(capsys.readouterr().out)
+	assert emitted["systemMessage"] == "PR-watch guard skipped: internal error (evaluate failed)"
+
+
 # ──────────────────────────────────────────────────────────────────
 # Wiring
 # ──────────────────────────────────────────────────────────────────
@@ -236,6 +252,10 @@ def test_claude_md_documents_the_rule():
 	assert ".claude/hooks/pr_watch_guard.py" in text
 	assert "`mcp__.*__subscribe_pr_activity`" in text
 	assert "tests/test_pr_watch_guard.py" in text
+	assert (
+		"fails open with a `systemMessage` warning when the hook payload cannot be read, "
+		"is invalid or non-object JSON, or guard evaluation raises an internal exception."
+	) in " ".join(text.split())
 	# §12.G is retained for §6 section stability but marked inactive.
 	assert "### G) Autofix CI / Address-Comments Mode Add-ons\n\n**INACTIVE — superseded by §25.**" in text
 	# The event trigger is gone from the §12 preamble.

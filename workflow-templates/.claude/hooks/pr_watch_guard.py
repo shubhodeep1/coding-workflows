@@ -27,9 +27,10 @@ Exit codes (Claude Code hook protocol):
   0 — allow the tool call (every tool that is not a PR subscription).
   2 — block the tool call; stderr is fed back to Claude as the reason.
 
-The guard must never break the session: an unparseable payload or an internal
-error allows the call with a `systemMessage` warning, the same fail-open
-contract as `pr_merge_status_guard.py`.
+The guard must never break the session: an unreadable, invalid, or non-object
+payload, or an internal evaluation error, allows the call with a
+`systemMessage` warning, the same fail-open contract as
+`pr_merge_status_guard.py`.
 """
 
 from __future__ import annotations
