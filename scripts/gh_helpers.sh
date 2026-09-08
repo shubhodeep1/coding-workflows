@@ -1013,22 +1013,59 @@ review_blocked_approval_status()
 {
 	local comments_json="${1:-[]}"
 	local request_json="${2:?request JSON required}"
-	printf '%s' "${comments_json}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
-import json, sys
-comments = json.load(sys.stdin); request = json.loads(sys.argv[1])
-command = "/review-blocked-approve {} {}".format(request["request_id"], request["decision_digest"])
+	local repository="${3:-${GITHUB_REPOSITORY:-}}"
+	local pending_json approval_candidate approver repository_role
+	pending_json="$(printf '%s' "${request_json}" | jq -c '{status:"pending",request_id:(.request_id // null),decision_digest:(.decision_digest // null)}' 2>/dev/null || printf '%s' '{"status":"pending","request_id":null,"decision_digest":null}')"
+	if ! [[ "${repository}" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
+		printf '%s\n' "${pending_json}"
+		return 0
+	fi
+	approval_candidate="$(printf '%s' "${comments_json}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import json, re, sys
+try:
+    comments = json.load(sys.stdin); request = json.loads(sys.argv[1])
+    request_id = request["request_id"]; digest = request["decision_digest"]
+except (json.JSONDecodeError, KeyError, TypeError):
+    raise SystemExit(0)
+command = "/review-blocked-approve {} {}".format(request_id, digest)
 trusted = {"OWNER", "MEMBER", "COLLABORATOR"}
-approved = None
+selected = None
 for comment in comments if isinstance(comments, list) else []:
     if not isinstance(comment, dict) or comment.get("body", "").strip() != command: continue
     if comment.get("author_type") != "User" or comment.get("author_association") not in trusted: continue
     if (comment.get("created_at") or "") < request.get("created_at", ""): continue
-    approved = comment
-if approved:
-    print(json.dumps({"status":"approved","request_id":request["request_id"],"decision_digest":request["decision_digest"],"approver":approved.get("author"),"approval_comment_id":approved.get("id")}, separators=(",", ":")))
-else:
-    print(json.dumps({"status":"pending","request_id":request["request_id"],"decision_digest":request["decision_digest"]}, separators=(",", ":")))
-' "${request_json}"
+    author = comment.get("author")
+    if not isinstance(author, str) or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})", author): continue
+    selected = comment
+if selected:
+    print(json.dumps(selected, separators=(",", ":")))
+' "${request_json}" 2>/dev/null || true)"
+	if [ -z "${approval_candidate}" ]; then
+		printf '%s\n' "${pending_json}"
+		return 0
+	fi
+	approver="$(printf '%s' "${approval_candidate}" | jq -r '.author // empty' 2>/dev/null || true)"
+	if [ -z "${approver}" ]; then
+		printf '%s\n' "${pending_json}"
+		return 0
+	fi
+	# The prefetched comment payload carries historical association only; no
+	# existing PR-context call exposes the commenter's current repository role.
+	# GitHub's legacy `permission` field maps maintain to write, so only the
+	# exact role_name can distinguish terminal-action authority safely.
+	if ! repository_role="$(gh_retry gh api -X GET "repos/${repository}/collaborators/${approver}/permission" --jq '.role_name // empty' 2>/dev/null)"; then
+		echo "::warning::Review-blocked approval remains pending because the current repository role for ${approver} could not be resolved." >&2
+		printf '%s\n' "${pending_json}"
+		return 0
+	fi
+	case "${repository_role}" in
+		maintain|admin)
+			printf '%s' "${approval_candidate}" | jq -c --arg role "${repository_role}" --arg request_id "$(printf '%s' "${request_json}" | jq -r '.request_id')" --arg decision_digest "$(printf '%s' "${request_json}" | jq -r '.decision_digest')" '{status:"approved",request_id:$request_id,decision_digest:$decision_digest,approver:(.author // null),approval_comment_id:(.id // null),repository_role:$role}'
+			;;
+		*)
+			printf '%s\n' "${pending_json}"
+			;;
+	esac
 }
 
 review_blocked_post_approval_request()
@@ -1043,7 +1080,7 @@ review_blocked_post_approval_request()
 	head_sha="$(printf '%s' "${request_json}" | jq -r '.head_sha')"
 	body="## Review-Blocked Judge — Human Approval Required
 
-The model recommends **${action}**, but no terminal PR mutation has run. A trusted repository owner, member, or collaborator must approve this exact request at head \`${head_sha}\` by posting:
+The model recommends **${action}**, but no terminal PR mutation has run. A GitHub User whose current repository role is exactly maintain or admin must approve this exact request at head \`${head_sha}\` by posting:
 
 \`/review-blocked-approve ${request_id} ${decision_digest}\`
 

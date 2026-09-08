@@ -169,6 +169,10 @@
       "color": "c2e0c6",
       "description": "Reviewer panel + editor cycle skipped by deterministic gate (doc-only or under size threshold)"
     },
+    "ai:merge-queued": {
+      "color": "c5def5",
+      "description": "Review queued behind an older open PR that edits the same files (merge train)"
+    },
     "ai:security-audit": {
       "color": "5319e7",
       "description": "Stable tracker issue for periodic default-branch security audits"

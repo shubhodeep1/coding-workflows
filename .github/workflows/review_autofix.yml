@@ -3755,8 +3755,6 @@ jobs:
       - name: Apply fixes with editor model
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          REPOSITORY: ${{ github.repository }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |
           set -euo pipefail
@@ -3886,6 +3884,29 @@ jobs:
                 echo "::warning::Editor in-step retry also failed; downstream noop-comment path will fire."
               }
             fi
+          fi
+
+      - name: Re-check PR state after editor
+        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          # The start-of-job PR payload predates the long-running editor and
+          # cannot establish that the PR is still open before persistence.
+          # Call gh directly so this credential-bearing step does not source
+          # the branch-primary runtime support bundle.
+          post_editor_pr_state=""
+          for post_editor_pr_state_attempt in 1 2 3; do
+            if post_editor_pr_state="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null)"; then
+              break
+            fi
+            [ "${post_editor_pr_state_attempt}" -lt 3 ] && sleep 2
+          done
+          if [ "${post_editor_pr_state}" != "open" ]; then
+            echo "::warning::PR #${PR_NUMBER} is ${post_editor_pr_state:-unavailable} after the editor run; blocking downstream repository mutations."
+            echo "PR_CLOSED=true" >> "$GITHUB_ENV"
           fi
 
       - name: Remove slop-scan runtime artifact

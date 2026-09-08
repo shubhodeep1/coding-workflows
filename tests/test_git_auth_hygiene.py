@@ -98,10 +98,17 @@ def test_networked_git_steps_use_ephemeral_authentication() -> None:
 	assert '_memory_git push origin "${memory_branch}"' in memory_helpers
 
 
-def _approval_status(comments: list[dict[str, object]], request: dict[str, object]) -> dict[str, object]:
+def _approval_status(
+	comments: list[dict[str, object]],
+	request: dict[str, object],
+	*,
+	role: str = "maintain",
+	repository: str = "owner/repo",
+) -> dict[str, object]:
 	command = (
 		"source scripts/gh_helpers.sh; "
-		"review_blocked_approval_status \"$COMMENTS\" \"$REQUEST\""
+		"gh_retry() { if [ \"$MOCK_ROLE\" = __error__ ]; then return 1; fi; printf '%s\\n' \"$MOCK_ROLE\"; }; "
+		"review_blocked_approval_status \"$COMMENTS\" \"$REQUEST\" \"$REPOSITORY\""
 	)
 	result = subprocess.run(
 		["bash", "-c", command],
@@ -110,6 +117,8 @@ def _approval_status(comments: list[dict[str, object]], request: dict[str, objec
 			"PATH": "/usr/bin:/bin",
 			"COMMENTS": json.dumps(comments, separators=(",", ":")),
 			"REQUEST": json.dumps(request, separators=(",", ":")),
+			"MOCK_ROLE": role,
+			"REPOSITORY": repository,
 		},
 		check=True,
 		text=True,
@@ -139,7 +148,7 @@ def _pending_request(comments: list[dict[str, object]], head_sha: str, producer_
 	return result.stdout.strip()
 
 
-def test_review_blocked_approval_accepts_only_exact_trusted_user_command() -> None:
+def test_review_blocked_approval_requires_exact_command_and_maintainer_role() -> None:
 	request = {
 		"request_id": "review_blocked_approval_20260907010101_0123456789",
 		"decision_digest": "a" * 64,
@@ -147,12 +156,67 @@ def test_review_blocked_approval_accepts_only_exact_trusted_user_command() -> No
 	}
 	command = f"/review-blocked-approve {request['request_id']} {request['decision_digest']}"
 	base = {"id": 42, "author": "maintainer", "author_type": "User", "author_association": "MEMBER", "created_at": "2026-09-07T01:01:00Z"}
-	assert _approval_status([{**base, "body": command}], request)["status"] == "approved"
+	assert _approval_status([{**base, "body": command}], request, role="maintain")["status"] == "approved"
+	assert _approval_status([{**base, "body": command}], request, role="admin")["status"] == "approved"
+	for insufficient_role in ("read", "triage", "write", "custom-security-reviewer", "", "__error__"):
+		assert _approval_status([{**base, "body": command}], request, role=insufficient_role)["status"] == "pending"
 	assert _approval_status([{**base, "body": command + " please"}], request)["status"] == "pending"
 	assert _approval_status([{**base, "body": command, "author_association": "NONE"}], request)["status"] == "pending"
 	assert _approval_status([{**base, "body": command, "author_type": "Bot"}], request)["status"] == "pending"
 	assert _approval_status([{**base, "body": command, "created_at": "2026-09-07T00:59:00Z"}], request)["status"] == "pending"
 	assert _approval_status([{**base, "body": command, "created_at": request["created_at"]}], request)["status"] == "approved"
+	assert _approval_status([{**base, "body": command}], request, repository="")["status"] == "pending"
+
+
+def test_editor_model_step_has_no_repository_credentials_and_rechecks_state() -> None:
+	workflow_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	editor_start = workflow_text.index("- name: Apply fixes with editor model")
+	editor_end = workflow_text.index("\n      - name:", editor_start + 1)
+	editor_block = workflow_text[editor_start:editor_end]
+	assert "GH_TOKEN:" not in editor_block
+	assert "GH_PAT:" not in editor_block
+	assert "REPOSITORY:" not in editor_block
+
+	recheck_start = workflow_text.index("- name: Re-check PR state after editor", editor_end)
+	commit_start = workflow_text.index("- name: Commit changes", recheck_start)
+	assert recheck_start < commit_start
+	recheck_end = workflow_text.index("\n      - name:", recheck_start + 1)
+	recheck_block = workflow_text[recheck_start:recheck_end]
+	assert "GH_TOKEN:" in recheck_block
+	assert "SUPPORT_SCRIPTS_DIR" not in recheck_block
+	assert 'post_editor_pr_state="$(gh api ' in recheck_block
+	assert 'echo "PR_CLOSED=true" >> "$GITHUB_ENV"' in recheck_block
+
+
+def test_editor_script_scrubs_repository_credentials_from_environment() -> None:
+	# Exercise only the credential-scrub prologue: everything after the first
+	# assignment to SUPPORT_SCRIPTS_DIR launches the real editor loop.
+	script_text = (REPO_ROOT / "scripts" / "review_apply_fixes.sh").read_text(encoding="utf-8")
+	prologue = script_text[: script_text.index("\nSUPPORT_SCRIPTS_DIR=")]
+	assert "Refusing to launch review editor" not in prologue
+	probe = prologue + "\nprintf 'PROLOGUE_REACHED\\n'\nenv\n"
+	result = subprocess.run(
+		["bash", "-c", probe],
+		cwd=REPO_ROOT,
+		env={
+			"PATH": "/usr/bin:/bin",
+			"GH_TOKEN": "test-only-placeholder",
+			"GH_PAT": "test-only-placeholder",
+			"GITHUB_TOKEN": "test-only-placeholder",
+			"ORCHESTRATOR_STATE_AUTH_KEYRING": "test-only-placeholder",
+			"TG_BOT_SECRET": "test-only-placeholder",
+			"OPENROUTER_API_KEY": "model-key-stays",
+		},
+		text=True,
+		capture_output=True,
+	)
+	assert result.returncode == 0, result.stderr
+	assert "PROLOGUE_REACHED" in result.stdout
+	for credential_name in ("GH_TOKEN", "GH_PAT", "GITHUB_TOKEN", "ORCHESTRATOR_STATE_AUTH_KEYRING", "TG_BOT_SECRET"):
+		assert f"{credential_name}=" not in result.stdout
+		assert f"::notice::Scrubbed {credential_name} from the review editor environment" in result.stderr
+	assert "OPENROUTER_API_KEY=model-key-stays" in result.stdout
+	assert "test-only-placeholder" not in result.stdout
 
 
 def test_approval_request_ids_use_the_canonical_generator() -> None:
@@ -160,6 +224,8 @@ def test_approval_request_ids_use_the_canonical_generator() -> None:
 	assert 'make_record_id("review_blocked_approval")' in text
 	assert "REVIEW_BLOCKED_APPROVAL_V1" in text
 	assert "is:issue is:open in:body review-blocked-approval-request:" in text
+	assert 'collaborators/${approver}/permission' in text
+	assert "--jq '.role_name // empty'" in text
 
 
 def test_approval_pending_is_handled_without_critical_alerts() -> None:
@@ -188,6 +254,8 @@ def test_approval_pending_is_handled_without_critical_alerts() -> None:
 
 	poller_text = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
 	assert 'requires trusted human approval."$\'\\n\'' in poller_text
+	assert 'review_blocked_approval_status "${PR_COMMENTS}" "${RB_APPROVAL_REQUEST}" "${GITHUB_REPOSITORY}"' in poller_text
+	assert 'review_blocked_approval_status "${PR_COMMENTS}" "${RB_APPROVAL_REQUEST}" "${REPOSITORY}"' in judge_text
 
 
 def test_outsider_cannot_forge_request_or_consumed_markers() -> None:

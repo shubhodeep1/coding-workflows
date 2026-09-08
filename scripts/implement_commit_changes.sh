@@ -54,10 +54,18 @@ exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
 
 # Remove workflow-generated/fetched artifacts BEFORE checking for
 # changes so they don't cause false-positive "file changes" detection.
+# Restore pre_assembled_static.txt from HEAD when the consumer tracks it;
+# build_static_context overwrites that path before this cleanup runs.
 # The manifest tracks exactly which files were fetched — caller-repo
 # files that were never touched are safe. Refuse the cleanup batch if
 # the manifest contains any path outside repo-relative cleanup targets.
-rm -f ./pre_assembled_static.txt
+if git cat-file -e "HEAD:pre_assembled_static.txt" >/dev/null 2>&1; then
+  echo "Preserving repo-tracked path during artifact cleanup: pre_assembled_static.txt"
+  git restore --source=HEAD --staged --worktree -- pre_assembled_static.txt
+else
+  git rm -f --cached --ignore-unmatch -- pre_assembled_static.txt >/dev/null 2>&1 || true
+  rm -f -- pre_assembled_static.txt
+fi
 fetched_manifest_path="${FETCHED_MANIFEST:-}"
 if [ -n "${fetched_manifest_path}" ] && [ -f "${fetched_manifest_path}" ]; then
   safe_fetched_paths=()

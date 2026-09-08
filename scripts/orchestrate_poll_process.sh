@@ -17007,11 +17007,24 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 		        ;;
 		    esac
 		  fi
+		  # Bind the mutation to the exact head whose checks passed. The
+		  # earlier _rtm_pr_json predates checks, sibling probing, and
+		  # alignment, so it cannot detect pushes during that work. This fresh
+		  # read catches them, and --match-head-commit closes the remaining
+		  # read-to-merge window.
+		  _rtm_fresh_pr_json="$(_fetch_pr_json "${RTM_PR}")"
+		  _rtm_fresh_state="$(_jq_field "${_rtm_fresh_pr_json}" '.state' 'open|closed|merged')"
+		  _rtm_fresh_head_sha="$(_jq_field "${_rtm_fresh_pr_json}" '.head.sha')"
+		  if [ "${_rtm_fresh_state}" != "open" ] || [ -z "${_rtm_fresh_head_sha}" ] \
+		    || [ "${_rtm_fresh_head_sha}" = "null" ] || [ "${_rtm_fresh_head_sha}" != "${_rtm_head_sha}" ]; then
+		    echo "  [ready-merge-head] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue}: validated head ${_rtm_head_sha:-unknown}, current head ${_rtm_fresh_head_sha:-unknown}, state ${_rtm_fresh_state:-unknown}."
+		    continue
+		  fi
 		  echo "  Merging PR #${RTM_PR} (squash)..."
-		  if gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
+		  if gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${_rtm_head_sha}"; then
 		    echo "  PR #${RTM_PR} merge initiated."
 		    refresh_integration_backpressure_gate_after_merge || true
-		  elif gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+		  elif gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit "${_rtm_head_sha}"; then
 		    echo "  PR #${RTM_PR} merged directly."
 		    refresh_integration_backpressure_gate_after_merge || true
 		  else
@@ -17688,7 +17701,7 @@ ${RB_DECISION_REFUSAL_MARKER}"
             REVIEW_BLOCKED_STATE_CHANGED=true
             continue
           fi
-          RB_APPROVAL_STATUS="$(review_blocked_approval_status "${PR_COMMENTS}" "${RB_APPROVAL_REQUEST}")"
+          RB_APPROVAL_STATUS="$(review_blocked_approval_status "${PR_COMMENTS}" "${RB_APPROVAL_REQUEST}" "${GITHUB_REPOSITORY}")"
           if [ "$(printf '%s' "${RB_APPROVAL_STATUS}" | jq -r '.status // empty')" != "approved" ]; then
             echo "  Terminal recommendation for PR #${RB_PR} remains pending trusted human approval."
             continue

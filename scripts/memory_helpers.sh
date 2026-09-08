@@ -137,8 +137,6 @@ memory_ensure_branch()
 	fi
 
 	local branch="${AI_MEMORY_BRANCH:-ai-memory}"
-	local token="${GH_TOKEN:-}"
-
 	# Resolve authenticated origin URL
 	local origin_url
 	origin_url="$(git remote get-url origin 2>/dev/null || echo "")"

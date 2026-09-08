@@ -3051,6 +3051,12 @@ def _file_lock(lock_name: str) -> Any:
         os.close(fd)
 
 
+def _inject_token_into_url(url: str, token: str) -> str:
+    """Compatibility shim that always returns a credential-free URL."""
+    del token
+    return re.sub(r"^(https?://)[^/@]+@", r"\1", url)
+
+
 def _resolve_origin_url(repo_root: Path) -> str:
     # ``git remote get-url origin`` is a read against the *host* repository so
     # the memory branch can be cloned from /tmp. Under the implement /

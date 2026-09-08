@@ -761,6 +761,8 @@ def _run_poller(
 	prs: list[dict] | None = None,
 	pr_commits: dict[int, list[dict]] | None = None,
 	pr_api_sequence: dict[int, list[dict]] | None = None,
+	collaborator_roles: dict[str, str] | None = None,
+	fail_collaborator_permission_for: list[str] | None = None,
 	existing_branches: list[str] | None = None,
 	merge_conflict_on_sync: bool = False,
 	fail_auto_pr_merge: bool = False,
@@ -849,6 +851,8 @@ def _run_poller(
 	prs = prs or []
 	pr_commits = pr_commits or {}
 	pr_api_sequence = pr_api_sequence or {}
+	collaborator_roles = collaborator_roles or {"maintainer": "maintain"}
+	fail_collaborator_permission_for = fail_collaborator_permission_for or []
 	existing_branches = existing_branches or ["main"]
 	blocked_check_shas = blocked_check_shas or []
 	validation_workflow_runs = validation_workflow_runs or []
@@ -1140,6 +1144,8 @@ def _run_poller(
 			"prs": prs,
 			"pr_commits": {str(k): list(v) for k, v in pr_commits.items()},
 			"pr_api_sequence": {str(k): list(v) for k, v in pr_api_sequence.items()},
+			"collaborator_roles": {str(k): str(v) for k, v in collaborator_roles.items()},
+			"fail_collaborator_permission_for": [str(login) for login in fail_collaborator_permission_for],
 			"existing_branches": existing_branches,
 			"update_branch_calls": [],
 			"update_branch_fail_for_prs": [int(x) for x in update_branch_fail_for_prs],
@@ -2095,6 +2101,22 @@ if args[0] == 'api':
 			print(json.dumps(labels))
 		else:
 			print(json.dumps([{'name': l} for l in labels]))
+		sys.exit(0)
+
+	m_permission = re.search(r'/collaborators/([^/]+)/permission$', path)
+	if m_permission:
+		login = m_permission.group(1)
+		if login in set(store.get('fail_collaborator_permission_for', [])):
+			print('forced collaborator permission API failure', file=sys.stderr)
+			sys.exit(1)
+		role_name = store.get('collaborator_roles', {}).get(login)
+		if role_name is None:
+			print('not found', file=sys.stderr)
+			sys.exit(1)
+		if jq:
+			print(role_name)
+		else:
+			print(json.dumps({'permission': 'write', 'role_name': role_name}))
 		sys.exit(0)
 
 	m = re.search(r'/issues/(\d+)$', path)
@@ -5485,6 +5507,8 @@ def _run_review_blocked_merge_decision(
 	fail_auto_pr_merge: bool = False,
 	fail_pr_close: bool = False,
 	approved: bool = True,
+	approver_role: str = "maintain",
+	fail_approver_permission_lookup: bool = False,
 	final_close_head_sha: str | None = None,
 ) -> dict:
 	state = _base_state(status="in_progress")
@@ -5551,6 +5575,8 @@ def _run_review_blocked_merge_decision(
 		# Reconciliation, handler prechecks, and comment hydration consume five
 		# snapshots before the action performs its first live-head check.
 		pr_api_sequence={901: pr_sequence},
+		collaborator_roles={"maintainer": approver_role},
+		fail_collaborator_permission_for=["maintainer"] if fail_approver_permission_lookup else [],
 		codex_json=decision,
 		fail_auto_pr_merge=fail_auto_pr_merge,
 		fail_pr_close=fail_pr_close,
@@ -5572,6 +5598,28 @@ def test_review_blocked_merge_waits_for_authenticated_approval():
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 	pr_comment_bodies = [comment.get("body", "") for comment in result["issues"]["901"]["comments"]]
 	assert not any("Orchestrator Review-Blocked Judge" in body for body in pr_comment_bodies)
+
+
+def test_review_blocked_terminal_approval_requires_current_maintainer_permission():
+	judged_head_sha = "7" * 40
+	for insufficient_role in ("read", "triage", "write", "custom-security-reviewer"):
+		result = _run_review_blocked_merge_decision(
+			action="merge",
+			judged_head_sha=judged_head_sha,
+			live_head_sha=judged_head_sha,
+			approver_role=insufficient_role,
+		)
+		assert result["pr_merge_calls"] == []
+		assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+
+	lookup_failure = _run_review_blocked_merge_decision(
+		action="merge",
+		judged_head_sha=judged_head_sha,
+		live_head_sha=judged_head_sha,
+		fail_approver_permission_lookup=True,
+	)
+	assert lookup_failure["pr_merge_calls"] == []
+	assert "ai:review-blocked" in lookup_failure["issues"]["10"]["labels"]
 
 
 def test_review_blocked_close_and_reissue_runs_after_authenticated_approval():
@@ -7957,6 +8005,94 @@ def test_integration_stale_alert_disabled_when_hours_zero():
 	# rewrites the squash anchor.
 	assert result["state_on_disk"].get("integration_stale_last_alerted_at_utc") is None
 	assert result["state_on_disk"]["last_main_squash_at_utc"] == state["last_main_squash_at_utc"]
+
+
+def _run_ready_to_merge_head_binding(
+	*,
+	validated_head_sha: str,
+	final_pr_snapshot: dict | None = None,
+	fail_auto_pr_merge: bool = False,
+) -> dict:
+	ready_pr = {
+		"number": 910,
+		"state": "open",
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"headSha": validated_head_sha,
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+	pr_sequence = [dict(ready_pr) for _ in range(4)]
+	if final_pr_snapshot is not None:
+		pr_sequence.append(dict(final_pr_snapshot))
+	else:
+		pr_sequence.append(dict(ready_pr))
+	return _run_poller(
+		state=_base_state(status="in_progress"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 910},
+		prs=[ready_pr],
+		pr_api_sequence={910: pr_sequence},
+		existing_branches=["main"],
+		fail_auto_pr_merge=fail_auto_pr_merge,
+		env_overrides={"GH_RETRY_MAX_ATTEMPTS": "1"},
+	)
+
+
+def test_ready_to_merge_refuses_head_changed_after_checks():
+	validated_head_sha = "a" * 40
+	changed_snapshot = {
+		"number": 910,
+		"state": "open",
+		"baseRefName": "main",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"headSha": "b" * 40,
+		"mergeable": True,
+		"mergeable_state": "clean",
+	}
+	result = _run_ready_to_merge_head_binding(
+		validated_head_sha=validated_head_sha,
+		final_pr_snapshot=changed_snapshot,
+	)
+	assert result["pr_merge_calls"] == []
+	assert "ai:ready-to-merge" in result["issues"]["10"]["labels"]
+	assert "[ready-merge-head] Deferring merge of PR #910" in result["stdout"]
+
+
+def test_ready_to_merge_refuses_unavailable_final_head():
+	result = _run_ready_to_merge_head_binding(
+		validated_head_sha="c" * 40,
+		final_pr_snapshot={
+			"number": 910,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	)
+	assert result["pr_merge_calls"] == []
+	assert "ai:ready-to-merge" in result["issues"]["10"]["labels"]
+
+
+def test_ready_to_merge_binds_automatic_and_direct_attempts_to_checked_head():
+	validated_head_sha = "d" * 40
+	result = _run_ready_to_merge_head_binding(
+		validated_head_sha=validated_head_sha,
+		fail_auto_pr_merge=True,
+	)
+	assert len(result["pr_merge_calls"]) == 2
+	assert "--auto" in result["pr_merge_calls"][0]
+	assert "--auto" not in result["pr_merge_calls"][1]
+	assert all(
+		call[-2:] == ["--match-head-commit", validated_head_sha]
+		for call in result["pr_merge_calls"]
+	)
 
 
 def test_integration_backpressure_blocks_merges_at_threshold_and_clears_below_it():
