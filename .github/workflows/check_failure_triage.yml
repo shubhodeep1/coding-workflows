@@ -205,6 +205,7 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
+          persist-credentials: false
       - name: Install Codex CLI
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
         with:
@@ -231,6 +232,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Checkout workflow support source fallback
         if: ${{ steps.checkout_support_source.outcome == 'failure' }}
         uses: actions/checkout@v5
@@ -241,6 +243,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Stage workflow support files
         run: |
           set -euo pipefail

@@ -151,6 +151,23 @@ MAX_TARGET_PATHS = 256
 MAX_TARGET_PATH_BYTES = 1024
 
 
+def is_sensitive_target_path(value: str) -> bool:
+	"""Return true for repository paths that may expose credentials or Git metadata."""
+	parts = [part.lower() for part in value.replace("\\", "/").split("/") if part]
+	if ".git" in parts:
+		return True
+	if any(
+		part.startswith(".env")
+		or part in {".gitconfig", ".git-credentials", ".gitmodules", ".netrc", ".npmrc", ".pypirc"}
+		for part in parts
+	):
+		return True
+	return any(
+		parts[index : index + 2] in ([".docker", "config.json"], [".aws", "credentials"])
+		for index in range(max(0, len(parts) - 1))
+	)
+
+
 def _mirror_event(prefix: str, **fields: object) -> None:
 	if _emit_event_helper is None:
 		return
@@ -240,6 +257,8 @@ def normalize_path(value: str) -> str | None:
 	if len(value.encode("utf-8")) > MAX_TARGET_PATH_BYTES:
 		return None
 	if not is_probable_path(value):
+		return None
+	if is_sensitive_target_path(value):
 		return None
 	return value
 
@@ -597,10 +616,13 @@ def emit_context(
 	omitted_entries += max(0, len(paths) - MAX_TARGET_PATHS)
 
 	for rel in bounded_paths:
-		abs_path = (repo_root / rel).resolve()
 		try:
-			abs_path.relative_to(repo_root_resolved)
-		except ValueError:
+			abs_path = (repo_root / rel).resolve()
+			resolved_repo_relative_path = abs_path.relative_to(repo_root_resolved).as_posix()
+		except (OSError, RuntimeError, ValueError):
+			omitted_entries += 1
+			continue
+		if is_sensitive_target_path(resolved_repo_relative_path):
 			omitted_entries += 1
 			continue
 		if not abs_path.is_file():

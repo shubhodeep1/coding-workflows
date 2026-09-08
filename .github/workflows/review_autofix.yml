@@ -907,6 +907,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Dispatch standalone validate for orchestrator short-circuit issues
         run: |
           set -euo pipefail
@@ -1054,6 +1055,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Force orchestrate poll after merged PR handling
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -1437,6 +1439,7 @@ jobs:
           filter: blob:none
           token: ${{ secrets.GH_PAT }}
 
+          persist-credentials: false
       - name: Show disk usage (post checkout)
         run: df -h /
 
@@ -1449,7 +1452,11 @@ jobs:
           SERVER_HOST="${GITHUB_SERVER_URL#https://}"
           SERVER_HOST="${SERVER_HOST#http://}"
           SERVER_HOST="${SERVER_HOST%/}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+          git remote set-url origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}"
 
       - name: Resolve workflow support ref
         run: |
@@ -1472,6 +1479,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Checkout workflow support source fallback
         if: ${{ steps.checkout_support_source.outcome == 'failure' }}
         uses: actions/checkout@v5
@@ -1482,6 +1490,7 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Ensure workflow support source checkout
         run: |
           set -euo pipefail
@@ -1501,6 +1510,7 @@ jobs:
           path: .codex-workflow-src-main
           fetch-depth: 1
 
+          persist-credentials: false
       - name: Stage workflow support files
         run: |
           set -euo pipefail
@@ -2388,8 +2398,15 @@ jobs:
           echo "CLAUDE_BRANCH_REVIEW_LIGHT_PROFILE mode=no_pr reviewer_reasoning=low reviewer_two_pass=false reviewer_count=${#reviewer_models[@]}"
 
       - name: Checkout PR head branch
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
 
           HEAD_REF="$(jq -r '.headRefName' "${PR_META_FILE}")"
           HEAD_REPO="$(jq -r '.headRepoFullName' "${PR_META_FILE}")"
@@ -2526,6 +2543,7 @@ jobs:
       - name: Count autofix iterations
         id: retrigger_guard
         env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
           FORCE_RB_JUDGE: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true') || (github.event_name != 'workflow_dispatch' && inputs.force_rb_judge)) && 'true' || 'false' }}
           # Orchestrator PR autofix flow (see README §"Orchestrator PR autofix flow"):
@@ -2551,6 +2569,11 @@ jobs:
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
         run: |
           set -euo pipefail
+
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
 
           # ----- Orchestrator PR mode classification -----
           orch_pr_mode="other"
@@ -2699,8 +2722,15 @@ jobs:
 
       - name: Generate diff context
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
 
           echo "Generating reviewer diff context"
           bash "${SUPPORT_SCRIPTS_DIR}/git_ref_health_check.sh" repair
@@ -3179,6 +3209,11 @@ jobs:
           LOCAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
         run: |
           set -euo pipefail
+
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
 
           if [ ! -x "${SUPPORT_SCRIPTS_DIR}/check_external_branch_advance.sh" ]; then
             echo "::warning::check_external_branch_advance.sh missing from support scripts; fail-open (skipping pre-review stale-base gate)."
@@ -4442,6 +4477,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+
           echo "Checking for merge conflicts"
           echo "MERGE_CONFLICT=false" >> "$GITHUB_ENV"
           echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
@@ -5497,7 +5537,11 @@ jobs:
             echo "::warning::check_external_branch_advance.sh missing from support scripts; fail-open (skipping pre-push gate)."
           fi
 
-          git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
+          git_auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.extraHeader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic ${git_auth_header}"
+          git remote set-url origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}"
           echo "Pushing pending commits to ${TARGET_BRANCH}..."
 
           # Retry non-fast-forward rejections with fetch+merge.  A concurrent
@@ -6527,6 +6571,16 @@ jobs:
           fi
           if [ "${JUDGE_HANDLED}" = "true" ]; then
             case "${JUDGE_ACTION}" in
+              approval_pending)
+                if [ "${JUDGE_SKIP_REASON}" = "approval_request_created" ]; then
+                  MSG="Review-blocked terminal recommendation needs trusted human approval"
+                else
+                  echo "Review-blocked terminal recommendation is awaiting trusted human approval; suppressing duplicate alert."
+                  exit 0
+                fi ;;
+              skip)
+                echo "Review-blocked refusal was already recorded; suppressing duplicate alert."
+                exit 0 ;;
               merge)
                 MSG="Review-blocked judge merged PR as-is" ;;
               fix)

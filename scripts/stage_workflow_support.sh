@@ -542,7 +542,7 @@ checkout_support_ref()
 {
 	local ref="$1"
 	local dest="$2"
-	local server_host remote_url
+	local server_host remote_url auth_header
 
 	if [ -z "${GH_TOKEN:-}" ]; then
 		echo "::error::GH_TOKEN is required to stage workflow support files." >&2
@@ -553,11 +553,12 @@ checkout_support_ref()
 	server_host="${server_host#https://}"
 	server_host="${server_host#http://}"
 	server_host="${server_host%/}"
-	remote_url="https://x-access-token:${GH_TOKEN}@${server_host}/${WORKFLOW_SOURCE_REPO}"
+	remote_url="https://${server_host}/${WORKFLOW_SOURCE_REPO}"
+	auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
 
 	rm -rf "${dest}"
 	mkdir -p "$(dirname "${dest}")"
-	if git clone --quiet --no-tags --depth 1 --branch "${ref}" "${remote_url}" "${dest}" 2>/dev/null; then
+	if git -c "http.extraHeader=Authorization: Basic ${auth_header}" clone --quiet --no-tags --depth 1 --branch "${ref}" "${remote_url}" "${dest}" 2>/dev/null; then
 		return 0
 	fi
 	rm -rf "${dest}"
