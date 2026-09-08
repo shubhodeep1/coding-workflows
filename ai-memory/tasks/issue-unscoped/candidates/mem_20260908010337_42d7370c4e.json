@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.93,
+  "details": "The repository centralizes polling and workflow state behavior in scripts/orchestrate_poll_process.sh, with repeated merged changes updating its dedicated test file. Future plans should treat behavior changes there as requiring regression coverage for success, failure, retry, and edge-state paths.",
+  "fingerprint": "93c3e78d9eabab03860b08b30acf1c361071d27b4fb6fd65cdaf84adf833e739",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34175277040",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34175277040",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3987",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3996",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3998",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4000",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4005",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3989",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3997",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3999",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4001",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4006"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260908010337_42d7370c4e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator changes are typically paired with focused contract tests in tests/test_orchestrate_poll_process.py.",
+  "timestamps": {
+    "created_at": "2026-09-08T01:03:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
