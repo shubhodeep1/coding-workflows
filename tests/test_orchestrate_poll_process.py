@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import time
+import unittest
 from pathlib import Path
 
 
@@ -2502,8 +2503,11 @@ sys.exit(1)
 		_write_exec(bin_dir / "gh", gh_mock)
 
 		real_git = shutil.which("git")
+		real_jq = shutil.which("jq")
 		real_python = shutil.which("python3")
 		assert real_git is not None
+		if real_jq is None:
+			raise unittest.SkipTest("jq binary not available in test environment")
 		assert real_python is not None
 		_write_exec(
 			bin_dir / "git",
@@ -2603,6 +2607,20 @@ if args and args[0] == 'fetch':
 
 proc = subprocess.run([real_git, *args])
 sys.exit(proc.returncode)
+''',
+		)
+
+		_write_exec(
+			bin_dir / "jq",
+r'''#!/usr/bin/env bash
+if [ "${MOCK_SECURITY_PASS_REISSUE_STATE_PERSIST_FAIL:-false}" = "true" ]; then
+	for jq_argument in "$@"; do
+		if [ "${jq_argument}" = "reissues" ]; then
+			exit 1
+		fi
+	done
+fi
+exec "${REAL_JQ_BIN}" "$@"
 ''',
 		)
 
@@ -3122,6 +3140,7 @@ sys.exit(proc.returncode)
 				"GH_MOCK_STORE": str(store_file),
 				"GH_RETRY_MAX_ATTEMPTS": "1",
 				"REAL_GIT_BIN": real_git,
+				"REAL_JQ_BIN": real_jq,
 				"REAL_PYTHON_BIN": real_python,
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
 				"MOCK_GIT_PUSH_SUCCESS": "true" if mock_git_push_success else "false",
@@ -4492,6 +4511,44 @@ def test_security_pass_implementation_failed_fix_with_open_blockers_defers_reiss
 	assert "SECURITY_PASS_FIX_ISSUE_REISSUED" not in combined_log
 
 
+def test_security_pass_implementation_failed_fix_defer_escalates_at_wave_ceiling() -> None:
+	defer_summary = "700|#701=open |blocker fix-up issue(s) still open"
+	result = _run_poller(
+		state=_security_pass_fixing_state(
+			security_pass_fix_defer={
+				"issue": 700,
+				"summary": defer_summary,
+				"security_pass_defer_count": 4,
+				"security_pass_defer_escalated": False,
+			},
+		),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+			701: ["ai:implementing", "ai:implement-fix-up"],
+		},
+		issue_comments={700: [_security_pass_post_codex_fixup_comment(700, 701)]},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MAX_IMPL_FAILED_DEFER_CYCLES": "5"},
+	)
+
+	assert result.get("created_issues", []) == []
+	assert result["closed_issues"] == []
+	assert "ai:needs-human" in result["issues"]["700"]["labels"]
+	for persisted_state in (result["state_on_disk"], result["latest_state"]):
+		defer_state = persisted_state["security_pass_fix_defer"]
+		assert defer_state["summary"] == defer_summary
+		assert defer_state["security_pass_defer_count"] == 5
+		assert defer_state["security_pass_defer_escalated"] is True
+	combined_log = result["stdout"] + result["stderr"]
+	assert "cycle=5/5; escalated=true" in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_REISSUED" not in combined_log
+
+
 def test_security_pass_blocker_free_post_codex_failure_escalates_at_existing_cap() -> None:
 	"""Diagnose outcomes without fix-up issues must not defer silently forever."""
 	defer_summary = "700||post-codex blocker metadata missing or malformed"
@@ -4568,6 +4625,60 @@ def test_security_pass_reissue_adopts_existing_successor_without_duplicate() -> 
 	combined_log = result["stdout"] + result["stderr"]
 	assert "successor #900 already exists for failed issue #700" in combined_log
 	assert "successor=900 mode=no-op-implementation reissue=1/2" in combined_log
+
+
+def test_security_pass_reissue_state_persist_failure_adopts_successor_next_poll() -> None:
+	failed_result = _run_poller(
+		state=_security_pass_fixing_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+		},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_REISSUE_STATE_PERSIST_FAIL": "true"},
+	)
+
+	assert len(failed_result.get("created_issues", [])) == 1
+	untracked_successor_num = failed_result["created_issues"][0]["number"]
+	assert failed_result["closed_issues"] == []
+	assert failed_result["issues"]["700"]["closed"] is False
+	assert failed_result["issues"][str(untracked_successor_num)]["closed"] is False
+	assert failed_result["latest_state"]["security_pass_active_fix_issues"] == [700]
+	assert "security_pass_fix_reissue_count" not in failed_result["latest_state"]
+	assert (
+		f"Security-pass successor #{untracked_successor_num} could not be persisted "
+		"for tracking issue #192" in failed_result["stdout"] + failed_result["stderr"]
+	)
+
+	successor_labels = failed_result["issues"][str(untracked_successor_num)]["labels"]
+	retry_result = _run_poller(
+		state=failed_result["state_on_disk"],
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+			untracked_successor_num: successor_labels,
+		},
+		issue_bodies={
+			700: _security_pass_fix_issue_body(192, 2),
+			untracked_successor_num: failed_result["issues"][str(untracked_successor_num)]["body"],
+		},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert retry_result.get("created_issues", []) == []
+	assert retry_result["closed_issues"] == [700]
+	assert retry_result["latest_state"]["security_pass_active_fix_issues"] == [untracked_successor_num]
+	assert retry_result["latest_state"]["security_pass_fix_reissue_count"] == 1
+	retry_log = retry_result["stdout"] + retry_result["stderr"]
+	assert f"successor #{untracked_successor_num} already exists for failed issue #700" in retry_log
+	assert f"successor={untracked_successor_num} mode=no-op-implementation reissue=1/2" in retry_log
 
 
 def test_security_pass_implementation_failed_noop_fix_is_reissued_with_noop_guidance() -> None:
@@ -18196,6 +18307,7 @@ def _run_selected_tests(
 ) -> int:
 	passed = 0
 	failed = 0
+	skipped = 0
 	results: list[tuple[str, int, str]] = []
 	runner_output = sys.stdout
 	for func in test_funcs:
@@ -18236,6 +18348,9 @@ def _run_selected_tests(
 		status = "pass"
 		try:
 			func()
+		except unittest.SkipTest as exc:
+			failure = exc
+			status = "skip"
 		except Exception as exc:
 			failure = exc
 			status = "fail"
@@ -18254,7 +18369,10 @@ def _run_selected_tests(
 		elapsed_ms = _test_elapsed_ms(started_at)
 		results.append((name, elapsed_ms, status))
 		_emit_test_runner_event("complete", name, elapsed_ms, status, runner_output)
-		if failure is None:
+		if status == "skip":
+			print(f"  SKIP  {name}: {failure}", file=runner_output, flush=True)
+			skipped += 1
+		elif failure is None:
 			print(f"  PASS  {name}", file=runner_output, flush=True)
 			passed += 1
 		else:
@@ -18269,8 +18387,11 @@ def _run_selected_tests(
 			"slowest", name, elapsed_ms, status, runner_output, rank=rank
 		)
 
+	summary = f"{passed} passed, {failed} failed"
+	if skipped:
+		summary += f", {skipped} skipped"
 	print(
-		f"\n{passed} passed, {failed} failed, {passed + failed} total",
+		f"\n{summary}, {passed + failed + skipped} total",
 		file=runner_output,
 		flush=True,
 	)
@@ -18291,10 +18412,13 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 	def synthetic_failure():
 		raise RuntimeError("synthetic failure")
 
+	def synthetic_skip():
+		raise unittest.SkipTest("synthetic skip")
+
 	output = io.StringIO()
 	with contextlib.redirect_stdout(output):
 		exit_code = _run_selected_tests(
-			[synthetic_fast, synthetic_slow, synthetic_failure],
+			[synthetic_fast, synthetic_slow, synthetic_failure, synthetic_skip],
 			heartbeat_interval_sec=0.005,
 			slowest_limit=2,
 		)
@@ -18304,7 +18428,8 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 	assert "  PASS  synthetic_fast" in lines
 	assert "  PASS  synthetic_slow" in lines
 	assert "  FAIL  synthetic_failure: synthetic failure" in lines
-	assert lines[-1] == "2 passed, 1 failed, 3 total"
+	assert "  SKIP  synthetic_skip: synthetic skip" in lines
+	assert lines[-1] == "2 passed, 1 failed, 1 skipped, 4 total"
 
 	events = [
 		json.loads(line.removeprefix(_TEST_RUNNER_EVENT_PREFIX))
@@ -18315,6 +18440,7 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 		("synthetic_fast", "pass"),
 		("synthetic_slow", "pass"),
 		("synthetic_failure", "fail"),
+		("synthetic_skip", "skip"),
 	):
 		test_events = [
 			event
@@ -18349,7 +18475,7 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 	)
 	synthetic_thread_names = {
 		f"{_TEST_RUNNER_HEARTBEAT_THREAD_PREFIX}{test_name}"
-		for test_name in ("synthetic_fast", "synthetic_slow", "synthetic_failure")
+		for test_name in ("synthetic_fast", "synthetic_slow", "synthetic_failure", "synthetic_skip")
 	}
 	assert not any(
 		thread.name in synthetic_thread_names
