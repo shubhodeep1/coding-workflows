@@ -2193,11 +2193,10 @@ jobs:
           # contract test passes (5/5).` and the run failed instead of
           # closing the issue via the success-no-op path below.
           # The classifier is deliberately two-sided and conservative:
-          # the reason must affirmatively state that nothing is required
-          # AND must not name a real obstacle. Anything that fails
-          # either half keeps the pre-existing failure behaviour, so a
-          # miss costs a false failure (today's behaviour), never a
-          # falsely-closed issue.
+          # the reason must affirmatively state that nothing is required,
+          # and its retained first sentence must not name a real obstacle.
+          # Anything that fails either scoped check keeps the pre-existing
+          # failure behaviour.
           # An affirmative validation-only + no-edit-permitted branch was
           # added for run
           # 34125645374 (tele-funtoken-msg-scoring issue #4090). Plan
@@ -2215,7 +2214,26 @@ jobs:
           # cannot close an unfinished issue. The real-obstacle veto still
           # applies, so a verdict that says validation is blocked keeps
           # failing.
-          BLOCKED_ALREADY_SATISFIED_REGEX='(requires?[[:space:]]+no[[:space:]]+([a-z-]+[[:space:]]+){0,3}(edit|change|modification|diff|patch)s?|no[[:space:]]+([a-z-]+[[:space:]]+){0,3}(edit|change|modification|diff|patch)s?[[:space:]]+(are[[:space:]]+|is[[:space:]]+|were[[:space:]]+|was[[:space:]]+)?(required|needed|necessary)|nothing[[:space:]]+to[[:space:]]+(do|change|implement|apply)|requires?[[:space:]]+(validation|verification)[- ]only.*no[[:space:]]+([a-z-]+[[:space:]]+){0,3}(edit|change|modification|diff|patch)s?[[:space:]]+(are[[:space:]]+|is[[:space:]]+|were[[:space:]]+|was[[:space:]]+)?permitted|already[[:space:]]+(implemented|present|satisfied|applied|in[[:space:]]+place|aligned|complete|completed|done|exists|enforced|up[- ]to[- ]date))'
+          # The veto is scoped to the verdict's first sentence (runs
+          # 34163478446, 34163969134, 34163977712, 34164219124,
+          # 34162543282, 34162832548, 34166170045 — tele-funtoken-msg-scoring
+          # issues #4189, #4192, #4191, #4193, #4180, #4184, #4213). Each
+          # answered an already-satisfied verdict such as `BLOCKED: Approved
+          # plan requires no repository changes; HEAD already contains the
+          # fix. Targeted tests pass (148). Full suite has 6 unrelated
+          # failures.` and every run went red: the positive half matched,
+          # but `failures` / `lacks` in the trailing aside about the
+          # pre-existing test suite tripped the veto. The model states its
+          # blocker up front and appends diagnostics afterwards, so the
+          # veto reads only the text up to a conservative sentence boundary:
+          # `.`, `!` or `?`, whitespace, then an uppercase letter or digit.
+          # A boundary after a dotted or common abbreviation falls back to
+          # the whole reason, while `;` and `,` do not end the sentence, so
+          # `requires no edits; pytest is unavailable` is still vetoed. The
+          # positive half still reads the whole reason.
+          # `already contains` / `already holds` joined the positive
+          # vocabulary from the same runs (`HEAD already contains the fix`).
+          BLOCKED_ALREADY_SATISFIED_REGEX='(requires?[[:space:]]+no[[:space:]]+([a-z-]+[[:space:]]+){0,3}(edit|change|modification|diff|patch)s?|no[[:space:]]+([a-z-]+[[:space:]]+){0,3}(edit|change|modification|diff|patch)s?[[:space:]]+(are[[:space:]]+|is[[:space:]]+|were[[:space:]]+|was[[:space:]]+)?(required|needed|necessary)|nothing[[:space:]]+to[[:space:]]+(do|change|implement|apply)|requires?[[:space:]]+(validation|verification)[- ]only.*no[[:space:]]+([a-z-]+[[:space:]]+){0,3}(edit|change|modification|diff|patch)s?[[:space:]]+(are[[:space:]]+|is[[:space:]]+|were[[:space:]]+|was[[:space:]]+)?permitted|already[[:space:]]+(implemented|present|satisfied|applied|in[[:space:]]+place|aligned|complete|completed|done|exists|enforced|contains|holds|up[- ]to[- ]date))'
           BLOCKED_REAL_OBSTACLE_REGEX='(scope-lock-violation|\<cannot\>|\<can[[:space:]]not\>|\<can.?t\>|\<unable\>|\<unavailable\>|\<not[[:space:]]available\>|\<inaccessible\>|\<no[[:space:]]access\>|\<denied\>|\<forbidden\>|\<not[[:space:]]permitted\>|\<no[[:space:]]permission\>|\<missing\>|\<absent\>|\<broken\>|\<lacks?\>|does[[:space:]]+not[[:space:]]+exist|\<fail(s|ed|ing|ure|ures)?\>|\<errors?\>|\<conflict(s|ed|ing)?\>|\<ambiguous\>|\<unclear\>|\<insufficient\>|\<needs?[[:space:]]human\>|\<requires?[[:space:]]human\>|\<blocked[[:space:]]by\>|\<out[- ]of[- ]scope\>|\<timed?[[:space:]]out\>|\<timeout\>)'
 
           # Salvage gate. Returns 0 iff at least one path in the porcelain
@@ -2506,8 +2524,18 @@ jobs:
                   # success-no-op regex below sets, so Guard 0 in "Handle no-op
                   # implementation" closes the issue with ai:closed instead of
                   # the diagnostics comment reporting a bail.
+                  # The veto reads only the first conservatively detected
+                  # sentence so trailing diagnostics cannot flip an already-
+                  # satisfied verdict to red. Ambiguous abbreviation boundaries
+                  # and extraction failures fall back to the whole reason.
+                  if ! codex_blocked_first_sentence="$(printf '%s' "${codex_blocked_reason}" | sed -E 's/[.!?][[:space:]]+[[:upper:][:digit:]].*$//')"; then
+                    codex_blocked_first_sentence="${codex_blocked_reason}"
+                  elif [ -z "${codex_blocked_first_sentence}" ] \
+                     || printf '%s' "${codex_blocked_first_sentence}" | grep -qiE '(^|[^[:alpha:]])(([[:alpha:]]\.)+[[:alpha:]]|etc|vs|cf|mr|mrs|ms|dr|prof|sr|jr|st)$' 2>/dev/null; then
+                    codex_blocked_first_sentence="${codex_blocked_reason}"
+                  fi
                   if printf '%s' "${codex_blocked_reason}" | grep -qiE "${BLOCKED_ALREADY_SATISFIED_REGEX}" 2>/dev/null \
-                     && ! printf '%s' "${codex_blocked_reason}" | grep -qiE "${BLOCKED_REAL_OBSTACLE_REGEX}" 2>/dev/null; then
+                     && ! printf '%s' "${codex_blocked_first_sentence}" | grep -qiE "${BLOCKED_REAL_OBSTACLE_REGEX}" 2>/dev/null; then
                     echo "Codex returned a BLOCKED verdict on attempt ${attempt} that reports the requested work is already present — treating it as success-no-op. Model reason: $(_gh_actions_escape "${codex_blocked_reason}")"
                     : > "${RUNTIME_DIR}/codex_success_noop.flag"
                     implement_succeeded=true

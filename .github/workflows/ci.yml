@@ -404,6 +404,11 @@ jobs:
             tests/test_review_merge_train.py \
             tests/test_gh_helpers_parse_reset_header.py
 
+      - name: PR-watch guard hook tests (CLAUDE.md §25)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_watch_guard.py
+
       - name: Orchestrate lib unit tests
         run: |
           set -euo pipefail
