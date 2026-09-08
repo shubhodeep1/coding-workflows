@@ -323,7 +323,7 @@ Four constraints govern edits to these pins:
   subagent's model for the whole run.
 - **Do not set `agent:` on the forked commands.** A forked skill loads
   CLAUDE.md *except* when the agent is `Explore` or `Plan`. Naming either
-  would silently drop §0–§24 from the command's context. Leaving `agent`
+  would silently drop §0–§25 from the command's context. Leaving `agent`
   unset keeps the repo rules loaded.
 - **`background: false` is required on the forks.** A backgrounded fork
   runs with the narrower background-subagent tool set and applies edits
