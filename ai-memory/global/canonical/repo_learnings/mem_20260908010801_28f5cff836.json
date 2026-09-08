@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Reusable workflow consumers are maintained with immutable references and drift auditing.",
   "timestamps": {
     "created_at": "2026-09-08T01:08:01Z",
