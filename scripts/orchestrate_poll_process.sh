@@ -4793,6 +4793,7 @@ security_pass_fix_reissue_exhausted() {
     | del(.security_pass_fix_reissue_count)
     | del(.security_pass_fix_defer)
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-failed"
   post_tracking_comment "## ❌ Project security-pass fix could not be implemented
@@ -4998,9 +4999,16 @@ REISSUE_EOF
     mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   else
     rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
-    echo "::warning::Security-pass successor #${new_issue_num} could not be persisted for tracking issue #${TRACKING_NUM}; the next poll will re-issue again."
+    if gh_retry gh issue close "${new_issue_num}" --repo "${GITHUB_REPOSITORY}" \
+      -c "Closing: this successor could not be persisted in tracking state. The poller will create a fresh successor on its next retry." 2>/dev/null; then
+      echo "::warning::Security-pass successor #${new_issue_num} could not be persisted for tracking issue #${TRACKING_NUM}; it was closed to prevent duplicate live successors, and the next poll will retry."
+    else
+      echo "::warning::Security-pass successor #${new_issue_num} could not be persisted or closed for tracking issue #${TRACKING_NUM}; it remains open and untracked."
+    fi
     return 0
   fi
+
+  reconcile_tracking_body_after_security_pass_transition
 
   ensure_label_exists "ai:closed"
   gh_retry gh issue edit "${issue_number}" --repo "${GITHUB_REPOSITORY}" \

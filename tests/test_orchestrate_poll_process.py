@@ -2493,8 +2493,10 @@ sys.exit(1)
 		_write_exec(bin_dir / "gh", gh_mock)
 
 		real_git = shutil.which("git")
+		real_jq = shutil.which("jq")
 		real_python = shutil.which("python3")
 		assert real_git is not None
+		assert real_jq is not None
 		assert real_python is not None
 		_write_exec(
 			bin_dir / "git",
@@ -2594,6 +2596,20 @@ if args and args[0] == 'fetch':
 
 proc = subprocess.run([real_git, *args])
 sys.exit(proc.returncode)
+''',
+		)
+
+		_write_exec(
+			bin_dir / "jq",
+r'''#!/usr/bin/env bash
+if [ "${MOCK_SECURITY_PASS_REISSUE_STATE_PERSIST_FAIL:-false}" = "true" ]; then
+	for jq_argument in "$@"; do
+		if [[ "${jq_argument}" == *'.security_pass_active_fix_issues = [$successor]'* ]]; then
+			exit 1
+		fi
+	done
+fi
+exec "${REAL_JQ_BIN}" "$@"
 ''',
 		)
 
@@ -3113,6 +3129,7 @@ sys.exit(proc.returncode)
 				"GH_MOCK_STORE": str(store_file),
 				"GH_RETRY_MAX_ATTEMPTS": "1",
 				"REAL_GIT_BIN": real_git,
+				"REAL_JQ_BIN": real_jq,
 				"REAL_PYTHON_BIN": real_python,
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
 				"MOCK_GIT_PUSH_SUCCESS": "true" if mock_git_push_success else "false",
@@ -4322,6 +4339,31 @@ def _security_pass_fixing_state(**overrides) -> dict:
 	return state
 
 
+def _security_pass_fixing_tracking_body(active_fix_issue: int) -> str:
+	return f"""## Project: Test Project
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-192`
+
+### Wave 1
+
+- [ ] **issue-1**: First task (priority 1)
+
+<!-- orchestrator:security-pass -->
+### Security pass
+- Status: `blocked`
+- Completed fix cycles: 1
+- Audited integration SHA: `audited-head`
+- Active fix issue: #{active_fix_issue}
+<!-- /orchestrator:security-pass -->
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
+
+
 def test_security_pass_implementation_failed_fix_with_resolved_blockers_is_reissued() -> None:
 	"""An open fix issue that implement.yml failed in post-Codex validation
 	must be closed and re-issued once its blocker fix-ups are closed.
@@ -4333,8 +4375,12 @@ def test_security_pass_implementation_failed_fix_with_resolved_blockers_is_reiss
 	standalone stall recovery skips ai:implementation-failed, so nothing
 	ever re-dispatched the security fix.
 	"""
+	tracking_body = _security_pass_fixing_tracking_body(700)
 	result = _run_poller(
-		state=_security_pass_fixing_state(),
+		state=_security_pass_fixing_state(
+			project_body_snapshot=tracking_body,
+			tracking_body_sync_hash=hashlib.sha256(tracking_body.encode("utf-8")).hexdigest(),
+		),
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
@@ -4346,6 +4392,7 @@ def test_security_pass_implementation_failed_fix_with_resolved_blockers_is_reiss
 		issue_closed={701: True},
 		issue_comments={700: [_security_pass_post_codex_fixup_comment(700, 701)]},
 		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		tracking_body=tracking_body,
 		existing_branches=["main", "orchestrator/project-192"],
 	)
 
@@ -4387,6 +4434,9 @@ def test_security_pass_implementation_failed_fix_with_resolved_blockers_is_reiss
 	assert any(f"re-issued as #{new_issue_num}" in body for body in tracking_comments)
 	assert any("(fix cycle 2/3)" in body and "(re-issue 1/2)" in body for body in tracking_comments)
 	assert not any("/re-security-pass" in body for body in tracking_comments)
+	rendered_tracking_body = result["issues"]["192"]["body"]
+	assert f"- Active fix issue: #{new_issue_num}" in rendered_tracking_body
+	assert "- Active fix issue: #700" not in rendered_tracking_body
 
 
 def test_security_pass_implementation_failed_fix_with_open_blockers_defers_reissue() -> None:
@@ -4513,8 +4563,13 @@ def test_security_pass_implementation_failed_noop_fix_is_reissued_with_noop_guid
 
 
 def test_security_pass_implementation_failed_reissue_cap_terminalizes_recoverably() -> None:
+	tracking_body = _security_pass_fixing_tracking_body(700)
 	result = _run_poller(
-		state=_security_pass_fixing_state(security_pass_fix_reissue_count=2),
+		state=_security_pass_fixing_state(
+			security_pass_fix_reissue_count=2,
+			project_body_snapshot=tracking_body,
+			tracking_body_sync_hash=hashlib.sha256(tracking_body.encode("utf-8")).hexdigest(),
+		),
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
@@ -4523,6 +4578,7 @@ def test_security_pass_implementation_failed_reissue_cap_terminalizes_recoverabl
 			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
 		},
 		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		tracking_body=tracking_body,
 		existing_branches=["main", "orchestrator/project-192"],
 	)
 
@@ -4543,6 +4599,35 @@ def test_security_pass_implementation_failed_reissue_cap_terminalizes_recoverabl
 	)
 	tracking_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]]
 	assert any("/re-security-pass" in body for body in tracking_comments)
+	rendered_tracking_body = result["issues"]["192"]["body"]
+	assert "- Status: `failed`" in rendered_tracking_body
+	assert "- Active fix issue: none" in rendered_tracking_body
+	assert "- Active fix issue: #700" not in rendered_tracking_body
+
+
+def test_security_pass_reissue_state_persist_failure_closes_untracked_successor() -> None:
+	result = _run_poller(
+		state=_security_pass_fixing_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+		},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_REISSUE_STATE_PERSIST_FAIL": "true"},
+	)
+
+	assert len(result.get("created_issues", [])) == 1
+	untracked_successor = result["created_issues"][0]["number"]
+	assert result["closed_issues"] == [untracked_successor]
+	assert result["issues"][str(untracked_successor)]["closed"] is True
+	assert result["issues"]["700"]["closed"] is False
+	assert result["latest_state"]["security_pass_active_fix_issues"] == [700]
+	assert "security_pass_fix_reissue_count" not in result["latest_state"]
+	assert "closed to prevent duplicate live successors" in result["stdout"] + result["stderr"]
 
 
 def test_security_pass_judge_validation_route_blocks_then_clean_pass_dispatches() -> None:
