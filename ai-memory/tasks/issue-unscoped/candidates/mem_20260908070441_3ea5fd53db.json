@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_watch_guard.py:34-35 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The enforcement text says the hook fails open with a warning when the hook payload cannot be parsed, but the implementation treats empty or whitespace-only input as `{}` and allows it silently.\n  WHY: The documented fail-open contract does not match the actual runtime behavior and could confuse contributors or operators who rely on the documentation.\n- CLAUDE.md:1473-1474 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The enforcement description says the hook \u201cfails open with a `systemMessage` warning when the hook payload \u2026 is invalid\u201d, but the implementation treats empty or whitespace-only payload as `{}` and does not emit a warning.\n  WHY: The documented fail-open contract does not match the actual behavior, which could confuse contributors/operators who rely on the documentation.\n- .github/workflows/review_autofix.yml (CI signal, not a diff file): failed[0] check-run `codex-agent`, conclusion `cancelled`, run 34192274518 on head SHA 6636f904c57b7424822a6b7f52ebda74e700533e | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: One completed check-run on the current PR head ended `cancelled` with an empty summary and empty log_tail, so it cannot be mapped to any code in the diff.\n  WHY: No demonstrated code failure \u2014 the cancelled run ID (34192274518) is newer than the currently in-progress review run (34192257906) on the same head, which is consistent with a superseded/duplicate dispatch or an external cancellation rather than a failing test.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .claude/hooks/pr_watch_guard.py\n  Line or code reference: lines 34-35\n  Problem: The enforcement text says the hook fails open with a warning when the hook payload cannot be parsed, but the implementation treats empty or whitespace-only input as `{}` and allows it silently.\n  Why it fails at runtime: The documented fail-open contract does not match the actual runtime behavior and could confuse contributors or operators who rely on the documentation.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- CLAUDE.md\n  Line or code reference: lines 1473-1474\n  Problem: The enforcement description says the hook \u201cfails open with a `systemMessage` warning when the hook payload \u2026 is invalid\u201d, but the implementation treats empty or whitespace-only payload as `{}` and does not emit a warning.\n  Why it fails at runtime: The documented fail-open contract does not match the actual behavior, which could confuse contributors/operators who rely on the documentation.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/review_autofix.yml (CI signal, not a diff file)\n  Line or code reference: failed[0] check-run `codex-agent`, conclusion `cancelled`, run 34192274518 on head SHA 6636f904c57b7424822a6b7f52ebda74e700533e\n  Problem: One completed check-run on the current PR head ended `cancelled` with an empty summary and empty log_tail, so it cannot be mapped to any code in the diff.\n  Why it fails at runtime: No demonstrated code failure \u2014 the cancelled run ID (34192274518) is newer than the currently in-progress review run (34192257906) on the same head, which is consistent with a superseded/duplicate dispatch or an external cancellation rather than a failing test. Reported per the check-run protocol because it cannot be positively mapped; the editor can confirm via `gh run view 34192274518` if desired. Note also that `collection_status: timeout` and the `lint` / `review / codex-agent` runs are still `in_progress`, so a fully green head is not yet confirmed by this snapshot.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "65f6329b108f29a999ebaa18cc60d50342c62a0519d8ec1b6f8afce7d5b6fd6c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4051,
+    "run_id": "34192257906",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34192257906",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260908070441_3ea5fd53db",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4051,
+    "run_id": "34192257906"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-08T07:04:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
