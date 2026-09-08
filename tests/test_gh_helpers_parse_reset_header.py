@@ -106,3 +106,19 @@ def test_missing_header_file_yields_empty_string(tmp_path: Path) -> None:
 	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
 	assert result.returncode == 0, result.stderr
 	assert result.stdout.strip() == ""
+
+
+def test_sleep_until_reset_log_uses_source_neutral_epoch_label() -> None:
+	env = dict(os.environ)
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	script = (
+		"set -euo pipefail\n"
+		f"source '{GH_HELPERS}'\n"
+		"sleep() { :; }\n"
+		f"_sleep_until_reset {PRIMARY_RESET_EPOCH}\n"
+	)
+	result = subprocess.run(
+		["bash", "-c", script], env=env, capture_output=True, text=True, check=True,
+	)
+	assert f"computed reset epoch: {PRIMARY_RESET_EPOCH}" in result.stderr
+	assert "X-RateLimit-Reset:" not in result.stderr

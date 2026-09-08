@@ -112,7 +112,7 @@ _sleep_until_reset()
 		wait_secs=30
 	fi
 
-	echo "::warning::  Rate limit resets in ${wait_secs}s (X-RateLimit-Reset: ${reset_epoch:-unknown})" >&2
+	echo "::warning::  Rate limit resets in ${wait_secs}s (computed reset epoch: ${reset_epoch:-unknown})" >&2
 	sleep "${wait_secs}"
 }
 
