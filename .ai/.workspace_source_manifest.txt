@@ -112,7 +112,11 @@ analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
 analysis/workflow-optimization-2026-08-30.md
+analysis/workflow-optimization-2026-09-03.md
+analysis/workflow-optimization-2026-09-06.md
+analysis/workflow-optimization-2026-09-07.md
 changelog.d/.gitkeep
+changelog.d/255-artifact-cleanup-preserves-tracked.md
 changelog.d/3738-merge-precheck-promisor-recovery.md
 changelog.d/3763-changes-lost-redispatch-get-method.md
 changelog.d/3764-preserve-editor-changelog-fragments.md
@@ -157,6 +161,7 @@ changelog.d/3902-secure-workflow-shell-inputs.md
 changelog.d/3903-changelog-only-notification.md
 changelog.d/3906-stall-recovery-human-gated-latch.md
 changelog.d/3909-deterministic-manifest-conflict-resolution.md
+changelog.d/3928-security-pass-exhaustion-findings.md
 changelog.d/3933-security-pass-deleted-branch-repair.md
 changelog.d/3933-security-pass-fix-dedupe-fail-closed.md
 changelog.d/3933-security-pass-fix-issue-idempotency.md
@@ -166,10 +171,19 @@ changelog.d/3939-plan-parser-blockquote-support.md
 changelog.d/3947-security-pass-deleted-branch-recovery.md
 changelog.d/3957-blocker-only-plan-blocked-routing.md
 changelog.d/3963-reissue-preserve-baseline-default-true.md
+changelog.d/3965-security-pass-cycle-budget-reset.md
+changelog.d/3965-security-pass-fix-successor-adoption.md
+changelog.d/3967-plan-blocker-prompt-routing.md
 changelog.d/3967-slash-command-model-pins.md
 changelog.d/3971-deploy-activate-best-model.md
 changelog.d/3972-blocked-already-satisfied-noop.md
 changelog.d/3973-immutable-consumer-workflow-pins.md
+changelog.d/3990-implement-prompt-stdin-cap.md
+changelog.d/3994-stall-recovery-linked-pr-scope.md
+changelog.d/4004-recovery-budget-fixups-backpressure.md
+changelog.d/4017-ledger-token-log-tail-bound.md
+changelog.d/4034-plan-implement-noop-false-failures.md
+changelog.d/4035-merge-train-pre-review-resolve.md
 changelog.d/433-readme-wrapper-predicate-examples.md
 changelog.d/changelog-fragment-workflow.md
 changelog.d/cloudflare-workers-credentials.md
@@ -180,6 +194,7 @@ changelog.d/digitalocean-token-access.md
 changelog.d/github-token-access.md
 changelog.d/investigate-issue-attached-upstream-autochain.md
 changelog.d/merged-pr-commit-guard.md
+changelog.d/merged-pr-guard-offline-fallback.md
 changelog.d/orchestrator-security-pass-phase-1-shift-left-prompts.md
 changelog.d/orchestrator-security-pass-phase-2-audit-engine.md
 changelog.d/orchestrator-security-pass-phase-3-dark-launch.md
@@ -227,6 +242,7 @@ docs/plans/opencode-clarify-cutover-plan.md
 docs/plans/orchestrator-prerequisite-gate-automation-plan.md
 docs/plans/orchestrator-sync-contract-list-union-plan.md
 docs/plans/orchestrator-validation-resilience-plan.md
+docs/plans/security-pass-convergence-plan.md
 docs/plans/symphony-inspired-improvements-plan.md
 docs/postmortems/2026-05-18-project-2734-stall.md
 docs/scripts-pending-removal.md
@@ -466,6 +482,7 @@ scripts/review_enable_auto_merge.sh
 scripts/review_filter_uninteresting_files.sh
 scripts/review_floor_rules.sh
 scripts/review_issue_ledger.sh
+scripts/review_merge_train.sh
 scripts/review_parse_consolidator.sh
 scripts/review_rb_judge.sh
 scripts/review_reject_verify.sh
@@ -646,6 +663,7 @@ tests/test_collect_workflow_logs.py
 tests/test_conflict_dispatch_active_run_visibility.py
 tests/test_conflict_manifest_union_contract.py
 tests/test_consolidate_soft_error_reports.py
+tests/test_consumer_artifact_cleanup_preserves_tracked.py
 tests/test_cost_audit_semble_metrics.py
 tests/test_cost_audit_serena_metrics.py
 tests/test_detect_editor_changes_lost.py
@@ -746,6 +764,7 @@ tests/test_review_editor_fifo_drain.py
 tests/test_review_floor_rules.py
 tests/test_review_issue_ledger.py
 tests/test_review_judge_interim_round_trip.py
+tests/test_review_merge_train.py
 tests/test_review_parse_consolidator.py
 tests/test_review_pipeline_integration.py
 tests/test_review_rb_judge_label_propagation.py
