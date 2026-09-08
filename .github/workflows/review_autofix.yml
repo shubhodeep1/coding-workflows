@@ -3897,7 +3897,13 @@ jobs:
           # cannot establish that the PR is still open before persistence.
           # Call gh directly so this credential-bearing step does not source
           # the branch-primary runtime support bundle.
-          post_editor_pr_state="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null || true)"
+          post_editor_pr_state=""
+          for post_editor_pr_state_attempt in 1 2 3; do
+            if post_editor_pr_state="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null)"; then
+              break
+            fi
+            [ "${post_editor_pr_state_attempt}" -lt 3 ] && sleep 2
+          done
           if [ "${post_editor_pr_state}" != "open" ]; then
             echo "::warning::PR #${PR_NUMBER} is ${post_editor_pr_state:-unavailable} after the editor run; blocking downstream repository mutations."
             echo "PR_CLOSED=true" >> "$GITHUB_ENV"
