@@ -183,6 +183,8 @@ def test_editor_model_step_has_no_repository_credentials_and_rechecks_state() ->
 	recheck_end = workflow_text.index("\n      - name:", recheck_start + 1)
 	recheck_block = workflow_text[recheck_start:recheck_end]
 	assert "GH_TOKEN:" in recheck_block
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"' not in recheck_block
+	assert 'post_editor_pr_state="$(gh api ' in recheck_block
 	assert 'echo "PR_CLOSED=true" >> "$GITHUB_ENV"' in recheck_block
 
 
