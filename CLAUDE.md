@@ -1470,6 +1470,8 @@ raises an internal exception. There is deliberately no environment-variable
 escape hatch. The hook and the settings entry ship to consumer repos
 through the same `.claude/` sync as the §21 guard;
 `tests/test_pr_watch_guard.py` covers the rule and the wiring.
+Empty or whitespace-only hook input is treated as an empty object and allowed
+silently because there is no tool payload to evaluate.
 
 ### E) Interactive Sessions Only
 

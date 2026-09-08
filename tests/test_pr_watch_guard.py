@@ -256,6 +256,10 @@ def test_claude_md_documents_the_rule():
 		"fails open with a `systemMessage` warning when the hook payload cannot be read, "
 		"is invalid or non-object JSON, or guard evaluation raises an internal exception."
 	) in " ".join(text.split())
+	assert (
+		"Empty or whitespace-only hook input is treated as an empty object and allowed "
+		"silently because there is no tool payload to evaluate."
+	) in " ".join(text.split())
 	# §12.G is retained for §6 section stability but marked inactive.
 	assert "### G) Autofix CI / Address-Comments Mode Add-ons\n\n**INACTIVE — superseded by §25.**" in text
 	# The event trigger is gone from the §12 preamble.

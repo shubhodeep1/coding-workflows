@@ -31,6 +31,8 @@ The guard must never break the session: an unreadable, invalid, or non-object
 payload, or an internal evaluation error, allows the call with a
 `systemMessage` warning, the same fail-open contract as
 `pr_merge_status_guard.py`.
+Empty or whitespace-only input is instead treated as an empty object and
+allowed silently because there is no tool payload to evaluate.
 """
 
 from __future__ import annotations
