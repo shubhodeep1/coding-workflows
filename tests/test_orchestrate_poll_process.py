@@ -708,6 +708,7 @@ def _run_poller(
 	fail_issue_comment_get_after: dict[int, int] | None = None,
 	fail_issue_get_for: list[int] | None = None,
 	fail_issue_edit_for: list[int] | None = None,
+	fail_issue_close_for: list[int] | None = None,
 	fail_branch_ref_after: dict[str, int] | None = None,
 	fail_branch_ref_not_found_after: dict[str, int] | None = None,
 	mock_actions_runs_cache_get_json: dict | None = None,
@@ -792,6 +793,7 @@ def _run_poller(
 	fail_issue_comment_get_after = fail_issue_comment_get_after or {}
 	fail_issue_get_for = fail_issue_get_for or []
 	fail_issue_edit_for = fail_issue_edit_for or []
+	fail_issue_close_for = fail_issue_close_for or []
 	fail_branch_ref_after = fail_branch_ref_after or {}
 	fail_branch_ref_not_found_after = fail_branch_ref_not_found_after or {}
 	mock_actions_runs_cache_get_json = mock_actions_runs_cache_get_json or {}
@@ -1079,6 +1081,7 @@ def _run_poller(
 			"fail_issue_comment_get_after": {str(k): int(v) for k, v in fail_issue_comment_get_after.items()},
 			"fail_issue_get_for": [int(x) for x in fail_issue_get_for],
 			"fail_issue_edit_for": [int(x) for x in fail_issue_edit_for],
+			"fail_issue_close_for": [int(x) for x in fail_issue_close_for],
 			"fail_branch_ref_after": {str(k): int(v) for k, v in fail_branch_ref_after.items()},
 			"fail_branch_ref_not_found_after": {str(k): int(v) for k, v in fail_branch_ref_not_found_after.items()},
 			"mock_actions_runs_cache_get_json": mock_actions_runs_cache_get_json,
@@ -1633,6 +1636,10 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'edit':
 
 if args[0] == 'issue' and len(args) >= 3 and args[1] == 'close':
 	num = args[2]
+	if int(num) in set(store.get('fail_issue_close_for', [])):
+		save()
+		print('forced issue close failure', file=sys.stderr)
+		sys.exit(1)
 	issue = get_issue(num)
 	issue['closed'] = True
 	store['closed_issues'].append(int(num))
@@ -4472,12 +4479,88 @@ def test_security_pass_implementation_failed_fix_with_open_blockers_defers_reiss
 		assert persisted_state["security_pass_active_fix_issues"] == [700]
 		assert persisted_state["security_pass_fix_defer"]["issue"] == 700
 		assert "#701=open" in persisted_state["security_pass_fix_defer"]["summary"]
+		assert persisted_state["security_pass_fix_defer"]["security_pass_defer_count"] == 1
+		assert persisted_state["security_pass_fix_defer"]["security_pass_defer_escalated"] is False
 		assert "security_pass_fix_reissue_count" not in persisted_state
 	combined_log = result["stdout"] + result["stderr"]
 	assert "Deferring security-pass fix reissue for #700" in combined_log
 	assert "blocker fix-up issue(s) still open" in combined_log
 	assert "SECURITY_PASS_FAILED" not in combined_log
 	assert "SECURITY_PASS_FIX_ISSUE_REISSUED" not in combined_log
+
+
+def test_security_pass_blocker_free_post_codex_failure_escalates_at_existing_cap() -> None:
+	"""Diagnose outcomes without fix-up issues must not defer silently forever."""
+	defer_summary = "700||post-codex blocker metadata missing or malformed"
+	result = _run_poller(
+		state=_security_pass_fixing_state(
+			security_pass_fix_defer={
+				"issue": 700,
+				"summary": defer_summary,
+				"security_pass_defer_count": 4,
+				"security_pass_defer_escalated": False,
+			},
+		),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+		},
+		issue_comments={
+			700: ["## Post-Codex validation harness error\n\nNo blocker issue was created."],
+		},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result.get("created_issues", []) == []
+	assert "ai:needs-human" in result["issues"]["700"]["labels"]
+	defer_state = result["latest_state"]["security_pass_fix_defer"]
+	assert defer_state == {
+		"issue": 700,
+		"summary": defer_summary,
+		"security_pass_defer_count": 5,
+		"security_pass_defer_escalated": True,
+	}
+	assert any(
+		"Security-pass implementation-failed deferral escalated" in comment["body"]
+		for comment in result["issues"]["700"]["comments"]
+	)
+	assert "cycle=5/5; escalated=true" in result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_FIX_ISSUE_REISSUED" not in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_reissue_adopts_existing_successor_without_duplicate() -> None:
+	existing_successor_body = (
+		_security_pass_fix_issue_body(192, 2)
+		+ "\n---\n\n**Re-issued from #700**\n"
+	)
+	result = _run_poller(
+		state=_security_pass_fixing_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+			900: ["ai:clarification", "ai:orchestrator-managed"],
+		},
+		issue_bodies={
+			700: _security_pass_fix_issue_body(192, 2),
+			900: existing_successor_body,
+		},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result.get("created_issues", []) == []
+	assert result["closed_issues"] == [700]
+	assert result["latest_state"]["security_pass_active_fix_issues"] == [900]
+	assert result["latest_state"]["security_pass_fix_reissue_count"] == 1
+	combined_log = result["stdout"] + result["stderr"]
+	assert "successor #900 already exists for failed issue #700" in combined_log
+	assert "successor=900 mode=no-op-implementation reissue=1/2" in combined_log
 
 
 def test_security_pass_implementation_failed_noop_fix_is_reissued_with_noop_guidance() -> None:
@@ -4537,6 +4620,32 @@ def test_security_pass_implementation_failed_reissue_cap_terminalizes_recoverabl
 	)
 	tracking_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]]
 	assert any("/re-security-pass" in body for body in tracking_comments)
+
+
+def test_security_pass_reissue_cap_close_failure_retains_fixing_state() -> None:
+	result = _run_poller(
+		state=_security_pass_fixing_state(security_pass_fix_reissue_count=2),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+		},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		fail_issue_close_for=[700],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result.get("created_issues", []) == []
+	assert result["closed_issues"] == []
+	assert "ai:implementation-failed" in result["issues"]["700"]["labels"]
+	assert result["latest_state"]["status"] == "security-pass-fixing"
+	assert result["latest_state"]["security_pass_active_fix_issues"] == [700]
+	assert result["latest_state"]["security_pass_fix_reissue_count"] == 2
+	combined_log = result["stdout"] + result["stderr"]
+	assert "Could not close exhausted security-pass fix issue #700" in combined_log
+	assert "SECURITY_PASS_FAILED" not in combined_log
 
 
 def test_security_pass_judge_validation_route_blocks_then_clean_pass_dispatches() -> None:
