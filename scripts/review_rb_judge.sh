@@ -2253,6 +2253,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         # ai:clarification already attached.
         ensure_label_exists "ai:clarification" "${REPOSITORY}"
         RB_FOLLOWUP_LABELS=("--label" "ai:clarification")
+        RB_FOLLOWUP_REQUIRED_LABELS='["ai:clarification"]'
 
         # Propagate ai:orchestrator-managed from the parent issue when
         # it carries that label — same rationale as the close_and_reissue
@@ -2263,6 +2264,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         if printf '%s' "${FIRST_ISSUE_LABELS_JSON}" | jq -e 'index("ai:orchestrator-managed")' >/dev/null 2>&1; then
           ensure_label_exists "ai:orchestrator-managed" "${REPOSITORY}"
           RB_FOLLOWUP_LABELS+=("--label" "ai:orchestrator-managed")
+          RB_FOLLOWUP_REQUIRED_LABELS="$(printf '%s' "${RB_FOLLOWUP_REQUIRED_LABELS}" | jq -c '. + ["ai:orchestrator-managed"] | unique')"
           echo "Propagating ai:orchestrator-managed from parent issue #${FIRST_ISSUE} to merge-with-followup issue."
         fi
 
@@ -2275,29 +2277,32 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         # so stall recovery / the next judge run notices and re-tries
         # follow-up creation.
         FOLLOWUP_URL=""
-        if command -v review_blocked_find_issue_for_request >/dev/null 2>&1 && [ -n "${RB_APPROVAL_REQUEST_ID:-}" ]; then
-          FOLLOWUP_URL="$(review_blocked_find_issue_for_request "${REPOSITORY}" "${RB_APPROVAL_REQUEST_ID}" || true)"
-        fi
-        if [ -n "${FOLLOWUP_URL}" ]; then
-          echo "Reusing follow-up issue for approval request ${RB_APPROVAL_REQUEST_ID}: ${FOLLOWUP_URL}"
-        elif FOLLOWUP_URL="$(gh_retry gh issue create \
-            --repo "${REPOSITORY}" \
-            --title "${FOLLOWUP_TITLE}" \
-            --body "${FULL_FOLLOWUP_BODY}" \
-            ${RB_FOLLOWUP_LABELS[@]+"${RB_FOLLOWUP_LABELS[@]}"})"; then
-          echo "Created follow-up issue: ${FOLLOWUP_URL}"
-        else
-          _create_rc=$?
-          echo "::error::Failed to create follow-up issue for merge_with_followup (rc=${_create_rc}; PR #${PR_NUMBER} merge confirmed but deferred gap is NOT tracked). Leaving linked issues in ai:review-blocked so stall recovery / a subsequent judge run can retry follow-up creation. Manual fallback: open an issue describing the gap and reference PR #${PR_NUMBER}."
-          # Emit structured outputs so downstream log analysis can
-          # classify this failure mode explicitly (parity with the
-          # other refusal paths). judge_handled stays at its initial
-          # `false` so the workflow's review-blocked fallback fires
-          # and the linked issues stay in ai:review-blocked for
-          # retry.
+        RB_SUCCESSOR_RESULT="$(review_blocked_prepare_successor_issue "${REPOSITORY}" "${PR_NUMBER}" \
+          "${PR_COMMENTS:-[]}" "${RB_APPROVAL_REQUEST:-}" "${RB_APPROVAL_PRODUCER_ID:-0}" \
+          "followup" "${FOLLOWUP_TITLE}" "${FULL_FOLLOWUP_BODY}" "${RB_FOLLOWUP_REQUIRED_LABELS}")"
+        RB_SUCCESSOR_STATUS="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.status // "inconclusive"')"
+        case "${RB_SUCCESSOR_STATUS}" in
+          valid)
+            FOLLOWUP_URL="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.url')"
+            echo "Reusing authenticated follow-up issue for approval request ${RB_APPROVAL_REQUEST_ID}: ${FOLLOWUP_URL}"
+            ;;
+          not_found)
+            RB_SUCCESSOR_BODY="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.body')"
+            if FOLLOWUP_URL="$(gh_retry gh issue create \
+                --repo "${REPOSITORY}" \
+                --title "${FOLLOWUP_TITLE}" \
+                --body "${RB_SUCCESSOR_BODY}" \
+                ${RB_FOLLOWUP_LABELS[@]+"${RB_FOLLOWUP_LABELS[@]}"})"; then
+              echo "Created follow-up issue: ${FOLLOWUP_URL}"
+            fi
+            ;;
+          *)
+            echo "::warning::Successor lookup was inconclusive; refusing follow-up adoption or creation this cycle."
+            ;;
+        esac
+        if [ -z "${FOLLOWUP_URL}" ]; then
           echo "judge_action=skip" >> "$GITHUB_OUTPUT"
           echo "judge_skip_reason=followup_issue_create_failed" >> "$GITHUB_OUTPUT"
-          FOLLOWUP_URL=""
         fi
 
         if [ -n "${FOLLOWUP_URL}" ]; then
@@ -2531,25 +2536,33 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
       # judge-addition issue silently delivers the same work.  Standalone
       # (non-orchestrator) reissues do NOT inherit this label so their
       # human-driven clarify semantics are preserved.
-      RB_PROPAGATE_LABELS=()
+      RB_PROPAGATE_LABELS=("--label" "ai:clarification")
+      RB_REISSUE_REQUIRED_LABELS='["ai:clarification"]'
+      ensure_label_exists "ai:clarification" "${REPOSITORY}"
       if printf '%s' "${FIRST_ISSUE_LABELS_JSON}" | jq -e 'index("ai:orchestrator-managed")' >/dev/null 2>&1; then
         ensure_label_exists "ai:orchestrator-managed" "${REPOSITORY}"
         RB_PROPAGATE_LABELS+=("--label" "ai:orchestrator-managed")
+        RB_REISSUE_REQUIRED_LABELS="$(printf '%s' "${RB_REISSUE_REQUIRED_LABELS}" | jq -c '. + ["ai:orchestrator-managed"] | unique')"
         echo "Propagating ai:orchestrator-managed from parent issue #${FIRST_ISSUE} to review-blocked reissue."
       fi
 
       NEW_URL=""
-      if command -v review_blocked_find_issue_for_request >/dev/null 2>&1 && [ -n "${RB_APPROVAL_REQUEST_ID:-}" ]; then
-        NEW_URL="$(review_blocked_find_issue_for_request "${REPOSITORY}" "${RB_APPROVAL_REQUEST_ID}" || true)"
-      fi
-      if [ -z "${NEW_URL}" ]; then
+      RB_SUCCESSOR_RESULT="$(review_blocked_prepare_successor_issue "${REPOSITORY}" "${PR_NUMBER}" \
+        "${PR_COMMENTS:-[]}" "${RB_APPROVAL_REQUEST:-}" "${RB_APPROVAL_PRODUCER_ID:-0}" \
+        "reissue" "${NEW_ISSUE_TITLE}" "${FULL_NEW_BODY}" "${RB_REISSUE_REQUIRED_LABELS}")"
+      RB_SUCCESSOR_STATUS="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.status // "inconclusive"')"
+      if [ "${RB_SUCCESSOR_STATUS}" = "valid" ]; then
+        NEW_URL="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.url')"
+        echo "Reusing authenticated replacement issue for approval request ${RB_APPROVAL_REQUEST_ID}: ${NEW_URL}"
+      elif [ "${RB_SUCCESSOR_STATUS}" = "not_found" ]; then
+        RB_SUCCESSOR_BODY="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.body')"
         NEW_URL="$(gh_retry gh issue create \
           --repo "${REPOSITORY}" \
           --title "${NEW_ISSUE_TITLE}" \
-          --body "${FULL_NEW_BODY}" \
+          --body "${RB_SUCCESSOR_BODY}" \
           ${RB_PROPAGATE_LABELS[@]+"${RB_PROPAGATE_LABELS[@]}"})"
       else
-        echo "Reusing replacement issue for approval request ${RB_APPROVAL_REQUEST_ID}: ${NEW_URL}"
+        echo "::warning::Successor lookup was inconclusive; refusing replacement adoption or creation this cycle."
       fi
       echo "Created replacement issue: ${NEW_URL}"
       [ -n "${NEW_URL}" ] && RB_REPLACEMENT_CREATED="true"

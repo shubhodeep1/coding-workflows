@@ -200,6 +200,10 @@ def test_finalize_refreshes_source_tree_and_preserves_extra_state(tmp_path: Path
 	(source_path / "tracked.txt").write_text("fresh\n", encoding="utf-8")
 	(source_path / "scripts").mkdir()
 	(source_path / "scripts" / "helper.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+	(source_path / ".git").mkdir()
+	(source_path / ".git" / "config").write_text("sensitive\n", encoding="utf-8")
+	(source_path / ".codex-workflow-src").mkdir()
+	(source_path / ".codex-workflow-src" / "helper.sh").write_text("trusted support\n", encoding="utf-8")
 
 	(workspace_path / "tracked.txt").write_text("stale\n", encoding="utf-8")
 	(workspace_path / "stale.txt").write_text("remove me\n", encoding="utf-8")
@@ -223,6 +227,8 @@ def test_finalize_refreshes_source_tree_and_preserves_extra_state(tmp_path: Path
 	assert result.returncode == 0, result.stderr
 	assert (workspace_path / "tracked.txt").read_text(encoding="utf-8") == "fresh\n"
 	assert (workspace_path / "scripts" / "helper.sh").exists()
+	assert not (workspace_path / ".git").exists()
+	assert not (workspace_path / ".codex-workflow-src").exists()
 	assert not (workspace_path / "stale.txt").exists()
 	assert (workspace_path / ".cache" / "tool" / "state.json").exists()
 	assert not (workspace_path / ".ai" / "validate-hints-cache").exists()

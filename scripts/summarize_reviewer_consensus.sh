@@ -26,7 +26,7 @@
 #   XPOLL_SUMMARISER_LINES_PER_REVIEWER  target lines per reviewer section (default 160)
 #   XPOLL_SUMMARISER_CALL_TIMEOUT_SECS   per-attempt timeout (default 2400)
 #   XPOLL_SUMMARISER_MAX_INPUT_LINES     pre-truncate per-reviewer input above this (default 3000)
-#   PR_NUMBER                         used to honour /tmp/pr_closed_sentinel_<n>
+#   PR_NUMBER / PR_CLOSED_SENTINEL_FILE  used to honour trusted PR closure
 
 set -euo pipefail
 
@@ -57,6 +57,11 @@ fi
 
 : "${PREVIOUS_REVIEWS_DIR:?PREVIOUS_REVIEWS_DIR must be set}"
 : "${RUNTIME_DIR:?RUNTIME_DIR must be set}"
+PR_CLOSED_SENTINEL_FILE="${PR_CLOSED_SENTINEL_FILE:-${RUNTIME_DIR}/pr_closed_sentinel}"
+if [ "${PR_CLOSED_SENTINEL_FILE}" != "${RUNTIME_DIR}/pr_closed_sentinel" ]; then
+	echo "summarize_reviewer_consensus.sh: PR_CLOSED_SENTINEL_FILE must be under RUNTIME_DIR" >&2
+	exit 2
+fi
 
 # Source gh_helpers.sh for sanitize_codex_prompt_file (best-effort).
 if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" ]; then
@@ -95,7 +100,7 @@ SUMMARISER_TARGET_PER_REVIEWER="${XPOLL_SUMMARISER_LINES_PER_REVIEWER:-160}"
 SUMMARISER_CALL_TIMEOUT="${XPOLL_SUMMARISER_CALL_TIMEOUT_SECS:-2400}"
 SUMMARISER_MAX_INPUT_LINES="${XPOLL_SUMMARISER_MAX_INPUT_LINES:-3000}"
 
-if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+if [ -n "${PR_NUMBER:-}" ] && [ -f "${PR_CLOSED_SENTINEL_FILE}" ]; then
 	echo "summariser (${PREFIX}): PR #${PR_NUMBER} closed — skipping summarisation." >&2
 	mkdir -p "$(dirname "${OUTPUT}")"
 	printf '(No consensus — PR closed during review.)\n' > "${OUTPUT}"
@@ -307,7 +312,7 @@ sentinel_aware_sleep()
 	local slept=0
 	local step
 	while [ "${slept}" -lt "${total}" ]; do
-		if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+		if [ -n "${PR_NUMBER:-}" ] && [ -f "${PR_CLOSED_SENTINEL_FILE}" ]; then
 			echo "summariser (${PREFIX}): PR #${PR_NUMBER} closed during backoff (after ${slept}s of ${total}s) — exiting cleanly." | tee -a "${log_file}" >&2
 			mkdir -p "$(dirname "${OUTPUT}")"
 			printf '(No consensus — PR closed during review.)\n' > "${OUTPUT}"
@@ -325,7 +330,7 @@ sentinel_aware_sleep()
 attempt=1
 last_rc=0
 while [ "${attempt}" -le "${SUMMARISER_MAX_ATTEMPTS}" ]; do
-	if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+	if [ -n "${PR_NUMBER:-}" ] && [ -f "${PR_CLOSED_SENTINEL_FILE}" ]; then
 		echo "summariser (${PREFIX}): PR #${PR_NUMBER} closed mid-retry — exiting cleanly." | tee -a "${log_file}" >&2
 		mkdir -p "$(dirname "${OUTPUT}")"
 		printf '(No consensus — PR closed during review.)\n' > "${OUTPUT}"

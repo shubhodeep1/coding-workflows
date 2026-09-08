@@ -1948,6 +1948,88 @@ resolve_orchestrator_state_producer() {
   return 0
 }
 
+review_blocked_refusal_is_valid() {
+  local comments_json="${1:-[]}"
+  local source_pr="${2:?source PR required}"
+  local linked_issue="${3:?linked issue required}"
+  local head_sha="${4:?head SHA required}"
+  local producer_id="${5:?producer ID required}"
+  local encoded_envelope refusal_envelope_file
+  while IFS= read -r encoded_envelope; do
+    [ -n "${encoded_envelope}" ] || continue
+    refusal_envelope_file="$(mktemp "${RUNTIME_DIR}/review_blocked_refusal.XXXXXX.json")"
+    if ! printf '%s' "${encoded_envelope}" | base64 --decode > "${refusal_envelope_file}" 2>/dev/null; then
+      rm -f "${refusal_envelope_file}"
+      continue
+    fi
+    if python3 scripts/orchestrate_state_v2.py verify-refusal \
+        --envelope-file "${refusal_envelope_file}" \
+        --repository "${GITHUB_REPOSITORY}" \
+        --tracking-issue "${TRACKING_NUM}" \
+        --source-pr "${source_pr}" \
+        --linked-issue "${linked_issue}" \
+        --head-sha "${head_sha}" \
+        --producer-id "${producer_id}" >/dev/null 2>&1; then
+      rm -f "${refusal_envelope_file}"
+      return 0
+    fi
+    rm -f "${refusal_envelope_file}"
+  done < <(printf '%s' "${comments_json}" | PRODUCER_ID="${producer_id}" PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import base64, json, os, re, sys
+try:
+    comments = json.load(sys.stdin); producer_id = int(os.environ["PRODUCER_ID"])
+except (ValueError, TypeError, json.JSONDecodeError):
+    raise SystemExit(0)
+pattern = re.compile(r"<!-- REVIEW_BLOCKED_DECISION_REFUSED_V2\s*\n(\{.*?\})\s*\nREVIEW_BLOCKED_DECISION_REFUSED_V2 -->", re.S)
+for comment in comments if isinstance(comments, list) else []:
+    if not isinstance(comment, dict) or comment.get("author_id") != producer_id:
+        continue
+    for match in pattern.finditer(comment.get("body", "")):
+        print(base64.b64encode(match.group(1).encode()).decode())
+' 2>/dev/null || true)
+  return 1
+}
+
+post_review_blocked_refusal() {
+  local source_pr="${1:?source PR required}"
+  local linked_issue="${2:?linked issue required}"
+  local head_sha="${3:?head SHA required}"
+  local rejected_output_file="${4:?rejected output file required}"
+  local refusal_reason="${5:?refusal reason required}"
+  local legacy_marker="${6:-}"
+  local refusal_envelope_file refusal_envelope refusal_comment
+  if ! resolve_orchestrator_state_producer; then
+    return 1
+  fi
+  refusal_envelope_file="$(mktemp "${RUNTIME_DIR}/review_blocked_refusal_sign.XXXXXX.json")"
+  if ! python3 scripts/orchestrate_state_v2.py sign-refusal \
+      --repository "${GITHUB_REPOSITORY}" \
+      --tracking-issue "${TRACKING_NUM}" \
+      --source-pr "${source_pr}" \
+      --linked-issue "${linked_issue}" \
+      --head-sha "${head_sha}" \
+      --producer-id "${ORCHESTRATOR_STATE_PRODUCER_ID}" \
+      --refusal-reason "${refusal_reason}" \
+      --rejected-output-file "${rejected_output_file}" \
+      --out-file "${refusal_envelope_file}" >/dev/null; then
+    rm -f "${refusal_envelope_file}"
+    return 1
+  fi
+  refusal_envelope="$(cat "${refusal_envelope_file}")"
+  rm -f "${refusal_envelope_file}"
+  refusal_comment="## Orchestrator Review-Blocked Judge — Decision Refused
+
+The advisory judge returned an invalid, oversized, or disallowed decision for issue #${linked_issue}. No actuator action was taken; the issue remains review-blocked for a safe retry.
+
+${legacy_marker}
+
+<!-- REVIEW_BLOCKED_DECISION_REFUSED_V2
+${refusal_envelope}
+REVIEW_BLOCKED_DECISION_REFUSED_V2 -->"
+  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${source_pr}/comments" \
+    -f body="${refusal_comment}" >/dev/null 2>&1
+}
+
 post_state_comment() {
   # Persist orchestrator state as a V2 chunked-comment chain so a snapshot
   # bigger than GitHub's 65,536-byte comment-body cap still lands.  The
@@ -17401,20 +17483,18 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       if [[ "${RB_EXPECTED_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
         RB_DECISION_REFUSAL_MARKER="<!-- REVIEW_BLOCKED_DECISION_REFUSED_V1 issue=${rb_issue} head=${RB_EXPECTED_HEAD_SHA} -->"
       fi
-      if [ -n "${RB_DECISION_REFUSAL_MARKER}" ] && printf '%s' "${PR_COMMENTS}" | jq -e --arg marker "${RB_DECISION_REFUSAL_MARKER}" '
-        any(.[]?; (
-          ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
-          or ((.author_type // "") == "Bot" and ((.author // "") | IN("github-actions", "github-actions[bot]", "codex", "codex-bot")))
-        ) and ((.body // "") | contains($marker)))
-      ' >/dev/null 2>&1; then
-        echo "  Review-blocked decision was already refused for issue #${rb_issue} at head ${RB_EXPECTED_HEAD_SHA}; skipping repeated judge invocation."
-        continue
-      fi
       RB_PENDING_APPROVAL_REQUEST=""
       RB_PENDING_DECISION_JSON=""
       RB_APPROVAL_PRODUCER_ID=""
       if resolve_orchestrator_state_producer; then
         RB_APPROVAL_PRODUCER_ID="${ORCHESTRATOR_STATE_PRODUCER_ID}"
+      fi
+      if [ -n "${RB_DECISION_REFUSAL_MARKER}" ] \
+        && [[ "${RB_APPROVAL_PRODUCER_ID}" =~ ^[1-9][0-9]*$ ]] \
+        && review_blocked_refusal_is_valid "${PR_COMMENTS}" "${RB_PR}" "${rb_issue}" \
+          "${RB_EXPECTED_HEAD_SHA}" "${RB_APPROVAL_PRODUCER_ID}"; then
+        echo "  Review-blocked decision was already refused for issue #${rb_issue} at head ${RB_EXPECTED_HEAD_SHA}; skipping repeated judge invocation."
+        continue
       fi
       if type review_blocked_find_pending_request >/dev/null 2>&1 \
         && [ -n "${RB_EXPECTED_HEAD_SHA}" ] \
@@ -17623,13 +17703,16 @@ sys.exit(1)
           ))
         ' >/dev/null 2>&1; then
         echo "::warning::Review-blocked judge returned an invalid, oversized, or disallowed decision for #${rb_issue}; no actuator action taken."
-        RB_REJECTION_COMMENT="## Orchestrator Review-Blocked Judge — Decision Refused
+        if ! post_review_blocked_refusal "${RB_PR}" "${rb_issue}" "${RB_EXPECTED_HEAD_SHA}" \
+          "${RB_JUDGE_OUTPUT_FILE}" "invalid_judge_decision" "${RB_DECISION_REFUSAL_MARKER}"; then
+          RB_REJECTION_COMMENT="## Orchestrator Review-Blocked Judge — Decision Refused
 
 The advisory judge returned an invalid, oversized, or disallowed decision for issue #${rb_issue}. No actuator action was taken; the issue remains review-blocked for a safe retry.
 
 ${RB_DECISION_REFUSAL_MARKER}"
-        gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
-          -f body="${RB_REJECTION_COMMENT}" >/dev/null 2>&1 || true
+          gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" \
+            -f body="${RB_REJECTION_COMMENT}" >/dev/null 2>&1 || true
+        fi
         continue
       fi
 
@@ -18011,24 +18094,34 @@ EOF
               # merged but the deferred gap has no durable tracking.
               FOLLOWUP_URL=""
               FOLLOWUP_NUM=""
-              FOLLOWUP_URL="$(review_blocked_find_issue_for_request "${GITHUB_REPOSITORY}" "${RB_APPROVAL_REQUEST_ID}" || true)"
+              RB_SUCCESSOR_RESULT="$(review_blocked_prepare_successor_issue "${GITHUB_REPOSITORY}" "${RB_PR}" \
+                "${PR_COMMENTS}" "${RB_APPROVAL_REQUEST}" "${RB_APPROVAL_PRODUCER_ID}" \
+                "followup" "${FOLLOWUP_TITLE}" "${FULL_FOLLOWUP_BODY}" \
+                '["ai:clarification","ai:orchestrator-managed"]')"
+              RB_SUCCESSOR_STATUS="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.status // "inconclusive"')"
+              case "${RB_SUCCESSOR_STATUS}" in
+                valid)
+                  FOLLOWUP_URL="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.url')"
+                  echo "  Reusing authenticated follow-up issue for approval request ${RB_APPROVAL_REQUEST_ID}: ${FOLLOWUP_URL}"
+                  ;;
+                not_found)
+                  RB_SUCCESSOR_BODY="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.body')"
+                  if FOLLOWUP_URL="$(gh_retry gh issue create \
+                      --repo "${GITHUB_REPOSITORY}" \
+                      --title "${FOLLOWUP_TITLE}" \
+                      --body "${RB_SUCCESSOR_BODY}" \
+                      --label "ai:clarification" \
+                      --label "ai:orchestrator-managed")"; then
+                    echo "  Created authenticated follow-up issue: ${FOLLOWUP_URL}"
+                  fi
+                  ;;
+                *)
+                  echo "::warning::Successor lookup was inconclusive; refusing follow-up adoption or creation this cycle."
+                  ;;
+              esac
               if [ -n "${FOLLOWUP_URL}" ]; then
-                echo "  Reusing follow-up issue for approval request ${RB_APPROVAL_REQUEST_ID}: ${FOLLOWUP_URL}"
-              elif FOLLOWUP_URL="$(gh_retry gh issue create \
-                  --repo "${GITHUB_REPOSITORY}" \
-                  --title "${FOLLOWUP_TITLE}" \
-                  --body "${FULL_FOLLOWUP_BODY}" \
-                  --label "ai:clarification" \
-                  --label "ai:orchestrator-managed")"; then
                 FOLLOWUP_URL_CLEAN="$(printf '%s\n' "${FOLLOWUP_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
                 FOLLOWUP_NUM="$(basename "${FOLLOWUP_URL_CLEAN%%[?#]*}")"
-                echo "  Created follow-up issue #${FOLLOWUP_NUM}: ${FOLLOWUP_TITLE}"
-              else
-                _create_rc=$?
-                echo "::error::Failed to create follow-up issue for merge_with_followup (rc=${_create_rc}; PR #${RB_PR} merge confirmed but deferred gap untracked). Leaving issue #${rb_issue} in ai:review-blocked so stall recovery / next judge run can retry. Manual fallback: open an issue describing the gap and reference PR #${RB_PR}."
-                tg_notify "Orchestrator merge_with_followup: PR #${RB_PR} (issue #${rb_issue}) merged but follow-up issue creation failed (rc=${_create_rc}). Deferred gap is currently untracked — stall recovery will retry. Manual fallback may be required."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
-                FOLLOWUP_URL=""
-                FOLLOWUP_NUM=""
               fi
 
               if [ -n "${FOLLOWUP_URL}" ] && [[ "${FOLLOWUP_NUM}" =~ ^[0-9]+$ ]]; then
@@ -18087,16 +18180,25 @@ EOF
 
             ensure_label_exists "ai:clarification"
             ensure_label_exists "ai:orchestrator-managed"
-            NEW_URL="$(review_blocked_find_issue_for_request "${GITHUB_REPOSITORY}" "${RB_APPROVAL_REQUEST_ID}" || true)"
-            if [ -z "${NEW_URL}" ]; then
+            RB_SUCCESSOR_RESULT="$(review_blocked_prepare_successor_issue "${GITHUB_REPOSITORY}" "${RB_PR}" \
+              "${PR_COMMENTS}" "${RB_APPROVAL_REQUEST}" "${RB_APPROVAL_PRODUCER_ID}" \
+              "reissue" "${NEW_ISSUE_TITLE}" "${FULL_NEW_BODY}" \
+              '["ai:clarification","ai:orchestrator-managed"]')"
+            RB_SUCCESSOR_STATUS="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.status // "inconclusive"')"
+            NEW_URL=""
+            if [ "${RB_SUCCESSOR_STATUS}" = "valid" ]; then
+              NEW_URL="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.url')"
+              echo "  Reusing authenticated replacement issue for approval request ${RB_APPROVAL_REQUEST_ID}: ${NEW_URL}"
+            elif [ "${RB_SUCCESSOR_STATUS}" = "not_found" ]; then
+              RB_SUCCESSOR_BODY="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.body')"
               NEW_URL="$(gh_retry gh issue create \
                 --repo "${GITHUB_REPOSITORY}" \
                 --title "${NEW_ISSUE_TITLE}" \
-                --body "${FULL_NEW_BODY}" \
+                --body "${RB_SUCCESSOR_BODY}" \
                 --label "ai:clarification" \
                 --label "ai:orchestrator-managed")"
             else
-              echo "  Reusing replacement issue for approval request ${RB_APPROVAL_REQUEST_ID}: ${NEW_URL}"
+              echo "::warning::Successor lookup was inconclusive; refusing replacement adoption or creation this cycle."
             fi
             NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
             NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"

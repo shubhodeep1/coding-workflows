@@ -115,6 +115,10 @@ STATE_AUTH_MAX_KEYRING_BYTES = 8192
 STATE_AUTH_KEY_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 STATE_AUTH_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,255}$")
 STATE_AUTH_MAX_GENERATION = 9_223_372_036_854_775_807
+REFUSAL_AUTH_SCHEMA_VERSION = "review_blocked_decision_refused.v2"
+REFUSAL_AUTH_DOMAIN = b"coding-workflows/review-blocked-decision-refused/v2"
+REFUSAL_REASON_RE = re.compile(r"^[a-z][a-z0-9_-]{0,127}$")
+REFUSAL_MAX_OUTPUT_BYTES = 1_048_576
 
 V2_OPENER_RE = re.compile(
 	r"^<!-- ORCHESTRATOR_STATE_V2 part=(\d+)/(\d+) manifest=([0-9a-f]{64}) -->$",
@@ -412,6 +416,115 @@ def cmd_validate_keyring(_args: argparse.Namespace) -> int:
 	return 0
 
 
+def _validated_refusal_context(args: argparse.Namespace) -> tuple[dict[str, Any] | None, str | None]:
+	repository = args.repository.strip()
+	if (
+		len(repository) > 256
+		or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None
+		or any(segment in (".", "..") for segment in repository.split("/"))
+	):
+		return None, "repository must be an owner/repo slug"
+	if args.tracking_issue < 1 or args.source_pr < 1 or args.linked_issue < 1 or args.producer_id < 1:
+		return None, "issue, PR, and producer identifiers must be positive integers"
+	if re.fullmatch(r"[0-9a-f]{40}", args.head_sha) is None:
+		return None, "head SHA must be 40 lowercase hexadecimal characters"
+	return {
+		"schema_version": REFUSAL_AUTH_SCHEMA_VERSION,
+		"algorithm": STATE_AUTH_ALGORITHM,
+		"producer_id": args.producer_id,
+		"repository": repository,
+		"tracking_issue": args.tracking_issue,
+		"source_pr": args.source_pr,
+		"linked_issue": args.linked_issue,
+		"head_sha": args.head_sha,
+	}, None
+
+
+def _signature_for_refusal(refusal_document: dict[str, Any], auth_key: bytes) -> str:
+	unsigned_document = dict(refusal_document)
+	unsigned_document.pop("signature", None)
+	message = b"\n".join((REFUSAL_AUTH_DOMAIN, _canonical_json_bytes(unsigned_document)))
+	return hmac.new(auth_key, message, hashlib.sha256).hexdigest()
+
+
+def cmd_sign_refusal(args: argparse.Namespace) -> int:
+	auth_context, context_error = _validated_refusal_context(args)
+	if context_error is not None:
+		print(f"refusal signing failed: {context_error}", file=sys.stderr)
+		return 2
+	if REFUSAL_REASON_RE.fullmatch(args.refusal_reason) is None:
+		print("refusal signing failed: refusal reason is invalid", file=sys.stderr)
+		return 2
+	output_path = Path(args.rejected_output_file)
+	try:
+		if output_path.stat().st_size > REFUSAL_MAX_OUTPUT_BYTES:
+			print("refusal signing failed: rejected output is too large", file=sys.stderr)
+			return 2
+		rejected_output_digest = hashlib.sha256(output_path.read_bytes()).hexdigest()
+	except OSError:
+		print("refusal signing failed: rejected output is unreadable", file=sys.stderr)
+		return 2
+	active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"refusal signing failed: {key_error}", file=sys.stderr)
+		return 2
+	assert auth_context is not None
+	assert active_key_id is not None
+	assert auth_keys is not None
+	refusal_document = {
+		**auth_context,
+		"key_id": active_key_id,
+		"refusal_reason": args.refusal_reason,
+		"rejected_output_digest": rejected_output_digest,
+	}
+	refusal_document["signature"] = _signature_for_refusal(
+		refusal_document, auth_keys[active_key_id]
+	)
+	try:
+		Path(args.out_file).write_bytes(_canonical_json_bytes(refusal_document) + b"\n")
+		os.chmod(args.out_file, 0o600)
+	except OSError:
+		print("refusal signing failed: output file is not writable", file=sys.stderr)
+		return 2
+	return 0
+
+
+def cmd_verify_refusal(args: argparse.Namespace) -> int:
+	auth_context, context_error = _validated_refusal_context(args)
+	if context_error is not None:
+		print(f"refusal verification failed: {context_error}", file=sys.stderr)
+		return 2
+	try:
+		refusal_document = json.loads(Path(args.envelope_file).read_text(encoding="utf-8"))
+	except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+		return 1
+	if not isinstance(refusal_document, dict) or set(refusal_document) != {
+		"schema_version", "algorithm", "key_id", "producer_id", "repository",
+		"tracking_issue", "source_pr", "linked_issue", "head_sha", "refusal_reason",
+		"rejected_output_digest", "signature",
+	}:
+		return 1
+	assert auth_context is not None
+	if any(refusal_document.get(field) != expected for field, expected in auth_context.items()):
+		return 1
+	if REFUSAL_REASON_RE.fullmatch(str(refusal_document.get("refusal_reason", ""))) is None:
+		return 1
+	if re.fullmatch(r"[0-9a-f]{64}", str(refusal_document.get("rejected_output_digest", ""))) is None:
+		return 1
+	if re.fullmatch(r"[0-9a-f]{64}", str(refusal_document.get("signature", ""))) is None:
+		return 1
+	_active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"refusal verification failed: {key_error}", file=sys.stderr)
+		return 2
+	assert auth_keys is not None
+	key_id = refusal_document.get("key_id")
+	if not isinstance(key_id, str) or key_id not in auth_keys:
+		return 1
+	expected_signature = _signature_for_refusal(refusal_document, auth_keys[key_id])
+	return 0 if hmac.compare_digest(refusal_document["signature"], expected_signature) else 1
+
+
 def _frame(part: int, total: int, manifest: str, payload: bytes) -> bytes:
 	opener = (
 		f"<!-- ORCHESTRATOR_STATE_V2 part={part}/{total} "
@@ -653,6 +766,24 @@ def main() -> int:
 		help="Validate the dedicated state-authentication keyring",
 	)
 	p_validate_keyring.set_defaults(func=cmd_validate_keyring)
+	for command_name, command_help, command_func in (
+		("sign-refusal", "Sign a context-bound review-blocked refusal envelope", cmd_sign_refusal),
+		("verify-refusal", "Verify a context-bound review-blocked refusal envelope", cmd_verify_refusal),
+	):
+		command_parser = sub.add_parser(command_name, help=command_help)
+		command_parser.add_argument("--repository", required=True)
+		command_parser.add_argument("--tracking-issue", required=True, type=int)
+		command_parser.add_argument("--source-pr", required=True, type=int)
+		command_parser.add_argument("--linked-issue", required=True, type=int)
+		command_parser.add_argument("--head-sha", required=True)
+		command_parser.add_argument("--producer-id", required=True, type=int)
+		if command_name == "sign-refusal":
+			command_parser.add_argument("--refusal-reason", required=True)
+			command_parser.add_argument("--rejected-output-file", required=True)
+			command_parser.add_argument("--out-file", required=True)
+		else:
+			command_parser.add_argument("--envelope-file", required=True)
+		command_parser.set_defaults(func=command_func)
 	p_pack = sub.add_parser(
 		"pack",
 		help="Split a state JSON file into V2-framed chunk files",

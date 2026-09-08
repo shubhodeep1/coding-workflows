@@ -22,6 +22,13 @@ unset editor_forbidden_credential_name
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
 WATCHDOG_HELPERS="${SUPPORT_SCRIPTS_DIR}/watchdog_helpers.sh"
 
+: "${RUNTIME_DIR:?RUNTIME_DIR must be set}"
+: "${PR_CLOSED_SENTINEL_FILE:?PR_CLOSED_SENTINEL_FILE must be set}"
+if [ "${PR_CLOSED_SENTINEL_FILE}" != "${RUNTIME_DIR}/pr_closed_sentinel" ]; then
+	echo "::error::PR_CLOSED_SENTINEL_FILE must be the protected runtime sentinel." >&2
+	exit 1
+fi
+
 if [ ! -f "${WATCHDOG_HELPERS}" ]; then
 	echo "::error::Missing required support script ${WATCHDOG_HELPERS}" >&2
 	exit 1
@@ -108,6 +115,99 @@ fi
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
 LESSONS_LEARNED_ENABLED="${LESSONS_LEARNED_ENABLED:-true}"
+EDITOR_ISOLATION_USER="nobody"
+EDITOR_ISOLATION_ACTIVE="false"
+EDITOR_ISOLATION_OWNER_UID=""
+EDITOR_ISOLATION_OWNER_GID=""
+EDITOR_ISOLATION_GIT_MODE=""
+EDITOR_ISOLATION_COMMAND_DIR=""
+EDITOR_ISOLATION_COMMAND_DIR_MODE=""
+EDITOR_ISOLATION_HOME=""
+EDITOR_ISOLATION_TMP=""
+EDITOR_ISOLATION_UID=""
+EDITOR_ISOLATION_GID=""
+
+setup_editor_isolation() {
+  local resolved_workspace resolved_source isolation_uid
+  : "${WORKSPACE_PATH:?WORKSPACE_PATH must be set for editor isolation}"
+  : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE must be set for editor isolation}"
+  : "${GITHUB_ENV:?GITHUB_ENV must be set for editor isolation}"
+  : "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY must be set for editor isolation}"
+  command -v sudo >/dev/null 2>&1 || {
+    echo "::error::sudo is required for unprivileged editor isolation." >&2
+    return 1
+  }
+  sudo -n true >/dev/null 2>&1 || {
+    echo "::error::Passwordless sudo is required for unprivileged editor isolation." >&2
+    return 1
+  }
+  id "${EDITOR_ISOLATION_USER}" >/dev/null 2>&1 || {
+    echo "::error::Unprivileged editor identity '${EDITOR_ISOLATION_USER}' is unavailable." >&2
+    return 1
+  }
+  isolation_uid="$(id -u "${EDITOR_ISOLATION_USER}")"
+  if [ "${isolation_uid}" = "$(id -u)" ]; then
+    echo "::error::Editor isolation identity must differ from the runner identity." >&2
+    return 1
+  fi
+  resolved_workspace="$(realpath -e -- "${WORKSPACE_PATH}")" || return 1
+  resolved_source="$(realpath -e -- "${GITHUB_WORKSPACE}")" || return 1
+  if [ "$(realpath -e -- "$(pwd)")" != "${resolved_workspace}" ] \
+    || [ "${resolved_workspace}" = "${resolved_source}" ] \
+    || [ -e "${resolved_workspace}/.git" ]; then
+    echo "::error::Editor must run from the detached workspace without Git metadata." >&2
+    return 1
+  fi
+  EDITOR_ISOLATION_COMMAND_DIR="$(dirname -- "${GITHUB_ENV}")"
+  if [ -n "${RUNNER_TEMP:-}" ]; then
+    case "${EDITOR_ISOLATION_COMMAND_DIR}" in
+      "${RUNNER_TEMP}"/*) ;;
+      *)
+        echo "::error::Runner command files are outside RUNNER_TEMP; refusing unsafe editor launch." >&2
+        return 1
+        ;;
+    esac
+  fi
+  EDITOR_ISOLATION_OWNER_UID="$(id -u)"
+  EDITOR_ISOLATION_OWNER_GID="$(id -g)"
+  EDITOR_ISOLATION_UID="${isolation_uid}"
+  EDITOR_ISOLATION_GID="$(id -g "${EDITOR_ISOLATION_USER}")"
+  EDITOR_ISOLATION_GIT_MODE="$(stat -c '%a' "${resolved_source}/.git")" || return 1
+  EDITOR_ISOLATION_COMMAND_DIR_MODE="$(stat -c '%a' "${EDITOR_ISOLATION_COMMAND_DIR}")" || return 1
+  EDITOR_ISOLATION_HOME="${RUNTIME_DIR}/editor-sandbox/home"
+  EDITOR_ISOLATION_TMP="${RUNTIME_DIR}/editor-sandbox/tmp"
+  mkdir -p "${EDITOR_ISOLATION_HOME}" "${EDITOR_ISOLATION_TMP}"
+  EDITOR_ISOLATION_ACTIVE="true"
+  chmod 0700 "${resolved_source}/.git" "${EDITOR_ISOLATION_COMMAND_DIR}"
+  sudo -n chown -R "${EDITOR_ISOLATION_UID}:${EDITOR_ISOLATION_GID}" \
+    "${resolved_workspace}" "${RUNTIME_DIR}/editor-sandbox" || return 1
+  sudo -n chmod 0700 "${EDITOR_ISOLATION_HOME}" "${EDITOR_ISOLATION_TMP}" || return 1
+}
+
+cleanup_editor_isolation() {
+  local cleanup_rc=0
+  if [ "${EDITOR_ISOLATION_ACTIVE}" = "true" ]; then
+    sudo -n chown -R "${EDITOR_ISOLATION_OWNER_UID}:${EDITOR_ISOLATION_OWNER_GID}" \
+      "${WORKSPACE_PATH}" "${RUNTIME_DIR}/editor-sandbox" || cleanup_rc=1
+    chmod "${EDITOR_ISOLATION_GIT_MODE}" "${GITHUB_WORKSPACE}/.git" || cleanup_rc=1
+    chmod "${EDITOR_ISOLATION_COMMAND_DIR_MODE}" "${EDITOR_ISOLATION_COMMAND_DIR}" || cleanup_rc=1
+    EDITOR_ISOLATION_ACTIVE="false"
+  fi
+  if [ "${cleanup_rc}" -ne 0 ]; then
+    echo "::error::Failed to restore runner ownership or protected-path permissions after editor execution." >&2
+  fi
+  return "${cleanup_rc}"
+}
+
+editor_isolation_exit_trap() {
+  local original_rc="$1"
+  trap - EXIT
+  if ! cleanup_editor_isolation; then
+    exit 80
+  fi
+  [ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true
+  exit "${original_rc}"
+}
 
 run_editor_codex_attempt() {
   local prompt_file="$1"
@@ -124,6 +224,7 @@ run_editor_codex_attempt() {
   local editor_opencode_config="${RUNTIME_DIR}/editor_opencode.json"
   local editor_opencode_serena="off"
   local editor_workspace
+  local editor_path
   local -a editor_opencode_cmd
   editor_workspace="$(pwd)"
 
@@ -143,8 +244,23 @@ run_editor_codex_attempt() {
     "${editor_opencode_config}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
     return 79
   fi
+  chmod 0444 "${editor_opencode_config}" || return 79
+  editor_path="${EDITOR_CODEX_PATH:-${PATH}}"
   editor_opencode_cmd=(
-    bash -c
+    sudo -n -u "${EDITOR_ISOLATION_USER}" --
+    env -i
+    "HOME=${EDITOR_ISOLATION_HOME}"
+    "TMPDIR=${EDITOR_ISOLATION_TMP}"
+    "XDG_CACHE_HOME=${EDITOR_ISOLATION_HOME}/.cache"
+    "XDG_CONFIG_HOME=${EDITOR_ISOLATION_HOME}/.config"
+    "XDG_DATA_HOME=${EDITOR_ISOLATION_HOME}/.local/share"
+    "PATH=${editor_path}"
+    "LANG=${LANG:-C.UTF-8}"
+    "LC_ALL=${LC_ALL:-C.UTF-8}"
+    "USER=${EDITOR_ISOLATION_USER}"
+    "LOGNAME=${EDITOR_ISOLATION_USER}"
+    "OPENROUTER_API_KEY=${OPENROUTER_API_KEY}"
+    bash --noprofile --norc -c
     # shellcheck disable=SC2016
     'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
     opencode-editor
@@ -1804,7 +1920,11 @@ JOB_TIMEOUT_SECS=$(( REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED * 60 ))
 JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
 _hb_tmpdir=""
 _hb_fifo=""
-trap '[ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true' EXIT
+trap 'editor_isolation_exit_trap $?' EXIT
+if ! setup_editor_isolation; then
+  echo "::error::Editor isolation prerequisites could not be established; refusing ambient-privilege fallback." >&2
+  exit 80
+fi
 
 # Match only standalone OpenAI-style refusal lines, not incidental prose in
 # an otherwise-valid structured summary (for example an Ignored suggestions
@@ -1830,10 +1950,14 @@ editor_silent_rounds=0
 while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   # Preserve an earlier trusted PR-state decision without performing any
   # authenticated repository reads from the model-facing process.
-  if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+  if [ -f "${PR_CLOSED_SENTINEL_FILE}" ]; then
     echo "PR #${PR_NUMBER} was closed/merged — skipping editor."
     echo "PR_CLOSED=true" >> "$GITHUB_ENV"
     exit 0
+  fi
+  if [ "${EDITOR_ISOLATION_ACTIVE}" != "true" ] && ! setup_editor_isolation; then
+    echo "::error::Editor isolation could not be re-established for attempt ${attempt}; refusing ambient-privilege fallback." >&2
+    exit 80
   fi
 
   now_epoch="$(date +%s)"
@@ -2048,6 +2172,9 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
 
   kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
+  if ! cleanup_editor_isolation; then
+    exit 80
+  fi
 
   editor_clean_output="${tmp_output}.ansi-clean"
   if opencode_strip_ansi < "${tmp_output}" > "${editor_clean_output}"; then
@@ -2103,7 +2230,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
 
   if [ "${cmd_rc}" -eq 78 ]; then
     echo "Editor attempt ${attempt}: workspace_safety_violation; aborting without retry."
-    if [ -z "${PR_NUMBER:-}" ] || [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    if [ -z "${PR_NUMBER:-}" ] || [ ! -f "${PR_CLOSED_SENTINEL_FILE}" ]; then
       emit_editor_substate "Failed" "${attempt}" "${tmp_err}"
     fi
     cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.txt" || true
@@ -2393,7 +2520,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
       cat "${tmp_err}"
     fi
   fi
-  if [ -z "${PR_NUMBER:-}" ] || [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+  if [ -z "${PR_NUMBER:-}" ] || [ ! -f "${PR_CLOSED_SENTINEL_FILE}" ]; then
     case "${stall_state}:${cmd_rc}" in
       killed:*|*:137|*:142)
         emit_editor_substate "Stalled" "${attempt}" "${tmp_err}"
@@ -2429,7 +2556,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
 done
 
 # If PR was closed/merged during editor execution, exit cleanly
-if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+if [ -f "${PR_CLOSED_SENTINEL_FILE}" ]; then
   echo "PR #${PR_NUMBER} was closed/merged — skipping editor fallback."
   echo "PR_CLOSED=true" >> "$GITHUB_ENV"
   exit 0

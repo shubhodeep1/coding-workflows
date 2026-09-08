@@ -2731,7 +2731,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 
 	stage_step_block = _step_block("Stage workflow support files")
 	assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in stage_step_block
-	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in stage_step_block
+	assert '.codex-workflow-src-main' not in stage_step_block
 	assert "REQUIRED_BOOTSTRAP_SCRIPTS=" not in stage_step_block
 	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}"' not in stage_step_block
 	required_bootstrap_line = next(
@@ -3944,7 +3944,7 @@ def test_review_consolidator_prompt_is_staged_for_review_runtime_support() -> No
 	assert 'PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-consolidator.txt"' in consolidate
 	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt" ]; then' in stage_helper
 	assert 'src=".codex-workflow-src/prompts/review-consolidator.txt"' in stage_helper
-	assert 'src=".codex-workflow-src-main/prompts/review-consolidator.txt"' in stage_helper
+	assert 'src=".codex-workflow-src-main/prompts/review-consolidator.txt"' not in stage_helper
 	assert 'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt"' in stage_helper
 	assert 'review-consolidator.txt not found in checked-out support sources' in stage_helper
 	assert 'REVIEW_CONSOLIDATOR_ENABLED=true' in stage_helper
@@ -4145,7 +4145,7 @@ def test_review_filter_helper_wiring_is_flag_gated_and_fail_open() -> None:
 	assert "REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}" in workflow
 	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ]; then' in stage_helper
 	assert 'src=".codex-workflow-src/scripts/review_filter_uninteresting_files.sh"' in stage_helper
-	assert 'src=".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh"' in stage_helper
+	assert 'src=".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh"' not in stage_helper
 	assert 'install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"' in stage_helper
 	assert 'review_filter_uninteresting_files.sh not found in checked-out support sources' in stage_helper
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"' in preflight_block
@@ -4213,7 +4213,7 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 	assert "REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}" in workflow
 	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then' in stage_helper
 	assert 'src=".codex-workflow-src/scripts/review_agents_md_materiality.sh"' in stage_helper
-	assert 'src=".codex-workflow-src-main/scripts/review_agents_md_materiality.sh"' in stage_helper
+	assert 'src=".codex-workflow-src-main/scripts/review_agents_md_materiality.sh"' not in stage_helper
 	assert 'install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in stage_helper
 	assert 'review_agents_md_materiality.sh not found in checked-out support sources' in stage_helper
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in preflight_block
@@ -4244,7 +4244,7 @@ def test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewe
 	reviewers = _reviewers_text()
 
 	assert 'failback_src=".codex-workflow-src/scripts/reviewer_failback_chains.json"' in stage_helper
-	assert 'failback_src=".codex-workflow-src-main/scripts/reviewer_failback_chains.json"' in stage_helper
+	assert 'failback_src=".codex-workflow-src-main/scripts/reviewer_failback_chains.json"' not in stage_helper
 	assert 'install -m 0644 "${failback_src}" "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"' in stage_helper
 	assert 'reviewer_failback_chains.json not found in checked-out support sources' in stage_helper
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"' in preflight_block
@@ -5361,7 +5361,6 @@ def test_review_partial_finalize_comment_and_marker_report_withheld_state() -> N
 def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
 	for step_name in (
 		"Pre-editor stale-base gate",
-		"Install project dependencies (best-effort)",
 		"Switch reasoning effort for editor",
 		"Setup Serena for editor",
 		"Apply fixes with editor model",
@@ -5374,6 +5373,7 @@ def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
 		assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" in block, (
 			f"step should skip during partial finalize: {step_name}"
 		)
+	assert "Install project dependencies (best-effort)" not in _workflow_text()
 	for step_name in (
 		"Run interim judge",
 		"Synthesize behavioural smoke",

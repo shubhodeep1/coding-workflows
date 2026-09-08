@@ -219,6 +219,110 @@ def test_editor_script_scrubs_repository_credentials_from_environment() -> None:
 	assert "test-only-placeholder" not in result.stdout
 
 
+def test_review_support_uses_only_the_immutable_workflow_definition_sha() -> None:
+	workflow_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	resolve_start = workflow_text.index("- name: Resolve workflow support ref")
+	resolve_end = workflow_text.index("\n      - name:", resolve_start + 1)
+	resolve_block = workflow_text[resolve_start:resolve_end]
+	assert "${{ job.workflow_repository }}" in resolve_block
+	assert "${{ job.workflow_sha }}" in resolve_block
+	assert "^[0-9a-fA-F]{40}$" in resolve_block
+	assert "github.sha" not in resolve_block
+	assert 'SCRIPT_REF=stable' not in resolve_block
+	assert ".codex-workflow-src-main" not in workflow_text
+	assert "Install project dependencies (best-effort)" not in workflow_text
+
+	stage_text = (REPO_ROOT / "scripts" / "stage_workflow_support.sh").read_text(encoding="utf-8")
+	review_stage = stage_text[: stage_text.index("\nWORKFLOW_SUPPORT_SOURCE_REPO_DEFAULT=")]
+	assert ".codex-workflow-src-main" not in review_stage
+
+
+def test_editor_launch_uses_unprivileged_empty_environment_and_protected_sentinel() -> None:
+	editor_text = (REPO_ROOT / "scripts" / "review_apply_fixes.sh").read_text(encoding="utf-8")
+	launch_start = editor_text.index("editor_opencode_cmd=(")
+	launch_end = editor_text.index("\n  )", launch_start)
+	launch_block = editor_text[launch_start:launch_end]
+	assert 'sudo -n -u "${EDITOR_ISOLATION_USER}" --' in launch_block
+	assert "env -i" in launch_block
+	assert '"OPENROUTER_API_KEY=${OPENROUTER_API_KEY}"' in launch_block
+	for forbidden_name in ("GITHUB_ENV", "GITHUB_OUTPUT", "BASH_ENV", "GIT_DIR", "GH_TOKEN", "GH_PAT", "TG_BOT_SECRET"):
+		assert forbidden_name not in launch_block
+	assert "setup_editor_isolation" in editor_text
+	assert "cleanup_editor_isolation" in editor_text
+	assert 'chmod 0700 "${resolved_source}/.git" "${EDITOR_ISOLATION_COMMAND_DIR}"' in editor_text
+	assert 'PR_CLOSED_SENTINEL_FILE must be the protected runtime sentinel' in editor_text
+	assert "/tmp/pr_closed_sentinel_" not in editor_text
+
+	reviewer_text = (REPO_ROOT / "scripts" / "review_run_reviewers.sh").read_text(encoding="utf-8")
+	assert "/tmp/pr_closed_sentinel_" not in reviewer_text
+	assert '"${PR_CLOSED_SENTINEL_FILE:-/dev/null}"' in reviewer_text
+
+
+def _resolve_successor(search_payload: dict[str, object], intent: dict[str, object], *, api_failure: bool = False) -> dict[str, object]:
+	command = (
+		"source scripts/gh_helpers.sh; "
+		+ ("gh_retry() { return 1; }; " if api_failure else "gh_retry() { printf '%s' \"$SEARCH_JSON\"; }; ")
+		+ "review_blocked_resolve_successor_issue owner/repo \"$INTENT_JSON\" 41898282"
+	)
+	result = subprocess.run(
+		["bash", "-c", command],
+		cwd=REPO_ROOT,
+		env={
+			"PATH": "/usr/bin:/bin",
+			"SEARCH_JSON": json.dumps(search_payload, separators=(",", ":")),
+			"INTENT_JSON": json.dumps(intent, separators=(",", ":")),
+		},
+		check=True,
+		text=True,
+		capture_output=True,
+	)
+	return json.loads(result.stdout)
+
+
+def test_successor_resolver_requires_creator_labels_and_canonical_payload() -> None:
+	request = {
+		"schema_version": "review_blocked_approval.v1",
+		"request_id": "review_blocked_approval_20260907010101_0123456789",
+		"pr_number": 12,
+		"linked_issue_number": 34,
+		"action": "close_and_reissue",
+		"head_sha": "d" * 40,
+	}
+	title = "Authenticated replacement"
+	body = "Replacement body"
+	build_command = (
+		"source scripts/gh_helpers.sh; "
+		"review_blocked_build_successor_intent \"$REQUEST\" reissue \"$TITLE\" \"$BODY\" '[\"ai:clarification\"]' 41898282"
+	)
+	built = subprocess.run(
+		["bash", "-c", build_command],
+		cwd=REPO_ROOT,
+		env={"PATH": "/usr/bin:/bin", "REQUEST": json.dumps(request), "TITLE": title, "BODY": body},
+		check=True,
+		text=True,
+		capture_output=True,
+	)
+	intent = json.loads(built.stdout)
+	marker = "<!-- REVIEW_BLOCKED_SUCCESSOR_V1\n" + json.dumps(intent, sort_keys=True, separators=(",", ":")) + "\nREVIEW_BLOCKED_SUCCESSOR_V1 -->"
+	valid_item = {
+		"state": "open",
+		"user": {"id": 41898282},
+		"title": title,
+		"body": body + "\n\n" + marker,
+		"html_url": "https://github.com/owner/repo/issues/77",
+		"labels": [{"name": "ai:clarification"}],
+	}
+	assert _resolve_successor({"items": [valid_item]}, intent)["status"] == "valid"
+	for invalid_item in (
+		{**valid_item, "user": {"id": 1001}},
+		{**valid_item, "labels": []},
+		{**valid_item, "title": "Edited title"},
+		{**valid_item, "body": "Edited body\n\n" + marker},
+	):
+		assert _resolve_successor({"items": [invalid_item]}, intent)["status"] == "not_found"
+	assert _resolve_successor({"items": []}, intent, api_failure=True)["status"] == "inconclusive"
+
+
 def test_approval_request_ids_use_the_canonical_generator() -> None:
 	text = (REPO_ROOT / "scripts" / "gh_helpers.sh").read_text(encoding="utf-8")
 	assert 'make_record_id("review_blocked_approval")' in text

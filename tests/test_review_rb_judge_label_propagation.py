@@ -411,6 +411,7 @@ set -euo pipefail
 ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
 _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ gh api "$@"; }}
+review_blocked_prepare_successor_issue() {{ jq -cn --arg body "$8" '{{status:"not_found",url:null,body:$body}}'; }}
 flag_enabled() {{ case "${{1,,}}" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac; }}
 
 GITHUB_OUTPUT="{github_output}"
@@ -574,12 +575,9 @@ def test_orchestrator_managed_parent_propagates_label_to_reissue() -> None:
 		f"reissue must carry --label when parent is orchestrator-managed; "
 		f"got args: {args}"
 	)
-	# Find the value that follows --label
-	idx = args.index("--label")
-	assert args[idx + 1] == "ai:orchestrator-managed", (
-		f"reissue --label must be exactly 'ai:orchestrator-managed'; "
-		f"got: {args[idx + 1]!r}"
-	)
+	label_values = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "--label"]
+	assert "ai:clarification" in label_values
+	assert "ai:orchestrator-managed" in label_values
 
 	# ensure_label_exists must be called for the propagated label so the
 	# repo has the label definition before `gh issue create` references it.
@@ -1541,6 +1539,7 @@ set -euo pipefail
 ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
 _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ gh api "$@"; }}
+review_blocked_prepare_successor_issue() {{ jq -cn --arg body "$8" '{{status:"not_found",url:null,body:$body}}'; }}
 sleep() {{ :; }}
 source "{pr_checks_lib_path}"
 

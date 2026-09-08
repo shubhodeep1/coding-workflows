@@ -14,6 +14,16 @@ if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
 
+if [ -n "${RUNTIME_DIR:-}" ]; then
+  PR_CLOSED_SENTINEL_FILE="${PR_CLOSED_SENTINEL_FILE:-${RUNTIME_DIR}/pr_closed_sentinel}"
+  if [ "${PR_CLOSED_SENTINEL_FILE:-/dev/null}" != "${RUNTIME_DIR}/pr_closed_sentinel" ]; then
+    echo "::error::PR_CLOSED_SENTINEL_FILE must be the protected runtime sentinel." >&2
+    exit 1
+  fi
+else
+  PR_CLOSED_SENTINEL_FILE="${PR_CLOSED_SENTINEL_FILE:-/dev/null}"
+fi
+
 # _embed_input_file + _init_prompt_budget / _cleanup_prompt_budget live
 # in scripts/gh_helpers.sh which is sourced above.  If gh_helpers.sh
 # was unavailable (consumer-repo run pre-stage) provide stub fallbacks
@@ -375,7 +385,7 @@ if [ -n "${PR_NUMBER:-}" ] && [ -n "${REPOSITORY:-}" ] && command -v gh >/dev/nu
   if [ "${preflight_state}" != "open" ]; then
     echo "Pre-flight: PR #${PR_NUMBER} is ${preflight_state} — skipping reviewer fan-out."
     mkdir -p "${PREVIOUS_REVIEWS_DIR}"
-    touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
+    touch "${PR_CLOSED_SENTINEL_FILE:-/dev/null}"
     if [ -n "${GITHUB_ENV:-}" ] && [ -w "${GITHUB_ENV}" ]; then
       echo "PR_CLOSED=true" >> "$GITHUB_ENV"
     fi
@@ -3790,7 +3800,7 @@ execute_reviewer_attempt() {
     "${reviewer_alt_config_backup:-}" \
     "${attempt_reasoning}"
 
-  if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+  if [ -f "${PR_CLOSED_SENTINEL_FILE:-/dev/null}" ]; then
     echo "Reviewer slot ${slot_model} skipped — PR #${PR_NUMBER} was closed/merged." | tee -a "${log_file}"
     REVIEWER_ATTEMPT_OUTCOME="pr_closed"
     return 0
@@ -3881,7 +3891,7 @@ execute_reviewer_attempt() {
     while true; do
       sleep "${reviewer_watchdog_sleep}"
 
-      if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+      if [ -n "${PR_NUMBER:-}" ] && [ -f "${PR_CLOSED_SENTINEL_FILE:-/dev/null}" ]; then
         echo "Reviewer ${effective_model} aborted — PR close sentinel observed." | tee -a "${log_file}" >&2
         printf 'pr_closed_sentinel' > "${wd_reason_file}"
         cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
@@ -3916,7 +3926,7 @@ execute_reviewer_attempt() {
         if [ "${pr_state}" != "open" ]; then
           echo "Reviewer ${effective_model} aborted — PR #${PR_NUMBER} is ${pr_state}." | tee -a "${log_file}" >&2
           printf 'pr_closed_api' > "${wd_reason_file}"
-          touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
+          touch "${PR_CLOSED_SENTINEL_FILE:-/dev/null}"
           echo "PR_CLOSED=true" >> "$GITHUB_ENV"
           cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
           _reviewer_kill_pid "${cpid}"
@@ -4297,11 +4307,11 @@ run_reviewer() {
     case "${sleep_secs}" in
       ''|*[!0-9]*) sleep_secs=0 ;;
     esac
-    if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    if [ -n "${PR_NUMBER:-}" ] && [ -f "${PR_CLOSED_SENTINEL_FILE:-/dev/null}" ]; then
       return 1
     fi
     while [ "${sleep_secs}" -gt 0 ]; do
-      if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+      if [ -n "${PR_NUMBER:-}" ] && [ -f "${PR_CLOSED_SENTINEL_FILE:-/dev/null}" ]; then
         return 1
       fi
       sleep 1
@@ -4944,7 +4954,7 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
     fi
 
     # Check for PR closure after pass 1
-    if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    if [ -f "${PR_CLOSED_SENTINEL_FILE:-/dev/null}" ]; then
       echo "PR #${PR_NUMBER} was closed/merged during pass 1 — exiting cleanly."
       echo "PR_CLOSED=true" >> "$GITHUB_ENV"
       exit 0
@@ -4959,7 +4969,7 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
     echo "Pass-1 consensus ledger: $(wc -c < "${PASS1_LEDGER_FILE}" 2>/dev/null || echo 0) bytes"
   fi
 
-  if [ ! -s "${PASS1_LEDGER_FILE}" ] && [ "${pass1_successful:-0}" -gt 0 ] && [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+  if [ ! -s "${PASS1_LEDGER_FILE}" ] && [ "${pass1_successful:-0}" -gt 0 ] && [ ! -f "${PR_CLOSED_SENTINEL_FILE:-/dev/null}" ]; then
     echo "Resume: regenerating missing pass-1 consensus ledger from cached pass-1 reviewer outputs."
     bash "${SUMMARISER_SCRIPT}" --prefix pass1 --output "${PASS1_LEDGER_FILE}"
     echo "Pass-1 consensus ledger: $(wc -c < "${PASS1_LEDGER_FILE}" 2>/dev/null || echo 0) bytes"
@@ -5052,7 +5062,7 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
 
   # ── Consolidate all pass-2 reviewer outputs into REVIEWER_CONSENSUS_FILE ──
   # Feeds editor (review_apply_fixes.sh) + memory-record step.
-  if [ "${pass2_successful}" -gt 0 ] && [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+  if [ "${pass2_successful}" -gt 0 ] && [ ! -f "${PR_CLOSED_SENTINEL_FILE:-/dev/null}" ]; then
     bash "${SUMMARISER_SCRIPT}" --prefix review --output "${REVIEWER_CONSENSUS_FILE}"
     echo "Pass-2 consensus ledger (REVIEWER_CONSENSUS_FILE): $(wc -c < "${REVIEWER_CONSENSUS_FILE}" 2>/dev/null || echo 0) bytes"
   fi
@@ -5068,7 +5078,7 @@ else
   # Produce REVIEWER_CONSENSUS_FILE so the editor + memory-record step get the
   # same ledger shape they receive in two-pass mode. Hard-fails on summariser
   # failure (triggers job-level Telegram alert).
-  if [ "${reviewers_successful}" -gt 0 ] && [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+  if [ "${reviewers_successful}" -gt 0 ] && [ ! -f "${PR_CLOSED_SENTINEL_FILE:-/dev/null}" ]; then
     bash "${SUMMARISER_SCRIPT}" --prefix review --output "${REVIEWER_CONSENSUS_FILE}"
     echo "Consensus ledger (REVIEWER_CONSENSUS_FILE): $(wc -c < "${REVIEWER_CONSENSUS_FILE}" 2>/dev/null || echo 0) bytes"
   fi
@@ -5076,7 +5086,7 @@ fi
 
 if [ "${reviewers_successful}" -eq 0 ]; then
   # If PR was closed/merged, exit cleanly instead of failing
-  if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+  if [ -f "${PR_CLOSED_SENTINEL_FILE:-/dev/null}" ]; then
     echo "PR #${PR_NUMBER} was closed/merged during review — exiting cleanly."
     echo "PR_CLOSED=true" >> "$GITHUB_ENV"
     exit 0

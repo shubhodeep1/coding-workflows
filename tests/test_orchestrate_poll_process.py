@@ -2039,15 +2039,16 @@ if args[0] == 'api':
 			body = payload_obj.get('body', body)
 		cid = store['next_comment_id']
 		store['next_comment_id'] += 1
-		issue['comments'].append({
+		created_comment = {
 			'id': cid,
 			'body': body,
 			'created_at': f'2026-01-01T00:00:{cid % 60:02d}Z',
 			'user': {'login': 'github-actions[bot]', 'id': 41898282},
 			'html_url': f'https://github.com/owner/repo/issues/{m.group(1)}#issuecomment-{cid}',
-		})
+		}
+		issue['comments'].append(created_comment)
 		save()
-		print(json.dumps({'id': cid}))
+		print(json.dumps(created_comment))
 		sys.exit(0)
 
 	m = re.search(r'/issues/comments/(\d+)$', path)
@@ -6299,7 +6300,42 @@ def test_review_blocked_final_fix_decision_performs_no_actuator_action():
 	assert f"issue=10 head={refused_head_sha}" in refusal_comments[0]
 
 
-def test_review_blocked_trusted_refusal_marker_stops_same_head_judge_loop():
+def _signed_review_blocked_refusal_comment(*, head_sha: str, linked_issue: int = 10, source_pr: int = 903) -> str:
+	with tempfile.TemporaryDirectory(prefix="signed-rb-refusal-") as td:
+		tmp_path = Path(td)
+		rejected_output = tmp_path / "rejected.txt"
+		envelope = tmp_path / "envelope.json"
+		rejected_output.write_text('{"action":"fix"}\n', encoding="utf-8")
+		result = subprocess.run(
+			[
+				sys.executable,
+				str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"sign-refusal",
+				"--repository", "owner/repo",
+				"--tracking-issue", "192",
+				"--source-pr", str(source_pr),
+				"--linked-issue", str(linked_issue),
+				"--head-sha", head_sha,
+				"--producer-id", "41898282",
+				"--refusal-reason", "invalid_judge_decision",
+				"--rejected-output-file", str(rejected_output),
+				"--out-file", str(envelope),
+			],
+			env={**os.environ, "ORCHESTRATOR_STATE_AUTH_KEYRING": _state_auth_keyring()},
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		return (
+			f"<!-- REVIEW_BLOCKED_DECISION_REFUSED_V1 issue={linked_issue} head={head_sha} -->\n\n"
+			"<!-- REVIEW_BLOCKED_DECISION_REFUSED_V2\n"
+			+ envelope.read_text(encoding="utf-8").strip()
+			+ "\nREVIEW_BLOCKED_DECISION_REFUSED_V2 -->"
+		)
+
+
+def test_review_blocked_v1_refusal_marker_never_stops_same_head_judge_loop():
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
 	state["review_blocked_retries"]["10"] = 2
@@ -6337,8 +6373,103 @@ def test_review_blocked_trusted_refusal_marker_stops_same_head_judge_loop():
 			"remaining_issues_summary": "one correction remains",
 		},
 	)
+	assert "skipping repeated judge invocation" not in result["stdout"]
+	assert "Review-blocked judge attempt" in result["stdout"]
+
+
+def test_review_blocked_signed_refusal_stops_exact_same_head_judge_loop():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	state["review_blocked_retries"]["10"] = 2
+	refused_head_sha = "5" * 40
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"], 903: []},
+		issue_comments={903: [{
+			"body": _signed_review_blocked_refusal_comment(head_sha=refused_head_sha),
+			"user": {"id": 41898282, "login": "github-actions[bot]", "type": "Bot"},
+			"author_association": "NONE",
+		}]},
+		issue_linked_prs={10: 903},
+		prs=[{
+			"number": 903,
+			"state": "open",
+			"merged": False,
+			"merged_at": None,
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"headSha": refused_head_sha,
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"title": "Test PR",
+			"body": "Body",
+		}],
+		existing_branches=["main"],
+		codex_json={"action": "merge", "justification": "must be skipped"},
+	)
 	assert "skipping repeated judge invocation" in result["stdout"]
 	assert "Review-blocked judge attempt" not in result["stdout"]
+
+
+def test_review_blocked_refusal_envelope_supports_rotation_and_rejects_tampering():
+	with tempfile.TemporaryDirectory(prefix="rb-refusal-cli-") as td:
+		tmp_path = Path(td)
+		rejected_output = tmp_path / "rejected.txt"
+		envelope = tmp_path / "envelope.json"
+		rejected_output.write_text("invalid judge output\n", encoding="utf-8")
+		common_args = [
+			"--repository", "owner/repo",
+			"--tracking-issue", "192",
+			"--source-pr", "903",
+			"--linked-issue", "10",
+			"--head-sha", "4" * 40,
+			"--producer-id", "41898282",
+		]
+		old_keyring = _state_auth_keyring("old", {"old": b"o" * 32})
+		sign_result = subprocess.run(
+			[
+				sys.executable, str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+				"sign-refusal", *common_args,
+				"--refusal-reason", "invalid_judge_decision",
+				"--rejected-output-file", str(rejected_output),
+				"--out-file", str(envelope),
+			],
+			env={**os.environ, "ORCHESTRATOR_STATE_AUTH_KEYRING": old_keyring},
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert sign_result.returncode == 0, sign_result.stderr
+		signed_envelope_text = envelope.read_text(encoding="utf-8")
+
+		verify_command = [
+			sys.executable, str(REPO_ROOT / "scripts" / "orchestrate_state_v2.py"),
+			"verify-refusal", *common_args, "--envelope-file", str(envelope),
+		]
+		rotated_keyring = _state_auth_keyring("new", {"new": b"n" * 32, "old": b"o" * 32})
+		assert subprocess.run(
+			verify_command,
+			env={**os.environ, "ORCHESTRATOR_STATE_AUTH_KEYRING": rotated_keyring},
+			check=False,
+		).returncode == 0
+
+		tampered = json.loads(envelope.read_text(encoding="utf-8"))
+		tampered["linked_issue"] = 11
+		envelope.write_text(json.dumps(tampered), encoding="utf-8")
+		assert subprocess.run(
+			verify_command,
+			env={**os.environ, "ORCHESTRATOR_STATE_AUTH_KEYRING": rotated_keyring},
+			check=False,
+		).returncode == 1
+		envelope.write_text(signed_envelope_text, encoding="utf-8")
+		assert subprocess.run(
+			verify_command,
+			env={**os.environ, "ORCHESTRATOR_STATE_AUTH_KEYRING": "not-json"},
+			check=False,
+		).returncode == 2
 
 
 def test_review_blocked_close_and_reissue_requires_replacement_details():

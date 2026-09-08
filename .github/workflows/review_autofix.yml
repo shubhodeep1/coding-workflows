@@ -1459,18 +1459,23 @@ jobs:
           git remote set-url origin "${GITHUB_SERVER_URL%/}/${GITHUB_REPOSITORY}"
 
       - name: Resolve workflow support ref
+        env:
+          WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
-          if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
-          else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          if [ "${WORKFLOW_DEFINITION_REPOSITORY}" != "${wf_source}" ]; then
+            echo "::error::Reusable workflow repository '${WORKFLOW_DEFINITION_REPOSITORY}' does not match expected source '${wf_source}'."
+            exit 1
           fi
+          if ! [[ "${WORKFLOW_DEFINITION_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::job.workflow_sha is not an immutable 40-character commit SHA."
+            exit 1
+          fi
+          echo "SCRIPT_REF=${WORKFLOW_DEFINITION_SHA,,}" >> "$GITHUB_ENV"
 
       - name: Checkout workflow support source
-        id: checkout_support_source
-        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -1480,46 +1485,19 @@ jobs:
           fetch-depth: 1
 
           persist-credentials: false
-      - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src
-          fetch-depth: 1
-
-          persist-credentials: false
       - name: Ensure workflow support source checkout
         run: |
           set -euo pipefail
           if [ ! -d .codex-workflow-src ]; then
-            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
+            echo "::error::Failed to checkout immutable workflow support source at ${SCRIPT_REF}"
             exit 1
           fi
-
-      - name: Checkout workflow support source main snapshot
-        if: ${{ env.SCRIPT_REF != 'main' }}
-        continue-on-error: true
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src-main
-          fetch-depth: 1
-
-          persist-credentials: false
       - name: Stage workflow support files
         run: |
           set -euo pipefail
           helper=".codex-workflow-src/scripts/stage_workflow_support.sh"
-          if [ ! -f "${helper}" ] && [ -f ".codex-workflow-src-main/scripts/stage_workflow_support.sh" ]; then
-            helper=".codex-workflow-src-main/scripts/stage_workflow_support.sh"
-          fi
           if [ ! -f "${helper}" ]; then
-            echo "::error::stage_workflow_support.sh not found in checked-out support sources (${SCRIPT_REF} and optional main snapshot) in shubhodeep1/coding-workflows."
+            echo "::error::stage_workflow_support.sh not found in immutable support source ${SCRIPT_REF}."
             exit 1
           fi
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
@@ -1534,14 +1512,11 @@ jobs:
 
           if [ ! -f "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh" ]; then
             backfill_src=".codex-workflow-src/scripts/transcript_archive.sh"
-            if [ ! -f "${backfill_src}" ] && [ -f ".codex-workflow-src-main/scripts/transcript_archive.sh" ]; then
-              backfill_src=".codex-workflow-src-main/scripts/transcript_archive.sh"
-            fi
             if [ -f "${backfill_src}" ]; then
               install -m 0755 "${backfill_src}" "${SUPPORT_SCRIPTS_DIR}/transcript_archive.sh"
-              echo "::notice::Backfilled transcript_archive.sh into the runtime support bundle from ${backfill_src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+              echo "::notice::Backfilled transcript_archive.sh from immutable support source ${SCRIPT_REF}."
             else
-              echo "::warning::Optional transcript archive helper transcript_archive.sh was not staged and could not be backfilled from .codex-workflow-src/scripts or .codex-workflow-src-main/scripts; transcript archiving remains disabled for this run."
+              echo "::warning::Optional transcript archive helper transcript_archive.sh is unavailable at ${SCRIPT_REF}; transcript archiving remains disabled for this run."
             fi
           fi
 
@@ -1559,36 +1534,27 @@ jobs:
               continue
             fi
             backfill_src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${backfill_src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              backfill_src=".codex-workflow-src-main/scripts/${f}"
-            fi
             if [ -f "${backfill_src}" ]; then
               install -m 0755 "${backfill_src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
-              echo "::notice::Backfilled ${f} into the runtime support bundle from ${backfill_src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+              echo "::notice::Backfilled ${f} from immutable support source ${SCRIPT_REF}."
             else
-              echo "::warning::Preflight support script ${f} was not staged and could not be backfilled from .codex-workflow-src/scripts or .codex-workflow-src-main/scripts; the later preflight step will report whether this is a hard or soft miss."
+              echo "::warning::Preflight support script ${f} is unavailable at ${SCRIPT_REF}; the later preflight step will report whether this is a hard or soft miss."
             fi
           done
 
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then
             src=".codex-workflow-src/prompts/_nag_reminders.txt"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/_nag_reminders.txt" ]; then
-              src=".codex-workflow-src-main/prompts/_nag_reminders.txt"
-            fi
             if [ -f "${src}" ]; then
               install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"
-              echo "::notice::Backfilled _nag_reminders.txt into the runtime support bundle from ${src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it)."
+              echo "::notice::Backfilled _nag_reminders.txt from immutable support source ${SCRIPT_REF}."
             else
-              echo "::warning::_nag_reminders.txt was not staged and could not be backfilled from .codex-workflow-src/prompts or .codex-workflow-src-main/prompts; nag reminders will fail open for this run."
+              echo "::warning::_nag_reminders.txt is unavailable at ${SCRIPT_REF}; nag reminders will fail open for this run."
               rm -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"
             fi
           fi
 
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
             src=".codex-workflow-src/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
-              src=".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
-            fi
             if [ -f "${src}" ]; then
               install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
             else
@@ -1712,6 +1678,7 @@ jobs:
           codex_run_budget_soft_deadline_epoch="$(( job_start_epoch + codex_run_budget_total_secs ))"
 
           mkdir -p "${PREVIOUS_REVIEWS_DIR}" "${RUNTIME_CONTEXT_DIR}"
+          chmod 0711 "${RUNTIME_DIR}"
 
           {
             echo "JOB_START_EPOCH=${job_start_epoch}"
@@ -1720,6 +1687,7 @@ jobs:
             echo "CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH=${codex_run_budget_soft_deadline_epoch}"
             echo "CODEX_RUN_BUDGET_TOTAL_SECS=${codex_run_budget_total_secs}"
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
+            echo "PR_CLOSED_SENTINEL_FILE=${RUNTIME_DIR}/pr_closed_sentinel"
             echo "PREVIOUS_REVIEWS_DIR=${PREVIOUS_REVIEWS_DIR}"
             echo "RUNTIME_CONTEXT_DIR=${RUNTIME_CONTEXT_DIR}"
             echo "PR_PAYLOAD_FILE=${RUNTIME_DIR}/pr_payload.json"
@@ -2900,9 +2868,7 @@ jobs:
 
           slop_scan_script=""
           for candidate in \
-            "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/slop_scan_local.py" \
-            "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/slop_scan_local.py" \
-            "${GITHUB_WORKSPACE}/scripts/slop_scan_local.py"
+            "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/slop_scan_local.py"
           do
             if [ -f "${candidate}" ]; then
               slop_scan_script="${candidate}"
@@ -3251,7 +3217,7 @@ jobs:
             echo "::warning::git reset --hard HEAD failed during pre-review merge-topology gate; fail-open to reviewer path."
             exit 0
           fi
-          if ! git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main -e pre_assembled_static.txt; then
+          if ! git clean -ffdx -e .codex-workflow-src -e pre_assembled_static.txt; then
             echo "::warning::git clean -ffdx failed during pre-review merge-topology gate; fail-open to reviewer path."
             exit 0
           fi
@@ -3318,8 +3284,8 @@ jobs:
               git merge --abort >/dev/null 2>&1 || true
             fi
             git reset --hard HEAD >/dev/null 2>&1 || true
-            git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main -e pre_assembled_static.txt >/dev/null 2>&1 || true
-            for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+            git clean -ffdx -e .codex-workflow-src -e pre_assembled_static.txt >/dev/null 2>&1 || true
+            for d in scripts prompts ai-memory .codex-workflow-src; do
               if [ -d "${MERGE_STASH}/${d}" ]; then
                 cp -a "${MERGE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${MERGE_STASH}/${d}" "${d}" 2>/dev/null || true
               fi
@@ -3330,7 +3296,7 @@ jobs:
           }
           trap 'cleanup_pre_review_merge_probe $?' EXIT
 
-          for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+          for d in scripts prompts ai-memory .codex-workflow-src; do
             if [ -d "${d}" ]; then
               if git ls-files -- "${d}/" 2>/dev/null | grep -q .; then
                 while IFS= read -r f; do
@@ -3344,7 +3310,7 @@ jobs:
               fi
             fi
           done
-          git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main -e pre_assembled_static.txt 2>/dev/null || true
+          git clean -ffdx -e .codex-workflow-src -e pre_assembled_static.txt 2>/dev/null || true
 
           echo "=== pre-review merge working tree state ==="
           git status --porcelain 2>/dev/null || true
@@ -3686,38 +3652,6 @@ jobs:
               echo "AUTOFIX_PRE_EDITOR_UNKNOWN pr=${PR_NUMBER} local_sha=${LOCAL_HEAD_SHA} target_branch=${TARGET_BRANCH} action=fail_open"
               ;;
           esac
-
-      - name: Install project dependencies (best-effort)
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
-        run: |
-          set -euo pipefail
-          # Install project dependencies so the editor can validate fixes
-          # (e.g., run vitest, tsc, pytest). Best-effort: failures here do
-          # not block the workflow.
-          install_failed=false
-          if [ -f package-lock.json ]; then
-            echo "Found package-lock.json — running npm ci"
-            npm ci --ignore-scripts 2>&1 || install_failed=true
-          elif [ -f yarn.lock ]; then
-            echo "Found yarn.lock — running yarn install"
-            yarn install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true
-          elif [ -f pnpm-lock.yaml ]; then
-            echo "Found pnpm-lock.yaml — running pnpm install"
-            npx pnpm install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true
-          elif [ -f package.json ]; then
-            echo "Found package.json (no lockfile) — running npm install"
-            npm install --ignore-scripts 2>&1 || install_failed=true
-          fi
-          if [ -f requirements.txt ]; then
-            echo "Found requirements.txt — running pip install"
-            pip install -r requirements.txt 2>&1 || install_failed=true
-          elif [ -f pyproject.toml ] && [ ! -f package.json ]; then
-            echo "Found pyproject.toml — running pip install"
-            pip install -e ".[dev]" 2>&1 || pip install -e . 2>&1 || install_failed=true
-          fi
-          if [ "${install_failed}" = "true" ]; then
-            echo "::warning::Some project dependencies could not be installed. Editor validation may be limited."
-          fi
 
       - name: Switch reasoning effort for editor
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
@@ -4528,7 +4462,7 @@ jobs:
           # Use -ffdx: double-force clears nested git repos (-ff), and -x also
           # removes files matching .gitignore so nothing
           # ignored can survive to block the upcoming merge simulation.
-          git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main
+          git clean -ffdx -e .codex-workflow-src
 
           # The scripts may have been removed during artifact cleanup in the
           # commit step (caller repos delete fetched scripts before committing)
@@ -4538,9 +4472,6 @@ jobs:
             if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
               src="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/${f}"
-              if [ ! -f "${src}" ] && [ -f "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/${f}" ]; then
-                src="${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/${f}"
-              fi
               if [ ! -f "${src}" ]; then
                 echo "::warning::${f} not found in checked-out support source; downstream steps that need it will fail with a specific error."
                 rm -f "${SUPPORT_SCRIPTS_DIR}/${f}"
@@ -4617,7 +4548,7 @@ jobs:
           # "Entry … not uptodate. Cannot merge." errors and prevents
           # git merge --abort from resetting cleanly afterward.
           MERGE_STASH="$(mktemp -d)"
-          for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+          for d in scripts prompts ai-memory .codex-workflow-src; do
             if [ -d "${d}" ]; then
               if git ls-files -- "${d}/" 2>/dev/null | grep -q .; then
                 # Directory contains tracked files — move only the untracked
@@ -4643,7 +4574,7 @@ jobs:
           # git merge refuses to proceed when an untracked working-tree file
           # would be overwritten; this ensures the tree is fully clean before
           # the merge simulation.  Tracked files are never removed by git clean.
-          git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main 2>/dev/null || true
+          git clean -ffdx -e .codex-workflow-src 2>/dev/null || true
 
           # Guardrail diagnostics: emit working tree state before merge so any
           # future untracked-file collision is immediately obvious in CI logs.
@@ -4728,7 +4659,7 @@ jobs:
           fi
 
           # Restore the stashed dirs so later steps have them available.
-          for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+          for d in scripts prompts ai-memory .codex-workflow-src; do
             if [ -d "${MERGE_STASH}/${d}" ]; then
               # Use cp + rm instead of mv to handle the case where the merge
               # already created the directory (e.g. scripts/ from main).
@@ -4994,20 +4925,13 @@ jobs:
           _primary_state="$(_probe_resolver "${RESOLVER_SCRIPT}")"
           if [ "${_primary_state}" != "ok" ]; then
             _fb1="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_conflict_resolve.sh"
-            _fb2="${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/review_conflict_resolve.sh"
             _fb1_state="$(_probe_resolver "${_fb1}")"
             if [ "${_fb1_state}" = "ok" ]; then
               echo "::warning::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state} (likely unresolved conflict markers from the merge replay); falling back to ${_fb1} (SCRIPT_REF=${SCRIPT_REF:-unknown})."
               RESOLVER_SCRIPT="${_fb1}"
             else
-              _fb2_state="$(_probe_resolver "${_fb2}")"
-              if [ "${_fb2_state}" = "ok" ]; then
-                echo "::warning::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state}; ${_fb1}=${_fb1_state}; falling back to ${_fb2}."
-                RESOLVER_SCRIPT="${_fb2}"
-              else
-                echo "::error::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state}; ${_fb1}=${_fb1_state}; ${_fb2}=${_fb2_state}. No clean resolver entry-point available."
-                exit 2
-              fi
+              echo "::error::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state}; immutable fallback ${_fb1}=${_fb1_state}. No clean resolver entry-point available."
+              exit 2
             fi
           fi
           bash "${RESOLVER_SCRIPT}"
@@ -5292,10 +5216,6 @@ jobs:
             if [ -f "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/label_helpers.sh" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
               install -m 0755 "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/label_helpers.sh" "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
-              source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
-            elif [ -f "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/label_helpers.sh" ]; then
-              mkdir -p "${SUPPORT_SCRIPTS_DIR}"
-              install -m 0755 "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/label_helpers.sh" "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
               source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
             else
               type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
@@ -7893,8 +7813,6 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          rm -rf "${GITHUB_WORKSPACE}/.codex-workflow-src-main"
-
           # Guard: RUNTIME_DIR is only written to $GITHUB_ENV by the
           # Create runtime workspace step.  If an earlier step failed
           # before that step ran, expanding "${RUNTIME_DIR}" under set -u
