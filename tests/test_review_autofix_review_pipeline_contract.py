@@ -6044,6 +6044,116 @@ def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_
 	assert "full change set of the pull request" in result["context_sections"]
 
 
+def _run_dependency_install_step(
+	repo_files: dict[str, str],
+	*,
+	pytest_importable: bool,
+) -> dict[str, str]:
+	"""Execute the dependency-install step body against a synthetic repo.
+
+	`pip` and `python3` are stubbed on PATH so nothing is really installed:
+	the `python3` stub reports pytest importability from `pytest_importable`
+	and records every invocation.  Returns the step's stdout/stderr under
+	"output" and the recorded stub invocations under "calls".
+	"""
+	script = _step_run_script("Install project dependencies (best-effort)")
+	with tempfile.TemporaryDirectory(prefix="autofix-dep-install-") as td:
+		root = Path(td)
+		repo = root / "repo"
+		bin_dir = root / "bin"
+		repo.mkdir()
+		bin_dir.mkdir()
+		log_path = root / "calls.log"
+		for name, body in repo_files.items():
+			(repo / name).parent.mkdir(parents=True, exist_ok=True)
+			(repo / name).write_text(body)
+		script_path = root / "step.sh"
+		script_path.write_text(script)
+		(bin_dir / "pip").write_text(
+			'#!/bin/sh\necho "pip $*" >> "$STUB_CALL_LOG"\nexit 0\n'
+		)
+		(bin_dir / "python3").write_text(
+			"#!/bin/sh\n"
+			'echo "python3 $*" >> "$STUB_CALL_LOG"\n'
+			"case \"$*\" in\n"
+			"  *'import pytest'*) exit %d ;;\n"
+			"  *'-m pip install pytest'*) exit 1 ;;\n"
+			"esac\n"
+			"exit 0\n" % (0 if pytest_importable else 1)
+		)
+		for stub in ("pip", "python3"):
+			(bin_dir / stub).chmod(0o755)
+		env = _git_clean_env()
+		env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+		env["STUB_CALL_LOG"] = str(log_path)
+		completed = subprocess.run(
+			["bash", str(script_path)],
+			cwd=str(repo),
+			env=env,
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		return {
+			"output": completed.stdout + completed.stderr,
+			"calls": log_path.read_text() if log_path.exists() else "",
+			"returncode": str(completed.returncode),
+		}
+
+
+def test_dependency_install_bootstraps_pytest_when_pyproject_declares_it() -> None:
+	"""A tool-only pyproject must still leave pytest importable for the editor.
+
+	`pip install -e .` exits 0 on a pyproject.toml that carries no [project]
+	table (setuptools builds an UNKNOWN-0.0.0 package), so the pre-existing
+	`install_failed` guard never fires and pytest silently stays missing.
+	"""
+	result = _run_dependency_install_step(
+		{"pyproject.toml": "[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n"},
+		pytest_importable=False,
+	)
+	assert "-m pip install pytest" in result["calls"], result["calls"]
+	assert "--user --break-system-packages pytest" in result["calls"], result["calls"]
+	assert "pytest is not importable" in result["output"], result["output"]
+
+
+def test_dependency_install_warns_when_pytest_bootstrap_does_not_take() -> None:
+	result = _run_dependency_install_step(
+		{"pyproject.toml": "[tool.pytest.ini_options]\n"},
+		pytest_importable=False,
+	)
+	assert "-m pip install pytest" in result["calls"], result["calls"]
+	assert (
+		"::warning::pytest is declared by this repository but could not be installed"
+		in result["output"]
+	), result["output"]
+
+
+def test_dependency_install_bootstraps_pytest_for_nested_conftest() -> None:
+	result = _run_dependency_install_step(
+		{"tests/conftest.py": ""},
+		pytest_importable=False,
+	)
+	assert "-m pip install pytest" in result["calls"], result["calls"]
+
+
+def test_dependency_install_skips_pytest_bootstrap_when_already_importable() -> None:
+	result = _run_dependency_install_step(
+		{"pyproject.toml": "[tool.pytest.ini_options]\n"},
+		pytest_importable=True,
+	)
+	assert "-m pip install pytest" not in result["calls"], result["calls"]
+	assert "already importable" in result["output"], result["output"]
+
+
+def test_dependency_install_skips_pytest_bootstrap_for_non_pytest_repos() -> None:
+	result = _run_dependency_install_step(
+		{"pyproject.toml": "[tool.ruff]\nline-length = 100\n"},
+		pytest_importable=False,
+	)
+	assert "-m pip install pytest" not in result["calls"], result["calls"]
+
+
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_opencode_full_review_cutover_removes_codex_runtime()
@@ -6131,6 +6241,11 @@ def main() -> int:
 	test_reviewer_iteration_scope_prepare_path_preserves_literal_root_level_trailing_punctuation()
 	test_reviewer_iteration_scope_prepare_path_preserves_hidden_directory_prefixes()
 	test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_helper()
+	test_dependency_install_bootstraps_pytest_when_pyproject_declares_it()
+	test_dependency_install_warns_when_pytest_bootstrap_does_not_take()
+	test_dependency_install_bootstraps_pytest_for_nested_conftest()
+	test_dependency_install_skips_pytest_bootstrap_when_already_importable()
+	test_dependency_install_skips_pytest_bootstrap_for_non_pytest_repos()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
 

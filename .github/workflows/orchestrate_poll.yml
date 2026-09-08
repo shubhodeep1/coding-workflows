@@ -147,6 +147,46 @@ jobs:
           mkdir -p scripts
           install -m 0755 "${src}" scripts/gh_helpers.sh
 
+          # Merge-train release helper (scripts/review_merge_train.sh) and the
+          # label catalog it uses; both best-effort so an older SCRIPT_REF
+          # without them still polls normally.
+          for helper in review_merge_train.sh label_helpers.sh; do
+            src=".codex-workflow-src/scripts/${helper}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${helper}" ]; then
+              src=".codex-workflow-src-main/scripts/${helper}"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0755 "${src}" "scripts/${helper}"
+            else
+              echo "::notice::Optional support script ${helper} not found in shubhodeep1/coding-workflows@${SCRIPT_REF}; merge-train release will be skipped this tick."
+            fi
+          done
+
+      - name: Release merge-queued PRs (merge train backstop)
+        # Runs on EVERY tick, before the tracking-issue gate below exits early
+        # for repos with no active orchestrator project, because the merge
+        # train (scripts/review_merge_train.sh) also serializes standalone
+        # ai/issue-* PRs. The event path (cancel_on_pr_close.yml when an
+        # ai/issue-* PR closes) releases queued PRs immediately; this is the
+        # backstop for missed events. Fail-open: never fails the poll.
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
+          MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
+          MERGE_TRAIN_ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/review_merge_train.sh ]; then
+            echo "merge-train release skipped: scripts/review_merge_train.sh not staged."
+            exit 0
+          fi
+          _mt_rc=0
+          SUPPORT_SCRIPTS_DIR="$(pwd)/scripts" bash scripts/review_merge_train.sh release || _mt_rc=$?
+          if [ "${_mt_rc}" -ne 0 ]; then
+            echo "::warning::review_merge_train.sh release exited ${_mt_rc}; continuing the poll (fail-open)."
+          fi
+
       - name: Find active tracking issues
         id: find_tracking
         env:

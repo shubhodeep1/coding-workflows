@@ -1,6 +1,3 @@
----
-model: sonnet
----
 Seed a **new consumer repository** so it runs the coding-workflows automation: given a target `owner/repo` in `$ARGUMENTS` (plus an optional profile — `core`, `standard`, or `full`; default **`standard`**), render the profile's wrapper workflows with the immutable commit behind the upstream **`stable`** release, copy the `.claude/` command/hook assets and root `CLAUDE.md` from that release, and land them in the target repo via a seed branch + PR. Set the target's `WORKFLOW_PROFILE` repo variable (after asking, §23.C), and register the repo in the library's `.github/ai/consumer_repos.json` (§14 — mandatory). After the seed PR merges and the user adds the required secrets, the existing `ai-update-workflows.yml` sync (daily 04:00 UTC cron + `@stable` `repository_dispatch`) owns all future updates and advances every installed wrapper to the next immutable release SHA — this command is **initial onboarding only** and is a no-op on an already-seeded repo.
 
 $ARGUMENTS
@@ -16,7 +13,7 @@ $ARGUMENTS
 4. **Compose the seed file set.** Keep non-wrapper assets byte-for-byte. For every wrapper, run the same release renderer as the automatic sync; never hand-edit or duplicate its regex:
    - Every wrapper listed in `workflow-templates/profiles/<profile>.txt` → run `scripts/workflow_wrapper_refs.py --input <source> --output <rendered> --sha "$UPSTREAM_SHA"` → target `.github/workflows/<same-name>`. The resulting reusable-workflow `uses:` line must end in `@<40-character SHA> # stable`, with no coding-workflows reusable-workflow `@stable` ref remaining.
    - **`workflow-templates/ai-update-workflows.yml` — always, whatever the profile.** The sync never creates this self-updater when it is absent, but refreshes an existing copy to the current release pin regardless of profile. Because `core`/`standard` manifests omit it, a seed without it never receives another update.
-   - The whole `workflow-templates/.claude/` tree → target `.claude/` (commands, `hooks/session-start.sh`, `hooks/pr_merge_status_guard.py`, `settings.json`) — the same set the sync's ".claude/ assets" step mirrors afterwards.
+   - The whole `workflow-templates/.claude/` tree → target `.claude/` (commands, `hooks/session-start.sh`, `hooks/pr_merge_status_guard.py`, `hooks/pr_watch_guard.py`, `settings.json`) — the same set the sync's ".claude/ assets" step mirrors afterwards.
    - Root `CLAUDE.md` → target root `CLAUDE.md`. In the library checkout `workflow-templates/CLAUDE.md` is a symlink to `../CLAUDE.md` — copy the **dereferenced content** (the sync uses `cp -L` for the same reason).
    If the target already has any of these paths with **different** content (e.g. its own root `CLAUDE.md`), do not overwrite silently — stop and ask (§2) with one batched question listing every collision and a recommended per-file action.
 

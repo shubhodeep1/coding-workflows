@@ -33,10 +33,21 @@ Phases of the unattended pipeline (each is a separate workflow file under
 6. **implement-repair** (`prompts/mode-implement-repair.txt`,
    `mode-implement-repair-syntax.txt`) — narrow post-Codex repair runs.
 7. **review autofix** (`review_autofix.yml`, `internal-review.yml`) — multi-
-   model reviewer + consolidator + editor loop on PR changes.
+   model reviewer + consolidator + editor loop on PR changes. Two pre-review
+   gates run first: the merge train (`scripts/review_merge_train.sh gate`,
+   `MERGE_TRAIN_ENABLED`) queues an `ai/issue-*` PR behind older open
+   `ai/issue-*` PRs on the same base that edit the same files (label
+   `ai:merge-queued`; released by `cancel_on_pr_close.yml` on close and by
+   `orchestrate_poll.yml` every tick; managed/standalone conflict and stall
+   recovery treat the label as an intentional wait), and the merge-topology gate hands a
+   content conflict to the resolver tail *before* the reviewer/editor spend
+   (`PRE_REVIEW_CONFLICT_RESOLVE_ENABLED`, sets `AUTOFIX_PRE_REVIEW_RESOLVE`).
 8. **conflict resolver** (`prompts/conflict-resolver.txt`,
    `integration-sync-conflict-resolver.txt`) — merge-conflict resolution
-   inside autofix.
+   inside autofix. In consumer repos the resolver, the review-blocked judge
+   and the poller remove workflow-generated root files before committing but
+   keep any path HEAD tracks (a consumer-owned `agents.md`), logging
+   `Preserving repo-tracked path during artifact cleanup: <path>`.
 9. **orchestrate** (`orchestrate.yml`, `orchestrate_poll.yml`) — issue
    decomposition + judge polling, including the default-on, current-head
    project security-pass gate before validation/finalization.
@@ -267,60 +278,26 @@ models (`minimax/minimax-m3`, `moonshotai/kimi-k3`,
 
 ---
 
-## Interactive slash-command model pins
+## Interactive slash-command model selection
 
 **Interactive Claude Code sessions only.** This section is unrelated to
 `## Models in use` above: that table covers the unattended codex/OpenCode
 pipeline models, which read `unattended_system_instructions.md` and are
-driven by repo-vars. The pins below are `model:` frontmatter on
-`.claude/commands/*.md` and only affect a human-driven `/command` invocation.
+driven by repo-vars.
 
-| Command | `model` | `context` |
-|---|---|---|
-| `/analyze-log` | `opus` | — |
-| `/apply-analysis` | `sonnet` | — |
-| `/apply-url` | `sonnet` | `fork`, `background: false` |
-| `/audit-plans` | `sonnet` | `fork`, `background: false` |
-| `/deploy-activate` | `best` | — |
-| `/implement-plan-ai` | `sonnet` | — |
-| `/implement-plan-claude` | `best` | — |
-| `/investigate-issue` | `opus` | — |
-| `/seed-repo` | `sonnet` | — |
-| `/validate-consumer-issue` | `opus` | — |
-| `/verify-activation` | `best` | `fork`, `background: false` |
-| `/write-plan` | `opus` | — |
-
-Rationale for the tiers: `sonnet` for dispatch-only, scaffolding, and
-read-only commands; `opus` for diagnosis and commands that write code or
-mutate infrastructure; `best` for the long-horizon commands, where a
-wrong answer costs a full re-run — the two that implement or audit a
-whole project (`/implement-plan-claude`, `/verify-activation`) and the
-operator-facing activation runbook (`/deploy-activate`), where a wrong
-step is executed against live infrastructure. `best` resolves to the latest
-Fable model where the account has access and falls back to `opus` where it
-does not — prefer it over a literal `fable`, which has no such fallback.
-
-Four constraints govern edits to these pins:
-
-- **`---` must be the file's first line.** Claude Code reads frontmatter
-  only there; anywhere else the markers and fields render as prompt prose.
-- **The pin lasts one turn, not one command.** The override applies for the
-  rest of the current turn and the session model resumes on the next
-  prompt, so a command that stops for CLAUDE.md §2 Q/A questions
-  (`/write-plan`, `/deploy-activate`) runs its later turns on the session
-  model. `context: fork` is the exception — there the pin sets the forked
-  subagent's model for the whole run.
-- **Do not set `agent:` on the forked commands.** A forked skill loads
-  CLAUDE.md *except* when the agent is `Explore` or `Plan`. Naming either
-  would silently drop §0–§24 from the command's context. Leaving `agent`
-  unset keeps the repo rules loaded.
-- **`background: false` is required on the forks.** A backgrounded fork
-  runs with the narrower background-subagent tool set and applies edits
-  outside session checkpoints. `background: false` keeps the full tool set,
-  so the §2 ask-first flow can still reach the operator.
+The 12 commands in `.claude/commands/*.md` deliberately carry **no**
+`model:` frontmatter, and no `context:` / `background:` keys either. Every
+`/command` runs on the model the operator picked for the session (via
+`/model` or the session's configured model), for every turn of the command.
+Do not re-add per-command `model:` pins: they were tried (PRs #3967 and
+#3971) and removed because the operator's session choice should decide the
+model, not the command file. A file that starts with `---` would be parsed
+as frontmatter, so the command body must remain the first line.
 
 No field here changes what any consumer repo receives on the `@stable`
-sync: `.claude/commands/` is not part of the synced surface.
+sync: `.claude/commands/` is not part of the synced surface, and the
+template copies under `workflow-templates/.claude/commands/` have never
+carried frontmatter.
 
 ---
 
@@ -417,6 +394,18 @@ committing the corresponding file:
 - Stall-sidecar markers are emitted as separate ledger event types
   `codex_stall_observed` and `codex_stall_killed` rather than as
   `run_substate` values.
+- Token counts are harvested from the editor log named by `--tokens-log-file`.
+  The helper reads only the trailing `LEDGER_TOKENS_LOG_MAX_BYTES` (default
+  `1048576`, `0` disables the bound), because the `usage`-object scan probes
+  every `{` in the document and `json.JSONDecodeError` counts newlines from
+  byte 0 on each failed probe, making a whole-file scan quadratic in file
+  size. Every parser keeps its last match and editors write their usage
+  summary at the end, so the tail carries the same answer.
+- The `record-run-event` write is bounded by `LEDGER_EMIT_TIMEOUT_SECONDS`
+  (default `120`, `0` disables). It runs while the helper holds the
+  per-dedupe-key `flock`, so an unbounded call would stall the caller's job
+  silently. On expiry the helper warns and fails open without consuming the
+  dedupe key.
 - `scripts/build_state_snapshot.py` builds the poller's `state.json` artifact,
   and `ai-memory/schemas/state_snapshot.v1.json` is the authoritative schema
   for that payload.
@@ -443,6 +432,48 @@ through one consolidated `ai:orchestrator-managed` issue; a merged fix advances
 `security_pass_cycle`, clears the recorded SHA, and re-runs the pass. Persistent
 findings after `MAX_SECURITY_PASS_CYCLES` (default `3`) terminalize as
 `ai:security-pass-failed`; `/re-security-pass` resets the bounded loop.
+The budget bounds *persistent* findings, so a recorded clean pass breaks the
+chain: when the integration head advances past a `passed` SHA (a
+`chore: sync <default> into <integration>` merge, a resolver/judge conflict
+resolution, or a merged fix PR), `run_security_pass_inline` resets
+`security_pass_cycle` to `0` before the re-audit and logs
+`SECURITY_PASS_CYCLE_BUDGET_RESET ... reason=head_advanced_after_clean_pass`
+with the tracking issue number and the new head SHA. Findings in the
+newly-arrived code then get their own fix cycles instead of terminalizing the
+project on sight. The reset fires only from a `passed` prior status; a
+`blocked` chain keeps its spent budget. Completion still requires a clean
+SHA-bound pass at the current head, so a fresh budget never admits unaudited
+code.
+Every security-pass transition that exits its current path or starts the long-running audit also keeps the tracking issue body honest:
+`security_pass_fail_closed`, `security_pass_terminal_failure`,
+`security_pass_closed_fix_failure`, the `blocked` write in
+`create_security_pass_fix_issue`, the running, clean/pass, and
+head-changed/pending writes in `run_security_pass_inline`, the stall-recovery
+successor adoption, and the `/re-security-pass` reset call
+`reconcile_tracking_body_after_security_pass_transition` between their
+state write and `post_state_comment`, so the rendered
+`<!-- orchestrator:security-pass -->` block matches the label and alert
+comment the same transition posts and the persisted
+`tracking_body_sync_hash` rides the state comment already being posted.
+The tick-level reconcile sites run only on the `merge_conflict` and
+wave-status paths and these security-pass paths leave the tick before reaching
+them, which is why #3965 kept rendering `Status: passed` after it had failed.
+The wrapper is hash-gated through
+`reconcile_tracking_issue_body_from_state`: with `project_body_snapshot`
+present, an unchanged body costs no API call; legacy state without the
+snapshot first fetches the live issue body as its render template. A changed
+body costs the single `gh issue edit`. It fails open.
+A consolidated fix issue that orchestrator stall recovery closed and re-issued
+is *not* a failed fix: `close_and_reissue` re-points wave state only (both
+writes are gated on a non-null `local_id`, which a security-pass fix issue
+never has), so before terminalizing, `resolve_security_pass_fix_successor`
+looks for the live successor by the durable `- Tracking issue: #<N>` and
+``- Local ID: `security-pass-fix-cycle-<K>` `` body markers that survive
+re-issue, adopts it into `security_pass_active_fix_issues`, and logs
+`SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED`. Both markers must match, so
+another project or another cycle is never adopted. An inconclusive lookup
+(API or parse failure) retains `security-pass-fixing` for retry rather than
+reading a transient read failure as evidence of a failed fix.
 Setting `ENABLE_SECURITY_PASS=false` remains the immediate operator kill switch.
 If an externally merged final PR has already deleted its integration branch,
 the only permitted analysis fallback is that PR's verified immutable head SHA;
@@ -602,6 +633,8 @@ and shipped:
 - `SECURITY_PASS_BLOCKED`
 - `SECURITY_PASS_FIX_ISSUE_CREATED`
 - `SECURITY_PASS_FIX_ISSUE_REISSUED`
+- `SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED`
+- `SECURITY_PASS_CYCLE_BUDGET_RESET`
 - `SECURITY_PASS_FAILED`
 - `SECURITY_PASS_SKIPPED_DISABLED`
 
@@ -718,6 +751,8 @@ LOG_PREFIX.name=SECURITY_PASS_CLEAN
 LOG_PREFIX.name=SECURITY_PASS_BLOCKED
 LOG_PREFIX.name=SECURITY_PASS_FIX_ISSUE_CREATED
 LOG_PREFIX.name=SECURITY_PASS_FIX_ISSUE_REISSUED
+LOG_PREFIX.name=SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED
+LOG_PREFIX.name=SECURITY_PASS_CYCLE_BUDGET_RESET
 LOG_PREFIX.name=SECURITY_PASS_FAILED
 LOG_PREFIX.name=SECURITY_PASS_SKIPPED_DISABLED
 LOG_PREFIX.name=SEMBLE_QUERY
@@ -899,7 +934,7 @@ depend on it.
 | `REVIEW_DIATAXIS_LENS_ENABLED` | `true` | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined only (no separate workflow toggle yet): keep it `low` severity and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-integration-head security gate before validation or finalization. Set to `false` for the immediate operator kill switch and legacy completion behavior. |
-| `MAX_SECURITY_PASS_CYCLES` | `3` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. |
+| `MAX_SECURITY_PASS_CYCLES` | `3` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. Resets to `0` when an advancing integration head invalidates a recorded clean pass. |
 | `MAX_SECURITY_PASS_FIX_REISSUES` | `2` | Maximum re-issues of one `ai:implementation-failed` consolidated security-fix issue per fix cycle before the pass terminalizes as `ai:security-pass-failed`. |
 | `SECURITY_PASS_CONFIDENCE_GATE` | `8` | Minimum 1-10 confidence score for findings that block the project security pass. |
 
@@ -907,6 +942,7 @@ depend on it.
 
 - `scripts/verify_integration_fingerprints.py` supports `--baseline-fingerprints-state <out>` / `--compare-against-baseline <in>` alongside `--ref`; capture mode records ref-accurate `head_sha` metadata, compare mode emits `PRE_EXISTING_FINGERPRINT_DRIFT_V1` markers for pre-existing drift that should not block the resolver commit, and the verifier-side false-positive defenses emit `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1` (capture-side multi-occurrence partial removal), `FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1` (a `must_contain` line modified after capture by a non-`[ai-merge-resolve]` commit), and `FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1` (a `must_not_contain` line re-added after capture by a non-`[ai-merge-resolve]` commit — e.g. a back-merge of the default branch keeping its still-present copy) when the ref-mode wave-dispatch gate suppresses a non-resolver false positive. The two post-capture defenses share one direction-agnostic pickaxe primitive and both fail closed in working-tree mode, so the resolver's own pre-commit self-check stays strict and still cannot silently revert merged intent.
 - `.github/workflows/review_autofix.yml` stages `verify_integration_fingerprints.py`, `review_conflict_prepare.sh`, `review_conflict_resolve.sh`, `render_prompt.py`, `opencode_helpers.sh`, and `write_opencode_config.sh` through `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` (main snapshot first, branch fallback). `render_prompt.py` is main-primary so the newest renderer (and any bundled contract/reference assets) reaches an in-flight PR whose branch predates the fix. The reviewer/editor prompt bodies embed arbitrary PR-diff + comment text that can carry literal `{{...}}` / `{%...%}` tokens, so their post-embed render calls now pass `--skip-syntax-validation` (opt-in via `RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1` in `render_prompt.sh`) — the strict `validate_supported_template_syntax` gate is skipped for those already-assembled bodies while placeholder substitution still runs. This removes the false-positive class at the source (an embedded diff token no longer hard-fails the whole reviewer/editor step, so a docs/diff carrying template syntax — run 28936678508 — or the earlier lone-`${{` case, PR #3592 / #3593 / run 28888093412, cannot wedge the review). The gate stays strict for every static template render (e.g. the editor continuation prompt `prompts/mode-review-apply-fixes-continuation.txt`), so genuine prompt-authoring errors are still caught. `render_prompt.py` stays fail-open — when the backend is absent from both refs, bootstrap preserves the ref's bundled bash renderer. `OPTIONAL_BOOTSTRAP_SCRIPTS` is reserved for genuinely optional helpers only.
+- `scripts/review_merge_train.sh` is staged through `REQUIRED_BOOTSTRAP_SCRIPTS` for `review_autofix.yml` and copied best-effort (with `label_helpers.sh`) next to `gh_helpers.sh` by `orchestrate_poll.yml` and `cancel_on_pr_close.yml`, which do not run the full support staging. Both callers treat a missing copy as "skip this tick" so an older `SCRIPT_REF` keeps polling; its own API budget is documented in the script header (CLAUDE.md §15).
 - `scripts/review_conflict_resolve.sh` persists one `AUTOFIX_RESOLVER_RETRY_STATE_V1` PR-body block per final PR/head SHA, keyed by normalized fingerprint failure signature. `RESOLVER_ESCAPE_THRESHOLD_N` is the per-tier same-head, same-signature step size: multiples advance `strict` → `ratio` → `count_only` → `warn_only`, emit `FINGERPRINT_TIER_DOWNGRADED_V1`, and after the next multiple the script labels the **final PR issue** `ai:resolver-escalated` and records `escalated_at` for poller-side suppression / branch-rebuild gating.
 - `scripts/verify_integration_fingerprints.py` uses `FINGERPRINT_QUARANTINE_RUNS_M` to move stable unchanged drift into ai-memory quarantine and emits `FINGERPRINT_QUARANTINED_V1` markers when the skip path activates. `.github/workflows/drift-audit.yml` (cron `0 3 * * *`, gated by `DRIFT_AUDIT_ENABLED`) scans `PRE_EXISTING_FINGERPRINT_DRIFT_V1` / `FINGERPRINT_QUARANTINED_V1` markers and maintains tracker issues for persistent clusters. The audit skips any cluster whose fingerprint path is absent from the repository checkout, so markers echoed from test fixtures or PR diffs (synthetic paths such as `scripts/example.py`) do not open tracker issues. Completed runs concluded `cancelled` / `skipped` routinely upload no logs (concurrency-superseded review runs); a failed log fetch for them is classified `unscannable` rather than missing, keeping coverage `full` so the per-run Telegram summary stays at DEBUG instead of firing a daily partial-coverage WARNING; their logs are still scanned when present. Every enabled run posts a Telegram run summary (`tg_send_msg`, gated by `TG_BOT_SECRET` / `TG_ADMIN_CHAT_ID`) linking to the run and writes a GitHub Actions job summary.
 - `.github/workflows/security-audit.yml` (weekly `0 8 * * 0` plus `workflow_dispatch` plus `workflow_call`, gated by `SECURITY_AUDIT_ENABLED`, default `true`) is a default-branch maintenance audit that runs on the source repo and, via the synced `workflow-templates/ai-security-audit.yml` wrapper, on every consumer repo against its own default branch (consumer runs stage this repo's `scripts/` + `prompts/` from a `@stable` support checkout into `SECURITY_AUDIT_SUPPORT_DIR` and need `OPENROUTER_API_KEY`, optionally `GH_PAT`). It runs `scripts/security_audit.sh` with `prompts/mode-security-audit.txt`, appends dated findings sections to the stable `AI Security Audit Tracker` issue (`ai:security-audit`, marker `<!-- ai:security-audit-tracker:v1 -->`), and opens up to 3 weekly `ai:security` follow-up issues after confidence-gate + false-positive-exclusion filtering. Each completed run records the audited HEAD on the tracker body (marker `<!-- ai:security-audit-last-sha:… -->`); the next run skips entirely when HEAD is unchanged (`SECURITY_AUDIT_SKIP_IF_UNCHANGED=true`, log-only skip) and otherwise diff-scopes the audit to the commits since that SHA (`SECURITY_AUDIT_INCREMENTAL=true`; the post-filter drops findings citing unchanged files as `suppressed_out_of_scope`; first runs, history rewrites, and >200-file diffs fall back to the full scope). `.github/workflows/internal-clarify.yml` skips `ai:security-audit` issues so tracker bookkeeping never recurses into the normal clarify/plan pipeline.

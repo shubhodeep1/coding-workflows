@@ -388,6 +388,27 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_memory_maintenance_contract_noop.py
 
+      - name: Merged-PR commit guard hook tests (CLAUDE.md §21)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_merge_status_guard.py
+
+      - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
+        # Drives scripts/review_merge_train.sh through a fake `gh` and pins
+        # the per-run file-list cache (one GET /pulls/{n}/files per distinct
+        # PR per release tick), plus _parse_reset_header's Retry-After
+        # precedence in scripts/gh_helpers.sh.
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_review_merge_train.py \
+            tests/test_gh_helpers_parse_reset_header.py
+
+      - name: PR-watch guard hook tests (CLAUDE.md §25)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_watch_guard.py
+
       - name: Orchestrate lib unit tests
         run: |
           set -euo pipefail
@@ -491,6 +512,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_consumer_artifact_cleanup_preserves_tracked.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_post_capture_evolution.py
 

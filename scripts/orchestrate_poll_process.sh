@@ -2954,6 +2954,62 @@ _find_all_linked_prs()
 	} | grep -E '^[0-9]+$' | sort -u
 }
 
+# _linked_pr_is_issue_implementation — Decide whether a PR surfaced by
+# _find_all_linked_prs is plausibly the issue's OWN implementation PR, as
+# opposed to an unrelated PR that merely mentions the issue.
+#
+# The timeline cross-reference strategy inside _find_all_linked_prs
+# returns every PR whose body or comments contain `#<n>`, and CLAUDE.md
+# §19 requires exactly that (`Refs #<n>`) for semantic linkage.  Without
+# this filter, close_linked_pr treated any rule-following tooling fix
+# that cited a stalled issue as the issue's implementation PR and closed
+# it unmerged: PR #3991 (branch claude/…, base main, a fix for the very
+# bug that stalled issue #3990) was closed that way while green and fully
+# reviewed, even though the stall judge had recorded that its head did
+# not match the integration branch.
+#
+# Args:
+#   issue_num  — the stalled issue
+#   head_ref   — the candidate PR's head branch name
+#   body       — the candidate PR's body (may be empty)
+# Returns 0 (treat as the implementation PR) when either:
+#   - head_ref matches the orchestrator branch convention for the issue:
+#     `ai/issue-<n>`, `ai/<n>`, `ai-implement-<n>` or `ai-<n>`, optionally
+#     under a path prefix (`refs/heads/ai/issue-<n>`) and optionally
+#     followed by a non-word suffix (`ai/issue-<n>-retry`, `ai/<n>-<slug>`).
+#     This is the same family cancel_zombie_runs_for_issue matches, with a
+#     stricter trailing boundary (non-word-or-end rather than
+#     non-digit-or-end, see below); or
+#   - body carries a GitHub auto-close keyword targeting the issue.  This
+#     authorization check is stricter than _linked_prs_by_body_reference's
+#     broad candidate filter: it adds leading and ASCII non-word boundaries.
+# Returns 1 otherwise (cross-reference only).
+# The base branch is deliberately not consulted: matching it against the
+# issue's integration branch would need the issue body (one extra API
+# call per candidate, §15), and a close keyword already expresses the
+# author's intent unambiguously.  Issues no API calls.
+_linked_pr_is_issue_implementation()
+{
+	local issue_num="$1"
+	local head_ref="${2:-}"
+	local body="${3:-}"
+	[[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+	# Trailing boundary is a non-word character or end of line (same as the
+	# body keyword below; cancel_zombie_runs_for_issue uses the looser
+	# `([^0-9]|$)`), so `ai/issue-77a` / `ai/issue-77_x` are not treated as
+	# issue 77; `ai/issue-77-retry` and `ai/77-slug` still are.
+	if printf '%s\n' "${head_ref}" | grep -Eq "(^|/)(ai/(issue-)?|ai-(implement-)?)${issue_num}([^0-9A-Za-z_]|$)"; then
+		return 0
+	fi
+	# Keyword substrings inside larger words are rejected, and the trailing
+	# boundary is a non-word character or end of line, so neither
+	# `prefixes #77` nor `Closes #77a` targets issue 77.
+	if printf '%s\n' "${body}" | grep -Eiq "(^|[^[:alnum:]_-])(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#${issue_num}([^0-9A-Za-z_]|$)"; then
+		return 0
+	fi
+	return 1
+}
+
 # _resolve_linked_pr_fresh_by_branch — Deterministic fallback for a linked
 # PR's head-commit timestamp when the issue→PR cross-reference timeline (the
 # single source that feeds BOTH stall-freshness guards: the detect_stalls
@@ -4415,6 +4471,42 @@ security_pass_current_head_is_valid() {
   ' "${STATE_FILE}" >/dev/null 2>&1
 }
 
+# reconcile_tracking_body_after_security_pass_transition
+#
+# Re-render the tracking issue body from state after a security-pass state
+# transition so the `<!-- orchestrator:security-pass -->` block matches the
+# label and any alert comment the same transition posts.  The tick-level
+# reconcile sites run only on the merge_conflict and wave-status paths, while
+# security-pass paths otherwise leave the tick or begin a long-running audit
+# before reaching either.  In #3965, the body froze at the last synced clean pass
+# (`Status: passed`, SHA 75048a2c) while the label read
+# ai:security-pass-failed and state recorded `failed` at 56f71c8f.
+#
+# Call it between the state write and post_state_comment so the persisted
+# tracking_body_sync_hash rides the state comment already being posted.
+# The underlying reconcile hash-gates on tracking_body_sync_hash.  With
+# project_body_snapshot present, an unchanged body costs no API call; legacy
+# state without it first fetches the live issue body as its render template.
+# A changed body costs the single `gh issue edit` (plus the existing readiness
+# refresh when a final PR is open).  Fails open -- a render or edit failure is
+# a warning, never a reason to skip the transition.
+#
+# Unlike the tick-level callers this does NOT gate on a non-empty
+# integration branch or final PR: the body render reads only state, and
+# the two arguments feed only the readiness refresh, which already guards
+# itself on a numeric open final PR.  The transitions that fire with no
+# integration branch at all (security_pass_fail_closed "no integration
+# branch to audit") are exactly the ones a guard would silently skip.
+reconcile_tracking_body_after_security_pass_transition() {
+  local transition_final_pr transition_integration_branch
+  transition_final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+  transition_integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || true)"
+  [[ "${transition_final_pr}" =~ ^[0-9]+$ ]] || transition_final_pr=""
+  TRACKING_BODY_SYNC_STATE_CHANGED="false"
+  reconcile_tracking_issue_body_from_state "${transition_final_pr}" "${transition_integration_branch}" || true
+  return 0
+}
+
 security_pass_fail_closed() {
   local failure_reason="$1"
   local failure_detail="$2"
@@ -4427,6 +4519,7 @@ security_pass_fail_closed() {
     | .security_pass_head_sha = ""
     | .security_pass_active_fix_issues = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass"
   COMPLETION_STATUS_STATE_CHANGED="false"
@@ -4457,6 +4550,7 @@ render_security_pass_findings_table() {
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -4466,7 +4560,9 @@ findings = payload["findings"]
 
 
 def cell(value: object) -> str:
-	return " ".join(str(value).replace("|", "\\|").split())
+	rendered_cell = " ".join(str(value).replace("|", "\\|").split())
+	# Keep audit-generated prose from notifying users or cross-referencing issues.
+	return re.sub(r"#(?=\d)", "#\u200b", rendered_cell.replace("@", "@\u200b"))
 
 
 lines = [
@@ -4526,6 +4622,7 @@ security_pass_terminal_failure() {
     | .security_pass_head_sha = $head_sha
     | .security_pass_active_fix_issues = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-failed"
   post_tracking_comment "## ❌ Project security pass exhausted
@@ -4542,6 +4639,117 @@ ${exhausted_findings_table}}"
   tg_notify "Project #${TRACKING_NUM} security pass FAILED after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} fix cycles with ${finding_count} finding(s) remaining. Manual intervention required." "CRITICAL"
 }
 
+# resolve_security_pass_fix_successor <closed_issue_num>
+#
+# Resolve the live successor of a security-pass consolidated fix issue
+# that orchestrator stall recovery closed and re-issued.
+#
+# Why this exists: execute_stall_recovery_action's `close_and_reissue`
+# arm re-points *wave* state only — it rewrites `.issue_number_map` and
+# `.waves[].issues[].github_issue`, and both writes are gated on a
+# non-null `local_id`.  A security-pass consolidated fix issue is not a
+# wave issue, so the stall judge reports `local_id: null`, the re-point
+# is skipped, and `.security_pass_active_fix_issues` stays pinned to the
+# closed predecessor.  The next poll tick then reads that issue as
+# closed-without-merge and security_pass_closed_fix_failure fails the
+# whole project, demanding a human `/re-security-pass` — even though a
+# live successor is already moving through the normal pipeline and
+# usually merges.  Project #3965 lost two completed fix cycles this way:
+# fix issue #3990 was closed and re-issued as #3993 -> #3996 at
+# 2026-09-04T01:52Z, the project was failed at 01:59Z, and #3996's fix
+# merged at 18:18Z against a project that had already been reset to
+# cycle 0 by the operator's `/re-security-pass`.
+#
+# Resolution uses the durable body markers `- Tracking issue: #<N>` and
+# "- Local ID: `security-pass-fix-cycle-<K>`", which survive re-issue
+# because stall recovery copies the original body verbatim and appends
+# its footer.  This is the same marker contract, the same single
+# paginated managed-issue listing, and the same jq shape that
+# create_security_pass_fix_issue's dedupe lookup already relies on.
+#
+# API cost (§15): one paginated `GET /issues?state=open&labels=
+# ai:orchestrator-managed` page walk, issued only on the
+# closed-without-merged-PR branch — never on an ordinary poll tick, and
+# never once the successor has been adopted into state.  No cycle-local
+# cache can serve it: ACTIVE_WORKFLOW_ISSUES holds only
+# workflow-active numbers, _candidate_details_json only known
+# candidates, and STALL_MANAGED_LINKED_PR_CACHE only state-known
+# stalled issues — a stall-recovery successor is in none of them on the
+# tick that first observes the predecessor closed.
+#
+# Args:
+#   closed_issue_num — the fix issue number recorded in state
+# Stdout:
+#   successor issue number on a confirmed match; empty otherwise
+# Returns:
+#   0 — successor found (number on stdout)
+#   1 — lookup succeeded and no successor exists
+#   2 — lookup inconclusive (API or parse failure).  Callers MUST retain
+#       the fixing state and retry rather than terminalize the project,
+#       mirroring the fail-closed dedupe contract established for
+#       create_security_pass_fix_issue.
+resolve_security_pass_fix_successor() {
+  local closed_issue_num="$1"
+  local security_pass_successor_local_id security_pass_successor_cycles
+  local security_pass_successor_pages_file security_pass_successor_jq_error_file
+  local security_pass_successor_number
+
+  [[ "${closed_issue_num}" =~ ^[0-9]+$ ]] || return 2
+
+  if ! security_pass_successor_cycles="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}" 2>/dev/null)"; then
+    return 2
+  fi
+  if ! [[ "${security_pass_successor_cycles}" =~ ^[0-9]+$ ]]; then
+    return 2
+  fi
+  security_pass_successor_local_id="security-pass-fix-cycle-$((security_pass_successor_cycles + 1))"
+
+  security_pass_successor_pages_file="${RUNTIME_DIR}/security_pass_successor_${TRACKING_NUM}_${closed_issue_num}.json"
+  security_pass_successor_jq_error_file="${security_pass_successor_pages_file}.jq.err"
+  rm -f "${security_pass_successor_pages_file}" "${security_pass_successor_jq_error_file}"
+  if ! gh_retry_to_file "${security_pass_successor_pages_file}" gh api --paginate --method GET \
+    "repos/${GITHUB_REPOSITORY}/issues" \
+    -f state=open \
+    -f labels="ai:orchestrator-managed" \
+    -f per_page=100; then
+    rm -f "${security_pass_successor_pages_file}"
+    return 2
+  fi
+  if [ ! -s "${security_pass_successor_pages_file}" ]; then
+    rm -f "${security_pass_successor_pages_file}"
+    return 2
+  fi
+  if ! security_pass_successor_number="$(jq -sr \
+    --arg tracking_marker "- Tracking issue: #${TRACKING_NUM}" \
+    --arg local_id_marker "- Local ID: \`${security_pass_successor_local_id}\`" \
+    --argjson closed_issue "${closed_issue_num}" '
+      if length == 0 or (all(.[]; type == "array") | not) then
+        error("managed-issue pagination output must contain JSON arrays")
+      else
+        [
+          .[][]
+          | select(.pull_request | not)
+          | select(.number != $closed_issue)
+          | select(
+              (((.body // "") | split("\n") | index($tracking_marker)) != null)
+              and (((.body // "") | split("\n") | index($local_id_marker)) != null)
+            )
+          | .number
+          | select(type == "number" and . > 0)
+        ] | max // empty
+      end
+    ' "${security_pass_successor_pages_file}" 2>"${security_pass_successor_jq_error_file}")"; then
+    rm -f "${security_pass_successor_pages_file}" "${security_pass_successor_jq_error_file}"
+    return 2
+  fi
+  rm -f "${security_pass_successor_pages_file}" "${security_pass_successor_jq_error_file}"
+  if [[ "${security_pass_successor_number}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "${security_pass_successor_number}"
+    return 0
+  fi
+  return 1
+}
+
 security_pass_closed_fix_failure() {
   local issue_number="$1"
 
@@ -4552,6 +4760,7 @@ security_pass_closed_fix_failure() {
     | .security_pass_head_sha = ""
     | .security_pass_active_fix_issues = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-failed"
   post_tracking_comment "## ❌ Project security-pass fix did not merge
@@ -4943,6 +5152,7 @@ PY
     | del(.security_pass_fix_reissue_count)
     | del(.security_pass_fix_defer)
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-fixing"
   if [[ "${security_pass_fix_action}" = "created consolidated fix issue" ]]; then
@@ -5003,6 +5213,30 @@ run_security_pass_inline() {
   if security_pass_current_head_is_valid "${current_head_sha}"; then
     return 0
   fi
+  # A recorded clean pass that no longer matches the current head means new
+  # commits landed after that audit -- a `chore: sync <default> into
+  # <integration>` merge, a resolver/judge conflict resolution, or a fix PR.
+  # `security_pass_cycle` bounds *persistent* findings: consecutive fix cycles
+  # that failed to clear the same audit.  A proven-clean audit breaks that
+  # chain, so carrying the spent budget across the invalidation terminalizes
+  # the project on the first finding in the newly-arrived code without ever
+  # granting it a fix cycle.  Incident: project #3965 passed at 75048a2c with
+  # the budget already at 3/3, a routine `chore: sync main into
+  # orchestrator/project-3965` merge advanced the head to 56f71c8f, and the
+  # re-audit's 2 findings went straight to security_pass_terminal_failure with
+  # zero cycles spent on them.  Completion still requires a clean SHA-bound
+  # pass at the current head (security_pass_current_head_is_valid above), so a
+  # fresh budget cannot let unaudited code through -- it only restores the fix
+  # loop those findings are entitled to.
+  if [ "${prior_security_status}" = "passed" ]; then
+    if jq '.security_pass_cycle = 0' "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null \
+      && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      echo "SECURITY_PASS_CYCLE_BUDGET_RESET tracking_issue=${TRACKING_NUM} reason=head_advanced_after_clean_pass head_sha=${current_head_sha}"
+    else
+      rm -f "${STATE_FILE}.tmp"
+      echo "::warning::Could not reset the security-pass fix-cycle budget for tracking issue #${TRACKING_NUM} after the audited head advanced to ${current_head_sha}; the previous budget stands."
+    fi
+  fi
 
   for required_security_asset in \
     scripts/security_audit.sh \
@@ -5062,6 +5296,7 @@ run_security_pass_inline() {
     | .security_pass_head_sha = ""
     | .security_pass_active_fix_issues = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass"
   echo "SECURITY_PASS_STARTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} base_sha=${merge_base_sha}"
@@ -5137,6 +5372,7 @@ run_security_pass_inline() {
       | .security_pass_head_sha = ""
       | .security_pass_active_fix_issues = []
     ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    reconcile_tracking_body_after_security_pass_transition
     post_state_comment || true
     echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} reason=head_changed_during_audit"
     return 1
@@ -5152,6 +5388,7 @@ run_security_pass_inline() {
   if [ "${finding_count}" -eq 0 ]; then
     jq '.status = "in_progress" | .security_pass_active_fix_issues = []' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    reconcile_tracking_body_after_security_pass_transition
     post_state_comment || true
     echo "SECURITY_PASS_CLEAN tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha}"
     return 0
@@ -10444,16 +10681,35 @@ close_linked_pr() {
   while IFS= read -r pr_num; do
     [[ "${pr_num}" =~ ^[0-9]+$ ]] || continue
     scanned=$((scanned + 1))
-    local pr_state
-    pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" --jq '.state' | grep -xE 'open|closed|merged' || echo "")"
-    if [ "${pr_state}" = "open" ]; then
-      echo "  close_linked_pr: closing linked PR #${pr_num} for issue #${issue_num} (state=open)."
-      if gh_retry gh pr close "${pr_num}" --repo "${GITHUB_REPOSITORY}" \
-          --comment "${close_reason}" 2>/dev/null; then
-        closed=$((closed + 1))
-      fi
-    else
+    # One `pulls/<n>` request per candidate (§15): the same call that
+    # answers "is it still open?" also carries the head ref and body the
+    # implementation-PR filter below needs, so its --jq is extended rather
+    # than issuing a second request.  A failed call yields an empty blob,
+    # which parses to state="" and is skipped as unknown, exactly as the
+    # previous `.state`-only lookup behaved.
+    local pr_meta_json pr_state pr_head_ref pr_base_ref pr_body
+    pr_meta_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" \
+      --jq '{state: (.state // ""), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), body: (.body // "")}' || echo "")"
+    pr_state="$(printf '%s' "${pr_meta_json}" | jq -r '.state // ""' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
+    pr_head_ref="$(printf '%s' "${pr_meta_json}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
+    pr_base_ref="$(printf '%s' "${pr_meta_json}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
+    pr_body="$(printf '%s' "${pr_meta_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+    if [ "${pr_state}" != "open" ]; then
       echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (state=${pr_state:-unknown})."
+      continue
+    fi
+    # Only the issue's own implementation PR is closed.  A PR that merely
+    # cross-references the issue from an unrelated branch (see
+    # _linked_pr_is_issue_implementation) is left open and logged so the
+    # skip leaves the same trail the other outcomes do.
+    if ! _linked_pr_is_issue_implementation "${issue_num}" "${pr_head_ref}" "${pr_body}"; then
+      echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (cross-reference only; head=${pr_head_ref:-?} does not match the issue's implementation branch pattern and the body carries no close keyword; base=${pr_base_ref:-?} is shown for context and is not evaluated)."
+      continue
+    fi
+    echo "  close_linked_pr: closing linked PR #${pr_num} for issue #${issue_num} (state=open)."
+    if gh_retry gh pr close "${pr_num}" --repo "${GITHUB_REPOSITORY}" \
+        --comment "${close_reason}" 2>/dev/null; then
+      closed=$((closed + 1))
     fi
   done <<< "${pr_nums}"
   echo "  close_linked_pr: issue=#${issue_num} scanned=${scanned} closed=${closed}"
@@ -10480,6 +10736,12 @@ close_linked_pr() {
 #   - issue body lacks the "Re-issued from #<n>" marker (i.e. it is the
 #     original task, not itself a re-issue — still a gap but not Gap 2)
 #   - issue has at least one linked PR per _find_all_linked_prs
+#     (the BROAD set, on purpose: this helper only surfaces a warning and
+#     never blocks recovery, so it errs toward silence rather than paying
+#     one `pulls/<n>` request per candidate (§15) to apply the
+#     _linked_pr_is_issue_implementation filter that close_linked_pr
+#     uses.  A cross-reference-only PR can therefore suppress the Gap-2
+#     signal; close_linked_pr will still leave that PR open.)
 #
 # Fail-open on every underlying call; the surfacing is best-effort and
 # must never block stall recovery.
@@ -10848,6 +11110,35 @@ sys.exit(1)
 " "${file_path}" 2>> "${parse_log}" || echo ""
 }
 
+# Swap ai:implementing -> ai:awaiting-approval before a stall-recovery
+# /approved re-trigger of the implement phase.
+#
+# The implement workflow precheck ("Precheck approval phase label" in
+# implement.yml) skips with reason=already_implementing while ai:implementing
+# is present and with reason=wrong_phase while ai:awaiting-approval is absent.
+# A stalled issue still carries ai:implementing from the failed run, so the
+# label must be moved back BEFORE the /approved comment is posted; otherwise
+# the re-triggered run exits at the precheck in a few seconds with conclusion
+# "success", no PR and no diagnostics, and the stall clock keeps running
+# until the judge closes and re-issues (issues #3990 / #3993, implement runs
+# 33837705036 and 33846524770).
+#
+# Shared by the managed arm (execute_stall_recovery_action) and the standalone
+# arm (run_standalone_stall_recovery) so both re-triggers use one contract.
+# Issues exactly one gh call. Fail-open: on failure it emits a ::warning and
+# returns 1; callers still post /approved so a transient label error never
+# suppresses the re-trigger.
+_reset_implementing_to_awaiting_approval_for_retrigger()
+{
+  local issue_num="$1"
+  if gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+    --remove-label 'ai:implementing' --add-label 'ai:awaiting-approval' >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "::warning::Failed to swap ai:implementing → ai:awaiting-approval for issue #${issue_num}; /approved retrigger may no-op if label state is unchanged."
+  return 1
+}
+
 execute_stall_recovery_action() {
   local issue_num="$1"
   local phase="$2"
@@ -10985,11 +11276,9 @@ STALL_EOF
       # still carries ai:implementing from the previous run, so we must
       # swap the label back to ai:awaiting-approval BEFORE posting
       # /approved; otherwise the re-triggered workflow will no-op and the
-      # stall recovery loops forever.
-      if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
-        --remove-label 'ai:implementing' --add-label 'ai:awaiting-approval' >/dev/null 2>&1; then
-        echo "::warning::Failed to swap ai:implementing → ai:awaiting-approval for issue #${issue_num}; /approved retrigger may no-op if label state is unchanged."
-      fi
+      # stall recovery loops forever. Shared with the standalone arm via
+      # _reset_implementing_to_awaiting_approval_for_retrigger.
+      _reset_implementing_to_awaiting_approval_for_retrigger "${issue_num}" || true
       local _retrigger_implement_rc=0
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
         -f body="$(cat <<'STALL_EOF'
@@ -11043,6 +11332,11 @@ STALL_EOF
         _rtr_pr_json="${STALL_IMPL_PR_JSON:-}"
         if [ -z "${_rtr_pr_json}" ] || [ "${_rtr_pr_json}" = "{}" ]; then
           _rtr_pr_json="$(_fetch_pr_json "${pr_num}")"
+        fi
+        if _linked_pr_is_merge_queued "${_rtr_pr_json}"; then
+          echo "STALL_SKIP issue=${issue_num} reason=merge_train_queued pr=${pr_num} phase=${phase} action=retrigger_review"
+          STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_merge_train"
+          return 1
         fi
         head_ref="$(_jq_field "${_rtr_pr_json}" '.head.ref')"
         _rtr_mergeable="$(_jq_field "${_rtr_pr_json}" '.mergeable' 'true|false')"
@@ -12105,6 +12399,7 @@ _fetch_candidate_issue_details_graphql() {
                   __typename
                   ... on PullRequest {
                     number state merged
+                    labels(first: 100) { nodes { name } }
                     mergedAt
                     headRefName
                     headRefOid
@@ -12160,6 +12455,7 @@ _fetch_candidate_issue_details_graphql() {
                       number: .number,
                       state: .state,
                       merged: (.merged // false),
+                      labels: [(.labels.nodes // [])[]?.name],
                       merged_at: (.mergedAt // null),
                       merge_commit_sha: (.mergeCommit.oid // null),
                       head_ref: (.headRefName // null),
@@ -12190,13 +12486,14 @@ _fetch_candidate_issue_details_graphql() {
 # _fetch_linked_pr_status_graphql — Batch-fetch latest-linked-PR state
 # for a list of issue numbers via a single GraphQL query per batch.
 # Lighter than _fetch_candidate_issue_details_graphql (only timeline
-# items, no labels/comments) and used by the orchestrator-managed
+# items and linked-PR labels, no issue labels/comments) and used by the orchestrator-managed
 # stall recovery loop, which already has its own label/state source
 # of truth.
 #
 # Input: JSON array of issue numbers, e.g. "[123, 456]"
 # Output: JSON object keyed by stringified issue number:
-#   { "123": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,"headPushedAt":"ISO8601"|null},
+#   { "123": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,
+#              "labels":[string],"headPushedAt":"ISO8601"|null},
 #     "456": null, ... }
 # `headPushedAt` is the linked PR's head commit pushedDate (coalesced
 # to committedDate when pushedDate is null).  Consumed by
@@ -12245,6 +12542,7 @@ _fetch_linked_pr_status_graphql() {
                   __typename
                   ... on PullRequest {
                     number state merged
+                    labels(first: 100) { nodes { name } }
                     repository { nameWithOwner }
                     commits(last: 1) { nodes { commit { pushedDate committedDate } } }
                   }
@@ -12287,6 +12585,7 @@ _fetch_linked_pr_status_graphql() {
                   number: .number,
                   state: .state,
                   merged: (.merged // false),
+                  labels: [(.labels.nodes // [])[]?.name],
                   headPushedAt: (
                     ((.commits.nodes // [])[0].commit.pushedDate)
                     // ((.commits.nodes // [])[0].commit.committedDate)
@@ -12309,7 +12608,7 @@ _fetch_linked_pr_status_graphql() {
 
 # _single_issue_linked_pr_status_graphql — convenience wrapper around
 # _fetch_linked_pr_status_graphql for cache-miss paths.  Returns the
-# same per-issue JSON entry ({number,state,merged,headPushedAt} or
+# same per-issue JSON entry ({number,state,merged,labels,headPushedAt} or
 # null) while keeping the common path batched.
 _single_issue_linked_pr_status_graphql() {
   local issue_num="$1"
@@ -12321,6 +12620,26 @@ _single_issue_linked_pr_status_graphql() {
   local _single_resp
   _single_resp="$(_fetch_linked_pr_status_graphql "[$issue_num]")"
   printf '%s' "${_single_resp}" | jq -c --arg n "${issue_num}" '.[$n] // null' 2>/dev/null || echo "null"
+}
+
+# Accept both the batched GraphQL label shape ([string]) and a full REST PR
+# payload ([{name:string}]). Only an explicitly open, unmerged PR can wait in
+# the train; missing/malformed state or labels fail open to normal recovery.
+_linked_pr_is_merge_queued()
+{
+  local linked_json="$1"
+  [ -n "${linked_json}" ] && [ "${linked_json}" != "null" ] && [ "${linked_json}" != "{}" ] || return 1
+  printf '%s' "${linked_json}" | jq -e '
+    select(type == "object")
+    | select(((.state // "") | ascii_downcase) == "open")
+    | select((.merged // false) != true)
+    | [(.labels // [])[]?
+      | if type == "string" then .
+        elif type == "object" then (.name // empty)
+        else empty
+        end]
+    | index("ai:merge-queued") != null
+  ' >/dev/null 2>&1
 }
 
 # _pr_json_closes_issue — conservative closing-keyword check used only
@@ -13047,6 +13366,25 @@ PY
       # falling back to the legacy timeline/body heuristics.
       _std_linked_json="$(_single_issue_linked_pr_status_graphql "${issue_num}")"
     fi
+    if [ "${phase}" = "ai:done" ] && { [ -z "${_std_linked_json}" ] || [ "${_std_linked_json}" = "null" ] || [ "${_std_linked_json}" = "{}" ]; }; then
+      # Batch + single-query miss: reuse the established implementation-PR
+      # resolver before any stall judge, conflict dispatch, or empty commit.
+      if _resolve_issue_implementation_pr "${issue_num}"; then
+        _std_linked_json="$(printf '%s' "${STALL_IMPL_PR_JSON}" | jq -c '{
+          number: (.number // null), state: (.state // null), merged: (.merged // false),
+          labels: [(.labels // [])[]? | if type == "object" then (.name // empty) else . end],
+          head_ref: (.head.ref // null), head_sha: (.head.sha // null),
+          mergeable: (.mergeable // null), merge_state_status: (.mergeable_state // null)
+        }' 2>/dev/null || echo "null")"
+      fi
+    fi
+    if [ "${phase}" = "ai:done" ] && _linked_pr_is_merge_queued "${_std_linked_json}"; then
+      echo "STALL_SKIP issue=${issue_num} reason=merge_train_queued pr=$(printf '%s' "${_std_linked_json}" | jq -r '.number // "unknown"') phase=${phase} action=${action}"
+      if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+      fi
+      continue
+    fi
     if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
       echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}' and tagging ai:merged."
       _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
@@ -13205,6 +13543,7 @@ PY
               _std_conflict_linked="$(printf '%s' "${_std_conflict_pr_json_try}" | jq -c '{
                 number: (.number // null),
                 state: (.state // null),
+                labels: [(.labels // [])[]? | if type == "object" then (.name // empty) else . end],
                 head_ref: (.head.ref // null),
                 head_sha: (.head.sha // null),
                 mergeable: (if .mergeable == null then null else (.mergeable | tostring) end),
@@ -13231,6 +13570,14 @@ PY
             fi
           done
         fi
+      fi
+
+      if _linked_pr_is_merge_queued "${_std_conflict_linked}"; then
+        echo "STALL_SKIP issue=${issue_num} reason=merge_train_queued pr=$(printf '%s' "${_std_conflict_linked}" | jq -r '.number // "unknown"') phase=${phase} action=${action}"
+        if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+          write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+        fi
+        continue
       fi
 
       if _check_open_pr_conflict_guard "${issue_num}" "${_std_conflict_linked}"; then
@@ -13400,6 +13747,11 @@ STALL_EOF
         took_action="true"
         ;;
       retrigger_implement)
+        # Same precheck gate as the managed arm in execute_stall_recovery_action:
+        # without this swap the /approved below fires an implement run that
+        # exits at "Precheck approval phase label" with
+        # reason=already_implementing and never reaches the editor.
+        _reset_implementing_to_awaiting_approval_for_retrigger "${issue_num}" || true
         local _std_retrigger_implement_rc=0
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /approved
@@ -14034,6 +14386,17 @@ recover_stalled_issue() {
   local _fresh_lpr_entry="null"
   if [ -n "${STALL_MANAGED_LINKED_PR_CACHE:-}" ]; then
     _fresh_lpr_entry="$(printf '%s' "${STALL_MANAGED_LINKED_PR_CACHE}" | jq -c --arg n "${issue_num}" '.[$n] // null' 2>/dev/null || echo "null")"
+  fi
+  if [ "${phase}" = "ai:done" ] && { [ -z "${_fresh_lpr_entry}" ] || [ "${_fresh_lpr_entry}" = "null" ] || [ "${_fresh_lpr_entry}" = "{}" ]; }; then
+    # Fail-open batch miss: resolve the implementation PR once before a
+    # queued PR can enter the stall judge or recovery executor.
+    if _resolve_issue_implementation_pr "${issue_num}"; then
+      _fresh_lpr_entry="${STALL_IMPL_PR_JSON}"
+    fi
+  fi
+  if [ "${phase}" = "ai:done" ] && _linked_pr_is_merge_queued "${_fresh_lpr_entry}"; then
+    echo "STALL_SKIP issue=${issue_num} reason=merge_train_queued pr=$(printf '%s' "${_fresh_lpr_entry}" | jq -r '.number // "unknown"') phase=${phase} action=${action}"
+    return 1  # Intentional train wait; do not consume stall budget or alert.
   fi
   if _check_merged_pr_guard "${issue_num}" "${_fresh_lpr_entry}"; then
     echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action}"
@@ -14787,6 +15150,47 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
         set_tracking_phase_label "ai:security-pass"
         PROJECT_STATUS="security-pass"
       elif [ "${SECURITY_FIX_STATE}" = "closed" ]; then
+        # A closed fix issue is not automatically a failed fix.  Orchestrator
+        # stall recovery closes a stalled issue and immediately re-issues it
+        # (execute_stall_recovery_action -> close_and_reissue), but only
+        # re-points wave state, which a security-pass fix issue does not have
+        # (the stall judge reports `local_id: null` for it).  Adopt the live
+        # successor before terminalizing, or the project is failed out from
+        # under a replacement issue that is still in the pipeline.  See
+        # resolve_security_pass_fix_successor for the incident this closes.
+        SECURITY_FIX_SUCCESSOR=""
+        SECURITY_FIX_SUCCESSOR_RC=0
+        SECURITY_FIX_SUCCESSOR="$(resolve_security_pass_fix_successor "${SECURITY_FIX_ISSUE}")" \
+          || SECURITY_FIX_SUCCESSOR_RC=$?
+        if [ "${SECURITY_FIX_SUCCESSOR_RC}" -eq 2 ]; then
+          echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE} is closed without merged-PR evidence, but the stall-recovery successor lookup was inconclusive; retaining fixing state for retry."
+          continue
+        fi
+        if [ "${SECURITY_FIX_SUCCESSOR_RC}" -eq 0 ] && [[ "${SECURITY_FIX_SUCCESSOR}" =~ ^[0-9]+$ ]]; then
+          echo "SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED tracking_issue=${TRACKING_NUM} closed_issue=${SECURITY_FIX_ISSUE} successor=${SECURITY_FIX_SUCCESSOR}"
+          if jq --argjson successor "${SECURITY_FIX_SUCCESSOR}" \
+            '.security_pass_active_fix_issues = [$successor]' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+            :
+          else
+            rm -f "${STATE_FILE}.tmp" || true
+            echo "::warning::Security-pass successor #${SECURITY_FIX_SUCCESSOR} could not be persisted for tracking issue #${TRACKING_NUM}; retaining fixing state for retry."
+            continue
+          fi
+          reconcile_tracking_body_after_security_pass_transition
+          post_state_comment || true
+          post_tracking_comment "## 🔁 Security-pass fix issue re-issued
+
+Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall recovery and re-issued as #${SECURITY_FIX_SUCCESSOR}. Tracking the successor; completion remains gated until it merges and a clean re-audit passes."
+          COMPLETION_STATUS_STATE_CHANGED="false"
+          update_completion_status_comment "waiting" \
+            "## Completion status"$'\n\n'"**State:** \`security-pass-fixing\`"$'\n\n'"Security-pass fix issue #${SECURITY_FIX_SUCCESSOR} (re-issued from #${SECURITY_FIX_ISSUE}) is in the normal delivery pipeline. Completion remains gated until it merges and a clean current-head re-audit passes." \
+            || true
+          if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+            post_state_comment || true
+          fi
+          continue
+        fi
         echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} reason=fix_issue_closed_without_merged_pr issue=${SECURITY_FIX_ISSUE}"
         security_pass_closed_fix_failure "${SECURITY_FIX_ISSUE}"
         continue
@@ -15366,6 +15770,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
         | del(.security_pass_fix_reissue_count)
         | del(.security_pass_fix_defer)
       ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      reconcile_tracking_body_after_security_pass_transition
       post_state_comment || true
       set_tracking_phase_label "ai:security-pass"
       post_tracking_comment "<!-- re-security-pass-dedup:${RE_SECURITY_PASS_COMMENT_ID} -->
@@ -16577,6 +16982,14 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       echo "  Issue #${ip_issue}: PR #${IP_PR} state=${IP_PR_STATE} mergeable=${IP_MERGEABLE}, skipping."
       continue
     fi
+    # Merge-train queued PRs (scripts/review_merge_train.sh) wait for an
+    # older overlapping PR to merge; resolving their conflicts now would be
+    # redone after that merge. The train releases them (and their review
+    # run resolves the conflict pre-review) once the blockers are gone.
+    if printf '%s' "${_ip_pr_json}" | jq -e '[.labels[]?.name] | index("ai:merge-queued")' >/dev/null 2>&1; then
+      echo "  Issue #${ip_issue}: PR #${IP_PR} is ai:merge-queued (merge train); skipping conflict dispatch until released."
+      continue
+    fi
     echo "  Issue #${ip_issue} has PR #${IP_PR} with merge conflicts. Running Codex conflict resolution..."
 
     _ip_head_sha="$(_jq_field "${_ip_pr_json}" '.head.sha')"
@@ -17452,13 +17865,37 @@ sys.exit(1)
                   : # self-repo or unknown — keep files; consumer-repo-only cleanup
                   ;;
                 *)
-                  rm -f ./pre_assembled_static.txt
-                  rm -f unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md
-                  rm -f scripts/git_ref_health_check.sh \
-                    scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
-                    scripts/codex_model_catalog.json
-                  rm -rf .github/prompts .github/scripts
-                  rm -f .github/ai/orchestrate_schema.v1.json
+                  # Never delete a path the consumer repo actually TRACKS.
+                  # The staging pass below runs `git add -A`, which records a
+                  # working-tree deletion as a real deletion in the commit and
+                  # silently drops a repo-owned file.  A consumer repo may own
+                  # a root-level `agents.md` (CLAUDE.md §22.C / §24.F record
+                  # DigitalOcean and Cloudflare resource IDs there), which
+                  # collides with the workflow-staged artifact of the same
+                  # name.  The git-remote-URL gate above stops this block from
+                  # running against the coding-workflows checkout itself
+                  # (PRs #917/#931); this per-path guard is the second layer,
+                  # for consumer repos that legitimately track one of these
+                  # names.  Mirrors scripts/review_commit_changes.sh.
+                  for _orch_cleanup_artifact in \
+                    pre_assembled_static.txt unattended_system_instructions.md ai_pipeline.md agents.md probably_unnecessary_but_read_if_stuck.md \
+                    scripts/git_ref_health_check.sh scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh \
+                    scripts/codex_model_catalog.json \
+                    .github/prompts .github/scripts \
+                    .github/ai/orchestrate_schema.v1.json; do
+                    if git ls-files --error-unmatch -- "${_orch_cleanup_artifact}" >/dev/null 2>&1; then
+                      echo "Preserving repo-tracked path during artifact cleanup: ${_orch_cleanup_artifact}"
+                      case "${_orch_cleanup_artifact}" in
+                        scripts/git_ref_health_check.sh|scripts/tg_helpers.sh|scripts/codex_model_catalog.json|.github/ai/orchestrate_schema.v1.json)
+                          # Bootstrap overwrites these paths before the judge runs.
+                          git restore --source=HEAD --worktree -- "${_orch_cleanup_artifact}"
+                          ;;
+                      esac
+                      continue
+                    fi
+                    rm -rf -- "${_orch_cleanup_artifact}"
+                  done
+                  unset _orch_cleanup_artifact
                   ;;
               esac
               unset _orig_origin_url
@@ -19778,6 +20215,10 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	S_HEAD_REF="$(echo "${S_PR_JSON}" | jq -r '.head.ref // ""')"
 	if [ -z "${S_HEAD_REF}" ] || [ "${S_HEAD_REF}" = "null" ]; then
 		echo "::warning::Standalone PR #${S_PR} has unavailable head ref from API. Skipping conflict dispatch path."
+		continue
+	fi
+	if _linked_pr_is_merge_queued "${S_PR_JSON}"; then
+		echo "  PR #${S_PR} is ai:merge-queued (merge train); skipping standalone conflict recovery until released."
 		continue
 	fi
 

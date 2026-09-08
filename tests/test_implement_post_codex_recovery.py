@@ -3407,8 +3407,39 @@ def test_blocked_already_satisfied_regexes_classify_real_verdicts() -> None:
 		)
 		return proc.returncode == 0
 
+	# The veto reads only a conservatively detected first sentence. Pin the
+	# extraction and abbreviation fallback so this helper cannot drift from it.
+	first_sentence_sed = "s/[.!?][[:space:]]+[[:upper:][:digit:]].*$//"
+	first_sentence_abbreviation = (
+		r"(^|[^[:alpha:]])(([[:alpha:]]\.)+[[:alpha:]]|etc|vs|cf|mr|mrs|ms|dr|prof|sr|jr|st)$"
+	)
+	assert (
+		"if ! codex_blocked_first_sentence=\"$(printf '%s' \"${codex_blocked_reason}\" "
+		f"| sed -E '{first_sentence_sed}')\"; then"
+	) in block, "the workflow must fail closed when first-sentence extraction fails"
+	assert (
+		f"grep -qiE '{first_sentence_abbreviation}'"
+	) in block, "the workflow must fail closed on ambiguous abbreviation boundaries"
+	assert (
+		'! printf \'%s\' "${codex_blocked_first_sentence}" | grep -qiE "${BLOCKED_REAL_OBSTACLE_REGEX}"'
+	) in block, "the real-obstacle veto must read the first sentence, not the whole reason"
+
+	def _first_sentence(reason: str) -> str:
+		proc = subprocess.run(
+			["sed", "-E", first_sentence_sed],
+			input=reason,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+		if proc.returncode != 0 or not proc.stdout:
+			return reason
+		if _grep(first_sentence_abbreviation, proc.stdout):
+			return reason
+		return proc.stdout
+
 	def _is_success_noop(reason: str) -> bool:
-		return _grep(positive, reason) and not _grep(negative, reason)
+		return _grep(positive, reason) and not _grep(negative, _first_sentence(reason))
 
 	# Verbatim verdict from run 33711184784 attempt 1 (issue #3972).
 	assert _is_success_noop(
@@ -3419,6 +3450,45 @@ def test_blocked_already_satisfied_regexes_classify_real_verdicts() -> None:
 	assert _is_success_noop("BLOCKED: The requested gate is already implemented on main.")
 	assert _is_success_noop("BLOCKED: No repository changes are required.")
 	assert _is_success_noop("BLOCKED: Nothing to do; the index already exists.")
+
+	# Verbatim verdict from run 34125645374 attempt 1
+	# (tele-funtoken-msg-scoring issue #4090). The plan phase emitted
+	# "Files likely to change: None." because the remediation had already
+	# landed in PR #4075; the run then failed with an ERROR alert instead
+	# of closing the issue through the success-no-op path.
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires validation only; existing "
+		"remediation passed all 74 targeted tests, so no repository edit "
+		"is permitted."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires verification-only checks; no repository "
+		"change is permitted."
+	)
+
+	# Validation-only wording without an affirmative no-edit statement is not
+	# sufficient: work may remain or the phrase itself may be negated.
+	assert not _is_success_noop(
+		"BLOCKED: This is not validation-only work; the plan requires repository edits."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires validation only for phase 1; phase 2 "
+		"still requires repository edits."
+	)
+
+	# The validation-only branch must still yield to the real-obstacle veto.
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires validation only and no repository edit "
+		"is permitted, but pytest is unavailable in the runner."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires validation-only checks and no repository "
+		"edit is permitted, but the fixture database is inaccessible."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires validation only and no repository edit "
+		"is permitted, but the harness is broken."
+	)
 
 	# Real obstacles must keep failing.
 	assert not _is_success_noop("BLOCKED: scope-lock-violation file=scripts/x.py")
@@ -3437,6 +3507,75 @@ def test_blocked_already_satisfied_regexes_classify_real_verdicts() -> None:
 	)
 	assert not _is_success_noop(
 		"BLOCKED: the upstream API is missing, so no changes are required here."
+	)
+
+	# Verbatim verdicts from tele-funtoken-msg-scoring runs 34166170045,
+	# 34163969134, 34163977712, 34164219124, 34163478446, 34162543282 and
+	# 34162832548 (issues #4213, #4192, #4191, #4193, #4189, #4180, #4184).
+	# Thirteen auto-heal issues for one SES error each dispatched an implement
+	# run; the model found the fix already at HEAD, but `failures` / `lacks`
+	# in the trailing aside about the pre-existing test suite tripped the
+	# veto and every run went red with an ERROR alert.
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires no repository edits; existing fix "
+		"verified (121 targeted tests passed). Full suite has 6 unrelated failures."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires no repository changes; HEAD already "
+		"contains the fix. Targeted tests pass (148). Full suite has 6 unrelated "
+		"failures."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved verification-only plan requires no repository edit. "
+		"HEAD matches the planning ref; targeted tests pass (148). Full suite has "
+		"6 unrelated failures. Production deployment status is unknown."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan forbids repository changes because HEAD already "
+		"contains the fix. Focused tests passed; full suite lacks project "
+		"dependencies."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires no repository diff; any edit would "
+		"violate scope. Targeted tests pass (148); full suite has 6 unrelated "
+		"failures."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires no repository changes; fix already "
+		"exists. Targeted tests pass (148 total). Full suite has 5 unrelated "
+		"pre-existing failures."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan is verification-only; current HEAD already "
+		"contains the fix. Six issue-specific tests pass. No in-scope repository "
+		"change is justified."
+	)
+	assert _is_success_noop("BLOCKED: main already holds the requested gate.")
+
+	# First-sentence scoping is narrow: `;` and `,` do not end the sentence,
+	# so an obstacle joined to the verdict stays vetoed, and an obstacle
+	# stated as the opening sentence stays vetoed however the rest reads.
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires no edits; pytest is unavailable so "
+		"validation could not run."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires no edits, but the fixture database is "
+		"inaccessible. Targeted tests pass."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: No changes are required, e.g. DigitalOcean token is unavailable."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: DigitalOcean credential unavailable for approved "
+		"PROMO_EMAIL_SENDER configuration correction. No repository changes are "
+		"required."
+	)
+	# Verbatim from run 34168336869 (issue #4198): a genuine blocker with no
+	# already-satisfied claim at all.
+	assert not _is_success_noop(
+		"BLOCKED: DigitalOcean credential unavailable for approved "
+		"PROMO_EMAIL_SENDER configuration correction."
 	)
 
 
