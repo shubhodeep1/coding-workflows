@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:4800-4803 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, mistralai_mistral-small-2603]\n  PROBLEM: The label restoration `gh_retry gh issue edit --add-label 'ai:implementation-failed'` does not call `ensure_label_exists \"ai:implementation-failed\"` first.\n  WHY: If the repository label is missing, restoration fails silently and the next poll cannot re-enter the exhausted branch; severity was reported as NIT by deepseek and minimax but MAJOR by mistral, so the highest severity is used.\n- scripts/orchestrate_poll_process.sh:gh issue edit \"${issue_number}\" --repo \"${GITHUB_REPOSITORY}\" --add-label 'ai:implementation-failed' | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The label restoration uses a fail-open `|| true` that masks failures.\n  WHY: A transient API error or missing label can leave the issue without the retry label needed for recovery.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The re-issue and cap-exhaustion transitions call reconcile_tracking_body_after_security_pass_transition so the tracking body's Active fix issue line follows the successor... Covered by the additional test_security_pass_reissued_fix_rerenders_tracking_body_security_block.\"\n  expected_change_site: tests/test_orchestrate_poll_process.py around the new re-issue/cap-exhaustion regression block (around lines 4278-4663 in the diff).\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The cap-exhaustion transition is wired through scripts/orchestrate_poll_process.sh:4808, but no equivalent test sets project_body_snapshot with `Active fix issue: #700`, runs the poller with security_pass_fix_reissue_count=2, and asserts that the rendered body no longer references the closed predecessor.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:4802-4803 | severity=NIT | confidence=3\n  PROBLEM: The label restoration `gh_retry gh issue edit --add-label 'ai:implementation-failed'` in the terminal-state persistence failure branch of `security_pass_fix_reissue_exhausted` does not call `ensure_label_exists \"ai:implementation-failed\"` first.\n  WHY: If the repository's label set is missing `ai:implementation-failed` at the moment this branch executes, `gh issue edit --add-label` fails silently and the issue loses the label that the next poll requires to re-enter the implementation-failed handler.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py around the new re-issue/cap-exhaustion regression block (around lines 4278-4663 in the diff) | severity=NIT | confidence=3\n  PROBLEM: There is no equivalent test for cap-exhaustion body re-rendering.\n  WHY: The cap-exhaustion path is wired but no test sets project_body_snapshot with `Active fix issue: #700`, runs the poller with security_pass_fix_reissue_count=2, and asserts the rendered body no longer references the closed predecessor.\n- scripts/orchestrate_poll_process.sh:4800-4801 | severity=HARDENING_RISK_SCORE 1\n  PROBLEM: The newly added `gh_retry gh issue edit ... --add-label 'ai:implementation-failed'` call does not call `ensure_label_exists \"ai:implementation-failed\"` first.\n  WHY: If the repository's label set loses `ai:implementation-failed`, `gh issue edit --add-label` returns an error and the recovery path cannot restore the label.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:gh issue edit --add-label 'ai:implementation-failed' >/dev/null 2>&1 || true | severity=MAJOR | confidence=5\n  PROBLEM: The label restoration runs without first calling ensure_label_exists \"ai:implementation-failed\".\n  WHY: If the repository's label set is missing that label, the restoration fails silently and the next poll cannot re-enter the exhausted branch.\n- scripts/orchestrate_poll_process.sh:gh issue edit \"${issue_number}\" --repo \"${GITHUB_REPOSITORY}\" --add-label 'ai:implementation-failed' >/dev/null 2>&1 || true | severity=MAJOR | confidence=4\n  PROBLEM: The label restoration is performed with a fail-open `|| true` that masks failures.\n  WHY: A transient API error or missing label could prevent the label from being added, leaving the system in an inconsistent state where the exhausted issue cannot be properly tracked for recovery.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "8f6edde31894948d2cef92df03d1b03c58e417b2a3a2f9716d265d0eb57a4e14",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4054,
+    "run_id": "34213094948",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34213094948",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260908105228_6499bf082f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4054,
+    "run_id": "34213094948"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-08T10:52:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
