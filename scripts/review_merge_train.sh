@@ -109,33 +109,49 @@ fi
 
 # Paths changed by a PR, one per line, sorted. Cached per PR number for the
 # lifetime of the process (release examines many PRs against the same older
-# set). Prints nothing and returns 1 when the API call fails so callers can
-# fail open explicitly.
+# set).
+#
+# Output-variable API: `_mt_pr_files_into <varname> <pr>` assigns the list to
+# the caller's variable and returns 1 (leaving it untouched) when the API
+# call fails so callers can fail open explicitly. Callers MUST use this form
+# rather than `files="$(_mt_pr_files N)"`: a command substitution runs the
+# function in a subshell, so the cache write is discarded on return and every
+# queued PR re-fetched the same older PRs' file lists (CLAUDE.md §15). The
+# printing form `_mt_pr_files` is kept for compatibility and still fills the
+# cache when it is called directly (not inside `$(...)`).
+#
+# API budget: one paginated `GET /pulls/{n}/files` per distinct PR per run.
 declare -A _MT_FILES_CACHE=()
-_mt_pr_files() {
-	local pr="$1"
-	if [ -n "${_MT_FILES_CACHE[${pr}]+x}" ]; then
-		printf '%s' "${_MT_FILES_CACHE[${pr}]}"
+_mt_pr_files_into() {
+	local __mt_files_dest="$1" __mt_files_pr="$2" __mt_files_out=""
+	if [ -n "${_MT_FILES_CACHE[${__mt_files_pr}]+x}" ]; then
+		printf -v "${__mt_files_dest}" '%s' "${_MT_FILES_CACHE[${__mt_files_pr}]}"
 		return 0
 	fi
-	local out=""
-	if ! out="$(gh_retry gh api --paginate "repos/${MT_REPO}/pulls/${pr}/files?per_page=100" --jq '.[].filename' 2>/dev/null)"; then
+	if ! __mt_files_out="$(gh_retry gh api --paginate "repos/${MT_REPO}/pulls/${__mt_files_pr}/files?per_page=100" --jq '.[].filename' 2>/dev/null)"; then
 		return 1
 	fi
-	out="$(printf '%s\n' "${out}" | sed '/^$/d' | sort -u)"
-	_MT_FILES_CACHE[${pr}]="${out}"
-	printf '%s' "${out}"
+	__mt_files_out="$(printf '%s\n' "${__mt_files_out}" | sed '/^$/d' | sort -u)"
+	_MT_FILES_CACHE[${__mt_files_pr}]="${__mt_files_out}"
+	printf -v "${__mt_files_dest}" '%s' "${__mt_files_out}"
+}
+
+_mt_pr_files() {
+	local __mt_files_printed=""
+	_mt_pr_files_into __mt_files_printed "$1" || return 1
+	printf '%s' "${__mt_files_printed}"
 }
 
 # This PR's paths from the diff review_collect_pr_metadata.sh already fetched
-# (zero API calls); falls back to _mt_pr_files.
-_mt_own_files() {
-	local pr="$1" diff_file="${PR_DIFF_FILE:-}"
+# (zero API calls); falls back to _mt_pr_files_into. Same output-variable
+# contract: `_mt_own_files_into <varname> <pr>`; `_mt_own_files` prints.
+_mt_own_files_into() {
+	local __mt_own_dest="$1" __mt_own_pr="$2" diff_file="${PR_DIFF_FILE:-}"
 	if [ -n "${diff_file}" ] && [ -s "${diff_file}" ]; then
 		# Git C-quotes headers containing non-ASCII/control bytes. The REST
 		# filenames are canonical, so use them rather than compare quoted text.
 		if grep -q '^diff --git "' "${diff_file}"; then
-			_mt_pr_files "${pr}"
+			_mt_pr_files_into "${__mt_own_dest}" "${__mt_own_pr}"
 			return $?
 		fi
 		# `diff --git a/<old> b/<new>` — take the b/ side; renames count on
@@ -143,11 +159,17 @@ _mt_own_files() {
 		local parsed_files
 		parsed_files="$(sed -n 's#^diff --git a/\(.*\) b/\(.*\)$#\1\n\2#p' "${diff_file}" | sed '/^$/d' | sort -u)"
 		if [ -n "${parsed_files}" ]; then
-			printf '%s' "${parsed_files}"
+			printf -v "${__mt_own_dest}" '%s' "${parsed_files}"
 			return 0
 		fi
 	fi
-	_mt_pr_files "${pr}"
+	_mt_pr_files_into "${__mt_own_dest}" "${__mt_own_pr}"
+}
+
+_mt_own_files() {
+	local __mt_own_printed=""
+	_mt_own_files_into __mt_own_printed "$1" || return 1
+	printf '%s' "${__mt_own_printed}"
 }
 
 # Intersection of two newline-separated sorted lists.
@@ -170,11 +192,16 @@ _mt_list_open_prs() {
 }
 
 # Older open ai/issue-* PRs (same base, lower number, not draft, not
-# review-blocked / closed-labelled) whose files overlap $3 (this PR's paths).
-# Prints "#N:path,path" lines; empty when unblocked. Returns 1 on API failure.
-_mt_blockers_for() {
-	local pr="$1" base="$2" own_files="$3" prs_json="$4"
-	local examined=0 line num head draft labels files common
+# review-blocked / closed-labelled) whose files overlap $4 (this PR's paths).
+# `_mt_blockers_for_into <varname> <pr> <base> <own_files> <prs_json>` assigns
+# newline-separated "#N:path,path" lines (empty when unblocked) to the caller's
+# variable; returns 1 on API failure. It must run in the caller's shell, not a
+# `$(...)` subshell, so the file lists it pulls through _mt_pr_files_into stay
+# cached for the next queued PR the release loop evaluates. `_mt_blockers_for`
+# is the printing form kept for compatibility.
+_mt_blockers_for_into() {
+	local __mt_blockers_dest="$1" pr="$2" base="$3" own_files="$4" prs_json="$5"
+	local examined=0 line num head draft labels files common __mt_blockers_acc=""
 	while IFS= read -r line; do
 		[ -n "${line}" ] || continue
 		num="$(printf '%s' "${line}" | jq -r '.number')"
@@ -193,15 +220,23 @@ _mt_blockers_for() {
 			_mt_log "MERGE_TRAIN_OLDER_PR_CAP pr=${pr} cap=${MT_MAX_OLDER} action=stop_examining"
 			break
 		fi
-		if ! files="$(_mt_pr_files "${num}")"; then
+		if ! _mt_pr_files_into files "${num}"; then
 			return 1
 		fi
 		common="$(_mt_intersect "${own_files}" "${files}")"
 		if [ -n "${common}" ]; then
-			printf '#%s:%s\n' "${num}" "$(printf '%s\n' "${common}" | paste -sd, -)"
+			__mt_blockers_acc+="$(printf '#%s:%s' "${num}" "$(printf '%s\n' "${common}" | paste -sd, -)")"$'\n'
 		fi
 	done < <(printf '%s\n' "${prs_json}" | jq -c 'select(.base == $b)' --arg b "${base}")
+	# Match what the former `$(...)` capture produced: no trailing newline.
+	printf -v "${__mt_blockers_dest}" '%s' "${__mt_blockers_acc%$'\n'}"
 	return 0
+}
+
+_mt_blockers_for() {
+	local __mt_blockers_printed=""
+	_mt_blockers_for_into __mt_blockers_printed "$@" || return 1
+	printf '%s' "${__mt_blockers_printed}"
 }
 
 _mt_ensure_label() {
@@ -276,8 +311,8 @@ _mt_gate() {
 		_mt_log "MERGE_TRAIN_GATE pr=${pr} head=${head} result=not_ai_issue_branch action=continue"
 		return 0
 	fi
-	local own_files prs_json blockers
-	if ! own_files="$(_mt_own_files "${pr}")"; then
+	local own_files="" prs_json blockers=""
+	if ! _mt_own_files_into own_files "${pr}"; then
 		_mt_warn "merge-train gate: could not list changed files for PR #${pr}; fail-open (not queued)."
 		return 0
 	fi
@@ -289,7 +324,7 @@ _mt_gate() {
 		_mt_warn "merge-train gate: could not list open PRs on ${base}; fail-open (not queued)."
 		return 0
 	fi
-	if ! blockers="$(_mt_blockers_for "${pr}" "${base}" "${own_files}" "${prs_json}")"; then
+	if ! _mt_blockers_for_into blockers "${pr}" "${base}" "${own_files}" "${prs_json}"; then
 		_mt_warn "merge-train gate: could not list files of an older PR; fail-open (not queued)."
 		return 0
 	fi
@@ -412,11 +447,13 @@ _mt_release() {
 			_mt_log "MERGE_TRAIN_RELEASE_ACTIVE pr=${num} head=${head} action=leave_queued"
 			continue
 		fi
-		if ! files="$(_mt_pr_files "${num}")"; then
+		files=""
+		if ! _mt_pr_files_into files "${num}"; then
 			_mt_warn "merge-train release: could not list files for queued PR #${num}; leaving it queued."
 			continue
 		fi
-		if ! blockers="$(_mt_blockers_for "${num}" "${base}" "${files}" "${prs_json}")"; then
+		blockers=""
+		if ! _mt_blockers_for_into blockers "${num}" "${base}" "${files}" "${prs_json}"; then
 			_mt_warn "merge-train release: could not evaluate blockers for PR #${num}; leaving it queued."
 			continue
 		fi

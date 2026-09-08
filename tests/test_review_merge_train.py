@@ -361,6 +361,36 @@ def test_release_dispatches_only_unblocked_queued_prs(tmp_path: Path) -> None:
 	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=1 base_filter=main" in result.stdout
 
 
+def test_release_fetches_each_pr_file_list_once_per_run(tmp_path: Path) -> None:
+	"""The per-run file-list cache must survive across queued-PR evaluations.
+
+	Regression for the api-batching finding on ``_MT_FILES_CACHE``: every
+	caller invoked ``_mt_pr_files`` through a command substitution, so the
+	cache write happened in a subshell and was discarded. With three open
+	PRs where 4081 and 4090 are both queued behind 4077, the release path
+	re-fetched ``/pulls/4077/files`` once per queued PR (and 4081's list
+	twice: once as its own, once as 4090's older blocker). Each list must
+	now cost exactly one ``GET`` for the whole run. See CLAUDE.md §15.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064"),
+		_pr(4081, "ai/issue-4059", labels=["ai:merge-queued"]),
+		_pr(4090, "ai/issue-4073", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4081, ["backend/promo_email_sender.py", "db/contracts/promo_email_jobs.yml"])
+	_write_files(fixtures, 4090, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_STILL_QUEUED pr=4081 blockers=#4077" in result.stdout
+	assert "MERGE_TRAIN_STILL_QUEUED pr=4090 blockers=#4077,#4081" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=0 base_filter=main" in result.stdout
+	for number in (4077, 4081, 4090):
+		calls = log_text.count(f"pulls/{number}/files")
+		assert calls == 1, f"/pulls/{number}/files fetched {calls} times; the per-run cache must hold it to one"
+
+
 def test_release_without_base_filter_covers_every_base(tmp_path: Path) -> None:
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	(fixtures / "pulls.json").write_text(json.dumps([
