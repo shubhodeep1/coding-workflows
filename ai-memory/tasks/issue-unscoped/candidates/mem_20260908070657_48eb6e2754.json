@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:156-157 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The `X-RateLimit-Reset` extraction uses `awk '{print $2}'`, which returns an empty value when the header omits whitespace after the colon.\n  WHY: `_sleep_until_reset` falls back to 30 seconds instead of waiting for the actual reset epoch on compact primary-rate-limit headers.\n- scripts/gh_helpers.sh:144-145 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `X-RateLimit-Reset` extraction still uses `awk '{print $2}'`, which returns empty when the header omits the space after the colon.\n  WHY: The primary-reset path silently falls through to the 30 s fallback on the same compact header form that the Retry-After parser handles.\n- _sleep_until_reset line 115 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The diagnostic message still references \"X-RateLimit-Reset\" even though the wait may have been derived from Retry-After.\n  WHY: The misleading message could confuse operators debugging rate-limit issues.\n- tests/test_gh_helpers_parse_reset_header.py:73-78 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: There is no regression test for an `X-RateLimit-Reset` header without whitespace after the colon.\n  WHY: The parser fix could regress silently if the field extraction logic changes back to `awk` or similar.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/gh_helpers.sh:156-157 | severity=MAJOR | confidence=4\n  PROBLEM: The `X-RateLimit-Reset` extraction piped through `awk '{print $2}'` returns an empty value when the header omits the space after the colon.\n  WHY: `_sleep_until_reset` falls back to 30 s instead of waiting until the actual window reset.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/gh_helpers.sh | lines 156-157 (the `grep -i '^x-ratelimit-reset:' \u2026 | head -1 | awk '{print $2}' | tr -d '\\r' || true` branch inside `_parse_reset_header`) | severity=MAJOR | confidence=4\n  PROBLEM: The `X-RateLimit-Reset` extraction still uses `awk '{print $2}'`, which returns empty when the header omits the space after the colon.\n  WHY: `_parse_reset_header` returns an empty string and `_sleep_until_reset` sleeps 30 s instead of waiting until the actual primary reset window.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/gh_helpers.sh | Code: _parse_reset_header function, lines 144-145 | severity=MAJOR | confidence=5\n  PROBLEM: The `X-RateLimit-Reset` extraction still uses `awk '{print $2}'`, which returns empty when the header omits the space after the colon.\n  WHY: The primary-reset path silently falls through to the 30 s fallback on the same malformed form that the Retry-After parser now handles.\n- scripts/gh_helpers.sh | Code: _sleep_until_reset line 115 | severity=NIT | confidence=4\n  PROBLEM: The diagnostic message still references \"X-RateLimit-Reset\" even though the wait may have been derived from Retry-After.\n  WHY: The message is misleading and could confuse operators debugging rate-limit issues.\n- tests/test_gh_helpers_parse_reset_header.py | Code: lines 73-78 | severity=NIT | confidence=5\n  PROBLEM: Missing regression test for the no-whitespace-after-colon case in X-RateLimit-Reset header parsing.\n  WHY: Without this test, the parser fix could regress silently if someone changes the field extraction logic back to awk or similar.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/gh_helpers.sh:156-157 | severity=MAJOR | confidence=4\n  PROBLEM: The X-RateLimit-Reset fallback path still extracts its value with awk '{print $2}', which yields an empty string when the header carries no whitespace after the colon (X-RateLimit-Reset:1788827590).\n  WHY: `_parse_reset_header` prints an empty string, `_sleep_until_reset` falls back to its 30 s default, and the retry loop re-hits the still-exhausted primary limit.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/gh_helpers.sh:156-157 | severity=MAJOR | confidence=5\n  PROBLEM: The `X-RateLimit-Reset` extraction still uses `awk '{print $2}'`, which returns empty when the header omits the space after the colon.\n  WHY: `_sleep_until_reset` falls back to the 30-second default instead of sleeping until the actual reset epoch.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "3b3ed8f27b061797b8a4c91af75b6149c05d34bd54265c231418a561f0263c4b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4047,
+    "run_id": "34192343422",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34192343422",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260908070657_48eb6e2754",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4047,
+    "run_id": "34192343422"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-08T07:06:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
