@@ -3407,13 +3407,19 @@ def test_blocked_already_satisfied_regexes_classify_real_verdicts() -> None:
 		)
 		return proc.returncode == 0
 
-	# The veto reads only the verdict's first sentence. Pin the exact sed
-	# expression the workflow uses so this helper cannot drift from it.
-	first_sentence_sed = "s/[.!?][[:space:]].*$//"
+	# The veto reads only a conservatively detected first sentence. Pin the
+	# extraction and abbreviation fallback so this helper cannot drift from it.
+	first_sentence_sed = "s/[.!?][[:space:]]+[[:upper:][:digit:]].*$//"
+	first_sentence_abbreviation = (
+		r"(^|[^[:alpha:]])(([[:alpha:]]\.)+[[:alpha:]]|etc|vs|cf|mr|mrs|ms|dr|prof|sr|jr|st)$"
+	)
 	assert (
-		"codex_blocked_first_sentence=\"$(printf '%s' \"${codex_blocked_reason}\" "
-		f"| sed -E '{first_sentence_sed}' || true)\""
-	) in block, "the workflow must derive codex_blocked_first_sentence with the pinned sed"
+		"if ! codex_blocked_first_sentence=\"$(printf '%s' \"${codex_blocked_reason}\" "
+		f"| sed -E '{first_sentence_sed}')\"; then"
+	) in block, "the workflow must fail closed when first-sentence extraction fails"
+	assert (
+		f"grep -qiE '{first_sentence_abbreviation}'"
+	) in block, "the workflow must fail closed on ambiguous abbreviation boundaries"
 	assert (
 		'! printf \'%s\' "${codex_blocked_first_sentence}" | grep -qiE "${BLOCKED_REAL_OBSTACLE_REGEX}"'
 	) in block, "the real-obstacle veto must read the first sentence, not the whole reason"
@@ -3424,8 +3430,12 @@ def test_blocked_already_satisfied_regexes_classify_real_verdicts() -> None:
 			input=reason,
 			text=True,
 			capture_output=True,
-			check=True,
+			check=False,
 		)
+		if proc.returncode != 0 or not proc.stdout:
+			return reason
+		if _grep(first_sentence_abbreviation, proc.stdout):
+			return reason
 		return proc.stdout
 
 	def _is_success_noop(reason: str) -> bool:
@@ -3552,6 +3562,9 @@ def test_blocked_already_satisfied_regexes_classify_real_verdicts() -> None:
 	assert not _is_success_noop(
 		"BLOCKED: Approved plan requires no edits, but the fixture database is "
 		"inaccessible. Targeted tests pass."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: No changes are required, e.g. DigitalOcean token is unavailable."
 	)
 	assert not _is_success_noop(
 		"BLOCKED: DigitalOcean credential unavailable for approved "
