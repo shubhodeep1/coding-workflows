@@ -168,6 +168,7 @@ changelog.d/3947-security-pass-deleted-branch-recovery.md
 changelog.d/3957-blocker-only-plan-blocked-routing.md
 changelog.d/3963-reissue-preserve-baseline-default-true.md
 changelog.d/3965-orchestrator-state-author-identity.md
+changelog.d/3965-review-security-boundaries.md
 changelog.d/3965-security-pass-fix-cycle-2.md
 changelog.d/3965-security-pass-fix-successor-adoption.md
 changelog.d/3965-security-pass-hardening.md

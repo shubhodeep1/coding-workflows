@@ -461,6 +461,20 @@ gh_retry()
 	return 1
 }
 
+# Run one networked git command with GitHub authentication that exists only
+# for that child process. The token is never written to repository config.
+git_with_github_auth()
+{
+	local auth_token="${GH_PAT:-${GH_TOKEN:-}}"
+	local auth_header=""
+	if [ -z "${auth_token}" ]; then
+		git "$@"
+		return
+	fi
+	auth_header="$(printf 'x-access-token:%s' "${auth_token}" | base64 | tr -d '\n')"
+	git -c "http.extraHeader=Authorization: Basic ${auth_header}" "$@"
+}
+
 # ---------------------------------------------------------------
 # gh_retry_to_file — Like gh_retry but captures stdout to a file.
 #
@@ -1039,7 +1053,11 @@ if selected:
 	# existing PR-context call exposes the commenter's current repository role.
 	# GitHub's legacy `permission` field maps maintain to write, so only the
 	# exact role_name can distinguish terminal-action authority safely.
-	repository_role="$(gh_retry gh api -X GET "repos/${repository}/collaborators/${approver}/permission" --jq '.role_name // empty' 2>/dev/null || true)"
+	if ! repository_role="$(gh_retry gh api -X GET "repos/${repository}/collaborators/${approver}/permission" --jq '.role_name // empty' 2>/dev/null)"; then
+		echo "::warning::Review-blocked approval remains pending because the current repository role for ${approver} could not be resolved." >&2
+		printf '%s\n' "${pending_json}"
+		return 0
+	fi
 	case "${repository_role}" in
 		maintain|admin)
 			printf '%s' "${approval_candidate}" | jq -c --arg role "${repository_role}" --arg request_id "$(printf '%s' "${request_json}" | jq -r '.request_id')" --arg decision_digest "$(printf '%s' "${request_json}" | jq -r '.decision_digest')" '{status:"approved",request_id:$request_id,decision_digest:$decision_digest,approver:(.author // null),approval_comment_id:(.id // null),repository_role:$role}'
