@@ -3748,6 +3748,42 @@ jobs:
           if [ "${install_failed}" = "true" ]; then
             echo "::warning::Some project dependencies could not be installed. Editor validation may be limited."
           fi
+          # The Python branch above can report success while installing
+          # nothing.  A pyproject.toml that carries only a tool table (for
+          # example `[tool.pytest.ini_options]`) has no `[project]` table, so
+          # setuptools' legacy fallback builds an `UNKNOWN-0.0.0` package,
+          # `pip install -e .` exits 0, `install_failed` stays false, and no
+          # warning is emitted -- yet pytest is still not importable.  The
+          # editor then cannot run the repository's pytest suites and
+          # improvises no-install import shims instead, which is exactly what
+          # every autofix round on PR #4029 reported.  Bootstrap pytest
+          # explicitly whenever the repository declares pytest configuration
+          # and the interpreter the editor will use cannot import it.
+          # `python3 -m pip` (not bare `pip`) keeps the install and the
+          # importability probe on the same interpreter.
+          pytest_bootstrap_wanted=false
+          if [ -f pytest.ini ] || [ -f conftest.py ]; then
+            pytest_bootstrap_wanted=true
+          elif [ -f pyproject.toml ] && grep -q '^\[tool\.pytest\.ini_options\]' pyproject.toml 2>/dev/null; then
+            pytest_bootstrap_wanted=true
+          elif [ -f setup.cfg ] && grep -q '^\[tool:pytest\]' setup.cfg 2>/dev/null; then
+            pytest_bootstrap_wanted=true
+          elif [ -f tox.ini ] && grep -q '^\[pytest\]' tox.ini 2>/dev/null; then
+            pytest_bootstrap_wanted=true
+          fi
+          if [ "${pytest_bootstrap_wanted}" = "true" ]; then
+            if python3 -c "import pytest" >/dev/null 2>&1; then
+              echo "Repository declares pytest configuration and pytest is already importable."
+            else
+              echo "Repository declares pytest configuration but pytest is not importable — installing pytest"
+              python3 -m pip install pytest 2>&1 || true
+              if python3 -c "import pytest" >/dev/null 2>&1; then
+                echo "pytest bootstrap succeeded."
+              else
+                echo "::warning::pytest is declared by this repository but could not be installed; the editor cannot run its pytest suites and will fall back to ad-hoc validation."
+              fi
+            fi
+          fi
 
       - name: Switch reasoning effort for editor
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
