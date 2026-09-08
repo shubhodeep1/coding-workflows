@@ -170,6 +170,7 @@ changelog.d/3963-reissue-preserve-baseline-default-true.md
 changelog.d/3965-orchestrator-state-author-identity.md
 changelog.d/3965-security-pass-fix-cycle-2.md
 changelog.d/3965-security-pass-fix-successor-adoption.md
+changelog.d/3965-security-pass-hardening.md
 changelog.d/3965-security-pass-pyyaml-duplicate-key-hardening.md
 changelog.d/3965-sync-contract-list-union.md
 changelog.d/3967-plan-blocker-prompt-routing.md
@@ -679,6 +680,7 @@ tests/test_fingerprint_quarantine.py
 tests/test_fingerprint_state_selfheal.py
 tests/test_generate_resource_id.py
 tests/test_gh_helpers_list_runs_method.py
+tests/test_git_auth_hygiene.py
 tests/test_header_render.sh
 tests/test_identity_recall_render.sh
 tests/test_implement_post_codex_recovery.py

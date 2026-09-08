@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The editor consumes untrusted PR content. Repository actuator credentials
+# must remain in separate trusted workflow steps so prompt injection cannot
+# read or exfiltrate them from this process environment.
+for editor_forbidden_credential_name in GH_TOKEN GH_PAT GITHUB_TOKEN ORCHESTRATOR_STATE_AUTH_KEYRING TG_BOT_SECRET; do
+	if [ -n "${!editor_forbidden_credential_name:-}" ]; then
+		echo "::error::Refusing to launch review editor with ${editor_forbidden_credential_name} present in the environment." >&2
+		exit 1
+	fi
+done
+unset editor_forbidden_credential_name
+
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
 WATCHDOG_HELPERS="${SUPPORT_SCRIPTS_DIR}/watchdog_helpers.sh"
 
@@ -15,18 +26,11 @@ if command -v codex_run_budget_export >/dev/null 2>&1; then
 	codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"
 fi
 
-# Source rate-limit-aware GH API helpers (provides gh_retry and the
-# Telegram admin alert on GH API rate-limit events).
+# Source prompt-input and UTF-8 sanitization helpers. This model-facing
+# process performs no authenticated GitHub operations.
 if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
   # shellcheck source=/dev/null
   source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
-fi
-# Fallback: if gh_helpers.sh was not sourced (missing file, unset
-# SUPPORT_SCRIPTS_DIR), define a pass-through so subsequent
-# `gh_retry gh ...` calls still execute — without the rate-limit
-# retry/alert behaviour, but without hard-failing under `set -e`.
-if ! command -v gh_retry >/dev/null 2>&1; then
-  gh_retry() { "$@"; }
 fi
 
 # _embed_input_file + _init_prompt_budget / _cleanup_prompt_budget live
@@ -1817,7 +1821,8 @@ if nag_reminder_enabled; then
 fi
 editor_silent_rounds=0
 while [ "${attempt}" -le "${editor_max_attempts}" ]; do
-  # Early exit if PR was closed/merged (detected by reviewer or editor watchdog)
+  # Preserve an earlier trusted PR-state decision without performing any
+  # authenticated repository reads from the model-facing process.
   if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
     echo "PR #${PR_NUMBER} was closed/merged — skipping editor."
     echo "PR_CLOSED=true" >> "$GITHUB_ENV"
@@ -1881,7 +1886,6 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
 
   # ── Background watchdog: heartbeat + network-activity aware ──
   (
-    wd_iter=0
     while true; do
       sleep 15
       wd_now="$(date +%s)"
@@ -1922,19 +1926,6 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
         fi
       fi
 
-      # PR state check — abort if PR was merged/closed (~every 2 min)
-      wd_iter=$((wd_iter + 1))
-      if [ $((wd_iter % 8)) -eq 0 ]; then
-        pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
-        if [ "${pr_state}" != "open" ]; then
-          echo "Editor aborted — PR #${PR_NUMBER} is ${pr_state} (attempt ${attempt})." >&2
-          touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
-          cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-          if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
-          rm -f "${hb_file}"
-          exit 144
-        fi
-      fi
     done
   ) &
   wd_pid=$!

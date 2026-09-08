@@ -1718,7 +1718,7 @@ case "${RB_ACTION}" in
       echo "judge_skip_reason=approval_request_created" >> "$GITHUB_OUTPUT"
       exit 0
     fi
-    RB_APPROVAL_STATUS="$(review_blocked_approval_status "${PR_COMMENTS}" "${RB_APPROVAL_REQUEST}")"
+    RB_APPROVAL_STATUS="$(review_blocked_approval_status "${PR_COMMENTS}" "${RB_APPROVAL_REQUEST}" "${REPOSITORY}")"
     if [ "$(printf '%s' "${RB_APPROVAL_STATUS}" | jq -r '.status // empty')" != "approved" ]; then
       echo "Review-blocked terminal recommendation remains pending trusted human approval."
       echo "judge_handled=true" >> "$GITHUB_OUTPUT"
