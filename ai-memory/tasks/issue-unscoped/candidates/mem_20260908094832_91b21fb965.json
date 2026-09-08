@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:line 4633 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The test function name claims the poller retains fixing state after cap-exhaustion close failure, but its assertions verify terminalization to failed state.\n  WHY: The assertions and production behavior now de-manage and terminalize despite close failure, so the stale name misdocuments the enforced contract; all reviewers rated the source finding NIT.\n- scripts/orchestrate_poll_process.sh:around line 4801 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The jq fallback for `fix_cycle_label` contains a stray closing parenthesis and outputs `?/3)` instead of `?/3`.\n  WHY: If the state-file jq read fails, Telegram notifications and tracking comments display the malformed fix-cycle label; the source finding was rated NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_orchestrate_poll_process.py\n  Line or code reference: line 4633, def test_security_pass_reissue_cap_close_failure_retains_fixing_state() -> None:\n  Problem: The test name claims the poller retains fixing state after a close failure, but the assertions verify terminalization to failed state.\n  Why it fails at runtime: The contradiction between name and assertions misleads future maintainers reading this regression test.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py\n  Line or code reference: def test_security_pass_reissue_cap_close_failure_retains_fixing_state() -> None: (around line 4633 in the post-autofix file)\n  Problem: The test function name claims the poller retains fixing state when the reissue cap is exhausted and `gh issue close` fails, but the assertions verify terminalization to failed state.\n  Why it fails at runtime: No runtime defect; the assertions correctly verify the new terminalization-on-close-failure behavior, but the regression-test name is misleading documentation.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- tests/test_orchestrate_poll_process.py\n  Line or code reference: line 4633, def test_security_pass_reissue_cap_close_failure_retains_fixing_state() -> None:\n  Problem: The test name claims the poller retains fixing state when the cap-exhaustion close fails, but the assertions verify terminalization to failed state.\n  Why it fails at runtime: No product-code runtime failure, but the name documents the opposite of the enforced contract.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- HARDENING_SUGGESTIONS:\n  - file: scripts/orchestrate_poll_process.sh\n    location: security_pass_fix_reissue_exhausted, state-write failure branch (lines 4798-4804)\n    issue: If the label edit succeeded and `gh issue close` then failed, and the terminal jq state write also fails, the next poll sees an open issue without the `ai:implementation-failed` label and falls through to the \"remains in progress\" branch, parking the project; the warning text claims \"the next poll will reconcile the terminal issue\" but no branch will.\n    suggested minimal fix: In the state-write failure branch, best-effort re-add the `ai:implementation-failed` label to `issue_number` so the cap path re-triggers on the next poll.\n    estimated lines changed: 3\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_orchestrate_poll_process.py\n  Line or code reference: line 4633, `def test_security_pass_reissue_cap_close_failure_retains_fixing_state() -> None:`\n  Problem: The test name says \"retains_fixing_state\" but the assertions verify terminalization to failed state.\n  Why it fails at runtime: No runtime failure, but the misleading name contradicts the documented behavior change and breaks the documentation value of the test surface.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- scripts/orchestrate_poll_process.sh\n  Line or code reference: `security_pass_handle_failed_fix_issue`, `fix_cycle_label` computation (around line 4801 in the post-autofix file)\n  Problem: The jq fallback has a stray closing parenthesis inside the double-quoted echo argument: `echo \"?/${MAX_SECURITY_PASS_CYCLES}\")\"` outputs `?/3)` instead of `?/3`.\n  Why it fails at runtime: When jq fails to read the state file, Telegram notifications and tracking comments show the malformed fix-cycle label.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "e7812900efb0606ad6f5e1920a3e9e3e7aafd90e876785d3423bc31ed0ce8d2b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4054,
+    "run_id": "34201901565",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34201901565",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260908094832_91b21fb965",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4054,
+    "run_id": "34201901565"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-08T09:48:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
