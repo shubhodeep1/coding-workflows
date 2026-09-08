@@ -186,16 +186,35 @@ def test_editor_model_step_has_no_repository_credentials_and_rechecks_state() ->
 	assert 'echo "PR_CLOSED=true" >> "$GITHUB_ENV"' in recheck_block
 
 
-def test_editor_script_refuses_repository_credential_environment() -> None:
+def test_editor_script_scrubs_repository_credentials_from_environment() -> None:
+	# Exercise only the credential-scrub prologue: everything after the first
+	# assignment to SUPPORT_SCRIPTS_DIR launches the real editor loop.
+	script_text = (REPO_ROOT / "scripts" / "review_apply_fixes.sh").read_text(encoding="utf-8")
+	prologue = script_text[: script_text.index("\nSUPPORT_SCRIPTS_DIR=")]
+	assert "Refusing to launch review editor" not in prologue
+	probe = prologue + "\nprintf 'PROLOGUE_REACHED\\n'\nenv\n"
 	result = subprocess.run(
-		["bash", "scripts/review_apply_fixes.sh"],
+		["bash", "-c", probe],
 		cwd=REPO_ROOT,
-		env={"PATH": "/usr/bin:/bin", "GH_TOKEN": "test-only-placeholder"},
+		env={
+			"PATH": "/usr/bin:/bin",
+			"GH_TOKEN": "test-only-placeholder",
+			"GH_PAT": "test-only-placeholder",
+			"GITHUB_TOKEN": "test-only-placeholder",
+			"ORCHESTRATOR_STATE_AUTH_KEYRING": "test-only-placeholder",
+			"TG_BOT_SECRET": "test-only-placeholder",
+			"OPENROUTER_API_KEY": "model-key-stays",
+		},
 		text=True,
 		capture_output=True,
 	)
-	assert result.returncode != 0
-	assert "Refusing to launch review editor with GH_TOKEN present" in result.stderr
+	assert result.returncode == 0, result.stderr
+	assert "PROLOGUE_REACHED" in result.stdout
+	for credential_name in ("GH_TOKEN", "GH_PAT", "GITHUB_TOKEN", "ORCHESTRATOR_STATE_AUTH_KEYRING", "TG_BOT_SECRET"):
+		assert f"{credential_name}=" not in result.stdout
+		assert f"::notice::Scrubbed {credential_name} from the review editor environment" in result.stderr
+	assert "OPENROUTER_API_KEY=model-key-stays" in result.stdout
+	assert "test-only-placeholder" not in result.stdout
 
 
 def test_approval_request_ids_use_the_canonical_generator() -> None:

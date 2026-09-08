@@ -4,10 +4,17 @@ set -euo pipefail
 # The editor consumes untrusted PR content. Repository actuator credentials
 # must remain in separate trusted workflow steps so prompt injection cannot
 # read or exfiltrate them from this process environment.
+#
+# Sanitize rather than refuse: this script is staged from the PR branch
+# (REQUIRED_BOOTSTRAP_SCRIPTS in scripts/stage_workflow_support.sh) while the
+# reusable workflow that invokes it is pinned to main, so a caller that still
+# injects a credential into the editor step is expected during the rollout
+# window. Scrubbing here keeps the isolation property under either caller;
+# a hard refusal deadlocks the very PR that ships the fix (run 34180518975).
 for editor_forbidden_credential_name in GH_TOKEN GH_PAT GITHUB_TOKEN ORCHESTRATOR_STATE_AUTH_KEYRING TG_BOT_SECRET; do
-	if [ -n "${!editor_forbidden_credential_name:-}" ]; then
-		echo "::error::Refusing to launch review editor with ${editor_forbidden_credential_name} present in the environment." >&2
-		exit 1
+	if [ -n "${!editor_forbidden_credential_name+x}" ]; then
+		echo "::notice::Scrubbed ${editor_forbidden_credential_name} from the review editor environment; model-facing processes run without repository credentials." >&2
+		unset "${editor_forbidden_credential_name}"
 	fi
 done
 unset editor_forbidden_credential_name
