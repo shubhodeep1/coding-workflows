@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/slash-commands-session-model.md:lines 8-10 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Counts in the table claim exactly 12 files had `model:` removed and exactly 3 had `context: fork` / `background: false` removed, with 0 consumer-repo files changed.\n  WHY: Cross-checking the diff against `pr_changed_files.txt` confirms the numbers match the evidence on disk; source severity was NIT.\n- agents.md:lines 297-300 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Claim that `workflow-templates/.claude/commands/` template copies have never carried frontmatter.\n  WHY: Verified \u2014 read `workflow-templates/.claude/commands/deploy-activate.md:1` (\"Given a reference...\") and `workflow-templates/.claude/commands/verify-activation.md:1` (\"Given a GitHub issue...\"); neither starts with `---`. Claim is factually accurate; source severity was NIT.\n- agents.md:line 281 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Heading rename from \"## Interactive slash-command model pins\" to \"## Interactive slash-command model selection\"; the deleted \"Four constraints\" block is no longer recorded in `agents.md`.\n  WHY: No external contract references the heading or constraints, and the constraints are moot once pins are removed; source severity was NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/slash-commands-session-model.md:lines 8-10 | severity=NIT | confidence=5\n  PROBLEM: Counts in the table claim exactly 12 files had `model:` removed and exactly 3 had `context: fork` / `background: false` removed, with 0 consumer-repo files changed.\n  WHY: Cross-checking the diff against `pr_changed_files.txt` confirms the numbers match the evidence on disk.\n- agents.md:lines 297-300 | severity=NIT | confidence=5\n  PROBLEM: Claim that `workflow-templates/.claude/commands/` template copies have never carried frontmatter.\n  WHY: Verified \u2014 read `workflow-templates/.claude/commands/deploy-activate.md:1` (\"Given a reference...\") and `workflow-templates/.claude/commands/verify-activation.md:1` (\"Given a GitHub issue...\"); neither starts with `---`. Claim is factually accurate.\n- agents.md:line 281 | severity=NIT | confidence=4\n  PROBLEM: Heading rename from \"## Interactive slash-command model pins\" to \"## Interactive slash-command model selection\"; the deleted \"Four constraints\" block is no longer recorded in `agents.md`.\n  WHY: No external contract references the heading or constraints, and the constraints are moot once pins are removed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "5c56b19d48a1394ab95aed5e73e5f2cd713f65782625bf5ea892d338d2f571f5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34178710849",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34178710849",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260908024424_d88f2d25a2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34178710849"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-08T02:44:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
