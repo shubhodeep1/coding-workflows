@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow and state inputs are expected to be validated conservatively and fail closed.",
   "timestamps": {
     "created_at": "2026-09-08T01:05:08Z",
