@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/4017-review-autofix-pytest-bootstrap.md: line 11 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The changelog fragment says there are 4 regression tests, but the PR adds 5 test functions.\n  WHY: The assembled changelog will permanently record an inaccurate test count relied on by operators and contributors.\n- .github/workflows/review_autofix.yml: lines 3769-3772 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, mistralai_mistral-small-2603, moonshotai_kimi-k3]\n  PROBLEM: The setup.cfg detection branch checks only `[tool:pytest]` and misses a top-level `[pytest]` section.\n  WHY: A repository using that configuration may not trigger pytest bootstrap; deepseek_deepseek-v4-pro and qwen_qwen3_7-plus judged this finding incorrect, and moonshotai_kimi-k3 noted the affected form is legacy and deprecated.\n- tests/test_review_autofix_review_pipeline_contract.py:6079 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The python3 stub\u2019s `case \"$*\"` pattern matches `*'import pytest'*`, but `$*` for `python3 -c \"import pytest\"` expands to `-c import pytest`, so the stub may always exit 0.\n  WHY: The test harness may fail to exercise the pytest-importable and not-importable branches; deepseek_deepseek-v4-pro, moonshotai_kimi-k3, and qwen_qwen3_7-plus judged this finding incorrect.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- changelog.d/4017-review-autofix-pytest-bootstrap.md: line 11, \"| Regression tests | 4\" | confidence not stated\n  PROBLEM: The fragment says 4 regression tests, but the PR adds 5 test functions.\n  WHY: Operators and contributors rely on the \"numbers that matter\" table as a factual reference; an incorrect count is misleading when tracing test coverage.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml: lines 3769-3772 (the setup.cfg detection branch) | severity=MAJOR | confidence=4\n  PROBLEM: The setup.cfg branch checks only `[tool:pytest]` and misses a `[pytest]` section.\n  WHY: The bootstrap will not fire for a repository whose setup.cfg declares pytest configuration in that form.\n- changelog.d/4017-review-autofix-pytest-bootstrap.md: line 11, the \"Regression tests | 4\" row of the numbers-that-matter table | severity=NIT | confidence=5\n  PROBLEM: The fragment's table claims 4 regression tests, but the file under the diff adds 5 test functions.\n  WHY: Operators reading the assembled entry will see 4 tests instead of the actual 5.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_review_autofix_review_pipeline_contract.py:6079 | severity=BLOCKER | confidence=5\n  PROBLEM: The python3 stub\u2019s `case \"$*\"` pattern matches `*'import pytest'*`, but `$*` for `python3 -c \"import pytest\"` expands to `-c import pytest` (no quotes).\n  WHY: The test harness cannot simulate the pytest-importable vs not-importable states correctly, leading to false positives in test coverage.\n- .github/workflows/review_autofix.yml: Line 3771 | severity=MAJOR | confidence=4\n  PROBLEM: The `[pytest]` grep runs against `tox.ini` only and misses a `[pytest]` section in `setup.cfg`.\n  WHY: A repository using the reported configuration would leave pytest unavailable; the editor cannot run the repository's suites.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- changelog.d/4017-review-autofix-pytest-bootstrap.md: line 11, table row \"| Regression tests | 4, in `tests/test_review_autofix_review_pipeline_contract.py` |\" | severity=NIT | confidence=5\n  PROBLEM: The fragment claims 4 regression tests, but the most recent autofix commit added a fifth test function.\n  WHY: The changelog is the permanent release-note record and its \"numbers that matter\" table is factually incorrect.\n- .github/workflows/review_autofix.yml: lines 3769-3771 (setup.cfg / tox.ini detection chain) | severity=NIT | confidence=3\n  PROBLEM: The detection chain recognizes `[tool:pytest]` in setup.cfg and `[pytest]` in tox.ini, but not a top-level `[pytest]` section in setup.cfg.\n  WHY: The step completes without installing pytest for that repository shape, so the editor cannot run the repository's suites.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/4017-review-autofix-pytest-bootstrap.md: line 11, \"| Regression tests | 4, in `tests/test_review_autofix_review_pipeline_contract.py` |\" | severity=NIT | confidence=5\n  PROBLEM: The changelog fragment claims 4 regression tests, but the PR introduces 5 test functions.\n  WHY: The assemblage into CHANGELOG.md will permanently record the wrong count.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "f6b380bd1a338f380044a9ab02b4ae32b611cda14a6347f9d35e12f788c51fcb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4044,
+    "run_id": "34183001851",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34183001851",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260908041656_a385c56307",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4044,
+    "run_id": "34183001851"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-08T04:16:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
