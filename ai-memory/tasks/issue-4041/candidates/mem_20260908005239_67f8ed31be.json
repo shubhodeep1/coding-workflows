@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-4039` at `ce1ae82854502e239be12862cae6736aa24b4ecb`  \nIntegration branch match: confirmed\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary_b.txt`  \nScope-mode justification: The complete fix is a single-file content replacement. Holding scope best preserves correctness, backward compatibility, and the issue\u2019s strict `files_touched` boundary.\n\n## Clarification interpretation\n\nNo clarification questions were required. The orchestrator auto-answer confirms continuation.\n\n## Automation and lifecycle\n\n- Modify existing test data only; no new or extended script.\n- No scheduler or PR-push wiring changes. Existing `.github/workflows/internal-implement.yml` handling remains unchanged.\n- No supervisor or database operation is required.\n- No `docs/scripts-pending-removal.md` entry is required.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary_b.txt`\n\t- Preserve line 1 as `status: ok`.\n\t- Replace the stale second line with `decompose-run: 34173894772`.\n\t- Ensure exactly two lines with no duplicate or additional run entries.\n\n## Functions or modules to implement\n\nNone. This is a plain-text fixture update.\n\n## Data structures affected\n\nA two-line smoke-canary text record:\n\n1. Status field.\n2. Decomposition run identifier.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Replace the complete file content\n\n- **Chosen:** Rewrite the file to the canonical two-line content with a terminating newline.\n- **Alternatives considered:** Replace only the old run number or append the requested run line.\n- **Why:** Whole-file replacement guarantees correct ordering and prevents stale, duplicate, or extra lines.\n\n## Security considerations\n\n- **Trust boundary:** The issue-provided run identifier is treated as literal text, never executed or interpolated into a command.\n- **Authorization:** No endpoint, worker, or authorization surface changes.\n- **Validation:** Verify the file\u2019s exact byte content and restrict the diff to the declared path.\n- **Abuse cases:** Prevent injected extra lines, duplicate run records, CRLF drift, and unrelated file changes.\n\n## Risks and edge cases\n\n- Current line 1 already matches; line 2 contains stale run `25567947079`.\n- Avoid appending the new line while retaining the old one.\n- Preserve LF line endings and avoid a blank third line.\n- Do not inspect or depend on another canary file.\n- No codebase conflict found: the target exists and the checked-out branch matches orchestrator metadata.\n\n## Testing considerations\n\n- Compare exact content against `status: ok\\ndecompose-run: 34173894772\\n`.\n- Confirm the file has exactly two lines.\n- Run `git diff --check`.\n- Confirm `git diff --name-only` contains only `tests/e2e_smoke_canary_b.txt`.\n- No broader test suite is necessary for this fixture-only edit.\n\n## Assumptions and missing context\n\n- \u201cExactly two lines\u201d includes the existing text-file convention of one terminating LF after line 2.\n- The sole named file is treated as the complete `files_touched` allowlist.\n- Estimated implementation and verification time: under 5 minutes.\n\n## Pre-execution self-check\n\n- Exact desired content identified.\n- Branch metadata matches the planning ref.\n- Change scope is limited to one existing file.\n- Verification covers content, duplication, line count, and scope.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "9d6bd5935fade4a9037713da2e4e5815b885101cb4aae519ab74ebe813271972",
+  "lineage": {
+    "issue_number": 4041,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34174477013",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34174477013",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4041"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260908005239_67f8ed31be",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4041,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34174477013"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4041",
+  "timestamps": {
+    "created_at": "2026-09-08T00:52:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
