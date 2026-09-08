@@ -4627,6 +4627,60 @@ def test_security_pass_reissue_adopts_existing_successor_without_duplicate() -> 
 	assert "successor=900 mode=no-op-implementation reissue=1/2" in combined_log
 
 
+def test_security_pass_reissue_state_persist_failure_adopts_successor_next_poll() -> None:
+	failed_result = _run_poller(
+		state=_security_pass_fixing_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+		},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_REISSUE_STATE_PERSIST_FAIL": "true"},
+	)
+
+	assert len(failed_result.get("created_issues", [])) == 1
+	untracked_successor_num = failed_result["created_issues"][0]["number"]
+	assert failed_result["closed_issues"] == []
+	assert failed_result["issues"]["700"]["closed"] is False
+	assert failed_result["issues"][str(untracked_successor_num)]["closed"] is False
+	assert failed_result["latest_state"]["security_pass_active_fix_issues"] == [700]
+	assert "security_pass_fix_reissue_count" not in failed_result["latest_state"]
+	assert (
+		f"Security-pass successor #{untracked_successor_num} could not be persisted "
+		"for tracking issue #192" in failed_result["stdout"] + failed_result["stderr"]
+	)
+
+	successor_labels = failed_result["issues"][str(untracked_successor_num)]["labels"]
+	retry_result = _run_poller(
+		state=failed_result["state_on_disk"],
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+			untracked_successor_num: successor_labels,
+		},
+		issue_bodies={
+			700: _security_pass_fix_issue_body(192, 2),
+			untracked_successor_num: failed_result["issues"][str(untracked_successor_num)]["body"],
+		},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert retry_result.get("created_issues", []) == []
+	assert retry_result["closed_issues"] == [700]
+	assert retry_result["latest_state"]["security_pass_active_fix_issues"] == [untracked_successor_num]
+	assert retry_result["latest_state"]["security_pass_fix_reissue_count"] == 1
+	retry_log = retry_result["stdout"] + retry_result["stderr"]
+	assert f"successor #{untracked_successor_num} already exists for failed issue #700" in retry_log
+	assert f"successor={untracked_successor_num} mode=no-op-implementation reissue=1/2" in retry_log
+
+
 def test_security_pass_implementation_failed_noop_fix_is_reissued_with_noop_guidance() -> None:
 	result = _run_poller(
 		state=_security_pass_fixing_state(),
