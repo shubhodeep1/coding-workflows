@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:12122, 12132, 12275 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3]\n  PROBLEM: The claimed GraphQL label-pagination fixes are absent, so the linked-PR queries still request only 50 labels.\n  WHY: PRs or issues with more than 50 labels can omit `ai:merge-queued` from cached batched JSON, causing merge-train protection to be bypassed; minimax classified this as BLOCKER, normalized here to critical.\n- scripts/orchestrate_poll_process.sh:12357-12369 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m3, moonshotai_kimi-k3]\n  PROBLEM: `_linked_pr_is_merge_queued` still treats any PR carrying `ai:merge-queued` as queued without requiring it to be explicitly open and unmerged.\n  WHY: A merged or closed PR with a stale label can suppress stall recovery and prevent reconciliation to `ai:merged`; minimax classified this as BLOCKER, normalized here to critical.\n- tests/test_orchestrate_poll_process.py (functions `test_standalone_stall_recovery_reconciles_merged_pr_with_stale_merge_train_label`, `test_managed_stall_recovery_reconciles_merged_pr_with_stale_merge_train_label`, `test_linked_pr_graphql_queries_request_full_label_page` \u2014 the editor summary in issue comment 5576457283 names lines 8601-8633 and 12651-12685) | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The claimed regression tests for stale merge-train labels, the open-and-unmerged guard, and 100-label GraphQL pagination are absent.\n  WHY: The defects remain unpinned by tests, and minimax classified the missing regression coverage as BLOCKER, normalized here to critical.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:12132, 12275, 12357-12369 | severity=BLOCKER | confidence=5\n  PROBLEM: The LAST RUN DIFF (commit cc4bbdad) claimed three runtime-correctness fixes were applied \u2014 bumping both GraphQL linked-PR label projections to `labels(first: 100)` and tightening `_linked_pr_is_merge_queued` so only explicitly-open, unmerged PRs count as merge-train waiters \u2014 but none of those edits are present in the live file.\n  WHY: Both query fragments still emit `labels(first: 50)` and the jq predicate still returns truthy for a closed/merged PR carrying `ai:merge-queued`, so the reviewer-reported defects the editor summary called \"applied\" remain live in the shipped code.\n- tests/test_orchestrate_poll_process.py (functions `test_standalone_stall_recovery_reconciles_merged_pr_with_stale_merge_train_label`, `test_managed_stall_recovery_reconciles_merged_pr_with_stale_merge_train_label`, `test_linked_pr_graphql_queries_request_full_label_page` \u2014 the editor summary in issue comment 5576457283 names lines 8601-8633 and 12651-12685) | severity=BLOCKER | confidence=5\n  PROBLEM: The claimed regression tests are absent.\n  WHY: The contracted defects have no test pinning them, and the PR CI lint shard remained `in_progress` (`collection_status: timeout`), so the regression was not caught by the workflow gate.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/orchestrate_poll_process.sh line 12122: `labels(first: 50)` \u2014 unchanged; scripts/orchestrate_poll_process.sh line 12132: `labels(first: 50)` \u2014 unchanged; scripts/orchestrate_poll_process.sh line 12275: `labels(first: 50)` \u2014 unchanged; scripts/orchestrate_poll_process.sh lines 12357-12369: `_linked_pr_is_merge_queued()` only checks for the `ai:merge-queued` label; no open/unmerged state guards\n  PROBLEM: The claimed autofix changes are not present in the working tree.\n  WHY: Without the open/unmerged guard, a merged or closed PR with a stale `ai:merge-queued` label will continue to suppress legitimate stall recovery; without the pagination bump, PRs or issues with more than 50 labels risk missing the merge-queued label.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "85d9a325a1c3b5d6d19e2bcfb7b2bc1707ba23e989d99dd68209fb64ce2012e9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4035,
+    "run_id": "34162529930",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34162529930",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260908002452_87a096bf21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4035,
+    "run_id": "34162529930"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-08T00:24:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
