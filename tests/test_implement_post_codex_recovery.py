@@ -3407,8 +3407,29 @@ def test_blocked_already_satisfied_regexes_classify_real_verdicts() -> None:
 		)
 		return proc.returncode == 0
 
+	# The veto reads only the verdict's first sentence. Pin the exact sed
+	# expression the workflow uses so this helper cannot drift from it.
+	first_sentence_sed = "s/[.!?][[:space:]].*$//"
+	assert (
+		"codex_blocked_first_sentence=\"$(printf '%s' \"${codex_blocked_reason}\" "
+		f"| sed -E '{first_sentence_sed}' || true)\""
+	) in block, "the workflow must derive codex_blocked_first_sentence with the pinned sed"
+	assert (
+		'! printf \'%s\' "${codex_blocked_first_sentence}" | grep -qiE "${BLOCKED_REAL_OBSTACLE_REGEX}"'
+	) in block, "the real-obstacle veto must read the first sentence, not the whole reason"
+
+	def _first_sentence(reason: str) -> str:
+		proc = subprocess.run(
+			["sed", "-E", first_sentence_sed],
+			input=reason,
+			text=True,
+			capture_output=True,
+			check=True,
+		)
+		return proc.stdout
+
 	def _is_success_noop(reason: str) -> bool:
-		return _grep(positive, reason) and not _grep(negative, reason)
+		return _grep(positive, reason) and not _grep(negative, _first_sentence(reason))
 
 	# Verbatim verdict from run 33711184784 attempt 1 (issue #3972).
 	assert _is_success_noop(
@@ -3476,6 +3497,72 @@ def test_blocked_already_satisfied_regexes_classify_real_verdicts() -> None:
 	)
 	assert not _is_success_noop(
 		"BLOCKED: the upstream API is missing, so no changes are required here."
+	)
+
+	# Verbatim verdicts from tele-funtoken-msg-scoring runs 34166170045,
+	# 34163969134, 34163977712, 34164219124, 34163478446, 34162543282 and
+	# 34162832548 (issues #4213, #4192, #4191, #4193, #4189, #4180, #4184).
+	# Thirteen auto-heal issues for one SES error each dispatched an implement
+	# run; the model found the fix already at HEAD, but `failures` / `lacks`
+	# in the trailing aside about the pre-existing test suite tripped the
+	# veto and every run went red with an ERROR alert.
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires no repository edits; existing fix "
+		"verified (121 targeted tests passed). Full suite has 6 unrelated failures."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires no repository changes; HEAD already "
+		"contains the fix. Targeted tests pass (148). Full suite has 6 unrelated "
+		"failures."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved verification-only plan requires no repository edit. "
+		"HEAD matches the planning ref; targeted tests pass (148). Full suite has "
+		"6 unrelated failures. Production deployment status is unknown."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan forbids repository changes because HEAD already "
+		"contains the fix. Focused tests passed; full suite lacks project "
+		"dependencies."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires no repository diff; any edit would "
+		"violate scope. Targeted tests pass (148); full suite has 6 unrelated "
+		"failures."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires no repository changes; fix already "
+		"exists. Targeted tests pass (148 total). Full suite has 5 unrelated "
+		"pre-existing failures."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan is verification-only; current HEAD already "
+		"contains the fix. Six issue-specific tests pass. No in-scope repository "
+		"change is justified."
+	)
+	assert _is_success_noop("BLOCKED: main already holds the requested gate.")
+
+	# First-sentence scoping is narrow: `;` and `,` do not end the sentence,
+	# so an obstacle joined to the verdict stays vetoed, and an obstacle
+	# stated as the opening sentence stays vetoed however the rest reads.
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires no edits; pytest is unavailable so "
+		"validation could not run."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires no edits, but the fixture database is "
+		"inaccessible. Targeted tests pass."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: DigitalOcean credential unavailable for approved "
+		"PROMO_EMAIL_SENDER configuration correction. No repository changes are "
+		"required."
+	)
+	# Verbatim from run 34168336869 (issue #4198): a genuine blocker with no
+	# already-satisfied claim at all.
+	assert not _is_success_noop(
+		"BLOCKED: DigitalOcean credential unavailable for approved "
+		"PROMO_EMAIL_SENDER configuration correction."
 	)
 
 
