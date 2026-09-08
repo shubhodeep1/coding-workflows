@@ -142,7 +142,7 @@ _parse_reset_header()
 	local header_file="$1"
 	local _retry_after_secs
 	_retry_after_secs=$(grep -i '^retry-after:' "${header_file}" 2>/dev/null \
-		| head -1 | awk '{print $2}' | tr -d '\r' || true)
+		| head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r' || true)
 	case "${_retry_after_secs}" in
 		''|*[!0-9]*) : ;;
 		*)

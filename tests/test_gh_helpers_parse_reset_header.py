@@ -70,6 +70,13 @@ def test_retry_after_seconds_win_over_primary_reset(tmp_path: Path) -> None:
 	assert "Retry-After: 45s" in err
 
 
+def test_retry_after_accepts_no_whitespace_after_colon(tmp_path: Path) -> None:
+	before = int(time.time())
+	out, _err = _parse(tmp_path, "HTTP/2 403\r\nRetry-After:45\r\n\r\n")
+	assert out.isdigit(), out
+	assert int(out) >= before + 45
+
+
 def test_retry_after_header_name_is_case_insensitive(tmp_path: Path) -> None:
 	before = int(time.time())
 	out, _err = _parse(tmp_path, "HTTP/1.1 403 Forbidden\r\nRetry-After: 7\r\n\r\n")
