@@ -1,0 +1,23 @@
+{
+  "discovered_at": "2026-09-08T07:06:08Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=.github/workflows/review_autofix.yml:check-run 34192274518; cited_path=.github/workflows/review_autofix.yml; files_touched=.claude/commands/seed-repo.md, .claude/hooks/pr_watch_guard.py, .claude/settings.json, .github/workflows/ci.yml, CLAUDE.md, changelog.d/4051-pr-watch-disabled.md, tests/test_pr_watch_guard.py, workflow-templates/.claude/commands/seed-repo.md, workflow-templates/.claude/hooks/pr_watch_guard.py, workflow-templates/.claude/settings.json.",
+  "phase": "review_autofix",
+  "pr_number": 4051,
+  "record_id": "lesson_20260908070608_782fb894a2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/review_autofix.yml",
+    ".claude/commands/seed-repo.md",
+    ".claude/hooks/pr_watch_guard.py",
+    ".claude/settings.json",
+    ".github/workflows/ci.yml",
+    "CLAUDE.md",
+    "changelog.d/4051-pr-watch-disabled.md",
+    "tests/test_pr_watch_guard.py",
+    "workflow-templates/.claude/commands/seed-repo.md",
+    "workflow-templates/.claude/hooks/pr_watch_guard.py",
+    "workflow-templates/.claude/settings.json"
+  ]
+}
