@@ -1802,6 +1802,8 @@ Any workflow or script that routes GitHub API calls through `scripts/gh_helpers.
 ⚠️ WARNING: GitHub API rate limit hit — workflow=<name> repo=<owner/repo> run=<runs-url>
 ```
 
+**Wait computation (`curl_gh_api`):** the retry wait is derived from the 403/429 response headers. A numeric `Retry-After` (what GitHub sends on secondary rate limits) takes precedence and the helper sleeps that many seconds; otherwise it sleeps until `X-RateLimit-Reset` (the primary window). Both paths keep the 600 s cap, 1 s floor, and 30 s fallback of `_sleep_until_reset`. Before this ordering a secondary-limit 403 was timed against the primary reset, which can be up to an hour out, so the helper slept the full 600 s cap where GitHub had asked for a few seconds. The `gh_retry` family still reads the reset from `GET /rate_limit`.
+
 **Throttling:** alerts are globally throttled to at most one per `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` (default `3600` s = 1 h) across **all** workflow runs. The cooldown state is kept in a Telegram **pinned message** in the admin chat via an embedded marker `<!-- gh_rl_ts:EPOCH -->`, read with `getChat`. This deliberately avoids any GitHub API call for dedup state so the throttle still works while the GitHub API itself is the resource being limited. Previous pinned alerts are unpinned best-effort after a new alert is pinned.
 
 **Fail-closed semantics:** if `pinChatMessage` fails after the alert was sent, the sent message is rolled back via `deleteMessage` so the "≤ 1 alert per cooldown window" invariant is preserved even under transient Telegram failures.
