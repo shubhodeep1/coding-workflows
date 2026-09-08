@@ -1,6 +1,3 @@
----
-model: sonnet
----
 Seed a **new consumer repository** so it runs the coding-workflows automation: given a target `owner/repo` in `$ARGUMENTS` (plus an optional profile — `core`, `standard`, or `full`; default **`standard`**), render the profile's wrapper workflows with the immutable commit behind the upstream **`stable`** release, copy the `.claude/` command/hook assets and root `CLAUDE.md` from that release, and land them in the target repo via a seed branch + PR. Set the target's `WORKFLOW_PROFILE` repo variable (after asking, §23.C), and register the repo in the library's `.github/ai/consumer_repos.json` (§14 — mandatory). After the seed PR merges and the user adds the required secrets, the existing `ai-update-workflows.yml` sync (daily 04:00 UTC cron + `@stable` `repository_dispatch`) owns all future updates and advances every installed wrapper to the next immutable release SHA — this command is **initial onboarding only** and is a no-op on an already-seeded repo.
 
 $ARGUMENTS
