@@ -8,7 +8,7 @@ The "Install project dependencies (best-effort)" step could report success while
 | Workflow fixed | `.github/workflows/review_autofix.yml` |
 | Autofix rounds that hit the gap | 8 of 8 on PR #4029, 2026-09-07 05:52 to 23:45 UTC |
 | Config markers detected | `pytest.ini`, `conftest.py`, `[tool.pytest.ini_options]`, `[tool:pytest]`, `[pytest]` |
-| Regression tests | 4, in `tests/test_review_autofix_review_pipeline_contract.py` |
+| Regression tests | 5, in `tests/test_review_autofix_review_pipeline_contract.py` |
 
 What this means for consumer repos: an AI review-autofix round on a Python repository that declares pytest now validates its fixes against the suites the repository actually ships, so a regression the tests would catch is caught before the round pushes. Repositories with no pytest configuration are untouched and no extra install runs for them.
 
