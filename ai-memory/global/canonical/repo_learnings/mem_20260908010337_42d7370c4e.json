@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Orchestrator changes are typically paired with focused contract tests in tests/test_orchestrate_poll_process.py.",
   "timestamps": {
     "created_at": "2026-09-08T01:03:37Z",
