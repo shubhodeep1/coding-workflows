@@ -4799,6 +4799,8 @@ security_pass_fix_reissue_exhausted() {
     :
   else
     rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    gh_retry gh issue edit "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
+      --add-label 'ai:implementation-failed' >/dev/null 2>&1 || true
     echo "::warning::Could not persist terminal project state after exhausting security-pass fix issue #${issue_number}; the next poll will reconcile the terminal issue."
     return 0
   fi
