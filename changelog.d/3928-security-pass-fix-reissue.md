@@ -1,0 +1,16 @@
+<!-- changelog: fixed -->
+- **A security-pass fix issue that fails implementation is now closed and re-issued instead of parking the project forever.** The poller no longer logs `remains in progress` every cycle for a consolidated `[security-pass]` fix issue that `implement.yml` left in `ai:implementation-failed`.
+
+When the mandatory project security pass creates a consolidated fix issue and `implement.yml` fails it in post-Codex validation (or produces no changes), the issue ends in `ai:implementation-failed`. Wave issues in that state are closed and re-issued by the poller's wave loop, and standalone stall recovery deliberately skips the label, but a security-pass fix issue lives outside the wave arrays, so nothing re-dispatched it: `orchestrate_poll_process.sh` kept the project in `security-pass-fixing` and logged `Security-pass fix issue #N remains in progress.` on every poll. The `security-pass-fixing` handler now recognises the label, waits while recorded `Post-Codex validation diagnosed follow-up fixes` blocker issues are still open, and escalates an unchanged blocker deferral to `ai:needs-human` at the existing implementation-failed defer ceiling; Post-Codex outcomes with no recorded blockers proceed directly to re-issue. It then closes the failed issue, re-issues it with the same body plus re-issue guidance, points `security_pass_active_fix_issues` at the successor, and posts a `Security-pass fix issue re-issued` tracking comment. The re-issue budget is bounded by the new `MAX_SECURITY_PASS_FIX_REISSUES` repository variable; exceeding it closes the dead issue and fails the pass as `ai:security-pass-failed`, recoverable with `/re-security-pass` like the other terminal security-pass states.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Trigger | tele-funtoken-msg-scoring#3928: fix issue #4055 failed on 2026-09-07 14:23 UTC, its fix-up #4101 merged at 15:03 UTC, and the project stayed parked |
+| `MAX_SECURITY_PASS_FIX_REISSUES` default | `2` re-issues per fix cycle |
+| Wired in | `.github/workflows/orchestrate_poll.yml` (`vars.MAX_SECURITY_PASS_FIX_REISSUES`) |
+
+What this means for operators: a security-pass fix that dies in post-Codex validation recovers on its own once its fix-up merges. If the successor fails again past the cap, the tracking issue gets a `Project security-pass fix could not be implemented` comment and the `ai:security-pass-failed` label; address the findings, then comment `/re-security-pass`.
+
+### For contributors
+
+The new `security_pass_handle_failed_fix_issue` helper mirrors the wave implementation-failed path (blocker parsing via `extract_fix_issues_from_comment`, bounded blocker deferral, and post-codex versus no-op guidance) and reads the fix issue's comments from the cycle-local GraphQL batch, falling back to REST only when that batch missed the issue. State gains `security_pass_fix_reissue_count` and `security_pass_fix_defer`; both are cleared when a fresh fix issue is created, on `/re-security-pass`, and when the pass is disabled. The successor is created before the failed issue is closed so a transient `gh issue create` failure retries next poll instead of tripping the closed-without-merged-PR terminal path.
