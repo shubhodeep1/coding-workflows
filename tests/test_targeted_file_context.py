@@ -591,6 +591,37 @@ def test_semble_query_oserror_falls_back_cleanly() -> None:
 		assert " ms=" in telemetry
 
 
+def test_semble_query_failure_does_not_suppress_later_overflow_query() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "src").mkdir()
+		for name in ("first.py", "later.py"):
+			(root / "src" / name).write_text("x = 1\n" * 2000, encoding="utf-8")
+		original_query = targeted_file_context_module._run_semble_query
+		query_calls: list[str] = []
+
+		def _query_after_failure(query: str, *args: object) -> tuple[bool, str]:
+			query_calls.append(query)
+			if len(query_calls) == 1:
+				return False, "transient-failure"
+			return True, "later chunk"
+
+		targeted_file_context_module._run_semble_query = _query_after_failure
+		try:
+			context = emit_context(
+				["src/first.py", "src/later.py"],
+				root,
+				max_bytes=1024,
+				semble_query_text="task summary",
+			)
+		finally:
+			targeted_file_context_module._run_semble_query = original_query
+
+		assert len(query_calls) == 2
+		assert "later chunk" in context
+		assert "chunk-retrieved via semble" in context
+
+
 def test_semble_query_exception_timeout_falls_back_cleanly() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)

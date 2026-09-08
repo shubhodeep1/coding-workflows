@@ -706,7 +706,7 @@ def emit_context(
 					semble_rendered += 1
 					continue
 				payload = "budget-exhausted"
-			semble_overflow_budget_exhausted = True
+				semble_overflow_budget_exhausted = True
 			_log_semble_event(
 				"SEMBLE_FALLBACK",
 				target="overflow",
