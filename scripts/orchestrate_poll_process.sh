@@ -1295,6 +1295,16 @@ if ! [[ "${SECURITY_PASS_CONFIDENCE_GATE}" =~ ^[0-9]+$ ]] \
   SECURITY_PASS_CONFIDENCE_GATE="8"
 fi
 
+# Cap on how many times a security-pass fix issue that ended in
+# ai:implementation-failed may be closed and re-issued within one fix
+# cycle before the pass fails closed (recoverable via /re-security-pass).
+# Mirrors MAX_IMPL_NOOP_REISSUES for wave issues.
+MAX_SECURITY_PASS_FIX_REISSUES="${MAX_SECURITY_PASS_FIX_REISSUES:-2}"
+if ! [[ "${MAX_SECURITY_PASS_FIX_REISSUES}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::MAX_SECURITY_PASS_FIX_REISSUES must be a non-negative integer; defaulting to 2"
+  MAX_SECURITY_PASS_FIX_REISSUES="2"
+fi
+
 if is_truthy "${ALLOW_WORKFLOW_EDITS:-true}"; then
   ALLOW_WORKFLOW_EDITS="true"
 else
@@ -4552,6 +4562,244 @@ Security-pass fix issue #${issue_number} closed without merged-PR evidence. Comp
   tg_notify "Project #${TRACKING_NUM} security-pass fix issue #${issue_number} closed without a merged PR. Manual correction and /re-security-pass are required." "CRITICAL"
 }
 
+security_pass_fix_reissue_exhausted() {
+  local issue_number="$1"
+  local reissue_count="$2"
+
+  echo "SECURITY_PASS_FAILED reason=fix_issue_implementation_failed_reissues_exhausted tracking_issue=${TRACKING_NUM} issue=${issue_number} reissues=${reissue_count} cap=${MAX_SECURITY_PASS_FIX_REISSUES}"
+  # Close the exhausted fix issue: create_security_pass_fix_issue reuses any
+  # OPEN managed issue carrying the same tracking + local-id body markers,
+  # whatever its phase label, so leaving it open would make the audit that
+  # follows /re-security-pass adopt this dead issue again.
+  ensure_label_exists "ai:closed"
+  gh_retry gh issue edit "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
+    --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
+  gh_retry gh issue close "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
+    -c "Closing: implementation failed again after ${reissue_count} re-issue(s) (MAX_SECURITY_PASS_FIX_REISSUES=${MAX_SECURITY_PASS_FIX_REISSUES}). The project security pass is now failed; address the findings manually, then comment \`/re-security-pass\` on the tracking issue." 2>/dev/null || true
+  jq '
+    .status = "failed"
+    | .security_pass_status = "failed"
+    | .security_pass_head_sha = ""
+    | .security_pass_active_fix_issues = []
+    | del(.security_pass_fix_reissue_count)
+    | del(.security_pass_fix_defer)
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment || true
+  set_tracking_phase_label "ai:security-pass-failed"
+  post_tracking_comment "## ❌ Project security-pass fix could not be implemented
+
+Security-pass fix issue #${issue_number} ended in \`ai:implementation-failed\` again after ${reissue_count} re-issue(s) (cap ${MAX_SECURITY_PASS_FIX_REISSUES}). Completion remains gated; address the findings manually, then comment \`/re-security-pass\` to reset the bounded fix loop."
+  set_failed_completion_status_comment \
+    "Security-pass fix issue #${issue_number} failed implementation after ${reissue_count} re-issue(s). Completion remains gated; use \`/re-security-pass\` after addressing the findings manually."
+  tg_notify "Project #${TRACKING_NUM} security-pass fix issue #${issue_number} failed implementation after ${reissue_count} re-issue(s). Manual intervention and /re-security-pass are required." "CRITICAL"
+}
+
+# A security-pass fix issue is orchestrator-managed but lives outside the
+# wave arrays, so neither the wave implementation-failed reissue loop
+# (which iterates WAVE_STATUS) nor standalone stall recovery (which skips
+# ai:implementation-failed) ever touches it once implement.yml fails in
+# post-Codex validation.  Without this handler the project sits in
+# security-pass-fixing forever, logging "remains in progress" every poll
+# (tele-funtoken-msg-scoring#3928 / fix issue #4055, 2026-09-07: the
+# blocker fix-up #4101 merged within an hour, the fix issue was never
+# re-issued).  Mirror the wave path: defer while post-Codex blocker
+# fix-ups are still open, otherwise close the failed issue and re-issue it
+# with the same body (its durable markers keep the successor discoverable)
+# plus reissue guidance, bounded by MAX_SECURITY_PASS_FIX_REISSUES.
+#
+# Always returns 0; the caller continues the tracking-issue loop.
+security_pass_handle_failed_fix_issue() {
+  local issue_number="$1"
+  local comments_json="$2"
+  local fix_comment_json fix_comment_body blockers_json blocker_count
+  local has_post_codex_context="false" mode="no-op-implementation"
+  local defer_reason="" blocker_open_count=0 blocker_unknown_count=0 blocker_status_summary=""
+  local blocker_issue blocker_state blockers_csv defer_signature prev_signature
+  local reissue_count issue_title issue_body blockers_md new_body new_issue_url new_issue_num
+  local fix_cycle_label
+
+  if ! printf '%s' "${comments_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    comments_json='[]'
+  fi
+  fix_cycle_label="$(jq -r '((.security_pass_cycle // 0) + 1 | tostring) + "/" + $max' --arg max "${MAX_SECURITY_PASS_CYCLES}" "${STATE_FILE}" 2>/dev/null || echo "?/${MAX_SECURITY_PASS_CYCLES}")"
+
+  if printf '%s' "${comments_json}" | jq -e 'any(.[]; (.body // "") | test("^## Post-Codex validation"))' >/dev/null 2>&1; then
+    has_post_codex_context="true"
+  fi
+  fix_comment_json="$(printf '%s' "${comments_json}" | jq -c '[.[] | select((.body // "") | startswith("## Post-Codex validation diagnosed follow-up fixes"))] | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)]) // empty' 2>/dev/null || true)"
+  blockers_json='[]'
+  if [ -n "${fix_comment_json}" ]; then
+    fix_comment_body="$(printf '%s' "${fix_comment_json}" | jq -r '.body // ""')"
+    blockers_json="$(extract_fix_issues_from_comment "${fix_comment_body}" | jq -R 'select(length > 0) | tonumber' | jq -s 'unique')"
+  fi
+  blocker_count="$(printf '%s' "${blockers_json}" | jq 'length' 2>/dev/null || echo 0)"
+  [[ "${blocker_count}" =~ ^[0-9]+$ ]] || blocker_count=0
+  if [ "${blocker_count}" -gt 0 ]; then
+    mode="post-codex-validation"
+  elif [ "${has_post_codex_context}" = "true" ]; then
+    mode="post-codex-validation"
+    defer_reason="post-codex blocker metadata missing or malformed"
+  fi
+
+  if [ "${blocker_count}" -gt 0 ]; then
+    while IFS= read -r blocker_issue; do
+      [ -n "${blocker_issue}" ] || continue
+      blocker_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${blocker_issue}" --jq '.state' || echo "")"
+      case "${blocker_state}" in
+        open)
+          blocker_open_count=$((blocker_open_count + 1))
+          blocker_status_summary+="#${blocker_issue}=open "
+          ;;
+        closed)
+          blocker_status_summary+="#${blocker_issue}=closed "
+          ;;
+        *)
+          blocker_unknown_count=$((blocker_unknown_count + 1))
+          blocker_status_summary+="#${blocker_issue}=unknown "
+          ;;
+      esac
+    done < <(printf '%s' "${blockers_json}" | jq -r '.[]')
+    if [ "${blocker_unknown_count}" -gt 0 ]; then
+      defer_reason="blocker status lookup incomplete"
+    elif [ "${blocker_open_count}" -gt 0 ]; then
+      defer_reason="blocker fix-up issue(s) still open"
+    fi
+  fi
+
+  if [ -n "${defer_reason}" ]; then
+    blockers_csv="$(printf '%s' "${blockers_json}" | jq -r 'map("#" + tostring) | join(", ")' 2>/dev/null || echo "")"
+    [ -n "${blockers_csv}" ] || blockers_csv="(none recorded)"
+    defer_signature="${issue_number}|${blocker_status_summary}|${defer_reason}"
+    prev_signature="$(jq -r '.security_pass_fix_defer.summary // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+    echo "  Deferring security-pass fix reissue for #${issue_number}: mode=${mode}; blockers=${blockers_csv}; statuses=${blocker_status_summary}; reason=${defer_reason}."
+    # Persist (and notify) only when the blocker picture changes, so a long
+    # wait on an open fix-up costs one state comment, not one per poll.
+    if [ "${defer_signature}" != "${prev_signature}" ]; then
+      if jq --arg summary "${defer_signature}" --argjson issue "${issue_number}" \
+        '.security_pass_fix_defer = {issue: $issue, summary: $summary}' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp"; then
+        mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment || true
+      else
+        rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+      fi
+      tg_notify "Security-pass fix issue #${issue_number} (project #${TRACKING_NUM}, fix cycle ${fix_cycle_label}) failed implementation; reissue deferred."$'\n'"Mode: ${mode}"$'\n'"Blockers: ${blockers_csv}"$'\n'"Statuses: ${blocker_status_summary}"$'\n'"Reason: ${defer_reason}"$'\n'"Issue: $(_gh_url "issues/${issue_number}")" "WARNING"
+    fi
+    return 0
+  fi
+
+  reissue_count="$(jq -r '.security_pass_fix_reissue_count // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${reissue_count}" =~ ^[0-9]+$ ]] || reissue_count=0
+  if [ "${reissue_count}" -ge "${MAX_SECURITY_PASS_FIX_REISSUES}" ]; then
+    security_pass_fix_reissue_exhausted "${issue_number}" "${reissue_count}"
+    return 0
+  fi
+
+  # The body carries the durable "- Tracking issue" / "- Local ID" markers
+  # that create_security_pass_fix_issue dedups on; copy it verbatim so the
+  # successor stays discoverable, and refuse to re-issue without it.
+  issue_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_number}" --jq '.title // ""' || echo "")"
+  issue_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+  if [ -z "${issue_body}" ] || [ "${issue_body}" = "null" ]; then
+    echo "::warning::Security-pass fix issue #${issue_number} body could not be read; retaining fixing state and retrying the re-issue next poll."
+    return 0
+  fi
+  if [ -z "${issue_title}" ] || [ "${issue_title}" = "null" ]; then
+    issue_title="[security-pass] Project #${TRACKING_NUM} fix cycle ${fix_cycle_label%%/*}"
+  fi
+
+  if [ "${mode}" = "post-codex-validation" ]; then
+    blockers_md="$(printf '%s' "${blockers_json}" | jq -r '.[] | "- #\(.)"' 2>/dev/null || echo "")"
+    [ -n "${blockers_md}" ] || blockers_md="- (none recorded)"
+    new_body="$(cat <<REISSUE_EOF
+${issue_body}
+
+---
+
+**⚠️ Re-issued from #${issue_number}** — the previous implementation attempt failed during post-Codex syntax/validation checks.
+
+**Post-Codex blocker context:**
+${blockers_md}
+
+**Guidance for the implementation model:**
+- Review and respect the blocker fix-up outcomes listed above before re-implementing this security fix.
+- Preserve compatibility with those blocker fixes; do not undo or duplicate them.
+- Run syntax/validation checks for changed files before finishing to avoid another post-Codex failure.
+- You MUST create or modify files as described in the approved plan. Do NOT only describe changes.
+REISSUE_EOF
+)"
+  else
+    new_body="$(cat <<REISSUE_EOF
+${issue_body}
+
+---
+
+**⚠️ Re-issued from #${issue_number}** — the previous implementation attempt produced no repository changes.
+
+**Guidance for the implementation model:**
+- You MUST create or modify files as described in the plan. Do NOT just describe changes.
+- Verify your changes exist on disk before finishing (e.g. \`ls -la\` the target path).
+- If a finding genuinely requires no code change, explain why in a comment instead of silently producing no output.
+REISSUE_EOF
+)"
+  fi
+
+  # Create the successor before closing the failed issue: a create failure
+  # then leaves state untouched for a retry, whereas closing first would
+  # hand the next poll a closed issue without merged-PR evidence and fail
+  # the whole pass on a transient API error.
+  ensure_label_exists "ai:clarification"
+  ensure_label_exists "ai:orchestrator-managed"
+  new_issue_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
+    --title "${issue_title}" \
+    --body "${new_body}" \
+    --label "ai:clarification" \
+    --label "ai:orchestrator-managed" 2>/dev/null || echo "")"
+  new_issue_num="$(printf '%s\n' "${new_issue_url}" | grep -oE '/issues/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
+  if ! [[ "${new_issue_num}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::Could not create a replacement for security-pass fix issue #${issue_number}; retaining fixing state and retrying next poll."
+    return 0
+  fi
+  reissue_count=$((reissue_count + 1))
+  if jq --argjson successor "${new_issue_num}" --argjson reissues "${reissue_count}" '
+    .security_pass_active_fix_issues = [$successor]
+    | .security_pass_fix_reissue_count = $reissues
+    | del(.security_pass_fix_defer)
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp"; then
+    mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  else
+    rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    echo "::warning::Security-pass successor #${new_issue_num} could not be persisted for tracking issue #${TRACKING_NUM}; the next poll will re-issue again."
+    return 0
+  fi
+
+  ensure_label_exists "ai:closed"
+  gh_retry gh issue edit "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
+    --remove-label 'ai:implementation-failed' --add-label 'ai:closed' 2>/dev/null || true
+  if [ "${mode}" = "post-codex-validation" ]; then
+    gh_retry gh issue close "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
+      -c "Closing: implementation failed in post-Codex validation. Blocker fix-up issues are no longer open, so this security-pass fix is re-issued as #${new_issue_num} with blocker-sequenced guidance." 2>/dev/null || true
+  else
+    gh_retry gh issue close "${issue_number}" --repo "${GITHUB_REPOSITORY}" \
+      -c "Closing: implementation produced no changes. Re-issued as #${new_issue_num} with additional guidance." 2>/dev/null || true
+  fi
+
+  echo "SECURITY_PASS_FIX_ISSUE_REISSUED tracking_issue=${TRACKING_NUM} failed_issue=${issue_number} successor=${new_issue_num} mode=${mode} reissue=${reissue_count}/${MAX_SECURITY_PASS_FIX_REISSUES}"
+  post_state_comment || true
+  post_tracking_comment "## 🔁 Security-pass fix issue re-issued
+
+Security-pass fix issue #${issue_number} (fix cycle ${fix_cycle_label}) ended in \`ai:implementation-failed\` (${mode}) and was re-issued as #${new_issue_num} (re-issue ${reissue_count}/${MAX_SECURITY_PASS_FIX_REISSUES}). Tracking the successor; completion remains gated until it merges and a clean re-audit passes."
+  COMPLETION_STATUS_STATE_CHANGED="false"
+  update_completion_status_comment "waiting" \
+    "## Completion status"$'\n\n'"**State:** \`security-pass-fixing\`"$'\n\n'"Security-pass fix issue #${new_issue_num} (re-issued from #${issue_number}) is in the normal delivery pipeline. Completion remains gated until it merges and a clean current-head re-audit passes." \
+    || true
+  if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+    post_state_comment || true
+  fi
+  tg_notify "Re-issued security-pass fix issue #${issue_number} as #${new_issue_num} (project #${TRACKING_NUM}, fix cycle ${fix_cycle_label}, re-issue ${reissue_count}/${MAX_SECURITY_PASS_FIX_REISSUES})."$'\n'"Mode: ${mode}"$'\n'"Old issue: $(_gh_url "issues/${issue_number}")"$'\n'"New issue: $(_gh_url "issues/${new_issue_num}")" "WARNING"
+  return 0
+}
+
 create_security_pass_fix_issue() {
   local findings_file="$1"
   local completed_cycles="$2"
@@ -4672,6 +4920,8 @@ PY
     .status = "security-pass-fixing"
     | .security_pass_status = "blocked"
     | .security_pass_active_fix_issues = [$issue_number]
+    | del(.security_pass_fix_reissue_count)
+    | del(.security_pass_fix_defer)
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-fixing"
@@ -14448,7 +14698,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 			|| [ "${PROJECT_STATUS}" = "security-pass-fixing" ] \
 			|| has_label "${TRACKING_LABELS}" "ai:security-pass-failed"; }; then
 		echo "SECURITY_PASS_SKIPPED_DISABLED tracking_issue=${TRACKING_NUM} releasing_state=${PROJECT_STATUS}"
-		jq '.status = "in_progress" | .security_pass_cycle = 0 | .security_pass_status = "pending" | .security_pass_active_fix_issues = [] | .security_pass_head_sha = ""' \
+		jq '.status = "in_progress" | .security_pass_cycle = 0 | .security_pass_status = "pending" | .security_pass_active_fix_issues = [] | .security_pass_head_sha = "" | del(.security_pass_fix_reissue_count) | del(.security_pass_fix_defer)' \
 			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 		post_state_comment || true
 		set_tracking_phase_label "ai:done"
@@ -14519,6 +14769,24 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       elif [ "${SECURITY_FIX_STATE}" = "closed" ]; then
         echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} reason=fix_issue_closed_without_merged_pr issue=${SECURITY_FIX_ISSUE}"
         security_pass_closed_fix_failure "${SECURITY_FIX_ISSUE}"
+        continue
+      elif has_label "${SECURITY_FIX_LABELS}" "ai:implementation-failed"; then
+        # Open, but implement.yml failed it in post-Codex validation.  No
+        # other loop re-issues a security-pass fix issue (see
+        # security_pass_handle_failed_fix_issue), so handle it here.  Prefer
+        # the comments the cycle-local GraphQL batch already fetched (§15);
+        # the REST fallback only runs when that batch missed the issue.
+        SECURITY_FIX_COMMENTS_JSON='[]'
+        if printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -e --arg issue "${SECURITY_FIX_ISSUE}" '(.[$issue].comments | type) == "array"' >/dev/null 2>&1; then
+          SECURITY_FIX_COMMENTS_JSON="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -c --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].comments')"
+        elif SECURITY_FIX_COMMENTS_JSON="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${SECURITY_FIX_ISSUE}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" \
+          && printf '%s' "${SECURITY_FIX_COMMENTS_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+          :
+        else
+          echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE} is implementation-failed but its comments could not be fetched; retaining fixing state for retry."
+          continue
+        fi
+        security_pass_handle_failed_fix_issue "${SECURITY_FIX_ISSUE}" "${SECURITY_FIX_COMMENTS_JSON}"
         continue
       else
         echo "Security-pass fix issue #${SECURITY_FIX_ISSUE} remains in progress."
@@ -15075,6 +15343,8 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
         | .security_pass_status = "pending"
         | .security_pass_active_fix_issues = []
         | .security_pass_head_sha = ""
+        | del(.security_pass_fix_reissue_count)
+        | del(.security_pass_fix_defer)
       ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment || true
       set_tracking_phase_label "ai:security-pass"

@@ -3689,6 +3689,216 @@ def test_security_pass_closed_fix_without_merged_pr_terminalizes_recoverably() -
 	assert any("/re-security-pass" in comment["body"] for comment in result["issues"]["192"]["comments"])
 
 
+def _security_pass_fix_issue_body(tracking_issue: int, cycle: int) -> str:
+	"""Body create_security_pass_fix_issue writes for a consolidated fix issue.
+
+	Both durable orchestrator markers (`- Tracking issue:` and `- Local ID:`)
+	must survive a re-issue verbatim: they are what the managed-issue dedup
+	in create_security_pass_fix_issue keys on.
+	"""
+	return f"""Refs #{tracking_issue}
+
+The mandatory project security pass found the following blocking issues. Address every row through the normal clarify, plan, implement, and review pipeline.
+
+| ID | Category | Severity | Confidence | Location | Exploit scenario | Recommendation |
+|---|---|---|---:|---|---|---|
+| finding-1 | A01:2021-Broken Access Control | high | 9 | app.py:1 | scenario | recommendation |
+
+---
+**Orchestrator metadata** (do not edit)
+- Tracking issue: #{tracking_issue}
+- Integration branch: `orchestrator/project-{tracking_issue}`
+- Local ID: `security-pass-fix-cycle-{cycle}`
+- Priority: 1
+- Managed by: AI Orchestrator
+"""
+
+
+def _security_pass_post_codex_fixup_comment(source_issue: int, fixup_issue: int) -> str:
+	"""The comment implement.yml leaves on a source issue it failed in post-Codex validation."""
+	return (
+		"## Post-Codex validation diagnosed follow-up fixes\n\n"
+		"Codex diagnose failed or returned invalid JSON. Fallback fix-up issue created with raw captured diagnostics.\n\n"
+		"Failed step: Enforce syntax validation outcome\n\n"
+		"Created fix-up issues:\n"
+		f"- #{fixup_issue}\n\n"
+		"<!-- IMPLEMENT_FIXUP_BLOCKERS_V1\n"
+		f'{{"fixup_issue_numbers":[{fixup_issue}],"blocks_source_issue":{source_issue}}}\n'
+		"IMPLEMENT_FIXUP_BLOCKERS_V1 -->"
+	)
+
+
+def _security_pass_fixing_state(**overrides) -> dict:
+	state = _base_state(status="security-pass-fixing")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 1,
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [900],
+			"security_pass_head_sha": "audited-head",
+		}
+	)
+	state.update(overrides)
+	return state
+
+
+def test_security_pass_implementation_failed_fix_with_resolved_blockers_is_reissued() -> None:
+	"""An open fix issue that implement.yml failed in post-Codex validation
+	must be closed and re-issued once its blocker fix-ups are closed.
+
+	Regression for tele-funtoken-msg-scoring#3928: security-pass fix issue
+	#4055 ended in ai:implementation-failed, its fallback fix-up #4101 merged
+	within the hour, and the poller then logged "remains in progress" on
+	every cycle. Wave issues are re-issued by the WAVE_STATUS loop and
+	standalone stall recovery skips ai:implementation-failed, so nothing
+	ever re-dispatched the security fix.
+	"""
+	result = _run_poller(
+		state=_security_pass_fixing_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			900: ["ai:implementation-failed", "ai:orchestrator-managed"],
+			901: ["ai:merged", "ai:implement-fix-up"],
+		},
+		issue_closed={901: True},
+		issue_comments={900: [_security_pass_post_codex_fixup_comment(900, 901)]},
+		issue_bodies={900: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert len(result.get("created_issues", [])) == 1
+	created = result["created_issues"][0]
+	new_issue_num = created["number"]
+	assert created["title"] == "[security-pass] Project #192 fix cycle 2"
+	assert created["labels"] == ["ai:clarification", "ai:orchestrator-managed"]
+	assert result["closed_issues"] == [900]
+	old_labels = result["issues"]["900"]["labels"]
+	assert "ai:closed" in old_labels
+	assert "ai:implementation-failed" not in old_labels
+
+	new_body = result["issues"][str(new_issue_num)]["body"]
+	assert "- Tracking issue: #192" in new_body
+	assert "- Local ID: `security-pass-fix-cycle-2`" in new_body
+	assert "Re-issued from #900" in new_body
+	assert "failed during post-Codex syntax/validation checks" in new_body
+	assert "- #901" in new_body
+
+	for persisted_state in (result["state_on_disk"], result["latest_state"]):
+		assert persisted_state["status"] == "security-pass-fixing"
+		assert persisted_state["security_pass_status"] == "blocked"
+		assert persisted_state["security_pass_cycle"] == 1
+		assert persisted_state["security_pass_active_fix_issues"] == [new_issue_num]
+		assert persisted_state["security_pass_fix_reissue_count"] == 1
+		assert "security_pass_fix_defer" not in persisted_state
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	assert result["security_audit_capture"] is None
+	combined_log = result["stdout"] + result["stderr"]
+	assert (
+		"SECURITY_PASS_FIX_ISSUE_REISSUED tracking_issue=192 failed_issue=900 "
+		f"successor={new_issue_num} mode=post-codex-validation reissue=1/2" in combined_log
+	)
+	assert "SECURITY_PASS_FAILED" not in combined_log
+	assert "remains in progress" not in combined_log
+	tracking_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	assert any(f"re-issued as #{new_issue_num}" in body for body in tracking_comments)
+	assert any("(fix cycle 2/3)" in body and "(re-issue 1/2)" in body for body in tracking_comments)
+	assert not any("/re-security-pass" in body for body in tracking_comments)
+
+
+def test_security_pass_implementation_failed_fix_with_open_blockers_defers_reissue() -> None:
+	result = _run_poller(
+		state=_security_pass_fixing_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			900: ["ai:implementation-failed", "ai:orchestrator-managed"],
+			901: ["ai:implementing", "ai:implement-fix-up"],
+		},
+		issue_comments={900: [_security_pass_post_codex_fixup_comment(900, 901)]},
+		issue_bodies={900: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result.get("created_issues", []) == []
+	assert result["closed_issues"] == []
+	for persisted_state in (result["state_on_disk"], result["latest_state"]):
+		assert persisted_state["status"] == "security-pass-fixing"
+		assert persisted_state["security_pass_active_fix_issues"] == [900]
+		assert persisted_state["security_pass_fix_defer"]["issue"] == 900
+		assert "#901=open" in persisted_state["security_pass_fix_defer"]["summary"]
+		assert "security_pass_fix_reissue_count" not in persisted_state
+	combined_log = result["stdout"] + result["stderr"]
+	assert "Deferring security-pass fix reissue for #900" in combined_log
+	assert "blocker fix-up issue(s) still open" in combined_log
+	assert "SECURITY_PASS_FAILED" not in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_REISSUED" not in combined_log
+
+
+def test_security_pass_implementation_failed_noop_fix_is_reissued_with_noop_guidance() -> None:
+	result = _run_poller(
+		state=_security_pass_fixing_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			900: ["ai:implementation-failed", "ai:orchestrator-managed"],
+		},
+		issue_bodies={900: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert len(result.get("created_issues", [])) == 1
+	new_issue_num = result["created_issues"][0]["number"]
+	assert result["closed_issues"] == [900]
+	new_body = result["issues"][str(new_issue_num)]["body"]
+	assert "- Local ID: `security-pass-fix-cycle-2`" in new_body
+	assert "produced no repository changes" in new_body
+	assert result["latest_state"]["security_pass_active_fix_issues"] == [new_issue_num]
+	assert result["latest_state"]["security_pass_fix_reissue_count"] == 1
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"successor={new_issue_num} mode=no-op-implementation reissue=1/2" in combined_log
+
+
+def test_security_pass_implementation_failed_reissue_cap_terminalizes_recoverably() -> None:
+	result = _run_poller(
+		state=_security_pass_fixing_state(security_pass_fix_reissue_count=2),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			900: ["ai:implementation-failed", "ai:orchestrator-managed"],
+		},
+		issue_bodies={900: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result.get("created_issues", []) == []
+	assert result["closed_issues"] == [900]
+	assert "ai:closed" in result["issues"]["900"]["labels"]
+	for persisted_state in (result["state_on_disk"], result["latest_state"]):
+		assert persisted_state["status"] == "failed"
+		assert persisted_state["security_pass_status"] == "failed"
+		assert persisted_state["security_pass_active_fix_issues"] == []
+		assert "security_pass_fix_reissue_count" not in persisted_state
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	assert result["security_audit_capture"] is None
+	combined_log = result["stdout"] + result["stderr"]
+	assert (
+		"SECURITY_PASS_FAILED reason=fix_issue_implementation_failed_reissues_exhausted "
+		"tracking_issue=192 issue=900 reissues=2 cap=2" in combined_log
+	)
+	tracking_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	assert any("/re-security-pass" in body for body in tracking_comments)
+
+
 def test_security_pass_judge_validation_route_blocks_then_clean_pass_dispatches() -> None:
 	blocked_state = _base_state()
 	blocked_state["integration_branch"] = "orchestrator/project-192"
