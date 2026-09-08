@@ -57,6 +57,11 @@ def test_primary_reset_is_returned_when_no_retry_after(tmp_path: Path) -> None:
 	assert "Retry-After" not in err
 
 
+def test_primary_reset_accepts_no_whitespace_after_colon(tmp_path: Path) -> None:
+	out, _err = _parse(tmp_path, f"HTTP/2 403\r\nX-RateLimit-Reset:{PRIMARY_RESET_EPOCH}\r\n\r\n")
+	assert out == str(PRIMARY_RESET_EPOCH)
+
+
 def test_retry_after_seconds_win_over_primary_reset(tmp_path: Path) -> None:
 	before = int(time.time())
 	out, err = _parse(
@@ -73,6 +78,13 @@ def test_retry_after_seconds_win_over_primary_reset(tmp_path: Path) -> None:
 def test_retry_after_accepts_no_whitespace_after_colon(tmp_path: Path) -> None:
 	before = int(time.time())
 	out, _err = _parse(tmp_path, "HTTP/2 403\r\nRetry-After:45\r\n\r\n")
+	assert out.isdigit(), out
+	assert int(out) >= before + 45
+
+
+def test_retry_after_trims_trailing_optional_whitespace(tmp_path: Path) -> None:
+	before = int(time.time())
+	out, _err = _parse(tmp_path, "HTTP/2 403\r\nRetry-After: 45 \t\r\n\r\n")
 	assert out.isdigit(), out
 	assert int(out) >= before + 45
 
