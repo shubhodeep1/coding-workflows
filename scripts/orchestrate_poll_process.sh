@@ -4615,6 +4615,7 @@ security_pass_handle_failed_fix_issue() {
   local has_post_codex_context="false" mode="no-op-implementation"
   local defer_reason="" blocker_open_count=0 blocker_unknown_count=0 blocker_status_summary=""
   local blocker_issue blocker_state blockers_csv defer_signature prev_signature
+  local previous_defer_count previous_defer_escalated defer_count defer_escalated should_escalate
   local reissue_count issue_title issue_body blockers_md new_body new_issue_url new_issue_num
   local fix_cycle_label
 
@@ -4638,7 +4639,6 @@ security_pass_handle_failed_fix_issue() {
     mode="post-codex-validation"
   elif [ "${has_post_codex_context}" = "true" ]; then
     mode="post-codex-validation"
-    defer_reason="post-codex blocker metadata missing or malformed"
   fi
 
   if [ "${blocker_count}" -gt 0 ]; then
@@ -4671,18 +4671,38 @@ security_pass_handle_failed_fix_issue() {
     [ -n "${blockers_csv}" ] || blockers_csv="(none recorded)"
     defer_signature="${issue_number}|${blocker_status_summary}|${defer_reason}"
     prev_signature="$(jq -r '.security_pass_fix_defer.summary // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
-    echo "  Deferring security-pass fix reissue for #${issue_number}: mode=${mode}; blockers=${blockers_csv}; statuses=${blocker_status_summary}; reason=${defer_reason}."
-    # Persist (and notify) only when the blocker picture changes, so a long
-    # wait on an open fix-up costs one state comment, not one per poll.
-    if [ "${defer_signature}" != "${prev_signature}" ]; then
-      if jq --arg summary "${defer_signature}" --argjson issue "${issue_number}" \
-        '.security_pass_fix_defer = {issue: $issue, summary: $summary}' \
-        "${STATE_FILE}" > "${STATE_FILE}.tmp"; then
-        mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-        post_state_comment || true
-      else
-        rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
-      fi
+    previous_defer_count="$(jq -r '.security_pass_fix_defer.count // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+    previous_defer_escalated="$(jq -r '.security_pass_fix_defer.escalated // false' "${STATE_FILE}" 2>/dev/null || echo false)"
+    [[ "${previous_defer_count}" =~ ^[0-9]+$ ]] || previous_defer_count=0
+    if [ "${defer_signature}" = "${prev_signature}" ]; then
+      defer_count=$((previous_defer_count + 1))
+      defer_escalated="${previous_defer_escalated}"
+    else
+      defer_count=1
+      defer_escalated="false"
+    fi
+    should_escalate="false"
+    if [ "${defer_count}" -ge "${MAX_IMPL_FAILED_DEFER_CYCLES}" ] && [ "${defer_escalated}" != "true" ]; then
+      should_escalate="true"
+      defer_escalated="true"
+    fi
+    echo "  Deferring security-pass fix reissue for #${issue_number}: mode=${mode}; blockers=${blockers_csv}; statuses=${blocker_status_summary}; reason=${defer_reason}; cycle=${defer_count}/${MAX_IMPL_FAILED_DEFER_CYCLES}; escalated=${defer_escalated}."
+    if jq --arg summary "${defer_signature}" --argjson issue "${issue_number}" \
+      --argjson count "${defer_count}" --argjson escalated "${defer_escalated}" \
+      '.security_pass_fix_defer = {issue: $issue, summary: $summary, count: $count, escalated: $escalated}' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp"; then
+      mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment || true
+    else
+      rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+    fi
+    if [ "${should_escalate}" = "true" ]; then
+      ensure_label_exists "ai:needs-human"
+      gh_retry gh issue edit "${issue_number}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1 || true
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/comments" \
+        -f body="$(printf '## Security-pass implementation-failed deferral escalated\n\nThis security-pass fix issue has been deferred for %s consecutive poll cycles with the same blocker status (%s). Blocker fix-ups [%s] are not advancing on their own — escalating to `ai:needs-human` for manual review. Reason: %s.' "${defer_count}" "${blocker_status_summary}" "${blockers_csv}" "${defer_reason}")" >/dev/null 2>&1 || true
+      tg_notify "Security-pass fix reissue for #${issue_number} (project #${TRACKING_NUM}, fix cycle ${fix_cycle_label}) escalated to ai:needs-human after ${defer_count} deferred cycles."$'\n'"Mode: ${mode}"$'\n'"Blockers: ${blockers_csv}"$'\n'"Statuses: ${blocker_status_summary}"$'\n'"Reason: ${defer_reason}"$'\n'"Issue: $(_gh_url "issues/${issue_number}")" "CRITICAL"
+    elif [ "${defer_signature}" != "${prev_signature}" ]; then
       tg_notify "Security-pass fix issue #${issue_number} (project #${TRACKING_NUM}, fix cycle ${fix_cycle_label}) failed implementation; reissue deferred."$'\n'"Mode: ${mode}"$'\n'"Blockers: ${blockers_csv}"$'\n'"Statuses: ${blocker_status_summary}"$'\n'"Reason: ${defer_reason}"$'\n'"Issue: $(_gh_url "issues/${issue_number}")" "WARNING"
     fi
     return 0

@@ -3833,12 +3833,78 @@ def test_security_pass_implementation_failed_fix_with_open_blockers_defers_reiss
 		assert persisted_state["security_pass_active_fix_issues"] == [700]
 		assert persisted_state["security_pass_fix_defer"]["issue"] == 700
 		assert "#701=open" in persisted_state["security_pass_fix_defer"]["summary"]
+		assert persisted_state["security_pass_fix_defer"]["count"] == 1
+		assert persisted_state["security_pass_fix_defer"]["escalated"] is False
 		assert "security_pass_fix_reissue_count" not in persisted_state
 	combined_log = result["stdout"] + result["stderr"]
 	assert "Deferring security-pass fix reissue for #700" in combined_log
 	assert "blocker fix-up issue(s) still open" in combined_log
 	assert "SECURITY_PASS_FAILED" not in combined_log
 	assert "SECURITY_PASS_FIX_ISSUE_REISSUED" not in combined_log
+
+
+def test_security_pass_implementation_failed_fix_defer_escalates_at_wave_ceiling() -> None:
+	defer_summary = "700|#701=open |blocker fix-up issue(s) still open"
+	result = _run_poller(
+		state=_security_pass_fixing_state(
+			security_pass_fix_defer={
+				"issue": 700,
+				"summary": defer_summary,
+				"count": 4,
+				"escalated": False,
+			}
+		),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+			701: ["ai:implementing", "ai:implement-fix-up"],
+		},
+		issue_comments={700: [_security_pass_post_codex_fixup_comment(700, 701)]},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MAX_IMPL_FAILED_DEFER_CYCLES": "5"},
+	)
+
+	assert result.get("created_issues", []) == []
+	assert result["closed_issues"] == []
+	assert "ai:needs-human" in result["issues"]["700"]["labels"]
+	for persisted_state in (result["state_on_disk"], result["latest_state"]):
+		defer_state = persisted_state["security_pass_fix_defer"]
+		assert defer_state["summary"] == defer_summary
+		assert defer_state["count"] == 5
+		assert defer_state["escalated"] is True
+	combined_log = result["stdout"] + result["stderr"]
+	assert "cycle=5/5; escalated=true" in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_REISSUED" not in combined_log
+
+
+def test_security_pass_post_codex_outcome_without_blockers_is_reissued() -> None:
+	result = _run_poller(
+		state=_security_pass_fixing_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={
+			10: ["ai:merged"],
+			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
+		},
+		issue_comments={700: ["## Post-Codex validation harness error\n\nHarness failed before follow-up issues were created."]},
+		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert len(result.get("created_issues", [])) == 1
+	new_issue_num = result["created_issues"][0]["number"]
+	assert result["closed_issues"] == [700]
+	new_body = result["issues"][str(new_issue_num)]["body"]
+	assert "failed during post-Codex syntax/validation checks" in new_body
+	assert "- (none recorded)" in new_body
+	assert "security_pass_fix_defer" not in result["latest_state"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"successor={new_issue_num} mode=post-codex-validation reissue=1/2" in combined_log
 
 
 def test_security_pass_implementation_failed_noop_fix_is_reissued_with_noop_guidance() -> None:
