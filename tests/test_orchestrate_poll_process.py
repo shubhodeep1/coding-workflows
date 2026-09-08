@@ -4598,8 +4598,34 @@ def test_security_pass_implementation_failed_noop_fix_is_reissued_with_noop_guid
 
 
 def test_security_pass_implementation_failed_reissue_cap_terminalizes_recoverably() -> None:
+	exhausted_tracking_body = """## Project: Test Project
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-192`
+
+### Wave 1
+
+- [x] **issue-1**: First task (priority 1)
+
+<!-- orchestrator:security-pass -->
+### Security pass
+- Status: `blocked`
+- Completed fix cycles: 1
+- Audited integration SHA: `audited-head`
+- Active fix issue: #700
+<!-- /orchestrator:security-pass -->
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
 	result = _run_poller(
-		state=_security_pass_fixing_state(security_pass_fix_reissue_count=2),
+		state=_security_pass_fixing_state(
+			security_pass_fix_reissue_count=2,
+			project_body_snapshot=exhausted_tracking_body,
+			tracking_body_sync_hash=hashlib.sha256(exhausted_tracking_body.encode("utf-8")).hexdigest(),
+		),
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
@@ -4608,6 +4634,7 @@ def test_security_pass_implementation_failed_reissue_cap_terminalizes_recoverabl
 			700: ["ai:implementation-failed", "ai:orchestrator-managed"],
 		},
 		issue_bodies={700: _security_pass_fix_issue_body(192, 2)},
+		tracking_body=exhausted_tracking_body,
 		existing_branches=["main", "orchestrator/project-192"],
 	)
 
@@ -4621,6 +4648,14 @@ def test_security_pass_implementation_failed_reissue_cap_terminalizes_recoverabl
 		assert "security_pass_fix_reissue_count" not in persisted_state
 	assert result["tracking_labels"] == ["ai:security-pass-failed"]
 	assert result["security_audit_capture"] is None
+	rendered_body = result["issues"]["192"]["body"]
+	assert "- Status: `failed`" in rendered_body
+	assert "- Active fix issue: none" in rendered_body
+	assert "- Active fix issue: #700" not in rendered_body
+	assert [call["issue"] for call in result["issue_body_edit_calls"]] == [192]
+	assert result["latest_state"]["tracking_body_sync_hash"] == hashlib.sha256(
+		rendered_body.encode("utf-8")
+	).hexdigest()
 	combined_log = result["stdout"] + result["stderr"]
 	assert (
 		"SECURITY_PASS_FAILED reason=fix_issue_implementation_failed_reissues_exhausted "
