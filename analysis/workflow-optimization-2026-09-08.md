@@ -284,3 +284,150 @@ Run `34162529930` alone contains a known duplicate lower bound of 15 OpenRouter 
 | Standalone label discovery per poll | 7 | 1 |
 | Autofix sweep inventory/status calls | 7 | 4, potentially |
 | Runtime call-count telemetry | unavailable | one aggregate per step |
+
+## Deep Audit — Workflows & Scripts (2026-09-08)
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001 — API failure silently changes the checkout branch
+- **File path:** `scripts/resolve_integration_ref.sh:38-56`; `.github/workflows/clarify.yml:119-129`; `.github/workflows/plan.yml:182-195`; `.github/workflows/implement.yml:382-393`; `.github/workflows/orchestrate_clarify_respond.yml:172-183`; `.github/workflows/validate.yml:153-164`
+- **Severity:** High
+- **Category tag:** `bug`
+- **Description:** The resolver uses raw `gh api` calls without `gh_retry`. All five callers collapse any resolver failure—including rate limits, authentication failures, and 5xx responses—into an empty output and subsequently check out the default branch. Inference: an orchestrator-managed task can therefore run against the wrong base when integration-branch resolution is temporarily unavailable.
+- **Recommended fix:** Source the sibling `gh_helpers.sh`, retry transient failures, and return distinct statuses for `no_integration_branch`, `branch_missing`, and `api_unavailable`. Only the first should select the default branch; an unavailable or unverifiable integration ref should defer the run.
+
+#### BUG-002 — Guard rejection can fail to latch during a transient API failure
+- **File path:** `scripts/implement_handle_guard_block.sh:34-64,153-195,218-240`; `.github/workflows/implement.yml:870-888,3787-3812`
+- **Severity:** Medium
+- **Category tag:** `bug`
+- **Description:** The destructive/scope guard’s circuit-breaker labels, verification reads, comments, and Telegram notifications use raw `gh`/`curl` calls. A transient failure can leave `ai:scope-blocked` or `ai:destructive-blocked` absent, allowing redispatch of the rejected issue. The workflow’s stated reason—that helper scripts may have been removed—is stale: staged support scripts are deliberately excluded from `FETCHED_MANIFEST`.
+- **Recommended fix:** Preserve `gh_helpers.sh`, `label_helpers.sh`, and `tg_helpers.sh` beside the runtime handler, then use `gh_retry`, `ensure_label_exists`, and `tg_send_msg`. Keep the final verification read and fail the handler explicitly when the latch remains absent.
+
+#### SHELL-001 — Configurable workflow list undergoes glob expansion
+- **File path:** `scripts/review_merge_train.sh:375-384`
+- **Severity:** Low
+- **Category tag:** `shellcheck`
+- **Description:** `for wf in ${MERGE_TRAIN_DISPATCH_WORKFLOWS:-...}` intentionally word-splits but also performs pathname expansion. A malformed repository variable containing glob characters can turn repository filenames into workflow names.
+- **Recommended fix:** Parse the value into an array with `read -r -a`, validate each entry as a workflow basename, and iterate using `"${workflows[@]}"`.
+
+No substantiated secret exposure, direct untrusted-text shell interpolation, YAML syntax failure, Python syntax failure, or shell syntax failure was found.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### BATCH-001 — Merge-train file cache is lost across command substitutions
+- **File path:** `scripts/review_merge_train.sh:110-128,175-203,388-420`
+- **Severity:** High
+- **Category tag:** `api-batching`
+- **Description:** `_mt_pr_files` writes `_MT_FILES_CACHE`, but callers invoke it through command substitutions. Bash executes those functions in subshells, so cache mutations do not survive. The release loop consequently re-fetches the same PR files across queued-PR evaluations despite the documented process-lifetime cache.
+- **Current call count:** Gate path: up to 1 PR inventory plus 20 `/pulls/{n}/files` calls. Release path: 2 inventories plus up to 21 file-list calls per queued PR.
+- **Proposed call count:** 2 inventories plus `ceil(unique_prs / 20)` GraphQL batches; REST only for PRs whose `files.pageInfo.hasNextPage` is true.
+- **Recommended fix:** First convert `_mt_pr_files` to an output-variable API so cache mutation occurs in the parent shell. Then add an aliased GraphQL prefetch modeled on `_fetch_candidate_issue_details_graphql`, hydrating `_MT_FILES_CACHE` before blocker evaluation.
+
+#### API-001 — Poller discards reusable tracker and repository metadata
+- **File path:** `scripts/orchestrate_poll_process.sh:12875-12892,14639-14674,15081-15108,19851-19855`
+- **Severity:** Medium
+- **Category tag:** `api-redundancy`
+- **Description:** The main tracking loop fetches every tracker’s comments, then `run_standalone_stall_recovery` re-fetches those same comments after the loop. On the `merge_conflict` path, `DEFAULT_BRANCH_TRACKING` is populated at line 15085 and the same repository field is fetched again at line 15107.
+- **Current call count:** `2T` comment requests for `T` tracking issues; 2 repository metadata calls on the merge-conflict path.
+- **Proposed call count:** `T` comment requests and 1 repository metadata request per poll.
+- **Recommended fix:** Store validated tracker comments in a cycle-local issue-number cache and resolve `REPO_DEFAULT_BRANCH` once. Extend the existing `_candidate_details_json` and `ACTIVE_WORKFLOW_ISSUES` cache pattern.
+
+#### API-002 — Auto-merge fetches labels separately from PR metadata
+- **File path:** `scripts/review_enable_auto_merge.sh:54-76,110-139`
+- **Severity:** Medium
+- **Category tag:** `api-redundancy`
+- **Description:** The script requests `/issues/{pr}/labels` and then `/pulls/{pr}`. The PR response already contains the labels needed for the `e2e-smoke-test` guard.
+- **Current call count:** 2 GET requests per eligible auto-merge run.
+- **Proposed call count:** 1 GET request.
+- **Recommended fix:** Fetch the PR payload first and derive labels, head ref, and body from that single validated object. Preserve the current fail-closed behavior for absent or malformed labels.
+
+#### API-003 — Merge-train comment upsert re-fetches a body already listed
+- **File path:** `scripts/review_merge_train.sh:220-255`
+- **Severity:** Low
+- **Category tag:** `api-redundancy`
+- **Description:** `_mt_find_marker_comment_id` lists all comments but returns only the ID. `_mt_upsert_comment` then issues a second GET for that comment’s body.
+- **Current call count:** 2 GET requests for an existing marker.
+- **Proposed call count:** 1 GET request.
+- **Recommended fix:** Return `{id, body}` from the comments-list request and compare locally. Follow `update_completion_status_comment` in `orchestrate_poll_process.sh:2111-2157`, which reuses cached comment bodies.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Context-budget warning wrapper is triplicated
+- **File path:** `scripts/review_apply_fixes.sh:164-202`; `scripts/review_rb_judge.sh:256-294`; `scripts/review_run_reviewers.sh:69-107`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** All three files define effectively identical `emit_context_budget_warn_for_prompt` functions, including the same Python heredoc and import fallback.
+- **Recommended fix:** Add `emit_context_budget_warn_for_prompt <phase> <prompt_path> <model>` to a new `scripts/context_budget_helpers.sh`, then source it from all three callers.
+
+#### DUP-002 — Semble query-section rendering is triplicated
+- **File path:** `scripts/review_apply_fixes.sh:909-918`; `scripts/review_conflict_prepare.sh:605-614`; `scripts/review_run_reviewers.sh:1760-1769`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** The three `append_semble_query_section` implementations are identical.
+- **Recommended fix:** Move the implementation to `scripts/semble_helpers.sh` as `semble_append_query_section <label> <path> [max_bytes]` and update all three callers.
+
+#### DUP-003 — Integration-ref bootstrap is copied across five workflows
+- **File path:** `.github/workflows/clarify.yml:61-130`; `.github/workflows/plan.yml:124-195`; `.github/workflows/implement.yml:325-394`; `.github/workflows/orchestrate_clarify_respond.yml:115-184`; `.github/workflows/validate.yml:96-164`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** Each workflow repeats cloning, authenticated fetching, fallback selection, log redaction, cleanup, resolver invocation, and output handling. This creates five sites that must remain synchronized when correcting BUG-001.
+- **Recommended fix:** Stage the support checkout with `actions/checkout`, then invoke one `scripts/resolve_integration_ref_step.sh --repo <slug> --issue <n> --github-output <path>` implementation. Update all five workflows.
+
+No complete workflow pair exceeded the requested greater-than-70% normalized-similarity threshold.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — Implement support-staging expression exceeds the Medium threshold
+- **File path:** `.github/workflows/implement.yml:855-1134`
+- **Severity:** Medium
+- **Category tag:** `expression-limit`
+- **Description:** The interpolated `Stage workflow support files` block is approximately **15,162 characters**, exceeding the 15,000-character Medium-risk threshold. Remaining headroom is approximately **5,838 characters** before GitHub’s 21,000-character hard limit.
+- **Recommended fix:** Move support installation and manifest generation into `scripts/stage_workflow_support.sh` with an implement-specific mode, leaving only environment setup and one script invocation inline.
+
+No block exceeded 18,000 characters. The largest `if:` expression measured 572 characters. No workflow exceeded 800 KB; the largest, `review_autofix.yml`, is approximately 459,794 characters with 588,782 characters of 1 MiB headroom.
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001 — Reserved label-repair resolver is not wired into runtime
+- **File path:** `scripts/orchestrate_lib.py:1674-2080`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `resolve_label_repair_evidence` and its evidence-selection path have no runtime caller in scoped workflows or scripts. `agents.md` explicitly describes this richer contradiction-evidence implementation as reserved and not wired into poller reconciliation.
+- **Recommended fix:** Either integrate it behind a default-off reconciliation feature flag with contract tests, or isolate it as explicitly reserved compatibility code. Do not silently remove its public identifiers.
+
+#### DEAD-002 — Reviewer filter preserves two unused raw variables
+- **File path:** `scripts/review_run_reviewers.sh:753-777,944-1015`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE` and `RAW_REVIEWER_SYMBOL_DIFF_SUMMARY_FILE` are assigned but never read. The filtered original diff is instead copied from the filtered current PR diff. Whether that intentionally collapses the original/current distinction is unclear. [NEEDS VERIFICATION]
+- **Recommended fix:** Filter `RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE` independently if its historical distinction matters; otherwise remove the stale assignments after confirming no sourced caller depends on them.
+
+#### CONSIST-001 — Diagnose-prompt manifest behavior contradicts its comment
+- **File path:** `.github/workflows/implement.yml:1044-1061,4868-4910`; `scripts/implement_commit_changes.sh:68-99`; `scripts/implement_diagnose_post_codex_failure.sh:360-399`
+- **Severity:** Low
+- **Category tag:** `consistency`
+- **Description:** The workflow appends `prompts/mode-implement-diagnose.txt` to `FETCHED_MANIFEST`, then immediately states it is intentionally not added because the late diagnose step needs it. Cleanup removes manifest entries; the diagnose helper later rehydrates the file, so behavior currently survives but the documented lifetime contract is false.
+- **Recommended fix:** Document the actual remove-and-rehydrate lifecycle and add a contract test, or preserve the prompt through cleanup and eliminate rehydration. Keep one authoritative lifetime policy.
+
+No `TODO`, `FIXME`, or `HACK` markers were found in scoped files.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BUG-001, BATCH-001 |
+| Medium | 5 | BUG-002, API-001, API-002, DUP-003, EXPR-001 |
+| Low | 7 | API-003, CONSIST-001, DEAD-001, DEAD-002, DUP-001, DUP-002, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 7 | Medium |
+| API call optimization | 3 | Medium |
+| Code modularization | 12 | Large |
+| Expression size reduction | 2 | Medium |
+| Medium/Low fixes | 6 | Medium |
