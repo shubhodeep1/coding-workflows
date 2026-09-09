@@ -23,7 +23,15 @@ SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
 WATCHDOG_HELPERS="${SUPPORT_SCRIPTS_DIR}/watchdog_helpers.sh"
 
 : "${RUNTIME_DIR:?RUNTIME_DIR must be set}"
-: "${PR_CLOSED_SENTINEL_FILE:?PR_CLOSED_SENTINEL_FILE must be set}"
+# Default the sentinel path instead of hard-requiring the workflow to export
+# it. On the workflow source repo the reusable review_autofix.yml runs @main
+# while this script is staged from the PR head SHA, so a `:?` guard here
+# aborts the editor before any model call whenever the running YAML predates
+# the export (runs 34257678201 / 34266425657 on PR #4057). This mirrors the
+# default already used by review_run_reviewers.sh and
+# summarize_reviewer_consensus.sh; the path check below still rejects any
+# override that points outside the protected runtime location.
+PR_CLOSED_SENTINEL_FILE="${PR_CLOSED_SENTINEL_FILE:-${RUNTIME_DIR}/pr_closed_sentinel}"
 if [ "${PR_CLOSED_SENTINEL_FILE}" != "${RUNTIME_DIR}/pr_closed_sentinel" ]; then
 	echo "::error::PR_CLOSED_SENTINEL_FILE must be the protected runtime sentinel." >&2
 	exit 1
