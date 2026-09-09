@@ -18197,18 +18197,25 @@ EOF
               echo "  Reusing authenticated replacement issue for approval request ${RB_APPROVAL_REQUEST_ID}: ${NEW_URL}"
             elif [ "${RB_SUCCESSOR_STATUS}" = "not_found" ]; then
               RB_SUCCESSOR_BODY="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.body')"
-              NEW_URL="$(gh_retry gh issue create \
-                --repo "${GITHUB_REPOSITORY}" \
-                --title "${NEW_ISSUE_TITLE}" \
-                --body "${RB_SUCCESSOR_BODY}" \
-                --label "ai:clarification" \
-                --label "ai:orchestrator-managed")"
+              if NEW_URL="$(gh_retry gh issue create \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --title "${NEW_ISSUE_TITLE}" \
+                  --body "${RB_SUCCESSOR_BODY}" \
+                  --label "ai:clarification" \
+                  --label "ai:orchestrator-managed")"; then
+                echo "  Created authenticated replacement issue: ${NEW_URL}"
+              else
+                RB_REISSUE_CREATE_RC=$?
+                echo "::error::Failed to create authenticated replacement issue for close_and_reissue (rc=${RB_REISSUE_CREATE_RC}; PR #${RB_PR} remains open). Leaving issue #${rb_issue} in ai:review-blocked for retry."
+                tg_notify "Orchestrator close_and_reissue: authenticated replacement creation failed for PR #${RB_PR} (issue #${rb_issue}, rc=${RB_REISSUE_CREATE_RC}). The PR remains open and stall recovery will retry."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+                NEW_URL=""
+              fi
             else
-              echo "::warning::Successor lookup was inconclusive; refusing replacement adoption or creation this cycle."
+              echo "::error::Authenticated successor lookup was inconclusive for close_and_reissue; refusing replacement adoption or creation and leaving PR #${RB_PR} open for retry."
+              tg_notify "Orchestrator close_and_reissue: authenticated successor lookup was inconclusive for PR #${RB_PR} (issue #${rb_issue}). The PR remains open and stall recovery will retry."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
             fi
             NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
             NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
-            echo "  Created replacement issue #${NEW_NUM}: ${NEW_ISSUE_TITLE}"
 
             # Create/reuse the replacement before closing the source PR. A
             # failed replacement must leave the original review-blocked PR

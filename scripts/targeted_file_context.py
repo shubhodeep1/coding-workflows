@@ -63,10 +63,10 @@ Bounds (defensible default; override per caller):
                                   read with read tool)" marker so the
                                   model uses its native targeted-read
                                   flow instead of being misled by a
-                                  truncated head. There is no separate
-                                  file-count cap: every path the caller
-                                  passes is reported, either inlined or
-                                  as a marker.
+                                  truncated head. At most 256 normalized
+                                  paths are processed; excess or invalid
+                                  paths are represented by the aggregate
+                                  omitted-path count in the final summary.
 
 Designed to be safe on missing inputs: if the plan has no recognised
 section, --paths-file is empty, and --paths is unset, the output is just
@@ -159,7 +159,7 @@ MAX_TARGET_PATH_BYTES = 1024
 def is_sensitive_target_path(value: str) -> bool:
 	"""Return true for repository paths that may expose credentials or Git metadata."""
 	parts = [part.lower() for part in value.replace("\\", "/").split("/") if part]
-	if ".git" in parts:
+	if any(part in {".git", ".ssh", ".aws", ".docker"} for part in parts):
 		return True
 	if any(
 		part.startswith(".env")
@@ -167,10 +167,7 @@ def is_sensitive_target_path(value: str) -> bool:
 		for part in parts
 	):
 		return True
-	return any(
-		parts[index : index + 2] in ([".docker", "config.json"], [".aws", "credentials"])
-		for index in range(max(0, len(parts) - 1))
-	)
+	return False
 
 
 def _mirror_event(prefix: str, **fields: object) -> None:

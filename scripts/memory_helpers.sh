@@ -138,12 +138,15 @@ memory_ensure_branch()
 
 	local branch="${AI_MEMORY_BRANCH:-ai-memory}"
 
-	# Resolve authenticated origin URL
+	# Resolve a credential-free origin URL; _memory_git supplies auth per command.
 	local origin_url
 	origin_url="$(git remote get-url origin 2>/dev/null || echo "")"
 	if [[ -z "${origin_url}" ]]; then
 		_memory_warn "ensure-branch: no origin remote configured"
 		return 0
+	fi
+	if [[ "${origin_url}" =~ ^(https?://)[^/@]+@(.+)$ ]]; then
+		origin_url="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
 	fi
 
 	# Check if branch exists on remote

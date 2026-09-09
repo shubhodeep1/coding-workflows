@@ -704,7 +704,11 @@ def test_sensitive_target_paths_are_rejected_case_insensitively() -> None:
 		".npmrc",
 		".pypirc",
 		".docker/config.json",
+		"nested/.docker/daemon.json",
 		"nested/.AWS/CREDENTIALS",
+		".aws/config",
+		".aws/sso/cache/token.json",
+		".ssh/id_rsa",
 	]
 	for path in blocked:
 		assert is_sensitive_target_path(path)

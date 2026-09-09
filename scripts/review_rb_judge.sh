@@ -100,6 +100,19 @@ review_rb_strip_opencode_output_file() {
 if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
+review_rb_send_warning()
+(
+  local rb_warning_message="$1"
+  local rb_support_root
+  rb_support_root="$(dirname -- "${SUPPORT_SCRIPTS_DIR}")"
+  if [ -r "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" ]; then
+    cd "${rb_support_root}" || return 0
+    # shellcheck source=/dev/null
+    source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" 2>/dev/null || return 0
+  fi
+  type tg_send_msg >/dev/null 2>&1 || return 0
+  tg_send_msg "${rb_warning_message}" "WARNING" >/dev/null || true
+)
 # Shared PR check-runs merge gate (_pr_checks_completed). Single source of
 # truth shared with scripts/orchestrate_poll_process.sh so this judge's
 # merge_with_followup gate and the orchestrator's merge gates apply the
@@ -2289,15 +2302,21 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
           not_found)
             RB_SUCCESSOR_BODY="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.body')"
             if FOLLOWUP_URL="$(gh_retry gh issue create \
-                --repo "${REPOSITORY}" \
-                --title "${FOLLOWUP_TITLE}" \
-                --body "${RB_SUCCESSOR_BODY}" \
-                ${RB_FOLLOWUP_LABELS[@]+"${RB_FOLLOWUP_LABELS[@]}"})"; then
+                 --repo "${REPOSITORY}" \
+                 --title "${FOLLOWUP_TITLE}" \
+                 --body "${RB_SUCCESSOR_BODY}" \
+                 ${RB_FOLLOWUP_LABELS[@]+"${RB_FOLLOWUP_LABELS[@]}"})"; then
               echo "Created follow-up issue: ${FOLLOWUP_URL}"
+            else
+              rb_followup_create_rc=$?
+              echo "::error::Failed to create authenticated follow-up issue for merge_with_followup (rc=${rb_followup_create_rc}; PR #${PR_NUMBER} merged but deferred gap untracked). Leaving linked issues in ai:review-blocked for retry."
+              review_rb_send_warning "Review-blocked merge_with_followup: PR #${PR_NUMBER} merged but authenticated follow-up creation failed (rc=${rb_followup_create_rc}); the deferred gap is untracked and will be retried."
+              FOLLOWUP_URL=""
             fi
             ;;
           *)
-            echo "::warning::Successor lookup was inconclusive; refusing follow-up adoption or creation this cycle."
+            echo "::error::Authenticated successor lookup was inconclusive for merge_with_followup; PR #${PR_NUMBER} merged but the deferred gap remains untracked. Leaving linked issues in ai:review-blocked for retry."
+            review_rb_send_warning "Review-blocked merge_with_followup: authenticated successor lookup was inconclusive after PR #${PR_NUMBER} merged; the deferred gap remains untracked and will be retried."
             ;;
         esac
         if [ -z "${FOLLOWUP_URL}" ]; then
@@ -2556,15 +2575,22 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
         echo "Reusing authenticated replacement issue for approval request ${RB_APPROVAL_REQUEST_ID}: ${NEW_URL}"
       elif [ "${RB_SUCCESSOR_STATUS}" = "not_found" ]; then
         RB_SUCCESSOR_BODY="$(printf '%s' "${RB_SUCCESSOR_RESULT}" | jq -r '.body')"
-        NEW_URL="$(gh_retry gh issue create \
-          --repo "${REPOSITORY}" \
-          --title "${NEW_ISSUE_TITLE}" \
-          --body "${RB_SUCCESSOR_BODY}" \
-          ${RB_PROPAGATE_LABELS[@]+"${RB_PROPAGATE_LABELS[@]}"})"
+        if NEW_URL="$(gh_retry gh issue create \
+            --repo "${REPOSITORY}" \
+            --title "${NEW_ISSUE_TITLE}" \
+            --body "${RB_SUCCESSOR_BODY}" \
+            ${RB_PROPAGATE_LABELS[@]+"${RB_PROPAGATE_LABELS[@]}"})"; then
+          echo "Created authenticated replacement issue: ${NEW_URL}"
+        else
+          rb_reissue_create_rc=$?
+          echo "::error::Failed to create authenticated replacement issue for close_and_reissue (rc=${rb_reissue_create_rc}; PR #${PR_NUMBER} remains open). Leaving linked issues in ai:review-blocked for retry."
+          review_rb_send_warning "Review-blocked close_and_reissue: authenticated replacement creation failed for PR #${PR_NUMBER} (rc=${rb_reissue_create_rc}); the PR remains open and will be retried."
+          NEW_URL=""
+        fi
       else
-        echo "::warning::Successor lookup was inconclusive; refusing replacement adoption or creation this cycle."
+        echo "::error::Authenticated successor lookup was inconclusive for close_and_reissue; refusing replacement adoption or creation and leaving PR #${PR_NUMBER} open for retry."
+        review_rb_send_warning "Review-blocked close_and_reissue: authenticated successor lookup was inconclusive for PR #${PR_NUMBER}; the PR remains open and will be retried."
       fi
-      echo "Created replacement issue: ${NEW_URL}"
       [ -n "${NEW_URL}" ] && RB_REPLACEMENT_CREATED="true"
     else
       if [ "${RB_REQUESTED_REISSUE_MODE}" = "spot-fix" ]; then

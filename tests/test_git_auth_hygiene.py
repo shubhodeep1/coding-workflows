@@ -93,9 +93,19 @@ def test_networked_git_steps_use_ephemeral_authentication() -> None:
 				assert "GIT_CONFIG_VALUE_0" in sync_step_block
 
 	memory_helpers = (REPO_ROOT / "scripts" / "memory_helpers.sh").read_text(encoding="utf-8")
+	ensure_branch_start = memory_helpers.index("\nmemory_ensure_branch()\n{")
+	ensure_branch_end = memory_helpers.index("\nmemory_record_run_event()\n{", ensure_branch_start)
+	ensure_branch_block = memory_helpers[ensure_branch_start:ensure_branch_end]
+	assert 'origin_url="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"' in ensure_branch_block
 	assert '_memory_git ls-remote --heads origin "${branch}"' in memory_helpers
 	assert '_memory_git push origin "${branch}"' in memory_helpers
 	assert '_memory_git push origin "${memory_branch}"' in memory_helpers
+
+	review_judge = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	warning_start = review_judge.index("review_rb_send_warning()")
+	warning_end = review_judge.index("# Shared PR check-runs merge gate", warning_start)
+	warning_block = review_judge[warning_start:warning_end]
+	assert warning_block.index('cd "${rb_support_root}"') < warning_block.index('source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"')
 
 
 def _approval_status(
