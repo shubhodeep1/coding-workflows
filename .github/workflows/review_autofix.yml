@@ -3851,9 +3851,9 @@ jobs:
           # test) into a deterministic EDITOR_CHANGES_LOST dead end
           # (tele-funtoken-msg-scoring#4287).
           PRE_EDITOR_UNTRACKED_FILE="${RUNTIME_DIR}/pre_editor_untracked.txt"
-          git ls-files --others --exclude-standard | sort -u > "${PRE_EDITOR_UNTRACKED_FILE}" || true
+          git ls-files --others --exclude-standard -z | sort -zu > "${PRE_EDITOR_UNTRACKED_FILE}" || true
           echo "PRE_EDITOR_UNTRACKED_FILE=${PRE_EDITOR_UNTRACKED_FILE}" >> "$GITHUB_ENV"
-          echo "Pre-editor untracked snapshot captured: $(wc -l < "${PRE_EDITOR_UNTRACKED_FILE}" | tr -d '[:space:]') paths"
+          echo "Pre-editor untracked snapshot captured: $(tr -cd '\0' < "${PRE_EDITOR_UNTRACKED_FILE}" | wc -c | tr -d '[:space:]') paths"
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
             PRE_EDITOR_STATE_FILE="${RUNTIME_DIR}/pre_editor_state.tsv"
             : > "${PRE_EDITOR_STATE_FILE}"

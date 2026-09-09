@@ -22,9 +22,9 @@
 #   RUNTIME_DIR                       Ephemeral per-run directory.
 #   PRE_EDITOR_STATE_FILE             Optional snapshot of pre-editor tree state.
 #   PRE_EDITOR_DIFF_BASELINE_FILE     Optional pre-editor baseline diff file.
-#   PRE_EDITOR_UNTRACKED_FILE         Optional sorted list of paths that were
-#                                     untracked before the editor ran (both repo
-#                                     kinds). Consumer repos use it to keep
+#   PRE_EDITOR_UNTRACKED_FILE         Optional sorted NUL-delimited list of paths
+#                                     that were untracked before the editor ran
+#                                     (both repo kinds). Consumer repos use it to keep
 #                                     editor-created files and remove only
 #                                     pre-existing strays; absent → legacy
 #                                     delete-all-new-files behaviour.
@@ -246,7 +246,7 @@ if [ -s "${NEW_FILES_BEFORE_COMMIT_FILE}" ]; then
       esac
       if [ -z "${removal_reason}" ]; then
         if [ "${pre_editor_untracked_available}" = true ]; then
-          if grep -qxF -- "${created_file}" "${PRE_EDITOR_UNTRACKED_FILE}"; then
+          if grep -zqxF -- "${created_file}" "${PRE_EDITOR_UNTRACKED_FILE}"; then
             removal_reason="untracked before the editor ran"
           else
             echo "Preserving editor-created file: ${created_file}"

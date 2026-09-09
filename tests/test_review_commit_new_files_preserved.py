@@ -78,6 +78,7 @@ def _seed_repo(tmp: Path) -> tuple[Path, dict[str, str]]:
 	)
 	# Pre-existing stray (present before the editor ran).
 	(repo / "stray_artifact.txt").write_text("leftover\n", encoding="utf-8")
+	(repo / 'stray-"café".txt').write_text("quoted path\n", encoding="utf-8")
 	# Pipeline-owned artifacts that appear during the editor phase.
 	(repo / "pre_assembled_static.txt").write_text("prompt\n", encoding="utf-8")
 	(repo / ".ai" / "review_runtime" / "pr-4287" / "round-1").mkdir(parents=True)
@@ -98,7 +99,7 @@ def _run_cleanup(
 	env = {**test_env, "IS_WORKFLOW_SOURCE_REPO": "false", "RUNTIME_DIR": str(runtime_dir)}
 	if snapshot is not None:
 		snapshot_file = runtime_dir / "pre_editor_untracked.txt"
-		snapshot_file.write_text("".join(f"{line}\n" for line in sorted(snapshot)), encoding="utf-8")
+		snapshot_file.write_bytes(b"".join(line.encode("utf-8") + b"\0" for line in sorted(snapshot)))
 		env["PRE_EDITOR_UNTRACKED_FILE"] = str(snapshot_file)
 	return subprocess.run(
 		["bash", "-c", "set -euo pipefail\n" + _cleanup_block()],
@@ -115,7 +116,12 @@ def test_consumer_cleanup_keeps_editor_created_files_and_removes_strays_and_arti
 		repo, test_env = _seed_repo(tmp)
 		runtime_dir = tmp / "runtime"
 		runtime_dir.mkdir()
-		proc = _run_cleanup(repo, test_env, snapshot=["stray_artifact.txt"], runtime_dir=runtime_dir)
+		proc = _run_cleanup(
+			repo,
+			test_env,
+			snapshot=["stray_artifact.txt", 'stray-"café".txt'],
+			runtime_dir=runtime_dir,
+		)
 		assert proc.returncode == 0, (proc.stdout, proc.stderr)
 
 		# Editor output survives.
@@ -128,6 +134,7 @@ def test_consumer_cleanup_keeps_editor_created_files_and_removes_strays_and_arti
 
 		# Strays and pipeline artifacts are gone.
 		assert not (repo / "stray_artifact.txt").exists(), proc.stdout
+		assert not (repo / 'stray-"café".txt').exists(), proc.stdout
 		assert not (repo / "pre_assembled_static.txt").exists(), proc.stdout
 		assert not (repo / ".ai" / "review_runtime" / "pr-4287" / "round-1" / "marker.json").exists(), proc.stdout
 		assert "- stray_artifact.txt (untracked before the editor ran)" in proc.stdout
@@ -137,6 +144,7 @@ def test_consumer_cleanup_keeps_editor_created_files_and_removes_strays_and_arti
 		removed = (runtime_dir / "review_removed_new_files.txt").read_text(encoding="utf-8")
 		removed_rows = {line.split("\t")[0]: line.split("\t")[1] for line in removed.splitlines() if line}
 		assert removed_rows["stray_artifact.txt"] == "untracked before the editor ran"
+		assert removed_rows['stray-"café".txt'] == "untracked before the editor ran"
 		assert removed_rows["pre_assembled_static.txt"] == "pipeline artifact"
 		assert removed_rows[".ai/review_runtime/pr-4287/round-1/marker.json"] == "pipeline artifact"
 		assert "db/contracts/settings.yml" not in removed_rows
@@ -193,11 +201,12 @@ def test_workflow_captures_pre_editor_untracked_snapshot_for_both_repo_kinds() -
 	text = WORKFLOW.read_text(encoding="utf-8")
 	m = re.search(
 		r'PRE_EDITOR_UNTRACKED_FILE="\$\{RUNTIME_DIR\}/pre_editor_untracked\.txt"\n'
-		r'\s+git ls-files --others --exclude-standard \| sort -u > "\$\{PRE_EDITOR_UNTRACKED_FILE\}" \|\| true\n'
+		r'\s+git ls-files --others --exclude-standard -z \| sort -zu > "\$\{PRE_EDITOR_UNTRACKED_FILE\}" \|\| true\n'
 		r'\s+echo "PRE_EDITOR_UNTRACKED_FILE=\$\{PRE_EDITOR_UNTRACKED_FILE\}" >> "\$GITHUB_ENV"\n',
 		text,
 	)
 	assert m, "The editor step must write PRE_EDITOR_UNTRACKED_FILE and export it via GITHUB_ENV"
+	assert "tr -cd '\\0'" in text and "wc -c" in text
 	# The snapshot must sit outside the source-repo-only block so consumer
 	# repos get it too; the source-repo block starts right after it.
 	source_repo_guard = text.index('if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then\n            PRE_EDITOR_STATE_FILE=')
@@ -211,5 +220,8 @@ def test_editor_prompt_allows_convention_required_new_files() -> None:
 	text = EDITOR_SCRIPT.read_text(encoding="utf-8")
 	assert "(do not create new files)" not in text
 	assert "Do not create new files unless absolutely required to fix a broken import or dependency." not in text
-	assert "a repository convention documented in CLAUDE.md / AGENTS.md requires it" in text
-	assert "db/contracts/" in text and "changelog.d/" in text
+	file_creation_policy = text.split("FILE CREATION POLICY", 1)[1].split("EDITOR EXECUTION GUARDRAILS", 1)[0]
+	assert "CLAUDE.md" in file_creation_policy
+	assert "agents.md" in file_creation_policy
+	assert "AGENTS.md" in file_creation_policy
+	assert "db/contracts/" in file_creation_policy and "changelog.d/" in file_creation_policy

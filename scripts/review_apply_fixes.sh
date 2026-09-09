@@ -1375,7 +1375,7 @@ FILE CREATION POLICY
 Create a new file only when one of these applies:
 - it is required to fix a broken import or dependency
 - a reviewer finding you are applying, or the original PR's scope, requires it
-- a repository convention documented in CLAUDE.md / AGENTS.md requires it for
+- a repository convention documented in CLAUDE.md / agents.md / AGENTS.md requires it for
   the change being fixed (for example a per-collection contract under
   db/contracts/, a changelog fragment under changelog.d/, or a regression test
   for a defect you fixed)
