@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Several merged changes target orchestration polling and review status transitions, including stale-head merge prevention, blocked-state handling, review autofix cycles, and preserving failure alerts. Plans that modify polling or review automation should account for races between observed and current commits and should retain actionable failure context across retries.",
+  "fingerprint": "cf7b2e41283dcd2243ddbb59ddbdd7d94505bdbdde912d9524c23d98110a1e2d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34332550004",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34332550004",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3998",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4000",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4005",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4017",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4049",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3999",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4001",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4006",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4029",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4052"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260909090815_8c3586d948",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "The poller and review pipeline need explicit handling for stale heads, blocked reviews, and failure-history preservation.",
+  "timestamps": {
+    "created_at": "2026-09-09T09:08:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
