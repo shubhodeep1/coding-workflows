@@ -18113,10 +18113,16 @@ EOF
                       --label "ai:clarification" \
                       --label "ai:orchestrator-managed")"; then
                     echo "  Created authenticated follow-up issue: ${FOLLOWUP_URL}"
+                  else
+                    _create_rc=$?
+                    echo "::error::Failed to create authenticated follow-up issue for merge_with_followup (rc=${_create_rc}; PR #${RB_PR} merge confirmed but deferred gap untracked). Leaving issue #${rb_issue} in ai:review-blocked so stall recovery / next judge run can retry."
+                    tg_notify "Orchestrator merge_with_followup: PR #${RB_PR} (issue #${rb_issue}) merged but authenticated follow-up issue creation failed (rc=${_create_rc}). Deferred gap is currently untracked; stall recovery will retry."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+                    FOLLOWUP_URL=""
                   fi
                   ;;
                 *)
-                  echo "::warning::Successor lookup was inconclusive; refusing follow-up adoption or creation this cycle."
+                  echo "::error::Authenticated successor lookup was inconclusive for merge_with_followup; PR #${RB_PR} is merged but the deferred gap remains untracked. Leaving issue #${rb_issue} in ai:review-blocked for retry."
+                  tg_notify "Orchestrator merge_with_followup: authenticated successor lookup was inconclusive after PR #${RB_PR} merged (issue #${rb_issue}). Deferred gap is currently untracked; stall recovery will retry."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
                   ;;
               esac
               if [ -n "${FOLLOWUP_URL}" ]; then

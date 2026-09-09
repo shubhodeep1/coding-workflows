@@ -493,6 +493,20 @@ gh_retry()
 	return 1
 }
 
+# Run one networked git command with GitHub authentication that exists only
+# for that child process. The token is never written to repository config.
+git_with_github_auth()
+{
+	local auth_token="${GH_PAT:-${GH_TOKEN:-}}"
+	local auth_header=""
+	if [ -z "${auth_token}" ]; then
+		git "$@"
+		return
+	fi
+	auth_header="$(printf 'x-access-token:%s' "${auth_token}" | base64 | tr -d '\n')"
+	git -c "http.extraHeader=Authorization: Basic ${auth_header}" "$@"
+}
+
 # ---------------------------------------------------------------
 # gh_retry_to_file — Like gh_retry but captures stdout to a file.
 #
