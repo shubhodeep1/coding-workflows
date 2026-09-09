@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "The poller and review pipeline need explicit handling for stale heads, blocked reviews, and failure-history preservation.",
   "timestamps": {
     "created_at": "2026-09-09T09:08:15Z",
