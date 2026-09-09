@@ -92,7 +92,25 @@ if [ "${CLAUDE_BRANCH_REVIEW_MODE:-false}" != "true" ] && [ -f "${EDITOR_ISOLATI
   source "${EDITOR_ISOLATION_PREFLIGHT_HELPER}"
   if editor_isolation_preflight_enabled; then
     editor_isolation_prepare_shared_paths
-    if ! editor_isolation_preflight_probe "${EDITOR_ISOLATION_USER:-nobody}"; then
+    # GitHub-hosted runners keep /home/runner at 0750, which closes every
+    # RUNNER_TEMP path (support bundle, detached workspace) to the editor
+    # identity (runs 34335652907 / 34337926193 on PR #4057 reported
+    # first_denied=/home/runner). Open those ancestors traverse-only for
+    # the probe exactly as the editor stage will for its attempt, then
+    # close them again before any reviewer model runs.
+    editor_isolation_preflight_rc=0
+    if ! editor_isolation_open_ancestor_traverse "${EDITOR_ISOLATION_USER:-nobody}"; then
+      editor_isolation_preflight_rc=1
+    fi
+    if [ "${editor_isolation_preflight_rc}" -eq 0 ] \
+      && ! editor_isolation_preflight_probe "${EDITOR_ISOLATION_USER:-nobody}"; then
+      editor_isolation_preflight_rc=1
+    fi
+    if ! editor_isolation_restore_ancestor_traverse; then
+      echo "::error::EDITOR_ISOLATION_PREFLIGHT_FAILED phase=review_run_reviewers: could not restore the ancestor directory modes opened for the probe; failing closed before reviewer spend." >&2
+      exit 1
+    fi
+    if [ "${editor_isolation_preflight_rc}" -ne 0 ]; then
       echo "::error::EDITOR_ISOLATION_PREFLIGHT_FAILED phase=review_run_reviewers: the editor identity cannot reach its launch paths in this job; failing before reviewer spend. See the EDITOR_ISOLATION_PREFLIGHT_DENIED lines above for the first denied path component." >&2
       exit 1
     fi

@@ -196,6 +196,12 @@ setup_editor_isolation() {
   EDITOR_ISOLATION_HOME="${RUNTIME_DIR}/editor-sandbox/home"
   EDITOR_ISOLATION_TMP="${RUNTIME_DIR}/editor-sandbox/tmp"
   mkdir -p "${EDITOR_ISOLATION_HOME}" "${EDITOR_ISOLATION_TMP}"
+  # Close the source checkout's Git metadata (the remote URL carries the
+  # repository token) and the runner command files before any ancestor
+  # directory is opened to the editor identity below. The modes recorded
+  # above are put back by cleanup_editor_isolation, or by
+  # _editor_isolation_setup_rollback when setup fails past this point.
+  chmod 0700 "${resolved_source}/.git" "${EDITOR_ISOLATION_COMMAND_DIR}" || return 1
   # Open the secret-free support bundle and RUNTIME_DIR traversal to the
   # editor identity, then prove every launch path is reachable as that
   # identity before spending an attempt. Runs 34304993091 / 34320556598
@@ -205,17 +211,45 @@ setup_editor_isolation() {
   if command -v editor_isolation_prepare_shared_paths >/dev/null 2>&1; then
     editor_isolation_prepare_shared_paths
   fi
+  # GitHub-hosted runners keep /home/runner at 0750, which closes every
+  # RUNNER_TEMP path (support bundle, detached workspace) to the editor
+  # identity: runs 34335652907 / 34337926193 (PR #4057) reported
+  # first_denied=/home/runner mode=drwxr-x---. Grant traverse-only (o+x)
+  # on such ancestors for this attempt; cleanup_editor_isolation restores
+  # the recorded modes once the attempt ends.
+  if command -v editor_isolation_open_ancestor_traverse >/dev/null 2>&1 \
+    && ! editor_isolation_open_ancestor_traverse "${EDITOR_ISOLATION_USER}"; then
+    echo "::error::Editor isolation could not open traverse-only access on an ancestor directory for identity '${EDITOR_ISOLATION_USER}'; see EDITOR_ISOLATION_ANCESTOR_TRAVERSE_DENIED lines above." >&2
+    _editor_isolation_setup_rollback
+    return 1
+  fi
   if command -v editor_isolation_preflight_probe >/dev/null 2>&1 \
     && editor_isolation_preflight_enabled \
     && ! editor_isolation_preflight_probe "${EDITOR_ISOLATION_USER}"; then
     echo "::error::Editor isolation preflight failed for identity '${EDITOR_ISOLATION_USER}'; see EDITOR_ISOLATION_PREFLIGHT_DENIED lines above for the first denied path component." >&2
+    _editor_isolation_setup_rollback
     return 1
   fi
   EDITOR_ISOLATION_ACTIVE="true"
-  chmod 0700 "${resolved_source}/.git" "${EDITOR_ISOLATION_COMMAND_DIR}"
   sudo -n chown -R "${EDITOR_ISOLATION_UID}:${EDITOR_ISOLATION_GID}" \
     "${resolved_workspace}" "${RUNTIME_DIR}/editor-sandbox" || return 1
   sudo -n chmod 0700 "${EDITOR_ISOLATION_HOME}" "${EDITOR_ISOLATION_TMP}" || return 1
+}
+
+# Undo the protections and ancestor grants applied by a setup_editor_isolation
+# call that failed before EDITOR_ISOLATION_ACTIVE was armed (the exit trap's
+# cleanup_editor_isolation only acts once it is).
+_editor_isolation_setup_rollback() {
+  local rollback_rc=0
+  if command -v editor_isolation_restore_ancestor_traverse >/dev/null 2>&1; then
+    editor_isolation_restore_ancestor_traverse || rollback_rc=1
+  fi
+  chmod "${EDITOR_ISOLATION_GIT_MODE}" "${GITHUB_WORKSPACE}/.git" || rollback_rc=1
+  chmod "${EDITOR_ISOLATION_COMMAND_DIR_MODE}" "${EDITOR_ISOLATION_COMMAND_DIR}" || rollback_rc=1
+  if [ "${rollback_rc}" -ne 0 ]; then
+    echo "::error::Failed to restore protected-path permissions after a failed editor isolation setup." >&2
+  fi
+  return "${rollback_rc}"
 }
 
 cleanup_editor_isolation() {
@@ -225,6 +259,11 @@ cleanup_editor_isolation() {
       "${WORKSPACE_PATH}" "${RUNTIME_DIR}/editor-sandbox" || cleanup_rc=1
     chmod "${EDITOR_ISOLATION_GIT_MODE}" "${GITHUB_WORKSPACE}/.git" || cleanup_rc=1
     chmod "${EDITOR_ISOLATION_COMMAND_DIR_MODE}" "${EDITOR_ISOLATION_COMMAND_DIR}" || cleanup_rc=1
+    # Close the ancestors (e.g. /home/runner) last, after the workspace is
+    # back under runner ownership and the protected paths are restored.
+    if command -v editor_isolation_restore_ancestor_traverse >/dev/null 2>&1; then
+      editor_isolation_restore_ancestor_traverse || cleanup_rc=1
+    fi
     EDITOR_ISOLATION_ACTIVE="false"
   fi
   if [ "${cleanup_rc}" -ne 0 ]; then

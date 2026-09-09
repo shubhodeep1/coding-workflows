@@ -61,14 +61,32 @@ def _run_probe(env: dict[str, str], *, prepare: bool) -> subprocess.CompletedPro
 	)
 
 
-def _fixture(tmp_path: Path) -> dict[str, str]:
+def _run_sequence(env: dict[str, str], *commands: str) -> subprocess.CompletedProcess[str]:
+	"""Run helper calls in one shell so the in-shell restore record survives."""
+	script = f"source {HELPER}; " + "; ".join(f'{c}; echo "RC[{c.split()[0]}]=$?"' for c in commands)
+	return subprocess.run(
+		["bash", "-c", script],
+		check=False,
+		capture_output=True,
+		text=True,
+		env={"PATH": "/usr/bin:/bin", **env},
+		cwd=REPO_ROOT,
+		timeout=120,
+	)
+
+
+def _fixture(tmp_path: Path, root: Path | None = None) -> dict[str, str]:
 	# The fixture must live somewhere the unprivileged identity can traverse
 	# up to; pytest's tmp_path is under the invoking user's private tmp
 	# root, so open every ancestor below /tmp that this test created.
-	support_root = tmp_path / "support"
+	# ``root`` places the support bundle, RUNTIME_DIR and workspace beneath
+	# an extra directory so a test can close that ancestor the way the
+	# GitHub-hosted runner home (/home/runner, 0750) closes RUNNER_TEMP.
+	base = root if root is not None else tmp_path
+	support_root = base / "support"
 	scripts_dir = support_root / "scripts"
-	runtime_dir = tmp_path / "runtime"
-	workspace = tmp_path / "workspace"
+	runtime_dir = base / "runtime"
+	workspace = base / "workspace"
 	bin_dir = tmp_path / "bin"
 	for directory in (scripts_dir, runtime_dir / "editor-sandbox", workspace, bin_dir):
 		directory.mkdir(parents=True, exist_ok=True)
@@ -112,18 +130,42 @@ def test_helper_is_staged_and_wired_into_both_review_scripts() -> None:
 	# switch is armed; the reviewers script probes before any model call and
 	# skips reviewer-only mode, where no editor runs.
 	setup_start = editor_text.index("setup_editor_isolation() {")
-	setup_end = editor_text.index("\ncleanup_editor_isolation() {", setup_start)
+	setup_end = editor_text.index("\n_editor_isolation_setup_rollback() {", setup_start)
 	setup_block = editor_text[setup_start:setup_end]
 	assert "editor_isolation_preflight_probe" in setup_block
 	assert setup_block.index("editor_isolation_preflight_probe") < setup_block.index('EDITOR_ISOLATION_ACTIVE="true"')
 	assert 'CLAUDE_BRANCH_REVIEW_MODE:-false}" != "true"' in reviewers_text
 	assert "failing before reviewer spend" in reviewers_text
 
+	# Ancestor traverse (runs 34335652907 / 34337926193: first_denied=
+	# /home/runner): the editor closes .git and the runner command files
+	# before opening any ancestor, opens before the probe, and restores in
+	# cleanup and in the setup rollback; the reviewers script opens for the
+	# probe and restores immediately, whatever the probe's outcome.
+	git_close = setup_block.index('chmod 0700 "${resolved_source}/.git" "${EDITOR_ISOLATION_COMMAND_DIR}"')
+	open_call = setup_block.index("editor_isolation_open_ancestor_traverse")
+	assert git_close < open_call < setup_block.index("editor_isolation_preflight_probe")
+	assert setup_block.count("\n    _editor_isolation_setup_rollback\n") == 2
+	rollback_start = setup_end
+	rollback_end = editor_text.index("\ncleanup_editor_isolation() {", rollback_start)
+	assert "editor_isolation_restore_ancestor_traverse" in editor_text[rollback_start:rollback_end]
+	cleanup_start = rollback_end
+	cleanup_end = editor_text.index("\neditor_isolation_exit_trap() {", cleanup_start)
+	cleanup_block = editor_text[cleanup_start:cleanup_end]
+	assert "editor_isolation_restore_ancestor_traverse" in cleanup_block
+	assert cleanup_block.index('chmod "${EDITOR_ISOLATION_GIT_MODE}"') < cleanup_block.index("editor_isolation_restore_ancestor_traverse")
+
+	reviewers_open = reviewers_text.index("editor_isolation_open_ancestor_traverse")
+	reviewers_probe = reviewers_text.index("editor_isolation_preflight_probe", reviewers_open)
+	reviewers_restore = reviewers_text.index("editor_isolation_restore_ancestor_traverse", reviewers_probe)
+	assert reviewers_open < reviewers_probe < reviewers_restore
+	assert reviewers_restore < reviewers_text.index("failing before reviewer spend", reviewers_restore)
+
 
 def test_helper_has_no_top_level_side_effects_and_parses() -> None:
 	subprocess.run(["bash", "-n", str(HELPER)], check=True)
 	result = subprocess.run(
-		["bash", "-c", f"set -euo pipefail; source {HELPER}; declare -F editor_isolation_preflight_probe editor_isolation_prepare_shared_paths editor_isolation_preflight_enabled"],
+		["bash", "-c", f"set -euo pipefail; source {HELPER}; declare -F editor_isolation_preflight_probe editor_isolation_prepare_shared_paths editor_isolation_preflight_enabled editor_isolation_open_ancestor_traverse editor_isolation_restore_ancestor_traverse"],
 		check=True,
 		capture_output=True,
 		text=True,
@@ -133,7 +175,15 @@ def test_helper_has_no_top_level_side_effects_and_parses() -> None:
 		"editor_isolation_preflight_probe",
 		"editor_isolation_prepare_shared_paths",
 		"editor_isolation_preflight_enabled",
+		"editor_isolation_open_ancestor_traverse",
+		"editor_isolation_restore_ancestor_traverse",
 	]
+	# restore with nothing recorded is a no-op that succeeds, also under set -u.
+	subprocess.run(
+		["bash", "-c", f"set -euo pipefail; source {HELPER}; editor_isolation_restore_ancestor_traverse"],
+		check=True,
+		env={"PATH": "/usr/bin:/bin"},
+	)
 
 
 def test_kill_switch_disables_preflight() -> None:
@@ -187,6 +237,102 @@ def test_probe_names_closed_ancestor_not_the_leaf(tmp_path: Path) -> None:
 		line for line in result.stderr.splitlines() if f"path={nested_workspace}" in line
 	)
 	assert f"first_denied={closed_parent} " in workspace_line
+
+
+@pytest.mark.skipif(not _sudo_to_nobody_available(), reason="passwordless sudo to nobody unavailable")
+def test_open_ancestor_traverse_mirrors_runner_home_then_restores(tmp_path: Path) -> None:
+	# /home/runner on a GitHub-hosted runner: 0750, owned by the job user,
+	# above RUNNER_TEMP (support bundle + detached workspace). RUNTIME_DIR
+	# lives under /tmp in production and passed the probe; here it sits
+	# under the same closed ancestor, which only widens the check.
+	home = tmp_path / "home"
+	env = _fixture(tmp_path, root=home)
+	home.chmod(0o750)
+	scripts_dir = Path(env["SUPPORT_SCRIPTS_DIR"])
+	workspace = Path(env["WORKSPACE_PATH"])
+
+	denied = _run_probe(env, prepare=True)
+	assert denied.returncode == 1
+	for path in (env["OPENCODE_HELPERS_PATH"], str(scripts_dir), str(workspace)):
+		line = next(line for line in denied.stderr.splitlines() if f"path={path} " in line)
+		assert f"first_denied={home} mode=drwxr-x--- owner=" in line, line
+	# prepare must not open ancestors on its own: that is the explicit
+	# open/restore pair's job, held only as long as the caller needs it.
+	assert stat.S_IMODE(home.stat().st_mode) == 0o750
+
+	result = _run_sequence(
+		env,
+		"editor_isolation_prepare_shared_paths",
+		f"editor_isolation_open_ancestor_traverse {ISOLATION_USER}",
+		f"editor_isolation_open_ancestor_traverse {ISOLATION_USER}",
+		f"editor_isolation_preflight_probe {ISOLATION_USER}",
+		"editor_isolation_restore_ancestor_traverse",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "RC[editor_isolation_open_ancestor_traverse]=0" in result.stdout
+	assert "RC[editor_isolation_preflight_probe]=0" in result.stdout
+	assert "RC[editor_isolation_restore_ancestor_traverse]=0" in result.stdout
+	assert "EDITOR_ISOLATION_PREFLIGHT_OK" in result.stdout
+	granted = [line for line in result.stdout.splitlines() if "EDITOR_ISOLATION_ANCESTOR_TRAVERSE_GRANTED" in line]
+	# One grant for the closed ancestor, recorded once even though three
+	# probe paths share it and open ran twice; traverse only, no read bit.
+	assert granted == [
+		f"EDITOR_ISOLATION_ANCESTOR_TRAVERSE_GRANTED user={ISOLATION_USER} path={home} mode_before=750 mode_after=751"
+	]
+	assert f"EDITOR_ISOLATION_ANCESTOR_TRAVERSE_RESTORED path={home} mode=750" in result.stdout
+	assert stat.S_IMODE(home.stat().st_mode) == 0o750
+
+	# Restoration closed the ancestor again: a fresh probe is denied at it.
+	closed_again = _run_probe(env, prepare=True)
+	assert closed_again.returncode == 1
+	assert f"first_denied={home} mode=drwxr-x---" in closed_again.stderr
+
+
+@pytest.mark.skipif(not _sudo_to_nobody_available(), reason="passwordless sudo to nobody unavailable")
+def test_open_ancestor_traverse_records_nested_ancestors_and_restores_in_order(tmp_path: Path) -> None:
+	outer = tmp_path / "outer"
+	inner = outer / "inner"
+	env = _fixture(tmp_path, root=inner)
+	outer.chmod(0o700)
+	inner.chmod(0o750)
+
+	result = _run_sequence(
+		env,
+		f"editor_isolation_open_ancestor_traverse {ISOLATION_USER}",
+		f"editor_isolation_preflight_probe {ISOLATION_USER}",
+		"editor_isolation_restore_ancestor_traverse",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "RC[editor_isolation_preflight_probe]=0" in result.stdout
+	granted = [line for line in result.stdout.splitlines() if "EDITOR_ISOLATION_ANCESTOR_TRAVERSE_GRANTED" in line]
+	assert [line.split(" path=")[1].split(" ")[0] for line in granted] == [str(outer), str(inner)]
+	restored = [line for line in result.stdout.splitlines() if "EDITOR_ISOLATION_ANCESTOR_TRAVERSE_RESTORED" in line]
+	assert restored == [
+		f"EDITOR_ISOLATION_ANCESTOR_TRAVERSE_RESTORED path={inner} mode=750",
+		f"EDITOR_ISOLATION_ANCESTOR_TRAVERSE_RESTORED path={outer} mode=700",
+	]
+	assert stat.S_IMODE(outer.stat().st_mode) == 0o700
+	assert stat.S_IMODE(inner.stat().st_mode) == 0o750
+
+
+@pytest.mark.skipif(not _sudo_to_nobody_available(), reason="passwordless sudo to nobody unavailable")
+def test_open_ancestor_traverse_never_touches_the_leaf(tmp_path: Path) -> None:
+	# A closed workspace itself is the editor stage's chown to handle, not
+	# an ancestor grant: open leaves it alone and the probe still names it.
+	env = _fixture(tmp_path)
+	workspace = Path(env["WORKSPACE_PATH"])
+	workspace.chmod(0o700)
+	result = _run_sequence(
+		env,
+		f"editor_isolation_open_ancestor_traverse {ISOLATION_USER}",
+		f"editor_isolation_preflight_probe {ISOLATION_USER}",
+		"editor_isolation_restore_ancestor_traverse",
+	)
+	assert "RC[editor_isolation_open_ancestor_traverse]=0" in result.stdout
+	assert "RC[editor_isolation_preflight_probe]=1" in result.stdout
+	assert "EDITOR_ISOLATION_ANCESTOR_TRAVERSE_GRANTED" not in result.stdout
+	assert f"path={workspace} first_denied={workspace} mode=drwx------" in result.stderr
+	assert stat.S_IMODE(workspace.stat().st_mode) == 0o700
 
 
 @pytest.mark.skipif(not _sudo_to_nobody_available(), reason="passwordless sudo to nobody unavailable")
