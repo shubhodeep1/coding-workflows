@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow and orchestration changes require contract-focused tests alongside implementation changes.",
   "timestamps": {
     "created_at": "2026-09-09T09:06:45Z",
