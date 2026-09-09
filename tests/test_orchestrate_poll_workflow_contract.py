@@ -26,12 +26,15 @@ def test_stall_control_env_defaults_are_declared() -> None:
 	assert "RECOVERY_COUNT_DISTINCT_FINDINGS: ${{ vars.RECOVERY_COUNT_DISTINCT_FINDINGS || 'false' }}" in wf
 
 
-def test_stall_recovery_prompt_is_bootstrapped_with_main_fallback() -> None:
+def test_stall_recovery_prompt_is_bootstrapped_from_immutable_workflow_source() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	assert "for pf in mode-judge.txt mode-judge-review-blocked.txt mode-judge-stall-recovery.txt; do" in wf
 	assert "src=\".codex-workflow-src/prompts/${pf}\"" in wf
-	assert "if [ ! -f \"${src}\" ] && [ -f \".codex-workflow-src-main/prompts/${pf}\" ]; then" in wf
-	assert "src=\".codex-workflow-src-main/prompts/${pf}\"" in wf
+	assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}" in wf
+	assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in wf
+	assert "SCRIPT_REF=${WORKFLOW_DEFINITION_SHA,,}" in wf
+	assert "SCRIPT_REF=stable" not in wf
+	assert ".codex-workflow-src-main" not in wf
 	assert "::error::Missing required support file prompts/${pf}" in wf
 	assert "install -m 0644 \"${src}\" \"prompts/${pf}\"" in wf
 
@@ -176,7 +179,7 @@ def test_poller_state_auth_and_readonly_model_security_contract() -> None:
 
 def main() -> int:
 	test_stall_control_env_defaults_are_declared()
-	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
+	test_stall_recovery_prompt_is_bootstrapped_from_immutable_workflow_source()
 	test_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_nag_reminder_assets_and_judge_wiring_are_present()

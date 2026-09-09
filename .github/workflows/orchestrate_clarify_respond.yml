@@ -289,7 +289,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh orchestrate_parse_and_post_answer.sh; do
+            for f in gh_helpers.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh model_provider_broker.py orchestrate_parse_and_post_answer.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -717,6 +717,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          source scripts/codex_helpers.sh
+          model_provider_broker_start
+          trap 'model_provider_broker_stop' EXIT
+            model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "$(pwd)"
+
           # Source sanitize_codex_prompt_file (best-effort) so the
           # clarify-respond prompt is UTF-8-clean before piping.
           # shellcheck source=/dev/null
@@ -769,7 +774,7 @@ jobs:
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
-            if cat "${CODEX_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+              if model_provider_broker_exec_unprivileged nobody codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "Codex clarify-respond succeeded on attempt ${attempt}."
                 break
@@ -795,6 +800,11 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -euo pipefail
+
+          source scripts/codex_helpers.sh
+          model_provider_broker_start
+          trap 'model_provider_broker_stop' EXIT
+            model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "$(pwd)"
 
           # Source sanitize_codex_prompt_file (best-effort) so the
           # critic + revised prompts are UTF-8-clean before piping.
@@ -837,8 +847,8 @@ jobs:
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${RUNTIME_DIR}/critic_prompt.txt"
             fi
-            if cat "${RUNTIME_DIR}/critic_prompt.txt" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec \
-              --skip-git-repo-check --model "${CRITIC_MODEL}" --sandbox danger-full-access > "${RUNTIME_DIR}/critic_output.txt" 2>/dev/null; then
+              if model_provider_broker_exec_unprivileged nobody codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec \
+              --skip-git-repo-check --model "${CRITIC_MODEL}" --sandbox read-only < "${RUNTIME_DIR}/critic_prompt.txt" > "${RUNTIME_DIR}/critic_output.txt" 2>/dev/null; then
               if grep -q 'VERDICT: REJECT' "${RUNTIME_DIR}/critic_output.txt"; then
                 echo "::warning::Self-critique rejected the decision. Appending critique and re-running."
                 CRITIC_REASON="$(grep -A5 'REASON:' "${RUNTIME_DIR}/critic_output.txt" || echo "No reason provided")"
@@ -853,8 +863,8 @@ jobs:
                 if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
                   sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}.v2"
                 fi
-                if cat "${CODEX_PROMPT_FILE}.v2" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec \
-                  --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
+                  if model_provider_broker_exec_unprivileged nobody codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec \
+                  --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only < "${CODEX_PROMPT_FILE}.v2" > "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
                   echo "Revised decision produced after self-critique."
                 else
                   echo "::warning::Revised Codex call failed; using original output."

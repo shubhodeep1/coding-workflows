@@ -119,6 +119,19 @@ REFUSAL_AUTH_SCHEMA_VERSION = "review_blocked_decision_refused.v2"
 REFUSAL_AUTH_DOMAIN = b"coding-workflows/review-blocked-decision-refused/v2"
 REFUSAL_REASON_RE = re.compile(r"^[a-z][a-z0-9_-]{0,127}$")
 REFUSAL_MAX_OUTPUT_BYTES = 1_048_576
+RESOLVER_RETRY_SCHEMA_VERSION = "autofix_resolver_retry_state.v2"
+RESOLVER_RETRY_DOMAIN = b"coding-workflows/autofix-resolver-retry-state/v2"
+RESOLVER_RETRY_MAX_BYTES = 262_144
+RESOLVER_RETRY_TIERS = ("strict", "ratio", "count_only", "warn_only")
+RESOLVER_RETRY_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+RESOLVER_RETRY_SIGNED_FIELDS = {
+	"schema_version", "algorithm", "key_id", "producer_id", "repository",
+	"tracking_issue", "integration_branch", "source_pr", "head_sha", "generation",
+	"failure_signature_sha256", "consecutive_failure_count", "threshold",
+	"escalation_threshold", "verification_tier", "regressed_by_resolver_count",
+	"pre_existing_drift_count", "regression_summary", "drift_summary", "escalated",
+	"escalated_at", "updated_at", "signature",
+}
 
 V2_OPENER_RE = re.compile(
 	r"^<!-- ORCHESTRATOR_STATE_V2 part=(\d+)/(\d+) manifest=([0-9a-f]{64}) -->$",
@@ -525,6 +538,171 @@ def cmd_verify_refusal(args: argparse.Namespace) -> int:
 	return 0 if hmac.compare_digest(refusal_document["signature"], expected_signature) else 1
 
 
+def _validated_resolver_retry_context(args: argparse.Namespace) -> tuple[dict[str, Any] | None, str | None]:
+	repository = args.repository.strip()
+	integration_branch = args.integration_branch.strip()
+	if (
+		len(repository) > 256
+		or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None
+		or any(segment in (".", "..") for segment in repository.split("/"))
+	):
+		return None, "repository must be an owner/repo slug"
+	if args.tracking_issue < 1 or args.source_pr < 1 or args.producer_id < 1:
+		return None, "tracking issue, source PR, and producer ID must be positive integers"
+	if integration_branch != f"orchestrator/project-{args.tracking_issue}":
+		return None, "integration branch does not match the tracking issue"
+	if re.fullmatch(r"[0-9a-f]{40}", args.head_sha) is None:
+		return None, "head SHA must be 40 lowercase hexadecimal characters"
+	return {
+		"schema_version": RESOLVER_RETRY_SCHEMA_VERSION,
+		"algorithm": STATE_AUTH_ALGORITHM,
+		"producer_id": args.producer_id,
+		"repository": repository,
+		"tracking_issue": args.tracking_issue,
+		"integration_branch": integration_branch,
+		"source_pr": args.source_pr,
+		"head_sha": args.head_sha,
+	}, None
+
+
+def _load_bounded_json_object(path: Path, max_bytes: int) -> dict[str, Any] | None:
+	try:
+		if path.stat().st_size > max_bytes:
+			return None
+		value = json.loads(path.read_text(encoding="utf-8"))
+	except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+		return None
+	return value if isinstance(value, dict) else None
+
+
+def _valid_retry_summary(value: Any) -> bool:
+	return (
+		isinstance(value, list)
+		and len(value) <= 10
+		and all(isinstance(item, str) and len(item.encode("utf-8")) <= 512 for item in value)
+	)
+
+
+def _validate_resolver_retry_document(document: dict[str, Any]) -> bool:
+	if set(document) != RESOLVER_RETRY_SIGNED_FIELDS:
+		return False
+	integer_fields = (
+		"producer_id", "tracking_issue", "source_pr", "generation",
+		"consecutive_failure_count", "threshold", "escalation_threshold",
+		"regressed_by_resolver_count", "pre_existing_drift_count",
+	)
+	if any(not isinstance(document.get(field), int) or isinstance(document.get(field), bool) for field in integer_fields):
+		return False
+	if any(document[field] < 0 for field in integer_fields):
+		return False
+	if min(document["producer_id"], document["tracking_issue"], document["source_pr"], document["generation"], document["threshold"]) < 1:
+		return False
+	if document["escalation_threshold"] < document["threshold"]:
+		return False
+	if document.get("verification_tier") not in RESOLVER_RETRY_TIERS:
+		return False
+	if re.fullmatch(r"[0-9a-f]{40}", str(document.get("head_sha", ""))) is None:
+		return False
+	for digest_field in ("failure_signature_sha256", "signature"):
+		if re.fullmatch(r"[0-9a-f]{64}", str(document.get(digest_field, ""))) is None:
+			return False
+	if not isinstance(document.get("escalated"), bool):
+		return False
+	if RESOLVER_RETRY_TIMESTAMP_RE.fullmatch(str(document.get("updated_at", ""))) is None:
+		return False
+	escalated_at = document.get("escalated_at")
+	if document["escalated"]:
+		if RESOLVER_RETRY_TIMESTAMP_RE.fullmatch(str(escalated_at)) is None:
+			return False
+	elif escalated_at != "":
+		return False
+	return _valid_retry_summary(document.get("regression_summary")) and _valid_retry_summary(document.get("drift_summary"))
+
+
+def _signature_for_resolver_retry(document: dict[str, Any], auth_key: bytes) -> str:
+	unsigned_document = dict(document)
+	unsigned_document.pop("signature", None)
+	message = b"\n".join((RESOLVER_RETRY_DOMAIN, _canonical_json_bytes(unsigned_document)))
+	return hmac.new(auth_key, message, hashlib.sha256).hexdigest()
+
+
+def cmd_sign_resolver_retry(args: argparse.Namespace) -> int:
+	context, context_error = _validated_resolver_retry_context(args)
+	if context_error is not None:
+		print(f"resolver retry signing failed: {context_error}", file=sys.stderr)
+		return 2
+	candidate = _load_bounded_json_object(Path(args.candidate_file), RESOLVER_RETRY_MAX_BYTES)
+	if candidate is None:
+		print("resolver retry signing failed: candidate is invalid or oversized", file=sys.stderr)
+		return 2
+	active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"resolver retry signing failed: {key_error}", file=sys.stderr)
+		return 2
+	assert context is not None and active_key_id is not None and auth_keys is not None
+	document = {
+		**context,
+		"key_id": active_key_id,
+		"generation": candidate.get("generation"),
+		"failure_signature_sha256": candidate.get("failure_signature_sha256"),
+		"consecutive_failure_count": candidate.get("consecutive_failure_count"),
+		"threshold": candidate.get("threshold"),
+		"escalation_threshold": candidate.get("escalation_threshold"),
+		"verification_tier": candidate.get("verification_tier"),
+		"regressed_by_resolver_count": candidate.get("regressed_by_resolver_count"),
+		"pre_existing_drift_count": candidate.get("pre_existing_drift_count"),
+		"regression_summary": candidate.get("regression_summary", []),
+		"drift_summary": candidate.get("drift_summary", []),
+		"escalated": candidate.get("escalated"),
+		"escalated_at": candidate.get("escalated_at"),
+		"updated_at": candidate.get("updated_at"),
+		"signature": "0" * 64,
+	}
+	if not _validate_resolver_retry_document(document):
+		print("resolver retry signing failed: candidate fields are invalid", file=sys.stderr)
+		return 2
+	document["signature"] = _signature_for_resolver_retry(document, auth_keys[active_key_id])
+	try:
+		Path(args.out_file).write_bytes(_canonical_json_bytes(document) + b"\n")
+		os.chmod(args.out_file, 0o600)
+	except OSError:
+		print("resolver retry signing failed: output file is not writable", file=sys.stderr)
+		return 2
+	return 0
+
+
+def cmd_verify_resolver_retry(args: argparse.Namespace) -> int:
+	context, context_error = _validated_resolver_retry_context(args)
+	if context_error is not None:
+		print(f"resolver retry verification failed: {context_error}", file=sys.stderr)
+		return 2
+	document = _load_bounded_json_object(Path(args.envelope_file), RESOLVER_RETRY_MAX_BYTES)
+	if document is None or not _validate_resolver_retry_document(document):
+		return 1
+	assert context is not None
+	if any(document.get(field) != expected for field, expected in context.items()):
+		return 1
+	_active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"resolver retry verification failed: {key_error}", file=sys.stderr)
+		return 2
+	assert auth_keys is not None
+	key_id = document.get("key_id")
+	if not isinstance(key_id, str) or key_id not in auth_keys:
+		return 1
+	expected_signature = _signature_for_resolver_retry(document, auth_keys[key_id])
+	if not hmac.compare_digest(str(document["signature"]), expected_signature):
+		return 1
+	if args.out_file:
+		try:
+			Path(args.out_file).write_bytes(_canonical_json_bytes(document) + b"\n")
+			os.chmod(args.out_file, 0o600)
+		except OSError:
+			print("resolver retry verification failed: output file is not writable", file=sys.stderr)
+			return 2
+	return 0
+
+
 def _frame(part: int, total: int, manifest: str, payload: bytes) -> bytes:
 	opener = (
 		f"<!-- ORCHESTRATOR_STATE_V2 part={part}/{total} "
@@ -760,6 +938,24 @@ def main() -> int:
 		command_parser.add_argument("--producer-login", required=True)
 		if command_name == "sign":
 			command_parser.add_argument("--out-file", required=True)
+		command_parser.set_defaults(func=command_func)
+	for command_name, command_help, command_func in (
+		("sign-resolver-retry", "Sign an authenticated resolver retry-state envelope", cmd_sign_resolver_retry),
+		("verify-resolver-retry", "Verify an authenticated resolver retry-state envelope", cmd_verify_resolver_retry),
+	):
+		command_parser = sub.add_parser(command_name, help=command_help)
+		command_parser.add_argument("--repository", required=True)
+		command_parser.add_argument("--tracking-issue", required=True, type=int)
+		command_parser.add_argument("--integration-branch", required=True)
+		command_parser.add_argument("--source-pr", required=True, type=int)
+		command_parser.add_argument("--head-sha", required=True)
+		command_parser.add_argument("--producer-id", required=True, type=int)
+		if command_name == "sign-resolver-retry":
+			command_parser.add_argument("--candidate-file", required=True)
+			command_parser.add_argument("--out-file", required=True)
+		else:
+			command_parser.add_argument("--envelope-file", required=True)
+			command_parser.add_argument("--out-file")
 		command_parser.set_defaults(func=command_func)
 	p_validate_keyring = sub.add_parser(
 		"validate-keyring",

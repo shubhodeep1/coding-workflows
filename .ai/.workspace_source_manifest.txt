@@ -168,6 +168,7 @@ changelog.d/3947-security-pass-deleted-branch-recovery.md
 changelog.d/3957-blocker-only-plan-blocked-routing.md
 changelog.d/3963-reissue-preserve-baseline-default-true.md
 changelog.d/3965-orchestrator-state-author-identity.md
+changelog.d/3965-review-autofix-security-boundaries-cycle-3.md
 changelog.d/3965-review-security-boundaries.md
 changelog.d/3965-security-pass-fix-cycle-2.md
 changelog.d/3965-security-pass-fix-successor-adoption.md
@@ -418,6 +419,7 @@ scripts/dev/test_watchdog_helpers.sh
 scripts/dev/test_write_guard.sh
 scripts/dispatch_and_watch_workflow_run.sh
 scripts/drift_audit.sh
+scripts/editor_isolation_preflight.sh
 scripts/emit_event.py
 scripts/emit_event.sh
 scripts/files_touched_scope_guard.py
@@ -671,6 +673,7 @@ tests/test_drift_audit_job.py
 tests/test_e2e_editor_smoke_canary.py
 tests/test_editor_capacity_fallback_contract.py
 tests/test_editor_changes_lost_redispatch_budget.py
+tests/test_editor_isolation_preflight.py
 tests/test_emit_event.sh
 tests/test_emit_event_concurrent.sh
 tests/test_family_node_runtime.py

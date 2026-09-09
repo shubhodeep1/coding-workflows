@@ -137,20 +137,18 @@ memory_ensure_branch()
 	fi
 
 	local branch="${AI_MEMORY_BRANCH:-ai-memory}"
+	local token="${GH_TOKEN:-}"
 
-	# Resolve a credential-free origin URL; _memory_git supplies auth per command.
+	# Resolve authenticated origin URL
 	local origin_url
 	origin_url="$(git remote get-url origin 2>/dev/null || echo "")"
 	if [[ -z "${origin_url}" ]]; then
 		_memory_warn "ensure-branch: no origin remote configured"
 		return 0
 	fi
-	if [[ "${origin_url}" =~ ^(https?://)[^/@]+@(.+)$ ]]; then
-		origin_url="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
-	fi
 
 	# Check if branch exists on remote
-	if _memory_git ls-remote --heads origin "${branch}" 2>/dev/null | grep -q "${branch}"; then
+	if git ls-remote --heads origin "${branch}" 2>/dev/null | grep -q "${branch}"; then
 		return 0
 	fi
 
@@ -179,7 +177,7 @@ memory_ensure_branch()
 		echo "AI memory branch — created automatically." > ai-memory/README.md
 		git add ai-memory/README.md
 		git commit --quiet -m "Initialize ai-memory branch"
-		_memory_git push origin "${branch}" 2>&1
+		git push origin "${branch}" 2>&1
 	) || {
 		_memory_warn "ensure-branch: failed to create '${branch}' (fail-open)"
 		rm -rf "${temp_dir}"
@@ -544,6 +542,7 @@ _memory_force_tick_remote_url()
 	local repo_root=""
 	local repository=""
 	local origin_url=""
+	local token=""
 	local server_url="${GITHUB_SERVER_URL:-https://github.com}"
 	local server_host=""
 
@@ -565,11 +564,9 @@ _memory_force_tick_remote_url()
 
 	if [ -n "${repo_root}" ] && [ -d "${repo_root}/.git" ]; then
 		origin_url="$(git -C "${repo_root}" remote get-url origin 2>/dev/null || echo "")"
-		if [[ "${origin_url}" =~ ^(https?://)[^/@]+@(.+)$ ]]; then
-			origin_url="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
-		fi
 	fi
 
+	token="${GH_PAT:-${GH_TOKEN:-}}"
 	if [ -n "${origin_url}" ]; then
 		case "${origin_url}" in
 			/*|./*|../*|file://*)
@@ -581,11 +578,11 @@ _memory_force_tick_remote_url()
 		esac
 	fi
 
-	if [ -n "${repository}" ]; then
+	if [ -n "${token}" ] && [ -n "${repository}" ]; then
 		server_host="${server_url#https://}"
 		server_host="${server_host#http://}"
 		server_host="${server_host%/}"
-		printf 'https://%s/%s\n' "${server_host}" "${repository}"
+		printf 'https://x-access-token:%s@%s/%s\n' "${token}" "${server_host}" "${repository}"
 		return 0
 	fi
 
@@ -597,23 +594,11 @@ _memory_force_tick_remote_url()
 	return 1
 }
 
-_memory_git()
-{
-	local auth_token="${GH_PAT:-${GH_TOKEN:-}}"
-	local auth_header=""
-	if [ -z "${auth_token}" ]; then
-		git "$@"
-		return
-	fi
-	auth_header="$(printf 'x-access-token:%s' "${auth_token}" | base64 | tr -d '\n')"
-	git -c "http.extraHeader=Authorization: Basic ${auth_header}" "$@"
-}
-
 _memory_force_tick_remote_branch_exists()
 {
 	local remote_url="${1:?remote url required}"
 	local branch="${2:?branch required}"
-	_memory_git ls-remote --heads "${remote_url}" "${branch}" 2>/dev/null | awk '{print $2}' | grep -Fxq "refs/heads/${branch}"
+	git ls-remote --heads "${remote_url}" "${branch}" 2>/dev/null | awk '{print $2}' | grep -Fxq "refs/heads/${branch}"
 }
 
 _memory_force_tick_ensure_branch()
@@ -639,7 +624,7 @@ _memory_force_tick_ensure_branch()
 		git add "${memory_root}/README.md"
 		git commit --quiet -m "Initialize ${branch}"
 		git remote add origin "${remote_url}"
-		_memory_git push origin "${branch}" >/dev/null 2>&1
+		git push origin "${branch}" >/dev/null 2>&1
 	) || {
 		rm -rf "${tmp_dir}"
 		return 1
@@ -782,7 +767,7 @@ memory_force_tick_get()
 	fi
 
 	tmp_dir="$(mktemp -d)"
-	if ! _memory_git clone --quiet --depth 1 --branch "${memory_branch}" "${remote_url}" "${tmp_dir}" >/dev/null 2>&1; then
+	if ! git clone --quiet --depth 1 --branch "${memory_branch}" "${remote_url}" "${tmp_dir}" >/dev/null 2>&1; then
 		rm -rf "${tmp_dir}"
 		_memory_warn "force-tick-get failed to clone ${memory_branch} (fail-open)"
 		_memory_telemetry '{"op":"force-tick-get","ok":false,"fail_open":true,"source":"shell"}' >&2
@@ -898,7 +883,7 @@ memory_force_tick_put()
 	fi
 
 	tmp_dir="$(mktemp -d)"
-	if ! _memory_git clone --quiet --depth 1 --branch "${memory_branch}" "${remote_url}" "${tmp_dir}" >/dev/null 2>&1; then
+	if ! git clone --quiet --depth 1 --branch "${memory_branch}" "${remote_url}" "${tmp_dir}" >/dev/null 2>&1; then
 		rm -rf "${tmp_dir}"
 		_memory_warn "force-tick-put failed to clone ${memory_branch} (fail-open)"
 		_memory_telemetry '{"op":"force-tick-put","ok":false,"fail_open":true,"source":"shell"}' >&2
@@ -934,7 +919,7 @@ memory_force_tick_put()
 			:
 		else
 			git commit --quiet -m "ai-memory: update force tick #${tracking_issue}"
-			_memory_git push origin "${memory_branch}" >/dev/null 2>&1
+			git push origin "${memory_branch}" >/dev/null 2>&1
 		fi
 	) || {
 		rm -rf "${tmp_dir}"

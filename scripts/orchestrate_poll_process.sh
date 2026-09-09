@@ -5599,35 +5599,77 @@ ensure_integration_conflict_state_fields() {
       }' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 }
 
-extract_autofix_resolver_retry_state_from_pr_body() {
-  # Read the PR body before invoking `python3 - <<'PY'`: the heredoc
-  # consumes stdin for the script itself, so piping directly into
-  # python would otherwise drop the body and make the extractor fail
-  # closed on every call.
-  local retry_state_body=""
-  retry_state_body="$(cat)"
+extract_autofix_resolver_retry_state_from_comments() {
+  local repository="$1"
+  local tracking_issue="$2"
+  local integration_branch="$3"
+  local source_pr="$4"
+  local head_sha="$5"
+  local comments_json=""
+  local candidate_dir=""
+  local candidate_file=""
+  local verified_file=""
+  local best_file=""
+	local candidate_head_sha=""
+  local generation="0"
+  local best_generation="0"
 
-  RETRY_STATE_BODY="${retry_state_body}" python3 - <<'PY'
-from __future__ import annotations
-
+  comments_json="$(cat)"
+  if ! resolve_orchestrator_state_producer \
+		|| [ ! -f "scripts/orchestrate_state_v2.py" ]; then
+    return 0
+  fi
+  candidate_dir="$(mktemp -d)"
+  COMMENTS_JSON="${comments_json}" PRODUCER_ID="${ORCHESTRATOR_STATE_PRODUCER_ID}" CANDIDATE_DIR="${candidate_dir}" python3 - <<'PYINNER'
 import json
 import os
 import re
-import sys
+from pathlib import Path
 
-body = os.environ.get("RETRY_STATE_BODY", "").replace("\r\n", "\n").replace("\r", "\n")
-pattern = re.compile(r"<!-- AUTOFIX_RESOLVER_RETRY_STATE_V1\n(.*?)\n-->", re.S)
-matches = pattern.findall(body)
-for raw in reversed(matches):
-  try:
-    parsed = json.loads(raw)
-  except json.JSONDecodeError:
-    continue
-  if isinstance(parsed, dict):
-    sys.stdout.write(json.dumps(parsed, sort_keys=True, ensure_ascii=True))
+try:
+    comments = json.loads(os.environ["COMMENTS_JSON"])
+except json.JSONDecodeError:
     raise SystemExit(0)
-raise SystemExit(0)
-PY
+producer_id = int(os.environ["PRODUCER_ID"])
+output_dir = Path(os.environ["CANDIDATE_DIR"])
+pattern = re.compile(r"^<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n(\{.*\})\n-->$", re.S)
+for comment in comments if isinstance(comments, list) else []:
+    if not isinstance(comment, dict) or int((comment.get("user") or {}).get("id") or 0) != producer_id:
+        continue
+    match = pattern.fullmatch(str(comment.get("body") or "").replace("\r\n", "\n"))
+    if not match:
+        continue
+    try:
+        document = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        continue
+    comment_id = int(comment.get("id") or 0)
+    if isinstance(document, dict) and comment_id > 0:
+        (output_dir / f"{comment_id}.json").write_text(json.dumps(document), encoding="utf-8")
+PYINNER
+  for candidate_file in "${candidate_dir}"/*.json; do
+    [ -f "${candidate_file}" ] || continue
+    verified_file="${candidate_file}.verified"
+		candidate_head_sha="$(jq -r '.head_sha // empty' "${candidate_file}" 2>/dev/null || echo '')"
+		[[ "${candidate_head_sha}" =~ ^[0-9a-f]{40}$ ]] || continue
+    if PYTHONDONTWRITEBYTECODE=1 python3 "scripts/orchestrate_state_v2.py" verify-resolver-retry \
+      --envelope-file "${candidate_file}" \
+      --repository "${repository}" \
+      --tracking-issue "${tracking_issue}" \
+      --integration-branch "${integration_branch}" \
+      --source-pr "${source_pr}" \
+			--head-sha "${candidate_head_sha}" \
+      --producer-id "${ORCHESTRATOR_STATE_PRODUCER_ID}" \
+      --out-file "${verified_file}"; then
+      generation="$(jq -r '.generation // 0' "${verified_file}" 2>/dev/null || echo 0)"
+      if [[ "${generation}" =~ ^[1-9][0-9]*$ ]] && [ "${generation}" -gt "${best_generation}" ]; then
+        best_generation="${generation}"
+        best_file="${verified_file}"
+      fi
+    fi
+  done
+  [ -z "${best_file}" ] || cat "${best_file}"
+  rm -rf "${candidate_dir}"
 }
 
 # Create the judge's `new_issues` as fix-up GitHub issues and record them in
@@ -8387,11 +8429,21 @@ heal_integration_branch_conflict() {
     echo "::warning::[integration-heal] Could not load final PR #${final_pr} metadata; skipping resolver escape-valve gate this tick."
   fi
 
-  if [ -n "${final_pr_body}" ] && [ -n "${final_pr_head_sha}" ]; then
+	if [ -n "${final_pr_head_sha}" ]; then
     local resolver_retry_state=""
     local resolver_retry_head_sha=""
     local resolver_retry_escalated="false"
-    resolver_retry_state="$(printf '%s' "${final_pr_body}" | extract_autofix_resolver_retry_state_from_pr_body || true)"
+		local resolver_retry_comments_json=""
+		# The PR metadata call above cannot return issue comments. This single
+		# paginated fetch is required for authenticated V2 retry-state authority;
+		# unsigned PR-body V1 blocks are deliberately never consulted.
+		resolver_retry_comments_json="$(gh_retry gh api --paginate \
+			"repos/${GITHUB_REPOSITORY}/issues/${final_pr}/comments?per_page=100" \
+			| jq -sc 'add // []' 2>/dev/null || echo '[]')"
+		resolver_retry_state="$(printf '%s' "${resolver_retry_comments_json}" \
+			| extract_autofix_resolver_retry_state_from_comments \
+				"${GITHUB_REPOSITORY}" "${TRACKING_NUM}" "${integration_branch}" \
+				"${final_pr}" "${final_pr_head_sha}" || true)"
     if [ -n "${resolver_retry_state}" ]; then
       resolver_retry_head_sha="$(printf '%s' "${resolver_retry_state}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
       resolver_retry_escalated="$(printf '%s' "${resolver_retry_state}" | jq -r '.escalated // false' 2>/dev/null || echo false)"

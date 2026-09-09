@@ -144,8 +144,17 @@ def _build_artifact(
 ) -> dict[str, object]:
 	ns = _retry_state_namespace()
 	verifier_module = ns["load_verifier_module"](str(REPO_ROOT / "scripts"))
-	with _pushd(tmp_path):
-		return ns["build_resolver_retry_state_artifact"](
+	previous_state = ns["extract_retry_state_from_body"](str(pr_payload.get("body", "") or ""))
+	verified_state_file = tmp_path / "verified-retry-state.json"
+	if isinstance(previous_state, dict):
+		verified_state_file.write_text(json.dumps(previous_state), encoding="utf-8")
+	else:
+		verified_state_file.unlink(missing_ok=True)
+	previous_environment_value = os.environ.get("RESOLVER_RETRY_STATE_VERIFIED_FILE")
+	os.environ["RESOLVER_RETRY_STATE_VERIFIED_FILE"] = str(verified_state_file)
+	try:
+		with _pushd(tmp_path):
+			return ns["build_resolver_retry_state_artifact"](
 			pr_payload=pr_payload,
 			pr_issue_comments=pr_issue_comments or [],
 			fingerprints=fingerprints or _sample_fingerprints(),
@@ -156,7 +165,12 @@ def _build_artifact(
 			run_url="https://github.com/owner/repo/actions/runs/1",
 			verifier_module=verifier_module,
 			max_items=max_items,
-		)
+			)
+	finally:
+		if previous_environment_value is None:
+			os.environ.pop("RESOLVER_RETRY_STATE_VERIFIED_FILE", None)
+		else:
+			os.environ["RESOLVER_RETRY_STATE_VERIFIED_FILE"] = previous_environment_value
 
 
 def test_retry_state_signature_is_order_stable(tmp_path: Path) -> None:
@@ -393,19 +407,19 @@ def test_review_autofix_wires_escape_threshold_and_failure_comment_suppression()
 	assert terminal_branch < terminal_alert
 
 
-def test_resolve_script_baseline_fallback_and_comment_gate_contract() -> None:
+def test_resolve_script_emits_candidate_without_github_mutations() -> None:
 	body = _resolve_script_text()
 	assert "Resolver retry-state persistence continuing without baseline fingerprints state" in body
 	assert re.search(
 		r'RESOLVER_FP_BASELINE_STATE_FILE="\$\{_retry_state_baseline_file\}"\s+_build_resolver_retry_state_artifact',
 		body,
 	), "retry-state builder should receive an empty baseline-file env override when capture is unavailable"
-	patch_branch_start = body.index('if [ -n "${_comment_id}" ] && [[ "${_comment_id}" =~ ^[0-9]+$ ]]; then')
-	patch_branch_end = body.index('elif [ -s "${_comment_file}" ]; then', patch_branch_start)
-	patch_branch = body[patch_branch_start:patch_branch_end]
-	patch_call = 'if gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${_comment_id}"'
-	assert patch_call in patch_branch
-	assert patch_branch.index("_comment_present=true") > patch_branch.index(patch_call)
+	assert 'RESOLVER_RETRY_STATE_CANDIDATE_FILE=${RESOLVER_RETRY_STATE_CANDIDATE_FILE}' in body
+	assert "Prepared AUTOFIX_RESOLVER_RETRY_STATE_V2 candidate for trusted actuation." in body
+	assert "gh_retry gh" not in body
+	workflow = REVIEW_AUTOFIX.read_text(encoding="utf-8")
+	assert "Actuate validated resolver outcome" in workflow
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_actuate.sh"' in workflow
 
 
 def test_resolve_script_wires_tier_selection_and_verifier_args() -> None:

@@ -347,10 +347,15 @@ jobs:
           set -euo pipefail
 
           source scripts/gh_helpers.sh 2>/dev/null || true
+            source scripts/codex_helpers.sh
+            model_provider_broker_start
+            trap 'model_provider_broker_stop; rm -f "${CODEX_PROMPT_FILE:-}"' EXIT
+            configured_reasoning="$(grep -m1 '^model_reasoning_effort = ' "${HOME}/.codex/config.toml" | cut -d'"' -f2)"
+              model_provider_broker_prepare_codex_readonly nobody "${WORKFLOW_RETRO_MODEL}" "${configured_reasoning}" "$(pwd)"
 
           RETRO_BODY_FILE="${RUNNER_TEMP:-/tmp}/workflow-weekly-retro.md"
+            RETRO_CANDIDATE_FILE="${RUNNER_TEMP:-/tmp}/workflow-weekly-retro.candidate.md"
           CODEX_PROMPT_FILE="$(mktemp)"
-          trap 'rm -f "${CODEX_PROMPT_FILE}"' EXIT
 
           RETRO_SEMBLE_PREFETCH=""
           if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -f scripts/semble_helpers.sh ]; then
@@ -392,13 +397,14 @@ jobs:
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
             set +e
-            bash scripts/codex_heartbeat.sh \
+              model_provider_broker_exec_sanitized bash scripts/codex_heartbeat.sh \
               --phase workflow_weekly_retro \
-              --stdout-file "${RETRO_BODY_FILE}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-weekly-retro-codex.log >&2)
+                --stdout-file "${RETRO_CANDIDATE_FILE}" \
+                  -- bash -c 'set -euo pipefail; source "$1"; shift; model_provider_broker_exec_unprivileged nobody "$@"' model-provider-child scripts/codex_helpers.sh \
+                  codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox read-only < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-weekly-retro-codex.log >&2)
             RETRO_EXIT=$?
             set -e
-            if [ "${RETRO_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${RETRO_BODY_FILE}"; then
+              if [ "${RETRO_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${RETRO_CANDIDATE_FILE}"; then
               break
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
@@ -413,6 +419,7 @@ jobs:
               exit "${RETRO_EXIT}"
             fi
           done
+            python3 scripts/workflow_log_output_contract.py --mode retro --candidate "${RETRO_CANDIDATE_FILE}" --output "${RETRO_BODY_FILE}" --allowed-output-root "${RUNNER_TEMP:-/tmp}"
 
           if ! head -n1 "${RETRO_BODY_FILE}" | grep -qx '## Weekly Retro'; then
             echo "::error::Weekly retro Codex output did not start with the required '## Weekly Retro' heading."
@@ -891,6 +898,11 @@ jobs:
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
           type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
+            source scripts/codex_helpers.sh
+            model_provider_broker_start
+            trap 'model_provider_broker_stop' EXIT
+            configured_reasoning="$(grep -m1 '^model_reasoning_effort = ' "${HOME}/.codex/config.toml" | cut -d'"' -f2)"
+              model_provider_broker_prepare_codex_readonly nobody "${WORKFLOW_EDITOR_MODEL}" "${configured_reasoning}" "$(pwd)"
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
@@ -1025,6 +1037,7 @@ jobs:
           REPORT_DIR="analysis"
           REPORT_BASE="${REPORT_DIR}/workflow-optimization-${REPORT_DATE}"
           REPORT_FILE="${REPORT_BASE}.md"
+            REPORT_CANDIDATE_FILE="${RUNNER_TEMP:-/tmp}/workflow-analysis-${REPORT_DATE}-${GITHUB_RUN_ID}.candidate.md"
           if [ -f "${REPORT_FILE}" ]; then
             REPORT_SUFFIX=2
             while [ -f "${REPORT_BASE}-${REPORT_SUFFIX}.md" ]; do
@@ -1058,6 +1071,8 @@ jobs:
           if [ -z "${RUN_LOGS_DIR:-}" ] || [ ! -d "${RUN_LOGS_DIR}" ]; then
             echo "::warning::workflow-log-output artifact not present at '${RUN_LOGS_DIR:-<unset>}'; Codex will only see analysis_context.json."
             RUN_LOGS_DIR=""
+            else
+              model_provider_broker_grant_read_path "${RUN_LOGS_DIR}" nobody
           fi
 
           # Build Semble prefetch (best-effort, fail-soft). Skipped silently
@@ -1107,13 +1122,14 @@ jobs:
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
             set +e
-            bash scripts/codex_heartbeat.sh \
+              model_provider_broker_exec_sanitized bash scripts/codex_heartbeat.sh \
               --phase workflow_log_analysis \
-              --stdout-file "${REPORT_FILE}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
+                --stdout-file "${REPORT_CANDIDATE_FILE}" \
+                  -- bash -c 'set -euo pipefail; source "$1"; shift; model_provider_broker_exec_unprivileged nobody "$@"' model-provider-child scripts/codex_helpers.sh \
+                  codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox read-only < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
             ANALYZE_EXIT=$?
             set -e
-            if [ "${ANALYZE_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${REPORT_FILE}"; then
+              if [ "${ANALYZE_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${REPORT_CANDIDATE_FILE}"; then
               codex_failure_mode=""
               break
             fi
@@ -1136,6 +1152,7 @@ jobs:
               handle_log_analysis_codex_failure "analysis_codex_pass" "codex_rc_nonzero" "${analyze_attempts_used}" "${ANALYZE_EXIT}" "${failure_summary}"
             fi
           done
+            python3 scripts/workflow_log_output_contract.py --mode analysis --candidate "${REPORT_CANDIDATE_FILE}" --output "${REPORT_FILE}" --allowed-output-root "${GITHUB_WORKSPACE}"
 
           echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
           echo "analysis_status=completed" >> "$GITHUB_OUTPUT"
@@ -1548,6 +1565,11 @@ jobs:
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
           type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
+          source scripts/codex_helpers.sh
+          model_provider_broker_start
+            trap 'model_provider_broker_stop' EXIT
+          configured_reasoning="$(grep -m1 '^model_reasoning_effort = ' "${HOME}/.codex/config.toml" | cut -d'"' -f2)"
+              model_provider_broker_prepare_codex_readonly nobody "${WORKFLOW_EDITOR_MODEL}" "${configured_reasoning}" "$(pwd)"
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
@@ -1663,9 +1685,11 @@ jobs:
           fi
 
           SECTION_FILE=""
+            VALIDATED_SECTION_FILE=""
           CODEX_PROMPT_FILE=""
-          trap 'rm -f "${SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
+            trap 'model_provider_broker_stop; rm -f "${SECTION_FILE}" "${VALIDATED_SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
           SECTION_FILE="$(mktemp)"
+            VALIDATED_SECTION_FILE="$(mktemp)"
           CODEX_PROMPT_FILE="$(mktemp)"
           {
             SEMBLE_PREFETCH="${AUDIT_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-workflow-audit.txt
@@ -1696,10 +1720,11 @@ jobs:
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
             set +e
-            bash scripts/codex_heartbeat.sh \
+              model_provider_broker_exec_sanitized bash scripts/codex_heartbeat.sh \
               --phase workflow_deep_audit \
               --stdout-file "${SECTION_FILE}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-audit-codex.log >&2)
+                  -- bash -c 'set -euo pipefail; source "$1"; shift; model_provider_broker_exec_unprivileged nobody "$@"' model-provider-child scripts/codex_helpers.sh \
+                  codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox read-only < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-audit-codex.log >&2)
             AUDIT_EXIT=$?
             set -e
             if [ "${AUDIT_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then
@@ -1721,6 +1746,8 @@ jobs:
               exit "${AUDIT_EXIT}"
             fi
           done
+            python3 scripts/workflow_log_output_contract.py --mode deep-audit --candidate "${SECTION_FILE}" --output "${VALIDATED_SECTION_FILE}" --expected-date "$(date -u +%F)" --allowed-output-root "${RUNNER_TEMP:-/tmp}"
+            mv "${VALIDATED_SECTION_FILE}" "${SECTION_FILE}"
 
           if ! head -n1 "${SECTION_FILE}" | grep -qE '^## Deep Audit — Workflows & Scripts \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$'; then
             echo "::error::Deep audit Codex output did not start with the required '## Deep Audit — Workflows & Scripts (YYYY-MM-DD)' heading."
@@ -2062,6 +2089,11 @@ jobs:
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
           type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
+          source scripts/codex_helpers.sh
+          model_provider_broker_start
+            trap 'model_provider_broker_stop' EXIT
+          configured_reasoning="$(grep -m1 '^model_reasoning_effort = ' "${HOME}/.codex/config.toml" | cut -d'"' -f2)"
+              model_provider_broker_prepare_codex_readonly nobody "${WORKFLOW_EDITOR_MODEL}" "${configured_reasoning}" "$(pwd)"
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
@@ -2177,9 +2209,11 @@ jobs:
           fi
 
           SECTION_FILE=""
+            VALIDATED_SECTION_FILE=""
           CODEX_PROMPT_FILE=""
-          trap 'rm -f "${SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
+            trap 'model_provider_broker_stop; rm -f "${SECTION_FILE}" "${VALIDATED_SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
           SECTION_FILE="$(mktemp)"
+            VALIDATED_SECTION_FILE="$(mktemp)"
           CODEX_PROMPT_FILE="$(mktemp)"
           {
             SEMBLE_PREFETCH="${API_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-workflow-api-redundancy.txt
@@ -2209,10 +2243,11 @@ jobs:
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
             set +e
-            bash scripts/codex_heartbeat.sh \
+              model_provider_broker_exec_sanitized bash scripts/codex_heartbeat.sh \
               --phase workflow_api_redundancy \
               --stdout-file "${SECTION_FILE}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)
+                  -- bash -c 'set -euo pipefail; source "$1"; shift; model_provider_broker_exec_unprivileged nobody "$@"' model-provider-child scripts/codex_helpers.sh \
+                  codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox read-only < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)
             API_EXIT=$?
             set -e
             if [ "${API_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then
@@ -2234,6 +2269,8 @@ jobs:
               exit "${API_EXIT}"
             fi
           done
+            python3 scripts/workflow_log_output_contract.py --mode api-redundancy --candidate "${SECTION_FILE}" --output "${VALIDATED_SECTION_FILE}" --expected-date "$(date -u +%F)" --allowed-output-root "${RUNNER_TEMP:-/tmp}"
+            mv "${VALIDATED_SECTION_FILE}" "${SECTION_FILE}"
 
           if ! head -n1 "${SECTION_FILE}" | grep -qE '^## API Call Consolidation & Dead-Call Analysis \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$'; then
             echo "::error::API redundancy Codex output did not start with the required '## API Call Consolidation & Dead-Call Analysis (YYYY-MM-DD)' heading."

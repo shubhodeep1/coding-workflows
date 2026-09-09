@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -846,6 +847,16 @@ def _run_poller(
 	if issue_labels is None:
 		issue_labels = {10: ["ai:merged"]}
 	issue_comments = issue_comments or {}
+	for pull_request in prs:
+		pull_body = str(pull_request.get("body") or "")
+		if pull_body.startswith("<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n"):
+			pull_number = int(pull_request["number"])
+			issue_labels.setdefault(pull_number, [])
+			issue_comments.setdefault(pull_number, []).append({
+				"body": pull_body,
+				"user": {"login": "github-actions[bot]", "id": 41898282},
+			})
+			pull_request["body"] = ""
 	issue_bodies = issue_bodies or {}
 	issue_events = issue_events or {}
 	gql_labels = gql_labels or {}
@@ -15047,27 +15058,43 @@ sys.exit(1)
 
 def _resolver_retry_state_block_for_test(
 	*,
+	source_pr: int,
 	head_sha: str,
 	consecutive_failure_count: int,
 	escalated: bool = True,
-	failure_signature_sha256: str = "signature-1",
+	failure_signature_sha256: str = "f" * 64,
 ) -> str:
 	payload = {
-		"schema_version": 1,
+		"schema_version": "autofix_resolver_retry_state.v2",
+		"algorithm": "hmac-sha256",
+		"key_id": "active",
+		"producer_id": 41898282,
+		"repository": "owner/repo",
+		"tracking_issue": 192,
+		"integration_branch": "orchestrator/project-192",
+		"source_pr": source_pr,
 		"head_sha": head_sha,
+		"generation": 1,
 		"failure_signature_sha256": failure_signature_sha256,
-		"last_failure_signature": failure_signature_sha256,
 		"consecutive_failure_count": consecutive_failure_count,
 		"threshold": 5,
+		"escalation_threshold": 20,
+		"verification_tier": "warn_only",
 		"regressed_by_resolver_count": 1,
 		"pre_existing_drift_count": 0,
-		"last_regressed_by_resolver": [{"fp_key": ["scripts/example.py", "EXPECTED_LINE"], "path": "scripts/example.py", "kind": "must_contain", "issue": 1500, "pr": 2600}],
-		"last_pre_existing_drift": [],
+		"regression_summary": ['["scripts/example.py","EXPECTED_LINE"]'],
+		"drift_summary": [],
 		"escalated": escalated,
 		"escalated_at": "2026-05-20T00:00:00Z" if escalated else "",
 		"updated_at": "2026-05-20T00:00:00Z",
 	}
-	return "<!-- AUTOFIX_RESOLVER_RETRY_STATE_V1\n" + json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n-->"
+	message = b"\n".join((
+		b"coding-workflows/autofix-resolver-retry-state/v2",
+		json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+	))
+	payload["signature"] = hmac.new(b"a" * 32, message, hashlib.sha256).hexdigest()
+	return "<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n" + json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n-->"
+
 
 
 def test_integration_sync_conflict_uses_sync_specific_retry_budget_default_one():
@@ -15246,11 +15273,12 @@ def test_integration_conflict_redispatch_stops_when_current_final_pr_head_is_res
 				"state": "open",
 				"baseRefName": "main",
 				"headRefName": "orchestrator/project-192",
-				"headSha": "escalatedsha353",
+				"headSha": "3333333333333333333333333333333333333333",
 				"mergeable": False,
 				"mergeable_state": "dirty",
 				"body": _resolver_retry_state_block_for_test(
-					head_sha="escalatedsha353",
+					source_pr=353,
+					head_sha="3333333333333333333333333333333333333333",
 					consecutive_failure_count=5,
 				),
 			},
@@ -15260,7 +15288,7 @@ def test_integration_conflict_redispatch_stops_when_current_final_pr_head_is_res
 	)
 	dispatches_for_final = [d for d in result["review_dispatches"] if d.get("pr_number") == 353]
 	assert dispatches_for_final == [], (
-		"expected no resolver redispatch once AUTOFIX_RESOLVER_RETRY_STATE_V1 "
+		"expected no resolver redispatch once signed AUTOFIX_RESOLVER_RETRY_STATE_V2 "
 		"marks the current final-PR head as escalated; got: "
 		+ str(dispatches_for_final)
 	)
@@ -15287,11 +15315,12 @@ def test_integration_conflict_redispatch_resumes_when_retry_state_head_sha_is_st
 				"state": "open",
 				"baseRefName": "main",
 				"headRefName": "orchestrator/project-192",
-				"headSha": "freshsha354",
+				"headSha": "a" * 40,
 				"mergeable": False,
 				"mergeable_state": "dirty",
 				"body": _resolver_retry_state_block_for_test(
-					head_sha="stalesha354",
+					source_pr=354,
+					head_sha="b" * 40,
 					consecutive_failure_count=5,
 				),
 			},
@@ -15326,11 +15355,12 @@ def test_integration_conflict_branch_rebuild_waits_for_threshold():
 				"state": "open",
 				"baseRefName": "main",
 				"headRefName": "orchestrator/project-192",
-				"headSha": "escalatedsha355",
+				"headSha": "5555555555555555555555555555555555555555",
 				"mergeable": False,
 				"mergeable_state": "dirty",
 				"body": _resolver_retry_state_block_for_test(
-					head_sha="escalatedsha355",
+					source_pr=355,
+					head_sha="5555555555555555555555555555555555555555",
 					consecutive_failure_count=5,
 				),
 			},
@@ -15367,11 +15397,12 @@ def test_integration_conflict_branch_rebuild_respects_cooldown():
 				"state": "open",
 				"baseRefName": "main",
 				"headRefName": "orchestrator/project-192",
-				"headSha": "escalatedsha356",
+				"headSha": "6666666666666666666666666666666666666666",
 				"mergeable": False,
 				"mergeable_state": "dirty",
 				"body": _resolver_retry_state_block_for_test(
-					head_sha="escalatedsha356",
+					source_pr=356,
+					head_sha="6666666666666666666666666666666666666666",
 					consecutive_failure_count=5,
 				),
 			},
@@ -15412,11 +15443,12 @@ def test_integration_conflict_branch_rebuild_refuses_audit_warnings():
 				"state": "open",
 				"baseRefName": "main",
 				"headRefName": "orchestrator/project-192",
-				"headSha": "escalatedsha358",
+				"headSha": "8888888888888888888888888888888888888888",
 				"mergeable": False,
 				"mergeable_state": "dirty",
 				"body": _resolver_retry_state_block_for_test(
-					head_sha="escalatedsha358",
+					source_pr=358,
+					head_sha="8888888888888888888888888888888888888888",
 					consecutive_failure_count=5,
 				),
 			},
@@ -15462,11 +15494,12 @@ def test_integration_conflict_branch_rebuild_replay_failure_marks_terminal_failu
 				"state": "open",
 				"baseRefName": "main",
 				"headRefName": "orchestrator/project-192",
-				"headSha": "escalatedsha357",
+				"headSha": "7777777777777777777777777777777777777777",
 				"mergeable": False,
 				"mergeable_state": "dirty",
 				"body": _resolver_retry_state_block_for_test(
-					head_sha="escalatedsha357",
+					source_pr=357,
+					head_sha="7777777777777777777777777777777777777777",
 					consecutive_failure_count=5,
 				),
 			},
@@ -15532,11 +15565,12 @@ def test_integration_conflict_branch_rebuild_fetch_retry_stays_escalated_and_ign
 				"state": "open",
 				"baseRefName": "main",
 				"headRefName": "orchestrator/project-192",
-				"headSha": "escalatedsha359",
+				"headSha": "9999999999999999999999999999999999999999",
 				"mergeable": False,
 				"mergeable_state": "dirty",
 				"body": _resolver_retry_state_block_for_test(
-					head_sha="escalatedsha359",
+					source_pr=359,
+					head_sha="9999999999999999999999999999999999999999",
 					consecutive_failure_count=5,
 				),
 			},

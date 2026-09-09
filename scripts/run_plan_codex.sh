@@ -2,6 +2,7 @@
 set -euo pipefail
 source scripts/gh_helpers.sh 2>/dev/null || true
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+source scripts/codex_helpers.sh
 TOOL_CALL_BUDGET="${TOOL_CALL_BUDGET:-40}"
 
 PROMPT_TEMPLATE_FILE="${RUNTIME_DIR}/mode-plan-inline.txt"
@@ -254,6 +255,10 @@ if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
 fi
 
+model_provider_broker_start
+trap 'model_provider_broker_stop' EXIT
+model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "$(pwd)"
+
 max_attempts=3
 for attempt in $(seq 1 "${max_attempts}"); do
   echo "Codex planning attempt ${attempt}/${max_attempts}..."
@@ -270,7 +275,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
     attempt_model="${MODEL_EDITOR_FALLBACK}"
     echo "Final attempt: switching editor model to fallback ${attempt_model} (primary ${MODEL_EDITOR} capacity-limited)."
   fi
-  if cat "${CODEX_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+  if model_provider_broker_exec_unprivileged nobody codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox read-only < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
     if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
       PLAN_LINES="$(wc -l < "${CODEX_OUTPUT_FILE}")"
       echo "Codex planning succeeded on attempt ${attempt} (${PLAN_LINES} lines of output)."

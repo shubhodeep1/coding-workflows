@@ -227,7 +227,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh; do
+            for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh model_provider_broker.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -768,6 +768,12 @@ jobs:
         run: |
           set -euo pipefail
 
+            source scripts/codex_helpers.sh
+            model_provider_broker_start
+            trap 'model_provider_broker_stop' EXIT
+            configured_reasoning="$(grep -m1 '^model_reasoning_effort = ' "${HOME}/.codex/config.toml" | cut -d'"' -f2)"
+              model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR}" "${configured_reasoning}" "$(pwd)"
+
           # Source sanitize_codex_prompt_file (best-effort) so invalid
           # UTF-8 in the prompt cannot deterministically kill every
           # clarify retry.
@@ -950,7 +956,7 @@ jobs:
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex clarify attempt ${attempt}/${max_attempts}..."
-            if cat "${CODEX_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+                if model_provider_broker_exec_unprivileged nobody codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "Codex clarify succeeded on attempt ${attempt}."
                 break
