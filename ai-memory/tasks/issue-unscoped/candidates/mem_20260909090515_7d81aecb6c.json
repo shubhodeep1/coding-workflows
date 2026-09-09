@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.92,
+  "details": "Recent changes repeatedly hardened orchestrator state handling against forged or malformed values, including authorization YAML bounds, resolver scope, author identity, and fingerprint self-healing. Future clarify or plan work involving persisted state should preserve strict validation and reject or repair unverifiable state rather than trusting fields from artifacts or comments.",
+  "fingerprint": "92945233408b1f6c387e8bb0ed897d32c1e77abb42bc31df45433518b395c8dc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34332550004",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34332550004",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3998",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4000",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4005",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4017",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4049",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3999",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4001",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4006",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4029",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4052"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260909090515_7d81aecb6c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator state is treated as untrusted input and must be validated, bounded, and identity-scoped.",
+  "timestamps": {
+    "created_at": "2026-09-09T09:05:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
