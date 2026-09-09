@@ -199,18 +199,47 @@ def test_consumer_cleanup_exports_removed_list_path_to_github_env() -> None:
 
 def test_workflow_captures_pre_editor_untracked_snapshot_for_both_repo_kinds() -> None:
 	text = WORKFLOW.read_text(encoding="utf-8")
-	m = re.search(
-		r'PRE_EDITOR_UNTRACKED_FILE="\$\{RUNTIME_DIR\}/pre_editor_untracked\.txt"\n'
-		r'\s+git ls-files --others --exclude-standard -z \| sort -zu > "\$\{PRE_EDITOR_UNTRACKED_FILE\}" \|\| true\n'
-		r'\s+echo "PRE_EDITOR_UNTRACKED_FILE=\$\{PRE_EDITOR_UNTRACKED_FILE\}" >> "\$GITHUB_ENV"\n',
-		text,
-	)
-	assert m, "The editor step must write PRE_EDITOR_UNTRACKED_FILE and export it via GITHUB_ENV"
-	assert "tr -cd '\\0'" in text and "wc -c" in text
+	snapshot_start = text.index('          PRE_EDITOR_UNTRACKED_FILE="${RUNTIME_DIR}/pre_editor_untracked.txt"')
 	# The snapshot must sit outside the source-repo-only block so consumer
 	# repos get it too; the source-repo block starts right after it.
 	source_repo_guard = text.index('if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then\n            PRE_EDITOR_STATE_FILE=')
-	assert m.start() < source_repo_guard
+	assert snapshot_start < source_repo_guard
+	snapshot_block = text[snapshot_start:source_repo_guard]
+	assert 'sort -zu > "${PRE_EDITOR_UNTRACKED_FILE}.tmp"' in snapshot_block
+	assert 'mv -f -- "${PRE_EDITOR_UNTRACKED_FILE}.tmp" "${PRE_EDITOR_UNTRACKED_FILE}"' in snapshot_block
+	assert 'rm -f -- "${PRE_EDITOR_UNTRACKED_FILE}.tmp" "${PRE_EDITOR_UNTRACKED_FILE}"' in snapshot_block
+	assert 'echo "PRE_EDITOR_UNTRACKED_FILE=${PRE_EDITOR_UNTRACKED_FILE}" >> "$GITHUB_ENV"' in snapshot_block
+	assert "tr -cd '\\0'" in snapshot_block and "wc -c" in snapshot_block
+	assert "|| true" not in snapshot_block
+
+	# Execute the workflow's actual shell block with a failed git capture.
+	# Failure must remove both a partial temporary file and any stale final
+	# snapshot so the commit step selects its legacy delete-all fallback.
+	snapshot_shell = "\n".join(line[10:] for line in snapshot_block.splitlines()) + "\n"
+	with tempfile.TemporaryDirectory() as tmpdir:
+		tmp = Path(tmpdir)
+		runtime_dir = tmp / "runtime"
+		runtime_dir.mkdir()
+		snapshot_file = runtime_dir / "pre_editor_untracked.txt"
+		snapshot_file.write_bytes(b"stale\0")
+		github_env = tmp / "github_env"
+		github_env.write_text("", encoding="utf-8")
+		proc = subprocess.run(
+			["bash", "-c", "set -euo pipefail\ngit() { return 1; }\n" + snapshot_shell],
+			cwd=tmp,
+			capture_output=True,
+			text=True,
+			env={**_git_test_env(tmp), "RUNTIME_DIR": str(runtime_dir), "GITHUB_ENV": str(github_env)},
+		)
+		assert proc.returncode == 0, (proc.stdout, proc.stderr)
+		assert not snapshot_file.exists()
+		assert not Path(f"{snapshot_file}.tmp").exists()
+		assert "legacy delete-all fallback will apply" in proc.stdout
+		assert f"PRE_EDITOR_UNTRACKED_FILE={snapshot_file}" in github_env.read_text(encoding="utf-8").splitlines()
+
+	# A successful empty snapshot is valid, so the consumer's `-f` check must
+	# not be weakened to `-s` while fixing the failed-capture path.
+	assert 'if [ -f "${PRE_EDITOR_UNTRACKED_FILE:-/nonexistent}" ]; then' in SCRIPT.read_text(encoding="utf-8")
 	# The changes-lost comment names the dropped paths.
 	assert 'if [ -s "${REVIEW_REMOVED_NEW_FILES_FILE:-}" ]; then' in text
 	assert "The commit step removed these newly created paths before staging" in text
