@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Orchestrator state is treated as untrusted input and must be validated, bounded, and identity-scoped.",
   "timestamps": {
     "created_at": "2026-09-09T09:05:15Z",
