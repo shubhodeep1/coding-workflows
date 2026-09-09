@@ -87,6 +87,17 @@ if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>
   echo "${editor_helpers_missing_alert}" >&2
   exit 1
 fi
+# Isolation preflight: probes, as the unprivileged editor identity, every
+# path the sandboxed launch below must reach and names the first denied
+# component. Fail-open when the helper is absent (an older support bundle):
+# the launch itself still fails closed, just without the diagnosis.
+EDITOR_ISOLATION_PREFLIGHT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/editor_isolation_preflight.sh"
+if [ -f "${EDITOR_ISOLATION_PREFLIGHT_HELPER}" ]; then
+  # shellcheck source=/dev/null
+  source "${EDITOR_ISOLATION_PREFLIGHT_HELPER}"
+else
+  echo "::warning::editor_isolation_preflight.sh is not in the support bundle; editor isolation runs without the path preflight." >&2
+fi
 if [ ! -f "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
   editor_config_writer_missing_alert="opencode_agent_failure phase=review_apply_fixes role=writer model=${MODEL_EDITOR:-unknown} rc=1 failure_class=config_writer_missing"
   if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" ]; then
@@ -185,6 +196,21 @@ setup_editor_isolation() {
   EDITOR_ISOLATION_HOME="${RUNTIME_DIR}/editor-sandbox/home"
   EDITOR_ISOLATION_TMP="${RUNTIME_DIR}/editor-sandbox/tmp"
   mkdir -p "${EDITOR_ISOLATION_HOME}" "${EDITOR_ISOLATION_TMP}"
+  # Open the secret-free support bundle and RUNTIME_DIR traversal to the
+  # editor identity, then prove every launch path is reachable as that
+  # identity before spending an attempt. Runs 34304993091 / 34320556598
+  # (PR #4057) lost three attempts each to
+  # `opencode_helpers.sh: Permission denied` with no indication of which
+  # directory closed the path; the probe prints `first_denied=<component>`.
+  if command -v editor_isolation_prepare_shared_paths >/dev/null 2>&1; then
+    editor_isolation_prepare_shared_paths
+  fi
+  if command -v editor_isolation_preflight_probe >/dev/null 2>&1 \
+    && editor_isolation_preflight_enabled \
+    && ! editor_isolation_preflight_probe "${EDITOR_ISOLATION_USER}"; then
+    echo "::error::Editor isolation preflight failed for identity '${EDITOR_ISOLATION_USER}'; see EDITOR_ISOLATION_PREFLIGHT_DENIED lines above for the first denied path component." >&2
+    return 1
+  fi
   EDITOR_ISOLATION_ACTIVE="true"
   chmod 0700 "${resolved_source}/.git" "${EDITOR_ISOLATION_COMMAND_DIR}"
   sudo -n chown -R "${EDITOR_ISOLATION_UID}:${EDITOR_ISOLATION_GID}" \

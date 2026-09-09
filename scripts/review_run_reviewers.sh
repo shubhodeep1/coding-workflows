@@ -76,6 +76,29 @@ if [ -f "${WATCHDOG_HELPERS}" ]; then
   fi
 fi
 
+# Editor isolation preflight, run here — before any reviewer model is
+# invoked — because the editor that consumes this step's output launches
+# as an unprivileged identity (see setup_editor_isolation in
+# review_apply_fixes.sh). Runs 34304993091 / 34320556598 on PR #4057 spent
+# 1.5-2.5 hours of reviewer fan-out before the editor died in seconds on
+# `opencode_helpers.sh: Permission denied`. Probing the same launch paths
+# up front turns that into a seconds-long failure that names the first
+# denied path component. Skipped in reviewer-only mode (no editor runs) and
+# when EDITOR_ISOLATION_PREFLIGHT_ENABLED=false; fail-open when the helper
+# is absent from an older support bundle.
+EDITOR_ISOLATION_PREFLIGHT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/editor_isolation_preflight.sh"
+if [ "${CLAUDE_BRANCH_REVIEW_MODE:-false}" != "true" ] && [ -f "${EDITOR_ISOLATION_PREFLIGHT_HELPER}" ]; then
+  # shellcheck source=/dev/null
+  source "${EDITOR_ISOLATION_PREFLIGHT_HELPER}"
+  if editor_isolation_preflight_enabled; then
+    editor_isolation_prepare_shared_paths
+    if ! editor_isolation_preflight_probe "${EDITOR_ISOLATION_USER:-nobody}"; then
+      echo "::error::EDITOR_ISOLATION_PREFLIGHT_FAILED phase=review_run_reviewers: the editor identity cannot reach its launch paths in this job; failing before reviewer spend. See the EDITOR_ISOLATION_PREFLIGHT_DENIED lines above for the first denied path component." >&2
+      exit 1
+    fi
+  fi
+fi
+
 emit_context_budget_warn_for_prompt() {
   local phase="$1"
   local prompt_path="$2"
