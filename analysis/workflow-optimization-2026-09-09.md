@@ -294,3 +294,191 @@ Deep-review Semble targets: `reviewer-context` 12 calls/185,995 bytes; `overflow
 - Cache-write semantics and dollar-cost totals are unavailable.
 - Success deep-dive sampling was 7%; failure claims above were verified against full logs.
 - Other MCP servers observed: none.
+
+## Deep Audit — Workflows & Scripts (2026-09-09)
+
+### Section 1: Bug & Correctness Sweep
+
+All 46 workflows and 134 scoped scripts were statically audited. YAML, Bash, and Python syntax checks passed. The previously documented untrusted `review_apply_fixes.sh` execution and failure-classification defects are not duplicated here.
+
+#### SEC-001
+
+- **File path and lines:** `scripts/resolve_integration_ref.sh:8-20,43-56`; `.github/workflows/clarify.yml:119-141`; `.github/workflows/plan.yml:182-209`; `.github/workflows/implement.yml:383-389,1254-1272`; `.github/workflows/orchestrate_clarify_respond.yml:173-198`; `.github/workflows/validate.yml:154-176`
+- **Severity:** High
+- **Category:** `security`
+- **Description:** `extract_integration_branch` accepts any non-newline/non-backtick text and only verifies that the named branch exists. Five workflows then interpolate that output directly into shell source, for example `echo "Resolved ref: ${{ steps.refctx.outputs.ref ... }}"`. **Inference:** an existing branch containing shell substitutions such as `$()` could execute commands when Actions expands the expression before Bash parses the step. Exploitability depends on GitHub’s accepted branch-name character set and the attacker’s ability to create the branch. [NEEDS VERIFICATION]
+- **Recommended fix:** Validate resolver output against a restrictive ref pattern, then pass it through step `env`, never directly inside `run:`. Follow `.github/workflows/implement.yml:398-401`’s `DEFAULT_CHECKOUT_REF` pattern and log with `printf '%s\n' "${RESOLVED_REF}"`.
+
+#### BUG-001
+
+- **File path and lines:** `scripts/label_helpers.sh:174-224`; `scripts/review_rb_judge.sh:782-814`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** Both phase-swap helpers perform a GET of every issue label, compute a replacement list, then PUT the complete list. A concurrent workflow adding a non-phase label between GET and PUT can have its update silently overwritten.
+- **Recommended fix:** Centralize phase mutation in `label_helpers.sh`; remove only known phase labels with targeted DELETE operations, POST the target label, then re-read and verify. Do not replace unrelated labels from a stale snapshot.
+
+#### BUG-002
+
+- **File path and lines:** `scripts/orchestrate_poll_process.sh:3598-3616`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** For `ai:ready-to-merge` issues, the sweep logs a failed `ai:merged` backfill but proceeds to close the issue. This contradicts the immediately documented requirement that concurrent readers see `ai:merged` before closure.
+- **Recommended fix:** If the label transition fails, skip closure and retry on the next poll. Close only after a verified label read contains `ai:merged`.
+
+#### BUG-003
+
+- **File path and lines:** `scripts/resolve_integration_ref.sh:38-92`; `.github/workflows/clarify.yml:125-129`; `.github/workflows/plan.yml:188-195`; `.github/workflows/implement.yml:389-393`; `.github/workflows/orchestrate_clarify_respond.yml:179-183`; `.github/workflows/validate.yml:160-164`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** The resolver uses raw `gh api` calls without `gh_retry`. Any transient issue-body or ref lookup failure causes callers to discard the integration ref and fall back to the default branch. For orchestrator-managed work, that can produce planning or implementation against the wrong base. [NEEDS VERIFICATION]
+- **Recommended fix:** Source sibling `gh_helpers.sh`, use `gh_retry _safe_gh_jq` for issue reads, and retry ref verification while preserving the existing non-retryable 404 path.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001
+
+- **File path and lines:** `scripts/gh_helpers.sh:610-663,665-727`
+- **Severity:** Medium
+- **Category:** `api-redundancy`
+- **Description:** `gh_api_json_to_file` and `curl_gh_api` retry all non-rate-limit failures, including permanent authentication and validation errors. This is the helper-level form of the authentication retry problem already described in Reliability Improvements §3.
+- **Current call count:** Up to 5 attempts per permanent failure.
+- **Proposed call count:** 1 attempt for classified permanent 4xx failures.
+- **Recommended fix:** Apply `_is_gh_permanent_failure`, already used by `gh_retry` at `scripts/gh_helpers.sh:458-465`, before sleeping or retrying.
+
+#### API-002
+
+- **File path and lines:** `scripts/orchestrate_poll_process.sh:12501-12625,16663-16687`
+- **Severity:** Medium
+- **Category:** `api-redundancy`
+- **Description:** `_fetch_candidate_issue_details_graphql` already returns current-wave labels, but the caller immediately invokes `_fetch_issue_labels_batch_graphql` for the same issue set.
+- **Current call count:** `2 × ceil(N/25)` GraphQL calls.
+- **Proposed call count:** `ceil(N/25)` calls.
+- **Recommended fix:** Populate `LABELS_JSON` from `_current_wave_details_json`; invoke `_fetch_issue_labels_batch_graphql` only for keys missing after a failed or partial details batch.
+
+#### BATCH-001
+
+- **File path and lines:** `scripts/orchestrate_poll_process.sh:13308-13320`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** Standalone stall discovery executes one `gh issue list` per seven phase labels.
+- **Current call count:** 7 logical list calls per poll.
+- **Proposed call count:** 1 aliased GraphQL query for up to 100 results per label, with paginated fallback only for overflowing aliases.
+- **Recommended fix:** Extend `_fetch_standalone_marker_issues_graphql`’s aliased-search pattern to include the seven label queries and return a deduplicated issue-number set.
+
+#### BATCH-002
+
+- **File path and lines:** `scripts/orchestrate_poll_process.sh:18486-18520`
+- **Severity:** Low
+- **Category:** `api-batching`
+- **Description:** After review-blocked handling, labels are re-fetched through one REST call per current or reissued issue.
+- **Current call count:** Up to `U` calls for `U` unique issue numbers.
+- **Proposed call count:** `ceil(U/25)` GraphQL calls.
+- **Recommended fix:** Build one deduplicated JSON number array and call the existing `_fetch_issue_labels_batch_graphql` helper.
+
+#### BATCH-003
+
+- **File path and lines:** `.github/workflows/review_autofix.yml:1152-1191`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** The deterministic-skip path discovers all closing issues in one GraphQL query but applies `ai:ready-to-merge` through one REST POST per issue.
+- **Current call count:** `1 + N` calls for `N` linked issues, excluding label creation.
+- **Proposed call count:** 2 calls: one discovery query returning node IDs and one aliased GraphQL mutation.
+- **Recommended fix:** Return issue node IDs and the target label ID from the discovery query, then issue aliased `addLabelsToLabelable` mutations. Extend the alias-building pattern used by `_fetch_candidate_issue_details_graphql`. [NEEDS VERIFICATION]
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+
+- **File path and lines:** `.github/workflows/clarify.yml:57-129`; `.github/workflows/implement.yml:320-393`; `.github/workflows/orchestrate_clarify_respond.yml:110-183`; `.github/workflows/plan.yml:120-195`; `.github/workflows/validate.yml:96-164`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** The 2,964-character “Resolve integration ref” block is byte-equivalent across three workflows and near-identical in two more.
+- **Recommended fix:** Create `.github/actions/resolve-integration-ref` with inputs `(issue_number, repository, workflow_source_ref, token)` and output `ref`; replace all five inline clone/stage/run blocks.
+
+#### DUP-002
+
+- **File path and lines:** `scripts/review_apply_fixes.sh:164-202`; `scripts/review_rb_judge.sh:256-294`; `scripts/review_run_reviewers.sh:69-107`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** `emit_context_budget_warn_for_prompt` is duplicated verbatim in three model-execution scripts.
+- **Recommended fix:** Move it to `scripts/cost_audit_helpers.sh` as `emit_context_budget_warn_for_prompt <phase> <prompt_path> <model>` and source that module from all three callers.
+
+#### DUP-003
+
+- **File path and lines:** `scripts/review_apply_fixes.sh:909-918`; `scripts/review_conflict_prepare.sh:605-614`; `scripts/review_run_reviewers.sh:1760-1769`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** `append_semble_query_section` is duplicated verbatim.
+- **Recommended fix:** Add `semble_append_query_section <label> <path> [max_bytes]` to `scripts/semble_helpers.sh` and update the three callers.
+
+#### DUP-004
+
+- **File path and lines:** `scripts/watchdog_helpers.sh:186`; `scripts/review_conflict_resolve.sh:255-269`; `scripts/review_rb_judge.sh:168-182`; `scripts/review_run_reviewers.sh:324-338`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** Three scripts duplicate `read_codex_stall_guard_state` even though `watchdog_helpers.sh` already defines the shared helper.
+- **Recommended fix:** Make `watchdog_helpers.sh` authoritative with signature `read_codex_stall_guard_state <status_file>` and remove the three local copies.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+All 46 workflows were parsed and every interpolated `run:` scalar measured. No block crosses the 15,000-character Medium threshold or 18,000-character High threshold; therefore no `EXPR-###` finding is emitted.
+
+| Workflow block | Characters | Headroom to 21,000 |
+|---|---:|---:|
+| `implement.yml:3850-4079` | 12,608 | 8,392 |
+| `implement.yml:855-1135` | 12,571 | 8,429 |
+| `implement.yml:2963-3216` | 11,403 | 9,597 |
+| `validate.yml:207-427` | 10,986 | 10,014 |
+| `plan.yml:1476-1678` | 10,938 | 10,062 |
+| `workflow-log-analysis.yml:881-1140` | 10,884 | 10,116 |
+
+`validate.yml:207-427` contains an inline manifest heredoc, but currently retains 10,014 characters of headroom. The largest `if:` expression is 739 characters. No workflow exceeds the 800 KB warning threshold; the largest is `review_autofix.yml` at approximately 462,186 characters.
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001
+
+- **File path and lines:** `scripts/orchestrate_poll_process.sh:9476-9484,11067-11086,11196-11206`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** `get_last_validation_run_conclusion`, `read_standalone_state_json`, and `stall_recovery_action_is_terminal` have no references elsewhere in workflows, scripts, or tests.
+- **Recommended fix:** Remove the three helpers, or add explicit callers and focused tests if they represent deferred compatibility contracts.
+
+#### CONSIST-001
+
+- **File path and lines:** `.github/ai/label_contract.v1.json:1-203`; `scripts/label_helpers.sh:9-128`
+- **Severity:** Low
+- **Category:** `consistency`
+- **Description:** Label colors, descriptions, and phase membership are maintained in both JSON and hardcoded Bash maps. The comment explicitly says the shell catalog “mirrors” the contract, creating two writable authorities.
+- **Recommended fix:** Generate the Bash fallback catalog from `label_contract.v1.json` during support staging, or commit a generated shell artifact with a CI parity check.
+
+#### DEBT-001
+
+- **File path and lines:** `scripts/orchestrate_poll_process.sh:1-20817`
+- **Severity:** Medium
+- **Category:** `tech-debt`
+- **Description:** The poller is 20,817 lines and approximately 1.07 MB, with 338 GitHub API-related call sites. **Inference:** this concentration increases review, API-accounting, and state-transition regression risk.
+- **Recommended fix:** Incrementally extract sourced modules for label/state mutation, stall recovery, validation lifecycle, merge/finalization, and API-prefetch caches. Preserve the current entrypoint and add contract tests before each extraction.
+
+No TODO/FIXME/HACK markers were found. ShellCheck found no high-confidence SC2086, SC2046, SC2006, or equivalent unquoted-expansion defect not already represented above. The raw-API consistency issue is captured by BUG-003.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | SEC-001 |
+| Medium | 8 | BUG-001, BUG-002, BUG-003, API-001, API-002, BATCH-001, BATCH-003, DEBT-001 |
+| Low | 7 | BATCH-002, DUP-001, DUP-002, DUP-003, DUP-004, DEAD-001, CONSIST-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 6 | Medium |
+| API call optimization | 3 | Medium |
+| Code modularization | 13 | Large |
+| Expression size reduction | 0 | Small |
+| Medium/Low fixes | 7 | Medium |
