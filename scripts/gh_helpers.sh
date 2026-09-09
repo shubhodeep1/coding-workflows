@@ -1319,7 +1319,7 @@ for item in items:
 		or hashlib.sha256(title.encode()).hexdigest() != intent.get("title_digest")
 		or hashlib.sha256(base_body.encode()).hexdigest() != intent.get("body_digest")
 		or not set(intent.get("required_labels", [])).issubset(actual_labels)
-		or re.fullmatch(r"https://[^\s]+/issues/[1-9][0-9]*", url) is None
+		or re.fullmatch(r"https?://[^\s]+/issues/[1-9][0-9]*", url) is None
 	):
 		continue
 	valid.append(url)

@@ -323,6 +323,7 @@ def test_successor_resolver_requires_creator_labels_and_canonical_payload() -> N
 		"labels": [{"name": "ai:clarification"}],
 	}
 	assert _resolve_successor({"items": [valid_item]}, intent)["status"] == "valid"
+	assert _resolve_successor({"items": [{**valid_item, "html_url": "http://ghe.example.com/owner/repo/issues/77"}]}, intent)["status"] == "valid"
 	for invalid_item in (
 		{**valid_item, "user": {"id": 1001}},
 		{**valid_item, "labels": []},
