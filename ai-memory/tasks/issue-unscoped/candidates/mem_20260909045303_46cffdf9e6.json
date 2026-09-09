@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- unattended_system_instructions.md:LOG_PREFIX.name=SECURITY_PASS_* contractual registry block | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The new log prefix SECURITY_PASS_SCOPE is emitted at scripts/orchestrate_poll_process.sh:5386, tested in tests/test_orchestrate_poll_process.py, and registered in agents.md, but is absent from the stable LOG_PREFIX.name list in unattended_system_instructions.md.\n  WHY: The unattended instructions declare the contractual log-prefix registry that workflow-log-analysis and API-hygiene tooling rely on; the missing prefix is an undocumented identifier that downstream parsers may not recognize, and severity was reported as MAJOR.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- File: unattended_system_instructions.md\n  Line or code reference: LOG_PREFIX.name=SECURITY_PASS_* contractual registry block\n  Problem: The new log prefix SECURITY_PASS_SCOPE is emitted at scripts/orchestrate_poll_process.sh:5386, tested in tests/test_orchestrate_poll_process.py, and registered in agents.md, but it is absent from the stable LOG_PREFIX.name list in unattended_system_instructions.md.\n  Why it fails at runtime: The unattended instructions declare the contractual log-prefix registry that workflow-log-analysis and API-hygiene tooling rely on. A prefix emitted in production but missing from the contract list is an undocumented identifier; downstream parsers built from that registry will not recognize it, and future rename/backward-compatibility guard logic will not protect it.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "cc52fabf07953053215d29144b6e7d9952f3783a65540ed9c026710784c80578",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34307339126",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34307339126",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260909045303_46cffdf9e6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34307339126"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-09T04:53:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
