@@ -14,7 +14,10 @@
 # queries GitHub's GET /rate_limit endpoint (not itself rate-limited)
 # to read X-RateLimit-Reset, then sleeps until reset+1 s (capped at
 # 600 s, floored at 1 s, fallback 30 s).  Other transient failures
-# use exponential backoff (1 s, 2 s, 4 s, …).
+# use exponential backoff (1 s, 2 s, 4 s, …).  curl_gh_api reads the
+# 403/429 response headers directly instead: a numeric Retry-After
+# (secondary rate limit) takes precedence over X-RateLimit-Reset —
+# see _parse_reset_header.
 
 # Guard against double-sourcing
 if [ "${_GH_HELPERS_LOADED:-}" = "1" ]; then
@@ -109,21 +112,50 @@ _sleep_until_reset()
 		wait_secs=30
 	fi
 
-	echo "::warning::  Rate limit resets in ${wait_secs}s (X-RateLimit-Reset: ${reset_epoch:-unknown})" >&2
+	echo "::warning::  Rate limit resets in ${wait_secs}s (computed reset epoch: ${reset_epoch:-unknown})" >&2
 	sleep "${wait_secs}"
 }
 
 # ---------------------------------------------------------------
-# _parse_reset_header — extract X-RateLimit-Reset from a header
-# dump file (produced by curl -D).
+# _parse_reset_header — derive the rate-limit reset epoch from a
+# header dump file (produced by curl -D).
+#
+# Precedence:
+#   1. Retry-After (integer seconds) → now + seconds. GitHub sends
+#      this on secondary rate limits (abuse detection); it is the
+#      authoritative wait and is usually well under a minute.
+#   2. X-RateLimit-Reset (epoch) → primary window reset.
+#
+# Without step 1 a secondary-limit 403 was timed against the
+# primary window, which can be up to an hour away, so the caller
+# slept the full 600 s cap in _sleep_until_reset instead of the
+# few seconds GitHub asked for. A non-numeric Retry-After (the
+# HTTP-date form) is ignored and falls through to step 2.
 #
 # Prints the epoch timestamp to stdout; empty string on failure.
+# Always returns 0: a missing header or header file is the empty
+# string, never a non-zero status, so the function is safe under
+# `set -euo pipefail` even outside an `if` / `||` context.
 # ---------------------------------------------------------------
 _parse_reset_header()
 {
 	local header_file="$1"
+	local _retry_after_secs
+	_retry_after_secs=$(grep -i '^retry-after:' "${header_file}" 2>/dev/null \
+		| head -1 | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*$//' | tr -d '\r' || true)
+	case "${_retry_after_secs}" in
+		''|*[!0-9]*) : ;;
+		*)
+			echo "::warning::  Retry-After: ${_retry_after_secs}s present (secondary rate limit); honouring it over X-RateLimit-Reset" >&2
+			# 10# forces decimal: a zero-padded value such as "08" would
+			# otherwise be parsed as octal and abort the arithmetic.
+			echo $(( $(date +%s) + 10#${_retry_after_secs} ))
+			return 0
+			;;
+	esac
 	grep -i '^x-ratelimit-reset:' "${header_file}" 2>/dev/null \
-		| head -1 | awk '{print $2}' | tr -d '\r'
+		| head -1 | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*$//' | tr -d '\r' || true
+	return 0
 }
 
 # ---------------------------------------------------------------
@@ -1112,6 +1144,232 @@ review_blocked_find_issue_for_request()
 		-f q="repo:${repository} is:issue is:open in:body review-blocked-approval-request:${request_id}" \
 		--jq '.items // [] | map(select((.body // "") | contains("<!-- review-blocked-approval-request:'"${request_id}"' -->"))) | first | .html_url // empty' \
 		2>/dev/null || true
+}
+
+review_blocked_build_successor_intent()
+{
+	local request_json="${1:?approval request JSON required}"
+	local successor_type="${2:?successor type required}"
+	local successor_title="${3:?successor title required}"
+	local successor_body="${4:?successor body required}"
+	local required_labels_json="${5:?required labels JSON required}"
+	local producer_id="${6:?producer ID required}"
+	REQUEST_JSON="${request_json}" SUCCESSOR_TYPE="${successor_type}" \
+	SUCCESSOR_TITLE="${successor_title}" SUCCESSOR_BODY="${successor_body}" \
+	REQUIRED_LABELS_JSON="${required_labels_json}" PRODUCER_ID="${producer_id}" \
+	PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+import hashlib
+import json
+import os
+import re
+import sys
+
+try:
+	request = json.loads(os.environ["REQUEST_JSON"])
+	labels = json.loads(os.environ["REQUIRED_LABELS_JSON"])
+	producer_id = int(os.environ["PRODUCER_ID"])
+except (KeyError, ValueError, TypeError, json.JSONDecodeError):
+	raise SystemExit(2)
+successor_type = os.environ.get("SUCCESSOR_TYPE", "")
+title = os.environ.get("SUCCESSOR_TITLE", "")
+body = os.environ.get("SUCCESSOR_BODY", "")
+action = request.get("action")
+expected_type = {"merge_with_followup": "followup", "close_and_reissue": "reissue"}.get(action)
+if (
+	request.get("schema_version") != "review_blocked_approval.v1"
+	or expected_type != successor_type
+	or not re.fullmatch(r"review_blocked_approval_\d{14}_[0-9a-f]{10}", str(request.get("request_id", "")))
+	or not isinstance(request.get("pr_number"), int) or request["pr_number"] < 1
+	or not isinstance(request.get("linked_issue_number"), int) or request["linked_issue_number"] < 1
+	or not re.fullmatch(r"[0-9a-f]{40}", str(request.get("head_sha", "")))
+	or producer_id < 1
+	or not title or len(title) > 240
+	or not body or len(body) > 20000
+	or not isinstance(labels, list) or not labels
+	or any(not isinstance(label, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", label) for label in labels)
+):
+	raise SystemExit(2)
+labels = sorted(set(labels))
+intent = {
+	"schema_version": "review_blocked_successor.v1",
+	"request_id": request["request_id"],
+	"action": action,
+	"source_pr": request["pr_number"],
+	"linked_issue": request["linked_issue_number"],
+	"approved_head_sha": request["head_sha"],
+	"producer_id": producer_id,
+	"successor_type": successor_type,
+	"title_digest": hashlib.sha256(title.encode()).hexdigest(),
+	"body_digest": hashlib.sha256(body.encode()).hexdigest(),
+	"required_labels": labels,
+}
+canonical = json.dumps(intent, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+intent["payload_digest"] = hashlib.sha256(canonical).hexdigest()
+print(json.dumps(intent, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+PY
+}
+
+review_blocked_successor_marker()
+{
+	local intent_json="${1:?successor intent JSON required}"
+	printf '<!-- REVIEW_BLOCKED_SUCCESSOR_V1\n%s\nREVIEW_BLOCKED_SUCCESSOR_V1 -->' "${intent_json}"
+}
+
+review_blocked_ensure_successor_intent()
+{
+	local repository="${1:?repository required}"
+	local pr_number="${2:?PR number required}"
+	local intent_json="${3:?successor intent JSON required}"
+	local producer_id="${4:?producer ID required}"
+	local comments_json="${5:-[]}"
+	local marker response_json
+	marker="$(review_blocked_successor_marker "${intent_json}")" || return 1
+	if printf '%s' "${comments_json}" | jq -e --arg marker "${marker}" --argjson producer_id "${producer_id}" \
+		'any(.[]?; (.author_id == $producer_id) and (.body == $marker))' >/dev/null 2>&1; then
+		return 0
+	fi
+	if ! response_json="$(gh_retry gh api "repos/${repository}/issues/${pr_number}/comments" -f body="${marker}" 2>/dev/null)"; then
+		return 1
+	fi
+	printf '%s' "${response_json}" | jq -e --arg marker "${marker}" --argjson producer_id "${producer_id}" \
+		'(.user.id == $producer_id) and (.body == $marker)' >/dev/null 2>&1
+}
+
+review_blocked_resolve_successor_issue()
+{
+	local repository="${1:?repository required}"
+	local intent_json="${2:?successor intent JSON required}"
+	local producer_id="${3:?producer ID required}"
+	local request_id search_json
+	request_id="$(printf '%s' "${intent_json}" | jq -r '.request_id // empty' 2>/dev/null || true)"
+	if ! [[ "${repository}" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] \
+		|| ! [[ "${request_id}" =~ ^review_blocked_approval_[0-9]{14}_[0-9a-f]{10}$ ]] \
+		|| ! [[ "${producer_id}" =~ ^[1-9][0-9]*$ ]]; then
+		printf '%s\n' '{"status":"inconclusive","url":null}'
+		return 0
+	fi
+	# Audited existing calls: PR comment hydration cannot return repository issue
+	# candidates. This is one bounded search call; candidate validation is local.
+	if ! search_json="$(gh_retry gh api -X GET search/issues \
+		-f q="repo:${repository} is:issue is:open in:body REVIEW_BLOCKED_SUCCESSOR_V1 ${request_id}" 2>/dev/null)"; then
+		printf '%s\n' '{"status":"inconclusive","url":null}'
+		return 0
+	fi
+	INTENT_JSON="${intent_json}" SEARCH_JSON="${search_json}" PRODUCER_ID="${producer_id}" \
+	PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+import hashlib
+import json
+import os
+import re
+
+def canonical(value):
+	return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+try:
+	intent = json.loads(os.environ["INTENT_JSON"])
+	search = json.loads(os.environ["SEARCH_JSON"])
+	producer_id = int(os.environ["PRODUCER_ID"])
+except (KeyError, ValueError, TypeError, json.JSONDecodeError):
+	print('{"status":"inconclusive","url":null}')
+	raise SystemExit(0)
+unsigned = dict(intent)
+payload_digest = unsigned.pop("payload_digest", None)
+required = {
+	"schema_version", "request_id", "action", "source_pr", "linked_issue",
+	"approved_head_sha", "producer_id", "successor_type", "title_digest",
+	"body_digest", "required_labels",
+}
+valid_intent = (
+	set(unsigned) == required
+	and intent.get("schema_version") == "review_blocked_successor.v1"
+	and intent.get("producer_id") == producer_id
+	and re.fullmatch(r"[0-9a-f]{64}", str(payload_digest or "")) is not None
+	and hashlib.sha256(canonical(unsigned).encode()).hexdigest() == payload_digest
+)
+items = search.get("items") if isinstance(search, dict) else None
+if not valid_intent or not isinstance(items, list) or len(items) > 100:
+	print('{"status":"inconclusive","url":null}')
+	raise SystemExit(0)
+opener = "<!-- REVIEW_BLOCKED_SUCCESSOR_V1\n"
+closer = "\nREVIEW_BLOCKED_SUCCESSOR_V1 -->"
+valid = []
+for item in items:
+	if not isinstance(item, dict) or item.get("state") != "open":
+		continue
+	if (item.get("user") or {}).get("id") != producer_id:
+		continue
+	title = item.get("title")
+	body = item.get("body")
+	url = item.get("html_url")
+	labels = item.get("labels")
+	if not isinstance(title, str) or not isinstance(body, str) or not isinstance(url, str) or not isinstance(labels, list):
+		continue
+	marker_start = body.rfind("\n\n" + opener)
+	if marker_start < 0 or not body.endswith(closer):
+		continue
+	base_body = body[:marker_start]
+	marker_json = body[marker_start + 2 + len(opener):-len(closer)]
+	try:
+		marker_intent = json.loads(marker_json)
+	except json.JSONDecodeError:
+		continue
+	actual_labels = {entry.get("name") for entry in labels if isinstance(entry, dict)}
+	if (
+		canonical(marker_intent) != canonical(intent)
+		or hashlib.sha256(title.encode()).hexdigest() != intent.get("title_digest")
+		or hashlib.sha256(base_body.encode()).hexdigest() != intent.get("body_digest")
+		or not set(intent.get("required_labels", [])).issubset(actual_labels)
+		or re.fullmatch(r"https?://[^\s]+/issues/[1-9][0-9]*", url) is None
+	):
+		continue
+	valid.append(url)
+if len(valid) == 1:
+	print(canonical({"status": "valid", "url": valid[0]}))
+elif valid:
+	print('{"status":"inconclusive","url":null}')
+else:
+	print('{"status":"not_found","url":null}')
+PY
+}
+
+review_blocked_prepare_successor_issue()
+{
+	local repository="${1:?repository required}"
+	local pr_number="${2:?PR number required}"
+	local comments_json="${3:-[]}"
+	local request_json="${4:?approval request JSON required}"
+	local producer_id="${5:?producer ID required}"
+	local successor_type="${6:?successor type required}"
+	local successor_title="${7:?successor title required}"
+	local successor_body="${8:?successor body required}"
+	local required_labels_json="${9:?required labels JSON required}"
+	local intent_json resolution_json resolution_status prepared_body
+	if ! intent_json="$(review_blocked_build_successor_intent "${request_json}" "${successor_type}" \
+		"${successor_title}" "${successor_body}" "${required_labels_json}" "${producer_id}")"; then
+		printf '%s\n' '{"status":"inconclusive","url":null,"body":null}'
+		return 0
+	fi
+	if ! review_blocked_ensure_successor_intent "${repository}" "${pr_number}" \
+		"${intent_json}" "${producer_id}" "${comments_json}"; then
+		printf '%s\n' '{"status":"inconclusive","url":null,"body":null}'
+		return 0
+	fi
+	resolution_json="$(review_blocked_resolve_successor_issue "${repository}" "${intent_json}" "${producer_id}")"
+	resolution_status="$(printf '%s' "${resolution_json}" | jq -r '.status // "inconclusive"' 2>/dev/null || echo inconclusive)"
+	case "${resolution_status}" in
+		valid)
+			printf '%s\n' "${resolution_json}"
+			;;
+		not_found)
+			prepared_body="${successor_body}
+
+$(review_blocked_successor_marker "${intent_json}")"
+			jq -cn --arg body "${prepared_body}" '{status:"not_found",url:null,body:$body}'
+			;;
+		*)
+			printf '%s\n' '{"status":"inconclusive","url":null,"body":null}'
+			;;
+	esac
 }
 
 _gh_issue_timeline_with_cross_refs_rest()

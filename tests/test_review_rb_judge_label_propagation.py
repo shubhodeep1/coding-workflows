@@ -411,6 +411,8 @@ set -euo pipefail
 ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
 _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ gh api "$@"; }}
+review_blocked_prepare_successor_issue() {{ jq -cn --arg body "$8" '{{status:"not_found",url:null,body:$body}}'; }}
+review_rb_send_warning() {{ :; }}
 flag_enabled() {{ case "${{1,,}}" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac; }}
 
 GITHUB_OUTPUT="{github_output}"
@@ -436,6 +438,7 @@ def _run_close_and_reissue(
 	live_close_head_sha: str | None = None,
 	final_close_head_sha: str | None = None,
 	pr_close_should_fail: bool = False,
+	issue_create_should_fail: bool = False,
 ) -> dict:
 	"""Run the close_and_reissue branch with FIRST_ISSUE_LABELS_JSON
 	pre-seeded to ``parent_label_set`` and return the captured gh
@@ -481,6 +484,7 @@ def _run_close_and_reissue(
 			"pulls/42": [initial_close_response, final_close_response],
 		}
 		mock_state["pr_close_should_fail"] = pr_close_should_fail
+		mock_state["issue_create_should_fail"] = issue_create_should_fail
 		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
 
 		labels_file = runtime_dir / "ensure_labels.txt"
@@ -574,12 +578,9 @@ def test_orchestrator_managed_parent_propagates_label_to_reissue() -> None:
 		f"reissue must carry --label when parent is orchestrator-managed; "
 		f"got args: {args}"
 	)
-	# Find the value that follows --label
-	idx = args.index("--label")
-	assert args[idx + 1] == "ai:orchestrator-managed", (
-		f"reissue --label must be exactly 'ai:orchestrator-managed'; "
-		f"got: {args[idx + 1]!r}"
-	)
+	label_values = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "--label"]
+	assert "ai:clarification" in label_values
+	assert "ai:orchestrator-managed" in label_values
 
 	# ensure_label_exists must be called for the propagated label so the
 	# repo has the label definition before `gh issue create` references it.
@@ -1541,6 +1542,8 @@ set -euo pipefail
 ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
 _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ gh api "$@"; }}
+review_blocked_prepare_successor_issue() {{ jq -cn --arg body "$8" '{{status:"not_found",url:null,body:$body}}'; }}
+review_rb_send_warning() {{ :; }}
 sleep() {{ :; }}
 source "{pr_checks_lib_path}"
 
@@ -2007,6 +2010,20 @@ def test_merge_with_followup_does_not_advance_when_issue_create_fails() -> None:
 		f"ai:ready-to-merge must NOT be ensured when issue create failed "
 		f"(label swap is gated on issue-create success). Got: {ensure_labels}"
 	)
+	assert "Failed to create authenticated follow-up issue" in state["_stdout"]
+	assert "rc=1" in state["_stdout"]
+
+
+def test_close_and_reissue_reports_replacement_creation_failure() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		issue_create_should_fail=True,
+	)
+	assert len(state.get("issue_create_args", [])) == 1
+	assert state.get("pr_close_args", []) == []
+	assert "Failed to create authenticated replacement issue" in state["_stdout"]
+	assert "rc=1" in state["_stdout"]
+	assert "judge_skip_reason=replacement_issue_create_failed" in state["_github_output"]
 
 
 def test_merge_with_followup_preserves_judge_json_bytes_under_xpg_echo() -> None:

@@ -16,7 +16,7 @@ fi
 wf_source="${WORKFLOW_SOURCE_REPO}"
 workspace_root="${GITHUB_WORKSPACE:-$PWD}"
 
-# Always stage runtime support files out of tree so main-primary
+# Always stage runtime support files out of tree so immutable-source
 # bootstrap helpers never overwrite the source-repo PR worktree
 # before reviewer/editor snapshots are taken.
 SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -42,66 +42,44 @@ mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_
   echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}"
 } >> "$GITHUB_ENV"
 
-REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh"
-# Main-primary bootstrap scripts: prefer the fresh main snapshot so
-# wedged integration branches still pick up resolver safety fixes
-# shipped on main. Entries staged only via this list fail open when
-# missing from both refs so older consumer script_refs still bootstrap cleanly.
+REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh editor_isolation_preflight.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh"
+# Immutable-source bootstrap scripts. The workflow checkout is pinned to
+# job.workflow_sha, so executable support must never fall back to a mutable
+# branch snapshot or the PR checkout.
 #
-# render_prompt.py is main-primary because it validates arbitrary embedded
-# PR-diff text before every reviewer/editor call. A false-positive in that
-# validator (e.g. a lone `${{` in the diff tripping the unmatched-delimiter
-# check, fixed on main by #3593) otherwise wedges the review of any in-flight
-# PR whose branch predates the fix — the very PR that surfaced the bug can
-# never carry the fix on its own branch. Sourcing it main-primary lets a
-# render_prompt fix on main immediately protect wedged branches, matching the
-# resolver-safety rationale above. It stays fail-open: some refs still ship a
-# self-contained render_prompt.sh, so when the backend is absent from both refs
-# bootstrap preserves that ref's bundled bash renderer instead of hard-failing.
+# render_prompt.py validates arbitrary embedded PR-diff text before every
+# reviewer/editor call. Keep it in this compatibility-named list so it is
+# staged in lockstep with the immutable reusable-workflow definition. It stays
+# optional because older workflow-definition commits may ship a self-contained
+# render_prompt.sh without the Python backend.
 #
-# opencode_helpers.sh / write_opencode_config.sh are main-primary because
-# review_conflict_resolve.sh (already main-primary above) sources them from
-# SUPPORT_SCRIPTS_DIR and hard-fails with failure_class=helpers_missing when
-# absent. Staging them from the same snapshot as the resolver keeps the
-# resolver and its dependencies in lockstep, so a main-side resolver change
-# can never land in a bundle whose helpers came from an older ref.
+# opencode_helpers.sh / write_opencode_config.sh stay beside the resolver so
+# the resolver and dependencies always come from one reviewed commit.
 MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py orchestrate_state_v2.py review_conflict_resolve.sh review_conflict_prepare.sh render_prompt.py opencode_helpers.sh write_opencode_config.sh"
-# Optional bootstrap scripts: allowed to be missing from both
-# refs.  The bootstrap emits a warning and continues — callers
+# Optional bootstrap scripts may be missing from the immutable source.
+# The bootstrap emits a warning and continues — callers
 # that depend on these must themselves tolerate absence.  Keep
 # this list empty unless a genuinely optional helper is added;
 # the default should always be "required".
 OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"
 for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
   src=".codex-workflow-src/scripts/${f}"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-    src=".codex-workflow-src-main/scripts/${f}"
-  fi
   if [ ! -f "${src}" ]; then
-    echo "::error::Required bootstrap script '${f}' is missing from checked-out support sources (${SCRIPT_REF} and optional main snapshot) in ${wf_source}. This usually means review_autofix.yml references a file that was never committed (common cause: a hallucinated [ai-merge-resolve] commit added a new bootstrap entry without its corresponding script). Verify REQUIRED_BOOTSTRAP_SCRIPTS matches the current contents of scripts/."
+    echo "::error::Required bootstrap script '${f}' is missing from immutable support source ${SCRIPT_REF} in ${wf_source}. Verify REQUIRED_BOOTSTRAP_SCRIPTS matches the workflow-definition commit."
     exit 1
   fi
   install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
 done
 for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do
-  src=".codex-workflow-src-main/scripts/${f}"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src/scripts/${f}" ]; then
-    src=".codex-workflow-src/scripts/${f}"
-  fi
+  src=".codex-workflow-src/scripts/${f}"
   if [ ! -f "${src}" ]; then
-    echo "::warning::Main-primary bootstrap script '${f}' not available in checked-out support sources; downstream features relying on this helper will be unavailable."
+    echo "::warning::Immutable-source bootstrap script '${f}' is unavailable at ${SCRIPT_REF}; downstream features relying on this helper will be unavailable."
     continue
-  fi
-  if [ "${src}" = ".codex-workflow-src-main/scripts/${f}" ] && [ -f ".codex-workflow-src/scripts/${f}" ]; then
-    echo "::notice::Bootstrapped ${f} from main snapshot (branch copy ignored)."
   fi
   install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
 done
 for f in ${OPTIONAL_BOOTSTRAP_SCRIPTS}; do
   src=".codex-workflow-src/scripts/${f}"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-    src=".codex-workflow-src-main/scripts/${f}"
-  fi
   if [ ! -f "${src}" ]; then
     echo "::warning::Optional bootstrap script '${f}' not available in checked-out support sources; downstream features relying on this helper will be unavailable."
     continue
@@ -111,9 +89,6 @@ done
 
 for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do
   src=".codex-workflow-src/scripts/${f}"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-    src=".codex-workflow-src-main/scripts/${f}"
-  fi
   if [ ! -f "${src}" ]; then
     echo "::warning::Optional Serena support asset ${f} is unavailable in checked-out support sources; Serena bootstrap remains disabled."
     continue
@@ -123,9 +98,6 @@ done
 
 	for f in emit_event.sh emit_event.py; do
 	  src=".codex-workflow-src/scripts/${f}"
-	  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-	    src=".codex-workflow-src-main/scripts/${f}"
-  fi
   if [ ! -f "${src}" ]; then
     echo "::warning::Optional events mirror helper ${f} is unavailable in checked-out support sources; stable text-prefix mirroring remains disabled."
     continue
@@ -135,9 +107,6 @@ done
 
 	for f in transcript_archive.sh; do
 	  src=".codex-workflow-src/scripts/${f}"
-	  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-	    src=".codex-workflow-src-main/scripts/${f}"
-	  fi
 	  if [ ! -f "${src}" ]; then
 	    echo "::warning::Optional transcript archive helper ${f} is unavailable in checked-out support sources; transcript archiving remains disabled."
 	    continue
@@ -147,9 +116,6 @@ done
 
 mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"
 serena_template_src=".codex-workflow-src/scripts/templates/serena_project.yml.j2"
-if [ ! -f "${serena_template_src}" ] && [ -f ".codex-workflow-src-main/scripts/templates/serena_project.yml.j2" ]; then
-  serena_template_src=".codex-workflow-src-main/scripts/templates/serena_project.yml.j2"
-fi
 if [ ! -f "${serena_template_src}" ]; then
   echo "::warning::Optional Serena template scripts/templates/serena_project.yml.j2 is unavailable in checked-out support sources; Serena bootstrap remains disabled."
 else
@@ -158,9 +124,6 @@ fi
 
 for sf in memory_record.v1.json lessons_learned_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json fingerprint_quarantine.v1.json validation_history.v1.json operator_bypass_audit.v1.json revalidate_events.v1.json validation_discovery.v1.json workflow_overlay.v1.json; do
   src=".codex-workflow-src/ai-memory/schemas/${sf}"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/ai-memory/schemas/${sf}" ]; then
-    src=".codex-workflow-src-main/ai-memory/schemas/${sf}"
-  fi
   if [ ! -f "${SUPPORT_AI_MEMORY_DIR}/schemas/${sf}" ] && [ -f "${src}" ]; then
     install -m 0644 "${src}" "${SUPPORT_AI_MEMORY_DIR}/schemas/${sf}"
   fi
@@ -179,18 +142,12 @@ PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.
 # _sync_memory_reference_files reads SUPPORT_AI_MEMORY_DIR as a
 # fallback when the consumer-repo source path lacks the file.
 retrieval_profiles_src=".codex-workflow-src/ai-memory/config/retrieval_profiles.v1.json"
-if [ ! -f "${retrieval_profiles_src}" ] && [ -f ".codex-workflow-src-main/ai-memory/config/retrieval_profiles.v1.json" ]; then
-  retrieval_profiles_src=".codex-workflow-src-main/ai-memory/config/retrieval_profiles.v1.json"
-fi
 mkdir -p "${SUPPORT_AI_MEMORY_DIR}/config"
 if [ ! -f "${SUPPORT_AI_MEMORY_DIR}/config/retrieval_profiles.v1.json" ] && [ -f "${retrieval_profiles_src}" ]; then
   install -m 0644 "${retrieval_profiles_src}" "${SUPPORT_AI_MEMORY_DIR}/config/retrieval_profiles.v1.json"
 fi
 
 catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
-if [ ! -f "${catalog_src}" ] && [ -f ".codex-workflow-src-main/scripts/codex_model_catalog.json" ]; then
-  catalog_src=".codex-workflow-src-main/scripts/codex_model_catalog.json"
-fi
 if [ -f "${catalog_src}" ]; then
   install -m 0644 "${catalog_src}" "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
 else
@@ -199,9 +156,6 @@ fi
 
 if [ ! -f "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json" ]; then
   failback_src=".codex-workflow-src/scripts/reviewer_failback_chains.json"
-  if [ ! -f "${failback_src}" ] && [ -f ".codex-workflow-src-main/scripts/reviewer_failback_chains.json" ]; then
-    failback_src=".codex-workflow-src-main/scripts/reviewer_failback_chains.json"
-  fi
   if [ -f "${failback_src}" ]; then
     install -m 0644 "${failback_src}" "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"
   else
@@ -214,9 +168,6 @@ for f in unattended_system_instructions.md; do
   target_path="${SUPPORT_ROOT_DIR}/${f}"
   if [ ! -f "${target_path}" ]; then
     src=".codex-workflow-src/${f}"
-    if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${f}" ]; then
-      src=".codex-workflow-src-main/${f}"
-    fi
     if [ ! -f "${src}" ]; then
       echo "::error::Missing required support file ${f}"
       exit 1
@@ -235,9 +186,6 @@ done
 # variable error under set -u.
 if [ ! -f "${SUPPORT_ROOT_DIR}/agents.md" ]; then
   src=".codex-workflow-src/agents.md"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/agents.md" ]; then
-    src=".codex-workflow-src-main/agents.md"
-  fi
   if [ -f "${src}" ]; then
     install -m 0644 "${src}" "${SUPPORT_ROOT_DIR}/agents.md"
   else
@@ -252,9 +200,6 @@ fi
 # when included; if absent the pointer line is suppressed.
 if [ ! -f probably_unnecessary_but_read_if_stuck.md ]; then
   src=".codex-workflow-src/probably_unnecessary_but_read_if_stuck.md"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/probably_unnecessary_but_read_if_stuck.md" ]; then
-    src=".codex-workflow-src-main/probably_unnecessary_but_read_if_stuck.md"
-  fi
   if [ -f "${src}" ]; then
     install -m 0644 "${src}" probably_unnecessary_but_read_if_stuck.md
   fi
@@ -262,9 +207,6 @@ fi
 
 if [ ! -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
   src=".codex-workflow-src/prompts/mode-judge-review-blocked.txt"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-judge-review-blocked.txt" ]; then
-    src=".codex-workflow-src-main/prompts/mode-judge-review-blocked.txt"
-  fi
   if [ ! -f "${src}" ]; then
     echo "::error::Missing required support file prompts/mode-judge-review-blocked.txt"
     exit 1
@@ -273,9 +215,6 @@ if [ ! -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
 fi
 if [ ! -f "${SUPPORT_PROMPTS_DIR}/mode-judge-interim.txt" ]; then
   src=".codex-workflow-src/prompts/mode-judge-interim.txt"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-judge-interim.txt" ]; then
-    src=".codex-workflow-src-main/prompts/mode-judge-interim.txt"
-  fi
   if [ ! -f "${src}" ]; then
     echo "::error::Missing required support file prompts/mode-judge-interim.txt"
     exit 1
@@ -297,9 +236,6 @@ fi
 for reference_asset in output-contract.txt severity-classification.txt; do
   if [ ! -f "${SUPPORT_PROMPTS_DIR}/references/${reference_asset}" ]; then
     src=".codex-workflow-src/prompts/references/${reference_asset}"
-    if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/references/${reference_asset}" ]; then
-      src=".codex-workflow-src-main/prompts/references/${reference_asset}"
-    fi
     if [ -f "${src}" ]; then
       mkdir -p "${SUPPORT_PROMPTS_DIR}/references"
       install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/references/${reference_asset}"
@@ -317,9 +253,6 @@ done
 for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_role_persona.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-interim.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-orchestrate-poll-judge.txt; do
   if [ ! -f "${SUPPORT_PROMPTS_DIR}/${prompt_assembly_asset}" ]; then
     src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
-    if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/${prompt_assembly_asset}" ]; then
-      src=".codex-workflow-src-main/prompts/${prompt_assembly_asset}"
-    fi
     if [ ! -f "${src}" ]; then
       echo "::error::Missing required support file prompts/${prompt_assembly_asset}"
       exit 1
@@ -330,9 +263,6 @@ for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_r
 done
 if [ ! -f "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt" ]; then
   src=".codex-workflow-src/prompts/behavioural-smoke-synthesise.txt"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/behavioural-smoke-synthesise.txt" ]; then
-    src=".codex-workflow-src-main/prompts/behavioural-smoke-synthesise.txt"
-  fi
   if [ ! -f "${src}" ]; then
     echo "::error::Missing required support file prompts/behavioural-smoke-synthesise.txt"
     exit 1
@@ -341,9 +271,6 @@ if [ ! -f "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt" ]; then
 fi
 if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt" ]; then
   src=".codex-workflow-src/prompts/review-consolidator.txt"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/review-consolidator.txt" ]; then
-    src=".codex-workflow-src-main/prompts/review-consolidator.txt"
-  fi
   if [ -f "${src}" ]; then
     install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt"
   else
@@ -353,9 +280,6 @@ if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt" ]; then
 fi
 if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then
   src=".codex-workflow-src/prompts/review-reviewer-checklist.txt"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/review-reviewer-checklist.txt" ]; then
-    src=".codex-workflow-src-main/prompts/review-reviewer-checklist.txt"
-  fi
   if [ -f "${src}" ]; then
     install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"
   else
@@ -365,9 +289,6 @@ if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then
 fi
 if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then
   src=".codex-workflow-src/prompts/_nag_reminders.txt"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/_nag_reminders.txt" ]; then
-    src=".codex-workflow-src-main/prompts/_nag_reminders.txt"
-  fi
   if [ -f "${src}" ]; then
     install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt"
   else
@@ -377,9 +298,6 @@ if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then
 fi
 if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ]; then
   src=".codex-workflow-src/scripts/review_filter_uninteresting_files.sh"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh" ]; then
-    src=".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh"
-  fi
   if [ -f "${src}" ]; then
     install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"
   else
@@ -389,9 +307,6 @@ if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ]; then
 fi
 if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then
   src=".codex-workflow-src/scripts/review_agents_md_materiality.sh"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/review_agents_md_materiality.sh" ]; then
-    src=".codex-workflow-src-main/scripts/review_agents_md_materiality.sh"
-  fi
   if [ -f "${src}" ]; then
     install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"
   else
@@ -401,9 +316,6 @@ if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then
 fi
 if [ ! -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" ]; then
   src=".codex-workflow-src/prompts/conflict-resolver.txt"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/conflict-resolver.txt" ]; then
-    src=".codex-workflow-src-main/prompts/conflict-resolver.txt"
-  fi
   if [ -f "${src}" ]; then
     install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
   else
@@ -413,9 +325,6 @@ if [ ! -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" ]; then
 fi
 if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver.txt" ]; then
   src=".codex-workflow-src/prompts/integration-sync-conflict-resolver.txt"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/integration-sync-conflict-resolver.txt" ]; then
-    src=".codex-workflow-src-main/prompts/integration-sync-conflict-resolver.txt"
-  fi
   if [ -f "${src}" ]; then
     install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver.txt"
   else
@@ -425,9 +334,6 @@ if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver.txt" ]; the
 fi
 if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-prelude.txt" ]; then
   src=".codex-workflow-src/prompts/integration-sync-conflict-resolver-retry-prelude.txt"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-prelude.txt" ]; then
-    src=".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-prelude.txt"
-  fi
   if [ -f "${src}" ]; then
     install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-prelude.txt"
   else
@@ -437,9 +343,6 @@ if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-prelu
 fi
 if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
   src=".codex-workflow-src/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
-  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
-    src=".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
-  fi
   if [ -f "${src}" ]; then
     install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
   else
