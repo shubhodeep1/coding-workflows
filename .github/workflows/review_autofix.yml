@@ -3840,6 +3840,25 @@ jobs:
           # riding along in the commit.
           # Consumer repos use per-file exclusions from scripts/.gitignore
           # so consumer-owned scripts (e.g. scripts/security/*.js) are staged.
+          #
+          # Both repo kinds: record which paths are ALREADY untracked before
+          # the editor runs.  scripts/review_commit_changes.sh uses this in
+          # consumer repos to tell an editor-created file (new since this
+          # snapshot: keep and stage it) from a pre-existing stray or
+          # runtime leftover (remove it).  Without it the consumer cleanup
+          # deleted every new file, which turned any review round whose fix
+          # was a new file (a db/contracts/*.yml contract, a regression
+          # test) into a deterministic EDITOR_CHANGES_LOST dead end
+          # (tele-funtoken-msg-scoring#4287).
+          PRE_EDITOR_UNTRACKED_FILE="${RUNTIME_DIR}/pre_editor_untracked.txt"
+          if git ls-files --others --exclude-standard -z | sort -zu > "${PRE_EDITOR_UNTRACKED_FILE}.tmp" \
+              && mv -f -- "${PRE_EDITOR_UNTRACKED_FILE}.tmp" "${PRE_EDITOR_UNTRACKED_FILE}"; then
+            echo "Pre-editor untracked snapshot captured: $(tr -cd '\0' < "${PRE_EDITOR_UNTRACKED_FILE}" | wc -c | tr -d '[:space:]') paths"
+          else
+            rm -f -- "${PRE_EDITOR_UNTRACKED_FILE}.tmp" "${PRE_EDITOR_UNTRACKED_FILE}"
+            echo "::warning::Pre-editor untracked snapshot capture failed; legacy delete-all fallback will apply."
+          fi
+          echo "PRE_EDITOR_UNTRACKED_FILE=${PRE_EDITOR_UNTRACKED_FILE}" >> "$GITHUB_ENV"
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
             PRE_EDITOR_STATE_FILE="${RUNTIME_DIR}/pre_editor_state.tsv"
             : > "${PRE_EDITOR_STATE_FILE}"
@@ -6524,6 +6543,19 @@ jobs:
               BODY="⚠️ **Editor changes lost** — the editor reported making changes but no commit was produced."
               BODY+=$'\n\n'
               BODY+="Auto-merge has been **blocked**. Automated retry could not continue safely because the retry budget is unavailable or exhausted."
+              # Name the editor-created paths the commit step dropped (with
+              # the policy reason) so the cause is visible on the PR instead
+              # of only deep in the run log.
+              if [ -s "${REVIEW_REMOVED_NEW_FILES_FILE:-}" ]; then
+                BODY+=$'\n\n'
+                BODY+="The commit step removed these newly created paths before staging (path — reason):"
+                BODY+=$'\n'
+                while IFS=$'\t' read -r removed_path removed_reason; do
+                  [ -n "${removed_path}" ] || continue
+                  BODY+="- \`${removed_path}\` — ${removed_reason:-removed}"
+                  BODY+=$'\n'
+                done < <(head -n 20 "${REVIEW_REMOVED_NEW_FILES_FILE}")
+              fi
               BODY+=$'\n'
               BODY+="**Next steps:** re-run the review workflow manually or apply the changes from the editor summary above."
               BODY+=$'\n\n'

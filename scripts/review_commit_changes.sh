@@ -22,6 +22,17 @@
 #   RUNTIME_DIR                       Ephemeral per-run directory.
 #   PRE_EDITOR_STATE_FILE             Optional snapshot of pre-editor tree state.
 #   PRE_EDITOR_DIFF_BASELINE_FILE     Optional pre-editor baseline diff file.
+#   PRE_EDITOR_UNTRACKED_FILE         Optional sorted NUL-delimited list of paths
+#                                     that were untracked before the editor ran
+#                                     (both repo kinds). Consumer repos use it to keep
+#                                     editor-created files and remove only
+#                                     pre-existing strays; absent → legacy
+#                                     delete-all-new-files behaviour.
+#   REVIEW_REMOVED_NEW_FILES_FILE     Optional output path (default
+#                                     ${RUNTIME_DIR}/review_removed_new_files.txt)
+#                                     listing "<path>\t<reason>" for every new
+#                                     file the consumer cleanup removed; exported
+#                                     to $GITHUB_ENV for the changes-lost comment.
 #   LAST_RUN_DIFF_FILE                Diff from previous autofix iteration.
 #   EDITOR_SUMMARY_FILE               Editor-produced summary (used by overlap validation).
 #   REVIEW_LEDGER_PATH                Path to review-issue ledger (defaults to .ai/review_issue_ledger/pr-${PR_NUMBER}.txt). Gitignored; persisted across autofix iterations via actions/cache in review_autofix.yml.
@@ -163,7 +174,42 @@ if [ -s "${NEW_FILES_BEFORE_COMMIT_FILE}" ]; then
       echo "- ${created_file}"
     done < "${NEW_FILES_BEFORE_COMMIT_FILE}"
   else
-    echo "Removing newly created files before commit (editor may not create new files):"
+    # Consumer repos: reconcile newly created files against the
+    # pre-editor untracked snapshot (PRE_EDITOR_UNTRACKED_FILE, written
+    # by the "Apply fixes with editor model" step) instead of deleting
+    # every one of them.  The old blanket rm ("editor may not create new
+    # files") deleted legitimate review output — a `db/contracts/*.yml`
+    # collection contract, a regression test, a changelog fragment — that
+    # the reviewer consensus had explicitly demanded.  The tree was then
+    # clean at commit time, EDITOR_CHANGES_LOST fired, the re-dispatch
+    # produced the same file and the same deletion, and once the retry
+    # budget ran out auto-merge was blocked with the PR looking green
+    # (tele-funtoken-msg-scoring#4287, runs 34196277121 / 34198075113;
+    # the changelog.d carve-out below was the same failure fixed
+    # narrowly for #3763).  Now:
+    #   - a path that was already untracked BEFORE the editor ran is a
+    #     stray/runtime leftover and is removed as before;
+    #   - a pipeline-owned artifact path is removed even when new, since
+    #     the workflow itself writes those during the editor phase;
+    #   - anything else the editor created is preserved and picked up by
+    #     the consumer untracked-files `git add` pass below (still subject
+    #     to the write guard and the protected-path resets).
+    # Without the snapshot (older wrapper, runtime dir missing) the
+    # legacy delete-all behaviour is kept so the guard never fails open.
+    # Every removed path is recorded in REVIEW_REMOVED_NEW_FILES_FILE so
+    # the EDITOR_CHANGES_LOST comment can name what was dropped and why.
+    REVIEW_REMOVED_NEW_FILES_FILE="${REVIEW_REMOVED_NEW_FILES_FILE:-${RUNTIME_DIR:-${TMPDIR:-/tmp}}/review_removed_new_files.txt}"
+    : > "${REVIEW_REMOVED_NEW_FILES_FILE}" 2>/dev/null || REVIEW_REMOVED_NEW_FILES_FILE=""
+    if [ -n "${REVIEW_REMOVED_NEW_FILES_FILE}" ] && [ -n "${GITHUB_ENV:-}" ]; then
+      echo "REVIEW_REMOVED_NEW_FILES_FILE=${REVIEW_REMOVED_NEW_FILES_FILE}" >> "$GITHUB_ENV"
+    fi
+    pre_editor_untracked_available=false
+    if [ -f "${PRE_EDITOR_UNTRACKED_FILE:-/nonexistent}" ]; then
+      pre_editor_untracked_available=true
+      echo "Reconciling newly created files before commit against the pre-editor untracked snapshot:"
+    else
+      echo "Removing newly created files before commit (pre-editor untracked snapshot unavailable; legacy policy: editor-created files are not kept):"
+    fi
     while IFS= read -r -d '' created_file; do
       [ -n "${created_file}" ] || continue
       # Preserve infrastructure dirs needed by the conflict resolver step.
@@ -188,7 +234,32 @@ if [ -s "${NEW_FILES_BEFORE_COMMIT_FILE}" ]; then
             continue
           fi ;;
       esac
-      echo "- ${created_file}"
+      removal_reason=""
+      # Pipeline-owned paths: the workflow writes these into the worktree
+      # during the review/editor phases (runtime markers, slop-scan
+      # findings, fetched support files), so "new since the snapshot" is
+      # not evidence the editor created them.  Keep this list aligned with
+      # the artifact cleanup and staging exclusions further down.
+      case "${created_file}" in
+        .ai|.ai/*|.github/ai|.github/ai/*|.github/prompts|.github/prompts/*|.github/scripts|.github/scripts/*|ai-memory|ai-memory/*|.codex-workflow-src|.codex-workflow-src/*|.codex-workflow-src-main|.codex-workflow-src-main/*|node_modules|node_modules/*|*/node_modules|*/node_modules/*|pre_assembled_static.txt|unattended_system_instructions.md|ai_pipeline.md|agents.md)
+          removal_reason="pipeline artifact" ;;
+      esac
+      if [ -z "${removal_reason}" ]; then
+        if [ "${pre_editor_untracked_available}" = true ]; then
+          if grep -zqxF -- "${created_file}" "${PRE_EDITOR_UNTRACKED_FILE}"; then
+            removal_reason="untracked before the editor ran"
+          else
+            echo "Preserving editor-created file: ${created_file}"
+            continue
+          fi
+        else
+          removal_reason="legacy policy (no pre-editor snapshot)"
+        fi
+      fi
+      echo "- ${created_file} (${removal_reason})"
+      if [ -n "${REVIEW_REMOVED_NEW_FILES_FILE}" ]; then
+        printf '%s\t%s\n' "${created_file}" "${removal_reason}" >> "${REVIEW_REMOVED_NEW_FILES_FILE}" 2>/dev/null || true
+      fi
       if ! rm -rf -- "${created_file}"; then
         echo "Failed to remove newly created path: ${created_file}"
         rm -f "${NEW_FILES_BEFORE_COMMIT_FILE}"
