@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Repository workflow consumers are managed as pinned, auditable artifacts rather than mutable references.",
   "timestamps": {
     "created_at": "2026-09-09T09:09:49Z",
