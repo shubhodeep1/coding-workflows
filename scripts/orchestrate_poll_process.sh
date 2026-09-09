@@ -4464,9 +4464,17 @@ ensure_security_pass_state_fields() {
       if (.security_pass_last_audited_sha | type) == "string" then .security_pass_last_audited_sha else "" end
     )
     | .security_pass_reported_findings = (
-      if (.security_pass_reported_findings | type) == "array"
-        and all(.security_pass_reported_findings[]; type == "object" and (.file | type) == "string")
-      then .security_pass_reported_findings else [] end
+      if (.security_pass_reported_findings | type) == "array" then
+        .security_pass_reported_findings
+        | map(select(
+          type == "object"
+          and (.file | type) == "string"
+          and ((.file | gsub("^\\./"; "")) | length > 0)
+          and ((.file | gsub("^\\./"; "")) != ".")
+          and ((.file | startswith("/")) | not)
+          and ((.file | split("/") | index("..")) == null)
+        ))
+      else [] end
     )' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 }
 

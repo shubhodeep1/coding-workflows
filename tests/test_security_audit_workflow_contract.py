@@ -889,7 +889,7 @@ def test_security_audit_delta_since_narrows_scope_and_keeps_prior_finding_files(
 						"owasp_or_stride_category": "A04:2021-Insecure Design",
 						"severity": "high",
 						"confidence": 9,
-						"file": "file_b.py",
+						"file": "./file_b.py",
 						"line": 1,
 						"exploit_scenario": "The earlier audit found this in file_b.",
 						"recommendation": "Guard the earlier path.",
@@ -938,6 +938,13 @@ def test_security_audit_delta_since_narrows_scope_and_keeps_prior_finding_files(
 	scope_lines = [line for line in scope_section.split("\nYou may read any file", 1)[0].splitlines() if line.startswith("- ")]
 	assert scope_lines == ["- file_b.py", "- file_c.py"]
 	assert "Previously reported findings for this project" in prompt
+	assert "=== BEGIN UNTRUSTED PRIOR FINDINGS ===" in prompt
+	assert "=== END UNTRUSTED PRIOR FINDINGS ===" in prompt
+	untrusted_prior_findings = prompt.split("=== BEGIN UNTRUSTED PRIOR FINDINGS ===\n", 1)[1].split(
+		"=== END UNTRUSTED PRIOR FINDINGS ===", 1
+	)[0]
+	assert "Exploit scenario: The earlier audit found this in file_b." in untrusted_prior_findings
+	assert "Rules for previously reported findings:" not in untrusted_prior_findings
 	assert "- `prior-b` (reported in fix cycle 1) | A04:2021-Insecure Design | high | confidence 9 | file_b.py:1" in prompt
 	assert "Exploit scenario: The earlier audit found this in file_b." in prompt
 	assert "- `prior-deleted` (reported in fix cycle 1) | uncategorised | unknown | confidence ? | no_longer_here.py:3" in prompt
@@ -997,19 +1004,20 @@ def test_security_audit_delta_since_requires_explicit_range_and_valid_inputs() -
 		assert not output_path.exists()
 
 		escaping_prior = tmp_path / "escaping.json"
-		escaping_prior.write_text(json.dumps([{"finding_id": "x", "file": "../outside.py"}]), encoding="utf-8")
-		proc, _ = _run_security_audit(
-			{},
-			extra_env={
-				**base_env,
-				"SECURITY_AUDIT_DIFF_BASE": head_sha,
-				"SECURITY_AUDIT_DIFF_HEAD": head_sha,
-				"SECURITY_AUDIT_PRIOR_FINDINGS": str(escaping_prior),
-			},
-		)
-		_assert_security_audit_failure_context(proc, phase="prior-findings", path_suffix="escaping.json")
-		assert "cites a non-repository path" in proc.stderr.replace("\\ ", " ")
-		assert not output_path.exists()
+		for invalid_prior_path in ("../outside.py", "scripts/../README.md"):
+			escaping_prior.write_text(json.dumps([{"finding_id": "x", "file": invalid_prior_path}]), encoding="utf-8")
+			proc, _ = _run_security_audit(
+				{},
+				extra_env={
+					**base_env,
+					"SECURITY_AUDIT_DIFF_BASE": head_sha,
+					"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+					"SECURITY_AUDIT_PRIOR_FINDINGS": str(escaping_prior),
+				},
+			)
+			_assert_security_audit_failure_context(proc, phase="prior-findings", path_suffix="escaping.json")
+			assert "cites a non-repository path" in proc.stderr.replace("\\ ", " ")
+			assert not output_path.exists()
 
 		proc, _ = _run_security_audit(
 			{},

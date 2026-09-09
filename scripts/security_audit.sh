@@ -146,7 +146,9 @@ security_audit_append_prompt_context() {
 		if [ -s "${PRIOR_FINDINGS_PROMPT_FILE}" ]; then
 			echo || return 1
 			echo "Previously reported findings for this project (earlier fix cycles; their fixes have merged into the audited head):" || return 1
+			echo "=== BEGIN UNTRUSTED PRIOR FINDINGS ===" || return 1
 			cat "${PRIOR_FINDINGS_PROMPT_FILE}" || return 1
+			echo "=== END UNTRUSTED PRIOR FINDINGS ===" || return 1
 			echo "Rules for previously reported findings:" || return 1
 			echo "- Verify each one against the current code. If it is still exploitable, re-emit it with the SAME finding_id and the current line number." || return 1
 			echo "- If it is resolved, omit it. Never report a resolved finding again under a new finding_id." || return 1
@@ -595,8 +597,11 @@ for index, finding in enumerate(prior_findings):
 	file_value = finding.get("file")
 	if not isinstance(file_value, str) or not file_value.strip():
 		raise SystemExit(f"prior finding #{index} is missing its file")
-	relative_file = str(PurePosixPath(file_value.strip()))
-	if relative_file.startswith("/") or relative_file.startswith("../") or relative_file in {"..", "."}:
+	relative_file_path = PurePosixPath(file_value.strip())
+	if relative_file_path.is_absolute() or ".." in relative_file_path.parts:
+		raise SystemExit(f"prior finding #{index} cites a non-repository path")
+	relative_file = relative_file_path.as_posix()
+	if not relative_file or relative_file == ".":
 		raise SystemExit(f"prior finding #{index} cites a non-repository path")
 	try:
 		resolved = (repo_root / relative_file).resolve()
