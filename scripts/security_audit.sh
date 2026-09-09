@@ -586,7 +586,12 @@ if not isinstance(prior_findings, list):
 
 def text_field(finding: dict, key: str) -> str:
 	value = finding.get(key)
-	return " ".join(str(value).split()) if isinstance(value, (str, int, float)) and not isinstance(value, bool) else ""
+	if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+		return ""
+	sanitized_prompt_value = " ".join(str(value).split()).replace("`", "")
+	for untrusted_fence in ("=== BEGIN UNTRUSTED PRIOR FINDINGS ===", "=== END UNTRUSTED PRIOR FINDINGS ==="):
+		sanitized_prompt_value = sanitized_prompt_value.replace(untrusted_fence, "[untrusted marker removed]")
+	return sanitized_prompt_value
 
 
 scope_files: list[str] = []
