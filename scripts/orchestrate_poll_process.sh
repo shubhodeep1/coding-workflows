@@ -18126,7 +18126,7 @@ EOF
                   ;;
               esac
               if [ -n "${FOLLOWUP_URL}" ]; then
-                FOLLOWUP_URL_CLEAN="$(printf '%s\n' "${FOLLOWUP_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+                FOLLOWUP_URL_CLEAN="$(printf '%s\n' "${FOLLOWUP_URL}" | grep -oE 'https?://[^ ]+' | tail -n1 || true)"
                 FOLLOWUP_NUM="$(basename "${FOLLOWUP_URL_CLEAN%%[?#]*}")"
               fi
 
@@ -18214,7 +18214,7 @@ EOF
               echo "::error::Authenticated successor lookup was inconclusive for close_and_reissue; refusing replacement adoption or creation and leaving PR #${RB_PR} open for retry."
               tg_notify "Orchestrator close_and_reissue: authenticated successor lookup was inconclusive for PR #${RB_PR} (issue #${rb_issue}). The PR remains open and stall recovery will retry."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
             fi
-            NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+            NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https?://[^ ]+' | tail -n1 || true)"
             NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
 
             # Create/reuse the replacement before closing the source PR. A

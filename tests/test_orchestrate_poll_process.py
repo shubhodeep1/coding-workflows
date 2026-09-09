@@ -837,6 +837,7 @@ def _run_poller(
 	security_pass_managed_issue_pages_raw: str | None = None,
 	sync_contract_list_union_fixture: bool = False,
 	sync_contract_list_union_timeout: bool = False,
+	issue_create_base_url: str = "https://github.com/owner/repo",
 	env_overrides: dict[str, str] | None = None,
 ) -> dict:
 	tracking_num = 192
@@ -1140,6 +1141,7 @@ def _run_poller(
 			"fail_release_dispatch": fail_release_dispatch,
 			"fail_search_issues": bool(fail_search_issues),
 			"search_issue_items": list(search_issue_items or []),
+			"issue_create_base_url": issue_create_base_url,
 			"default_branch": "main",
 			"prs": prs,
 			"pr_commits": {str(k): list(v) for k, v in pr_commits.items()},
@@ -1782,7 +1784,7 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'create':
 	store['issues'][str(next_num)] = {'labels': list(labels), 'comments': [], 'body': body, 'closed': False, 'title': title}
 	store.setdefault('created_issues', []).append({'number': next_num, 'title': title, 'labels': list(labels)})
 	save()
-	print(f'https://github.com/owner/repo/issues/{next_num}')
+	print(f"{store.get('issue_create_base_url', 'https://github.com/owner/repo').rstrip('/')}/issues/{next_num}")
 	sys.exit(0)
 
 if args[0] == 'api':
@@ -5511,6 +5513,7 @@ def _run_review_blocked_merge_decision(
 	approver_role: str = "maintain",
 	fail_approver_permission_lookup: bool = False,
 	final_close_head_sha: str | None = None,
+	issue_create_base_url: str = "https://github.com/owner/repo",
 ) -> dict:
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
@@ -5581,7 +5584,8 @@ def _run_review_blocked_merge_decision(
 		codex_json=decision,
 		fail_auto_pr_merge=fail_auto_pr_merge,
 		fail_pr_close=fail_pr_close,
-		capture_telegram_calls=True,
+	capture_telegram_calls=True,
+		issue_create_base_url=issue_create_base_url,
 		env_overrides={"ENABLE_AUTO_MERGE": "true", "GH_RETRY_MAX_ATTEMPTS": "1"},
 	)
 
@@ -5629,6 +5633,7 @@ def test_review_blocked_close_and_reissue_runs_after_authenticated_approval():
 		action="close_and_reissue",
 		judged_head_sha=judged_head_sha,
 		live_head_sha=judged_head_sha,
+		issue_create_base_url="http://ghe.example.com/owner/repo",
 	)
 	assert result.get("created_issues") == [{
 		"number": 900,
@@ -5764,6 +5769,7 @@ def test_review_blocked_merge_with_followup_binds_merge_to_judged_head():
 		action="merge_with_followup",
 		judged_head_sha=judged_head_sha,
 		live_head_sha=judged_head_sha,
+		issue_create_base_url="http://ghe.example.com/owner/repo",
 	)
 	assert len(result["pr_merge_calls"]) == 1
 	assert result["pr_merge_calls"][0][-2:] == ["--match-head-commit", judged_head_sha]
@@ -5774,6 +5780,11 @@ def test_review_blocked_merge_with_followup_binds_merge_to_judged_head():
 			"labels": ["ai:clarification", "ai:orchestrator-managed"],
 		},
 	]
+	assert "ai:ready-to-merge" in result["issues"]["10"]["labels"]
+	assert any(
+		"REVIEW_BLOCKED_APPROVAL_CONSUMED_V1" in comment.get("body", "")
+		for comment in result["issues"]["901"]["comments"]
+	)
 
 
 def test_review_blocked_merged_followup_retargets_to_integration_branch():
