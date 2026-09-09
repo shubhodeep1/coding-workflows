@@ -120,7 +120,12 @@ security_audit_append_prompt_context() {
 	if [ "${AUDIT_SCOPE_MODE}" = "incremental" ]; then
 		if [ -n "${SECURITY_AUDIT_DIFF_BASE}" ]; then
 			echo "Audit scope override: INCREMENTAL — explicit diff range ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA}; the checked-out HEAD may be a non-default branch." || return 1
-			echo "Files changed in the explicit range (every finding MUST cite one of these files):" || return 1
+			if [ -n "${SECURITY_AUDIT_DIFF_SINCE}" ]; then
+				echo "Delta re-audit: an earlier audit already covered this range up to commit ${AUDIT_SCOPE_SINCE_SHA}. Only range files changed since that commit, plus files cited by previously reported findings, are in scope." || return 1
+				echo "Files in scope (every finding MUST cite one of these files):" || return 1
+			else
+				echo "Files changed in the explicit range (every finding MUST cite one of these files):" || return 1
+			fi
 		else
 			echo "Audit scope: INCREMENTAL — commits ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA} on the default branch." || return 1
 			echo "Files changed since the last audited commit (every finding MUST cite one of these files):" || return 1
@@ -138,6 +143,15 @@ security_audit_append_prompt_context() {
 		echo || return 1
 		echo "Project-pass security and money-handling lens:" || return 1
 		cat "${SECURITY_AUDIT_MONEY_LENS_FILE}" || return 1
+		if [ -s "${PRIOR_FINDINGS_PROMPT_FILE}" ]; then
+			echo || return 1
+			echo "Previously reported findings for this project (earlier fix cycles; their fixes have merged into the audited head):" || return 1
+			cat "${PRIOR_FINDINGS_PROMPT_FILE}" || return 1
+			echo "Rules for previously reported findings:" || return 1
+			echo "- Verify each one against the current code. If it is still exploitable, re-emit it with the SAME finding_id and the current line number." || return 1
+			echo "- If it is resolved, omit it. Never report a resolved finding again under a new finding_id." || return 1
+			echo "- Report every remaining instance of the same defect class in the scoped files (sibling code paths, other venues, adapters, handlers) as its own finding. The fix loop converges only when a class is cleared, not one line." || return 1
+		fi
 		if [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
 			echo || return 1
 			echo "=== BEGIN UNTRUSTED PROJECT SPECIFICATION ===" || return 1
@@ -180,6 +194,28 @@ SECURITY_AUDIT_DIFF_HEAD="${SECURITY_AUDIT_DIFF_HEAD:-}"
 if { [ -n "${SECURITY_AUDIT_DIFF_BASE}" ] && [ -z "${SECURITY_AUDIT_DIFF_HEAD}" ]; } \
 		|| { [ -z "${SECURITY_AUDIT_DIFF_BASE}" ] && [ -n "${SECURITY_AUDIT_DIFF_HEAD}" ]; }; then
 	echo "SECURITY_AUDIT_DIFF_BASE and SECURITY_AUDIT_DIFF_HEAD must be supplied together" >&2
+	exit 1
+fi
+
+# Optional delta narrowing for the explicit range: when set, only files that
+# also changed in SECURITY_AUDIT_DIFF_SINCE..SECURITY_AUDIT_DIFF_HEAD stay in
+# scope, so a re-audit after a merged fix looks at the fix (plus any prior
+# findings, below) instead of re-sampling the whole project range.  The
+# explicit range remains the scope contract: a file changed only by commits
+# that were already on the base side of the range never enters scope.
+SECURITY_AUDIT_DIFF_SINCE="${SECURITY_AUDIT_DIFF_SINCE:-}"
+if [ -n "${SECURITY_AUDIT_DIFF_SINCE}" ] && [ -z "${SECURITY_AUDIT_DIFF_BASE}" ]; then
+	echo "SECURITY_AUDIT_DIFF_SINCE requires SECURITY_AUDIT_DIFF_BASE and SECURITY_AUDIT_DIFF_HEAD" >&2
+	exit 1
+fi
+# Optional JSON array of findings reported by earlier audits of the same
+# project (findings-json mode only).  Their files are added to the audit
+# scope and the list is appended to the prompt so the model verifies each one
+# against the current code and reports remaining instances of the same class
+# instead of re-discovering the project from scratch.
+SECURITY_AUDIT_PRIOR_FINDINGS="${SECURITY_AUDIT_PRIOR_FINDINGS:-}"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
+	echo "SECURITY_AUDIT_PRIOR_FINDINGS is only valid in findings-json mode" >&2
 	exit 1
 fi
 
@@ -294,6 +330,10 @@ TRACKER_BODY_WITH_SHA_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-issue-body-wit
 SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/security-money-lens.txt"
 SECURITY_AUDIT_MONEY_LENS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/rendered-security-money-lens.txt"
 FINDINGS_PACKAGE_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/findings-package-error.txt"
+DELTA_CHANGED_FILES_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/delta-changed-files.txt"
+PRIOR_FINDINGS_SCOPE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-scope.txt"
+PRIOR_FINDINGS_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-prompt.txt"
+PRIOR_FINDINGS_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-error.txt"
 
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	if [ -z "${SECURITY_AUDIT_FINDINGS_OUT}" ]; then
@@ -303,6 +343,9 @@ if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	security_audit_require_writable_destination "findings-output-preflight" "${SECURITY_AUDIT_FINDINGS_OUT}"
 	if [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
 		security_audit_require_file "project-spec-preflight" "${SECURITY_AUDIT_PROJECT_SPEC_PATH}"
+	fi
+	if [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
+		security_audit_require_file "prior-findings-preflight" "${SECURITY_AUDIT_PRIOR_FINDINGS}"
 	fi
 fi
 
@@ -440,6 +483,32 @@ if [ -n "${SECURITY_AUDIT_DIFF_BASE}" ]; then
 	fi
 	AUDIT_SCOPE_MODE="incremental"
 	AUDIT_SCOPE_REASON="${CHANGED_FILE_COUNT} files in explicit range ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA}"
+	if [ -n "${SECURITY_AUDIT_DIFF_SINCE}" ]; then
+		# Delta narrowing: keep only range files that also changed since the
+		# last audited commit.  Fails closed on an unusable SINCE commit so a
+		# stale or rewritten pointer never silently widens or empties scope.
+		if ! AUDIT_SCOPE_SINCE_SHA="$(git rev-parse --verify --end-of-options "${SECURITY_AUDIT_DIFF_SINCE}^{commit}" 2>/dev/null)"; then
+			security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_SINCE}" "SECURITY_AUDIT_DIFF_SINCE does not resolve to a commit"
+			exit 1
+		fi
+		if ! git merge-base --is-ancestor "${AUDIT_SCOPE_SINCE_SHA}" "${AUDIT_SCOPE_HEAD_SHA}" 2>/dev/null; then
+			security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_SINCE}..${SECURITY_AUDIT_DIFF_HEAD}" "SECURITY_AUDIT_DIFF_SINCE is not an ancestor of the diff head"
+			exit 1
+		fi
+		if ! git diff --name-only "${AUDIT_SCOPE_SINCE_SHA}..${AUDIT_SCOPE_HEAD_SHA}" -- > "${DELTA_CHANGED_FILES_FILE}"; then
+			security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_SINCE}..${SECURITY_AUDIT_DIFF_HEAD}" "unable to derive delta changed-file scope"
+			exit 1
+		fi
+		if ! grep -Fxf "${DELTA_CHANGED_FILES_FILE}" "${CHANGED_FILES_FILE}" > "${CHANGED_FILES_FILE}.delta" 2>/dev/null; then
+			# grep exits 1 on an empty intersection; that is a legitimate
+			# (narrow) scope, not an error.
+			: > "${CHANGED_FILES_FILE}.delta"
+		fi
+		mv "${CHANGED_FILES_FILE}.delta" "${CHANGED_FILES_FILE}"
+		DELTA_FILE_COUNT="$(grep -c . "${CHANGED_FILES_FILE}" 2>/dev/null || true)"
+		[[ "${DELTA_FILE_COUNT}" =~ ^[0-9]+$ ]] || DELTA_FILE_COUNT=0
+		AUDIT_SCOPE_REASON="${DELTA_FILE_COUNT} of ${CHANGED_FILE_COUNT} files in explicit range ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA} changed since last audited commit ${AUDIT_SCOPE_SINCE_SHA}"
+	fi
 elif [ -z "${HEAD_SHA}" ]; then
 	AUDIT_SCOPE_REASON="checkout is not a git repository; scope gates fail open to a full audit"
 elif [ -n "${LAST_AUDITED_SHA}" ]; then
@@ -478,6 +547,108 @@ elif [ -n "${LAST_AUDITED_SHA}" ]; then
 	fi
 fi
 echo "security-audit: scope=${AUDIT_SCOPE_MODE} (${AUDIT_SCOPE_REASON})"
+
+# --- Prior findings: extend scope + render the prompt section ---------------
+# Findings reported by earlier audits of this project keep their files in
+# scope (so a still-present finding can be re-emitted through the incremental
+# post-filter) and are listed for the model to verify.  Validation fails
+# closed: the file is produced by the orchestrator from its own state, so a
+# malformed one signals a caller bug, not an audit result.
+PRIOR_FINDINGS_COUNT=0
+: > "${PRIOR_FINDINGS_SCOPE_FILE}"
+: > "${PRIOR_FINDINGS_PROMPT_FILE}"
+if [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
+	if ! PRIOR_FINDINGS_COUNT="$(python3 - \
+		"${REPO_ROOT}" \
+		"${SECURITY_AUDIT_PRIOR_FINDINGS}" \
+		"${PRIOR_FINDINGS_SCOPE_FILE}" \
+		"${PRIOR_FINDINGS_PROMPT_FILE}" 2> "${PRIOR_FINDINGS_ERROR_FILE}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path, PurePosixPath
+
+repo_root = Path(sys.argv[1]).resolve()
+prior_findings_path = Path(sys.argv[2])
+scope_path = Path(sys.argv[3])
+prompt_path = Path(sys.argv[4])
+
+try:
+	prior_findings = json.loads(prior_findings_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+	raise SystemExit(f"unable to load prior findings: {exc}")
+if not isinstance(prior_findings, list):
+	raise SystemExit("prior findings must be a JSON array")
+
+
+def text_field(finding: dict, key: str) -> str:
+	value = finding.get(key)
+	return " ".join(str(value).split()) if isinstance(value, (str, int, float)) and not isinstance(value, bool) else ""
+
+
+scope_files: list[str] = []
+prompt_lines: list[str] = []
+for index, finding in enumerate(prior_findings):
+	if not isinstance(finding, dict):
+		raise SystemExit(f"prior finding #{index} must be an object")
+	file_value = finding.get("file")
+	if not isinstance(file_value, str) or not file_value.strip():
+		raise SystemExit(f"prior finding #{index} is missing its file")
+	relative_file = str(PurePosixPath(file_value.strip()))
+	if relative_file.startswith("/") or relative_file.startswith("../") or relative_file in {"..", "."}:
+		raise SystemExit(f"prior finding #{index} cites a non-repository path")
+	try:
+		resolved = (repo_root / relative_file).resolve()
+		resolved.relative_to(repo_root)
+	except (OSError, ValueError):
+		raise SystemExit(f"prior finding #{index} cites a path outside the repository")
+	# A deleted file cannot carry a finding any more; it stays in the prompt
+	# list (the model may confirm the removal) but never enters scope.
+	if resolved.is_file() and relative_file not in scope_files:
+		scope_files.append(relative_file)
+	finding_id = text_field(finding, "finding_id") or f"prior-finding-{index + 1}"
+	line_value = finding.get("line")
+	location = relative_file
+	if isinstance(line_value, int) and not isinstance(line_value, bool) and line_value > 0:
+		location = f"{relative_file}:{line_value}"
+	cycle_value = finding.get("cycle")
+	cycle_note = ""
+	if isinstance(cycle_value, int) and not isinstance(cycle_value, bool) and cycle_value > 0:
+		cycle_note = f" (reported in fix cycle {cycle_value})"
+	prompt_lines.append(
+		"- `{id}`{cycle} | {category} | {severity} | confidence {confidence} | {location}\n"
+		"  Exploit scenario: {exploit}\n"
+		"  Recommendation given: {recommendation}".format(
+			id=finding_id,
+			cycle=cycle_note,
+			category=text_field(finding, "owasp_or_stride_category") or "uncategorised",
+			severity=text_field(finding, "severity") or "unknown",
+			confidence=text_field(finding, "confidence") or "?",
+			location=location,
+			exploit=text_field(finding, "exploit_scenario") or "(not recorded)",
+			recommendation=text_field(finding, "recommendation") or "(not recorded)",
+		)
+	)
+
+scope_path.write_text("".join(f"{path}\n" for path in scope_files), encoding="utf-8")
+prompt_path.write_text("".join(f"{line}\n" for line in prompt_lines), encoding="utf-8")
+print(len(prior_findings))
+PY
+	)"; then
+		security_audit_emit_path_diagnostic "${PRIOR_FINDINGS_ERROR_FILE}"
+		security_audit_emit_failure "prior-findings" "${SECURITY_AUDIT_PRIOR_FINDINGS}" "$(head -n1 "${PRIOR_FINDINGS_ERROR_FILE}" 2>/dev/null || echo 'prior findings could not be processed')"
+		exit 1
+	fi
+	[[ "${PRIOR_FINDINGS_COUNT}" =~ ^[0-9]+$ ]] || PRIOR_FINDINGS_COUNT=0
+	PRIOR_FINDINGS_SCOPE_COUNT="$(grep -c . "${PRIOR_FINDINGS_SCOPE_FILE}" 2>/dev/null || true)"
+	[[ "${PRIOR_FINDINGS_SCOPE_COUNT}" =~ ^[0-9]+$ ]] || PRIOR_FINDINGS_SCOPE_COUNT=0
+	if [ "${AUDIT_SCOPE_MODE}" = "incremental" ] && [ "${PRIOR_FINDINGS_SCOPE_COUNT}" -gt 0 ]; then
+		cat "${CHANGED_FILES_FILE}" "${PRIOR_FINDINGS_SCOPE_FILE}" | grep . | sort -u > "${CHANGED_FILES_FILE}.union"
+		mv "${CHANGED_FILES_FILE}.union" "${CHANGED_FILES_FILE}"
+	fi
+	echo "security-audit: prior-findings=${PRIOR_FINDINGS_COUNT} (${PRIOR_FINDINGS_SCOPE_COUNT} cited files kept in scope)"
+fi
 
 SECURITY_AUDIT_RENDER_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/render_prompt.sh"
 SECURITY_AUDIT_PROMPT_PATH="${SECURITY_AUDIT_SUPPORT_DIR}/prompts/mode-security-audit.txt"

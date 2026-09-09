@@ -971,6 +971,11 @@ def _run_poller(
 				"  'output_mode': os.environ.get('SECURITY_AUDIT_OUTPUT_MODE'),\n"
 				"  'diff_base': os.environ.get('SECURITY_AUDIT_DIFF_BASE'),\n"
 				"  'diff_head': os.environ.get('SECURITY_AUDIT_DIFF_HEAD'),\n"
+				"  'diff_since': os.environ.get('SECURITY_AUDIT_DIFF_SINCE'),\n"
+				"  'prior_findings': (\n"
+				"    json.loads(Path(os.environ['SECURITY_AUDIT_PRIOR_FINDINGS']).read_text(encoding='utf-8'))\n"
+				"    if os.environ.get('SECURITY_AUDIT_PRIOR_FINDINGS') else None\n"
+				"  ),\n"
 				"  'confidence_gate': os.environ.get('SECURITY_AUDIT_CONFIDENCE_GATE'),\n"
 				"  'model': os.environ.get('WORKFLOW_EDITOR_MODEL'),\n"
 				"  'tracking_body': json.loads(Path(os.environ['GH_MOCK_STORE']).read_text(encoding='utf-8'))['issues']['192']['body'],\n"
@@ -1012,7 +1017,26 @@ def _run_poller(
 			str(tracking_num): {
 				"labels": list(tracking_labels),
 				"comments": [
-					_comment_entry({"body": _state_comment(state), "user": {"login": "github-actions[bot]"}}, 1, tracking_num),
+					_comment_entry(
+						{
+							# Sandbox SHA aliases (`__integration_head__`, ...) are
+							# resolved in the seeded security-pass pointers so a test
+							# can point state at a real ancestor of the audited head.
+							"body": _state_comment(
+								{
+									**state,
+									**{
+										pointer_key: _resolve_sandbox_sha_alias(str(state[pointer_key]))
+										for pointer_key in ("security_pass_last_audited_sha", "security_pass_head_sha")
+										if isinstance(state.get(pointer_key), str)
+									},
+								}
+							),
+							"user": {"login": "github-actions[bot]"},
+						},
+						1,
+						tracking_num,
+					),
 					*[
 						_comment_entry(comment_body, idx + 2, tracking_num)
 						for idx, comment_body in enumerate(tracking_comments)
@@ -3721,6 +3745,208 @@ def test_security_pass_exhaustion_still_terminalizes_from_blocked_status() -> No
 	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" not in combined_log
 
 
+def test_security_pass_first_audit_records_delta_pointer_and_findings_memory() -> None:
+	"""A blocked audit records what the next delta re-audit needs.
+
+	Regression for tele-funtoken-msg-scoring#3928, fun-token-multi-chain#471
+	and binance-blessings#249: every re-audit re-scanned the whole
+	merge-base..head range from scratch with no memory of earlier cycles, so
+	each cycle surfaced brand-new findings (no finding_id ever repeated, every
+	fix issue merged) and the budget still exhausted.
+	"""
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 0,
+			"security_pass_status": "pending",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	capture = result["security_audit_capture"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert latest_state["status"] == "security-pass-fixing"
+	assert not capture["diff_since"]
+	assert capture["prior_findings"] is None
+	assert (
+		"SECURITY_PASS_SCOPE tracking_issue=192 mode=full reason=no_prior_audit "
+		f"base_sha={capture['diff_base']} since_sha=none head_sha={capture['diff_head']} prior_findings=0"
+	) in combined_log
+	assert latest_state["security_pass_last_audited_sha"] == capture["diff_head"]
+	reported = latest_state["security_pass_reported_findings"]
+	assert [finding["finding_id"] for finding in reported] == ["SEC-TEST-1"]
+	assert reported[0]["cycle"] == 1
+	assert reported[0]["file"] == "scripts/example.py"
+	assert reported[0]["line"] == 1
+	assert reported[0]["recommendation"] == "Enforce authorisation before the state mutation."
+	fix_issue = latest_state["security_pass_active_fix_issues"][0]
+	fix_body = result["issues"][str(fix_issue)]["body"]
+	assert "Fix every instance of each finding's defect class across this project's changes" in fix_body
+
+
+def test_security_pass_reaudit_after_merged_fix_is_a_delta_with_prior_findings() -> None:
+	"""After a merged fix the re-audit narrows to the delta and re-verifies findings.
+
+	State carries the head audited before the fix (`__integration_head__`)
+	and the finding that audit reported; the integration branch has since
+	advanced.  The engine must receive the old head as SECURITY_AUDIT_DIFF_SINCE
+	(the explicit range stays merge-base..head) and the recorded finding as
+	SECURITY_AUDIT_PRIOR_FINDINGS.  A clean result empties the memory.
+	"""
+	integration_branch = "orchestrator/project-192"
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": integration_branch,
+			"security_pass_cycle": 1,
+			"security_pass_status": "pending",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "",
+			"security_pass_last_audited_sha": "__integration_head__",
+			"security_pass_reported_findings": [
+				{
+					"cycle": 1,
+					"finding_id": "SEC-TEST-1",
+					"owasp_or_stride_category": "A01: Broken Access Control",
+					"severity": "high",
+					"confidence": 9,
+					"file": "scripts/example.py",
+					"line": 1,
+					"exploit_scenario": "An unauthorised caller crosses the trust boundary.",
+					"recommendation": "Enforce authorisation before the state mutation.",
+				}
+			],
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", integration_branch],
+		branch_ref_shas={integration_branch: "__advanced_integration_head__"},
+	)
+
+	latest_state = result["latest_state"]
+	capture = result["security_audit_capture"]
+	combined_log = result["stdout"] + result["stderr"]
+	seeded_state = json.loads(_extract_state_payloads([result["issues"]["192"]["comments"][0]])[0])
+	previously_audited_sha = seeded_state["security_pass_last_audited_sha"]
+	assert re.fullmatch(r"[0-9a-f]{40}", previously_audited_sha)
+	assert capture["diff_head"] != previously_audited_sha
+	assert capture["diff_since"] == previously_audited_sha
+	assert capture["diff_base"] != previously_audited_sha
+	assert [finding["finding_id"] for finding in capture["prior_findings"]] == ["SEC-TEST-1"]
+	assert capture["prior_findings"][0]["cycle"] == 1
+	assert (
+		"SECURITY_PASS_SCOPE tracking_issue=192 mode=delta reason=head_advanced_since_last_audit "
+		f"base_sha={capture['diff_base']} since_sha={previously_audited_sha} head_sha={capture['diff_head']} prior_findings=1"
+	) in combined_log
+	assert "SECURITY_PASS_CLEAN" in combined_log
+	assert latest_state["security_pass_cycle"] == 1
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_head_sha"] == capture["diff_head"]
+	assert latest_state["security_pass_last_audited_sha"] == capture["diff_head"]
+	assert latest_state["security_pass_reported_findings"] == []
+
+
+def test_security_pass_head_advance_after_clean_pass_reaudits_only_the_delta() -> None:
+	"""A clean pass invalidated by new commits re-audits from the passed SHA.
+
+	The passed SHA is the last audited commit, so only the commits that
+	arrived afterwards (sync merge, resolver merge, fix PR) need auditing.
+	Legacy state that passed before `security_pass_last_audited_sha` existed
+	falls back to `security_pass_head_sha`, and the budget reset still fires.
+	"""
+	integration_branch = "orchestrator/project-192"
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": integration_branch,
+			"security_pass_cycle": 3,
+			"security_pass_status": "passed",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "__integration_head__",
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", integration_branch],
+		branch_ref_shas={integration_branch: "__advanced_integration_head__"},
+	)
+
+	latest_state = result["latest_state"]
+	capture = result["security_audit_capture"]
+	combined_log = result["stdout"] + result["stderr"]
+	seeded_state = json.loads(_extract_state_payloads([result["issues"]["192"]["comments"][0]])[0])
+	passed_sha = seeded_state["security_pass_head_sha"]
+	assert re.fullmatch(r"[0-9a-f]{40}", passed_sha)
+	assert capture["diff_head"] != passed_sha
+	assert capture["diff_since"] == passed_sha
+	assert capture["prior_findings"] is None
+	assert "SECURITY_PASS_CYCLE_BUDGET_RESET" in combined_log
+	assert f"mode=delta reason=head_advanced_since_last_audit base_sha={capture['diff_base']} since_sha={passed_sha}" in combined_log
+	assert latest_state["security_pass_cycle"] == 0
+	assert latest_state["security_pass_status"] == "blocked"
+	assert latest_state["security_pass_last_audited_sha"] == capture["diff_head"]
+	assert [finding["finding_id"] for finding in latest_state["security_pass_reported_findings"]] == ["SEC-TEST-1"]
+
+
+def test_security_pass_unusable_last_audited_sha_falls_back_to_full_range() -> None:
+	"""A rewritten or unknown last-audited pointer never narrows the audit."""
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 1,
+			"security_pass_status": "pending",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "",
+			"security_pass_last_audited_sha": "not-a-commit-in-this-repository",
+			"security_pass_reported_findings": [
+				{"cycle": 1, "finding_id": "SEC-OLD", "file": "scripts/example.py", "line": 1},
+			],
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	capture = result["security_audit_capture"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert not capture["diff_since"]
+	# Memory still travels with a full-range audit: the findings are what the
+	# engine must verify, whichever files end up in scope.
+	assert [finding["finding_id"] for finding in capture["prior_findings"]] == ["SEC-OLD"]
+	assert "mode=full reason=last_audited_sha_not_ancestor_of_head" in combined_log
+	assert result["latest_state"]["security_pass_last_audited_sha"] == capture["diff_head"]
+	assert result["latest_state"]["security_pass_reported_findings"] == []
+
+
 def test_security_pass_terminal_failure_rerenders_tracking_body_security_block() -> None:
 	"""The tracking body must not keep advertising a clean pass after exhaustion.
 
@@ -3956,6 +4182,10 @@ def test_re_security_pass_resets_terminal_state_and_reaudits() -> None:
 			"security_pass_status": "failed",
 			"security_pass_active_fix_issues": [],
 			"security_pass_head_sha": "old-head",
+			"security_pass_last_audited_sha": "old-head",
+			"security_pass_reported_findings": [
+				{"cycle": 3, "finding_id": "SEC-OLD", "file": "scripts/example.py", "line": 1},
+			],
 		}
 	)
 	result = _run_poller(
@@ -3975,6 +4205,13 @@ def test_re_security_pass_resets_terminal_state_and_reaudits() -> None:
 	assert latest_state["security_pass_cycle"] == 0
 	assert latest_state["security_pass_status"] == "passed"
 	assert latest_state["security_pass_head_sha"] != "old-head"
+	# The reset restarts the bounded loop from a full-range audit: the
+	# operator claims the exhaustion findings are addressed, so neither the
+	# failed head nor its findings narrow or steer the re-audit.
+	capture = result["security_audit_capture"]
+	assert not capture["diff_since"]
+	assert capture["prior_findings"] is None
+	assert "mode=full reason=no_prior_audit" in result["stdout"] + result["stderr"]
 	assert "ai:security-pass-failed" not in result["tracking_labels"]
 	assert any("re-security-pass-dedup:" in comment["body"] for comment in result["issues"]["192"]["comments"])
 	assert result["git_fetch_calls"]["refs/heads/main:refs/remotes/origin/main"] >= 1

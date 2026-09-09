@@ -1281,10 +1281,10 @@ if is_truthy "${ENABLE_SECURITY_PASS_RAW}"; then
   ENABLE_SECURITY_PASS="true"
 fi
 
-MAX_SECURITY_PASS_CYCLES="${MAX_SECURITY_PASS_CYCLES:-3}"
+MAX_SECURITY_PASS_CYCLES="${MAX_SECURITY_PASS_CYCLES:-5}"
 if ! [[ "${MAX_SECURITY_PASS_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_SECURITY_PASS_CYCLES}" -lt 1 ]; then
-  echo "::warning::MAX_SECURITY_PASS_CYCLES must be a positive integer; defaulting to 3"
-  MAX_SECURITY_PASS_CYCLES="3"
+  echo "::warning::MAX_SECURITY_PASS_CYCLES must be a positive integer; defaulting to 5"
+  MAX_SECURITY_PASS_CYCLES="5"
 fi
 
 SECURITY_PASS_CONFIDENCE_GATE="${SECURITY_PASS_CONFIDENCE_GATE:-8}"
@@ -4459,6 +4459,14 @@ ensure_security_pass_state_fields() {
     )
     | .security_pass_head_sha = (
       if (.security_pass_head_sha | type) == "string" then .security_pass_head_sha else "" end
+    )
+    | .security_pass_last_audited_sha = (
+      if (.security_pass_last_audited_sha | type) == "string" then .security_pass_last_audited_sha else "" end
+    )
+    | .security_pass_reported_findings = (
+      if (.security_pass_reported_findings | type) == "array"
+        and all(.security_pass_reported_findings[]; type == "object" and (.file | type) == "string")
+      then .security_pass_reported_findings else [] end
     )' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 }
 
@@ -5097,6 +5105,8 @@ lines = [
 	"",
 	"The mandatory project security pass found the following blocking issues. Address every row through the normal clarify, plan, implement, and review pipeline.",
 	"",
+	"Fix every instance of each finding's defect class across this project's changes, not only the cited line: the re-audit checks sibling code paths (other venues, adapters, handlers, workers) for the same defect and re-opens the loop if any remain.",
+	"",
 ]
 lines.extend(table_path.read_text(encoding="utf-8").splitlines())
 lines.extend(
@@ -5323,6 +5333,58 @@ run_security_pass_inline() {
     return 1
   fi
 
+  # Delta re-audit.  Every earlier audit of this project already covered the
+  # range merge-base..<its head>; re-sampling the whole range after each
+  # merged fix hands the model a fresh chance to find something new in code it
+  # has already passed judgement on, so the fix loop never converges.  On
+  # tele-funtoken-msg-scoring#3928, fun-token-multi-chain#471 and
+  # binance-blessings#249 every consolidated fix issue merged, no finding_id
+  # ever repeated across cycles, and all three projects still exhausted
+  # MAX_SECURITY_PASS_CYCLES on findings the previous audit had not reported.
+  # The explicit range stays merge-base..head (the scope contract), and
+  # SECURITY_AUDIT_DIFF_SINCE narrows it to files that changed since the last
+  # audited commit; previously reported findings keep their files in scope
+  # and are handed to the model to verify (SECURITY_AUDIT_PRIOR_FINDINGS).
+  # Legacy state that passed before this field existed falls back to the
+  # passed head SHA, which is exactly the last audited commit.  A missing,
+  # rewritten, or non-ancestor pointer falls back to the full range.
+  security_pass_last_audited_sha="$(jq -r '
+    if (.security_pass_last_audited_sha // "") != "" then .security_pass_last_audited_sha
+    elif (.security_pass_status // "") == "passed" then (.security_pass_head_sha // "")
+    else "" end' "${STATE_FILE}" 2>/dev/null || true)"
+  security_pass_audit_since_sha=""
+  security_pass_audit_scope_mode="full"
+  security_pass_audit_scope_reason="no_prior_audit"
+  if [ -n "${security_pass_last_audited_sha}" ]; then
+    if [ "${security_pass_last_audited_sha}" = "${current_head_sha}" ]; then
+      security_pass_audit_scope_reason="head_unchanged_since_last_audit"
+      security_pass_audit_since_sha="${security_pass_last_audited_sha}"
+      security_pass_audit_scope_mode="delta"
+    elif git cat-file -e "${security_pass_last_audited_sha}^{commit}" 2>/dev/null \
+      && git merge-base --is-ancestor "${security_pass_last_audited_sha}" "${current_head_sha}" 2>/dev/null; then
+      security_pass_audit_since_sha="${security_pass_last_audited_sha}"
+      security_pass_audit_scope_mode="delta"
+      security_pass_audit_scope_reason="head_advanced_since_last_audit"
+    else
+      security_pass_audit_scope_reason="last_audited_sha_not_ancestor_of_head"
+    fi
+  fi
+  security_pass_prior_findings_file="${RUNTIME_DIR}/security_pass_prior_findings_${TRACKING_NUM}.json"
+  rm -f "${security_pass_prior_findings_file}"
+  security_pass_prior_findings_count="$(jq -r '.security_pass_reported_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${security_pass_prior_findings_count}" =~ ^[0-9]+$ ]] || security_pass_prior_findings_count=0
+  if [ "${security_pass_prior_findings_count}" -gt 0 ]; then
+    if ! jq '.security_pass_reported_findings // []' "${STATE_FILE}" > "${security_pass_prior_findings_file}" 2>/dev/null; then
+      rm -f "${security_pass_prior_findings_file}"
+      security_pass_prior_findings_count=0
+      echo "::warning::Could not export the previously reported security-pass findings for tracking issue #${TRACKING_NUM}; the audit runs without them."
+    fi
+  fi
+  if [ "${security_pass_prior_findings_count}" -eq 0 ]; then
+    security_pass_prior_findings_file=""
+  fi
+  echo "SECURITY_PASS_SCOPE tracking_issue=${TRACKING_NUM} mode=${security_pass_audit_scope_mode} reason=${security_pass_audit_scope_reason} base_sha=${merge_base_sha} since_sha=${security_pass_audit_since_sha:-none} head_sha=${current_head_sha} prior_findings=${security_pass_prior_findings_count}"
+
   context_file="${RUNTIME_DIR}/security_pass_project_${TRACKING_NUM}.txt"
   findings_file="${RUNTIME_DIR}/security_pass_findings_${TRACKING_NUM}.json"
   audit_error_file="${RUNTIME_DIR}/security_pass_audit_${TRACKING_NUM}.err"
@@ -5353,6 +5415,8 @@ run_security_pass_inline() {
     SECURITY_AUDIT_FINDINGS_OUT="${findings_file}" \
     SECURITY_AUDIT_DIFF_BASE="${merge_base_sha}" \
     SECURITY_AUDIT_DIFF_HEAD="${current_head_sha}" \
+    SECURITY_AUDIT_DIFF_SINCE="${security_pass_audit_since_sha}" \
+    SECURITY_AUDIT_PRIOR_FINDINGS="${security_pass_prior_findings_file}" \
     SECURITY_AUDIT_CONFIDENCE_GATE="${SECURITY_PASS_CONFIDENCE_GATE}" \
     SECURITY_AUDIT_SKIP_IF_UNCHANGED="false" \
     SECURITY_AUDIT_INCREMENTAL="true" \
@@ -5422,9 +5486,37 @@ run_security_pass_inline() {
 
   finding_count="$(jq -r '.findings | length' "${findings_file}")"
   completed_cycles="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}")"
-  jq --arg head_sha "${current_head_sha}" --argjson findings_count "${finding_count}" '
+  # Record the audited head as the base of the next delta re-audit and
+  # remember every blocking finding so the next audit verifies it instead of
+  # re-discovering the project.  A clean result clears the memory: nothing is
+  # outstanding, and the next audit (after a head advance) covers only the new
+  # commits.  Long free-text fields are trimmed so state stays bounded.
+  jq --arg head_sha "${current_head_sha}" --argjson findings_count "${finding_count}" \
+    --argjson cycle "$((completed_cycles + 1))" --slurpfile audit_result "${findings_file}" '
     .security_pass_head_sha = $head_sha
+    | .security_pass_last_audited_sha = $head_sha
     | .security_pass_status = (if $findings_count == 0 then "passed" else "blocked" end)
+    | .security_pass_reported_findings = (
+        if $findings_count == 0 then []
+        else (
+          ((.security_pass_reported_findings // []) | map(select(type == "object")))
+          + [
+            $audit_result[0].findings[]
+            | {
+                cycle: $cycle,
+                finding_id: .finding_id,
+                owasp_or_stride_category: .owasp_or_stride_category,
+                severity: .severity,
+                confidence: .confidence,
+                file: .file,
+                line: .line,
+                exploit_scenario: ((.exploit_scenario // "") | .[0:600]),
+                recommendation: ((.recommendation // "") | .[0:600])
+              }
+          ]
+        ) | .[-60:]
+        end
+      )
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
   if [ "${finding_count}" -eq 0 ]; then
@@ -15123,7 +15215,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 			|| [ "${PROJECT_STATUS}" = "security-pass-fixing" ] \
 			|| has_label "${TRACKING_LABELS}" "ai:security-pass-failed"; }; then
 		echo "SECURITY_PASS_SKIPPED_DISABLED tracking_issue=${TRACKING_NUM} releasing_state=${PROJECT_STATUS}"
-		jq '.status = "in_progress" | .security_pass_cycle = 0 | .security_pass_status = "pending" | .security_pass_active_fix_issues = [] | .security_pass_head_sha = "" | del(.security_pass_fix_reissue_count) | del(.security_pass_fix_defer)' \
+		jq '.status = "in_progress" | .security_pass_cycle = 0 | .security_pass_status = "pending" | .security_pass_active_fix_issues = [] | .security_pass_head_sha = "" | .security_pass_last_audited_sha = "" | .security_pass_reported_findings = [] | del(.security_pass_fix_reissue_count) | del(.security_pass_fix_defer)' \
 			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 		post_state_comment || true
 		set_tracking_phase_label "ai:done"
@@ -15803,12 +15895,17 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
     if [ -n "${RE_SECURITY_PASS_COMMENT_JSON}" ] && [ "${RE_SECURITY_PASS_COMMENT_JSON}" != "null" ]; then
       RE_SECURITY_PASS_COMMENT_ID="$(printf '%s' "${RE_SECURITY_PASS_COMMENT_JSON}" | jq -r '.id // 0' 2>/dev/null || echo 0)"
       echo "  /re-security-pass requested for project #${TRACKING_NUM}. Resetting security-pass state."
+      # A reset is a full restart of the bounded loop: the operator claims
+      # to have addressed the exhaustion findings, so the next audit covers
+      # the whole range again rather than a delta from the failed head.
       jq '
         .status = "security-pass"
         | .security_pass_cycle = 0
         | .security_pass_status = "pending"
         | .security_pass_active_fix_issues = []
         | .security_pass_head_sha = ""
+        | .security_pass_last_audited_sha = ""
+        | .security_pass_reported_findings = []
         | del(.security_pass_fix_reissue_count)
         | del(.security_pass_fix_defer)
       ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
