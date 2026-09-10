@@ -451,6 +451,7 @@ def _security_audit_findings_payload(findings: list[dict] | None = None) -> dict
 			"suppressed_invalid": 0,
 			"suppressed_low_confidence": 0,
 			"suppressed_out_of_scope": 0,
+			"suppressed_waived": 0,
 		},
 	}
 
@@ -4945,6 +4946,31 @@ def test_security_pass_invalid_engine_output_fails_closed() -> None:
 	assert result["latest_state"]["security_pass_head_sha"] == ""
 	assert result["tracking_labels"] == ["ai:security-pass"]
 	assert "SECURITY_PASS_FAILED reason=engine_unavailable" in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_invalid_suppressed_waived_count_fails_closed() -> None:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	for invalid_value in (None, "not-an-integer"):
+		payload = _security_audit_findings_payload()
+		if invalid_value is None:
+			payload["counts"].pop("suppressed_waived")
+		else:
+			payload["counts"]["suppressed_waived"] = invalid_value
+		result = _run_poller(
+			state=state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			enable_security_pass="true",
+			security_audit_payload=payload,
+			issue_labels={10: ["ai:merged"]},
+			existing_branches=["main", "orchestrator/project-192"],
+		)
+
+		assert result["latest_state"]["status"] == "security-pass"
+		assert result["latest_state"]["security_pass_status"] == "failed"
+		assert result["tracking_labels"] == ["ai:security-pass"]
+		assert "SECURITY_PASS_FAILED reason=engine_unavailable" in result["stdout"] + result["stderr"]
 
 
 def test_security_pass_closed_fix_without_merged_pr_terminalizes_recoverably() -> None:

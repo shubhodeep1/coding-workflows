@@ -6133,7 +6133,8 @@ run_security_pass_inline() {
       .counts.suppressed_excluded,
       .counts.suppressed_invalid,
       .counts.suppressed_low_confidence,
-      .counts.suppressed_out_of_scope
+      .counts.suppressed_out_of_scope,
+      .counts.suppressed_waived
     ][]; (type == "number") and (floor == .) and . >= 0)
     and all(.findings[];
       (.finding_id | type) == "string" and (.finding_id | length) > 0
