@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:6090-6095 | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The findings-JSON validation in run_security_pass_inline checks .counts.suppressed_excluded, .counts.suppressed_invalid, .counts.suppressed_low_confidence, and .counts.suppressed_out_of_scope, but does not validate .counts.suppressed_waived even though security_audit.sh now emits this key and counts it as a first-class suppression bucket.\n  WHY: A malformed or missing .counts.suppressed_waived value (non-integer, negative, boolean) will pass the orchestrator's gate and later confuse the waiver-suppression accounting, producing inconsistent logs or downstream state corruption.\n- scripts/orchestrate_poll_process.sh:15984-16000 | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: /security-pass-waive accepts finding ids that are not present in security_pass_reported_findings and records them as waivers with empty file, line, category, and severity fields; no advisory follow-up is filed and no warning is surfaced beyond a markdown bullet.\n  WHY: A typo in an operator-provided finding id silently persists as a valid waiver, causing the id to be treated as an accepted known risk across future audits even though no actual finding was ever reviewed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The required CI check lint-pr-body-auto-close must pass before this PR can merge.\n  expected_change_site: PR #4074 title/body (the squash-merge artifact validated by .github/workflows/lint-pr-body-auto-close.yml at lines 74-76).\n  confidence=5\n  flagged_by: [moonshotai_kimi-k3]\n  EVIDENCE: The lint job failed because lint_pr_body_auto_close.py could not fetch labels for a cross-repo consumer issue reference at PR body line 9. The body uses bare consumer-repo forms like tele-funtoken-msg-scoring#4281/3955/4283, which the auto-close keyword regex either misresolves or tries to label-lookup as an unreachable non-default repo. Either rephrase the references with the exact non-auto-close form (Refs owner/repo#N) for cross-repo consumer issues, or remove the auto-close keyword so the required check passes.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/orchestrate_poll_process.sh:6090-6095 | severity=MAJOR | confidence=high\n  PROBLEM: The findings-JSON validation in run_security_pass_inline checks .counts.suppressed_excluded, .counts.suppressed_invalid, .counts.suppressed_low_confidence, and .counts.suppressed_out_of_scope, but does not validate .counts.suppressed_waived even though security_audit.sh now emits this key and counts it as a first-class suppression bucket.\n  WHY: A malformed or missing .counts.suppressed_waived value (non-integer, negative, boolean) will pass the orchestrator's gate and later confuse the waiver-suppression accounting, producing inconsistent logs or downstream state corruption.\n- scripts/orchestrate_poll_process.sh:15984-16000 | severity=MAJOR | confidence=high\n  PROBLEM: /security-pass-waive accepts finding ids that are not present in security_pass_reported_findings and records them as waivers with empty file, line, category, and severity fields; no advisory follow-up is filed and no warning is surfaced beyond a markdown bullet.\n  WHY: A typo in an operator-provided finding id silently persists as a valid waiver, causing the id to be treated as an accepted known risk across future audits even though no actual finding was ever reviewed.\n- TASK_GAP\n  Requirement: The required CI check lint-pr-body-auto-close must pass before this PR can merge.\n  Expected change site: PR #4074 title/body (the squash-merge artifact validated by .github/workflows/lint-pr-body-auto-close.yml at lines 74-76).\n  Evidence of absence: The lint job failed because lint_pr_body_auto_close.py could not fetch labels for a cross-repo consumer issue reference at PR body line 9. The body uses bare consumer-repo forms like tele-funtoken-msg-scoring#4281/3955/4283, which the auto-close keyword regex either misresolves or tries to label-lookup as an unreachable non-default repo. Either rephrase the references with the exact non-auto-close form (Refs owner/repo#N) for cross-repo consumer issues, or remove the auto-close keyword so the required check passes.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: high\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "2857336ce1f7842f1863e6b4347fbc9c851d6be1f5834572d574903f89efcdeb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "34429844430",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34429844430",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260910035643_1aeb50dc67",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "34429844430"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-10T03:56:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
