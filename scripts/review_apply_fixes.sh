@@ -2051,7 +2051,15 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   _hb_tmpdir=""
   _hb_fifo=""
 
-  kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
+  # The watchdog subshell exits on its own (143/142) after it kills the
+  # editor, so by the time the editor process is reaped the watchdog may
+  # already be gone and this `kill` returns 1 (ESRCH). Under `set -e` an
+  # unguarded failure here aborted the whole script: no retry attempt, no
+  # fallback summary, no archived editor stderr, and the run surfaced as
+  # an "editor produced no output" empty-noop (run 34397466777 on PR
+  # #4071, wall-time kill on attempt 1). Reaping a watchdog that has
+  # already exited is the expected outcome on every watchdog-kill path.
+  kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
 
   editor_clean_output="${tmp_output}.ansi-clean"
