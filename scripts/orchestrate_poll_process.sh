@@ -8438,7 +8438,6 @@ heal_integration_branch_conflict() {
 
   local final_pr_payload=""
   local final_pr_head_sha=""
-  local final_pr_body=""
   local final_pr_mergeable=""
   # GitHub API hygiene audit: this function already re-reads
   # `repos/.../pulls/${final_pr}` later for `.mergeable` during the
@@ -8449,7 +8448,6 @@ heal_integration_branch_conflict() {
   if final_pr_payload="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}")"; then
     if printf '%s' "${final_pr_payload}" | jq -e . >/dev/null 2>&1; then
       final_pr_head_sha="$(printf '%s' "${final_pr_payload}" | jq -r '.head.sha // ""' 2>/dev/null || echo "")"
-      final_pr_body="$(printf '%s' "${final_pr_payload}" | jq -r '.body // ""' 2>/dev/null || echo "")"
       final_pr_mergeable="$(printf '%s' "${final_pr_payload}" | jq -r 'if .mergeable != null then .mergeable else empty end' 2>/dev/null || echo "")"
     else
       echo "::warning::[integration-heal] Final PR #${final_pr} metadata fetch returned non-JSON; skipping resolver escape-valve gate this tick."
@@ -8495,14 +8493,6 @@ heal_integration_branch_conflict() {
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         post_state_comment || true
         return 0
-      fi
-      if [ -n "${resolver_retry_head_sha}" ] && [ "${resolver_retry_head_sha}" != "${final_pr_head_sha}" ]; then
-        echo "  [integration-heal] Final PR #${final_pr} head advanced from ${resolver_retry_head_sha} to ${final_pr_head_sha} since the persisted resolver retry state; resetting per-head conflict counters."
-        jq '.integration_conflict_unresolved_ticks = 0 |
-            .integration_conflict_dispatch_count = 0 |
-            .integration_conflict_dispatch_ts = 0 |
-            .integration_conflict_judge_retry_ts = 0' \
-          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       fi
     fi
   fi
