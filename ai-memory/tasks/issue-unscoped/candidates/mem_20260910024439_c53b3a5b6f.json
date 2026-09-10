@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:2054 (comment block) | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The comment states the watchdog \"exits on its own (143/142)\" but the same watchdog subshell also self-exits with 144 on the PR-closed path.\n  WHY: No runtime impact because the guard covers all exit codes equally; this is a documentation completeness issue, and the test docstring has the same omission.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_apply_fixes.sh:2054 (comment block) | severity=NIT | confidence=4\n  PROBLEM: The comment states the watchdog \"exits on its own (143/142)\" but the same watchdog subshell also self-exits with 144 (line 1938: PR-closed path).\n  WHY: Does not fail at runtime. The code behavior is correct regardless of exit code. Only the comment is incomplete.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_apply_fixes.sh:2054-2061 | severity=NIT | confidence=4\n  PROBLEM: the comment lists the watchdog's expected self-exit codes as \"(143/142)\" but the same watchdog shape elsewhere in this file (the PR-closed branch) self-exits with 144.\n  WHY: The `|| true` guard correctly covers all of them, but a future reader who greps for \"144\" or traces the PR-closed reap will not find the exit code acknowledged in the comment that explains why the guard exists.\n- scripts/review_apply_fixes.sh:2054-2061 | confidence=1\n  PROBLEM: the comment lists the watchdog's expected self-exit codes as \"(143/142)\" but the same watchdog shape elsewhere in this file (the PR-closed branch) self-exits with 144.\n  WHY: Suggested minimal fix: change \"(143/142)\" to \"(142/143/144)\" in the comment, and reflect the same triplet in the test docstring of tests/test_editor_watchdog_kill_contract.py and in the changelog fragment's parenthetical so the three artifacts stay in sync.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/review_apply_fixes.sh:2054 (new comment block above the guarded reap) | severity=NIT | confidence=4\n  PROBLEM: the comment says the watchdog \"exits on its own (143/142)\", but the same watchdog also self-exits with 144 on the PR-closed path (line 1938 in this file; lines 3886 and 3920 in review_run_reviewers.sh).\n  WHY: A future reader grepping for why a 144 reap needs the guard will not find it acknowledged in the comment that justifies the guard. Verified: exit 144 is a real self-exit path of the same subshell the reap targets.\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_apply_fixes.sh:2054 (comment block) | severity=NIT | confidence=4\n  PROBLEM: The comment says the watchdog \"exits on its own (143/142)\" but the same watchdog subshell also exits 144 on the PR-closed path (line 1938).\n  WHY: No runtime impact \u2014 the `|| true` guard covers all exit codes equally. This is a documentation completeness issue in the comment that justifies the guard. The test docstring (line 11) has the same omission.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "900985fe20a123be69096ed0582a02039415954f95e527b4e5af412ea047bd9c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4072,
+    "run_id": "34425774456",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34425774456",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260910024439_c53b3a5b6f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4072,
+    "run_id": "34425774456"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-10T02:44:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
