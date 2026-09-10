@@ -2868,6 +2868,8 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in resolver
 	assert 'opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing' in resolver
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in resolver
+	assert "model_provider_broker_stop || echo" in resolver
+	assert "model_provider_broker_stop || _rc=1" not in resolver
 	for converted in (apply_fixes, consolidate, rb_judge, resolver):
 		assert "--ask-for-approval never" not in converted
 	judge_stall_case = rb_judge.index('case "${judge_stall_state}" in')

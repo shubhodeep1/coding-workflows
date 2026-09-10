@@ -312,12 +312,12 @@ _resolver_restore_agent_access()
 
 _resolver_exit_trap()
 {
-  local _rc=$?
-  _resolver_restore_agent_access || _rc=1
-  model_provider_broker_stop || _rc=1
-  if [ "${_rc}" -ne 0 ] && [ -n "${GITHUB_ENV:-}" ]; then
-    echo "RESOLVER_ACTUATION_REQUIRED=true" >> "${GITHUB_ENV}"
-  fi
+	local _rc=$?
+	_resolver_restore_agent_access || _rc=1
+	model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed after resolver execution." >&2
+	if [ "${_rc}" -ne 0 ] && [ -n "${GITHUB_ENV:-}" ]; then
+		echo "RESOLVER_ACTUATION_REQUIRED=true" >> "${GITHUB_ENV}"
+	fi
   return "${_rc}"
 }
 trap _resolver_exit_trap EXIT
