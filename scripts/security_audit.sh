@@ -220,6 +220,7 @@ cd "${REPO_ROOT}"
 # unset so support files resolve from the audited checkout itself,
 # byte-identical to the pre-consumer behaviour.
 SECURITY_AUDIT_SUPPORT_DIR="${SECURITY_AUDIT_SUPPORT_DIR:-${REPO_ROOT}}"
+SECURITY_AUDIT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Resolve the exclusion catalog: a copy in the audited repository wins (so a
 # consumer can pin its own catalog at the default relative path); otherwise a
@@ -273,7 +274,12 @@ MAX_FOLLOWUP_ISSUES_PER_WEEK="3"
 SECURITY_AUDIT_INCREMENTAL_MAX_FILES="200"
 
 SECURITY_AUDIT_RUNTIME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/security-audit.XXXXXX")"
-trap 'rm -rf "${SECURITY_AUDIT_RUNTIME_DIR}"' EXIT
+security_audit_cleanup()
+{
+	model_provider_broker_stop >/dev/null 2>&1 || true
+	rm -rf "${SECURITY_AUDIT_RUNTIME_DIR}"
+}
+trap security_audit_cleanup EXIT
 
 TRACKER_BODY_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-issue-body.md"
 TRACKER_CANDIDATES_JSON="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-candidates.json"
@@ -528,8 +534,23 @@ if ! command -v codex >/dev/null 2>&1; then
 fi
 security_audit_require_writable_destination "codex-preflight" "${CODEX_OUTPUT_FILE}"
 security_audit_require_writable_destination "codex-preflight" "${CODEX_ERROR_FILE}"
+MODEL_PROVIDER_BROKER_AGENT_HOME="${SECURITY_AUDIT_RUNTIME_DIR}/model-provider-agent-home"
+export MODEL_PROVIDER_BROKER_AGENT_HOME
+[ -f "${SECURITY_AUDIT_SCRIPT_DIR}/codex_helpers.sh" ] || {
+	security_audit_emit_failure "codex-preflight" "${SECURITY_AUDIT_SCRIPT_DIR}/codex_helpers.sh" "required support script is unavailable"
+	exit 1
+}
+# shellcheck disable=SC1091
+source "${SECURITY_AUDIT_SCRIPT_DIR}/codex_helpers.sh"
+CODEX_HELPERS_SCRIPTS_DIR="${SECURITY_AUDIT_SCRIPT_DIR}"
+export CODEX_HELPERS_SCRIPTS_DIR
+model_provider_broker_start
+model_provider_broker_prepare_codex_writer \
+	"${WORKFLOW_EDITOR_MODEL:-openai/gpt-5.6-sol}" \
+	"${MODEL_REASONING_EFFORT:-xhigh}" \
+	"${REPO_ROOT}"
 
-if codex --ask-for-approval never \
+if model_provider_broker_exec_sanitized codex --ask-for-approval never \
 		-c model_verbosity=low \
 		-c include_apply_patch_tool=true \
 		exec \

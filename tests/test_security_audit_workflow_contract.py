@@ -108,19 +108,20 @@ sys.exit(1)
 def _install_mock_codex(bin_dir: Path, state_file: Path) -> None:
 	codex_script = r'''#!/usr/bin/env python3
 import json
-import os
 import sys
 from pathlib import Path
 
-state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+state_path = Path(__STATE_PATH__)
+control_path = state_path.with_name("codex-control.json")
+control = json.loads(control_path.read_text(encoding="utf-8"))
 state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
 state.setdefault("codex_calls", []).append(sys.argv[1:])
 state.setdefault("codex_stdin", []).append(sys.stdin.read())
 state_path.write_text(json.dumps(state), encoding="utf-8")
-sys.stdout.write(os.environ.get("MOCK_CODEX_OUTPUT", "[]"))
-sys.stderr.write(os.environ.get("MOCK_CODEX_STDERR", ""))
-sys.exit(int(os.environ.get("MOCK_CODEX_EXIT_CODE", "0")))
-'''
+sys.stdout.write(str(control.get("output", "[]")))
+sys.stderr.write(str(control.get("stderr", "")))
+sys.exit(int(control.get("exit_code", 0)))
+'''.replace("__STATE_PATH__", repr(str(state_file)))
 	_write_exec(bin_dir / "codex", codex_script)
 
 
@@ -171,9 +172,24 @@ def _run_security_audit(
 		if codex_available:
 			_install_mock_codex(bin_dir, state_file)
 		state_file.write_text(json.dumps(state), encoding="utf-8")
+		control_values = extra_env or {}
+		state_file.with_name("codex-control.json").write_text(
+			json.dumps(
+				{
+					"output": codex_output,
+					"stderr": control_values.get("MOCK_CODEX_STDERR", ""),
+					"exit_code": int(control_values.get("MOCK_CODEX_EXIT_CODE", "0")),
+				}
+			),
+			encoding="utf-8",
+		)
 		codex_home = tmp_path / "codex-home"
 		codex_home.mkdir(parents=True, exist_ok=True)
-		(codex_home / "config.toml").write_text('model = "test/model"\n', encoding="utf-8")
+		(codex_home / "config.toml").write_text(
+			'model = "test/model"\nmodel_reasoning_effort = "xhigh"\n\n'
+			'[model_providers.openrouter]\nbase_url = "https://openrouter.ai/api/v1"\n',
+			encoding="utf-8",
+		)
 
 		run_cwd = cwd or REPO_ROOT
 		env = os.environ.copy()

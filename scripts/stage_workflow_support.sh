@@ -460,6 +460,17 @@ checkout_support_ref()
 	auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
 
 	rm -rf "${dest}"
+	if [[ "${ref}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+		mkdir -p "${dest}"
+		git -C "${dest}" init --quiet
+		git -C "${dest}" remote add origin "${remote_url}"
+		if git -c "http.extraHeader=Authorization: Basic ${auth_header}" -C "${dest}" fetch --quiet --depth 1 origin "${ref}" \
+			&& git -C "${dest}" checkout --quiet --detach FETCH_HEAD; then
+			return 0
+		fi
+		rm -rf "${dest}"
+		return 1
+	fi
 	mkdir -p "$(dirname "${dest}")"
 	if git -c "http.extraHeader=Authorization: Basic ${auth_header}" clone --quiet --no-tags --depth 1 --branch "${ref}" "${remote_url}" "${dest}" 2>/dev/null; then
 		return 0
@@ -473,7 +484,13 @@ bootstrap_support_roots()
 	SUPPORT_PRIMARY_ROOT=""
 	SUPPORT_MAIN_ROOT=""
 
-	if [ "${IS_SELF_REPO}" = "true" ]; then
+	if [[ "${ORIGINAL_SCRIPT_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+		if ! checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/primary"; then
+			echo "::error::Failed to stage workflow support files from immutable ref ${ORIGINAL_SCRIPT_REF}." >&2
+			exit 1
+		fi
+		SUPPORT_PRIMARY_ROOT="${SUPPORT_STAGE_ROOT}/primary"
+	elif [ "${IS_SELF_REPO}" = "true" ]; then
 		SUPPORT_PRIMARY_ROOT="${REPO_ROOT}"
 	elif checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/primary"; then
 		SUPPORT_PRIMARY_ROOT="${SUPPORT_STAGE_ROOT}/primary"
@@ -486,7 +503,10 @@ bootstrap_support_roots()
 		exit 1
 	fi
 
-	if [ "${RESOLVED_SCRIPT_REF}" != "main" ] && [ -n "${GH_TOKEN:-}" ] && checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/main"; then
+	if ! [[ "${RESOLVED_SCRIPT_REF}" =~ ^[0-9a-fA-F]{40}$ ]] \
+		&& [ "${RESOLVED_SCRIPT_REF}" != "main" ] \
+		&& [ -n "${GH_TOKEN:-}" ] \
+		&& checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/main"; then
 		SUPPORT_MAIN_ROOT="${SUPPORT_STAGE_ROOT}/main"
 	fi
 }

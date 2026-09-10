@@ -767,11 +767,13 @@ def emit_context(
 			summary += f" Suppressed overflow entries: {off_suppressed}."
 	if omitted_entries:
 		if path_count_omissions:
-			summary += (
-				f" Omitted {omitted_entries} path(s): {path_count_omissions} exceeded the "
-				f"{MAX_TARGET_PATHS}-path cap; others failed validation, sensitivity, "
-				"filesystem, or byte limits."
-			)
+			summary += f" Omitted {omitted_entries} path(s): {path_count_omissions} exceeded the {MAX_TARGET_PATHS}-path cap."
+			other_path_omissions = omitted_entries - path_count_omissions
+			if other_path_omissions:
+				summary += (
+					f" The other {other_path_omissions} path(s) failed validation, sensitivity, "
+					"filesystem, or byte limits."
+				)
 		else:
 			summary += (
 				f" Omitted {omitted_entries} path(s) due to validation, sensitivity, "

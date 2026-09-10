@@ -210,7 +210,7 @@ def test_validate_prompts_include_serena_placeholder() -> None:
 def test_validate_workflow_lists_semble_support_files_in_helper_manifest() -> None:
 	wf = _workflow_text()
 	required_snippets = [
-		'helper_path="scripts/stage_workflow_support.sh"',
+		'helper_path="${helper_stage_dir}/scripts/stage_workflow_support.sh"',
 		'bash "${helper_path}" validate --manifest "${manifest_path}"',
 		"scripts/install_semble.sh",
 		"scripts/semble_helpers.sh",

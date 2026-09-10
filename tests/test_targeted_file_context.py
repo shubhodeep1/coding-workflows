@@ -774,11 +774,12 @@ def test_path_count_and_rendered_output_are_strictly_bounded() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		paths = [f"missing/path-{index}.py" for index in range(MAX_TARGET_PATHS * 4)]
-		context = emit_context(paths, root, max_bytes=4096, header_text="bounded")
-		assert len(context.encode("utf-8")) <= 4096
+		context = emit_context(paths, root, max_bytes=100_000, header_text="bounded")
+		assert len(context.encode("utf-8")) <= 100_000
 		assert context.count("--- FILE:") <= MAX_TARGET_PATHS
 		assert "path-1023.py" not in context
-		assert "Omitted" in context
+		assert f"Omitted {MAX_TARGET_PATHS * 3} path(s): {MAX_TARGET_PATHS * 3} exceeded the {MAX_TARGET_PATHS}-path cap." in context
+		assert "The other" not in context
 
 
 def test_emit_context_normalizes_raw_paths_before_filesystem_access() -> None:

@@ -209,9 +209,13 @@ model_provider_broker_stop()
 		kill -TERM "${broker_pid}" 2>/dev/null || return 1
 		for _broker_wait in $(seq 1 50); do
 			kill -0 "${broker_pid}" 2>/dev/null || break
-			sleep 0.1
+			if [ -r "/proc/${broker_pid}/stat" ] && grep -q ') Z ' "/proc/${broker_pid}/stat"; then
+				break
+			fi
+			/bin/sleep 0.1
 		done
-		if kill -0 "${broker_pid}" 2>/dev/null; then
+		if kill -0 "${broker_pid}" 2>/dev/null \
+			&& { [ ! -r "/proc/${broker_pid}/stat" ] || ! grep -q ') Z ' "/proc/${broker_pid}/stat"; }; then
 			echo "::error::model provider broker did not stop cleanly" >&2
 			return 1
 		fi
@@ -219,7 +223,8 @@ model_provider_broker_stop()
 	fi
 	[ -z "${MODEL_PROVIDER_BROKER_PID_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_PID_FILE}"
 	[ -z "${MODEL_PROVIDER_BROKER_READY_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_READY_FILE}"
-	if [ -n "${MODEL_PROVIDER_BROKER_AGENT_HOME:-}" ] && [ -d "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ]; then
+	if [ -n "${MODEL_PROVIDER_BROKER_AGENT_HOME:-}" ] && [ -d "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ] \
+		&& [ "$(stat -c %u "${MODEL_PROVIDER_BROKER_AGENT_HOME}")" != "$(id -u)" ]; then
 		sudo -n chown -R "$(id -u):$(id -g)" "${MODEL_PROVIDER_BROKER_AGENT_HOME}" || return 1
 	fi
 	unset MODEL_PROVIDER_BROKER_BASE_URL MODEL_PROVIDER_BROKER_TOKEN MODEL_PROVIDER_BROKER_PID_FILE MODEL_PROVIDER_BROKER_READY_FILE MODEL_PROVIDER_BROKER_AGENT_HOME MODEL_PROVIDER_BROKER_ACL_BACKUP MODEL_PROVIDER_BROKER_ISOLATION_USER
@@ -270,6 +275,83 @@ model_provider_broker_grant_read_path()
 		parent_path="$(dirname -- "${parent_path}")"
 	done
 	export MODEL_PROVIDER_BROKER_ACL_BACKUP
+}
+
+model_provider_broker_prepare_codex_writer()
+{
+	local model="${1:?model required}" reasoning="${2:?reasoning required}"
+	local project_path="${3:-$(pwd)}" scripts_dir="" writer_path="" catalog_path="" source_config=""
+	scripts_dir="$(_codex_helpers_resolve_scripts_dir "${CODEX_HELPERS_SCRIPTS_DIR:-}")"
+	writer_path="${scripts_dir}/write_codex_config.sh"
+	catalog_path="${scripts_dir}/codex_model_catalog.json"
+	source_config="${CODEX_HOME:-${HOME:-/root}/.codex}/config.toml"
+	CODEX_HOME="${MODEL_PROVIDER_BROKER_AGENT_HOME:?MODEL_PROVIDER_BROKER_AGENT_HOME is required}/.codex"
+	mkdir -p "${CODEX_HOME}"
+	if [ -r "${source_config}" ]; then
+		if [ "${source_config}" != "${CODEX_HOME}/config.toml" ]; then
+			install -m 0600 "${source_config}" "${CODEX_HOME}/config.toml"
+		fi
+		PYTHONDONTWRITEBYTECODE=1 python3 - \
+			"${CODEX_HOME}/config.toml" \
+			"${MODEL_PROVIDER_BROKER_BASE_URL:?broker base URL required}" \
+			"${reasoning}" <<'PY'
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+provider_base_url = sys.argv[2]
+reasoning = sys.argv[3]
+lines = config_path.read_text(encoding="utf-8").splitlines(keepends=True)
+provider_section = False
+provider_replaced = False
+reasoning_replaced = False
+first_table = len(lines)
+for index, line in enumerate(lines):
+	stripped = line.strip()
+	if stripped.startswith("["):
+		first_table = min(first_table, index)
+		provider_section = stripped == "[model_providers.openrouter]"
+		continue
+	if index < first_table and re.match(r"^\s*model_reasoning_effort\s*=", line):
+		lines[index] = f'model_reasoning_effort = "{reasoning}"\n'
+		reasoning_replaced = True
+	elif provider_section and re.match(r"^\s*base_url\s*=", line):
+		lines[index] = f'base_url = "{provider_base_url}"\n'
+		provider_replaced = True
+if not provider_replaced:
+	raise SystemExit("model provider broker config rewrite found no openrouter base_url")
+if not reasoning_replaced:
+	lines.insert(first_table, f'model_reasoning_effort = "{reasoning}"\n')
+descriptor, temporary_name = tempfile.mkstemp(prefix=f".{config_path.name}.", dir=config_path.parent)
+try:
+	os.fchmod(descriptor, 0o600)
+	with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+		handle.writelines(lines)
+		handle.flush()
+		os.fsync(handle.fileno())
+	os.replace(temporary_name, config_path)
+except BaseException:
+	try:
+		os.unlink(temporary_name)
+	except OSError:
+		pass
+	raise
+PY
+	else
+		bash "${writer_path}" \
+			--model "${model}" \
+			--reasoning "${reasoning}" \
+			--web-search disabled \
+			--catalog-path "${catalog_path}" \
+			--project-path "${project_path}" \
+			--config-path "${CODEX_HOME}/config.toml" \
+			--allow-elevation force \
+			--provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL:?broker base URL required}"
+	fi
+	export CODEX_HOME
 }
 
 model_provider_broker_prepare_codex_readonly()
@@ -332,6 +414,43 @@ model_provider_broker_exec_sanitized()
 		LANG="${LANG:-C.UTF-8}" \
 		LC_ALL="${LC_ALL:-C.UTF-8}" \
 		NO_PROXY="127.0.0.1,localhost" \
+		GITHUB_ACTIONS="${GITHUB_ACTIONS:-}" \
+		GITHUB_RUN_ID="${GITHUB_RUN_ID:-}" \
+		GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:-}" \
+		GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$(pwd)}" \
+		GIT_DIR="${GIT_DIR:-.git}" \
+		GIT_WORK_TREE="${GIT_WORK_TREE:-$(pwd)}" \
+		RUNNER_TEMP="${RUNNER_TEMP:-/tmp}" \
+		ISSUE_NUMBER="${ISSUE_NUMBER:-}" \
+		PR_NUMBER="${PR_NUMBER:-}" \
+		TRACKING_ISSUE="${TRACKING_ISSUE:-}" \
+		TRACKING_ISSUE_NUM="${TRACKING_ISSUE_NUM:-}" \
+		CODEX_HEARTBEAT_ENABLED="${CODEX_HEARTBEAT_ENABLED:-1}" \
+		CODEX_HEARTBEAT_INTERVAL_SECS="${CODEX_HEARTBEAT_INTERVAL_SECS:-30}" \
+		CODEX_STALL_GUARD_ENABLED="${CODEX_STALL_GUARD_ENABLED:-false}" \
+		CODEX_STALL_TIMEOUT_SECONDS="${CODEX_STALL_TIMEOUT_SECONDS:-600}" \
+		CODEX_STALL_KILL_GRACE_SECONDS="${CODEX_STALL_KILL_GRACE_SECONDS:-30}" \
+		CODEX_THREAD_REUSE_ENABLED="${CODEX_THREAD_REUSE_ENABLED:-false}" \
+		CODEX_THREAD_REUSE_RUNTIME_DIR="${CODEX_THREAD_REUSE_RUNTIME_DIR:-}" \
+		CODEX_THREAD_REUSE_REAL_CODEX="${CODEX_THREAD_REUSE_REAL_CODEX:-}" \
+		CODEX_THREAD_REUSE_WRAPPER_DIR="${CODEX_THREAD_REUSE_WRAPPER_DIR:-}" \
+		CODEX_THREAD_REUSE_STATE_KEY="${CODEX_THREAD_REUSE_STATE_KEY:-}" \
+		CODEX_THREAD_REUSE_PROMPT_FILE="${CODEX_THREAD_REUSE_PROMPT_FILE:-}" \
+		CODEX_THREAD_REUSE_OUTPUT_FILE="${CODEX_THREAD_REUSE_OUTPUT_FILE:-}" \
+		CODEX_THREAD_REUSE_PHASE="${CODEX_THREAD_REUSE_PHASE:-}" \
+		CODEX_THREAD_REUSE_MODEL="${CODEX_THREAD_REUSE_MODEL:-}" \
+		CODEX_THREAD_REUSE_SANDBOX="${CODEX_THREAD_REUSE_SANDBOX:-}" \
+		CODEX_THREAD_REUSE_LOG_FILE="${CODEX_THREAD_REUSE_LOG_FILE:-}" \
+		CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE="${CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE:-}" \
+		CODEX_THREAD_REUSE_STATUS_FILE="${CODEX_THREAD_REUSE_STATUS_FILE:-}" \
+		CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_THREAD_REUSE_STALL_GUARD_HELPER:-}" \
+		CODEX_THREAD_REUSE_HEARTBEAT_HELPER="${CODEX_THREAD_REUSE_HEARTBEAT_HELPER:-}" \
+		CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK="${CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK:-true}" \
+		CODEX_THREAD_REUSE_TIMEOUT_SECS="${CODEX_THREAD_REUSE_TIMEOUT_SECS:-}" \
+		CODEX_THREAD_REUSE_CONTINUATION_FILE="${CODEX_THREAD_REUSE_CONTINUATION_FILE:-}" \
+		CODEX_THREAD_REUSE_TRANSFORM_MODE="${CODEX_THREAD_REUSE_TRANSFORM_MODE:-none}" \
+		CODEX_THREAD_REUSE_MARKER_START="${CODEX_THREAD_REUSE_MARKER_START:-}" \
+		CODEX_THREAD_REUSE_MARKER_END="${CODEX_THREAD_REUSE_MARKER_END:-}" \
 		OPENROUTER_API_KEY="${MODEL_PROVIDER_BROKER_TOKEN}" \
 		MODEL_PROVIDER_BROKER_BASE_URL="${MODEL_PROVIDER_BROKER_BASE_URL}" \
 		MODEL_PROVIDER_BROKER_TOKEN="${MODEL_PROVIDER_BROKER_TOKEN}" \

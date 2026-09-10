@@ -141,8 +141,7 @@ def test_render_prompt_python_is_staged_once_as_required_support() -> None:
 	required_loop_end = stage_block.index("\ndone", required_loop_start)
 	required_loop_block = stage_block[required_loop_start:required_loop_end]
 	assert 'src=".codex-workflow-src/scripts/${f}"' in required_loop_block
-	assert '[ -f ".codex-workflow-src-main/scripts/${f}" ]' in required_loop_block
-	assert 'src=".codex-workflow-src-main/scripts/${f}"' in required_loop_block
+	assert ".codex-workflow-src-main" not in required_loop_block
 	assert 'echo "::error::Missing required support script ${f}' in required_loop_block
 	assert "exit 1" in required_loop_block
 	assert 'install -m 0755 "${src}" "scripts/${f}"' in required_loop_block

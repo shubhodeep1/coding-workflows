@@ -128,6 +128,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/dev/test_watchdog_helpers.sh` — Shell regression tests for watchdog_helpers.sh.
 - `scripts/dev/test_write_guard.sh` — Shell regression tests for write_guard.sh.
 - `scripts/drift_audit.sh` — drift_audit.sh — Scan recent review/autofix logs for persistent fingerprint drift.
+- `scripts/editor_isolation_preflight.sh` — Validate unprivileged editor filesystem and credential isolation before model launch.
 - `scripts/emit_event.py` — Fail-open append-only JSONL mirror for stable workflow event prefixes.
 - `scripts/emit_event.sh` — emit_event.sh — fail-open append-only JSONL mirror helper.
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
@@ -165,6 +166,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/memory_helpers.sh` — Shell helper for memory helpers.
 - `scripts/memory_injection_patterns.py` — Advisory prompt-injection regex roster for AI-memory candidate writes.
 - `scripts/memory_maintenance_extract_learnings.py` — Extract repository learnings for the memory-maintenance workflow.
+- `scripts/model_provider_broker.py` — Bounded loopback proxy that keeps upstream model credentials out of model-process environments.
 - `scripts/nag_reminder.sh` — Fail-open reminder injection helper for long-running unattended wrapper loops.
 - `scripts/opencode_helpers.sh` — Shared OpenCode command, output, bootstrap, and alert helpers.
 - `scripts/openrouter_prompt_cache.py` — OpenRouter prompt-cache helpers shared by workflow scripts.
@@ -185,6 +187,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_apply_fixes.sh` — Shell helper for review apply fixes.
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.
+- `scripts/review_conflict_actuate.sh` — Trusted post-resolver actuator for signed retry state and GitHub side effects.
 - `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.
 - `scripts/review_conflict_resolve.sh` — create the [ai-merge-resolve] commit for review_autofix.yml.
 - `scripts/review_consolidate.sh` — Shell helper for review consolidate.
@@ -236,6 +239,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/validation_template_bootstrap.py` — Shared onboarding helper for validation template manifests.
 - `scripts/verify_integration_fingerprints.py` — Verify that an orchestrator integration-sync resolver run preserved merged sub-issue intent.
 - `scripts/watchdog_helpers.sh` — Shell helper for shared Codex watchdog utilities.
+- `scripts/workflow_log_output_contract.py` — Validate and atomically publish untrusted workflow-log model output.
 - `scripts/workflow_retro.py` — Build weekly workflow-retro context from workflow-log-analysis telemetry.
 - `scripts/workflow_retro_fanout.sh` — Post weekly workflow retros to consumer repositories from the centralized fan-out job.
 - `scripts/workflow_wrapper_refs.py` — Render consumer workflow wrappers with immutable reusable-workflow references.

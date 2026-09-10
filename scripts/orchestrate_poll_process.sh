@@ -5784,7 +5784,7 @@ normalize_judge_justification_for_fingerprint() {
   local raw_text="${1-}"
   # Pass input via env var, not stdin: the GHA Ubuntu 24.04 runner's
   # `bash -e {0}` shell closes the heredoc-bound FD 3 before exec'ing
-  # python3, so the previous `python3 /dev/fd/3 3<<'PY'` form failed
+  # python3, so the previous FD-3 Python heredoc form failed
   # with "can't open file '/dev/fd/3': [Errno 2]" and turned every
   # poller invocation that touched judge fingerprints into a non-zero
   # exit. Reading the text from RAW_TEXT and the script from stdin

@@ -27,7 +27,7 @@ def _helper_text() -> str:
 def test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets() -> None:
 	wf = _workflow_text()
 	required_snippets = [
-		'helper_path="scripts/stage_workflow_support.sh"',
+		'helper_path="${helper_stage_dir}/scripts/stage_workflow_support.sh"',
 		'bash "${helper_path}" validate --manifest "${manifest_path}"',
 		"UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}",
 		"scripts/assemble_prompt.sh",
@@ -128,7 +128,9 @@ def test_stage_workflow_support_helper_runs_overlay_loader_for_validate() -> Non
 
 def test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_main_checkout() -> None:
 	helper = _helper_text()
-	assert '[ -n "${GH_TOKEN:-}" ] && checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/main"' in helper
+	assert 'if [[ "${ORIGINAL_SCRIPT_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then' in helper
+	assert 'Failed to stage workflow support files from immutable ref ${ORIGINAL_SCRIPT_REF}' in helper
+	assert 'if ! [[ "${RESOLVED_SCRIPT_REF}" =~ ^[0-9a-fA-F]{40}$ ]]' in helper
 	assert '[ "${source_path}" -ef "${target_path}" ]' in helper
 	assert "realpath -m" not in helper
 
@@ -153,7 +155,7 @@ def test_validate_workflow_bootstraps_codex_heartbeat_support() -> None:
 		"CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}",
 		"UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}",
 		"scripts/codex_heartbeat.sh",
-		'helper_path="scripts/stage_workflow_support.sh"',
+		'helper_path="${helper_stage_dir}/scripts/stage_workflow_support.sh"',
 	):
 		assert snippet in wf
 

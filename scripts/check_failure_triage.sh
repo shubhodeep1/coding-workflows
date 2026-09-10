@@ -56,6 +56,7 @@ log()
 # --- Helpers (fail open if unavailable) ------------------------------------
 
 source scripts/gh_helpers.sh 2>/dev/null || true
+source scripts/codex_helpers.sh
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 type gh_api_json_to_file >/dev/null 2>&1 || gh_api_json_to_file()
 {
@@ -320,13 +321,17 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 } > "${PROMPT_FILE}"
 
 if command -v codex >/dev/null 2>&1; then
-	if env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
-		codex --ask-for-approval never \
+	MODEL_PROVIDER_BROKER_AGENT_HOME="${RUNTIME_DIR}/model-provider-agent-home"
+	export MODEL_PROVIDER_BROKER_AGENT_HOME
+	model_provider_broker_start
+	trap 'model_provider_broker_stop' EXIT
+	model_provider_broker_prepare_codex_writer "${MODEL_EDITOR:-openai/gpt-5.6-sol}" "${MODEL_REASONING_EFFORT:-xhigh}" "$(pwd)"
+	if model_provider_broker_exec_sanitized codex --ask-for-approval never \
 		-c model_verbosity="${MODEL_VERBOSITY:-low}" \
 		-c include_apply_patch_tool=true \
 		exec --skip-git-repo-check \
 		--model "${MODEL_EDITOR:-openai/gpt-5.6-sol}" \
-		--sandbox danger-full-access \
+		--sandbox read-only \
 		< "${PROMPT_FILE}" \
 		> "${DIAG_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
 		:

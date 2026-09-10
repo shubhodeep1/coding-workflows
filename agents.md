@@ -362,7 +362,7 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
 - Stable-release repository dispatch payloads carry both `version` and the peeled
   commit `sha`. Consumers validate the payload but independently resolve current
   `stable`, so delayed events cannot downgrade installed pins.
-- Model-facing reusable workflows resolve support bootstrap checkouts only from
+- Reusable workflows that execute staged support resolve bootstrap checkouts only from
   validated `job.workflow_repository` plus immutable `job.workflow_sha`.
   Missing or malformed workflow identity fails closed; `stable` and `main`
   support fallbacks are not permitted.
@@ -370,15 +370,17 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
 ## Model credential isolation
 
 - `scripts/model_provider_broker.py` is the bounded loopback-only credential
-  boundary for issue-derived analysis, workflow-log analysis, and conflict
+  boundary for issue-derived analysis, implementation and repair, validation,
+  check-failure triage, security audits, workflow-log analysis, and conflict
   resolution. Agent environments contain an ephemeral broker token, never the
   upstream provider key or GitHub/state/Telegram credentials. Broker instances
   accept at most `MODEL_PROVIDER_BROKER_MAX_REQUESTS` requests (default `100`,
   valid range `1..100`) and fail closed with HTTP 429 after exhaustion.
 - Read-only Codex phases run with `--sandbox read-only` and web search disabled.
-  The conflict writer additionally runs as `nobody` with temporary ACL access to
-  its allowlisted paths and no access to `.git`; trusted GitHub actuation runs
-  afterward in `scripts/review_conflict_actuate.sh`.
+  Writer phases retain only their required workspace permissions in a sanitized
+  environment. The conflict writer additionally runs as `nobody` with temporary
+  ACL access to its allowlisted paths and no access to `.git`; trusted GitHub
+  actuation runs afterward in `scripts/review_conflict_actuate.sh`.
 - Resolver retry tiers trust only signed
   `AUTOFIX_RESOLVER_RETRY_STATE_V2` producer comments. User-editable V1 PR-body
   markers remain recognizable as legacy text but cannot weaken verification.

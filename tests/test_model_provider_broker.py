@@ -100,6 +100,29 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 	resolver_step = review_workflow.split("- name: Run Codex resolver, validate, stage, commit", 1)[1].split("- name: Actuate validated resolver outcome", 1)[0]
 	assert "GH_TOKEN:" not in resolver_step
 	assert "GH_PAT:" not in resolver_step
+	implement_workflow = (REPO_ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
+	assert "model_provider_broker_prepare_codex_writer" in implement_workflow
+	assert "model_provider_broker_exec_sanitized bash scripts/codex_thread_reuse.sh direct-run" in implement_workflow
+	assert "model_provider_broker_exec_unprivileged nobody codex" in implement_workflow
+	assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in implement_workflow
+	assert "SCRIPT_REF=stable" not in implement_workflow
+	assert ".codex-workflow-src-main" not in implement_workflow
+	validate_workflow = (REPO_ROOT / ".github/workflows/validate.yml").read_text(encoding="utf-8")
+	validate_process = (REPO_ROOT / "scripts/validate_process.sh").read_text(encoding="utf-8")
+	assert "WORKFLOW_SUPPORT_REF=\"${helper_ref}\"" in validate_workflow
+	assert '"scripts/model_provider_broker.py"' in validate_workflow
+	assert "model_provider_broker_prepare_codex_writer" in validate_process
+	assert "model_provider_broker_exec_sanitized" in validate_process
+	for workflow_name in (
+		"cancel_on_pr_close.yml",
+		"sync_ai_labels.yml",
+		"security-audit.yml",
+		"check_failure_triage.yml",
+	):
+		workflow_text = (REPO_ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
+		assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in workflow_text
+		assert "SCRIPT_REF=stable" not in workflow_text
+		assert "Checkout workflow support source fallback" not in workflow_text
 
 
 def test_sanitized_launcher_exposes_only_ephemeral_provider_token(tmp_path: Path) -> None:
