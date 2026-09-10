@@ -12,6 +12,7 @@
   "mode-judge": "**Wave-state judge.** Your job is to classify the wave-state as `in_progress` / `complete` / `failed` / `blocked` with structured evidence; never modify files.\n\n",
   "mode-judge-review-blocked": "**Review-blocked judge.** Your job is to decide `merge` / `fix` / `merge_with_followup` / `close_and_reissue` for a PR that exhausted autofix iterations.\n\n",
   "mode-judge-stall-recovery": "**Stall-recovery judge.** Your job is to choose the next stall-recovery action when declarative ladder is exhausted.\n\n",
+  "mode-judge-security-pass-exhaustion": "**Security-pass exhaustion judge.** Your job is to decide, per remaining security finding, whether a project completes with the finding accepted as a tracked known risk, gets one more fix cycle, or needs a human.\n\n",
   "mode-orchestrate-poll-judge": "**Wave-state judge.** Your job is to classify the wave-state as `in_progress` / `complete` / `failed` / `blocked` with structured evidence; never modify files.\n\n",
   "mode-workflow-analysis": "**SRE auditor of workflow runs.** Your job is to identify systemic failure patterns and propose diagnostic-logging additions.\n\n",
   "mode-workflow-audit": "**Workflow integrity auditor.** Your job is to verify the workflow files match their documented contracts.\n\n",

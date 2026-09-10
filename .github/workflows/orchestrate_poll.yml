@@ -482,7 +482,7 @@ jobs:
             install -m 0644 "${src}" "prompts/${pf}"
           done
 
-          for security_prompt in mode-security-audit.txt; do
+          for security_prompt in mode-security-audit.txt mode-judge-security-pass-exhaustion.txt; do
             src=".codex-workflow-src/prompts/${security_prompt}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/${security_prompt}" ]; then
               src=".codex-workflow-src-main/prompts/${security_prompt}"
@@ -494,7 +494,7 @@ jobs:
             install -m 0644 "${src}" "prompts/${security_prompt}"
           done
 
-          for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-orchestrate-poll-judge.txt _templates/mode-security-audit.txt references/security-money-lens.txt; do
+          for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-judge-security-pass-exhaustion.txt _templates/mode-orchestrate-poll-judge.txt _templates/mode-security-audit.txt references/security-money-lens.txt; do
             asset_src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
             if [ ! -f "${asset_src}" ] && [ -f ".codex-workflow-src-main/prompts/${prompt_assembly_asset}" ]; then
               asset_src=".codex-workflow-src-main/prompts/${prompt_assembly_asset}"
@@ -685,6 +685,8 @@ jobs:
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           MAX_SECURITY_PASS_FIX_REISSUES: ${{ vars.MAX_SECURITY_PASS_FIX_REISSUES || '2' }}
           SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}
+          SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED: ${{ vars.SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED || 'true' }}
+          MAX_SECURITY_PASS_JUDGE_ROUNDS: ${{ vars.MAX_SECURITY_PASS_JUDGE_ROUNDS || '0' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
           VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
           MAX_JUDGE_CYCLES: ${{ vars.MAX_JUDGE_CYCLES || '25' }}

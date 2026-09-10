@@ -23,8 +23,10 @@ flowchart LR
   security_pass -->|clean current-head audit| validating["ai:validating"]
   security_pass -->|findings| security_pass_fixing["ai:security-pass-fixing"]
   security_pass_fixing -->|fix issue merged, re-audit| security_pass
-  security_pass -->|cycle budget exhausted| security_pass_failed["ai:security-pass-failed"]
-  security_pass_failed -->|/re-security-pass| security_pass
+  security_pass -->|budget exhausted, judge accepts all| validating
+  security_pass -->|budget exhausted, judge keep_fixing| security_pass_fixing
+  security_pass -->|budget exhausted, judge fail or unavailable| security_pass_failed["ai:security-pass-failed"]
+  security_pass_failed -->|/re-security-pass or /security-pass-waive| security_pass
 
   validating --> validated["ai:validated"]
   validating --> validation_failed["ai:validation-failed"]
@@ -53,8 +55,10 @@ Security-pass gate (default on, before validation or finalization)
   judge complete -> ai:security-pass -> clean -> ai:validating
   judge complete -> ai:security-pass -> findings -> ai:security-pass-fixing
     -> fix issue merged -> ai:security-pass (re-audit)
-  ai:security-pass -> MAX_SECURITY_PASS_CYCLES exhausted -> ai:security-pass-failed
-    -> /re-security-pass -> ai:security-pass
+  ai:security-pass -> MAX_SECURITY_PASS_CYCLES exhausted -> exhaustion judge
+    -> accept all -> ai:validating | keep_fixing -> ai:security-pass-fixing
+    -> fail or judge unavailable -> ai:security-pass-failed
+    -> /re-security-pass or /security-pass-waive -> ai:security-pass
 
 Validation branch
   ... -> ai:validating -> ai:validated
@@ -79,6 +83,7 @@ Other live contract labels support recovery, diagnostics, or side channels rathe
 | `/answer` | Issue comment | `.github/workflows/plan.yml` | Moves `ai:clarification` or `ai:blocked` into `ai:planning`; on success the plan flow advances to `ai:awaiting-approval` and may auto-post `/approved`. | `processed_command_<issue>_<comment>_answer` via `make_processed_command_entry_id(issue_number, comment_id, command)`. |
 | `/approved` | Issue comment | `.github/workflows/implement.yml` | Moves `ai:awaiting-approval` into `ai:implementing`; a successful implementation PR then advances the issue to `ai:done`. | `processed_command_<issue>_<comment>_approved`. |
 | `/re-security-pass` | Tracking-issue comment | `scripts/orchestrate_poll_process.sh` (scheduled poller) | Resets a project in terminal `ai:security-pass-failed` back to `ai:security-pass` with `security_pass_cycle = 0` and re-runs the mandatory current-head audit on the same poll tick. | Only the newest `/re-security-pass` comment after the last state comment or `<!-- re-security-pass-dedup:<comment-id> -->` marker is honoured; the marker is posted on reset. |
+| `/security-pass-waive <finding_id> [<finding_id> ...]` | Tracking-issue comment by a human OWNER/MEMBER/COLLABORATOR | `scripts/orchestrate_poll_process.sh` (scheduled poller) | Records the ids in `security_pass_waived_findings` (with file, line, and category when they are among the reported findings) and files one non-blocking `ai:security` follow-up per known finding. In terminal `ai:security-pass-failed` it then resets to `ai:security-pass` like `/re-security-pass` and re-audits on the same tick; in `ai:security-pass-fixing` it only persists. | Only the newest `/security-pass-waive` comment after the last state comment or `<!-- security-pass-waive-dedup:<comment-id> -->` marker is honoured; the marker is posted on acceptance and on rejection (bot or other author association, malformed id). |
 | `/clarify-now` | Issue comment | No checked-in consumer on this ref | Reserved / unwired on the current branch; no live state transition was found in the checked-in workflows or scripts. | n/a |
 | `[judge-fix]` | Commit subject on the PR branch | `scripts/review_rb_judge.sh` and `.github/workflows/review_autofix.yml` | Applies review-blocked fixes chosen by the judge so the issue can re-enter the review path and eventually reach `ai:ready-to-merge`. | Retry tracking counts `[judge-fix]` commits in branch history (`judge_fix_count`); there is no comment-level processed-command key. |
 | `[ai-autofix]` | Commit subject on the PR branch | `.github/workflows/review_autofix.yml` | Continues the autofix loop while the PR stays under review. | Self-trigger suppression keys off PR head SHA plus GitHub-attributed bot identity; iteration tracking counts consecutive first-parent `[ai-autofix]` commits. |

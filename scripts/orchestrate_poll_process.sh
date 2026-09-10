@@ -88,6 +88,9 @@ fi
 # persistent on the repo side, so caching within a single orchestrator
 # invocation is safe and collapses dozens of API calls into a handful.
 declare -gA _ENSURED_LABELS_CACHE=()
+# Marker-search results are cached per tracking issue so accepted findings pay
+# at most one reconciliation lookup per poller process, not one per finding.
+declare -gA _SECURITY_PASS_ADVISORY_SEARCH_CACHE=()
 
 # _gh_url constructs a full GitHub URL for the current repository.
 _gh_url() {
@@ -1303,6 +1306,24 @@ MAX_SECURITY_PASS_FIX_REISSUES="${MAX_SECURITY_PASS_FIX_REISSUES:-2}"
 if ! [[ "${MAX_SECURITY_PASS_FIX_REISSUES}" =~ ^[0-9]+$ ]]; then
   echo "::warning::MAX_SECURITY_PASS_FIX_REISSUES must be a non-negative integer; defaulting to 2"
   MAX_SECURITY_PASS_FIX_REISSUES="2"
+fi
+
+# Exhaustion judge: when MAX_SECURITY_PASS_CYCLES is spent with findings still
+# open, an autonomous judge decides per finding whether to accept it as a
+# tracked known risk, run one more consolidated fix cycle, or fail the pass
+# for a human (see security_pass_exhaustion_judge).  `false` restores the
+# pre-judge behaviour: terminal ai:security-pass-failed on exhaustion.
+# MAX_SECURITY_PASS_JUDGE_ROUNDS bounds how many times the judge is consulted
+# per project; 0 (default) is unbounded, so the judge decides every time.
+if is_truthy "${SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED:-true}"; then
+  SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED="true"
+else
+  SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED="false"
+fi
+MAX_SECURITY_PASS_JUDGE_ROUNDS="${MAX_SECURITY_PASS_JUDGE_ROUNDS:-0}"
+if ! [[ "${MAX_SECURITY_PASS_JUDGE_ROUNDS}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::MAX_SECURITY_PASS_JUDGE_ROUNDS must be a non-negative integer; defaulting to 0 (unbounded)"
+  MAX_SECURITY_PASS_JUDGE_ROUNDS="0"
 fi
 
 if is_truthy "${ALLOW_WORKFLOW_EDITS:-true}"; then
@@ -4475,6 +4496,30 @@ ensure_security_pass_state_fields() {
           and ((.file | split("/") | index("..")) == null)
         ))
       else [] end
+    )
+    | .security_pass_waived_findings = (
+      if (.security_pass_waived_findings | type) == "array" then
+        .security_pass_waived_findings
+        | map(select(type == "object" and (.finding_id | type) == "string" and (.finding_id | length) > 0))
+        | .[-100:]
+      else [] end
+    )
+    | .security_pass_followup_issues = (
+      if (.security_pass_followup_issues | type) == "array" then
+        .security_pass_followup_issues
+        | map(select(
+          type == "object"
+          and (.finding_id | type) == "string" and (.finding_id | length) > 0
+          and (.issue | type) == "number" and (.issue | floor) == .issue and .issue > 0
+        ))
+        | .[-100:]
+      else [] end
+    )
+    | .security_pass_judge_rounds = (
+      if (.security_pass_judge_rounds | type) == "number"
+        and (.security_pass_judge_rounds | floor) == .security_pass_judge_rounds
+        and .security_pass_judge_rounds >= 0
+      then .security_pass_judge_rounds else 0 end
     )' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 }
 
@@ -4645,7 +4690,7 @@ security_pass_terminal_failure() {
 
 The security pass still reports ${finding_count} blocking finding(s) after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} completed fix cycle(s).
 
-Manual intervention is required. After addressing the findings, comment \`/re-security-pass\` to reset the bounded fix loop.${exhausted_findings_table:+
+Manual intervention is required. After addressing the findings, comment \`/re-security-pass\` to reset the bounded fix loop. To accept a finding as a known risk instead, comment \`/security-pass-waive <finding_id> [<finding_id> ...]\`; the loop then resets with that finding excluded.${exhausted_findings_table:+
 
 ### Remaining blocking findings (integration head \`${integration_head_sha}\`)
 
@@ -5231,6 +5276,628 @@ The security pass found blocking issues and ${security_pass_fix_action} #${issue
   return 0
 }
 
+
+# ---------------------------------------------------------------------------
+# Security-pass exhaustion judge, waivers, and advisory follow-ups
+# ---------------------------------------------------------------------------
+#
+# The consolidated fix-cycle budget (MAX_SECURITY_PASS_CYCLES) bounds
+# *persistent* findings, but in practice every re-audit after a merged fix
+# reported brand-new findings on the lines the fix itself wrote (a TTL, a
+# tombstone, an expiry path), so tele-funtoken-msg-scoring#3955 and #4281
+# exhausted 3/3 cycles with every fix issue merged and no finding ever
+# repeated, then sat in ai:security-pass-failed until a human commented
+# /re-security-pass.  Instead of terminalizing on sight, the poller now
+# consults an autonomous judge (prompts/mode-judge-security-pass-exhaustion.txt)
+# that decides per remaining finding:
+#
+#   accept_with_followup  -> the finding becomes a waiver in
+#                            security_pass_waived_findings (the engine and the
+#                            poller drop any re-report), a non-blocking
+#                            `ai:security` follow-up issue is filed through the
+#                            normal issue pipeline, and the project completes
+#                            once nothing else blocks.
+#   keep_fixing           -> one more consolidated fix issue is created for
+#                            the keep_fixing rows; after it merges the re-audit
+#                            returns here if findings remain (the judge decides
+#                            every time; MAX_SECURITY_PASS_JUDGE_ROUNDS=0 is
+#                            unbounded).
+#   fail                  -> the existing terminal ai:security-pass-failed path
+#                            runs, with the judge's verdict on the tracking
+#                            issue so the operator knows why.
+#
+# Judge unavailability of any kind (kill switch, missing prompt, codex failure,
+# unparseable or incomplete verdict, round cap) falls back to the terminal
+# failure that existed before the judge -- never to a silent pass.
+# `/security-pass-waive <finding_id>...` lets an operator record the same kind
+# of acceptance by hand.
+
+security_pass_findings_rows_json() {
+  # Print the findings array of a findings-JSON file, or [] when unreadable.
+  local findings_file="$1"
+  jq -c '.findings // []' "${findings_file}" 2>/dev/null || echo '[]'
+}
+
+# security_pass_apply_waivers_to_findings <findings_file>
+#
+# Poller-side enforcement of security_pass_waived_findings on an engine
+# result: drops re-reports of accepted findings (exact finding_id, or the
+# same file and category within SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of
+# the waived line) and rewrites the findings file in place with the kept
+# rows and an updated counts.kept / counts.suppressed_waived.  The engine
+# applies the same rule when it receives SECURITY_AUDIT_WAIVED_FINDINGS; this
+# keeps an older staged engine honest.  Fail-open: any error leaves the file
+# untouched and logs a warning.
+security_pass_apply_waivers_to_findings() {
+  local findings_file="$1"
+  local waived_count suppressed_summary
+  waived_count="$(jq -r '.security_pass_waived_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${waived_count}" =~ ^[0-9]+$ ]] || waived_count=0
+  [ "${waived_count}" -gt 0 ] || return 0
+  if ! suppressed_summary="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${findings_file}" "${STATE_FILE}" "${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-40}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+findings_path = Path(sys.argv[1])
+state_path = Path(sys.argv[2])
+line_window = int(sys.argv[3])
+
+payload = json.loads(findings_path.read_text(encoding="utf-8"))
+state = json.loads(state_path.read_text(encoding="utf-8"))
+waivers = [row for row in state.get("security_pass_waived_findings", []) if isinstance(row, dict)]
+
+
+def norm_category(value: object) -> str:
+	return " ".join(str(value or "").lower().split())
+
+
+def waiver_for(finding: dict) -> str | None:
+	finding_id = str(finding.get("finding_id") or "")
+	for waiver in waivers:
+		waived_id = str(waiver.get("finding_id") or "")
+		if waived_id and waived_id == finding_id:
+			return waived_id
+		waived_line = waiver.get("line")
+		if (
+			str(waiver.get("file") or "")
+			and str(waiver.get("file") or "") == str(finding.get("file") or "")
+			and norm_category(waiver.get("owasp_or_stride_category"))
+			and norm_category(waiver.get("owasp_or_stride_category")) == norm_category(finding.get("owasp_or_stride_category"))
+			and isinstance(waived_line, int)
+			and not isinstance(waived_line, bool)
+			and abs(int(waived_line) - int(finding.get("line") or 0)) <= line_window
+		):
+			return waived_id or "(unnamed waiver)"
+	return None
+
+
+kept: list[dict] = []
+suppressed: list[str] = []
+for finding in payload.get("findings", []):
+	if isinstance(finding, dict) and waiver_for(finding) is not None:
+		suppressed.append(str(finding.get("finding_id") or "?"))
+		continue
+	kept.append(finding)
+
+if suppressed:
+	payload["findings"] = kept
+	counts = payload.setdefault("counts", {})
+	counts["kept"] = len(kept)
+	counts["suppressed_waived"] = int(counts.get("suppressed_waived") or 0) + len(suppressed)
+	findings_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+print(json.dumps({"count": len(suppressed), "ids": suppressed}))
+PY
+  )"; then
+    echo "::warning::Could not apply security-pass waivers to the audit result for tracking issue #${TRACKING_NUM}; the engine's own suppression stands."
+    return 0
+  fi
+  local suppressed_count suppressed_ids
+  suppressed_count="$(printf '%s' "${suppressed_summary}" | jq -r '.count // 0' 2>/dev/null || echo 0)"
+  suppressed_ids="$(printf '%s' "${suppressed_summary}" | jq -r '.ids // [] | join(",")' 2>/dev/null || true)"
+  if [[ "${suppressed_count}" =~ ^[0-9]+$ ]] && [ "${suppressed_count}" -gt 0 ]; then
+    echo "SECURITY_PASS_WAIVED_SUPPRESSED tracking_issue=${TRACKING_NUM} count=${suppressed_count} ids=${suppressed_ids}"
+  fi
+  return 0
+}
+
+# security_pass_record_waivers <waivers_json_array>
+#
+# Upsert waiver rows (by finding_id) into security_pass_waived_findings,
+# drop the same ids from security_pass_reported_findings so the next delta
+# audit does not ask the engine to re-verify them, and keep the array
+# bounded.  Rows carry {finding_id, file, line, owasp_or_stride_category,
+# severity, justification, source, waived_by, waived_at_cycle, issue}.
+security_pass_record_waivers() {
+  local waivers_json="$1"
+  if ! jq --argjson waivers "${waivers_json}" '
+    (.security_pass_waived_findings // []) as $existing
+    | ($waivers | map(.finding_id)) as $ids
+    | .security_pass_waived_findings = (
+        ([$existing[] | select((.finding_id | IN($ids[])) | not)] + $waivers) | .[-100:]
+      )
+    | .security_pass_reported_findings = (
+        [(.security_pass_reported_findings // [])[] | select((.finding_id | IN($ids[])) | not)]
+      )
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    rm -f "${STATE_FILE}.tmp"
+    return 1
+  fi
+  return 0
+}
+
+# create_security_pass_advisory_followup <finding_json> <integration_branch> <head_sha> <justification> <source>
+#
+# File one non-blocking `ai:security` follow-up issue for an accepted
+# finding and leave its number in SECURITY_PASS_ADVISORY_ISSUE_NUMBER (empty
+# when nothing was filed).  Dedupes on security_pass_followup_issues in
+# state (one cheap jq read, no API call); the body carries the weekly
+# audit's `<!-- ai:security-finding:<id> -->` marker so the scheduled audit's
+# own dedupe recognises it, plus `<!-- security-pass-advisory:<tracking>:<id> -->`.
+# API cost: one paginated reconciliation search per tracking issue per poller
+# process, one `gh issue create` per new accepted finding, and the first cached
+# `gh label create` attempt for `ai:security`. Fail-open: lookup/create failures
+# leave the number empty and the waiver stands.
+create_security_pass_advisory_followup() {
+  local finding_json="$1"
+  local integration_branch="$2"
+  local head_sha="$3"
+  local justification="$4"
+  local source="${5:-judge}"
+  local finding_id existing_issue body_file title issue_url issue_number advisory_marker remote_followups_json
+  SECURITY_PASS_ADVISORY_ISSUE_NUMBER=""
+  finding_id="$(printf '%s' "${finding_json}" | jq -r '.finding_id // ""' 2>/dev/null || true)"
+  [ -n "${finding_id}" ] || return 0
+  existing_issue="$(jq -r --arg id "${finding_id}" '
+    [(.security_pass_followup_issues // [])[] | select(.finding_id == $id) | .issue] | last // empty
+  ' "${STATE_FILE}" 2>/dev/null || true)"
+  if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
+    SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${existing_issue}"
+    return 0
+  fi
+  advisory_marker="<!-- security-pass-advisory:${TRACKING_NUM}:${finding_id} -->"
+  if [ -z "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]+set}" ]; then
+    # The state cache and weekly-audit lookup cannot detect an issue whose
+    # create succeeded but whose response/state write was lost. This single
+    # paginated REST search per tracking issue returns issue number+body and
+    # fails open to an empty cache; subsequent findings reuse the result.
+    remote_followups_json="$(gh_retry gh api --method GET --paginate --slurp "search/issues" \
+      -f per_page=100 \
+      -f q="repo:${GITHUB_REPOSITORY} is:issue label:ai:security security-pass-advisory:${TRACKING_NUM} in:body" 2>/dev/null || echo '[]')"
+    _SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]="${remote_followups_json}"
+  fi
+  existing_issue="$(printf '%s' "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]}" | jq -r --arg marker "${advisory_marker}" '
+    [if type == "array" then .[].items[]? else .items[]? end | select((.body // "") | contains($marker)) | .number]
+    | first // empty
+  ' 2>/dev/null || true)"
+  if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
+    if ! jq --arg id "${finding_id}" --argjson issue "${existing_issue}" '
+      .security_pass_followup_issues = ([.security_pass_followup_issues[]? | select(.finding_id != $id)] + [{finding_id: $id, issue: $issue}] | .[-100:])
+      | .security_pass_waived_findings = [(.security_pass_waived_findings // [])[] | if .finding_id == $id then .issue = $issue else . end]
+    ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      rm -f "${STATE_FILE}.tmp"
+      echo "::warning::Found advisory follow-up #${existing_issue} for security-pass finding ${finding_id}, but could not reconcile it into state."
+    fi
+    SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${existing_issue}"
+    return 0
+  fi
+  body_file="${RUNTIME_DIR}/security_pass_advisory_${TRACKING_NUM}_$(printf '%s' "${finding_id}" | tr -c 'A-Za-z0-9._-' '_').md"
+  printf '%s\n' "${finding_json}" > "${body_file}.finding.json"
+  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" <<'PY'
+from __future__ import annotations
+
+import json
+import re
+import sys
+from pathlib import Path
+
+finding = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+body_path = Path(sys.argv[2])
+tracking_issue = sys.argv[3]
+integration_branch = sys.argv[4] or "(default branch)"
+head_sha = sys.argv[5]
+justification = sys.argv[6]
+source = sys.argv[7]
+
+
+def prose(value: object) -> str:
+	text = " ".join(str(value or "").split())
+	# Audit- and judge-generated prose must not notify users or auto-link issues.
+	return re.sub(r"#(?=\d)", "#\u200b", text.replace("@", "@\u200b"))
+
+
+finding_id = prose(finding.get("finding_id"))
+location = f"{finding.get('file')}:{finding.get('line')}"
+accepted_by = {
+	"judge": "the orchestrator's security-pass exhaustion judge",
+	"operator": "an operator (`/security-pass-waive`)",
+}.get(source, source)
+lines = [
+	f"<!-- ai:security-finding:{finding_id} -->",
+	f"<!-- security-pass-advisory:{tracking_issue}:{finding_id} -->",
+	f"Refs #{tracking_issue}",
+	"",
+	f"Non-blocking security follow-up. This finding was reported by the mandatory project security pass for integration branch `{integration_branch}` at `{head_sha}` and accepted as a known risk by {accepted_by} after the consolidated fix-cycle budget was spent. The project completes without this fix; address it through the normal issue pipeline.",
+	"",
+	f"**Why it was accepted:** {prose(justification) or '(no justification recorded)'}",
+	"",
+	f"- Finding ID: `{finding_id}`",
+	f"- Category: {prose(finding.get('owasp_or_stride_category'))}",
+	f"- Severity: {prose(finding.get('severity'))}",
+	f"- Confidence: {prose(finding.get('confidence'))}",
+	f"- Location: `{prose(location)}`",
+	"",
+	"### Exploit scenario",
+	"",
+	prose(finding.get("exploit_scenario")),
+	"",
+	"### Recommendation",
+	"",
+	prose(finding.get("recommendation")),
+	"",
+]
+body_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+title = f"[security-pass] Advisory: {finding_id} ({prose(finding.get('severity'))}, {prose(location)})"
+print(title[:200])
+PY
+  )"; then
+    echo "::warning::Could not render the advisory follow-up body for security-pass finding ${finding_id} on tracking issue #${TRACKING_NUM}; the waiver stands without a follow-up issue."
+    return 0
+  fi
+  ensure_label_exists "ai:security"
+  # Do not retry this non-idempotent mutation. If GitHub accepts the create but
+  # the response is lost, the marker search above reconciles it next poll.
+  issue_url="$(gh issue create \
+    --repo "${GITHUB_REPOSITORY}" \
+    --title "${title}" \
+    --body-file "${body_file}" \
+    --label "ai:security" 2>/dev/null || true)"
+  issue_number="$(printf '%s\n' "${issue_url}" | grep -oE '/issues/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
+  if ! [[ "${issue_number}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::Could not create the advisory follow-up issue for security-pass finding ${finding_id} on tracking issue #${TRACKING_NUM}; the waiver stands without a follow-up issue."
+    return 0
+  fi
+  if ! jq --arg id "${finding_id}" --argjson issue "${issue_number}" '
+    .security_pass_followup_issues = (((.security_pass_followup_issues // []) + [{finding_id: $id, issue: $issue}]) | .[-100:])
+    | .security_pass_waived_findings = [
+        (.security_pass_waived_findings // [])[]
+        | if .finding_id == $id then .issue = $issue else . end
+      ]
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    rm -f "${STATE_FILE}.tmp"
+    echo "::warning::Created advisory follow-up #${issue_number} for security-pass finding ${finding_id}, but could not persist it in state; the body marker will reconcile it next poll."
+  fi
+  echo "SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED tracking_issue=${TRACKING_NUM} finding=${finding_id} issue=${issue_number} source=${source}"
+  SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${issue_number}"
+  return 0
+}
+
+# security_pass_exhaustion_judge <head_sha> <merge_base_sha> <finding_count> <completed_cycles> <findings_file> <integration_branch> [<verified_analysis_ref>]
+#
+# Returns 0 when the judge produced an actionable verdict that this function
+# fully applied, with SECURITY_PASS_JUDGE_OUTCOME set to `passed` (every
+# remaining finding accepted; the pass is recorded clean at <head_sha> and
+# the caller continues to completion) or `fixing` (a consolidated fix issue
+# was created, or the attempt failed closed; the caller returns 1 without
+# terminalizing).  Returns 1 when the caller must run the pre-existing
+# terminal failure: judge disabled, round cap reached, prompt or engine
+# unavailable, unparseable or incomplete verdict, or a `fail` decision.
+security_pass_exhaustion_judge() {
+  local head_sha="$1"
+  local merge_base_sha="$2"
+  local finding_count="$3"
+  local completed_cycles="$4"
+  local findings_file="$5"
+  local integration_branch="$6"
+  local verified_analysis_ref="${7:-}"
+  local judge_rounds judge_round diagnostics prompt_file output_file error_file verdict_file
+  local judge_json judge_success attempt effective_judge_model semble_query_file semble_prefetch static_file
+  local accepted_count fixing_count failed_count decisions_table waivers_json fixing_findings_file
+  local followup_issue followup_issues finding_json finding_id justification summary
+
+  SECURITY_PASS_JUDGE_OUTCOME=""
+  if [ "${SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED}" != "true" ]; then
+    echo "SECURITY_PASS_JUDGE_SKIPPED tracking_issue=${TRACKING_NUM} reason=disabled"
+    return 1
+  fi
+  judge_rounds="$(jq -r '.security_pass_judge_rounds // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${judge_rounds}" =~ ^[0-9]+$ ]] || judge_rounds=0
+  if [ "${MAX_SECURITY_PASS_JUDGE_ROUNDS}" -gt 0 ] && [ "${judge_rounds}" -ge "${MAX_SECURITY_PASS_JUDGE_ROUNDS}" ]; then
+    echo "SECURITY_PASS_JUDGE_SKIPPED tracking_issue=${TRACKING_NUM} reason=rounds_exhausted rounds=${judge_rounds} cap=${MAX_SECURITY_PASS_JUDGE_ROUNDS}"
+    return 1
+  fi
+  if [ ! -f prompts/mode-judge-security-pass-exhaustion.txt ] || [ ! -f scripts/write_codex_config.sh ]; then
+    echo "SECURITY_PASS_JUDGE_SKIPPED tracking_issue=${TRACKING_NUM} reason=prompt_unavailable"
+    return 1
+  fi
+  judge_round=$((judge_rounds + 1))
+
+  # Diagnostics: everything the judge needs that is not in the checkout.
+  # --slurpfile keeps the findings and state out of argv (MAX_ARG_STRLEN).
+  if ! diagnostics="$(jq -cn \
+    --arg tracking_issue "${TRACKING_NUM}" \
+    --arg integration_branch "${integration_branch}" \
+    --arg head_sha "${head_sha}" \
+    --arg merge_base_sha "${merge_base_sha}" \
+    --argjson completed_cycles "${completed_cycles}" \
+    --argjson max_cycles "${MAX_SECURITY_PASS_CYCLES}" \
+    --argjson judge_round "${judge_round}" \
+    --argjson max_judge_rounds "${MAX_SECURITY_PASS_JUDGE_ROUNDS}" \
+    --slurpfile audit "${findings_file}" \
+    --slurpfile state "${STATE_FILE}" '
+    {
+      tracking_issue: ($tracking_issue | tonumber),
+      project_title: ($state[0].project_title // ""),
+      integration_branch: $integration_branch,
+      integration_head_sha: $head_sha,
+      merge_base_sha: $merge_base_sha,
+      completed_fix_cycles: $completed_cycles,
+      max_fix_cycles: $max_cycles,
+      judge_round: $judge_round,
+      max_judge_rounds: (if $max_judge_rounds == 0 then "unbounded" else $max_judge_rounds end),
+      remaining_findings: ($audit[0].findings // []),
+      reported_findings_history: ($state[0].security_pass_reported_findings // []),
+      waived_findings: ($state[0].security_pass_waived_findings // []),
+      advisory_followup_issues: ($state[0].security_pass_followup_issues // []),
+      project_specification: (($state[0].project_body_snapshot // "") | .[0:6000])
+    }' 2>/dev/null)" || [ -z "${diagnostics}" ]; then
+    echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=diagnostics_build_failed"
+    return 1
+  fi
+
+  prompt_file="${RUNTIME_DIR}/security_pass_judge_prompt_${TRACKING_NUM}.txt"
+  output_file="${RUNTIME_DIR}/security_pass_judge_output_${TRACKING_NUM}.txt"
+  error_file="${RUNTIME_DIR}/security_pass_judge_${TRACKING_NUM}.err"
+  verdict_file="${RUNTIME_DIR}/security_pass_judge_verdict_${TRACKING_NUM}.json"
+  semble_query_file="${RUNTIME_DIR}/security_pass_judge_semble_query_${TRACKING_NUM}.txt"
+  static_file="${RUNTIME_DIR}/judge_static.txt"
+  {
+    printf '%s\n' 'Security-pass exhaustion judge context.'
+    append_judge_semble_query_text "Remaining findings:" "$(security_pass_findings_rows_json "${findings_file}")" 7000
+  } > "${semble_query_file}"
+  semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${semble_query_file}" "Security Pass Judge Context")"
+  rm -f "${semble_query_file}"
+  if [ ! -s "${static_file}" ]; then
+    if ! assemble_judge_static_context "${static_file}"; then
+      echo "WARNING: failed to assemble security-pass judge static context; continuing without it" >&2
+      : > "${static_file}"
+    fi
+  fi
+  {
+    cat "${static_file}"
+    echo
+    echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE:-60}"
+    echo
+    echo "=== SECURITY PASS EXHAUSTION JUDGE TASK ==="
+    echo
+    SEMBLE_PREFETCH="${semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-security-pass-exhaustion.txt
+    echo
+    echo "=== SECURITY PASS EXHAUSTION DIAGNOSTICS JSON ==="
+    echo
+    echo "${diagnostics}"
+  } > "${prompt_file}"
+
+  effective_judge_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-5.6-sol}}"
+  if ! bash scripts/write_codex_config.sh --model "${effective_judge_model}" --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-xhigh}" >/dev/null 2>"${error_file}"; then
+    echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=codex_config_failed"
+    return 1
+  fi
+
+  judge_success="false"
+  for attempt in 1 2; do
+    : > "${output_file}"
+    if [ -n "${MOCK_SECURITY_PASS_JUDGE_JSON:-}" ]; then
+      printf '%s\n' "${MOCK_SECURITY_PASS_JUDGE_JSON}" > "${output_file}"
+    else
+      sanitize_codex_prompt_file "${prompt_file}"
+      bash scripts/codex_heartbeat.sh \
+        --phase "orchestrate-security-pass-judge" \
+        --stdout-file "${output_file}" \
+        --stderr-file "${error_file}" \
+        -- codex --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check \
+          --model "${effective_judge_model}" --sandbox read-only < "${prompt_file}" || true
+    fi
+    judge_json="$(_robust_parse_json_file "${output_file}")"
+    if [ -n "${judge_json}" ] && printf '%s' "${judge_json}" | jq -e --slurpfile audit "${findings_file}" '
+      (.decisions | type) == "array"
+      and (
+        ([$audit[0].findings[]?.finding_id] | unique) as $ids
+        | ([.decisions[] | select(type == "object") | select((.finding_id | type) == "string") | select(.finding_id | IN($ids[])) | .finding_id] | unique) as $decided
+        | [.decisions[] | select(type == "object") | select((.finding_id | type) == "string") | select(.finding_id | IN($ids[]))] as $known
+        | ($known | length) == ($ids | length)
+          and ($decided | length) == ($ids | length)
+          and all($known[]; .action == "accept_with_followup" or .action == "keep_fixing" or .action == "fail")
+          and ((any($known[]; .action == "fail") | not) or all($known[]; .action == "fail"))
+      )
+    ' >/dev/null 2>&1; then
+      judge_success="true"
+      break
+    fi
+    echo "::warning::Security-pass exhaustion judge attempt ${attempt} for tracking issue #${TRACKING_NUM} returned no usable verdict (every remaining finding needs exactly one valid decision, and fail cannot be mixed with non-fail actions)."
+    if [ -z "${MOCK_SECURITY_PASS_JUDGE_JSON:-}" ]; then
+      sleep $(( 8 * attempt ))
+    fi
+  done
+  if [ "${judge_success}" != "true" ]; then
+    echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=invalid_verdict round=${judge_round}"
+    return 1
+  fi
+
+  # Normalize the verdict to one decision per remaining finding (the first
+  # decision for an id wins; unknown ids are dropped), and persist the round.
+  printf '%s' "${judge_json}" | jq -c --slurpfile audit "${findings_file}" --argjson cycle "${completed_cycles}" '
+    ($audit[0].findings // []) as $findings
+    | (.decisions // []) as $decisions
+    | {
+        summary: ((.summary // "") | tostring | .[0:1200]),
+        decisions: [
+          $findings[] as $finding
+          | ($decisions | map(select(type == "object" and .finding_id == $finding.finding_id)) | .[0]) as $decision
+          | {
+              finding_id: $finding.finding_id,
+              action: $decision.action,
+              justification: (($decision.justification // "") | tostring | .[0:600]),
+              finding: $finding
+            }
+        ]
+      }
+  ' > "${verdict_file}" 2>/dev/null || { echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=verdict_normalize_failed"; return 1; }
+  jq --argjson round "${judge_round}" '.security_pass_judge_rounds = $round' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+
+  accepted_count="$(jq -r '[.decisions[] | select(.action == "accept_with_followup")] | length' "${verdict_file}")"
+  fixing_count="$(jq -r '[.decisions[] | select(.action == "keep_fixing")] | length' "${verdict_file}")"
+  failed_count="$(jq -r '[.decisions[] | select(.action == "fail")] | length' "${verdict_file}")"
+  summary="$(jq -r '.summary' "${verdict_file}")"
+  echo "SECURITY_PASS_JUDGE_DECIDED tracking_issue=${TRACKING_NUM} round=${judge_round} head_sha=${head_sha} accepted=${accepted_count} keep_fixing=${fixing_count} failed=${failed_count}"
+
+  if [ "${failed_count}" -gt 0 ]; then
+    decisions_table="$(render_security_pass_judge_decisions_table "${verdict_file}" 2>/dev/null || true)"
+    post_tracking_comment "## ⚖️ Security-pass exhaustion judge (round ${judge_round})
+
+The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remain at integration head \`${head_sha}\`. The judge decided that ${failed_count} finding(s) need a human, so the project is terminalized as \`ai:security-pass-failed\`.
+
+**Summary:** $(security_pass_prose "${summary}")
+${decisions_table:+
+${decisions_table}}"
+    return 1
+  fi
+
+  # Accepted findings: waiver rows + advisory follow-ups.
+  followup_issues=""
+  if [ "${accepted_count}" -gt 0 ]; then
+    waivers_json="$(jq -c --argjson cycle "${completed_cycles}" '
+      [.decisions[] | select(.action == "accept_with_followup") | {
+        finding_id: .finding.finding_id,
+        file: .finding.file,
+        line: .finding.line,
+        owasp_or_stride_category: .finding.owasp_or_stride_category,
+        severity: .finding.severity,
+        justification: .justification,
+        source: "judge",
+        waived_by: "security-pass-exhaustion-judge",
+        waived_at_cycle: $cycle,
+        issue: null
+      }]' "${verdict_file}")"
+    if ! security_pass_record_waivers "${waivers_json}"; then
+      echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=waiver_state_write_failed round=${judge_round}"
+      return 1
+    fi
+    echo "SECURITY_PASS_WAIVED tracking_issue=${TRACKING_NUM} source=judge round=${judge_round} ids=$(printf '%s' "${waivers_json}" | jq -r 'map(.finding_id) | join(",")')"
+    while IFS= read -r finding_json; do
+      [ -n "${finding_json}" ] || continue
+      justification="$(printf '%s' "${finding_json}" | jq -r '.justification // ""')"
+      create_security_pass_advisory_followup "$(printf '%s' "${finding_json}" | jq -c '.finding')" "${integration_branch}" "${head_sha}" "${justification}" "judge"
+      followup_issue="${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
+      if [[ "${followup_issue}" =~ ^[0-9]+$ ]]; then
+        followup_issues="${followup_issues}${followup_issues:+, }#${followup_issue}"
+      fi
+    done < <(jq -c '.decisions[] | select(.action == "accept_with_followup")' "${verdict_file}")
+  fi
+
+  decisions_table="$(render_security_pass_judge_decisions_table "${verdict_file}" 2>/dev/null || true)"
+  if [ "${fixing_count}" -gt 0 ]; then
+    post_tracking_comment "## ⚖️ Security-pass exhaustion judge (round ${judge_round})
+
+The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remain at integration head \`${head_sha}\`. The judge accepted ${accepted_count} finding(s) as known risks${followup_issues:+ (follow-ups: ${followup_issues})} and granted one more consolidated fix cycle for ${fixing_count} finding(s). The re-audit after that fix merges returns to the judge if findings remain.
+
+**Summary:** $(security_pass_prose "${summary}")
+${decisions_table:+
+${decisions_table}}"
+    fixing_findings_file="${RUNTIME_DIR}/security_pass_findings_${TRACKING_NUM}.judge_fix.json"
+    jq --slurpfile verdict "${verdict_file}" '
+      ([$verdict[0].decisions[] | select(.action == "keep_fixing") | .finding_id]) as $ids
+      | .findings = [.findings[] | select(.finding_id | IN($ids[]))]
+      | .counts.kept = (.findings | length)
+    ' "${findings_file}" > "${fixing_findings_file}"
+    if [ -n "${verified_analysis_ref}" ] \
+      && ! ensure_security_pass_repair_branch "${integration_branch}" "${head_sha}"; then
+      security_pass_fail_closed "repair_branch_recreate_failed" "The deleted integration branch could not be recreated and verified at the audited final-PR head." "blocked"
+      SECURITY_PASS_JUDGE_OUTCOME="fixing"
+      return 0
+    fi
+    if ! create_security_pass_fix_issue "${fixing_findings_file}" "${completed_cycles}" "${integration_branch}"; then
+      security_pass_fail_closed "fix_issue_create_failed" "The consolidated security-pass fix issue could not be created." "blocked"
+    fi
+    SECURITY_PASS_JUDGE_OUTCOME="fixing"
+    return 0
+  fi
+
+  # Every remaining finding accepted: the audited head is clean by decision.
+  jq --arg head_sha "${head_sha}" '
+    .status = "in_progress"
+    | .security_pass_status = "passed"
+    | .security_pass_head_sha = $head_sha
+    | .security_pass_active_fix_issues = []
+    | .security_pass_reported_findings = []
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  reconcile_tracking_body_after_security_pass_transition
+  post_state_comment || true
+  post_tracking_comment "## ⚖️ Security-pass exhaustion judge (round ${judge_round})
+
+The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remained at integration head \`${head_sha}\`. The judge accepted every remaining finding as a known risk${followup_issues:+ (follow-ups: ${followup_issues})}; the security pass is recorded clean at this head and completion continues. Comment \`/re-security-pass\` to re-run a full audit instead.
+
+**Summary:** $(security_pass_prose "${summary}")
+${decisions_table:+
+${decisions_table}}"
+  echo "SECURITY_PASS_CLEAN tracking_issue=${TRACKING_NUM} head_sha=${head_sha} reason=exhaustion_judge_accepted accepted=${accepted_count}"
+  tg_notify "Project #${TRACKING_NUM} security pass: the exhaustion judge accepted ${accepted_count} remaining finding(s) as known risks after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} fix cycles${followup_issues:+ (follow-ups ${followup_issues})}; completion continues." "WARNING"
+  SECURITY_PASS_JUDGE_OUTCOME="passed"
+  return 0
+}
+
+# Strip notification triggers from judge- or audit-generated prose before it
+# lands in a tracking comment (same rule as render_security_pass_findings_table).
+security_pass_prose() {
+  printf '%s' "${1:-}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import re, sys
+text = " ".join(sys.stdin.read().split())
+sys.stdout.write(re.sub(r"#(?=\d)", "#\u200b", text.replace("@", "@\u200b")))
+'
+}
+
+render_security_pass_judge_decisions_table() {
+  local verdict_file="$1"
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${verdict_file}" <<'PY'
+from __future__ import annotations
+
+import json
+import re
+import sys
+from pathlib import Path
+
+verdict = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+
+
+def cell(value: object) -> str:
+	rendered_cell = " ".join(str(value).replace("|", "\\|").split())
+	return re.sub(r"#(?=\d)", "#\u200b", rendered_cell.replace("@", "@\u200b"))
+
+
+lines = [
+	"| ID | Severity | Location | Decision | Justification |",
+	"|---|---|---|---|---|",
+]
+for decision in verdict.get("decisions", []):
+	finding = decision.get("finding") or {}
+	lines.append(
+		"| "
+		+ " | ".join(
+			[
+				cell(decision.get("finding_id")),
+				cell(finding.get("severity")),
+				cell(f"{finding.get('file')}:{finding.get('line')}"),
+				cell(decision.get("action")),
+				cell(decision.get("justification") or ""),
+			]
+		)
+		+ " |"
+	)
+sys.stdout.write("\n".join(lines) + "\n")
+PY
+}
+
 run_security_pass_inline() {
   local integration_branch="$1"
   local default_branch="$2"
@@ -5391,7 +6058,24 @@ run_security_pass_inline() {
   if [ "${security_pass_prior_findings_count}" -eq 0 ]; then
     security_pass_prior_findings_file=""
   fi
-  echo "SECURITY_PASS_SCOPE tracking_issue=${TRACKING_NUM} mode=${security_pass_audit_scope_mode} reason=${security_pass_audit_scope_reason} base_sha=${merge_base_sha} since_sha=${security_pass_audit_since_sha:-none} head_sha=${current_head_sha} prior_findings=${security_pass_prior_findings_count}"
+  # Waived findings (exhaustion judge or /security-pass-waive) travel to the
+  # engine as accepted findings it must not re-report; the poller re-applies
+  # the same suppression on the result (security_pass_apply_waivers_to_findings).
+  security_pass_waived_findings_file="${RUNTIME_DIR}/security_pass_waived_findings_${TRACKING_NUM}.json"
+  rm -f "${security_pass_waived_findings_file}"
+  security_pass_waived_findings_count="$(jq -r '.security_pass_waived_findings // [] | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${security_pass_waived_findings_count}" =~ ^[0-9]+$ ]] || security_pass_waived_findings_count=0
+  if [ "${security_pass_waived_findings_count}" -gt 0 ]; then
+    if ! jq '.security_pass_waived_findings // []' "${STATE_FILE}" > "${security_pass_waived_findings_file}" 2>/dev/null; then
+      rm -f "${security_pass_waived_findings_file}"
+      security_pass_waived_findings_count=0
+      echo "::warning::Could not export the waived security-pass findings for tracking issue #${TRACKING_NUM}; the audit runs without them and the poller re-applies the waivers to its result."
+    fi
+  fi
+  if [ "${security_pass_waived_findings_count}" -eq 0 ]; then
+    security_pass_waived_findings_file=""
+  fi
+  echo "SECURITY_PASS_SCOPE tracking_issue=${TRACKING_NUM} mode=${security_pass_audit_scope_mode} reason=${security_pass_audit_scope_reason} base_sha=${merge_base_sha} since_sha=${security_pass_audit_since_sha:-none} head_sha=${current_head_sha} prior_findings=${security_pass_prior_findings_count} waived_findings=${security_pass_waived_findings_count}"
 
   context_file="${RUNTIME_DIR}/security_pass_project_${TRACKING_NUM}.txt"
   findings_file="${RUNTIME_DIR}/security_pass_findings_${TRACKING_NUM}.json"
@@ -5425,6 +6109,7 @@ run_security_pass_inline() {
     SECURITY_AUDIT_DIFF_HEAD="${current_head_sha}" \
     SECURITY_AUDIT_DIFF_SINCE="${security_pass_audit_since_sha}" \
     SECURITY_AUDIT_PRIOR_FINDINGS="${security_pass_prior_findings_file}" \
+    SECURITY_AUDIT_WAIVED_FINDINGS="${security_pass_waived_findings_file}" \
     SECURITY_AUDIT_CONFIDENCE_GATE="${SECURITY_PASS_CONFIDENCE_GATE}" \
     SECURITY_AUDIT_SKIP_IF_UNCHANGED="false" \
     SECURITY_AUDIT_INCREMENTAL="true" \
@@ -5449,7 +6134,8 @@ run_security_pass_inline() {
       .counts.suppressed_excluded,
       .counts.suppressed_invalid,
       .counts.suppressed_low_confidence,
-      .counts.suppressed_out_of_scope
+      .counts.suppressed_out_of_scope,
+      .counts.suppressed_waived
     ][]; (type == "number") and (floor == .) and . >= 0)
     and all(.findings[];
       (.finding_id | type) == "string" and (.finding_id | length) > 0
@@ -5492,6 +6178,7 @@ run_security_pass_inline() {
     return 1
   fi
 
+  security_pass_apply_waivers_to_findings "${findings_file}"
   finding_count="$(jq -r '.findings | length' "${findings_file}")"
   completed_cycles="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}")"
   # Record the audited head as the base of the next delta re-audit and
@@ -5538,6 +6225,21 @@ run_security_pass_inline() {
 
   echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} findings=${finding_count} cycle=${completed_cycles}"
   if [ "${completed_cycles}" -ge "${MAX_SECURITY_PASS_CYCLES}" ]; then
+    # Budget spent: let the exhaustion judge decide before terminalizing.  It
+    # returns 0 only after fully applying a verdict (every finding accepted ->
+    # passed at this head; keep_fixing -> another consolidated fix issue);
+    # anything else keeps the pre-judge terminal failure.
+    SECURITY_PASS_JUDGE_OUTCOME=""
+    if security_pass_exhaustion_judge "${current_head_sha}" "${merge_base_sha}" "${finding_count}" "${completed_cycles}" "${findings_file}" "${integration_branch}" "${verified_analysis_ref}"; then
+      case "${SECURITY_PASS_JUDGE_OUTCOME}" in
+        passed)
+          return 0
+          ;;
+        fixing)
+          return 1
+          ;;
+      esac
+    fi
     security_pass_terminal_failure "${current_head_sha}" "${finding_count}" "${completed_cycles}" "${findings_file}"
     return 1
   fi
@@ -15223,7 +15925,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 			|| [ "${PROJECT_STATUS}" = "security-pass-fixing" ] \
 			|| has_label "${TRACKING_LABELS}" "ai:security-pass-failed"; }; then
 		echo "SECURITY_PASS_SKIPPED_DISABLED tracking_issue=${TRACKING_NUM} releasing_state=${PROJECT_STATUS}"
-		jq '.status = "in_progress" | .security_pass_cycle = 0 | .security_pass_status = "pending" | .security_pass_active_fix_issues = [] | .security_pass_head_sha = "" | .security_pass_last_audited_sha = "" | .security_pass_reported_findings = [] | del(.security_pass_fix_reissue_count) | del(.security_pass_fix_defer)' \
+		jq '.status = "in_progress" | .security_pass_cycle = 0 | .security_pass_judge_rounds = 0 | .security_pass_status = "pending" | .security_pass_active_fix_issues = [] | .security_pass_head_sha = "" | .security_pass_last_audited_sha = "" | .security_pass_reported_findings = [] | del(.security_pass_fix_reissue_count) | del(.security_pass_fix_defer)' \
 			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 		post_state_comment || true
 		set_tracking_phase_label "ai:done"
@@ -15233,6 +15935,166 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 	if [ "${PROJECT_STATUS}" = "security-pass" ] || [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
 		DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
 	fi
+
+  # ---------------------------------------------------------------
+  # /security-pass-waive <finding_id>... — operator acceptance of findings
+  # ---------------------------------------------------------------
+  # Records the named findings as waivers (security_pass_waived_findings);
+  # the engine and the poller drop any re-report of them, and a non-blocking
+  # `ai:security` follow-up is filed for each waiver whose finding rows are
+  # still in security_pass_reported_findings.  In terminal
+  # ai:security-pass-failed the loop is then reset and re-audited exactly like
+  # /re-security-pass; in security-pass-fixing the waivers only persist and
+  # apply from the running cycle's next re-audit.  OWNER/MEMBER/COLLABORATOR
+  # humans only.  A `<!-- security-pass-waive-dedup:<comment-id> -->` marker
+  # (also posted on rejection) stops the same comment from being re-evaluated.
+  if { [ "${PROJECT_STATUS}" = "failed" ] && has_label "${TRACKING_LABELS}" "ai:security-pass-failed"; } \
+    || [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
+    SECURITY_PASS_WAIVE_COMMENT_JSON="$(echo "${COMMENTS}" | jq -c '
+      (to_entries
+        | map(select((.value.body // "") | (
+            startswith("<!-- ORCHESTRATOR_STATE_V1")
+            or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")
+            or startswith("<!-- security-pass-waive-dedup:")
+        )))
+        | last
+        | .key // -1) as $last_waive_boundary_idx |
+      [to_entries[]
+        | select(.key > $last_waive_boundary_idx and ((.value.body // "") | test("^\\s*/security-pass-waive(\\s|$)"; "m")))
+        | .value
+      ]
+      | last // empty
+    ')"
+    if [ -n "${SECURITY_PASS_WAIVE_COMMENT_JSON}" ] && [ "${SECURITY_PASS_WAIVE_COMMENT_JSON}" != "null" ]; then
+      SECURITY_PASS_WAIVE_COMMENT_ID="$(printf '%s' "${SECURITY_PASS_WAIVE_COMMENT_JSON}" | jq -r '.id // 0' 2>/dev/null || echo 0)"
+      SECURITY_PASS_WAIVE_AUTHOR="$(printf '%s' "${SECURITY_PASS_WAIVE_COMMENT_JSON}" | jq -r '.user.login // ""' 2>/dev/null || echo "")"
+      SECURITY_PASS_WAIVE_REJECT_REASON=""
+      if ! printf '%s' "${SECURITY_PASS_WAIVE_COMMENT_JSON}" | jq -e '
+        ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+        and ((.user.type // "") != "Bot")
+        and (((.user.login // "") | endswith("[bot]")) | not)
+      ' >/dev/null 2>&1; then
+        SECURITY_PASS_WAIVE_REJECT_REASON="author"
+      fi
+      # Ids come from the first `/security-pass-waive` line only; every token
+      # must be a plain finding id, otherwise the whole comment is rejected.
+      SECURITY_PASS_WAIVE_TOKENS_JSON="$(printf '%s' "${SECURITY_PASS_WAIVE_COMMENT_JSON}" | jq -c '
+        (.body // "") | split("\n")
+        | map(select(test("^\\s*/security-pass-waive(\\s|$)"))) | .[0] // ""
+        | sub("^\\s*/security-pass-waive"; "")
+        | [splits("\\s+")] | map(select(length > 0))
+      ' 2>/dev/null || echo '[]')"
+      SECURITY_PASS_WAIVE_IDS_JSON="$(printf '%s' "${SECURITY_PASS_WAIVE_TOKENS_JSON}" | jq -c 'map(select(test("^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$"))) | unique' 2>/dev/null || echo '[]')"
+      if [ -z "${SECURITY_PASS_WAIVE_REJECT_REASON}" ] \
+        && { [ "$(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'length')" -eq 0 ] \
+          || [ "$(printf '%s' "${SECURITY_PASS_WAIVE_TOKENS_JSON}" | jq -r 'unique | length')" != "$(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'length')" ]; }; then
+        SECURITY_PASS_WAIVE_REJECT_REASON="format"
+      fi
+      if [ -n "${SECURITY_PASS_WAIVE_REJECT_REASON}" ]; then
+        echo "SECURITY_PASS_WAIVE_REJECTED tracking_issue=${TRACKING_NUM} comment=${SECURITY_PASS_WAIVE_COMMENT_ID} reason=${SECURITY_PASS_WAIVE_REJECT_REASON}"
+        if [ "${SECURITY_PASS_WAIVE_REJECT_REASON}" = "author" ]; then
+          SECURITY_PASS_WAIVE_REJECT_TEXT="only a human repository OWNER, MEMBER, or COLLABORATOR may waive security-pass findings"
+        else
+          SECURITY_PASS_WAIVE_REJECT_TEXT="expected \`/security-pass-waive <finding_id> [<finding_id> ...]\` with ids made of letters, digits, \`.\`, \`_\` and \`-\` (at most 121 characters each)"
+        fi
+        post_tracking_comment "<!-- security-pass-waive-dedup:${SECURITY_PASS_WAIVE_COMMENT_ID} -->
+
+## ⛔ Security-pass waiver not applied
+
+The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was not applied: ${SECURITY_PASS_WAIVE_REJECT_TEXT}."
+      else
+        echo "  /security-pass-waive requested for project #${TRACKING_NUM} by ${SECURITY_PASS_WAIVE_AUTHOR}: $(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'join(" ")')"
+        SECURITY_PASS_WAIVERS_JSON="$(jq -c --argjson ids "${SECURITY_PASS_WAIVE_IDS_JSON}" --arg by "${SECURITY_PASS_WAIVE_AUTHOR}" '
+          (.security_pass_reported_findings // []) as $reported
+          | (.security_pass_cycle // 0) as $cycle
+          | [
+              $ids[] as $id
+              | ([$reported[] | select(.finding_id == $id)] | last) as $known
+              | {
+                  finding_id: $id,
+                  file: ($known.file // ""),
+                  line: ($known.line // 0),
+                  owasp_or_stride_category: ($known.owasp_or_stride_category // ""),
+                  severity: ($known.severity // ""),
+                  justification: ("Accepted as a known risk by " + $by + " via /security-pass-waive."),
+                  source: "operator",
+                  waived_by: $by,
+                  waived_at_cycle: $cycle,
+                  issue: null,
+                  finding: $known
+                }
+            ]
+        ' "${STATE_FILE}")"
+        if ! security_pass_record_waivers "$(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c 'map(del(.finding))')"; then
+          echo "::warning::Could not persist /security-pass-waive for tracking issue #${TRACKING_NUM}; leaving the command unmarked so the next poll retries it."
+          continue
+        fi
+        SECURITY_PASS_WAIVE_LINES=""
+        while IFS= read -r SECURITY_PASS_WAIVE_ROW; do
+          [ -n "${SECURITY_PASS_WAIVE_ROW}" ] || continue
+          SECURITY_PASS_WAIVE_ROW_ID="$(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -r '.finding_id')"
+          if printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -e '.finding != null' >/dev/null 2>&1; then
+            create_security_pass_advisory_followup \
+              "$(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -c '.finding')" \
+              "${INTEGRATION_BRANCH_TRACKING}" \
+              "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}")" \
+              "$(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -r '.justification')" \
+              "operator"
+            SECURITY_PASS_WAIVE_ROW_ISSUE="${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
+            SECURITY_PASS_WAIVE_LINES="${SECURITY_PASS_WAIVE_LINES}"$'\n'"- \`${SECURITY_PASS_WAIVE_ROW_ID}\` ($(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -r '.file + ":" + (.line | tostring)')${SECURITY_PASS_WAIVE_ROW_ISSUE:+; follow-up #${SECURITY_PASS_WAIVE_ROW_ISSUE}})"
+          else
+            SECURITY_PASS_WAIVE_LINES="${SECURITY_PASS_WAIVE_LINES}"$'\n'"- \`${SECURITY_PASS_WAIVE_ROW_ID}\` (not among the reported findings; matched by exact id only)"
+          fi
+        done < <(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c '.[]')
+        echo "SECURITY_PASS_WAIVED tracking_issue=${TRACKING_NUM} source=operator by=${SECURITY_PASS_WAIVE_AUTHOR} ids=$(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'join(",")')"
+        if [ "${PROJECT_STATUS}" = "failed" ]; then
+          # Same reset as /re-security-pass: the waivers survive (the jq below
+          # never touches security_pass_waived_findings) and the next audit
+          # covers the full range with them applied.
+          jq '
+            .status = "security-pass"
+            | .security_pass_cycle = 0
+            | .security_pass_judge_rounds = 0
+            | .security_pass_status = "pending"
+            | .security_pass_active_fix_issues = []
+            | .security_pass_head_sha = ""
+            | .security_pass_last_audited_sha = ""
+            | .security_pass_reported_findings = []
+            | del(.security_pass_fix_reissue_count)
+            | del(.security_pass_fix_defer)
+          ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          reconcile_tracking_body_after_security_pass_transition
+          post_state_comment || true
+          set_tracking_phase_label "ai:security-pass"
+          post_tracking_comment "<!-- security-pass-waive-dedup:${SECURITY_PASS_WAIVE_COMMENT_ID} -->
+
+## ✅ Security-pass findings waived
+
+\`${SECURITY_PASS_WAIVE_AUTHOR}\` accepted the following finding(s) as known risks for this project; they are excluded from every future audit of this project:
+${SECURITY_PASS_WAIVE_LINES}
+
+The bounded security-pass fix loop was reset. Re-running the mandatory current-head audit."
+          tg_notify "/security-pass-waive: project #${TRACKING_NUM} waived $(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'length') finding(s) (by ${SECURITY_PASS_WAIVE_AUTHOR}); security-pass state reset and re-running the audit." "WARNING"
+          if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
+            DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+          fi
+          ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" || true
+          continue
+        fi
+        reconcile_tracking_body_after_security_pass_transition
+        post_state_comment || true
+        post_tracking_comment "<!-- security-pass-waive-dedup:${SECURITY_PASS_WAIVE_COMMENT_ID} -->
+
+## ✅ Security-pass findings waived
+
+\`${SECURITY_PASS_WAIVE_AUTHOR}\` accepted the following finding(s) as known risks for this project; they are excluded from every future audit of this project:
+${SECURITY_PASS_WAIVE_LINES}
+
+The active security-pass fix cycle continues; the waivers apply from its next re-audit."
+        tg_notify "/security-pass-waive: project #${TRACKING_NUM} waived $(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'length') finding(s) (by ${SECURITY_PASS_WAIVE_AUTHOR}); the active fix cycle continues." "WARNING"
+      fi
+    fi
+  fi
 
   if [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
     SECURITY_FIX_ISSUES_JSON="$(jq -c '.security_pass_active_fix_issues // []' "${STATE_FILE}" 2>/dev/null || echo '[]')"
@@ -15909,6 +16771,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
       jq '
         .status = "security-pass"
         | .security_pass_cycle = 0
+        | .security_pass_judge_rounds = 0
         | .security_pass_status = "pending"
         | .security_pass_active_fix_issues = []
         | .security_pass_head_sha = ""

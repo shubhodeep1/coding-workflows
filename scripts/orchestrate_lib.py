@@ -1340,6 +1340,7 @@ def render_tracking_issue_body_from_state(
 		for issue_number in security_pass_active_fix_issues
 		if isinstance(issue_number, int) and not isinstance(issue_number, bool) and issue_number > 0
 	) or "none"
+	security_pass_waived_count = _security_pass_waived_count(state)
 	security_pass_block = "\n".join(
 		[
 			"<!-- orchestrator:security-pass -->",
@@ -1348,6 +1349,7 @@ def render_tracking_issue_body_from_state(
 			f"- Completed fix cycles: {security_pass_cycle}",
 			f"- Audited integration SHA: `{security_pass_head_sha or 'none'}`",
 			f"- Active fix issue: {security_pass_fix_display}",
+			*([f"- Waived findings: {security_pass_waived_count}"] if security_pass_waived_count else []),
 			"<!-- /orchestrator:security-pass -->",
 		]
 	)
@@ -1367,6 +1369,22 @@ def render_tracking_issue_body_from_state(
 	if body_template.endswith("\n"):
 		rendered += "\n"
 	return rendered
+
+
+def _security_pass_waived_count(state: dict[str, Any]) -> int:
+	"""Count the accepted (waived) security-pass findings recorded in state.
+
+	Rendered as a `- Waived findings: N` row only when non-zero, so bodies of
+	projects that never waived anything are byte-identical to before.
+	"""
+	waived = state.get("security_pass_waived_findings", [])
+	if not isinstance(waived, list):
+		return 0
+	return sum(
+		1
+		for row in waived
+		if isinstance(row, dict) and isinstance(row.get("finding_id"), str) and row.get("finding_id")
+	)
 
 
 def format_wave_status_comment(state: dict[str, Any], wave_idx: int) -> str:
@@ -1407,6 +1425,9 @@ def format_wave_status_comment(state: dict[str, Any], wave_idx: int) -> str:
 		lines.append(f"- Completed fix cycles: {security_pass_cycle}")
 		lines.append(f"- Audited integration SHA: `{security_pass_head_sha or 'none'}`")
 		lines.append(f"- Active fix issue: {security_pass_fix_display}")
+		security_pass_waived_count = _security_pass_waived_count(state)
+		if security_pass_waived_count:
+			lines.append(f"- Waived findings: {security_pass_waived_count}")
 		lines.append("")
 	return "\n".join(lines)
 

@@ -154,6 +154,16 @@ security_audit_append_prompt_context() {
 			echo "- If it is resolved, omit it. Never report a resolved finding again under a new finding_id." || return 1
 			echo "- Report every remaining instance of the same defect class in the scoped files (sibling code paths, other venues, adapters, handlers) as its own finding. The fix loop converges only when a class is cleared, not one line." || return 1
 		fi
+		if [ -s "${WAIVED_FINDINGS_PROMPT_FILE}" ]; then
+			echo || return 1
+			echo "Accepted findings for this project (reviewed and waived as known risks; they are tracked in non-blocking follow-up issues):" || return 1
+			echo "=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===" || return 1
+			cat "${WAIVED_FINDINGS_PROMPT_FILE}" || return 1
+			echo "=== END UNTRUSTED ACCEPTED FINDINGS ===" || return 1
+			echo "Rules for accepted findings:" || return 1
+			echo "- Never report an accepted finding again, neither under its finding_id nor under a new one, for the same location or the same defect at that location." || return 1
+			echo "- An acceptance covers one location. Other locations in the scoped files remain in scope." || return 1
+		fi
 		if [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
 			echo || return 1
 			echo "=== BEGIN UNTRUSTED PROJECT SPECIFICATION ===" || return 1
@@ -218,6 +228,25 @@ fi
 SECURITY_AUDIT_PRIOR_FINDINGS="${SECURITY_AUDIT_PRIOR_FINDINGS:-}"
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
 	echo "SECURITY_AUDIT_PRIOR_FINDINGS is only valid in findings-json mode" >&2
+	exit 1
+fi
+# Optional JSON array of findings that an operator (`/security-pass-waive`) or
+# the orchestrator's security-pass exhaustion judge accepted as known risks
+# for the audited project (findings-json mode only).  They are appended to the
+# prompt as accepted findings the model must not report again, and the
+# post-filter drops any re-report deterministically: an exact `finding_id`
+# match, or the same file and category within
+# SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of the waived line (model-generated
+# ids drift between runs and fix commits move lines).  Counted as
+# `suppressed_waived`.  Malformed input fails closed like prior findings.
+SECURITY_AUDIT_WAIVED_FINDINGS="${SECURITY_AUDIT_WAIVED_FINDINGS:-}"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
+	echo "SECURITY_AUDIT_WAIVED_FINDINGS is only valid in findings-json mode" >&2
+	exit 1
+fi
+SECURITY_AUDIT_WAIVER_LINE_WINDOW="${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-40}"
+if ! [[ "${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" =~ ^[0-9]+$ ]]; then
+	echo "SECURITY_AUDIT_WAIVER_LINE_WINDOW must be a non-negative integer" >&2
 	exit 1
 fi
 
@@ -336,6 +365,9 @@ DELTA_CHANGED_FILES_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/delta-changed-files.txt"
 PRIOR_FINDINGS_SCOPE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-scope.txt"
 PRIOR_FINDINGS_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-prompt.txt"
 PRIOR_FINDINGS_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-error.txt"
+WAIVED_FINDINGS_NORMALIZED_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/waived-findings.json"
+WAIVED_FINDINGS_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/waived-findings-prompt.txt"
+WAIVED_FINDINGS_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/waived-findings-error.txt"
 
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	if [ -z "${SECURITY_AUDIT_FINDINGS_OUT}" ]; then
@@ -348,6 +380,9 @@ if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	fi
 	if [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
 		security_audit_require_file "prior-findings-preflight" "${SECURITY_AUDIT_PRIOR_FINDINGS}"
+	fi
+	if [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
+		security_audit_require_file "waived-findings-preflight" "${SECURITY_AUDIT_WAIVED_FINDINGS}"
 	fi
 fi
 
@@ -660,6 +695,106 @@ PY
 	echo "security-audit: prior-findings=${PRIOR_FINDINGS_COUNT} (${PRIOR_FINDINGS_SCOPE_COUNT} cited files kept in scope)"
 fi
 
+# --- Waived findings: normalize + render the prompt section ----------------
+# Accepted findings never enter scope on their own (they are not to be
+# re-audited); they are listed for the model as accepted and enforced by the
+# post-filter below.  Validation fails closed: the file comes from the
+# orchestrator's own state or an operator command it already validated.
+WAIVED_FINDINGS_COUNT=0
+: > "${WAIVED_FINDINGS_PROMPT_FILE}"
+printf '[]\n' > "${WAIVED_FINDINGS_NORMALIZED_FILE}"
+if [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
+	if ! WAIVED_FINDINGS_COUNT="$(python3 - \
+		"${SECURITY_AUDIT_WAIVED_FINDINGS}" \
+		"${WAIVED_FINDINGS_NORMALIZED_FILE}" \
+		"${WAIVED_FINDINGS_PROMPT_FILE}" 2> "${WAIVED_FINDINGS_ERROR_FILE}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path, PurePosixPath
+
+waived_findings_path = Path(sys.argv[1])
+normalized_path = Path(sys.argv[2])
+prompt_path = Path(sys.argv[3])
+
+try:
+	waived_findings = json.loads(waived_findings_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+	raise SystemExit(f"unable to load waived findings: {exc}")
+if not isinstance(waived_findings, list):
+	raise SystemExit("waived findings must be a JSON array")
+
+
+def text_field(finding: dict, key: str) -> str:
+	value = finding.get(key)
+	if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+		return ""
+	sanitized_prompt_value = " ".join(str(value).split()).replace("`", "")
+	for untrusted_fence in ("=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===", "=== END UNTRUSTED ACCEPTED FINDINGS ==="):
+		sanitized_prompt_value = sanitized_prompt_value.replace(untrusted_fence, "[untrusted marker removed]")
+	return sanitized_prompt_value
+
+
+normalized: list[dict] = []
+prompt_lines: list[str] = []
+for index, finding in enumerate(waived_findings):
+	if not isinstance(finding, dict):
+		raise SystemExit(f"waived finding #{index} must be an object")
+	finding_id = text_field(finding, "finding_id")
+	if not finding_id:
+		raise SystemExit(f"waived finding #{index} is missing its finding_id")
+	relative_file = ""
+	file_value = finding.get("file")
+	if isinstance(file_value, str) and file_value.strip():
+		relative_file_path = PurePosixPath(file_value.strip())
+		if relative_file_path.is_absolute() or ".." in relative_file_path.parts:
+			raise SystemExit(f"waived finding #{index} cites a non-repository path")
+		relative_file = relative_file_path.as_posix()
+		if relative_file.startswith("./"):
+			relative_file = relative_file[2:]
+		if not relative_file or relative_file == ".":
+			raise SystemExit(f"waived finding #{index} cites a non-repository path")
+	line_value = finding.get("line")
+	line_number = 0
+	if isinstance(line_value, int) and not isinstance(line_value, bool) and line_value > 0:
+		line_number = line_value
+	category = text_field(finding, "owasp_or_stride_category")
+	normalized.append(
+		{
+			"finding_id": finding_id,
+			"file": relative_file,
+			"line": line_number,
+			"owasp_or_stride_category": category,
+		}
+	)
+	location = relative_file or "(location not recorded)"
+	if relative_file and line_number:
+		location = f"{relative_file}:{line_number}"
+	prompt_lines.append(
+		"- `{id}` | {category} | {severity} | {location}\n"
+		"  Accepted because: {reason}".format(
+			id=finding_id,
+			category=category or "uncategorised",
+			severity=text_field(finding, "severity") or "unknown",
+			location=location,
+			reason=text_field(finding, "justification") or "(not recorded)",
+		)
+	)
+
+normalized_path.write_text(json.dumps(normalized, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
+prompt_path.write_text("".join(f"{line}\n" for line in prompt_lines), encoding="utf-8")
+print(len(normalized))
+PY
+	)"; then
+		security_audit_emit_path_diagnostic "${WAIVED_FINDINGS_ERROR_FILE}"
+		security_audit_emit_failure "waived-findings" "${SECURITY_AUDIT_WAIVED_FINDINGS}" "$(head -n1 "${WAIVED_FINDINGS_ERROR_FILE}" 2>/dev/null || echo 'waived findings could not be processed')"
+		exit 1
+	fi
+	[[ "${WAIVED_FINDINGS_COUNT}" =~ ^[0-9]+$ ]] || WAIVED_FINDINGS_COUNT=0
+	echo "security-audit: waived-findings=${WAIVED_FINDINGS_COUNT} (line window ${SECURITY_AUDIT_WAIVER_LINE_WINDOW})"
+fi
+
 SECURITY_AUDIT_RENDER_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/render_prompt.sh"
 SECURITY_AUDIT_PROMPT_PATH="${SECURITY_AUDIT_SUPPORT_DIR}/prompts/mode-security-audit.txt"
 security_audit_require_file "prompt-preflight" "${SECURITY_AUDIT_RENDER_HELPER}"
@@ -734,7 +869,9 @@ python3 - \
 	"${FILTERED_FINDINGS_FILE}" \
 	"${FILTER_SUMMARY_FILE}" \
 	"${AUDIT_SCOPE_MODE}" \
-	"${CHANGED_FILES_FILE}" <<'PY'
+	"${CHANGED_FILES_FILE}" \
+	"${WAIVED_FINDINGS_NORMALIZED_FILE}" \
+	"${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -749,6 +886,8 @@ filtered_findings_path = Path(sys.argv[5])
 summary_path = Path(sys.argv[6])
 audit_scope_mode = sys.argv[7]
 changed_files_path = Path(sys.argv[8])
+waived_findings_path = Path(sys.argv[9])
+waiver_line_window = int(sys.argv[10])
 
 # Incremental scope is enforced here deterministically: even if the model
 # ignores the prompt's changed-file restriction, out-of-scope findings never
@@ -939,6 +1078,37 @@ def matching_exclusion_rule(finding: dict[str, object], rules: list[dict[str, ob
 
 raw_findings = load_json(codex_output_path, label="Codex output")
 exclusion_rules = normalize_exclusions(load_json(exclusions_path, label="security-audit exclusions"))
+waived_findings_input = load_json(waived_findings_path, label="waived findings") if waived_findings_path.is_file() else []
+if not isinstance(waived_findings_input, list):
+	fail("waived findings must be a JSON array")
+
+
+def matching_waiver(finding: dict[str, object]) -> str | None:
+	"""Return the waived finding_id this finding re-reports, if any.
+
+	Exact id first; otherwise the same file and category within the line
+	window of the waived line, because the auditor mints a new id on every
+	run and a fix commit shifts the cited line.
+	"""
+	finding_id = str(finding.get("finding_id") or "")
+	finding_file = str(finding.get("file") or "")
+	finding_category = " ".join(str(finding.get("owasp_or_stride_category") or "").lower().split())
+	finding_line = int(finding.get("line") or 0)
+	for waiver in waived_findings_input:
+		if not isinstance(waiver, dict):
+			continue
+		waived_id = str(waiver.get("finding_id") or "")
+		if waived_id and waived_id == finding_id:
+			return waived_id
+		waived_file = str(waiver.get("file") or "")
+		waived_category = " ".join(str(waiver.get("owasp_or_stride_category") or "").lower().split())
+		waived_line = waiver.get("line")
+		if not waived_file or not waived_category or not isinstance(waived_line, int) or isinstance(waived_line, bool) or waived_line < 1:
+			continue
+		if waived_file == finding_file and waived_category == finding_category and abs(waived_line - finding_line) <= waiver_line_window:
+			return waived_id or "(unnamed waiver)"
+	return None
+
 
 if not isinstance(raw_findings, list):
 	fail("security-audit Codex output must be a JSON array")
@@ -948,6 +1118,7 @@ invalid_findings: list[dict[str, str]] = []
 excluded_findings: list[dict[str, str]] = []
 low_confidence_findings: list[str] = []
 out_of_scope_findings: list[str] = []
+waived_findings: list[dict[str, str]] = []
 seen_ids: set[str] = set()
 
 for raw_finding in raw_findings:
@@ -969,6 +1140,10 @@ for raw_finding in raw_findings:
 	rule_id = matching_exclusion_rule(normalized_finding, exclusion_rules)
 	if rule_id is not None:
 		excluded_findings.append({"finding_id": finding_id, "rule_id": rule_id})
+		continue
+	waived_id = matching_waiver(normalized_finding)
+	if waived_id is not None:
+		waived_findings.append({"finding_id": finding_id, "waived_finding_id": waived_id})
 		continue
 	kept_findings.append(normalized_finding)
 
@@ -994,10 +1169,12 @@ summary_path.write_text(
 			"suppressed_excluded": len(excluded_findings),
 			"suppressed_invalid": len(invalid_findings),
 			"suppressed_out_of_scope": len(out_of_scope_findings),
+			"suppressed_waived": len(waived_findings),
 			"low_confidence_finding_ids": low_confidence_findings,
 			"excluded": excluded_findings,
 			"invalid": invalid_findings,
 			"out_of_scope_finding_ids": out_of_scope_findings,
+			"waived": waived_findings,
 		},
 		ensure_ascii=True,
 		indent=2,
@@ -1030,6 +1207,7 @@ count_keys = (
 	"suppressed_invalid",
 	"suppressed_low_confidence",
 	"suppressed_out_of_scope",
+	"suppressed_waived",
 )
 
 
