@@ -5830,6 +5830,7 @@ ${decisions_table}}"
     | .security_pass_status = "passed"
     | .security_pass_head_sha = $head_sha
     | .security_pass_active_fix_issues = []
+    | .security_pass_reported_findings = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true

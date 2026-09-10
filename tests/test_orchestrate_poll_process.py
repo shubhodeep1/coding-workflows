@@ -4324,7 +4324,16 @@ def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> Non
 	remaining = _security_pass_test_finding()
 	remaining["exploit_scenario"] = "Notify @security-team about issue #123."
 	result = _run_poller(
-		state=_security_pass_exhausted_state(),
+		state=_security_pass_exhausted_state(
+			security_pass_reported_findings=[
+				{
+					"cycle": 2,
+					"finding_id": "SEC-FIXED-EARLIER",
+					"file": "scripts/old_example.py",
+					"line": 7,
+				}
+			]
+		),
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
