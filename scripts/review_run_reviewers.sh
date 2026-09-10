@@ -3957,7 +3957,7 @@ execute_reviewer_attempt() {
   fi
   if [ ! -s "${reviewer_effective_prompt_file}" ]; then
     echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file is still empty after fallback on ${attempt_label}; refusing to launch OpenCode with empty stdin." | tee -a "${log_file}" >&2
-    kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
+    kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true
     emit_reviewer_substate "Failed" "${attempt_number}"
     rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}" "${wd_reason_file}" "${stall_status_file}" "${tmp_output}" "${tmp_structured_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
     REVIEWER_ATTEMPT_OUTCOME="failed"
@@ -4008,7 +4008,7 @@ execute_reviewer_attempt() {
   echo "${codex_bg_pid}" > "${codex_pid_file}"
   wait "${codex_bg_pid}" 2>/dev/null || cmd_rc=$?
 
-  kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
+  kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
 
   if [ -s "${wd_reason_file}" ]; then

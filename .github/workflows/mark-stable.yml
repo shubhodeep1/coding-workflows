@@ -220,11 +220,12 @@ jobs:
           # test_validation_refresh_runner.py exercises the real discovery
           # manifest validator (validate_discovered_manifest_yaml), which needs
           # pyyaml + jsonschema; jinja2 is required by the template-render tests.
-          # Matches the dependency set installed in ci.yml, validation-refresh.yml
-          # and nightly-validation-selftest.yml. Without these, the validator
+          # Those three dependencies match validation-refresh.yml and
+          # nightly-validation-selftest.yml; pytest runs the release-gate
+          # watchdog contract test. Without the first three, the validator
           # short-circuits with jsonschema_missing, the codex retry loop fires,
           # and the FakeExecutor planned-call sequence desyncs (false failure).
-          python3 -m pip install --quiet pyyaml jsonschema jinja2
+          python3 -m pip install --quiet pyyaml jsonschema jinja2 pytest
 
       - name: Orchestrate poll process unit tests
         env:
@@ -346,6 +347,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_reject_verify.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_recovery_pr_lookup.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_editor_fifo_drain.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_editor_watchdog_kill_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_subissue_closing_pr.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_state_selfheal.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_loop_and_churn_fixes.py
