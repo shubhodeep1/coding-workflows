@@ -2051,7 +2051,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   _hb_tmpdir=""
   _hb_fifo=""
 
-  # The watchdog subshell exits on its own (143/142) after it kills the
+  # The watchdog subshell exits on its own (143/142/144) after it kills the
   # editor, so by the time the editor process is reaped the watchdog may
   # already be gone and this `kill` returns 1 (ESRCH). Under `set -e` an
   # unguarded failure here aborted the whole script: no retry attempt, no

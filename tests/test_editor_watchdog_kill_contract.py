@@ -8,7 +8,7 @@ retry attempt, no fallback summary and no archived editor stderr. The
 downstream step classified the run as "editor produced no output" and the
 review was deferred to the stall poller.
 
-Cause: the watchdog subshell exits on its own (143 / 142) after it kills
+Cause: the watchdog subshell exits on its own (143 / 142 / 144) after it kills
 the editor, so by the time the parent reaps the editor process the watchdog
 may already be gone. The parent then ran
 
@@ -56,9 +56,9 @@ def _run_reap_harness(reap_line: str) -> subprocess.CompletedProcess[str]:
 	harness = "\n".join(
 		[
 			"set -euo pipefail",
-			"( sleep 0.2; exit 143 ) &",
+			"( exit 143 ) &",
 			"wd_pid=$!",
-			"sleep 1",
+			'wait "${wd_pid}" || true',
 			reap_line,
 			f'echo "{MARKER}"',
 		]
