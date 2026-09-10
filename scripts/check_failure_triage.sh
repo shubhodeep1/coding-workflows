@@ -324,7 +324,7 @@ if command -v codex >/dev/null 2>&1; then
 	MODEL_PROVIDER_BROKER_AGENT_HOME="${RUNTIME_DIR}/model-provider-agent-home"
 	export MODEL_PROVIDER_BROKER_AGENT_HOME
 	model_provider_broker_start
-	trap 'model_provider_broker_stop' EXIT
+	trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
 	model_provider_broker_prepare_codex_writer "${MODEL_EDITOR:-openai/gpt-5.6-sol}" "${MODEL_REASONING_EFFORT:-xhigh}" "$(pwd)"
 	if model_provider_broker_exec_sanitized codex --ask-for-approval never \
 		-c model_verbosity="${MODEL_VERBOSITY:-low}" \

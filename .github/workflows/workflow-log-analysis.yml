@@ -349,7 +349,7 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
             source scripts/codex_helpers.sh
             model_provider_broker_start
-            trap 'model_provider_broker_stop; rm -f "${CODEX_PROMPT_FILE:-}"' EXIT
+            trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2; rm -f "${CODEX_PROMPT_FILE:-}"' EXIT
             configured_reasoning="$(grep -m1 '^model_reasoning_effort = ' "${HOME}/.codex/config.toml" | cut -d'"' -f2)"
               model_provider_broker_prepare_codex_readonly nobody "${WORKFLOW_RETRO_MODEL}" "${configured_reasoning}" "$(pwd)"
 
@@ -900,7 +900,7 @@ jobs:
           type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
             source scripts/codex_helpers.sh
             model_provider_broker_start
-            trap 'model_provider_broker_stop' EXIT
+            trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
             configured_reasoning="$(grep -m1 '^model_reasoning_effort = ' "${HOME}/.codex/config.toml" | cut -d'"' -f2)"
               model_provider_broker_prepare_codex_readonly nobody "${WORKFLOW_EDITOR_MODEL}" "${configured_reasoning}" "$(pwd)"
 
@@ -1567,7 +1567,7 @@ jobs:
           type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
           source scripts/codex_helpers.sh
           model_provider_broker_start
-            trap 'model_provider_broker_stop' EXIT
+            trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
           configured_reasoning="$(grep -m1 '^model_reasoning_effort = ' "${HOME}/.codex/config.toml" | cut -d'"' -f2)"
               model_provider_broker_prepare_codex_readonly nobody "${WORKFLOW_EDITOR_MODEL}" "${configured_reasoning}" "$(pwd)"
 
@@ -1687,7 +1687,7 @@ jobs:
           SECTION_FILE=""
             VALIDATED_SECTION_FILE=""
           CODEX_PROMPT_FILE=""
-            trap 'model_provider_broker_stop; rm -f "${SECTION_FILE}" "${VALIDATED_SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
+            trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2; rm -f "${SECTION_FILE}" "${VALIDATED_SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
           SECTION_FILE="$(mktemp)"
             VALIDATED_SECTION_FILE="$(mktemp)"
           CODEX_PROMPT_FILE="$(mktemp)"
@@ -2091,7 +2091,7 @@ jobs:
           type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
           source scripts/codex_helpers.sh
           model_provider_broker_start
-            trap 'model_provider_broker_stop' EXIT
+            trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
           configured_reasoning="$(grep -m1 '^model_reasoning_effort = ' "${HOME}/.codex/config.toml" | cut -d'"' -f2)"
               model_provider_broker_prepare_codex_readonly nobody "${WORKFLOW_EDITOR_MODEL}" "${configured_reasoning}" "$(pwd)"
 
@@ -2211,7 +2211,7 @@ jobs:
           SECTION_FILE=""
             VALIDATED_SECTION_FILE=""
           CODEX_PROMPT_FILE=""
-            trap 'model_provider_broker_stop; rm -f "${SECTION_FILE}" "${VALIDATED_SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
+            trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2; rm -f "${SECTION_FILE}" "${VALIDATED_SECTION_FILE}" "${CODEX_PROMPT_FILE}"' EXIT
           SECTION_FILE="$(mktemp)"
             VALIDATED_SECTION_FILE="$(mktemp)"
           CODEX_PROMPT_FILE="$(mktemp)"

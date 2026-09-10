@@ -283,7 +283,7 @@ editor_isolation_exit_trap() {
   local original_rc="$1"
   trap - EXIT
   cleanup_editor_isolation || original_rc=80
-  model_provider_broker_stop || original_rc=80
+  model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed after editor execution." >&2
   [ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true
   exit "${original_rc}"
 }

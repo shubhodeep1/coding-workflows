@@ -209,7 +209,7 @@ fi
 
 echo "handled=true" >> "$GITHUB_OUTPUT"
 model_provider_broker_start
-trap 'model_provider_broker_stop' EXIT
+trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
 model_provider_broker_prepare_codex_writer "${DIAGNOSE_MODEL}" "${DIAGNOSE_REASONING}" "$(pwd)"
 if ! patch_diagnose_reasoning_into_config; then
   echo "::warning::Failed to patch ~/.codex/config.toml for diagnose reasoning; leaving existing config unchanged."

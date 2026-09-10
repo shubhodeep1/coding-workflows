@@ -1509,7 +1509,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   fi
 done
 fi
-model_provider_broker_stop
+model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed after judge execution." >&2
 
 if [ "${JUDGE_SUCCESS}" != "true" ]; then
   opencode_emit_failure_alert review_rb_judge reviewer "${MODEL_EDITOR}" "${rc:-1}" attempts_exhausted || true
@@ -1951,7 +1951,7 @@ __EDIT_DISCIPLINE__
         emit_review_rb_substate "review_rb_fix" "judge_fix" "Failed" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       fi
       rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"
-      model_provider_broker_stop
+      model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed after fix execution." >&2
 
       # Check for changes and commit
       if codex_stall_guard_kill_detected "${rb_fix_rc}" "${rb_fix_stall_state}"; then

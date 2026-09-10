@@ -256,7 +256,7 @@ if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 fi
 
 model_provider_broker_start
-trap 'model_provider_broker_stop' EXIT
+trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
 model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "$(pwd)"
 
 max_attempts=3
