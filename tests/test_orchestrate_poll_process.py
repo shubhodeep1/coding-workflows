@@ -15299,6 +15299,8 @@ def test_integration_conflict_redispatch_stops_when_current_final_pr_head_is_res
 
 
 def test_integration_conflict_redispatch_resumes_when_retry_state_head_sha_is_stale():
+	# Historical test name retained for compatibility. Stale signed state must
+	# not reset counters accumulated for the current head or trigger redispatch.
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
 	state["integration_conflict_unresolved_ticks"] = 2
@@ -15329,13 +15331,10 @@ def test_integration_conflict_redispatch_resumes_when_retry_state_head_sha_is_st
 		merge_tree_conflict_paths=["scripts/example.py"],
 	)
 	dispatches_for_final = [d for d in result["review_dispatches"] if d.get("pr_number") == 354]
-	assert dispatches_for_final, (
-		"expected resolver redispatch to resume when the persisted retry-state "
-		"head SHA no longer matches the current final-PR head"
-	)
-	assert result["latest_state"]["integration_sync_status"] == "healing"
-	assert result["latest_state"]["integration_conflict_unresolved_ticks"] == 1
-	assert result["latest_state"]["integration_conflict_dispatch_count"] == 1
+	assert dispatches_for_final == []
+	assert result["latest_state"]["integration_sync_status"] == "conflict"
+	assert result["latest_state"]["integration_conflict_unresolved_ticks"] == 2
+	assert result["latest_state"]["integration_conflict_dispatch_count"] == 4
 
 
 def test_integration_conflict_branch_rebuild_waits_for_threshold():

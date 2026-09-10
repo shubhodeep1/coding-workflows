@@ -5688,7 +5688,7 @@ PYINNER
       --tracking-issue "${tracking_issue}" \
       --integration-branch "${integration_branch}" \
       --source-pr "${source_pr}" \
-			--head-sha "${candidate_head_sha}" \
+			--head-sha "${head_sha}" \
       --producer-id "${ORCHESTRATOR_STATE_PRODUCER_ID}" \
       --out-file "${verified_file}"; then
       generation="$(jq -r '.generation // 0' "${verified_file}" 2>/dev/null || echo 0)"
