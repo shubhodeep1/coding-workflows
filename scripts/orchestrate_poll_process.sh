@@ -8462,12 +8462,12 @@ heal_integration_branch_conflict() {
     local resolver_retry_head_sha=""
     local resolver_retry_escalated="false"
 		local resolver_retry_comments_json=""
-		# The PR metadata call above cannot return issue comments. This single
-		# paginated fetch is required for authenticated V2 retry-state authority;
-		# unsigned PR-body V1 blocks are deliberately never consulted.
-		resolver_retry_comments_json="$(gh_retry gh api --paginate \
-			"repos/${GITHUB_REPOSITORY}/issues/${final_pr}/comments?per_page=100" \
-			| jq -sc 'add // []' 2>/dev/null || echo '[]')"
+		# The PR metadata call above cannot return issue comments. Bound this
+		# five-minute poll path to the 100 most recently updated comments; the
+		# actuator refreshes its single V2 marker on every state change.
+		resolver_retry_comments_json="$(gh_retry gh api \
+			"repos/${GITHUB_REPOSITORY}/issues/${final_pr}/comments?sort=updated&direction=desc&per_page=100" \
+			| jq -c 'if type == "array" then . else [] end' 2>/dev/null || echo '[]')"
 		resolver_retry_state="$(printf '%s' "${resolver_retry_comments_json}" \
 			| extract_autofix_resolver_retry_state_from_comments \
 				"${GITHUB_REPOSITORY}" "${TRACKING_NUM}" "${integration_branch}" \

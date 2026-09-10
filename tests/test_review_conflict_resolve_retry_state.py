@@ -422,6 +422,17 @@ def test_resolve_script_emits_candidate_without_github_mutations() -> None:
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_actuate.sh"' in workflow
 
 
+def test_resolver_retry_comment_lookups_are_bounded() -> None:
+	poller = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	actuator = (REPO_ROOT / "scripts" / "review_conflict_actuate.sh").read_text(encoding="utf-8")
+	bounded_endpoint = "comments?sort=updated&direction=desc&per_page=100"
+	assert bounded_endpoint in poller
+	assert bounded_endpoint in actuator
+	poller_lookup = poller.split('local resolver_retry_comments_json=""', 1)[1].split("resolver_retry_state=", 1)[0]
+	assert "--paginate" not in poller_lookup
+	assert 'gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments' not in actuator
+
+
 def test_resolve_script_wires_tier_selection_and_verifier_args() -> None:
 	body = _resolve_script_text()
 	assert "_select_fingerprint_verification_tier" in body
