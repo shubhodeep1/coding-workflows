@@ -445,7 +445,8 @@ without the pointer falls back to `security_pass_head_sha`. A pointer that
 does not resolve or is not an ancestor of the head falls back to the full
 range; every choice is logged as `SECURITY_PASS_SCOPE tracking_issue=<N>
 mode=full|delta reason=<no_prior_audit|head_advanced_since_last_audit|head_unchanged_since_last_audit|last_audited_sha_not_ancestor_of_head>
-base_sha=<merge-base> since_sha=<sha|none> head_sha=<sha> prior_findings=<count>`.
+base_sha=<merge-base> since_sha=<sha|none> head_sha=<sha> prior_findings=<count>
+waived_findings=<count>`.
 Incident: tele-funtoken-msg-scoring#3928, fun-token-multi-chain#471 and
 binance-blessings#249 each merged every fix issue, never repeated a finding ID
 between cycles, and still exhausted the budget on fresh full-range samples.
@@ -495,6 +496,32 @@ another project or another cycle is never adopted. An inconclusive lookup
 (API or parse failure) retains `security-pass-fixing` for retry rather than
 reading a transient read failure as evidence of a failed fix.
 Setting `ENABLE_SECURITY_PASS=false` remains the immediate operator kill switch.
+Exhaustion is no longer terminal by default. When `MAX_SECURITY_PASS_CYCLES`
+is spent with findings still open, `security_pass_exhaustion_judge` (gated by
+`SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED`, default `true`, and bounded by
+`MAX_SECURITY_PASS_JUDGE_ROUNDS`, default `0` = unbounded) renders
+`prompts/mode-judge-security-pass-exhaustion.txt` read-only against the
+audited checkout and requires one decision per remaining finding:
+`accept_with_followup` (waiver row in `security_pass_waived_findings`, id
+dropped from `security_pass_reported_findings`, one non-blocking `ai:security`
+follow-up issue recorded in `security_pass_followup_issues`), `keep_fixing`
+(one more consolidated fix issue for exactly those findings), or `fail`
+(the pre-judge `security_pass_terminal_failure`). A disabled judge, a missing
+prompt, a codex failure, or an invalid verdict also fall back to the terminal
+path; nothing passes silently. Every round increments
+`security_pass_judge_rounds` (reset by `/re-security-pass` and the kill-switch
+release) and posts a `⚖️ Security-pass exhaustion judge` comment with the
+decision table. Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
+and `security_pass_apply_waivers_to_findings` re-applies them to the result
+(exact id, or same file and category within `SECURITY_AUDIT_WAIVER_LINE_WINDOW`,
+default 40 lines). `/security-pass-waive <finding_id> ...` (human
+OWNER/MEMBER/COLLABORATOR only, dedup marker
+`<!-- security-pass-waive-dedup:<comment-id> -->`) records operator waivers; in
+the failed state it then resets the loop like `/re-security-pass`, in
+`security-pass-fixing` it only persists. The scan runs before the
+`security-pass-fixing` handler because that handler ends its tick. The
+tracking body's `### Security pass` block renders `- Waived findings: N` only
+when N > 0, so bodies without waivers are byte-identical.
 If an externally merged final PR has already deleted its integration branch,
 the only permitted analysis fallback is that PR's verified immutable head SHA;
 an unavailable or mismatched PR head fails closed and never substitutes the
@@ -658,6 +685,13 @@ and shipped:
 - `SECURITY_PASS_CYCLE_BUDGET_RESET`
 - `SECURITY_PASS_FAILED`
 - `SECURITY_PASS_SKIPPED_DISABLED`
+- `SECURITY_PASS_JUDGE_SKIPPED`
+- `SECURITY_PASS_JUDGE_FAILED`
+- `SECURITY_PASS_JUDGE_DECIDED`
+- `SECURITY_PASS_WAIVED`
+- `SECURITY_PASS_WAIVE_REJECTED`
+- `SECURITY_PASS_WAIVED_SUPPRESSED`
+- `SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED`
 
 - `SEMBLE_QUERY`
 - `SEMBLE_FALLBACK`
@@ -777,6 +811,13 @@ LOG_PREFIX.name=SECURITY_PASS_FIX_ISSUE_SUCCESSOR_ADOPTED
 LOG_PREFIX.name=SECURITY_PASS_CYCLE_BUDGET_RESET
 LOG_PREFIX.name=SECURITY_PASS_FAILED
 LOG_PREFIX.name=SECURITY_PASS_SKIPPED_DISABLED
+LOG_PREFIX.name=SECURITY_PASS_JUDGE_SKIPPED
+LOG_PREFIX.name=SECURITY_PASS_JUDGE_FAILED
+LOG_PREFIX.name=SECURITY_PASS_JUDGE_DECIDED
+LOG_PREFIX.name=SECURITY_PASS_WAIVED
+LOG_PREFIX.name=SECURITY_PASS_WAIVE_REJECTED
+LOG_PREFIX.name=SECURITY_PASS_WAIVED_SUPPRESSED
+LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED
 LOG_PREFIX.name=SEMBLE_QUERY
 LOG_PREFIX.name=SEMBLE_FALLBACK
 LOG_PREFIX.name=SERENA_QUERY

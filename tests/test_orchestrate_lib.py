@@ -2080,6 +2080,41 @@ def test_security_pass_status_rendering_includes_active_fix_issue() -> None:
 		assert "- Active fix issue: #321" in rendered
 
 
+def test_security_pass_status_rendering_adds_waived_row_only_when_findings_are_waived() -> None:
+	state = _make_state()
+	state.update(
+		{
+			"security_pass_cycle": 3,
+			"security_pass_status": "passed",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "b" * 40,
+		}
+	)
+	state["project_body_snapshot"] = (
+		"## Project: Test Project\n\n"
+		"### Wave 1\n\n"
+		"- [ ] **issue-1**: First task (priority 1)\n"
+		"- [ ] **issue-2**: Second task (priority 2)\n"
+	)
+
+	for rendered in (
+		orchestrate_lib.render_tracking_issue_body_from_state(state),
+		orchestrate_lib.format_wave_status_comment(state, 0),
+	):
+		assert "- Waived findings:" not in rendered
+
+	state["security_pass_waived_findings"] = [
+		{"finding_id": "SEC-1", "source": "judge"},
+		{"finding_id": "SEC-2", "source": "operator"},
+		{"not": "a waiver"},
+	]
+	for rendered in (
+		orchestrate_lib.render_tracking_issue_body_from_state(state),
+		orchestrate_lib.format_wave_status_comment(state, 0),
+	):
+		assert "- Active fix issue: none\n- Waived findings: 2" in rendered
+
+
 def test_render_tracking_issue_body_from_state_inserts_missing_issue_rows_into_existing_wave():
 	template = """## Project: Test Project
 
