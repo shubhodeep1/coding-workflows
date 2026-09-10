@@ -961,8 +961,9 @@ _verify_fingerprints_soft() {
 }
 
 # _build_resolver_retry_state_artifact: emit a machine-readable JSON
-# payload describing the current fingerprint failure set plus the
-# updated AUTOFIX_RESOLVER_RETRY_STATE_V1 PR-body block.  The helper
+# payload describing the current fingerprint failure set plus the candidate
+# fields for a producer-authenticated V2 comment. The legacy V1 render helpers
+# below remain diagnostic/test compatibility code and grant no runtime authority.
 # deliberately reuses the verifier module's baseline/dedup logic so the
 # state block is keyed off the same normalized fp_key set that
 # compare-mode verification actually enforced.

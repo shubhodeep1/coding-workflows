@@ -85,6 +85,10 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 		assert "model_provider_broker_start" in text
 		assert "model_provider_broker_exec_unprivileged nobody" in text
 		assert "--sandbox read-only" in text
+		if relative_path.startswith(".github/workflows/"):
+			assert "${{ job.workflow_repository }}" in text
+			assert "${{ job.workflow_sha }}" in text
+			assert ".codex-workflow-src-main" not in text
 	workflow_log = (REPO_ROOT / ".github/workflows/workflow-log-analysis.yml").read_text(encoding="utf-8")
 	assert workflow_log.count("model_provider_broker_exec_sanitized bash scripts/codex_heartbeat.sh") == 4
 	assert workflow_log.count("model_provider_broker_exec_unprivileged nobody") >= 4

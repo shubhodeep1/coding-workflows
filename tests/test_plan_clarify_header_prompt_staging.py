@@ -28,8 +28,8 @@ Two kinds of tests pin the fix:
 
 1. A static contract: every reusable workflow or staged runner that renders
    ``render_prompt.sh prompts/header.txt`` has workflow staging for
-   prompts/header.txt with the standard .codex-workflow-src ->
-   .codex-workflow-src-main fallback and a hard error when it is unavailable.
+   prompts/header.txt from the immutable .codex-workflow-src checkout and a
+   hard error when it is unavailable.
 
 2. A behavioural test that reproduces the runtime layout (scripts/ staged,
    prompts/ absent from the working tree), runs the staging block, and asserts
@@ -114,8 +114,8 @@ def test_render_callers_stage_header_prompt() -> None:
 		assert 'src=".codex-workflow-src/prompts/header.txt"' in text, (
 			f"{yml.name}: header staging is missing the primary support-source path"
 		)
-		assert '.codex-workflow-src-main/prompts/header.txt' in text, (
-			f"{yml.name}: header staging is missing the main-snapshot fallback"
+		assert '.codex-workflow-src-main/prompts/header.txt' not in text, (
+			f"{yml.name}: header staging must not use a mutable main snapshot"
 		)
 		assert (
 			"::error::Failed to stage required file prompts/header.txt" in text
@@ -127,8 +127,8 @@ def test_render_callers_stage_header_prompt() -> None:
 			r'echo "::error::Failed to stage required file prompts/header\.txt"\n\s+exit 1',
 			text,
 		), (
-			f"{yml.name}: header staging must exit immediately when neither "
-			f"support checkout carries the fragment"
+			f"{yml.name}: header staging must exit immediately when the immutable "
+			f"support checkout lacks the fragment"
 		)
 
 	plan_workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
@@ -136,7 +136,7 @@ def test_render_callers_stage_header_prompt() -> None:
 	assert "for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh" in plan_workflow_text
 	assert 'install -m 0644 "${src}" prompts/header.txt' in plan_workflow_text
 	assert 'src=".codex-workflow-src/prompts/header.txt"' in plan_workflow_text
-	assert '.codex-workflow-src-main/prompts/header.txt' in plan_workflow_text
+	assert '.codex-workflow-src-main/prompts/header.txt' not in plan_workflow_text
 	assert "::error::Failed to stage required file prompts/header.txt" in plan_workflow_text
 	assert HEADER_RENDER_RE.search(plan_runner_text)
 
@@ -144,7 +144,6 @@ def test_render_callers_stage_header_prompt() -> None:
 def _render_header(
 	*,
 	stage_header: bool,
-	prefer_main_snapshot: bool = False,
 	support_header_available: bool = True,
 ) -> subprocess.CompletedProcess[str]:
 	"""Render prompts/header.txt the way plan.yml / clarify.yml do.
@@ -153,22 +152,18 @@ def _render_header(
 	tree, the support checkout under .codex-workflow-src, and prompts/ absent
 	until the staging block runs. When ``stage_header`` is true the exact
 	staging snippet from the workflows runs before the render. When
-	``prefer_main_snapshot`` is true the header exists only in the
-	.codex-workflow-src-main fallback checkout. When
-	``support_header_available`` is false, neither support checkout carries the
-	header fragment and the staging block must hard-fail.
+	``support_header_available`` is false, the immutable support checkout lacks
+	the header fragment and the staging block must hard-fail.
 	"""
 	with tempfile.TemporaryDirectory(prefix="plan-header-staging-") as td:
 		root = Path(td)
 		scripts_dir = root / "scripts"
 		support_prompts = root / ".codex-workflow-src" / "prompts"
-		support_prompts_main = root / ".codex-workflow-src-main" / "prompts"
 		support_scripts = root / ".codex-workflow-src" / "scripts"
 		runtime_dir = root / "rt"
 		for d in (
 			scripts_dir,
 			support_prompts,
-			support_prompts_main,
 			support_scripts,
 			runtime_dir,
 		):
@@ -187,10 +182,7 @@ def _render_header(
 		# The header fragment exists only in the support checkout, mirroring a
 		# consumer repo that ships none of these files.
 		if support_header_available:
-			header_prompt_dir = (
-				support_prompts_main if prefer_main_snapshot else support_prompts
-			)
-			(header_prompt_dir / "header.txt").write_text(
+			(support_prompts / "header.txt").write_text(
 				HEADER_PROMPT.read_text(encoding="utf-8"), encoding="utf-8"
 			)
 		(runtime_dir / "repo_learnings.txt").write_text(
@@ -201,9 +193,6 @@ def _render_header(
 			'mkdir -p prompts\n'
 			'if [ ! -f prompts/header.txt ]; then\n'
 			'  src=".codex-workflow-src/prompts/header.txt"\n'
-			'  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/header.txt" ]; then\n'
-			'    src=".codex-workflow-src-main/prompts/header.txt"\n'
-			'  fi\n'
 			'  if [ ! -f "${src}" ]; then\n'
 			'    echo "::error::Failed to stage required file prompts/header.txt"\n'
 			'    exit 1\n'
@@ -238,30 +227,17 @@ def _render_header(
 
 def test_header_renders_when_staged() -> None:
 	"""With the staging block, the header renders and {{REPO_LEARNINGS}} hydrates."""
-	for prefer_main_snapshot in (False, True):
-		result = _render_header(
-			stage_header=True, prefer_main_snapshot=prefer_main_snapshot
-		)
-		assert result.returncode == 0, (
-			f"render failed unexpectedly (prefer_main_snapshot={prefer_main_snapshot}): "
-			f"rc={result.returncode}\nstderr={result.stderr}"
-		)
-		assert "Prompt file not found" not in result.stderr, (
-			f"staged render still hit the missing-header path "
-			f"(prefer_main_snapshot={prefer_main_snapshot})"
-		)
-		assert "{{REPO_LEARNINGS}}" not in result.stdout, (
-			f"placeholder left unhydrated in rendered header "
-			f"(prefer_main_snapshot={prefer_main_snapshot})"
-		)
-		assert "Learned: prefer batched GraphQL." in result.stdout, (
-			f"REPO_LEARNINGS env value not injected into the rendered header "
-			f"(prefer_main_snapshot={prefer_main_snapshot})"
-		)
+	result = _render_header(stage_header=True)
+	assert result.returncode == 0, (
+		f"render failed unexpectedly: rc={result.returncode}\nstderr={result.stderr}"
+	)
+	assert "Prompt file not found" not in result.stderr
+	assert "{{REPO_LEARNINGS}}" not in result.stdout
+	assert "Learned: prefer batched GraphQL." in result.stdout
 
 
 def test_header_staging_hard_fails_without_any_support_copy() -> None:
-	"""When neither support checkout has header.txt, staging must stop first."""
+	"""When the immutable support checkout lacks header.txt, staging must stop first."""
 	result = _render_header(stage_header=True, support_header_available=False)
 	assert result.returncode != 0
 	assert "::error::Failed to stage required file prompts/header.txt" in result.stdout

@@ -9,6 +9,9 @@ actuation_required="${RESOLVER_ACTUATION_REQUIRED:-false}"
 if [ ! -s "${candidate_file:-/nonexistent}" ] && [ "${actuation_required}" != "true" ]; then
 	exit 0
 fi
+if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
+	exit 0
+fi
 if ! [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] \
 	|| ! [[ "${INTEGRATION_TRACKING_NUM:-}" =~ ^[1-9][0-9]*$ ]] \
 	|| [ "${TARGET_BRANCH:-}" != "orchestrator/project-${INTEGRATION_TRACKING_NUM:-0}" ] \

@@ -171,7 +171,7 @@ model_provider_broker_start()
 	env -i PATH="${PATH}" HOME="${HOME:-/root}" PYTHONDONTWRITEBYTECODE=1 \
 		OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
 		python3 "${broker_path}" --ready-file "${ready_file}" \
-		--max-requests "${MODEL_PROVIDER_BROKER_MAX_REQUESTS:-12}" &
+		--max-requests "${MODEL_PROVIDER_BROKER_MAX_REQUESTS:-100}" &
 	broker_pid=$!
 	printf '%s\n' "${broker_pid}" > "${pid_file}"
 	chmod 0600 "${pid_file}"

@@ -205,7 +205,7 @@ def main() -> int:
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument("--ready-file", required=True)
 	parser.add_argument("--upstream-url", default="https://openrouter.ai/api/v1")
-	parser.add_argument("--max-requests", type=int, default=12)
+	parser.add_argument("--max-requests", type=int, default=100)
 	args = parser.parse_args()
 	if not 1 <= args.max_requests <= 100:
 		parser.error("--max-requests must be between 1 and 100")

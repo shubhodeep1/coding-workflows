@@ -172,10 +172,15 @@ def test_safe_fetch_steps_define_canonical_safe_gh_jq_fallback() -> None:
 def test_bootstrapped_gh_retry_workflows_require_staged_helper_with_main_fallback() -> None:
 	for relative_path in BOOTSTRAPPED_GH_HELPER_WORKFLOWS:
 		text = _workflow_text(relative_path)
+		if relative_path.endswith("orchestrate_poll.yml"):
+			assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}" in text
+			assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in text
+			assert ".codex-workflow-src-main" not in text
+			assert 'src=".codex-workflow-src/scripts/gh_helpers.sh"' in text
+			assert '::error::Missing required support script gh_helpers.sh' in text
+			continue
 		fallback_step = (
-			"Checkout workflow support source fallback for gh retry"
-			if relative_path.endswith("orchestrate_poll.yml")
-			else "Checkout workflow support source fallback"
+			"Checkout workflow support source fallback"
 		)
 		fallback_block = _step_block(text, fallback_step)
 		assert "path: .codex-workflow-src" in text, (

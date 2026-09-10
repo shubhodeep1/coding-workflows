@@ -5599,6 +5599,36 @@ ensure_integration_conflict_state_fields() {
       }' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 }
 
+# Compatibility parser for diagnostics and older external callers only.
+# Runtime retry-tier authority comes exclusively from the verified V2 comment
+# path below; this legacy PR-body value is never consulted by the poller.
+extract_autofix_resolver_retry_state_from_pr_body() {
+  local retry_state_body=""
+  retry_state_body="$(cat)"
+
+  RETRY_STATE_BODY="${retry_state_body}" python3 - <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+
+body = os.environ.get("RETRY_STATE_BODY", "").replace("\r\n", "\n").replace("\r", "\n")
+pattern = re.compile(r"<!-- AUTOFIX_RESOLVER_RETRY_STATE_V1\n(.*?)\n-->", re.S)
+matches = pattern.findall(body)
+for raw in reversed(matches):
+  try:
+    parsed = json.loads(raw)
+  except json.JSONDecodeError:
+    continue
+  if isinstance(parsed, dict):
+    sys.stdout.write(json.dumps(parsed, sort_keys=True, ensure_ascii=True))
+    raise SystemExit(0)
+raise SystemExit(0)
+PY
+}
+
 extract_autofix_resolver_retry_state_from_comments() {
   local repository="$1"
   local tracking_issue="$2"

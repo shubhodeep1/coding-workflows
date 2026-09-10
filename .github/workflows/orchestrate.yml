@@ -160,17 +160,23 @@ jobs:
           fi
 
       - name: Resolve workflow support ref for run-start
+        env:
+          WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
-          if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
-          else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          if [ "${WORKFLOW_DEFINITION_REPOSITORY}" != "${wf_source}" ]; then
+            echo "::error::Reusable workflow repository '${WORKFLOW_DEFINITION_REPOSITORY}' does not match expected source '${wf_source}'."
+            exit 1
           fi
+          if ! [[ "${WORKFLOW_DEFINITION_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::job.workflow_sha is not an immutable 40-character commit SHA."
+            exit 1
+          fi
+          echo "SCRIPT_REF=${WORKFLOW_DEFINITION_SHA,,}" >> "$GITHUB_ENV"
 
       - name: Checkout workflow support source for run-start
-        id: checkout_support_source_run_start
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -179,31 +185,6 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
-
-          persist-credentials: false
-      - name: Checkout workflow support source fallback for run-start
-        if: ${{ steps.checkout_support_source_run_start.outcome == 'failure' }}
-        continue-on-error: true
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src
-          fetch-depth: 1
-
-          persist-credentials: false
-      - name: Checkout workflow support source main snapshot for run-start
-        if: ${{ env.SCRIPT_REF != 'main' }}
-        continue-on-error: true
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src-main
-          fetch-depth: 1
-
           persist-credentials: false
       - name: Stage workflow memory support files for run-start
         run: |
@@ -219,9 +200,6 @@ jobs:
           _fetched_scripts=()
           for f in gh_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py; do
             src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              src=".codex-workflow-src-main/scripts/${f}"
-            fi
             if [ ! -f "${src}" ]; then
               echo "::warning::Missing required run-start support script ${f}; run-start memory event may be skipped"
               continue
@@ -241,15 +219,10 @@ jobs:
           mkdir -p ai-memory/schemas
           for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json validation_history.v1.json operator_bypass_audit.v1.json revalidate_events.v1.json validation_discovery.v1.json; do
             src=".codex-workflow-src/ai-memory/schemas/${sf}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/ai-memory/schemas/${sf}" ]; then
-              src=".codex-workflow-src-main/ai-memory/schemas/${sf}"
-            fi
             if [ ! -f "ai-memory/schemas/${sf}" ] && [ -f "${src}" ]; then
               install -m 0644 "${src}" "ai-memory/schemas/${sf}"
             fi
           done
-
-          rm -rf .codex-workflow-src-main
 
       - name: Record orchestration run start
         env:
@@ -296,18 +269,23 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Resolve workflow support ref
+        env:
+          WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
-          if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
-          else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          if [ "${WORKFLOW_DEFINITION_REPOSITORY}" != "${wf_source}" ]; then
+            echo "::error::Reusable workflow repository '${WORKFLOW_DEFINITION_REPOSITORY}' does not match expected source '${wf_source}'."
+            exit 1
           fi
+          if ! [[ "${WORKFLOW_DEFINITION_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::job.workflow_sha is not an immutable 40-character commit SHA."
+            exit 1
+          fi
+          echo "SCRIPT_REF=${WORKFLOW_DEFINITION_SHA,,}" >> "$GITHUB_ENV"
 
       - name: Checkout workflow support source
-        id: checkout_support_source
-        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -315,39 +293,15 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
-
-          persist-credentials: false
-      - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src
-          fetch-depth: 1
-
           persist-credentials: false
       - name: Ensure workflow support source checkout
         run: |
           set -euo pipefail
           if [ ! -d .codex-workflow-src ]; then
-            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
+            echo "::error::Failed to checkout immutable workflow support source at ${SCRIPT_REF}"
             exit 1
           fi
 
-      - name: Checkout workflow support source main snapshot
-        if: ${{ env.SCRIPT_REF != 'main' }}
-        continue-on-error: true
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src-main
-          fetch-depth: 1
-
-          persist-credentials: false
       - name: Stage workflow support files
         run: |
           set -euo pipefail
@@ -356,9 +310,6 @@ jobs:
           _fetched_scripts=()
             for f in gh_helpers.sh label_helpers.sh git_ref_health_check.sh orchestrate_lib.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh model_provider_broker.py; do
             src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              src=".codex-workflow-src-main/scripts/${f}"
-            fi
             if [ ! -f "${src}" ]; then
               echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
               exit 1
@@ -377,9 +328,6 @@ jobs:
           # shim resolves ${SCRIPT_DIR}/render_prompt.py.
           for f in render_prompt.py; do
             src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              src=".codex-workflow-src-main/scripts/${f}"
-            fi
             if [ ! -f "${src}" ]; then
               echo "::notice::Optional render_prompt.py backend unavailable on ${SCRIPT_REF}; render_prompt.sh shim (if present) resolves it elsewhere or the bundled bash renderer is used."
               continue
@@ -391,9 +339,6 @@ jobs:
           mkdir -p ai-memory/schemas
           for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json validation_history.v1.json operator_bypass_audit.v1.json revalidate_events.v1.json validation_discovery.v1.json workflow_overlay.v1.json; do
             src=".codex-workflow-src/ai-memory/schemas/${sf}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/ai-memory/schemas/${sf}" ]; then
-              src=".codex-workflow-src-main/ai-memory/schemas/${sf}"
-            fi
             if [ ! -f "ai-memory/schemas/${sf}" ] && [ -f "${src}" ]; then
               install -m 0644 "${src}" "ai-memory/schemas/${sf}"
             fi
@@ -411,9 +356,6 @@ jobs:
 
           mkdir -p prompts prompts/_templates
           prompt_src=".codex-workflow-src/prompts/mode-orchestrate.txt"
-          if [ ! -f "${prompt_src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-orchestrate.txt" ]; then
-            prompt_src=".codex-workflow-src-main/prompts/mode-orchestrate.txt"
-          fi
           if [ ! -f "${prompt_src}" ]; then
             echo "::error::Missing required support file prompts/mode-orchestrate.txt"
             exit 1
@@ -422,9 +364,6 @@ jobs:
 
           for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_role_persona.txt _prelude_output_contract.txt _templates/mode-orchestrate.txt; do
             asset_src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
-            if [ ! -f "${asset_src}" ] && [ -f ".codex-workflow-src-main/prompts/${prompt_assembly_asset}" ]; then
-              asset_src=".codex-workflow-src-main/prompts/${prompt_assembly_asset}"
-            fi
             if [ ! -f "${asset_src}" ]; then
               echo "::error::Missing required support file prompts/${prompt_assembly_asset}"
               exit 1
@@ -434,9 +373,6 @@ jobs:
 
           mkdir -p .github/ai
           schema_src=".codex-workflow-src/.github/ai/orchestrate_schema.v1.json"
-          if [ ! -f "${schema_src}" ] && [ -f ".codex-workflow-src-main/.github/ai/orchestrate_schema.v1.json" ]; then
-            schema_src=".codex-workflow-src-main/.github/ai/orchestrate_schema.v1.json"
-          fi
           if [ ! -f "${schema_src}" ]; then
             echo "::error::Missing required support file .github/ai/orchestrate_schema.v1.json"
             exit 1
@@ -444,9 +380,6 @@ jobs:
           install -m 0644 "${schema_src}" .github/ai/orchestrate_schema.v1.json
 
           catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
-          if [ ! -f "${catalog_src}" ] && [ -f ".codex-workflow-src-main/scripts/codex_model_catalog.json" ]; then
-            catalog_src=".codex-workflow-src-main/scripts/codex_model_catalog.json"
-          fi
           if [ -f "${catalog_src}" ]; then
             install -m 0644 "${catalog_src}" scripts/codex_model_catalog.json
             _fetched_scripts+=(codex_model_catalog.json)
@@ -465,9 +398,6 @@ jobs:
           for f in unattended_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               src=".codex-workflow-src/${f}"
-              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${f}" ]; then
-                src=".codex-workflow-src-main/${f}"
-              fi
               if [ ! -f "${src}" ]; then
                 echo "::error::Failed to stage required file ${f}"
                 exit 1
@@ -475,8 +405,6 @@ jobs:
               install -m 0644 "${src}" "${f}"
             fi
           done
-
-          rm -rf .codex-workflow-src-main
 
       - name: Setup uv
         if: env.SEMBLE_ENABLED == 'true'
