@@ -299,6 +299,8 @@ jobs:
         id: refctx
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}
         run: |
           set -euo pipefail
           issue_number="${ISSUE_NUMBER:-}"
@@ -309,14 +311,18 @@ jobs:
           fi
 
           resolver_repo="shubhodeep1/coding-workflows"
-          resolver_ref="stable"
-          if [ "${{ github.repository }}" = "${resolver_repo}" ]; then
-            resolver_ref="${{ github.sha }}"
+          if [ "${WORKFLOW_DEFINITION_REPOSITORY}" != "${resolver_repo}" ]; then
+            echo "::error::Reusable workflow repository '${WORKFLOW_DEFINITION_REPOSITORY}' does not match expected source '${resolver_repo}'."
+            exit 1
           fi
+          if ! [[ "${WORKFLOW_DEFINITION_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::job.workflow_sha is not an immutable 40-character commit SHA."
+            exit 1
+          fi
+          resolver_ref="${WORKFLOW_DEFINITION_SHA,,}"
 
           resolver_stage_root="${RUNNER_TEMP}/resolve-integration-ref-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           resolver_stage_primary="${resolver_stage_root}/primary"
-          resolver_stage_fallback="${resolver_stage_root}/fallback"
           resolver_repo_url="https://github.com/${resolver_repo}"
           rm -rf "${resolver_stage_root}"
           mkdir -p "${resolver_stage_root}"
@@ -330,25 +336,19 @@ jobs:
           }
           trap cleanup_resolver_stage EXIT
 
-          if resolver_git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_primary}" 2>"${resolver_clone_log}"; then
-            resolver_script="${resolver_stage_primary}/scripts/resolve_integration_ref.sh"
-            if ! resolver_git -C "${resolver_stage_primary}" fetch --quiet --depth 1 origin "${resolver_ref}" 2>>"${resolver_clone_log}" || \
-               ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}"; then
-              echo "::warning::Failed to stage canonical integration resolver ref ${resolver_ref}; using main fallback."
-              if [ -s "${resolver_clone_log}" ]; then
-                sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
-              fi
-            fi
-          elif resolver_git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_fallback}" 2>>"${resolver_clone_log}"; then
-            resolver_script="${resolver_stage_fallback}/scripts/resolve_integration_ref.sh"
-          else
-            echo "::warning::Failed to stage canonical integration resolver; falling back to default branch."
+          mkdir -p "${resolver_stage_primary}"
+          git -C "${resolver_stage_primary}" init --quiet
+          git -C "${resolver_stage_primary}" remote add origin "${resolver_repo_url}"
+          if ! resolver_git -C "${resolver_stage_primary}" fetch --quiet --depth 1 origin "${resolver_ref}" 2>"${resolver_clone_log}" \
+            || ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}"; then
+            echo "::warning::Failed to stage canonical integration resolver at immutable ref ${resolver_ref}; falling back to default branch."
             if [ -s "${resolver_clone_log}" ]; then
               sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
             fi
             echo "ref=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          resolver_script="${resolver_stage_primary}/scripts/resolve_integration_ref.sh"
 
           if [ ! -f "${resolver_script}" ]; then
             echo "::warning::Canonical integration resolver script not found in staged source; falling back to default branch."

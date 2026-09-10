@@ -2836,6 +2836,9 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in apply_fixes
 	assert 'failure_class=config_writer_missing' in apply_fixes
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in apply_fixes
+	assert '"OPENROUTER_API_KEY=${MODEL_PROVIDER_BROKER_TOKEN}"' in apply_fixes
+	assert '--provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL}"' in apply_fixes
+	assert "model_provider_broker_stop || original_rc=80" in apply_fixes
 	assert 'opencode_run_cmd "$@"' in consolidate
 	assert '\twriter\n\t"${REVIEW_CONSOLIDATOR_MODEL}"' in consolidate
 	assert 'opencode_emit_failure_alert review_consolidate writer' in consolidate
@@ -2843,6 +2846,8 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'if source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in consolidate
 	assert 'missing=opencode_config_writer failopen=1 output_bytes=0' in consolidate
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in consolidate
+	assert '--provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL}"' in consolidate
+	assert consolidate.count("model_provider_broker_exec_sanitized") >= 2
 	assert 'reviewer\n    "${MODEL_EDITOR}"' in rb_judge
 	assert 'writer\n        "${MODEL_EDITOR}"' in rb_judge
 	assert 'OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"' in rb_judge
@@ -2850,6 +2855,8 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in rb_judge
 	assert 'opencode_emit_failure_alert review_rb_judge reviewer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing' in rb_judge
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" 2>/dev/null || true' in rb_judge
+	assert '--provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL}"' in rb_judge
+	assert rb_judge.count("model_provider_broker_exec_sanitized") >= 6
 	assert 'if ! review_rb_prepare_opencode_config reviewer review_rb_judge "${RB_JUDGE_OPENCODE_CONFIG}" off; then\n  exit 1\nfi' in rb_judge
 	assert 'if ! review_rb_prepare_opencode_config writer review_rb_fix "${RB_FIX_OPENCODE_CONFIG}" "${rb_fix_serena_mode}"; then\n        rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"\n        exit 1\n      fi' in rb_judge
 	assert 'opencode_run_cmd "$@"' in resolver

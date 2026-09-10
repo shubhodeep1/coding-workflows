@@ -370,9 +370,10 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
 ## Model credential isolation
 
 - `scripts/model_provider_broker.py` is the bounded loopback-only credential
-  boundary for issue-derived analysis, implementation and repair, validation,
-  check-failure triage, security audits, workflow-log analysis, and conflict
-  resolution. Agent environments contain an ephemeral broker token, never the
+  boundary for issue-derived analysis, orchestrator polling, implementation and
+  repair, validation, check-failure triage, security audits, source and consumer
+  retros, review consolidation, review editing, review-blocked judging/fixing,
+  workflow-log analysis, and conflict resolution. Agent environments contain an ephemeral broker token, never the
   upstream provider key or GitHub/state/Telegram credentials. Broker instances
   accept at most `MODEL_PROVIDER_BROKER_MAX_REQUESTS` requests (default `100`,
   valid range `1..100`) and fail closed with HTTP 429 after exhaustion.

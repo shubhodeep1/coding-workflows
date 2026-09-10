@@ -138,20 +138,28 @@ sys.exit(1)
 	_write_exec(bin_dir / "gh", gh_script)
 
 
-def _install_mock_codex(bin_dir: Path) -> None:
+def _install_mock_codex(bin_dir: Path, state_file: Path) -> None:
 	codex_script = r'''#!/usr/bin/env python3
 import json
 import os
 import sys
 from pathlib import Path
 
-state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+state_path = Path(__STATE_PATH__)
 state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
 state.setdefault("codex_calls", []).append(sys.argv[1:])
+state.setdefault("codex_environments", []).append({
+	name: os.environ[name]
+	for name in (
+		"OPENROUTER_API_KEY", "GH_TOKEN", "GH_PAT", "GITHUB_TOKEN",
+		"ORCHESTRATOR_STATE_AUTH_KEYRING", "TG_BOT_SECRET", "TG_ADMIN_CHAT_ID",
+	)
+	if name in os.environ
+})
 state_path.write_text(json.dumps(state), encoding="utf-8")
-sys.stdout.write(os.environ.get("MOCK_CODEX_OUTPUT", ""))
+sys.stdout.write(__RETRO_BODY__)
 sys.exit(0)
-'''
+'''.replace("__STATE_PATH__", repr(str(state_file))).replace("__RETRO_BODY__", repr(RETRO_BODY))
 	_write_exec(bin_dir / "codex", codex_script)
 
 
@@ -194,7 +202,7 @@ def _run_fanout(
 		state_file = tmp_path / "gh-state.json"
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 		_install_mock_gh(bin_dir)
-		_install_mock_codex(bin_dir)
+		_install_mock_codex(bin_dir, state_file)
 		# workflow_retro.py needs the same interpreter version the tests run
 		# on (CI pins 3.12); shim `python3` so the script uses it too.
 		(bin_dir / "python3").symlink_to(sys.executable)
@@ -211,7 +219,10 @@ def _run_fanout(
 				"GITHUB_REPOSITORY": "owner/source",
 				"GITHUB_WORKSPACE": str(REPO_ROOT),
 				"OPENROUTER_API_KEY": "test-openrouter-key",
-				"MOCK_CODEX_OUTPUT": RETRO_BODY,
+				"GH_PAT": "test-gh-pat",
+				"ORCHESTRATOR_STATE_AUTH_KEYRING": "test-state-key",
+				"TG_BOT_SECRET": "test-telegram-token",
+				"TG_ADMIN_CHAT_ID": "test-chat-id",
 				"MOCK_GH_STATE_FILE": str(state_file),
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 				"PYTHONDONTWRITEBYTECODE": "1",
@@ -287,7 +298,11 @@ def test_fanout_posts_active_repo_skips_idle_and_disabled_and_source() -> None:
 		"errors": [],
 	}
 	state = {
-		"consumer_var_responses": {"owner/disabled-repo": "false"},
+		"consumer_var_responses": {
+			"owner/active-repo": "true",
+			"owner/disabled-repo": "false",
+			"owner/idle-repo": "true",
+		},
 		"issue_list_responses": [[]],
 		"next_issue_number": 9100,
 	}
@@ -311,6 +326,11 @@ def test_fanout_posts_active_repo_skips_idle_and_disabled_and_source() -> None:
 	# The source repo's own retro is posted by the dedicated job steps.
 	assert "repo=owner/source" not in proc.stdout
 	assert len(final_state.get("codex_calls", [])) == 1
+	model_environment = final_state["codex_environments"][0]
+	assert model_environment.get("OPENROUTER_API_KEY")
+	assert model_environment["OPENROUTER_API_KEY"] != "test-openrouter-key"
+	for credential_name in ("GH_TOKEN", "GH_PAT", "GITHUB_TOKEN", "ORCHESTRATOR_STATE_AUTH_KEYRING", "TG_BOT_SECRET", "TG_ADMIN_CHAT_ID"):
+		assert credential_name not in model_environment
 	create_args = final_state.get("issue_create_args", [])
 	assert len(create_args) == 1
 	assert "ai:retro" in create_args[0]

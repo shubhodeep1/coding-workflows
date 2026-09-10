@@ -544,7 +544,9 @@ export MODEL_PROVIDER_BROKER_AGENT_HOME
 source "${SECURITY_AUDIT_SCRIPT_DIR}/codex_helpers.sh"
 CODEX_HELPERS_SCRIPTS_DIR="${SECURITY_AUDIT_SCRIPT_DIR}"
 export CODEX_HELPERS_SCRIPTS_DIR
-model_provider_broker_start
+if [ -z "${MODEL_PROVIDER_BROKER_BASE_URL:-}" ] || [ -z "${MODEL_PROVIDER_BROKER_TOKEN:-}" ]; then
+	model_provider_broker_start
+fi
 model_provider_broker_prepare_codex_writer \
 	"${WORKFLOW_EDITOR_MODEL:-openai/gpt-5.6-sol}" \
 	"${MODEL_REASONING_EFFORT:-xhigh}" \

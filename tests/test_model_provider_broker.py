@@ -113,6 +113,24 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 	assert '"scripts/model_provider_broker.py"' in validate_workflow
 	assert "model_provider_broker_prepare_codex_writer" in validate_process
 	assert "model_provider_broker_exec_sanitized" in validate_process
+	poller_workflow = (REPO_ROOT / ".github/workflows/orchestrate_poll.yml").read_text(encoding="utf-8")
+	poller_process = (REPO_ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert "codex_helpers.sh" in poller_workflow
+	assert "model_provider_broker.py" in poller_workflow
+	assert "model_provider_broker_prepare_codex_writer" in poller_workflow
+	assert "model_provider_broker_exec_sanitized" in poller_process
+	assert 'OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"' not in poller_process
+	retro_fanout = (REPO_ROOT / "scripts/workflow_retro_fanout.sh").read_text(encoding="utf-8")
+	assert "model_provider_broker_exec_sanitized" in retro_fanout
+	assert "--sandbox read-only" in retro_fanout
+	assert "workflow_log_output_contract.py" in retro_fanout
+	for review_script_name in ("review_apply_fixes.sh", "review_consolidate.sh", "review_rb_judge.sh"):
+		review_script = (REPO_ROOT / "scripts" / review_script_name).read_text(encoding="utf-8")
+		assert "model_provider_broker_start" in review_script
+		assert "--provider-base-url" in review_script
+		assert "model_provider_broker_stop" in review_script
+	assert '"OPENROUTER_API_KEY=${MODEL_PROVIDER_BROKER_TOKEN}"' in (REPO_ROOT / "scripts/review_apply_fixes.sh").read_text(encoding="utf-8")
+	assert '"OPENROUTER_API_KEY=${OPENROUTER_API_KEY}"' not in (REPO_ROOT / "scripts/review_apply_fixes.sh").read_text(encoding="utf-8")
 	for workflow_name in (
 		"cancel_on_pr_close.yml",
 		"sync_ai_labels.yml",
@@ -132,7 +150,11 @@ def test_sanitized_launcher_exposes_only_ephemeral_provider_token(tmp_path: Path
 		export RUNTIME_DIR="{tmp_path}"
 		export OPENROUTER_API_KEY="upstream-secret"
 		export GH_TOKEN="repository-secret"
+		export GH_PAT="repository-pat"
+		export GITHUB_TOKEN="github-token"
 		export ORCHESTRATOR_STATE_AUTH_KEYRING="state-secret"
+		export TG_BOT_SECRET="telegram-secret"
+		export TG_ADMIN_CHAT_ID="telegram-chat"
 		model_provider_broker_start
 		model_provider_broker_exec_sanitized sh -c env
 		model_provider_broker_stop
@@ -146,7 +168,15 @@ def test_sanitized_launcher_exposes_only_ephemeral_provider_token(tmp_path: Path
 	)
 	assert "upstream-secret" not in result.stdout
 	assert "repository-secret" not in result.stdout
+	assert "repository-pat" not in result.stdout
+	assert "github-token" not in result.stdout
 	assert "state-secret" not in result.stdout
+	assert "telegram-secret" not in result.stdout
+	assert "telegram-chat" not in result.stdout
 	assert "OPENROUTER_API_KEY=" in result.stdout
 	assert "GH_TOKEN=" not in result.stdout
+	assert "GH_PAT=" not in result.stdout
+	assert "GITHUB_TOKEN=" not in result.stdout
 	assert "ORCHESTRATOR_STATE_AUTH_KEYRING=" not in result.stdout
+	assert "TG_BOT_SECRET=" not in result.stdout
+	assert "TG_ADMIN_CHAT_ID=" not in result.stdout

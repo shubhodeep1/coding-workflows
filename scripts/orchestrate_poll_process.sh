@@ -19,6 +19,12 @@ if [ -f "scripts/gh_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/gh_helpers.sh
 fi
+if [ ! -f "scripts/codex_helpers.sh" ]; then
+  echo "::error::Missing required support script scripts/codex_helpers.sh" >&2
+  exit 1
+fi
+# shellcheck source=codex_helpers.sh
+source scripts/codex_helpers.sh
 if ! type emit_event >/dev/null 2>&1; then
   emit_event() { return 0; }
 fi
@@ -169,8 +175,8 @@ if ! command -v maybe_inject_nag >/dev/null 2>&1; then
 fi
 
 # Run untrusted model-facing commands without GitHub, Telegram, state-auth,
-# Git, or other ambient credentials. Codex keeps provider access, while its
-# spawned tools cannot inherit secret-named variables.
+# Git, or other ambient credentials. The only provider credential exposed is
+# the broker's bounded per-run token.
 poller_run_sanitized_command() {
   local -a sanitized_command_environment=(env -i \
     HOME="${HOME:-}" \
@@ -183,7 +189,10 @@ poller_run_sanitized_command() {
     XDG_CACHE_HOME="${XDG_CACHE_HOME:-${HOME:-}/.cache}" \
     GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$(pwd)}" \
     PYTHONDONTWRITEBYTECODE="1" \
-    OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" \
+    OPENROUTER_API_KEY="${MODEL_PROVIDER_BROKER_TOKEN:-}" \
+    MODEL_PROVIDER_BROKER_BASE_URL="${MODEL_PROVIDER_BROKER_BASE_URL:-}" \
+    MODEL_PROVIDER_BROKER_TOKEN="${MODEL_PROVIDER_BROKER_TOKEN:-}" \
+    MODEL_PROVIDER_BROKER_AGENT_HOME="${MODEL_PROVIDER_BROKER_AGENT_HOME:-}" \
     MOCK_CODEX_JSON="${MOCK_CODEX_JSON:-}" \
     REAL_PYTHON_BIN="${REAL_PYTHON_BIN:-}")
   if [ -n "${SSL_CERT_FILE:-}" ]; then
@@ -200,7 +209,10 @@ poller_run_readonly_model() {
   local output_file="$2"
   local error_file="$3"
   local model_name="$4"
-  poller_run_sanitized_command \
+  model_provider_broker_exec_sanitized env \
+    MOCK_CODEX_JSON="${MOCK_CODEX_JSON:-}" \
+    MOCK_CODEX_TOUCH_FILE="${MOCK_CODEX_TOUCH_FILE:-}" \
+    REAL_PYTHON_BIN="${REAL_PYTHON_BIN:-}" \
     codex --ask-for-approval never \
       -c model_verbosity=low \
       -c include_apply_patch_tool=true \
@@ -5226,7 +5238,11 @@ run_security_pass_inline() {
   echo "SECURITY_PASS_STARTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} base_sha=${merge_base_sha}"
 
   effective_security_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-5.6-sol}}"
-  if ! bash scripts/write_codex_config.sh --model "${effective_security_model}" --reasoning xhigh >/dev/null 2>"${audit_error_file}"; then
+  if ! bash scripts/write_codex_config.sh \
+    --model "${effective_security_model}" \
+    --reasoning xhigh \
+    --provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL}" \
+    >/dev/null 2>"${audit_error_file}"; then
     security_pass_fail_closed "engine_unavailable" "The security-pass model configuration could not be prepared." "${prior_security_status}"
     return 1
   fi

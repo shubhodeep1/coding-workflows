@@ -337,6 +337,12 @@ def test_validate_process_includes_discover_and_diagnose_semble_hooks() -> None:
 def test_self_heal_includes_semble_and_serena_prompt_hooks() -> None:
 	text = _self_heal_text()
 	assert 'if source scripts/semble_helpers.sh; then' in text
+	assert 'source "${SELF_HEAL_SCRIPT_DIR}/codex_helpers.sh"' in text
+	assert 'model_provider_broker_start' in text
+	assert 'model_provider_broker_prepare_codex_writer' in text
+	assert 'trap cleanup_self_heal_model_provider_broker EXIT' in text
+	assert 'model_provider_broker_exec_sanitized' in text
+	assert text.index('trap cleanup_self_heal_model_provider_broker EXIT') < text.index('model_provider_broker_start')
 	assert 'SELF_HEAL_SEMBLE_MAX_CHUNKS="${SELF_HEAL_SEMBLE_MAX_CHUNKS:-3}"' in text
 	assert 'build_self_heal_semble_query()' in text
 	assert 'build_self_heal_serena_tool_hints()' in text

@@ -90,6 +90,21 @@ if [ ! -f "${SELF_HEAL_SCRIPT_DIR}/codex_helpers.sh" ]; then
 fi
 # shellcheck source=/dev/null
 source "${SELF_HEAL_SCRIPT_DIR}/codex_helpers.sh"
+SELF_HEAL_STARTED_MODEL_PROVIDER_BROKER="false"
+cleanup_self_heal_model_provider_broker()
+{
+	if [ "${SELF_HEAL_STARTED_MODEL_PROVIDER_BROKER}" = "true" ]; then
+		model_provider_broker_stop >/dev/null 2>&1 || true
+	fi
+}
+trap cleanup_self_heal_model_provider_broker EXIT
+if [ -z "${MODEL_PROVIDER_BROKER_TOKEN:-}" ] || [ -z "${MODEL_PROVIDER_BROKER_BASE_URL:-}" ]; then
+	MODEL_PROVIDER_BROKER_AGENT_HOME="${MODEL_PROVIDER_BROKER_AGENT_HOME:-${RUNTIME_DIR}/self-heal-model-provider-agent-home}"
+	export MODEL_PROVIDER_BROKER_AGENT_HOME
+	model_provider_broker_start
+	SELF_HEAL_STARTED_MODEL_PROVIDER_BROKER="true"
+	model_provider_broker_prepare_codex_writer "${MODEL_EDITOR:-openai/gpt-5.6-sol}" "${MODEL_REASONING_EFFORT:-xhigh}" "$(pwd)"
+fi
 CODEX_HEARTBEAT_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_stall_guard.sh"
 LEDGER_SUBSTATE_HELPER=""

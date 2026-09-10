@@ -541,6 +541,7 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
   fi
 
   RESOLVER_RETRY_STATE_VERIFIED_FILE="${RUNTIME_DIR}/resolver_retry_state_verified.json"
+  RESOLVER_RETRY_STATE_COMMENT_ID=""
   rm -f "${RESOLVER_RETRY_STATE_VERIFIED_FILE}"
   if [ -s "${PR_ISSUE_COMMENTS_FILE:-/nonexistent}" ] \
     && [ -f "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" ] \
@@ -592,12 +593,15 @@ PY
         if [[ "${_retry_generation}" =~ ^[1-9][0-9]*$ ]] && [ "${_retry_generation}" -gt "${_retry_best_generation}" ]; then
           install -m 0600 "${_retry_verified_file}" "${RESOLVER_RETRY_STATE_VERIFIED_FILE}"
           _retry_best_generation="${_retry_generation}"
+          RESOLVER_RETRY_STATE_COMMENT_ID="${_retry_candidate_file##*/}"
+          RESOLVER_RETRY_STATE_COMMENT_ID="${RESOLVER_RETRY_STATE_COMMENT_ID%.json}"
         fi
       fi
     done
     rm -rf "${_retry_state_candidates_dir}"
   fi
   echo "RESOLVER_RETRY_STATE_VERIFIED_FILE=${RESOLVER_RETRY_STATE_VERIFIED_FILE}" >> "$GITHUB_ENV"
+  echo "RESOLVER_RETRY_STATE_COMMENT_ID=${RESOLVER_RETRY_STATE_COMMENT_ID}" >> "$GITHUB_ENV"
   rm -f "${_ti_comments_raw}" "${_ti_comments_json}" "${_trusted_ti_comments_json}" "${_state_json_file}"
   unset _ti_comments_raw _ti_comments_json _trusted_ti_comments_json _state_json_file
   unset _state_producer_json _state_producer_id _state_producer_login _state_acquisition_ready

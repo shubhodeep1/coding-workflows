@@ -54,12 +54,15 @@ if [ -s "${candidate_file:-/nonexistent}" ]; then
 		cat "${signed_file}"
 		echo '-->'
 	} > "${comment_file}"
-	gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?sort=updated&direction=desc&per_page=100" \
-		| jq 'if type == "array" then . else [] end' > "${comments_file}"
-	existing_comment_id="$(jq -r --argjson producer_id "${producer_id}" '
-		[.[] | select((.user.id // 0) == $producer_id and ((.body // "") | startswith("<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n")))]
-		| sort_by(.id) | last | .id // empty
-	' "${comments_file}")"
+	existing_comment_id="${RESOLVER_RETRY_STATE_COMMENT_ID:-}"
+	if ! [[ "${existing_comment_id}" =~ ^[1-9][0-9]*$ ]]; then
+		gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?sort=updated&direction=desc&per_page=100" \
+			| jq 'if type == "array" then . else [] end' > "${comments_file}"
+		existing_comment_id="$(jq -r --argjson producer_id "${producer_id}" '
+			[.[] | select((.user.id // 0) == $producer_id and ((.body // "") | startswith("<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n")))]
+			| sort_by(.id) | last | .id // empty
+		' "${comments_file}")"
+	fi
 	comment_payload="$(jq -n --rawfile body "${comment_file}" '{body:$body}')"
 	if [[ "${existing_comment_id}" =~ ^[1-9][0-9]*$ ]]; then
 		printf '%s' "${comment_payload}" | gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_comment_id}" --input - >/dev/null

@@ -847,7 +847,7 @@ def _run_poller(
 	if issue_labels is None:
 		issue_labels = {10: ["ai:merged"]}
 	issue_comments = issue_comments or {}
-	for pull_request in prs:
+	for pull_request in prs or []:
 		pull_body = str(pull_request.get("body") or "")
 		if pull_body.startswith("<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n"):
 			pull_number = int(pull_request["number"])
@@ -3256,6 +3256,9 @@ sys.exit(proc.returncode)
 				"GH_TOKEN": "test-token",
 				"ORCHESTRATOR_STATE_AUTH_KEYRING": _state_auth_keyring(),
 				"OPENROUTER_API_KEY": "test-openrouter",
+				"MODEL_PROVIDER_BROKER_BASE_URL": "http://127.0.0.1:9/api/v1",
+				"MODEL_PROVIDER_BROKER_TOKEN": "test-broker-token",
+				"MODEL_PROVIDER_BROKER_AGENT_HOME": str(home_dir),
 				"GITHUB_REPOSITORY": "owner/repo",
 				"MODEL_EDITOR": "openai/gpt-5.4",
 				"MODEL_REASONING_EFFORT_JUDGE": "xhigh",
@@ -15007,6 +15010,9 @@ sys.exit(1)
 				"JUDGE_OUTPUT_FILE": str(runtime_dir / "judge_output.txt"),
 				"GH_TOKEN": "test-token",
 				"OPENROUTER_API_KEY": "test-key",
+				"MODEL_PROVIDER_BROKER_BASE_URL": "http://127.0.0.1:9/api/v1",
+				"MODEL_PROVIDER_BROKER_TOKEN": "test-broker-token",
+				"MODEL_PROVIDER_BROKER_AGENT_HOME": str(home_dir),
 				"GITHUB_REPOSITORY": "owner/repo",
 				"MODEL_EDITOR": "openai/gpt-5.4",
 				"MODEL_REASONING_EFFORT_JUDGE": "xhigh",
