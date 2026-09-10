@@ -10,7 +10,7 @@ Until now `MAX_SECURITY_PASS_CYCLES` exhaustion labelled the tracking issue `ai:
 | Judge decisions per remaining finding | `accept_with_followup`, `keep_fixing`, `fail` |
 | Default judge round cap (`MAX_SECURITY_PASS_JUDGE_ROUNDS`) | `0` (unbounded) |
 | Waiver location match window (`SECURITY_AUDIT_WAIVER_LINE_WINDOW`) | 40 lines |
-| New GitHub API calls per accepted finding | 1 (`gh issue create` for the `ai:security` follow-up) |
+| New GitHub API calls | 1 `gh issue create` per accepted finding, plus 1 cached reconciliation search per tracking issue and poller process |
 
 What this means for operators: a project that keeps producing new medium-severity findings in its own fix code now converges on its own. Accepted findings arrive as `ai:security` issues that the normal clarify → plan → implement pipeline picks up later, so nothing is dropped, and the tracking issue carries the judge's decision table for every round. Projects that were already in `ai:security-pass-failed` before this release stay there until `/re-security-pass` or `/security-pass-waive <finding_id> ...` is commented; the new path applies only to exhaustions that happen after it ships.
 

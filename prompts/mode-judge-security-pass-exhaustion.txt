@@ -32,6 +32,7 @@ Allowed actions (exactly one per remaining finding):
 
 Rules:
 - Emit exactly one decision for every remaining finding, keyed by its exact `finding_id`. Unknown ids are ignored; a missing id invalidates the verdict.
+- `fail` is project-wide. If any finding requires `fail`, use `fail` for every remaining finding; mixing `fail` with another action invalidates the verdict.
 - Decide from the code, not from the finding text alone.
 - Keep justifications concise and concrete; cite the code path or commit you verified.
 - Never edit, commit, or push. This is a read-only decision.

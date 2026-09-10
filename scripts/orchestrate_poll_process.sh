@@ -88,6 +88,9 @@ fi
 # persistent on the repo side, so caching within a single orchestrator
 # invocation is safe and collapses dozens of API calls into a handful.
 declare -gA _ENSURED_LABELS_CACHE=()
+# Marker-search results are cached per tracking issue so accepted findings pay
+# at most one reconciliation lookup per poller process, not one per finding.
+declare -gA _SECURITY_PASS_ADVISORY_SEARCH_CACHE=()
 
 # _gh_url constructs a full GitHub URL for the current repository.
 _gh_url() {
@@ -5409,7 +5412,7 @@ PY
 # severity, justification, source, waived_by, waived_at_cycle, issue}.
 security_pass_record_waivers() {
   local waivers_json="$1"
-  jq --argjson waivers "${waivers_json}" '
+  if ! jq --argjson waivers "${waivers_json}" '
     (.security_pass_waived_findings // []) as $existing
     | ($waivers | map(.finding_id)) as $ids
     | .security_pass_waived_findings = (
@@ -5418,7 +5421,11 @@ security_pass_record_waivers() {
     | .security_pass_reported_findings = (
         [(.security_pass_reported_findings // [])[] | select((.finding_id | IN($ids[])) | not)]
       )
-  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    rm -f "${STATE_FILE}.tmp"
+    return 1
+  fi
+  return 0
 }
 
 # create_security_pass_advisory_followup <finding_json> <integration_branch> <head_sha> <justification> <source>
@@ -5429,16 +5436,17 @@ security_pass_record_waivers() {
 # state (one cheap jq read, no API call); the body carries the weekly
 # audit's `<!-- ai:security-finding:<id> -->` marker so the scheduled audit's
 # own dedupe recognises it, plus `<!-- security-pass-advisory:<tracking>:<id> -->`.
-# API cost: one `gh issue create` per accepted finding, nothing else.  Fail-open:
-# a create failure logs a warning and leaves the number empty; the waiver still
-# stands.
+# API cost: one paginated reconciliation search per tracking issue per poller
+# process, one `gh issue create` per new accepted finding, and the first cached
+# `gh label create` attempt for `ai:security`. Fail-open: lookup/create failures
+# leave the number empty and the waiver stands.
 create_security_pass_advisory_followup() {
   local finding_json="$1"
   local integration_branch="$2"
   local head_sha="$3"
   local justification="$4"
   local source="${5:-judge}"
-  local finding_id existing_issue body_file title issue_url issue_number
+  local finding_id existing_issue body_file title issue_url issue_number advisory_marker remote_followups_json
   SECURITY_PASS_ADVISORY_ISSUE_NUMBER=""
   finding_id="$(printf '%s' "${finding_json}" | jq -r '.finding_id // ""' 2>/dev/null || true)"
   [ -n "${finding_id}" ] || return 0
@@ -5446,6 +5454,32 @@ create_security_pass_advisory_followup() {
     [(.security_pass_followup_issues // [])[] | select(.finding_id == $id) | .issue] | last // empty
   ' "${STATE_FILE}" 2>/dev/null || true)"
   if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
+    SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${existing_issue}"
+    return 0
+  fi
+  advisory_marker="<!-- security-pass-advisory:${TRACKING_NUM}:${finding_id} -->"
+  if [ -z "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]+set}" ]; then
+    # The state cache and weekly-audit lookup cannot detect an issue whose
+    # create succeeded but whose response/state write was lost. This single
+    # paginated REST search per tracking issue returns issue number+body and
+    # fails open to an empty cache; subsequent findings reuse the result.
+    remote_followups_json="$(gh_retry gh api --method GET --paginate --slurp "search/issues" \
+      -f per_page=100 \
+      -f q="repo:${GITHUB_REPOSITORY} is:issue label:ai:security security-pass-advisory:${TRACKING_NUM} in:body" 2>/dev/null || echo '[]')"
+    _SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]="${remote_followups_json}"
+  fi
+  existing_issue="$(printf '%s' "${_SECURITY_PASS_ADVISORY_SEARCH_CACHE[${TRACKING_NUM}]}" | jq -r --arg marker "${advisory_marker}" '
+    [if type == "array" then .[].items[]? else .items[]? end | select((.body // "") | contains($marker)) | .number]
+    | first // empty
+  ' 2>/dev/null || true)"
+  if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
+    if ! jq --arg id "${finding_id}" --argjson issue "${existing_issue}" '
+      .security_pass_followup_issues = ([.security_pass_followup_issues[]? | select(.finding_id != $id)] + [{finding_id: $id, issue: $issue}] | .[-100:])
+      | .security_pass_waived_findings = [(.security_pass_waived_findings // [])[] | if .finding_id == $id then .issue = $issue else . end]
+    ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+      rm -f "${STATE_FILE}.tmp"
+      echo "::warning::Found advisory follow-up #${existing_issue} for security-pass finding ${finding_id}, but could not reconcile it into state."
+    fi
     SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${existing_issue}"
     return 0
   fi
@@ -5513,7 +5547,9 @@ PY
     return 0
   fi
   ensure_label_exists "ai:security"
-  issue_url="$(gh_retry gh issue create \
+  # Do not retry this non-idempotent mutation. If GitHub accepts the create but
+  # the response is lost, the marker search above reconciles it next poll.
+  issue_url="$(gh issue create \
     --repo "${GITHUB_REPOSITORY}" \
     --title "${title}" \
     --body-file "${body_file}" \
@@ -5523,13 +5559,16 @@ PY
     echo "::warning::Could not create the advisory follow-up issue for security-pass finding ${finding_id} on tracking issue #${TRACKING_NUM}; the waiver stands without a follow-up issue."
     return 0
   fi
-  jq --arg id "${finding_id}" --argjson issue "${issue_number}" '
+  if ! jq --arg id "${finding_id}" --argjson issue "${issue_number}" '
     .security_pass_followup_issues = (((.security_pass_followup_issues // []) + [{finding_id: $id, issue: $issue}]) | .[-100:])
     | .security_pass_waived_findings = [
         (.security_pass_waived_findings // [])[]
         | if .finding_id == $id then .issue = $issue else . end
       ]
-  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    rm -f "${STATE_FILE}.tmp"
+    echo "::warning::Created advisory follow-up #${issue_number} for security-pass finding ${finding_id}, but could not persist it in state; the body marker will reconcile it next poll."
+  fi
   echo "SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED tracking_issue=${TRACKING_NUM} finding=${finding_id} issue=${issue_number} source=${source}"
   SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${issue_number}"
   return 0
@@ -5665,18 +5704,18 @@ security_pass_exhaustion_judge() {
       (.decisions | type) == "array"
       and (
         ([$audit[0].findings[]?.finding_id] | unique) as $ids
-        | ([.decisions[] | select(type == "object") | select((.finding_id | type) == "string") | .finding_id] | unique) as $decided
-        | all($ids[]; . as $id | ($decided | index($id)) != null)
-          and all(
-            .decisions[] | select(type == "object") | select((.finding_id | type) == "string") | select(.finding_id | IN($ids[]));
-            (.action == "accept_with_followup" or .action == "keep_fixing" or .action == "fail")
-          )
+        | ([.decisions[] | select(type == "object") | select((.finding_id | type) == "string") | select(.finding_id | IN($ids[])) | .finding_id] | unique) as $decided
+        | [.decisions[] | select(type == "object") | select((.finding_id | type) == "string") | select(.finding_id | IN($ids[]))] as $known
+        | ($known | length) == ($ids | length)
+          and ($decided | length) == ($ids | length)
+          and all($known[]; .action == "accept_with_followup" or .action == "keep_fixing" or .action == "fail")
+          and ((any($known[]; .action == "fail") | not) or all($known[]; .action == "fail"))
       )
     ' >/dev/null 2>&1; then
       judge_success="true"
       break
     fi
-    echo "::warning::Security-pass exhaustion judge attempt ${attempt} for tracking issue #${TRACKING_NUM} returned no usable verdict (every remaining finding needs one decision with a valid action)."
+    echo "::warning::Security-pass exhaustion judge attempt ${attempt} for tracking issue #${TRACKING_NUM} returned no usable verdict (every remaining finding needs exactly one valid decision, and fail cannot be mixed with non-fail actions)."
     if [ -z "${MOCK_SECURITY_PASS_JUDGE_JSON:-}" ]; then
       sleep $(( 8 * attempt ))
     fi
@@ -5741,7 +5780,10 @@ ${decisions_table}}"
         waived_at_cycle: $cycle,
         issue: null
       }]' "${verdict_file}")"
-    security_pass_record_waivers "${waivers_json}"
+    if ! security_pass_record_waivers "${waivers_json}"; then
+      echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=waiver_state_write_failed round=${judge_round}"
+      return 1
+    fi
     echo "SECURITY_PASS_WAIVED tracking_issue=${TRACKING_NUM} source=judge round=${judge_round} ids=$(printf '%s' "${waivers_json}" | jq -r 'map(.finding_id) | join(",")')"
     while IFS= read -r finding_json; do
       [ -n "${finding_json}" ] || continue
@@ -15981,7 +16023,10 @@ The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was no
                 }
             ]
         ' "${STATE_FILE}")"
-        security_pass_record_waivers "$(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c 'map(del(.finding))')"
+        if ! security_pass_record_waivers "$(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c 'map(del(.finding))')"; then
+          echo "::warning::Could not persist /security-pass-waive for tracking issue #${TRACKING_NUM}; leaving the command unmarked so the next poll retries it."
+          continue
+        fi
         SECURITY_PASS_WAIVE_LINES=""
         while IFS= read -r SECURITY_PASS_WAIVE_ROW; do
           [ -n "${SECURITY_PASS_WAIVE_ROW}" ] || continue

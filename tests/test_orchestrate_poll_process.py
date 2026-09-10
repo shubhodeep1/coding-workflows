@@ -1922,6 +1922,7 @@ if args[0] == 'api':
 		if 'is:issue' in q:
 			items = [item for item in items if 'pull_request' not in item]
 		result = {'total_count': len(items), 'incomplete_results': False, 'items': items}
+		save()
 		if jq:
 			import subprocess as _sp
 			p = _sp.run(['jq', '-rc', jq], input=json.dumps(result), capture_output=True, text=True)
@@ -4392,6 +4393,38 @@ def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> Non
 	)
 
 
+def test_security_pass_advisory_followup_reconciles_remote_marker_before_create() -> None:
+	"""A lost create response/state write must not duplicate the advisory."""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		search_issue_items=[
+			{
+				"number": 955,
+				"body": "<!-- security-pass-advisory:192:SEC-TEST-1 -->",
+				"state": "open",
+			}
+		],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+				_security_pass_judge_verdict(("SEC-TEST-1", "accept_with_followup"))
+			),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "complete"
+	assert result.get("created_issues", []) == []
+	assert latest_state["security_pass_followup_issues"] == [{"finding_id": "SEC-TEST-1", "issue": 955}]
+	assert latest_state["security_pass_waived_findings"][0]["issue"] == 955
+	assert result["api_calls"].count("search/issues") == 1
+
+
 def test_security_pass_exhaustion_judge_keep_fixing_creates_consolidated_fix_issue() -> None:
 	"""A keep_fixing verdict grants one more cycle for exactly those findings."""
 	result = _run_poller(
@@ -4478,6 +4511,37 @@ def test_security_pass_exhaustion_judge_fail_verdict_terminalizes_with_verdict_c
 		notification["issue"] == "192" and notification["level"] == "CRITICAL" and "security pass FAILED" in notification["message"]
 		for notification in result["telegram_notifications"]
 	)
+
+
+def test_security_pass_exhaustion_judge_rejects_mixed_fail_verdict() -> None:
+	"""A project-wide fail decision cannot silently discard partial actions."""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(
+			[_security_pass_test_finding(), _security_pass_second_test_finding()]
+		),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+				_security_pass_judge_verdict(("SEC-TEST-1", "fail"), ("SEC-TEST-2", "accept_with_followup"))
+			),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_status"] == "failed"
+	assert latest_state["security_pass_judge_rounds"] == 0
+	assert latest_state["security_pass_waived_findings"] == []
+	assert result.get("created_issues", []) == []
+	combined_log = result["stdout"] + result["stderr"]
+	assert "fail cannot be mixed with non-fail actions" in combined_log
+	assert "SECURITY_PASS_JUDGE_FAILED tracking_issue=192 reason=invalid_verdict round=1" in combined_log
+	assert "SECURITY_PASS_JUDGE_DECIDED" not in combined_log
 
 
 def test_security_pass_exhaustion_judge_invalid_verdict_falls_back_to_terminal_failure() -> None:
