@@ -4,7 +4,7 @@ set -euo pipefail
 usage()
 {
 	cat >&2 <<'EOF'
-Usage: codex_stall_guard.sh --phase <phase> [--stdout-file <path>] [--stderr-file <path>] [--activity-file <path>] [--status-file <path>] -- <command> [args...]
+Usage: codex_stall_guard.sh --phase <phase> [--stdout-file <path>] [--stderr-file <path>] [--activity-file <path>] [--status-file <path>] [--process-group-file <path>] -- <command> [args...]
 EOF
 }
 
@@ -26,6 +26,7 @@ stdout_file=""
 stderr_file=""
 activity_file=""
 status_file=""
+process_group_file=""
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -47,6 +48,10 @@ while [ "$#" -gt 0 ]; do
 			;;
 		--status-file)
 			status_file="${2:-}"
+			shift 2
+			;;
+		--process-group-file)
+			process_group_file="${2:-}"
 			shift 2
 			;;
 		--help|-h)
@@ -136,6 +141,7 @@ export CODEX_STALL_GUARD_STDOUT_FILE="${stdout_file}"
 export CODEX_STALL_GUARD_STDERR_FILE="${stderr_file}"
 export CODEX_STALL_GUARD_ACTIVITY_FILE="${activity_file}"
 export CODEX_STALL_GUARD_STATUS_FILE="${status_file}"
+export CODEX_STALL_GUARD_PROCESS_GROUP_FILE="${process_group_file}"
 export CODEX_STALL_GUARD_HEARTBEAT_ENABLED="${heartbeat_enabled}"
 export CODEX_STALL_GUARD_HEARTBEAT_INTERVAL_SECS="${heartbeat_interval_raw}"
 export CODEX_STALL_GUARD_ENABLED_EFFECTIVE="${stall_guard_enabled}"
@@ -151,6 +157,8 @@ from __future__ import annotations
 import errno
 import json
 import os
+import pwd
+import re
 import selectors
 import signal
 import subprocess
@@ -165,6 +173,7 @@ STDOUT_FILE = os.environ.get("CODEX_STALL_GUARD_STDOUT_FILE", "")
 STDERR_FILE = os.environ.get("CODEX_STALL_GUARD_STDERR_FILE", "")
 ACTIVITY_FILE = os.environ.get("CODEX_STALL_GUARD_ACTIVITY_FILE", "")
 STATUS_FILE = os.environ.get("CODEX_STALL_GUARD_STATUS_FILE", "")
+PROCESS_GROUP_FILE = os.environ.get("CODEX_STALL_GUARD_PROCESS_GROUP_FILE", "")
 HEARTBEAT_ENABLED = os.environ.get("CODEX_STALL_GUARD_HEARTBEAT_ENABLED", "true") == "true"
 HEARTBEAT_INTERVAL_SECS = int(os.environ.get("CODEX_STALL_GUARD_HEARTBEAT_INTERVAL_SECS", "30"))
 STALL_GUARD_ENABLED = os.environ.get("CODEX_STALL_GUARD_ENABLED_EFFECTIVE", "false") == "true"
@@ -174,6 +183,22 @@ HEARTBEAT_DIR = Path(os.environ.get("CODEX_STALL_HEARTBEAT_DIR_EFFECTIVE", "/tmp
 RUN_ID = os.environ.get("CODEX_STALL_RUN_ID", "")
 ISSUE = os.environ.get("CODEX_STALL_ISSUE", "")
 COMMAND = sys.argv[1:]
+
+
+def _isolated_user_from_command() -> str:
+	if len(COMMAND) < 5 or COMMAND[:3] != ["sudo", "-n", "-u"] or COMMAND[4] != "--":
+		return ""
+	candidate = COMMAND[3]
+	if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,254}\$?", candidate) is None:
+		return ""
+	try:
+		pwd.getpwnam(candidate)
+	except KeyError:
+		return ""
+	return candidate
+
+
+ISOLATED_USER = _isolated_user_from_command()
 
 if not COMMAND:
 	raise SystemExit(2)
@@ -232,6 +257,7 @@ def _budget_suffix_for_now() -> str:
 stdout_handle, close_stdout = _open_output(STDOUT_FILE, sys.stdout.buffer)
 stderr_handle, close_stderr = _open_output(STDERR_FILE, sys.stderr.buffer)
 kill_timer: threading.Timer | None = None
+signal_failure = False
 
 child = subprocess.Popen(
 	COMMAND,
@@ -240,6 +266,38 @@ child = subprocess.Popen(
 	bufsize=0,
 	start_new_session=True,
 )
+
+child_pgid = os.getpgid(child.pid)
+
+
+def _write_process_group_metadata() -> None:
+	if not PROCESS_GROUP_FILE:
+		return
+	metadata_path = Path(PROCESS_GROUP_FILE)
+	metadata_content = "\n".join(
+		(
+			f"guard_pid={os.getpid()}",
+			f"child_pid={child.pid}",
+			f"process_group_id={child_pgid}",
+			f"isolated_user={ISOLATED_USER}",
+			f"signal_mode={'privileged' if ISOLATED_USER else 'standard'}",
+		)
+	) + "\n"
+	try:
+		metadata_path.parent.mkdir(parents=True, exist_ok=True)
+		tmp_path = metadata_path.with_name(f".{metadata_path.name}.tmp.{os.getpid()}.{time.time_ns()}")
+		fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+		with os.fdopen(fd, "w", encoding="utf-8") as handle:
+			handle.write(metadata_content)
+			handle.flush()
+			os.fsync(handle.fileno())
+		os.replace(tmp_path, metadata_path)
+	except OSError as exc:
+		_emit_wrapper_stderr(f"::error::codex_stall_guard failed to publish process-group metadata: {exc}\n")
+		raise
+
+
+_write_process_group_metadata()
 
 assert child.stdout is not None
 assert child.stderr is not None
@@ -287,37 +345,114 @@ def _write_status(state: str, idle_secs: int, signal_name: str = "") -> None:
 		_emit_wrapper_stderr(f"::warning::codex_stall_guard failed to write status file {status_path}\n")
 
 
-def _kill_child_group_if_running() -> None:
+def _isolated_group_has_members() -> bool:
+	if not ISOLATED_USER:
+		return False
+	result = subprocess.run(
+		["pgrep", "-u", ISOLATED_USER, "-g", str(child_pgid)],
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+		check=False,
+	)
+	if result.returncode == 0:
+		return True
+	if result.returncode == 1:
+		return False
+	_emit_wrapper_stderr(
+		f"::error::codex_stall_guard could not verify isolated process group pgid={child_pgid} user={ISOLATED_USER} rc={result.returncode}\n"
+	)
+	return True
+
+
+def _process_group_exists() -> bool:
+	result = subprocess.run(
+		["pgrep", "-g", str(child_pgid)],
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+		check=False,
+	)
+	if result.returncode == 0:
+		return True
+	if result.returncode == 1:
+		return False
+	_emit_wrapper_stderr(
+		f"::error::codex_stall_guard could not inspect process group pgid={child_pgid} rc={result.returncode}\n"
+	)
+	return True
+
+
+def _verify_isolated_group_stopped() -> bool:
+	if not ISOLATED_USER:
+		return True
+	for _attempt in range(20):
+		if not _isolated_group_has_members():
+			return True
+		time.sleep(0.1)
+	_emit_wrapper_stderr(
+		f"::error::codex_stall_guard isolated process-group survivor pgid={child_pgid} user={ISOLATED_USER}\n"
+	)
+	return False
+
+
+def _reap_child_after_kill() -> None:
+	try:
+		child.wait(timeout=2)
+	except subprocess.TimeoutExpired:
+		return
+
+
+def _signal_child_group(signum: signal.Signals) -> bool:
+	global signal_failure
 	if child.poll() is not None:
-		return
+		return True
+	if ISOLATED_USER:
+		result = subprocess.run(
+		["sudo", "-n", "kill", f"-{signum.name.removeprefix('SIG')}", "--", f"-{child_pgid}"],
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+		check=False,
+		)
+		if result.returncode == 0:
+			return True
+		# A concurrently-exited group is successful convergence. Any process
+		# still in the group makes the privileged-command failure explicit.
+		if not _process_group_exists():
+			return True
+		_emit_wrapper_stderr(
+			f"::error::codex_stall_guard privileged process-group signal failed pgid={child_pgid} user={ISOLATED_USER} signal={signum.name} rc={result.returncode}\n"
+		)
+		signal_failure = True
+		return False
 	try:
-		child_pgid = os.getpgid(child.pid)
+		os.killpg(child_pgid, signum)
 	except ProcessLookupError:
+		return True
+	except PermissionError:
+		_emit_wrapper_stderr(
+			f"::error::codex_stall_guard process-group signal denied pgid={child_pgid} signal={signum.name}\n"
+		)
+		signal_failure = True
+		return False
+	return True
+
+
+def _kill_child_group_if_running() -> None:
+	global signal_failure
+	if child.poll() is not None:
+		if not _verify_isolated_group_stopped():
+			signal_failure = True
 		return
-	try:
-		if child_pgid != os.getpgrp():
-			os.killpg(child_pgid, signal.SIGKILL)
-		else:
-			child.kill()
-	except ProcessLookupError:
-		return
+	_signal_child_group(signal.SIGKILL)
+	_reap_child_after_kill()
+	if not _verify_isolated_group_stopped():
+		signal_failure = True
 
 
 def _forward_signal(signum: int, _frame) -> None:
 	global kill_timer
 	if child.poll() is not None:
 		return
-	try:
-		child_pgid = os.getpgid(child.pid)
-	except ProcessLookupError:
-		return
-	try:
-		if child_pgid != os.getpgrp():
-			os.killpg(child_pgid, signum)
-		else:
-			child.send_signal(signum)
-	except ProcessLookupError:
-		return
+	_signal_child_group(signal.Signals(signum))
 	if kill_timer is None or not kill_timer.is_alive():
 		kill_timer = threading.Timer(0.5, _kill_child_group_if_running)
 		kill_timer.daemon = True
@@ -329,22 +464,6 @@ for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
 		signal.signal(signum, _forward_signal)
 	except OSError:
 		pass
-
-
-def _signal_child_group(signum: signal.Signals) -> None:
-	if child.poll() is not None:
-		return
-	try:
-		child_pgid = os.getpgid(child.pid)
-	except ProcessLookupError:
-		return
-	try:
-		if child_pgid != os.getpgrp():
-			os.killpg(child_pgid, signum)
-		else:
-			child.send_signal(signum)
-	except ProcessLookupError:
-		return
 
 
 selector = selectors.DefaultSelector()
@@ -367,6 +486,9 @@ wrapper_returncode: int | None = None
 try:
 	open_streams = 2
 	while open_streams > 0:
+		if signal_failure:
+			wrapper_returncode = 126
+			break
 		now = time.monotonic()
 		timeout_candidates = [1.0]
 		if HEARTBEAT_ENABLED:
@@ -439,18 +561,23 @@ try:
 			if (time.monotonic() - guard_term_sent_at) >= STALL_KILL_GRACE_SECS and guard_signal_name != "SIGKILL":
 				guard_signal_name = "SIGKILL"
 				_signal_child_group(signal.SIGKILL)
+				_reap_child_after_kill()
 				_write_status("killed", int(time.monotonic() - last_child_event_monotonic), "SIGKILL")
+				if not _verify_isolated_group_stopped():
+					signal_failure = True
 
-	returncode = child.wait()
-	if guard_term_sent_at is not None:
+	returncode = child.wait() if wrapper_returncode is None else None
+	if guard_term_sent_at is not None and returncode is not None:
 		if guard_signal_name != "SIGKILL" and returncode < 0 and abs(returncode) == signal.SIGKILL:
 			guard_signal_name = "SIGKILL"
 		elif not guard_signal_name:
 			guard_signal_name = "SIGTERM"
 		_write_status("killed", int(max(0.0, time.monotonic() - last_child_event_monotonic)), guard_signal_name)
 		wrapper_returncode = 137
-	else:
+	elif returncode is not None:
 		wrapper_returncode = _shell_rc(returncode)
+	if ISOLATED_USER and guard_term_sent_at is not None and not _verify_isolated_group_stopped():
+		wrapper_returncode = 126
 finally:
 	selector.close()
 	if kill_timer is not None:

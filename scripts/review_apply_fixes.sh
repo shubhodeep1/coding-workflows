@@ -152,6 +152,7 @@ EDITOR_ISOLATION_HOME=""
 EDITOR_ISOLATION_TMP=""
 EDITOR_ISOLATION_UID=""
 EDITOR_ISOLATION_GID=""
+EDITOR_ISOLATION_PROCESS_GROUP_FILE=""
 
 setup_editor_isolation() {
   local resolved_workspace resolved_source isolation_uid
@@ -262,6 +263,15 @@ _editor_isolation_setup_rollback() {
 cleanup_editor_isolation() {
   local cleanup_rc=0
   if [ "${EDITOR_ISOLATION_ACTIVE}" = "true" ]; then
+    if [ -n "${EDITOR_ISOLATION_PROCESS_GROUP_FILE}" ]; then
+      if ! command -v editor_isolation_verify_process_group_stopped >/dev/null 2>&1 \
+        || ! editor_isolation_verify_process_group_stopped "${EDITOR_ISOLATION_PROCESS_GROUP_FILE}" "${EDITOR_ISOLATION_USER}"; then
+        echo "::error::Refusing to restore editor workspace ownership while the isolated process group may still be alive." >&2
+        return 1
+      fi
+      rm -f -- "${EDITOR_ISOLATION_PROCESS_GROUP_FILE}"
+      EDITOR_ISOLATION_PROCESS_GROUP_FILE=""
+    fi
     sudo -n chown -R "${EDITOR_ISOLATION_OWNER_UID}:${EDITOR_ISOLATION_OWNER_GID}" \
       "${WORKSPACE_PATH}" "${RUNTIME_DIR}/editor-sandbox" || cleanup_rc=1
     chmod "${EDITOR_ISOLATION_GIT_MODE}" "${GITHUB_WORKSPACE}/.git" || cleanup_rc=1
@@ -279,6 +289,48 @@ cleanup_editor_isolation() {
   return "${cleanup_rc}"
 }
 
+terminate_editor_attempt_process_group() {
+  local guard_pid="$1" process_group_file="$2"
+  local termination_rc=0 member_status=1
+  if [ -z "${guard_pid}" ] || [ -z "${process_group_file}" ] \
+    || ! command -v editor_isolation_signal_process_group >/dev/null 2>&1; then
+    echo "::error::Editor process-group metadata or signalling helper is unavailable; terminating the guard as a fallback." >&2
+    termination_rc=1
+  elif ! editor_isolation_signal_process_group "${process_group_file}" "${EDITOR_ISOLATION_USER}" TERM "${guard_pid}"; then
+    termination_rc=1
+  fi
+
+  sleep 5
+  if [ -n "${process_group_file}" ] \
+    && command -v editor_isolation_process_group_has_members >/dev/null 2>&1; then
+    if editor_isolation_process_group_has_members "${process_group_file}" "${EDITOR_ISOLATION_USER}" "${guard_pid}"; then
+      member_status=0
+    else
+      member_status=$?
+    fi
+    if [ "${member_status}" -eq 0 ]; then
+      editor_isolation_signal_process_group "${process_group_file}" "${EDITOR_ISOLATION_USER}" KILL "${guard_pid}" || termination_rc=1
+    elif [ "${member_status}" -ne 1 ]; then
+      termination_rc=1
+    fi
+    if ! editor_isolation_verify_process_group_stopped "${process_group_file}" "${EDITOR_ISOLATION_USER}" "${guard_pid}"; then
+      termination_rc=1
+    fi
+  else
+    termination_rc=1
+  fi
+
+  # The editor group is handled first. The guard normally exits after its
+  # child; this bounded fallback prevents a signalling failure from hanging
+  # the parent wait while cleanup remains fail-closed on group survivors.
+  if [ -n "${guard_pid}" ] && kill -0 "${guard_pid}" 2>/dev/null; then
+    kill -TERM "${guard_pid}" 2>/dev/null || true
+    sleep 1
+    kill -KILL "${guard_pid}" 2>/dev/null || true
+  fi
+  return "${termination_rc}"
+}
+
 editor_isolation_exit_trap() {
   local original_rc="$1"
   trap - EXIT
@@ -294,6 +346,7 @@ run_editor_codex_attempt() {
   local stderr_target="$3"
   local activity_file="$4"
   local status_file="$5"
+  local process_group_file="${6:-}"
 
   # EDITOR_ATTEMPT_MODEL lets the retry loop switch the editor model per
   # attempt (capacity-fallback to MODEL_EDITOR_FALLBACK on the final attempt;
@@ -305,6 +358,7 @@ run_editor_codex_attempt() {
   local editor_workspace
   local editor_path
   local -a editor_opencode_cmd
+  local -a stall_guard_args
   editor_workspace="$(pwd)"
 
   if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
@@ -357,11 +411,16 @@ run_editor_codex_attempt() {
   fi
 
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-    exec "${CODEX_STALL_GUARD_HELPER}" \
-      --phase review_apply_fixes \
-      --stdout-file "${stdout_file}" \
-      --activity-file "${activity_file}" \
-      --status-file "${status_file}" \
+    stall_guard_args=(
+      --phase review_apply_fixes
+      --stdout-file "${stdout_file}"
+      --activity-file "${activity_file}"
+      --status-file "${status_file}"
+    )
+    if [ -n "${process_group_file}" ]; then
+      stall_guard_args+=(--process-group-file "${process_group_file}")
+    fi
+    exec "${CODEX_STALL_GUARD_HELPER}" "${stall_guard_args[@]}" \
       -- "${editor_opencode_cmd[@]}" < "${prompt_file}" 2>"${stderr_target}"
   fi
 
@@ -2095,6 +2154,12 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   editor_start="$(date +%s)"
   codex_pid_file="$(mktemp /tmp/codex_pid_editor.XXXXXX)"
   stall_status_file="$(mktemp /tmp/editor_stall_status.XXXXXX)"
+  process_group_file=""
+  if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+    process_group_file="$(mktemp "${RUNTIME_DIR}/editor_process_group.XXXXXX")"
+    chmod 0600 -- "${process_group_file}"
+    EDITOR_ISOLATION_PROCESS_GROUP_FILE="${process_group_file}"
+  fi
 
   # ── Background watchdog: heartbeat + network-activity aware ──
   (
@@ -2110,7 +2175,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
       if [ "${wall_secs}" -ge "${attempt_wall}" ]; then
         echo "Editor killed — wall time ${attempt_wall}s exceeded (attempt ${attempt})." >&2
         cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-        if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+        terminate_editor_attempt_process_group "${cpid}" "${process_group_file}" || true
         rm -f "${hb_file}"
         exit 143
       fi
@@ -2132,7 +2197,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
           printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
         else
           echo "Editor killed — no output for ${idle_secs}s and no active network connections (idle limit: ${EDITOR_IDLE_TIMEOUT}s, attempt ${attempt})." >&2
-          if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+          terminate_editor_attempt_process_group "${cpid}" "${process_group_file}" || true
           rm -f "${hb_file}"
           exit 142
         fi
@@ -2210,7 +2275,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   emit_editor_substate "StreamingTurn" "${attempt}"
   (
     trap '' PIPE
-    PATH="${EDITOR_CODEX_PATH}" run_editor_codex_attempt "${attempt_prompt_file}" "${tmp_output}" "${_hb_fifo}" "${hb_file}" "${stall_status_file}"
+    PATH="${EDITOR_CODEX_PATH}" run_editor_codex_attempt "${attempt_prompt_file}" "${tmp_output}" "${_hb_fifo}" "${hb_file}" "${stall_status_file}" "${process_group_file}"
   ) &
   codex_bg_pid=$!
   echo "${codex_bg_pid}" > "${codex_pid_file}"
@@ -2253,6 +2318,16 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
 
   kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
+  if [ -n "${process_group_file}" ]; then
+    if [ "${cmd_rc}" -eq 79 ] && [ ! -s "${process_group_file}" ]; then
+      : # Configuration failed before the guard launched an editor group.
+    elif ! editor_isolation_verify_process_group_stopped "${process_group_file}" "${EDITOR_ISOLATION_USER}" "${codex_bg_pid}"; then
+      echo "::error::Editor attempt ${attempt} left an isolated process-group survivor; refusing workspace ownership restoration." >&2
+      exit 80
+    fi
+    rm -f -- "${process_group_file}"
+    EDITOR_ISOLATION_PROCESS_GROUP_FILE=""
+  fi
   if ! cleanup_editor_isolation; then
     exit 80
   fi

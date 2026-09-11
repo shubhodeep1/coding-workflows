@@ -76,6 +76,129 @@ editor_isolation_preflight_enabled()
 	return 0
 }
 
+# Load runner-owned metadata published by codex_stall_guard.sh. The guard
+# starts its child in a new session, so child_pid and process_group_id must
+# match. Callers may also bind the metadata to the guard PID they launched.
+_editor_isolation_load_process_group_metadata()
+{
+	local metadata_path="$1" expected_user="$2" expected_guard_pid="${3:-}"
+	local metadata_key metadata_value metadata_owner metadata_mode metadata_size current_pgid actual_pgid
+	local loaded_guard_pid="" loaded_child_pid="" loaded_process_group_id="" loaded_isolated_user="" loaded_signal_mode=""
+	if [ ! -f "${metadata_path}" ] || [ -L "${metadata_path}" ]; then
+		echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=missing_or_not_regular" >&2
+		return 1
+	fi
+	metadata_owner="$(stat -c '%u' -- "${metadata_path}" 2>/dev/null || true)"
+	metadata_mode="$(stat -c '%a' -- "${metadata_path}" 2>/dev/null || true)"
+	metadata_size="$(stat -c '%s' -- "${metadata_path}" 2>/dev/null || true)"
+	if [ "${metadata_owner}" != "$(id -u)" ] || [ "${metadata_mode}" != "600" ] \
+		|| ! [[ "${metadata_size}" =~ ^[0-9]+$ ]] || [ "${metadata_size}" -gt 1024 ]; then
+		echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=ownership_mode_or_size" >&2
+		return 1
+	fi
+	while IFS='=' read -r metadata_key metadata_value; do
+		case "${metadata_key}" in
+			guard_pid)
+				[ -z "${loaded_guard_pid}" ] || return 1
+				loaded_guard_pid="${metadata_value}"
+				;;
+			child_pid)
+				[ -z "${loaded_child_pid}" ] || return 1
+				loaded_child_pid="${metadata_value}"
+				;;
+			process_group_id)
+				[ -z "${loaded_process_group_id}" ] || return 1
+				loaded_process_group_id="${metadata_value}"
+				;;
+			isolated_user)
+				[ -z "${loaded_isolated_user}" ] || return 1
+				loaded_isolated_user="${metadata_value}"
+				;;
+			signal_mode)
+				[ -z "${loaded_signal_mode}" ] || return 1
+				loaded_signal_mode="${metadata_value}"
+				;;
+			*)
+				echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=unknown_field" >&2
+				return 1
+				;;
+		esac
+	done < "${metadata_path}"
+	if ! [[ "${loaded_guard_pid}" =~ ^[1-9][0-9]*$ ]] \
+		|| ! [[ "${loaded_child_pid}" =~ ^[1-9][0-9]*$ ]] \
+		|| ! [[ "${loaded_process_group_id}" =~ ^[1-9][0-9]*$ ]] \
+		|| [ "${loaded_process_group_id}" -le 1 ] \
+		|| [ "${loaded_child_pid}" != "${loaded_process_group_id}" ] \
+		|| [ "${loaded_isolated_user}" != "${expected_user}" ] \
+		|| [ "${loaded_signal_mode}" != "privileged" ] \
+		|| { [ -n "${expected_guard_pid}" ] && [ "${loaded_guard_pid}" != "${expected_guard_pid}" ]; }; then
+		echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=field_mismatch" >&2
+		return 1
+	fi
+	current_pgid="$(ps -o pgid= -p "${BASHPID:-$$}" 2>/dev/null | tr -d '[:space:]')"
+	if [ -n "${current_pgid}" ] && [ "${loaded_process_group_id}" = "${current_pgid}" ]; then
+		echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=caller_group" >&2
+		return 1
+	fi
+	actual_pgid="$(ps -o pgid= -p "${loaded_child_pid}" 2>/dev/null | tr -d '[:space:]')"
+	if [ -n "${actual_pgid}" ] && [ "${actual_pgid}" != "${loaded_process_group_id}" ]; then
+		echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=live_group_mismatch" >&2
+		return 1
+	fi
+	EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID="${loaded_process_group_id}"
+	EDITOR_ISOLATION_TARGET_USER="${loaded_isolated_user}"
+	return 0
+}
+
+editor_isolation_process_group_has_members()
+{
+	local metadata_path="$1" expected_user="$2" expected_guard_pid="${3:-}"
+	_editor_isolation_load_process_group_metadata "${metadata_path}" "${expected_user}" "${expected_guard_pid}" || return 2
+	pgrep -u "${EDITOR_ISOLATION_TARGET_USER}" -g "${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" >/dev/null 2>&1
+}
+
+editor_isolation_signal_process_group()
+{
+	local metadata_path="$1" expected_user="$2" requested_signal="$3" expected_guard_pid="${4:-}"
+	case "${requested_signal}" in
+		TERM|KILL) ;;
+		*)
+			echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_SIGNAL_INVALID signal=${requested_signal}" >&2
+			return 1
+			;;
+	esac
+	_editor_isolation_load_process_group_metadata "${metadata_path}" "${expected_user}" "${expected_guard_pid}" || return 1
+	if sudo -n kill "-${requested_signal}" -- "-${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" 2>/dev/null; then
+		return 0
+	fi
+	if ! pgrep -g "${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" >/dev/null 2>&1; then
+		return 0
+	fi
+	echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_SIGNAL_FAILED user=${EDITOR_ISOLATION_TARGET_USER} pgid=${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID} signal=${requested_signal}" >&2
+	return 1
+}
+
+editor_isolation_verify_process_group_stopped()
+{
+	local metadata_path="$1" expected_user="$2" expected_guard_pid="${3:-}"
+	local verify_attempts="${EDITOR_ISOLATION_KILL_VERIFY_ATTEMPTS:-20}" verify_index member_status
+	if ! [[ "${verify_attempts}" =~ ^[1-9][0-9]*$ ]] || [ "${verify_attempts}" -gt 100 ]; then
+		verify_attempts=20
+	fi
+	for (( verify_index = 0; verify_index < verify_attempts; verify_index++ )); do
+		if editor_isolation_process_group_has_members "${metadata_path}" "${expected_user}" "${expected_guard_pid}"; then
+			member_status=0
+		else
+			member_status=$?
+			[ "${member_status}" -eq 1 ] && return 0
+			return 1
+		fi
+		sleep 0.1
+	done
+	echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_SURVIVOR user=${EDITOR_ISOLATION_TARGET_USER} pgid=${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" >&2
+	return 1
+}
+
 # Resolve the support bundle root: SUPPORT_ROOT_DIR is exported by
 # stage_workflow_support.sh; fall back to the parent of SUPPORT_SCRIPTS_DIR.
 _editor_isolation_support_root()

@@ -48,7 +48,6 @@
 
 set -euo pipefail
 source scripts/gh_helpers.sh 2>/dev/null || true
-source scripts/codex_helpers.sh
 type gh_retry &>/dev/null || gh_retry() { "$@"; }
 type _safe_gh_jq &>/dev/null || _safe_gh_jq() {
   local _tmpf
@@ -97,7 +96,7 @@ esac
 # `model = ...` would create duplicate TOML keys (which strict TOML
 # parsers reject as invalid).
 patch_diagnose_reasoning_into_config() {
-  local cfg="${CODEX_HOME:-${HOME:-/root}/.codex}/config.toml"
+  local cfg="${HOME:-/root}/.codex/config.toml"
   mkdir -p "$(dirname "${cfg}")"
   PYTHONDONTWRITEBYTECODE=1 python3 - "${cfg}" "${DIAGNOSE_REASONING}" <<'PY'
 from pathlib import Path
@@ -145,6 +144,9 @@ if not replaced:
 config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")
 PY
 }
+if ! patch_diagnose_reasoning_into_config; then
+  echo "::warning::Failed to patch ~/.codex/config.toml for diagnose reasoning; leaving existing config unchanged."
+fi
 
 echo "handled=false" >> "$GITHUB_OUTPUT"
 
@@ -208,12 +210,6 @@ if [ ! -s "${CAPTURE_FILE}" ]; then
 fi
 
 echo "handled=true" >> "$GITHUB_OUTPUT"
-model_provider_broker_start
-trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
-model_provider_broker_prepare_codex_writer "${DIAGNOSE_MODEL}" "${DIAGNOSE_REASONING}" "$(pwd)"
-if ! patch_diagnose_reasoning_into_config; then
-  echo "::warning::Failed to patch ~/.codex/config.toml for diagnose reasoning; leaving existing config unchanged."
-fi
 
 ensure_implementation_failed_label() {
   if [ -f scripts/label_helpers.sh ]; then
@@ -665,7 +661,7 @@ DIAGNOSE_SUCCESS=false
 if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}"
 fi
-if model_provider_broker_exec_sanitized timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${DIAGNOSE_MODEL}" --sandbox read-only \
+if timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${DIAGNOSE_MODEL}" --sandbox danger-full-access \
   < "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}" > "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" \
   2> >(tee -a "${IMPLEMENT_DIAGNOSE_LOG_FILE}" >&2); then
   if extract_last_json_with_key "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" "status" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}"; then

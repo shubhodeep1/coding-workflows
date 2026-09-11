@@ -59,11 +59,10 @@ exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
 # The manifest tracks exactly which files were fetched — caller-repo
 # files that were never touched are safe. Refuse the cleanup batch if
 # the manifest contains any path outside repo-relative cleanup targets.
-if git cat-file -e "HEAD:pre_assembled_static.txt" >/dev/null 2>&1; then
+if git ls-files --error-unmatch -- pre_assembled_static.txt >/dev/null 2>&1; then
   echo "Preserving repo-tracked path during artifact cleanup: pre_assembled_static.txt"
-  git restore --source=HEAD --staged --worktree -- pre_assembled_static.txt
+  git restore --source=HEAD --worktree -- pre_assembled_static.txt
 else
-  git rm -f --cached --ignore-unmatch -- pre_assembled_static.txt >/dev/null 2>&1 || true
   rm -f -- pre_assembled_static.txt
 fi
 fetched_manifest_path="${FETCHED_MANIFEST:-}"

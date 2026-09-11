@@ -29,8 +29,7 @@
 #     [--catalog-path /abs/path/to/codex_model_catalog.json] \
 #     [--project-path /abs/path/to/workdir] \
 #     [--config-path  /abs/path/to/config.toml] \
-#     [--allow-elevation auto|force|forbid] \
-#     [--provider-base-url https://openrouter.ai/api/v1]
+#     [--allow-elevation auto|force|forbid]
 #
 # Defaults:
 #   --web-search        live
@@ -84,9 +83,8 @@ Usage: write_codex_config.sh --model <slug> --reasoning <effort>
                              [--web-search live|disabled]
                              [--catalog-path PATH]
                              [--project-path PATH]
-	                             [--config-path  PATH]
-	                             [--allow-elevation auto|force|forbid]
-	                             [--provider-base-url URL]
+                             [--config-path  PATH]
+                             [--allow-elevation auto|force|forbid]
 USAGE
 }
 
@@ -97,7 +95,6 @@ _catalog_path=""
 _project_path=""
 _config_path=""
 _allow_elevation="auto"
-_provider_base_url="https://openrouter.ai/api/v1"
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -108,7 +105,6 @@ while [ $# -gt 0 ]; do
 		--project-path)     _project_path="${2:-}"; shift 2 ;;
 		--config-path)      _config_path="${2:-}"; shift 2 ;;
 		--allow-elevation)  _allow_elevation="${2:-}"; shift 2 ;;
-		--provider-base-url) _provider_base_url="${2:-}"; shift 2 ;;
 		-h|--help)          usage; exit 0 ;;
 		*)
 			echo "::error::write_codex_config.sh: unknown argument: $1" >&2
@@ -147,11 +143,6 @@ case "${_allow_elevation}" in
 		exit 2
 		;;
 esac
-_provider_base_url_pattern='^(https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~:/?#@!$&()*+,;=%-]*)?|http://127\.0\.0\.1:[1-9][0-9]{0,4}/api/v1)$'
-if ! [[ "${_provider_base_url}" =~ ${_provider_base_url_pattern} ]]; then
-	echo "::error::write_codex_config.sh: invalid --provider-base-url '${_provider_base_url}'" >&2
-	exit 2
-fi
 
 if [ -z "${_catalog_path}" ]; then
 	_catalog_path="$(pwd)/scripts/codex_model_catalog.json"
@@ -267,7 +258,7 @@ trap 'rm -f "${_tmp_path}"' EXIT
 	printf '\n'
 	printf '[model_providers.openrouter]\n'
 	printf 'name = "OpenRouter"\n'
-	printf 'base_url = "%s"\n' "${_provider_base_url}"
+	printf 'base_url = "https://openrouter.ai/api/v1"\n'
 	printf 'env_key = "OPENROUTER_API_KEY"\n'
 	printf 'wire_api = "responses"\n'
 	printf 'stream_idle_timeout_ms = 600000\n'
