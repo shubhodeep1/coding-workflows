@@ -208,8 +208,23 @@ jobs:
           # "${TARGET_BRANCH}"`, which GitHub itself rejects when an open
           # PR already exists on the same head — see the recovery branch
           # at the `gh pr create` failure handler below.
-          gh api --paginate \
-            "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/timeline" \
+          #
+          # Only the issue's OWN implementation PR counts: an open PR on
+          # the conventional head `ai/issue-<N>` (TARGET_BRANCH), or an
+          # open PR whose body closes the issue (`Closes/Fixes/Resolves
+          # #<N>`). A PR that merely mentions the issue ("Refs #N" from an
+          # unrelated fix) also emits a `cross-referenced` event; counting
+          # it silently skipped planning for issue #4073 (see the same
+          # step in plan.yml). Mention-only PRs are logged and ignored.
+          # Mirrors _pr_json_is_issue_implementation_pr in
+          # scripts/orchestrate_poll_process.sh. §15: the existing
+          # timeline call plus one `pulls?head=` call.
+          repo_slug="${{ github.repository }}"
+          repo_owner="${repo_slug%%/*}"
+          impl_head="ai/issue-${ISSUE_NUMBER}"
+          closing_kw_re="(^|[^A-Za-z0-9_-])(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#${ISSUE_NUMBER}([^0-9A-Za-z_]|$)"
+          cross_ref_prs="$(gh api --paginate \
+            "repos/${repo_slug}/issues/${ISSUE_NUMBER}/timeline" \
             --jq '
               [.[]
                 | select(.event == "cross-referenced")
@@ -219,8 +234,29 @@ jobs:
               ]
               | unique_by(.number)
               | .[]
-              | "#\(.number) \(.html_url)"
-            ' > "${PR_EXISTS_FILE}" || true
+              | "\(.number)\t\(.html_url)\t\(if ((.body // "") | test("'"${closing_kw_re}"'"; "i")) then "closes" else "mention" end)"
+            ' || true)"
+          head_branch_prs="$(gh api --paginate \
+            "repos/${repo_slug}/pulls?state=open&head=${repo_owner}:${impl_head}" \
+            --jq '.[] | select(.head.ref == "'"${impl_head}"'") | "#\(.number) \(.html_url)"' || true)"
+          impl_prs=""
+          mention_only_prs=""
+          while IFS=$'\t' read -r xref_pr_num xref_pr_url xref_pr_kind; do
+            [ -n "${xref_pr_num}" ] || continue
+            if [ "${xref_pr_kind}" = "closes" ]; then
+              impl_prs+="#${xref_pr_num} ${xref_pr_url}"$'\n'
+            else
+              mention_only_prs+="#${xref_pr_num} ${xref_pr_url}"$'\n'
+            fi
+          done <<< "${cross_ref_prs}"
+          if [ -n "${head_branch_prs}" ]; then
+            impl_prs+="${head_branch_prs}"$'\n'
+          fi
+          printf '%s' "${impl_prs}" | grep -E '^#[0-9]+ ' | sort -u > "${PR_EXISTS_FILE}" || true
+          if [ -n "${mention_only_prs}" ]; then
+            echo "Ignoring open PR(s) that only mention issue #${ISSUE_NUMBER} (not its implementation PR):"
+            printf '%s' "${mention_only_prs}"
+          fi
 
           if [ -s "${PR_EXISTS_FILE}" ]; then
             echo "existing_pr=true" >> "$GITHUB_OUTPUT"

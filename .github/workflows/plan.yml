@@ -552,21 +552,67 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          # Use the issue timeline API to find PRs that are actually
-          # cross-referenced to this issue (not just text matches).
+          # Only the issue's OWN implementation PR blocks a planning run:
+          # an open PR on the conventional implement head `ai/issue-<N>`,
+          # or an open PR whose body closes the issue (`Closes/Fixes/
+          # Resolves #<N>`). This mirrors _pr_json_is_issue_implementation_pr
+          # in scripts/orchestrate_poll_process.sh.
+          #
           # The previous gh pr list --search approach produced false positives
-          # when unrelated PRs happened to mention the issue number.
-          LINKED_PR_COUNT="$(gh_retry gh api --paginate \
-            "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/timeline" \
+          # when unrelated PRs happened to mention the issue number, and the
+          # bare timeline cross-reference count that replaced it had the same
+          # blind spot: any open PR that merely mentions the issue ("Refs #N"
+          # from an unrelated fix) also emits a `cross-referenced` event.
+          # That skipped planning for issue #4073 three times in a row while
+          # PR #4072 — a main-branch fix citing #4073 as context — was open;
+          # the issue sat in ai:planning with no comment or label change
+          # until stall recovery closed and re-issued it (#4075). Mention-only
+          # PRs are now logged and ignored.
+          #
+          # §15: one timeline call (existing, now also carrying the PR body)
+          # plus one `pulls?head=` call for the conventional head branch.
+          repo_slug="${{ github.repository }}"
+          repo_owner="${repo_slug%%/*}"
+          impl_head="ai/issue-${ISSUE_NUMBER}"
+          closing_kw_re="(^|[^A-Za-z0-9_-])(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#${ISSUE_NUMBER}([^0-9A-Za-z_]|$)"
+          CROSS_REF_PRS="$(gh_retry gh api --paginate \
+            "repos/${repo_slug}/issues/${ISSUE_NUMBER}/timeline" \
             --jq '
               [.[]
                | select(.event == "cross-referenced")
                | select(.source.issue.pull_request != null)
                | select(.source.issue.state == "open")
-              ] | length
+               | .source.issue
+              ]
+              | unique_by(.number)
+              | .[]
+              | "\(.number)\t\(.html_url)\t\(if ((.body // "") | test("'"${closing_kw_re}"'"; "i")) then "closes" else "mention" end)"
             ')"
+          HEAD_BRANCH_PRS="$(gh_retry gh api --paginate \
+            "repos/${repo_slug}/pulls?state=open&head=${repo_owner}:${impl_head}" \
+            --jq '.[] | select(.head.ref == "'"${impl_head}"'") | "#\(.number) \(.html_url)"')"
+          IMPL_PRS=""
+          MENTION_ONLY_PRS=""
+          while IFS=$'\t' read -r xref_pr_num xref_pr_url xref_pr_kind; do
+            [ -n "${xref_pr_num}" ] || continue
+            if [ "${xref_pr_kind}" = "closes" ]; then
+              IMPL_PRS+="#${xref_pr_num} ${xref_pr_url}"$'\n'
+            else
+              MENTION_ONLY_PRS+="#${xref_pr_num} ${xref_pr_url}"$'\n'
+            fi
+          done <<< "${CROSS_REF_PRS}"
+          if [ -n "${HEAD_BRANCH_PRS}" ]; then
+            IMPL_PRS+="${HEAD_BRANCH_PRS}"$'\n'
+          fi
+          IMPL_PRS="$(printf '%s' "${IMPL_PRS}" | grep -E '^#[0-9]+ ' | sort -u || true)"
+          if [ -n "${MENTION_ONLY_PRS}" ]; then
+            echo "Ignoring open PR(s) that only mention issue #${ISSUE_NUMBER} (not its implementation PR):"
+            printf '%s' "${MENTION_ONLY_PRS}"
+          fi
+          LINKED_PR_COUNT="$(printf '%s\n' "${IMPL_PRS}" | grep -cE '^#[0-9]+ ' || true)"
           if [ "${LINKED_PR_COUNT}" -gt 0 ]; then
             echo "Issue #${ISSUE_NUMBER} already has at least one open PR. Skipping planning run."
+            printf '%s\n' "${IMPL_PRS}"
             echo "AI_PHASE_GATE_V1 phase=plan gate=existing_pr_check reason=existing_pr outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
           fi
