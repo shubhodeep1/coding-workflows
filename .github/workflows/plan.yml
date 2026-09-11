@@ -204,9 +204,11 @@ jobs:
           token: ${{ secrets.GH_PAT }}
 
       - name: Log checkout ref
+        env:
+          PLAN_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          echo "Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          echo "Resolved ref: ${PLAN_RESOLVED_REF}"
           echo "HEAD commit: $(git rev-parse HEAD)"
           if branch_name="$(git symbolic-ref --short HEAD 2>/dev/null)"; then
             echo "HEAD branch: ${branch_name}"

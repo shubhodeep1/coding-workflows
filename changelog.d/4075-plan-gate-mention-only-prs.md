@@ -13,4 +13,4 @@ What this means for operators: an issue that an unrelated open PR references wit
 
 ### For contributors
 
-`tests/test_stall_recovery_pr_lookup.py` now exercises the plan.yml gate as well as the implement.yml one, with a `MOCK_GH_PULLS_JSON` hook in the shared `gh` stub for the paginated open-PR inventory. The alias pattern lives in two places by design (shell and Python parity is pinned by `test_resolve_integration_ref_parity_for_fixtures`).
+`tests/test_stall_recovery_pr_lookup.py` now exercises the plan.yml gate as well as the implement.yml one, with a `MOCK_GH_PULLS_JSON` hook in the shared `gh` stub for the paginated open-PR inventory. The alias pattern lives in two places by design (shell and Python parity is pinned by `test_resolve_integration_ref_parity_for_fixtures`). Workflow shell steps receive the resolved ref through step-local environment variables, so valid Git ref characters cannot be reinterpreted as shell syntax when the ref is logged or stored as the implementation PR base.

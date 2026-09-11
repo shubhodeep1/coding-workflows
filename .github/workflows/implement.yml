@@ -1318,9 +1318,12 @@ jobs:
 
       - name: Log checkout ref
         if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          IMPLEMENT_RESOLVED_FALLBACK_REF: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}
+          IMPLEMENT_LOG_PR_BASE_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          echo "Resolved fallback ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          echo "Resolved fallback ref: ${IMPLEMENT_RESOLVED_FALLBACK_REF}"
           baseline_status="${{ steps.baseline_refctx.outputs.status }}"
           if [ -z "${baseline_status}" ]; then
             baseline_status="step-no-output"
@@ -1330,7 +1333,7 @@ jobs:
             resolved_checkout_source="${{ steps.baseline_refctx.outputs.branch }}"
           fi
           echo "Resolved checkout source: ${resolved_checkout_source}"
-          echo "PR base ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          echo "PR base ref: ${IMPLEMENT_LOG_PR_BASE_REF}"
           if [ "${{ steps.baseline_refctx.outputs.status }}" = "accepted" ] && [ "${{ steps.checkout_baseline.outcome }}" = "success" ]; then
             echo "Baseline override: accepted ${{ steps.baseline_refctx.outputs.branch }}"
           elif [ "${{ steps.baseline_refctx.outputs.status }}" = "accepted" ]; then
@@ -1398,6 +1401,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          IMPLEMENT_METADATA_PR_BASE_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -1427,7 +1431,7 @@ jobs:
           ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
-          PR_BASE_BRANCH="${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          PR_BASE_BRANCH="${IMPLEMENT_METADATA_PR_BASE_REF}"
           ISSUE_SCOPE_LOCK_GLOB=""
 
           if [ "${SCOPE_LOCK_LABEL_ENABLED:-false}" = "true" ]; then

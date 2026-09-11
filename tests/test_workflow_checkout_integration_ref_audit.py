@@ -95,23 +95,41 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 		disallowed_inline_markers = base_disallowed_inline_markers
 		if workflow_name == "implement.yml":
 			checkout_ref = "ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
-			resolved_ref_log = "echo \"Resolved fallback ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
-			resolved_base_log = "echo \"PR base ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
+			resolved_ref_env = "IMPLEMENT_RESOLVED_FALLBACK_REF: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+			resolved_ref_log = 'echo "Resolved fallback ref: ${IMPLEMENT_RESOLVED_FALLBACK_REF}"'
+			unsafe_resolved_ref_log = "echo \"Resolved fallback ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
+			resolved_base_env = "IMPLEMENT_LOG_PR_BASE_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+			resolved_base_log = 'echo "PR base ref: ${IMPLEMENT_LOG_PR_BASE_REF}"'
+			unsafe_resolved_base_log = "echo \"PR base ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
 			checkout_resolver_step = "- name: Resolve checkout ref"
 			checkout_resolver_id = "id: checkout_ref"
 		else:
 			checkout_ref = "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
-			resolved_ref_log = "echo \"Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
+			resolved_ref_name = {
+				"clarify.yml": "CLARIFY_RESOLVED_REF",
+				"orchestrate_clarify_respond.yml": "ORCHESTRATE_CLARIFY_RESOLVED_REF",
+				"plan.yml": "PLAN_RESOLVED_REF",
+				"validate.yml": "VALIDATE_RESOLVED_REF",
+			}[workflow_name]
+			resolved_ref_env = f"{resolved_ref_name}: ${{{{ steps.refctx.outputs.ref || github.event.repository.default_branch }}}}"
+			resolved_ref_log = f'echo "Resolved ref: ${{{resolved_ref_name}}}"'
+			unsafe_resolved_ref_log = "echo \"Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
+			resolved_base_env = ""
 			resolved_base_log = ""
+			unsafe_resolved_base_log = ""
 			checkout_resolver_step = ""
 			checkout_resolver_id = ""
 
 		assert resolver_step in wf, f"{workflow_name} missing integration ref resolver step"
 		assert resolver_id in wf, f"{workflow_name} missing resolver step id refctx"
 		assert checkout_ref in wf, f"{workflow_name} checkout is missing refctx/default branch ref"
+		assert resolved_ref_env in wf, f"{workflow_name} missing env-bound resolved-ref log input"
 		assert resolved_ref_log in wf, f"{workflow_name} missing resolved-ref log output"
+		assert unsafe_resolved_ref_log not in wf, f"{workflow_name} interpolates resolver output into shell source"
 		if resolved_base_log:
+			assert resolved_base_env in wf, f"{workflow_name} missing env-bound base-ref log input"
 			assert resolved_base_log in wf, f"{workflow_name} missing base-ref log output"
+			assert unsafe_resolved_base_log not in wf, f"{workflow_name} interpolates base-ref output into shell source"
 			assert checkout_resolver_step in wf, f"{workflow_name} missing checkout override resolver step"
 			assert checkout_resolver_id in wf, f"{workflow_name} missing checkout override resolver id"
 		assert "git rev-parse HEAD" in wf, f"{workflow_name} missing HEAD commit log"
