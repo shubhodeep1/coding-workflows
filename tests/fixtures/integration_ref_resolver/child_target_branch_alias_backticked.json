@@ -1,0 +1,17 @@
+{
+  "name": "child_target_branch_alias_backticked",
+  "issues": {
+    "101": {
+      "body": "Refs #1047\n\n**Target branch:** `orchestrator/project-alias` (integration branch of project #1047). The affected code exists only on that branch and is not on `main`.\n\n## Problem\n"
+    },
+    "1047": {
+      "body": "## Project: Tracking\n**Integration branch:** `orchestrator/project-tracking`\n"
+    }
+  },
+  "branch_exists": {
+    "orchestrator/project-alias": true,
+    "orchestrator/project-tracking": true
+  },
+  "expected_stdout": "orchestrator/project-alias",
+  "expected_exit_code": 0
+}

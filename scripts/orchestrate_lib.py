@@ -47,6 +47,20 @@ INTEGRATION_BRANCH_LINE_RE = re.compile(
 	r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$",
 	re.MULTILINE,
 )
+# "Target branch:" is an accepted alias of "Integration branch:" for
+# human-authored issues that name the branch they must be planned and
+# implemented against. Issue #4075 used
+# ``**Target branch:** `orchestrator/project-3965` (integration branch ...)``,
+# which INTEGRATION_BRANCH_LINE_RE does not recognise, so planning checked
+# out main and the planner blocked with "integration branch mismatch". The
+# backticked form may carry trailing prose after the closing backtick; the
+# plain form is a single whitespace-free token. The canonical line always
+# wins when both are present (see extract_integration_branch). Keep in sync
+# with the alias pattern in scripts/resolve_integration_ref.sh.
+TARGET_BRANCH_LINE_RE = re.compile(
+	r"^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)\s*(?:`\s*([^`\n]+?)\s*`(?:\s.*)?|([^`\s]+))\s*$",
+	re.MULTILINE,
+)
 TRACKING_ISSUE_LINE_RE = re.compile(
 	r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$",
 	re.MULTILINE,
@@ -2756,13 +2770,21 @@ def get_impl_noop_count(
 # ---------------------------------------------------------------------------
 
 def extract_integration_branch(body: str) -> str:
-	"""Extract integration-branch metadata from markdown body text."""
+	"""Extract integration-branch metadata from markdown body text.
+
+	The canonical ``Integration branch:`` line wins; ``Target branch:`` is
+	accepted as an alias when no canonical line is present
+	(TARGET_BRANCH_LINE_RE).
+	"""
 	if not body:
 		return ""
 	match = INTEGRATION_BRANCH_LINE_RE.search(body)
-	if not match:
+	if match:
+		return match.group(1).strip()
+	alias_match = TARGET_BRANCH_LINE_RE.search(body)
+	if not alias_match:
 		return ""
-	return match.group(1).strip()
+	return (alias_match.group(1) or alias_match.group(2) or "").strip()
 
 
 def extract_tracking_issue_number(body: str) -> int | None:
