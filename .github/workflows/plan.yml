@@ -554,9 +554,9 @@ jobs:
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           # Only the issue's OWN implementation PR blocks a planning run:
           # an open PR on the conventional implement head `ai/issue-<N>`,
-          # or an open PR whose body closes the issue (`Closes/Fixes/
-          # Resolves #<N>`). This mirrors _linked_pr_is_issue_implementation
-          # in scripts/orchestrate_poll_process.sh.
+          # or an open PR whose body closes the issue with a supported short,
+          # qualified, or GitHub issue URL reference. This mirrors
+          # _pr_json_closes_issue in scripts/orchestrate_poll_process.sh.
           #
           # The previous gh pr list --search approach produced false positives
           # when unrelated PRs happened to mention the issue number, and the
@@ -574,7 +574,7 @@ jobs:
           repo_slug="${{ github.repository }}"
           repo_owner="${repo_slug%%/*}"
           impl_head="ai/issue-${ISSUE_NUMBER}"
-          closing_kw_re="(^|[^A-Za-z0-9_-])(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#${ISSUE_NUMBER}([^0-9A-Za-z_]|$)"
+          closing_kw_re="(^|[^[:alnum:]_-])(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+(#${ISSUE_NUMBER}|[[:alnum:]_.-]+/[[:alnum:]_.-]+#${ISSUE_NUMBER}|https?://github[.]com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/${ISSUE_NUMBER})([^[:alnum:]_-]|$)"
           CROSS_REF_PRS="$(gh_retry gh api --paginate \
             "repos/${repo_slug}/issues/${ISSUE_NUMBER}/timeline" \
             --jq '

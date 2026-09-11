@@ -211,18 +211,19 @@ jobs:
           #
           # Only the issue's OWN implementation PR counts: an open PR on
           # the conventional head `ai/issue-<N>` (TARGET_BRANCH), or an
-          # open PR whose body closes the issue (`Closes/Fixes/Resolves
-          # #<N>`). A PR that merely mentions the issue ("Refs #N" from an
+          # open PR whose body closes the issue with a supported short,
+          # qualified, or GitHub issue URL reference. A PR that merely
+          # mentions the issue ("Refs #N" from an
           # unrelated fix) also emits a `cross-referenced` event; counting
           # it silently skipped planning for issue #4073 (see the same
           # step in plan.yml). Mention-only PRs are logged and ignored.
-          # Mirrors _linked_pr_is_issue_implementation in
+          # Mirrors _pr_json_closes_issue in
           # scripts/orchestrate_poll_process.sh. §15: the existing
           # timeline call plus one `pulls?head=` call.
           repo_slug="${{ github.repository }}"
           repo_owner="${repo_slug%%/*}"
           impl_head="ai/issue-${ISSUE_NUMBER}"
-          closing_kw_re="(^|[^A-Za-z0-9_-])(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#${ISSUE_NUMBER}([^0-9A-Za-z_]|$)"
+          closing_kw_re="(^|[^[:alnum:]_-])(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+(#${ISSUE_NUMBER}|[[:alnum:]_.-]+/[[:alnum:]_.-]+#${ISSUE_NUMBER}|https?://github[.]com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/${ISSUE_NUMBER})([^[:alnum:]_-]|$)"
           cross_ref_prs="$(gh api --paginate \
             "repos/${repo_slug}/issues/${ISSUE_NUMBER}/timeline" \
             --jq '
@@ -4454,7 +4455,7 @@ jobs:
             # is indistinguishable from "no linked PR exists").
             recovery_repo_slug="${{ github.repository }}"
             recovery_repo_owner="${recovery_repo_slug%%/*}"
-            recovery_closing_kw_re="(^|[^A-Za-z0-9_-])(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#${ISSUE_NUMBER}([^0-9A-Za-z_]|$)"
+            recovery_closing_kw_re="(^|[^[:alnum:]_-])(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+(#${ISSUE_NUMBER}|[[:alnum:]_.-]+/[[:alnum:]_.-]+#${ISSUE_NUMBER}|https?://github[.]com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/${ISSUE_NUMBER})([^[:alnum:]_-]|$)"
             recovery_head_pr_url="$(gh_retry gh api --paginate \
               "repos/${recovery_repo_slug}/pulls?state=open&head=${recovery_repo_owner}:${TARGET_BRANCH}" \
               --jq '[.[] | select(.head.ref == "'"${TARGET_BRANCH}"'") | .html_url] | .[0] // ""' || echo "")"

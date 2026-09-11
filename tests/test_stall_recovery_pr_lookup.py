@@ -917,23 +917,28 @@ def test_safety_check_ignores_mention_only_cross_referenced_pr():
 
 
 def test_safety_check_closing_keyword_requires_exact_issue_number():
-	"""`Closes #1410` / `prefixes #141` / `Closes #141a` do not target issue
-	#141 (same boundaries as _linked_pr_is_issue_implementation in
-	scripts/orchestrate_poll_process.sh); `closes: #141`, `Resolved #141.`
-	and `fixed #141` do."""
+	"""The gate matches the canonical short, qualified, and URL reference
+	forms while rejecting near-miss issue numbers and unsupported colon forms
+	(the same boundaries as _pr_json_closes_issue in the poller)."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
 		timeline = [
 			_open_pr_xref(300, body="Closes #1410"),
 			_open_pr_xref(301, body="prefixes #141"),
 			_open_pr_xref(302, body="Closes #141a"),
+			_open_pr_xref(303, body="Closes: #141"),
+			_open_pr_xref(304, body="Resolves: https://github.com/owner/repo/issues/141"),
 		]
 		proc, pr_exists, gh_out = _run_safety_check(tmp, "141", timeline)
 		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
 		assert pr_exists == "", f"near-miss keywords must not block; got: {pr_exists!r}"
 		assert "existing_pr=false" in gh_out, gh_out
 
-	for body in ("closes: #141", "Done.\n\nResolved #141.", "FIXED #141 by rewriting the loop"):
+	for body in (
+		"Done.\n\nResolved #141.",
+		"FIXED owner/repo#141 by rewriting the loop",
+		"Closes https://github.com/owner/repo/issues/141",
+	):
 		with tempfile.TemporaryDirectory() as td:
 			tmp = Path(td)
 			proc, pr_exists, gh_out = _run_safety_check(tmp, "141", [_open_pr_xref(310, body=body)])
@@ -1001,17 +1006,24 @@ def test_plan_gate_ignores_mention_only_cross_referenced_pr():
 
 
 def test_plan_gate_skips_on_closing_cross_referenced_pr():
-	with tempfile.TemporaryDirectory() as td:
-		tmp = Path(td)
-		proc, github_env = _run_plan_existing_pr_gate(tmp, "4073", [_open_pr_xref(500, body="Closes #4073")])
-		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
-		assert "SKIP_PLAN=true" in github_env, github_env
-		assert "Issue #4073 already has at least one open PR. Skipping planning run." in proc.stdout, proc.stdout
-		assert "#500 https://github.com/owner/repo/pull/500" in proc.stdout, proc.stdout
-		assert (
-			"AI_PHASE_GATE_V1 phase=plan gate=existing_pr_check reason=existing_pr outcome=skip issue=4073"
-			in proc.stdout
-		), proc.stdout
+	for closing_reference_body in (
+		"Closes #4073",
+		"Fixes owner/repo#4073",
+		"Resolves https://github.com/owner/repo/issues/4073",
+	):
+		with tempfile.TemporaryDirectory() as td:
+			tmp = Path(td)
+			proc, github_env = _run_plan_existing_pr_gate(
+				tmp, "4073", [_open_pr_xref(500, body=closing_reference_body)]
+			)
+			assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+			assert "SKIP_PLAN=true" in github_env, (closing_reference_body, github_env)
+			assert "Issue #4073 already has at least one open PR. Skipping planning run." in proc.stdout, proc.stdout
+			assert "#500 https://github.com/owner/repo/pull/500" in proc.stdout, proc.stdout
+			assert (
+				"AI_PHASE_GATE_V1 phase=plan gate=existing_pr_check reason=existing_pr outcome=skip issue=4073"
+				in proc.stdout
+			), proc.stdout
 
 
 def test_plan_gate_skips_on_conventional_head_branch_pr():
@@ -1157,16 +1169,22 @@ def _run_create_pr_recovery(
 
 def test_create_pr_recovery_finds_existing_linked_open_pr():
 	"""Recovery path's happy case: `gh pr create` raced and lost; the
-	timeline shows a cross-referenced OPEN PR whose body closes the issue;
-	recovery must exit 0 and write `pr_url=<URL>` to `$GITHUB_OUTPUT`."""
-	with tempfile.TemporaryDirectory() as td:
-		tmp = Path(td)
-		timeline = [_open_pr_xref(200, body="Closes #141")]
-		proc, gh_out = _run_create_pr_recovery(tmp, "141", timeline)
-		assert proc.returncode == 0, (
-			f"recovery should succeed; stderr: {proc.stderr}\nstdout: {proc.stdout}"
-		)
-		assert "pr_url=https://github.com/owner/repo/pull/200" in gh_out, gh_out
+	timeline shows a cross-referenced OPEN PR whose body closes the issue using
+	any canonical reference form; recovery must return that PR URL."""
+	for closing_reference_body in (
+		"Closes #141",
+		"Fixes owner/repo#141",
+		"Resolves https://github.com/owner/repo/issues/141",
+	):
+		with tempfile.TemporaryDirectory() as td:
+			tmp = Path(td)
+			timeline = [_open_pr_xref(200, body=closing_reference_body)]
+			proc, gh_out = _run_create_pr_recovery(tmp, "141", timeline)
+			assert proc.returncode == 0, (
+				f"recovery should succeed for {closing_reference_body!r}; "
+				f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+			)
+			assert "pr_url=https://github.com/owner/repo/pull/200" in gh_out, gh_out
 
 
 def test_create_pr_recovery_exits_1_when_timeline_empty():
