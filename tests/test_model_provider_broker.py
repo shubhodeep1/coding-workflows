@@ -2,24 +2,47 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
+import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BROKER = REPO_ROOT / "scripts" / "model_provider_broker.py"
+
+
+def _broker_module():
+	spec = importlib.util.spec_from_file_location("model_provider_broker_test", BROKER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	sys.modules[spec.name] = module
+	spec.loader.exec_module(module)
+	return module
+
+
+def _broker_policy(module):
+	return module.BrokerPolicy(
+		frozenset(("openai/test-model",)),
+		100,
+		150,
+		tuple(module.Decimal(value) for value in ("1", "2", "0.1", "0.5")),
+	)
 
 
 def _start_broker(tmp_path: Path) -> tuple[subprocess.Popen[bytes], dict[str, object]]:
 	ready_file = tmp_path / "ready.json"
 	environment = {"PATH": os.environ["PATH"], "OPENROUTER_API_KEY": "upstream-secret"}
 	process = subprocess.Popen(
-		["python3", str(BROKER), "--ready-file", str(ready_file), "--max-requests", "2"],
+		[
+			"python3", str(BROKER), "--ready-file", str(ready_file), "--max-requests", "2",
+			"--allowed-model", "openai/test-model",
+		],
 		env=environment,
 		stdout=subprocess.PIPE,
 		stderr=subprocess.PIPE,
@@ -72,6 +95,87 @@ def test_broker_rejects_invalid_session_token(tmp_path: Path) -> None:
 	finally:
 		process.terminate()
 		process.wait(timeout=3)
+
+
+def test_policy_normalizes_response_limits_and_server_price_ceilings() -> None:
+	module = _broker_module()
+	policy = _broker_policy(module)
+	body, output_tokens = policy.normalize_request(
+		"/api/v1/responses",
+		b'{"model":"openai/test-model","input":"hello","max_output_tokens":500,"provider":{"max_price":{"prompt":0.5,"completion":9}}}',
+	)
+	document = json.loads(body)
+	assert output_tokens == 100
+	assert document["max_output_tokens"] == 100
+	assert document["provider"]["max_price"] == {
+		"prompt": 0.5,
+		"completion": 2,
+		"request": 0.1,
+		"image": 0.5,
+	}
+
+
+def test_policy_rejects_ambiguous_or_unauthorized_requests() -> None:
+	module = _broker_module()
+	policy = _broker_policy(module)
+	invalid_bodies = (
+		b'{"model":"openai/test-model","model":"openai/other"}',
+		b'{"input":"hello"}',
+		b'{"model":"openai/other"}',
+		b'{"model":"openai/test-model","models":["openai/other"]}',
+		b'{"model":"openai/test-model","plugins":[]}',
+		b'{"model":"openai/test-model","modalities":["text","audio"]}',
+	)
+	for body in invalid_bodies:
+		try:
+			policy.normalize_request("/api/v1/responses", body)
+		except module.BrokerRequestError:
+			pass
+		else:
+			raise AssertionError(f"broker accepted invalid request: {body!r}")
+
+
+def test_policy_normalizes_legacy_chat_limit_and_rejects_conflict() -> None:
+	module = _broker_module()
+	policy = _broker_policy(module)
+	body, output_tokens = policy.normalize_request(
+		"/api/v1/chat/completions",
+		b'{"model":"openai/test-model","messages":[],"max_tokens":40}',
+	)
+	document = json.loads(body)
+	assert output_tokens == 40
+	assert document["max_completion_tokens"] == 40
+	assert "max_tokens" not in document
+	try:
+		policy.normalize_request(
+			"/api/v1/chat/completions",
+			b'{"model":"openai/test-model","messages":[],"max_tokens":40,"max_completion_tokens":41}',
+		)
+	except module.BrokerRequestError:
+		pass
+	else:
+		raise AssertionError("broker accepted conflicting chat token limits")
+
+
+def test_request_and_output_budget_reservation_is_race_safe() -> None:
+	module = _broker_module()
+	policy = _broker_policy(module)
+	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
+	results: list[bool] = []
+	results_lock = threading.Lock()
+
+	def reserve() -> None:
+		result = state.reserve_request(50)
+		with results_lock:
+			results.append(result)
+
+	threads = [threading.Thread(target=reserve) for _ in range(20)]
+	for thread in threads:
+		thread.start()
+	for thread in threads:
+		thread.join()
+	assert results.count(True) == 3
+	assert state.output_tokens_reserved == 150
 
 
 def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
@@ -155,6 +259,7 @@ def test_sanitized_launcher_exposes_only_ephemeral_provider_token(tmp_path: Path
 		export ORCHESTRATOR_STATE_AUTH_KEYRING="state-secret"
 		export TG_BOT_SECRET="telegram-secret"
 		export TG_ADMIN_CHAT_ID="telegram-chat"
+		export MODEL_EDITOR="openai/test-model"
 		model_provider_broker_start
 		model_provider_broker_exec_sanitized sh -c env
 		model_provider_broker_stop

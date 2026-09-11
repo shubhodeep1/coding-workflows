@@ -8,6 +8,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
+REVIEWED_CODEX_ACTION_SHA = "f03b8d657a63d64b87324e8a1047a8b90d3221e0"
 
 REQUIRED_RESOLVER_WORKFLOWS = {
 	"plan.yml",
@@ -73,6 +74,17 @@ def test_checkout_workflows_are_all_classified() -> None:
 def test_allowlist_entries_have_rationale() -> None:
 	for workflow_name, rationale in ALLOWLIST_EXCEPTIONS.items():
 		assert rationale.strip(), f"Missing allow-list rationale for {workflow_name}"
+
+
+def test_remote_codex_runtime_actions_are_immutable() -> None:
+	paths = [REPO_ROOT / ".github" / "actions" / "setup-runtime" / "action.yml", *WORKFLOWS_DIR.glob("*.yml")]
+	for path in paths:
+		text = path.read_text(encoding="utf-8")
+		assert "install-codex@stable" not in text, path
+		assert "setup-runtime@stable" not in text, path
+		for line in text.splitlines():
+			if "shubhodeep1/coding-workflows/.github/actions/install-codex@" in line:
+				assert line.rstrip().endswith(f"install-codex@{REVIEWED_CODEX_ACTION_SHA}"), (path, line)
 
 
 def test_required_workflows_enforce_integration_ref_contract() -> None:
@@ -146,6 +158,7 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 def main() -> int:
 	test_checkout_workflows_are_all_classified()
 	test_allowlist_entries_have_rationale()
+	test_remote_codex_runtime_actions_are_immutable()
 	test_required_workflows_enforce_integration_ref_contract()
 	return 0
 

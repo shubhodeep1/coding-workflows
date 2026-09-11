@@ -14,10 +14,11 @@ import ssl
 import sys
 import tempfile
 import threading
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
-
 
 ALLOWED_PATHS = frozenset(("/api/v1/responses", "/api/v1/chat/completions"))
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
@@ -27,10 +28,144 @@ MAX_HEADER_BYTES = 32 * 1024
 HOP_BY_HOP_HEADERS = frozenset(
 	("connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade")
 )
+PRICE_FIELDS = ("prompt", "completion", "request", "image")
+
+
+class BrokerRequestError(ValueError):
+	"""A safe-to-report request policy rejection."""
+
+
+def _reject_duplicate_key(pairs: list[tuple[str, object]]) -> dict[str, object]:
+	document: dict[str, object] = {}
+	for key, value in pairs:
+		if key in document:
+			raise BrokerRequestError("request JSON contains a duplicate field")
+		document[key] = value
+	return document
+
+
+def _parse_decimal(value: object, field_name: str) -> Decimal:
+	if isinstance(value, bool) or not isinstance(value, (int, Decimal, str)):
+		raise BrokerRequestError(f"{field_name} must be a non-negative decimal")
+	try:
+		parsed = Decimal(str(value))
+	except InvalidOperation as exc:
+		raise BrokerRequestError(f"{field_name} must be a non-negative decimal") from exc
+	if not parsed.is_finite() or parsed < 0:
+		raise BrokerRequestError(f"{field_name} must be a non-negative decimal")
+	return parsed
+
+
+def _encode_json(value: object) -> str:
+	if value is None:
+		return "null"
+	if value is True:
+		return "true"
+	if value is False:
+		return "false"
+	if isinstance(value, str):
+		return json.dumps(value, ensure_ascii=False)
+	if isinstance(value, int) and not isinstance(value, bool):
+		return str(value)
+	if isinstance(value, Decimal):
+		return format(value, "f")
+	if isinstance(value, list):
+		return "[" + ",".join(_encode_json(item) for item in value) + "]"
+	if isinstance(value, dict):
+		return "{" + ",".join(
+			f"{json.dumps(key, ensure_ascii=False)}:{_encode_json(item)}"
+			for key, item in value.items()
+		) + "}"
+	raise BrokerRequestError("request JSON contains an unsupported value")
+
+
+@dataclass(frozen=True)
+class BrokerPolicy:
+	allowed_models: frozenset[str]
+	max_output_tokens: int
+	max_total_output_tokens: int
+	max_prices: tuple[Decimal, Decimal, Decimal, Decimal]
+
+	def normalize_request(self, path: str, body: bytes) -> tuple[bytes, int]:
+		try:
+			document = json.loads(
+				body.decode("utf-8"),
+				object_pairs_hook=_reject_duplicate_key,
+				parse_float=Decimal,
+				parse_constant=lambda _value: (_ for _ in ()).throw(BrokerRequestError("request JSON contains a non-finite number")),
+			)
+		except (UnicodeDecodeError, json.JSONDecodeError, BrokerRequestError) as exc:
+			if isinstance(exc, BrokerRequestError):
+				raise
+			raise BrokerRequestError("request body must be valid JSON") from exc
+		if not isinstance(document, dict):
+			raise BrokerRequestError("request JSON must be an object")
+		if "models" in document:
+			raise BrokerRequestError("fallback model arrays are not authorized")
+		model = document.get("model")
+		if not isinstance(model, str) or not model or model not in self.allowed_models:
+			raise BrokerRequestError("request model is not authorized")
+		if "plugins" in document:
+			raise BrokerRequestError("request plugins are not authorized")
+		modalities = document.get("modalities")
+		if modalities is not None and modalities != ["text"]:
+			raise BrokerRequestError("only text output is authorized")
+
+		if path == "/api/v1/responses":
+			if "max_tokens" in document or "max_completion_tokens" in document:
+				raise BrokerRequestError("response request uses an unsupported token limit field")
+			output_tokens = self._bounded_token_limit(document.get("max_output_tokens"), "max_output_tokens")
+			document["max_output_tokens"] = output_tokens
+		else:
+			completion_limit = document.get("max_completion_tokens")
+			legacy_limit = document.get("max_tokens")
+			if completion_limit is not None and legacy_limit is not None and completion_limit != legacy_limit:
+				raise BrokerRequestError("chat request contains conflicting token limits")
+			output_tokens = self._bounded_token_limit(
+				completion_limit if completion_limit is not None else legacy_limit,
+				"max_completion_tokens",
+			)
+			document.pop("max_tokens", None)
+			document["max_completion_tokens"] = output_tokens
+
+		provider = document.get("provider")
+		if provider is None:
+			provider = {}
+			document["provider"] = provider
+		if not isinstance(provider, dict):
+			raise BrokerRequestError("provider must be an object")
+		provided_prices = provider.get("max_price")
+		if provided_prices is None:
+			provided_prices = {}
+		if not isinstance(provided_prices, dict) or any(key not in PRICE_FIELDS for key in provided_prices):
+			raise BrokerRequestError("provider.max_price contains unsupported fields")
+		bounded_prices: dict[str, Decimal] = {}
+		for price_name, policy_ceiling in zip(PRICE_FIELDS, self.max_prices, strict=True):
+			requested_price = provided_prices.get(price_name)
+			bounded_prices[price_name] = policy_ceiling if requested_price is None else min(
+				_parse_decimal(requested_price, f"provider.max_price.{price_name}"),
+				policy_ceiling,
+			)
+		provider["max_price"] = bounded_prices
+		return _encode_json(document).encode("utf-8"), output_tokens
+
+	def _bounded_token_limit(self, value: object, field_name: str) -> int:
+		if value is None:
+			return self.max_output_tokens
+		if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+			raise BrokerRequestError(f"{field_name} must be a positive integer")
+		return min(value, self.max_output_tokens)
 
 
 class BrokerState:
-	def __init__(self, upstream_url: str, upstream_key: str, session_token: str, max_requests: int) -> None:
+	def __init__(
+		self,
+		upstream_url: str,
+		upstream_key: str,
+		session_token: str,
+		max_requests: int,
+		policy: BrokerPolicy,
+	) -> None:
 		parsed = urlsplit(upstream_url)
 		if parsed.scheme != "https" or not parsed.hostname or parsed.query or parsed.fragment:
 			raise ValueError("upstream URL must be an HTTPS origin with an optional path")
@@ -40,14 +175,20 @@ class BrokerState:
 		self.upstream_key = upstream_key
 		self.session_token = session_token
 		self.max_requests = max_requests
+		self.policy = policy
 		self.requests_started = 0
+		self.output_tokens_reserved = 0
 		self.lock = threading.Lock()
 
-	def reserve_request(self) -> bool:
+	def reserve_request(self, output_tokens: int) -> bool:
 		with self.lock:
-			if self.requests_started >= self.max_requests:
+			if (
+				self.requests_started >= self.max_requests
+				or self.output_tokens_reserved + output_tokens > self.policy.max_total_output_tokens
+			):
 				return False
 			self.requests_started += 1
+			self.output_tokens_reserved += output_tokens
 			return True
 
 
@@ -117,18 +258,26 @@ class BrokerHandler(BaseHTTPRequestHandler):
 		if not 0 < content_length <= MAX_REQUEST_BODY_BYTES:
 			self._reject(413, "request body size is invalid")
 			return
-		if not self.broker_state.reserve_request():
-			self._reject(429, "broker request limit reached")
-			return
 		body = self.rfile.read(content_length)
 		if len(body) != content_length:
 			self._reject(400, "request body was truncated")
+			return
+		if self.headers.get("Content-Type", "").partition(";")[0].strip().lower() != "application/json":
+			self._reject(415, "application/json content type required")
+			return
+		try:
+			body, output_tokens = self.broker_state.policy.normalize_request(self.path, body)
+		except BrokerRequestError as exc:
+			self._reject(400, str(exc))
+			return
+		if not self.broker_state.reserve_request(output_tokens):
+			self._reject(429, "broker request or output-token limit reached")
 			return
 
 		upstream_headers = {
 			"Authorization": f"Bearer {self.broker_state.upstream_key}",
 			"Content-Type": self.headers.get("Content-Type", "application/json"),
-			"Content-Length": str(content_length),
+			"Content-Length": str(len(body)),
 			"Accept": self.headers.get("Accept", "application/json"),
 		}
 		upstream_path = f"{self.broker_state.upstream_prefix}{self.path.removeprefix('/api/v1')}"
@@ -206,15 +355,35 @@ def main() -> int:
 	parser.add_argument("--ready-file", required=True)
 	parser.add_argument("--upstream-url", default="https://openrouter.ai/api/v1")
 	parser.add_argument("--max-requests", type=int, default=100)
+	parser.add_argument("--allowed-model", action="append", required=True)
+	parser.add_argument("--max-output-tokens", type=int, default=16_384)
+	parser.add_argument("--max-total-output-tokens", type=int, default=65_536)
+	for price_field in PRICE_FIELDS:
+		parser.add_argument(f"--max-{price_field}-price", default="0")
 	args = parser.parse_args()
 	if not 1 <= args.max_requests <= 100:
 		parser.error("--max-requests must be between 1 and 100")
+	if not 1 <= args.max_output_tokens <= 1_000_000:
+		parser.error("--max-output-tokens must be between 1 and 1000000")
+	if not args.max_output_tokens <= args.max_total_output_tokens <= 10_000_000:
+		parser.error("--max-total-output-tokens must cover one request and be at most 10000000")
+	allowed_models = frozenset(args.allowed_model)
+	if any(not model or len(model) > 256 for model in allowed_models):
+		parser.error("--allowed-model values must be non-empty and at most 256 characters")
+	try:
+		max_prices = tuple(
+			_parse_decimal(getattr(args, f"max_{price_field}_price"), f"--max-{price_field}-price")
+			for price_field in PRICE_FIELDS
+		)
+	except BrokerRequestError as exc:
+		parser.error(str(exc))
+	policy = BrokerPolicy(allowed_models, args.max_output_tokens, args.max_total_output_tokens, max_prices)  # type: ignore[arg-type]
 	upstream_key = os.environ.get("OPENROUTER_API_KEY", "")
 	if not upstream_key:
 		print("model provider broker: OPENROUTER_API_KEY is unavailable", file=sys.stderr)
 		return 2
 	try:
-		state = BrokerState(args.upstream_url, upstream_key, secrets.token_urlsafe(32), args.max_requests)
+		state = BrokerState(args.upstream_url, upstream_key, secrets.token_urlsafe(32), args.max_requests, policy)
 	except ValueError as exc:
 		print(f"model provider broker: {exc}", file=sys.stderr)
 		return 2

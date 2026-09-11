@@ -626,6 +626,22 @@ def _signature_for_resolver_retry(document: dict[str, Any], auth_key: bytes) -> 
 	return hmac.new(auth_key, message, hashlib.sha256).hexdigest()
 
 
+def _resolver_retry_document_is_verified(
+	document: dict[str, Any],
+	context: dict[str, Any],
+	auth_keys: dict[str, bytes],
+) -> bool:
+	if not _validate_resolver_retry_document(document):
+		return False
+	if any(document.get(field) != expected for field, expected in context.items()):
+		return False
+	key_id = document.get("key_id")
+	if not isinstance(key_id, str) or key_id not in auth_keys:
+		return False
+	expected_signature = _signature_for_resolver_retry(document, auth_keys[key_id])
+	return hmac.compare_digest(str(document["signature"]), expected_signature)
+
+
 def cmd_sign_resolver_retry(args: argparse.Namespace) -> int:
 	context, context_error = _validated_resolver_retry_context(args)
 	if context_error is not None:
@@ -677,21 +693,15 @@ def cmd_verify_resolver_retry(args: argparse.Namespace) -> int:
 		print(f"resolver retry verification failed: {context_error}", file=sys.stderr)
 		return 2
 	document = _load_bounded_json_object(Path(args.envelope_file), RESOLVER_RETRY_MAX_BYTES)
-	if document is None or not _validate_resolver_retry_document(document):
+	if document is None:
 		return 1
 	assert context is not None
-	if any(document.get(field) != expected for field, expected in context.items()):
-		return 1
 	_active_key_id, auth_keys, key_error = _state_auth_keyring()
 	if key_error is not None:
 		print(f"resolver retry verification failed: {key_error}", file=sys.stderr)
 		return 2
 	assert auth_keys is not None
-	key_id = document.get("key_id")
-	if not isinstance(key_id, str) or key_id not in auth_keys:
-		return 1
-	expected_signature = _signature_for_resolver_retry(document, auth_keys[key_id])
-	if not hmac.compare_digest(str(document["signature"]), expected_signature):
+	if not _resolver_retry_document_is_verified(document, context, auth_keys):
 		return 1
 	if args.out_file:
 		try:
@@ -700,6 +710,71 @@ def cmd_verify_resolver_retry(args: argparse.Namespace) -> int:
 		except OSError:
 			print("resolver retry verification failed: output file is not writable", file=sys.stderr)
 			return 2
+	return 0
+
+
+def cmd_select_resolver_retry(args: argparse.Namespace) -> int:
+	context, context_error = _validated_resolver_retry_context(args)
+	if context_error is not None:
+		print(f"resolver retry selection failed: {context_error}", file=sys.stderr)
+		return 2
+	_active_key_id, auth_keys, key_error = _state_auth_keyring()
+	if key_error is not None:
+		print(f"resolver retry selection failed: {key_error}", file=sys.stderr)
+		return 2
+	try:
+		comments_path = Path(args.comments_json)
+		if comments_path.stat().st_size > 32 * 1024 * 1024:
+			raise ValueError("comments payload is oversized")
+		comments = json.loads(comments_path.read_text(encoding="utf-8"))
+	except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+		print("resolver retry selection failed: comments payload is invalid", file=sys.stderr)
+		return 2
+	if not isinstance(comments, list) or len(comments) > 100_000:
+		print("resolver retry selection failed: comments payload is invalid", file=sys.stderr)
+		return 2
+	assert context is not None and auth_keys is not None
+	marker_prefix = "<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n"
+	marker_suffix = "\n-->"
+	selected: tuple[int, int, dict[str, Any]] | None = None
+	for comment in comments:
+		if not isinstance(comment, dict):
+			continue
+		comment_id = comment.get("id")
+		user = comment.get("user")
+		body = comment.get("body")
+		if isinstance(body, str):
+			body = body.replace("\r\n", "\n").replace("\r", "\n")
+		if (
+			not isinstance(comment_id, int)
+			or isinstance(comment_id, bool)
+			or comment_id < 1
+			or not isinstance(user, dict)
+			or user.get("id") != args.producer_id
+			or not isinstance(body, str)
+			or len(body.encode("utf-8")) > RESOLVER_RETRY_MAX_BYTES + 64
+			or not body.startswith(marker_prefix)
+			or not body.endswith(marker_suffix)
+		):
+			continue
+		try:
+			document = json.loads(body[len(marker_prefix):-len(marker_suffix)])
+		except json.JSONDecodeError:
+			continue
+		if not isinstance(document, dict) or not _resolver_retry_document_is_verified(document, context, auth_keys):
+			continue
+		candidate = (document["generation"], comment_id, document)
+		if selected is None or candidate[:2] > selected[:2]:
+			selected = candidate
+	if selected is None:
+		return 1
+	result = {"comment_id": selected[1], "envelope": selected[2]}
+	try:
+		Path(args.out_file).write_bytes(_canonical_json_bytes(result) + b"\n")
+		os.chmod(args.out_file, 0o600)
+	except OSError:
+		print("resolver retry selection failed: output file is not writable", file=sys.stderr)
+		return 2
 	return 0
 
 
@@ -939,6 +1014,19 @@ def main() -> int:
 		if command_name == "sign":
 			command_parser.add_argument("--out-file", required=True)
 		command_parser.set_defaults(func=command_func)
+	p_select_resolver_retry = sub.add_parser(
+		"select-resolver-retry",
+		help="Select the highest-generation authenticated resolver retry state from comments",
+	)
+	p_select_resolver_retry.add_argument("--comments-json", required=True)
+	p_select_resolver_retry.add_argument("--repository", required=True)
+	p_select_resolver_retry.add_argument("--tracking-issue", required=True, type=int)
+	p_select_resolver_retry.add_argument("--integration-branch", required=True)
+	p_select_resolver_retry.add_argument("--source-pr", required=True, type=int)
+	p_select_resolver_retry.add_argument("--head-sha", required=True)
+	p_select_resolver_retry.add_argument("--producer-id", required=True, type=int)
+	p_select_resolver_retry.add_argument("--out-file", required=True)
+	p_select_resolver_retry.set_defaults(func=cmd_select_resolver_retry)
 	for command_name, command_help, command_func in (
 		("sign-resolver-retry", "Sign an authenticated resolver retry-state envelope", cmd_sign_resolver_retry),
 		("verify-resolver-retry", "Verify an authenticated resolver retry-state envelope", cmd_verify_resolver_retry),

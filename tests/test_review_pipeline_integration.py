@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "review_pipeline"
@@ -84,8 +84,8 @@ def _install_mock_opencode(mock_bin_dir: Path, *, consolidator_fixture: str | No
 		"set -euo pipefail\n\n"
 		"if [ \"${1:-}\" = \"--version\" ]; then printf '1.18.23\\n'; exit 0; fi\n"
 		"if [ \"${1:-}\" != \"run\" ]; then echo \"mock-opencode supports only run\" >&2; exit 2; fi\n"
-		"if [ -n \"${MOCK_OPENCODE_OUTPUT_FILE:-}\" ] && [ -f \"${MOCK_OPENCODE_OUTPUT_FILE}\" ]; then\n"
-		"\tcat \"${MOCK_OPENCODE_OUTPUT_FILE}\"\n"
+		f"if [ -f {shlex.quote(str(output_file))} ]; then\n"
+		f"\tcat {shlex.quote(str(output_file))}\n"
 		"fi\n",
 		encoding="utf-8",
 	)

@@ -97,7 +97,7 @@ esac
 # `model = ...` would create duplicate TOML keys (which strict TOML
 # parsers reject as invalid).
 patch_diagnose_reasoning_into_config() {
-  local cfg="${CODEX_HOME:-${HOME:-/root}/.codex}/config.toml"
+	  local cfg="${CODEX_HOME:-${HOME:-/root}/.codex}/config.toml"
   mkdir -p "$(dirname "${cfg}")"
   PYTHONDONTWRITEBYTECODE=1 python3 - "${cfg}" "${DIAGNOSE_REASONING}" <<'PY'
 from pathlib import Path
@@ -208,7 +208,7 @@ if [ ! -s "${CAPTURE_FILE}" ]; then
 fi
 
 echo "handled=true" >> "$GITHUB_OUTPUT"
-model_provider_broker_start
+MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${DIAGNOSE_MODEL}" model_provider_broker_start
 trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
 model_provider_broker_prepare_codex_writer "${DIAGNOSE_MODEL}" "${DIAGNOSE_REASONING}" "$(pwd)"
 if ! patch_diagnose_reasoning_into_config; then

@@ -39,7 +39,9 @@ if [ -s "${candidate_file:-/nonexistent}" ]; then
 	signed_file="$(mktemp)"
 	comment_file="$(mktemp)"
 	comments_file="$(mktemp)"
-	trap 'rm -f "${signed_file}" "${comment_file}" "${comments_file}"' EXIT
+	comments_pages_file="$(mktemp)"
+	selection_file="$(mktemp)"
+	trap 'rm -f "${signed_file}" "${comment_file}" "${comments_file}" "${comments_pages_file}" "${selection_file}"' EXIT
 	PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_state_v2.py" sign-resolver-retry \
 		--candidate-file "${candidate_file}" \
 		--repository "${GITHUB_REPOSITORY}" \
@@ -56,12 +58,25 @@ if [ -s "${candidate_file:-/nonexistent}" ]; then
 	} > "${comment_file}"
 	existing_comment_id="${RESOLVER_RETRY_STATE_COMMENT_ID:-}"
 	if ! [[ "${existing_comment_id}" =~ ^[1-9][0-9]*$ ]]; then
-		gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?sort=updated&direction=desc&per_page=100" \
-			| jq 'if type == "array" then . else [] end' > "${comments_file}"
-		existing_comment_id="$(jq -r --argjson producer_id "${producer_id}" '
-			[.[] | select((.user.id // 0) == $producer_id and ((.body // "") | startswith("<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n")))]
-			| sort_by(.id) | last | .id // empty
-		' "${comments_file}")"
+		gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" > "${comments_pages_file}"
+		jq -s 'add // []' "${comments_pages_file}" > "${comments_file}"
+		if PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_state_v2.py" select-resolver-retry \
+			--comments-json "${comments_file}" \
+			--repository "${GITHUB_REPOSITORY}" \
+			--tracking-issue "${INTEGRATION_TRACKING_NUM}" \
+			--integration-branch "${TARGET_BRANCH}" \
+			--source-pr "${PR_NUMBER}" \
+			--head-sha "${live_head_sha}" \
+			--producer-id "${producer_id}" \
+			--out-file "${selection_file}"; then
+			existing_comment_id="$(jq -r '.comment_id' "${selection_file}")"
+		else
+			selector_rc=$?
+			if [ "${selector_rc}" -ne 1 ]; then
+				echo "::error::Resolver retry-state lookup failed; refusing to create a duplicate marker."
+				exit 1
+			fi
+		fi
 	fi
 	comment_payload="$(jq -n --rawfile body "${comment_file}" '{body:$body}')"
 	if [[ "${existing_comment_id}" =~ ^[1-9][0-9]*$ ]]; then

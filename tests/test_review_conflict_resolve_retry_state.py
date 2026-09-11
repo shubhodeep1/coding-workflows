@@ -427,16 +427,18 @@ def test_resolver_retry_comment_lookups_are_bounded() -> None:
 	actuator = (REPO_ROOT / "scripts" / "review_conflict_actuate.sh").read_text(encoding="utf-8")
 	prepare = (REPO_ROOT / "scripts" / "review_conflict_prepare.sh").read_text(encoding="utf-8")
 	metadata = (REPO_ROOT / "scripts" / "review_collect_pr_metadata.sh").read_text(encoding="utf-8")
-	bounded_endpoint = "comments?sort=updated&direction=desc&per_page=100"
-	assert bounded_endpoint in poller
-	assert bounded_endpoint in actuator
-	poller_lookup = poller.split('local resolver_retry_comments_json=""', 1)[1].split("resolver_retry_state=", 1)[0]
-	assert "--paginate" not in poller_lookup
-	assert 'gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments' not in actuator
+	paginated_endpoint = "comments?per_page=100"
+	assert paginated_endpoint in poller
+	assert paginated_endpoint in actuator
+	assert 'gh_retry_to_file "${resolver_retry_comments_pages_file}" gh api --paginate' in poller
+	assert 'gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100"' in actuator
 	assert 'api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments"' in metadata
+	assert "select-resolver-retry" in poller
+	assert "select-resolver-retry" in prepare
+	assert "select-resolver-retry" in actuator
 	assert "RESOLVER_RETRY_STATE_COMMENT_ID=${RESOLVER_RETRY_STATE_COMMENT_ID}" in prepare
 	assert 'existing_comment_id="${RESOLVER_RETRY_STATE_COMMENT_ID:-}"' in actuator
-	assert actuator.index('existing_comment_id="${RESOLVER_RETRY_STATE_COMMENT_ID:-}"') < actuator.index(bounded_endpoint)
+	assert actuator.index('existing_comment_id="${RESOLVER_RETRY_STATE_COMMENT_ID:-}"') < actuator.index(paginated_endpoint)
 
 
 def test_resolve_script_wires_tier_selection_and_verifier_args() -> None:
