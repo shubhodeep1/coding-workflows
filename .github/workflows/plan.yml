@@ -555,7 +555,7 @@ jobs:
           # Only the issue's OWN implementation PR blocks a planning run:
           # an open PR on the conventional implement head `ai/issue-<N>`,
           # or an open PR whose body closes the issue (`Closes/Fixes/
-          # Resolves #<N>`). This mirrors _pr_json_is_issue_implementation_pr
+          # Resolves #<N>`). This mirrors _linked_pr_is_issue_implementation
           # in scripts/orchestrate_poll_process.sh.
           #
           # The previous gh pr list --search approach produced false positives

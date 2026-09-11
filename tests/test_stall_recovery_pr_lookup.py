@@ -1071,15 +1071,16 @@ def test_plan_gate_skips_when_timeline_lookup_fails():
 #
 # When `gh pr create` fails — typically because a concurrent runner raced
 # and already created a PR on the same head branch — the recovery branch
-# queries the issue timeline for a cross-referenced OPEN PR and exits 0
-# with `pr_url=<URL>` if one is found. Otherwise it exits 1.
+# first queries the conventional `ai/issue-<N>` head, then falls back to
+# an OPEN cross-referenced PR whose body closes the issue. It exits 0 with
+# `pr_url=<URL>` if one is found and exits 1 otherwise.
 #
 # This is the symmetric pair of Site 1's safety check, but with a
 # different output shape (bare URL written to GITHUB_OUTPUT, not the
 # `#N URL` line format) and a different control-flow context (nested
 # inside the `if ! gh pr create` failure branch). The tests below
 # exercise the full step under a stubbed `gh` that forces
-# `gh pr create` to fail and replays canned timeline JSON.
+# `gh pr create` to fail and replays canned pull/timeline JSON.
 # ---------------------------------------------------------------------------
 
 
@@ -1088,11 +1089,12 @@ def _run_create_pr_recovery(
 	issue_number: str,
 	timeline: list[dict],
 	*,
+	recovery_pulls: list[dict] | None = None,
 	gh_pr_create_stderr: str = "PR exists for head branch",
 ) -> tuple[subprocess.CompletedProcess, str]:
 	"""Extract and execute the "Create Pull Request" step under a stubbed
 	`gh` that forces `gh pr create` to fail (to enter the recovery path)
-	and replays the supplied timeline for the recovery's `gh api` call.
+	and replays the supplied timeline and exact-head PR lookup responses.
 	Returns (proc, github_output_contents)."""
 	bin_dir = tmp / "bin"
 	_install_timeline_gh_stub(bin_dir)
@@ -1133,6 +1135,7 @@ def _run_create_pr_recovery(
 	env["GITHUB_OUTPUT"] = str(github_output)
 	env["GH_TOKEN"] = "test-token"
 	env["MOCK_GH_TIMELINE_JSON"] = json.dumps(timeline)
+	env["MOCK_GH_PULLS_JSON"] = json.dumps(recovery_pulls or [])
 	env["MOCK_GH_PR_CREATE_EXIT_CODE"] = "1"
 	env["MOCK_GH_PR_CREATE_STDERR"] = gh_pr_create_stderr
 
@@ -1154,23 +1157,11 @@ def _run_create_pr_recovery(
 
 def test_create_pr_recovery_finds_existing_linked_open_pr():
 	"""Recovery path's happy case: `gh pr create` raced and lost; the
-	timeline shows a cross-referenced OPEN PR; recovery must exit 0 and
-	write `pr_url=<URL>` to `$GITHUB_OUTPUT`."""
+	timeline shows a cross-referenced OPEN PR whose body closes the issue;
+	recovery must exit 0 and write `pr_url=<URL>` to `$GITHUB_OUTPUT`."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
-		timeline = [
-			{
-				"event": "cross-referenced",
-				"source": {
-					"issue": {
-						"number": 200,
-						"html_url": "https://github.com/owner/repo/pull/200",
-						"state": "open",
-						"pull_request": {"url": "https://api.github.com/.../pulls/200"},
-					}
-				},
-			},
-		]
+		timeline = [_open_pr_xref(200, body="Closes #141")]
 		proc, gh_out = _run_create_pr_recovery(tmp, "141", timeline)
 		assert proc.returncode == 0, (
 			f"recovery should succeed; stderr: {proc.stderr}\nstdout: {proc.stdout}"
@@ -1220,25 +1211,47 @@ def test_create_pr_recovery_skips_text_only_mention():
 		assert "pr_url=" not in gh_out, gh_out
 
 
+def test_create_pr_recovery_ignores_mention_only_cross_referenced_pr():
+	"""An unrelated open PR with `Refs #N` must not be adopted after
+	`gh pr create` fails."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		timeline = [_open_pr_xref(199, body="Tracked separately in #141. Refs #141")]
+		proc, gh_out = _run_create_pr_recovery(tmp, "141", timeline)
+		assert proc.returncode == 1, (
+			f"mention-only PR must not satisfy recovery; stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		)
+		assert "pr_url=" not in gh_out, gh_out
+
+
+def test_create_pr_recovery_prefers_conventional_head_over_mention_only_xref():
+	"""If another runner creates the exact-head PR, recovery must select it
+	instead of an older mention-only cross-reference."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		timeline = [_open_pr_xref(199, body="Tracked separately in #141. Refs #141")]
+		recovery_pulls = [_open_pr_on_head(200, "ai/issue-141")]
+		proc, gh_out = _run_create_pr_recovery(
+			tmp, "141", timeline, recovery_pulls=recovery_pulls
+		)
+		assert proc.returncode == 0, (
+			f"exact-head recovery should succeed; stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		)
+		assert "pr_url=https://github.com/owner/repo/pull/200" in gh_out, gh_out
+		assert "pull/199" not in gh_out, gh_out
+		pr_url_lines = [ln for ln in gh_out.splitlines() if ln.startswith("pr_url=")]
+		assert len(pr_url_lines) == 1, pr_url_lines
+
+
 def test_create_pr_recovery_ignores_closed_pr():
 	"""A closed/merged cross-referenced PR must not satisfy recovery —
 	the goal is to find an OPEN PR to redirect to, not to point at a
 	merged historical artifact."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
-		timeline = [
-			{
-				"event": "cross-referenced",
-				"source": {
-					"issue": {
-						"number": 199,
-						"html_url": "https://github.com/owner/repo/pull/199",
-						"state": "closed",
-						"pull_request": {"url": "x", "merged_at": "2026-01-01T00:00:00Z"},
-					}
-				},
-			},
-		]
+		closed_pr = _open_pr_xref(199, body="Closes #141")
+		closed_pr["source"]["issue"]["state"] = "closed"
+		timeline = [closed_pr]
 		proc, gh_out = _run_create_pr_recovery(tmp, "141", timeline)
 		assert proc.returncode == 1, (
 			f"closed PR must not satisfy recovery; rc={proc.returncode}\n"
@@ -1261,28 +1274,8 @@ def test_create_pr_recovery_picks_first_open_pr_when_multiple_present():
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
 		timeline = [
-			{
-				"event": "cross-referenced",
-				"source": {
-					"issue": {
-						"number": 200,
-						"html_url": "https://github.com/owner/repo/pull/200",
-						"state": "open",
-						"pull_request": {"url": "https://api.github.com/.../pulls/200"},
-					}
-				},
-			},
-			{
-				"event": "cross-referenced",
-				"source": {
-					"issue": {
-						"number": 201,
-						"html_url": "https://github.com/owner/repo/pull/201",
-						"state": "open",
-						"pull_request": {"url": "https://api.github.com/.../pulls/201"},
-					}
-				},
-			},
+			_open_pr_xref(200, body="Closes #141"),
+			_open_pr_xref(201, body="Fixes #141"),
 		]
 		proc, gh_out = _run_create_pr_recovery(tmp, "141", timeline)
 		assert proc.returncode == 0, (

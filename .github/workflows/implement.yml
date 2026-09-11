@@ -216,7 +216,7 @@ jobs:
           # unrelated fix) also emits a `cross-referenced` event; counting
           # it silently skipped planning for issue #4073 (see the same
           # step in plan.yml). Mention-only PRs are logged and ignored.
-          # Mirrors _pr_json_is_issue_implementation_pr in
+          # Mirrors _linked_pr_is_issue_implementation in
           # scripts/orchestrate_poll_process.sh. §15: the existing
           # timeline call plus one `pulls?head=` call.
           repo_slug="${{ github.repository }}"
@@ -4443,26 +4443,38 @@ jobs:
               cat "${RUNTIME_DIR}/created_pr_url.err"
             fi
             # See the rationale on the "Safety check for existing PR" step
-            # above: `--search "issue:${N}"` is fuzzy free-text. Use the
-            # issue timeline cross-reference query instead so a recovery
-            # after a failed `gh pr create` returns a genuinely linked PR.
-            # `gh_retry` here so a transient API blip does not block the
-            # recovery — site 1 has the same lookup but cannot use
-            # `gh_retry` (gh_helpers.sh is staged later in the workflow).
+            # above: only the issue's own implementation PR is reusable.
+            # Prefer the exact head branch because that is the race this
+            # recovery handles; otherwise accept only a cross-referenced PR
+            # whose body closes the issue. Mention-only PRs are ignored.
+            # §15: the existing timeline call plus one exact-head call; the
+            # timeline is queried only when the head lookup misses.
             # Leave stderr unredirected so gh/jq diagnostics surface in
             # the workflow log on failure (otherwise `EXISTING_PR=""`
             # is indistinguishable from "no linked PR exists").
-            EXISTING_PR="$(gh_retry gh api --paginate \
-              "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/timeline" \
-              --jq '
-                [.[]
-                  | select(.event == "cross-referenced")
-                  | select(.source.issue.pull_request != null)
-                  | select(.source.issue.state == "open")
-                  | .source.issue.html_url
-                ]
-                | .[0] // ""
-              ' || echo "")"
+            recovery_repo_slug="${{ github.repository }}"
+            recovery_repo_owner="${recovery_repo_slug%%/*}"
+            recovery_closing_kw_re="(^|[^A-Za-z0-9_-])(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#${ISSUE_NUMBER}([^0-9A-Za-z_]|$)"
+            recovery_head_pr_url="$(gh_retry gh api --paginate \
+              "repos/${recovery_repo_slug}/pulls?state=open&head=${recovery_repo_owner}:${TARGET_BRANCH}" \
+              --jq '[.[] | select(.head.ref == "'"${TARGET_BRANCH}"'") | .html_url] | .[0] // ""' || echo "")"
+            EXISTING_PR="${recovery_head_pr_url}"
+            if [ -z "${EXISTING_PR}" ]; then
+              EXISTING_PR="$(gh_retry gh api --paginate \
+                "repos/${recovery_repo_slug}/issues/${ISSUE_NUMBER}/timeline" \
+                --jq '
+                  [.[]
+                    | select(.event == "cross-referenced")
+                    | select(.source.issue.pull_request != null)
+                    | select(.source.issue.state == "open")
+                    | .source.issue
+                    | select((.body // "") | test("'"${recovery_closing_kw_re}"'"; "i"))
+                    | .html_url
+                  ]
+                  | unique
+                  | .[0] // ""
+                ' || echo "")"
+            fi
             if [ -n "${EXISTING_PR}" ]; then
               echo "Found existing PR: ${EXISTING_PR}"
               echo "pr_url=${EXISTING_PR}" >> "$GITHUB_OUTPUT"
