@@ -208,8 +208,25 @@ jobs:
           # "${TARGET_BRANCH}"`, which GitHub itself rejects when an open
           # PR already exists on the same head — see the recovery branch
           # at the `gh pr create` failure handler below.
-          gh api --paginate \
-            "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/timeline" \
+          #
+          # Only the issue's OWN implementation PR counts: an open PR on
+          # the conventional head `ai/issue-<N>` (TARGET_BRANCH), or an
+          # open PR whose body closes the issue with a supported short,
+          # qualified, or GitHub issue URL reference. A PR that merely
+          # mentions the issue ("Refs #N" from an
+          # unrelated fix) also emits a `cross-referenced` event; counting
+          # it silently skipped planning for issue #4073 (see the same
+          # step in plan.yml). Mention-only PRs are logged and ignored.
+          # Mirrors _pr_json_closes_issue in
+          # scripts/orchestrate_poll_process.sh. §15: one timeline call
+          # identifies candidates, and one paginated open-PR inventory
+          # supplies bodies and heads without one REST call per candidate.
+          repo_slug="${{ github.repository }}"
+          repo_owner="${repo_slug%%/*}"
+          impl_head="ai/issue-${ISSUE_NUMBER}"
+          closing_kw_re="(^|[^[:alnum:]_-])(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+(#${ISSUE_NUMBER}|[[:alnum:]_.-]+/[[:alnum:]_.-]+#${ISSUE_NUMBER}|https?://github[.]com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/${ISSUE_NUMBER})([^[:alnum:]_-]|$)"
+          cross_ref_pr_candidates="$(gh api --paginate \
+            "repos/${repo_slug}/issues/${ISSUE_NUMBER}/timeline" \
             --jq '
               [.[]
                 | select(.event == "cross-referenced")
@@ -219,8 +236,56 @@ jobs:
               ]
               | unique_by(.number)
               | .[]
-              | "#\(.number) \(.html_url)"
-            ' > "${PR_EXISTS_FILE}" || true
+              | "\(.number)\t\(.html_url)"
+            ' || true)"
+          open_pr_inventory="$(gh api --paginate \
+            "repos/${repo_slug}/pulls?state=open&per_page=100" \
+            --jq '.[] | "\(.number)\t\(.html_url)\t\(.head.ref // "")\t\(.head.repo.owner.login // "")\t\((.body // "") | @base64)"' || true)"
+          cross_ref_prs=""
+          head_branch_prs=""
+          while IFS=$'\t' read -r inventory_pr_num inventory_pr_url inventory_head_ref inventory_head_owner inventory_body_b64; do
+            [ -n "${inventory_pr_num}" ] || continue
+            if [ "${inventory_head_ref}" = "${impl_head}" ] && [ "${inventory_head_owner,,}" = "${repo_owner,,}" ]; then
+              head_branch_prs+="#${inventory_pr_num} ${inventory_pr_url}"$'\n'
+            fi
+          done <<< "${open_pr_inventory}"
+          while IFS=$'\t' read -r xref_candidate_num xref_candidate_url; do
+            [ -n "${xref_candidate_num}" ] || continue
+            xref_candidate_body_b64=""
+            while IFS=$'\t' read -r inventory_pr_num inventory_pr_url inventory_head_ref inventory_head_owner inventory_body_b64; do
+              if [ "${inventory_pr_num}" = "${xref_candidate_num}" ]; then
+                xref_candidate_body_b64="${inventory_body_b64}"
+                break
+              fi
+            done <<< "${open_pr_inventory}"
+            if printf '%s' "${head_branch_prs}" | grep -Fqx "#${xref_candidate_num} ${xref_candidate_url}"; then
+              continue
+            fi
+            xref_candidate_body="$(printf '%s' "${xref_candidate_body_b64}" | base64 --decode 2>/dev/null || true)"
+            if printf '%s' "${xref_candidate_body}" | grep -Eiq "${closing_kw_re}"; then
+              cross_ref_prs+="${xref_candidate_num}"$'\t'"${xref_candidate_url}"$'\tcloses\n'
+            else
+              cross_ref_prs+="${xref_candidate_num}"$'\t'"${xref_candidate_url}"$'\tmention\n'
+            fi
+          done <<< "${cross_ref_pr_candidates}"
+          impl_prs=""
+          mention_only_prs=""
+          while IFS=$'\t' read -r xref_pr_num xref_pr_url xref_pr_kind; do
+            [ -n "${xref_pr_num}" ] || continue
+            if [ "${xref_pr_kind}" = "closes" ]; then
+              impl_prs+="#${xref_pr_num} ${xref_pr_url}"$'\n'
+            else
+              mention_only_prs+="#${xref_pr_num} ${xref_pr_url}"$'\n'
+            fi
+          done <<< "${cross_ref_prs}"
+          if [ -n "${head_branch_prs}" ]; then
+            impl_prs+="${head_branch_prs}"$'\n'
+          fi
+          printf '%s' "${impl_prs}" | grep -E '^#[0-9]+ ' | sort -u > "${PR_EXISTS_FILE}" || true
+          if [ -n "${mention_only_prs}" ]; then
+            echo "Ignoring open PR(s) that only mention issue #${ISSUE_NUMBER} (not its implementation PR):"
+            printf '%s' "${mention_only_prs}"
+          fi
 
           if [ -s "${PR_EXISTS_FILE}" ]; then
             echo "existing_pr=true" >> "$GITHUB_OUTPUT"
@@ -1253,9 +1318,12 @@ jobs:
 
       - name: Log checkout ref
         if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          IMPLEMENT_RESOLVED_FALLBACK_REF: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}
+          IMPLEMENT_LOG_PR_BASE_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          echo "Resolved fallback ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          echo "Resolved fallback ref: ${IMPLEMENT_RESOLVED_FALLBACK_REF}"
           baseline_status="${{ steps.baseline_refctx.outputs.status }}"
           if [ -z "${baseline_status}" ]; then
             baseline_status="step-no-output"
@@ -1265,7 +1333,7 @@ jobs:
             resolved_checkout_source="${{ steps.baseline_refctx.outputs.branch }}"
           fi
           echo "Resolved checkout source: ${resolved_checkout_source}"
-          echo "PR base ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          echo "PR base ref: ${IMPLEMENT_LOG_PR_BASE_REF}"
           if [ "${{ steps.baseline_refctx.outputs.status }}" = "accepted" ] && [ "${{ steps.checkout_baseline.outcome }}" = "success" ]; then
             echo "Baseline override: accepted ${{ steps.baseline_refctx.outputs.branch }}"
           elif [ "${{ steps.baseline_refctx.outputs.status }}" = "accepted" ]; then
@@ -1333,6 +1401,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          IMPLEMENT_METADATA_PR_BASE_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -1362,7 +1431,7 @@ jobs:
           ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
-          PR_BASE_BRANCH="${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          PR_BASE_BRANCH="${IMPLEMENT_METADATA_PR_BASE_REF}"
           ISSUE_SCOPE_LOCK_GLOB=""
 
           if [ "${SCOPE_LOCK_LABEL_ENABLED:-false}" = "true" ]; then
@@ -4407,26 +4476,60 @@ jobs:
               cat "${RUNTIME_DIR}/created_pr_url.err"
             fi
             # See the rationale on the "Safety check for existing PR" step
-            # above: `--search "issue:${N}"` is fuzzy free-text. Use the
-            # issue timeline cross-reference query instead so a recovery
-            # after a failed `gh pr create` returns a genuinely linked PR.
-            # `gh_retry` here so a transient API blip does not block the
-            # recovery — site 1 has the same lookup but cannot use
-            # `gh_retry` (gh_helpers.sh is staged later in the workflow).
+            # above: only the issue's own implementation PR is reusable.
+            # Prefer the exact head branch because that is the race this
+            # recovery handles; otherwise accept only a cross-referenced PR
+            # whose body closes the issue. Mention-only PRs are ignored.
+            # §15: one open-PR inventory supplies heads and bodies; the
+            # timeline is queried only when the exact-head lookup misses.
             # Leave stderr unredirected so gh/jq diagnostics surface in
             # the workflow log on failure (otherwise `EXISTING_PR=""`
             # is indistinguishable from "no linked PR exists").
-            EXISTING_PR="$(gh_retry gh api --paginate \
-              "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/timeline" \
-              --jq '
-                [.[]
-                  | select(.event == "cross-referenced")
-                  | select(.source.issue.pull_request != null)
-                  | select(.source.issue.state == "open")
-                  | .source.issue.html_url
-                ]
-                | .[0] // ""
-              ' || echo "")"
+            recovery_repo_slug="${{ github.repository }}"
+            recovery_repo_owner="${recovery_repo_slug%%/*}"
+            recovery_closing_kw_re="(^|[^[:alnum:]_-])(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+(#${ISSUE_NUMBER}|[[:alnum:]_.-]+/[[:alnum:]_.-]+#${ISSUE_NUMBER}|https?://github[.]com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/${ISSUE_NUMBER})([^[:alnum:]_-]|$)"
+            recovery_open_pr_inventory="$(gh_retry gh api --paginate \
+              "repos/${recovery_repo_slug}/pulls?state=open&per_page=100" \
+              --jq '.[] | "\(.number)\t\(.html_url)\t\(.head.ref // "")\t\(.head.repo.owner.login // "")\t\((.body // "") | @base64)"' || echo "")"
+            recovery_head_pr_url=""
+            while IFS=$'\t' read -r recovery_inventory_pr_num recovery_inventory_pr_url recovery_inventory_head_ref recovery_inventory_head_owner recovery_inventory_body_b64; do
+              if [ "${recovery_inventory_head_ref}" = "${TARGET_BRANCH}" ] && [ "${recovery_inventory_head_owner,,}" = "${recovery_repo_owner,,}" ]; then
+                recovery_head_pr_url="${recovery_inventory_pr_url}"
+                break
+              fi
+            done <<< "${recovery_open_pr_inventory}"
+            EXISTING_PR="${recovery_head_pr_url}"
+            if [ -z "${EXISTING_PR}" ]; then
+              recovery_cross_ref_candidates="$(gh_retry gh api --paginate \
+                "repos/${recovery_repo_slug}/issues/${ISSUE_NUMBER}/timeline" \
+                --jq '
+                  [.[]
+                    | select(.event == "cross-referenced")
+                    | select(.source.issue.pull_request != null)
+                    | select(.source.issue.state == "open")
+                    | .source.issue
+                    | {number, html_url}
+                  ]
+                  | unique_by(.number)
+                  | .[]
+                  | "\(.number)\t\(.html_url)"
+                ' || echo "")"
+              while IFS=$'\t' read -r recovery_candidate_num recovery_candidate_url; do
+                [ -n "${recovery_candidate_num}" ] || continue
+                recovery_candidate_body_b64=""
+                while IFS=$'\t' read -r recovery_inventory_pr_num recovery_inventory_pr_url recovery_inventory_head_ref recovery_inventory_head_owner recovery_inventory_body_b64; do
+                  if [ "${recovery_inventory_pr_num}" = "${recovery_candidate_num}" ]; then
+                    recovery_candidate_body_b64="${recovery_inventory_body_b64}"
+                    break
+                  fi
+                done <<< "${recovery_open_pr_inventory}"
+                recovery_candidate_body="$(printf '%s' "${recovery_candidate_body_b64}" | base64 --decode 2>/dev/null || true)"
+                if printf '%s' "${recovery_candidate_body}" | grep -Eiq "${recovery_closing_kw_re}"; then
+                  EXISTING_PR="${recovery_candidate_url}"
+                  break
+                fi
+              done <<< "${recovery_cross_ref_candidates}"
+            fi
             if [ -n "${EXISTING_PR}" ]; then
               echo "Found existing PR: ${EXISTING_PR}"
               echo "pr_url=${EXISTING_PR}" >> "$GITHUB_OUTPUT"

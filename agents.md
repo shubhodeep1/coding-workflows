@@ -86,6 +86,13 @@ dependency installation, lint, and tests. Rejections emit the secret-safe
 ubiquitous `grep` instead of `rg` so runner images without ripgrep still fail
 only on real policy drift.
 
+Integration-ref trust boundary: `scripts/resolve_integration_ref.sh` can return
+any existing valid Git branch name declared by issue metadata. Workflows may
+pass that output to action inputs or through step-local environment variables,
+but must never interpolate it directly into `run:` script source.
+`tests/test_workflow_checkout_integration_ref_audit.py` pins the env-bound log
+contract for every resolver-consuming workflow.
+
 Plan prompt note: `PLAN_DIAGRAMS_OPTIONAL` defaults to `true`, so plan outputs
 may include `Data flow:`, `State machines:`, and `Failure modes:` only when
 they materially help. Trivial plans should omit them, and `State machines:` is

@@ -740,6 +740,7 @@ def _run_fetch_issue_metadata_step(
 		{
 			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			"GH_TOKEN": "test-token",
+			"IMPLEMENT_METADATA_PR_BASE_REF": "orchestrator/project-829",
 			"GITHUB_ENV": str(github_env),
 			"ISSUE_NUMBER": "948",
 			"ISSUE_META_FILE": str(issue_meta_file),
@@ -1151,9 +1152,10 @@ def test_checkout_repository_fallback_uses_checkout_ref_output_chain() -> None:
 		in fallback_checkout_step
 	)
 	assert (
-		"Resolved fallback ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+		"IMPLEMENT_RESOLVED_FALLBACK_REF: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
 		in log_step
 	)
+	assert 'Resolved fallback ref: ${IMPLEMENT_RESOLVED_FALLBACK_REF}' in log_step
 	assert "steps.checkout_ref.outputs.source" not in log_step, (
 		"Resolved checkout source logging must not read the dead checkout_ref.outputs.source output"
 	)
@@ -1161,10 +1163,13 @@ def test_checkout_repository_fallback_uses_checkout_ref_output_chain() -> None:
 
 
 def test_fetch_issue_metadata_keeps_pr_base_branch_on_refctx_default_chain() -> None:
+	fetch_step = _step_block_text("Fetch issue metadata")
 	fetch_block = _extract_run_script("Fetch issue metadata")
-	assert 'PR_BASE_BRANCH="${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"' in fetch_block, (
+	assert "IMPLEMENT_METADATA_PR_BASE_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in fetch_step, (
 		"Fetch issue metadata must keep PR_BASE_BRANCH anchored to the integration/default ref, not the baseline checkout override"
 	)
+	assert 'PR_BASE_BRANCH="${IMPLEMENT_METADATA_PR_BASE_REF}"' in fetch_block
+	assert 'PR_BASE_BRANCH="${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"' not in fetch_block
 	assert "steps.checkout_ref.outputs.ref" not in fetch_block, (
 		"PR_BASE_BRANCH must not follow the optional prior_pr_baseline_branch checkout override"
 	)

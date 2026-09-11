@@ -301,7 +301,8 @@ def test_workflow_contains_guarded_baseline_override_checkout_path() -> None:
 	assert 'resolved_checkout_source="${{ steps.baseline_refctx.outputs.branch }}"' in log_step
 	assert "Baseline override: ignored (${baseline_status})" in log_step
 	assert "Baseline override: fallback to resolved ref after checkout failure for" in log_step
-	assert "Resolved fallback ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}" in log_step
+	assert "IMPLEMENT_RESOLVED_FALLBACK_REF: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}" in log_step
+	assert 'Resolved fallback ref: ${IMPLEMENT_RESOLVED_FALLBACK_REF}' in log_step
 
 
 def test_resolver_accepts_valid_machine_generated_reissue_branch() -> None:
