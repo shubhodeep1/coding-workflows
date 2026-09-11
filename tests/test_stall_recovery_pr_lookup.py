@@ -667,8 +667,7 @@ def _run_safety_check(
 ) -> tuple[subprocess.CompletedProcess, str, str]:
 	"""Extract and execute the "Safety check for existing PR" step under a
 	stubbed `gh`. Returns (proc, pr_exists_file_contents, github_output_contents).
-	`pulls` is the canned response of the `pulls?head=<owner>:ai/issue-<N>`
-	lookup (default: no open PR on the conventional head)."""
+	`pulls` is the canned paginated open-PR inventory (default: no open PRs)."""
 	bin_dir = tmp / "bin"
 	_install_timeline_gh_stub(bin_dir)
 
@@ -748,7 +747,12 @@ def _run_plan_existing_pr_gate(
 
 
 def _open_pr_xref(number: int, body: str = "") -> dict:
-	"""A `cross-referenced` timeline event pointing at an OPEN PR."""
+	"""A raw REST `cross-referenced` event pointing at an OPEN PR.
+
+	`body` remains accepted for existing callers but is deliberately omitted:
+	the production timeline payload does not contain the source PR body.
+	"""
+	_ = body
 	return {
 		"event": "cross-referenced",
 		"source": {
@@ -756,7 +760,6 @@ def _open_pr_xref(number: int, body: str = "") -> dict:
 				"number": number,
 				"html_url": f"https://github.com/owner/repo/pull/{number}",
 				"state": "open",
-				"body": body,
 				"pull_request": {"url": f"https://api.github.com/repos/owner/repo/pulls/{number}"},
 			}
 		},
@@ -764,13 +767,21 @@ def _open_pr_xref(number: int, body: str = "") -> dict:
 
 
 def _open_pr_on_head(number: int, head_ref: str) -> dict:
-	"""One element of the `pulls?head=` list response."""
+	"""One element of the open-pull inventory response."""
 	return {
 		"number": number,
 		"html_url": f"https://github.com/owner/repo/pull/{number}",
 		"state": "open",
 		"head": {"ref": head_ref},
+		"body": "",
 	}
+
+
+def _open_pr_with_body(number: int, body: str, head_ref: str = "feature/manual") -> dict:
+	"""A full open-PR list payload with body and head metadata."""
+	pull = _open_pr_on_head(number, head_ref)
+	pull["body"] = body
+	return pull
 
 
 def test_safety_check_skips_text_only_mention():
@@ -817,8 +828,9 @@ def test_safety_check_finds_real_cross_referenced_open_pr():
 	surfaced in PR_EXISTS_FILE."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
-		timeline = [_open_pr_xref(200, body="Implements the thing.\n\nCloses #141")]
-		proc, pr_exists, gh_out = _run_safety_check(tmp, "141", timeline)
+		timeline = [_open_pr_xref(200)]
+		pulls = [_open_pr_with_body(200, "Implements the thing.\n\nCloses #141")]
+		proc, pr_exists, gh_out = _run_safety_check(tmp, "141", timeline, pulls=pulls)
 		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
 		assert "#200 https://github.com/owner/repo/pull/200" in pr_exists, pr_exists
 		assert "existing_pr=true" in gh_out, gh_out
@@ -830,9 +842,11 @@ def test_safety_check_dedupes_multiple_cross_refs_to_same_pr():
 	'Linked issues' edits). The output must list each PR once."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
-		shared_pr = _open_pr_xref(200, body="Fixes #141")
+		shared_pr = _open_pr_xref(200)
 		timeline = [shared_pr, shared_pr, shared_pr]
-		proc, pr_exists, gh_out = _run_safety_check(tmp, "141", timeline)
+		proc, pr_exists, gh_out = _run_safety_check(
+			tmp, "141", timeline, pulls=[_open_pr_with_body(200, "Fixes #141")]
+		)
 		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
 		lines = [ln for ln in pr_exists.splitlines() if ln.strip()]
 		assert lines == ["#200 https://github.com/owner/repo/pull/200"], lines
@@ -902,13 +916,14 @@ def test_safety_check_ignores_mention_only_cross_referenced_pr():
 	conventional `ai/issue-<N>` head) must NOT block, and must be logged."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
-		timeline = [
-			_open_pr_xref(
+		timeline = [_open_pr_xref(4072)]
+		pulls = [
+			_open_pr_with_body(
 				4072,
-				body="The signal-permission gap is tracked separately in #141 and is not addressed here.\n\nRefs PR #4071",
-			),
+				"The signal-permission gap is tracked separately in #141 and is not addressed here.\n\nRefs PR #4071",
+			)
 		]
-		proc, pr_exists, gh_out = _run_safety_check(tmp, "141", timeline)
+		proc, pr_exists, gh_out = _run_safety_check(tmp, "141", timeline, pulls=pulls)
 		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
 		assert pr_exists == "", f"mention-only PR must not block; got: {pr_exists!r}"
 		assert "existing_pr=false" in gh_out, gh_out
@@ -922,14 +937,15 @@ def test_safety_check_closing_keyword_requires_exact_issue_number():
 	(the same boundaries as _pr_json_closes_issue in the poller)."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
-		timeline = [
-			_open_pr_xref(300, body="Closes #1410"),
-			_open_pr_xref(301, body="prefixes #141"),
-			_open_pr_xref(302, body="Closes #141a"),
-			_open_pr_xref(303, body="Closes: #141"),
-			_open_pr_xref(304, body="Resolves: https://github.com/owner/repo/issues/141"),
+		timeline = [_open_pr_xref(number) for number in range(300, 305)]
+		pulls = [
+			_open_pr_with_body(300, "Closes #1410"),
+			_open_pr_with_body(301, "prefixes #141"),
+			_open_pr_with_body(302, "Closes #141a"),
+			_open_pr_with_body(303, "Closes: #141"),
+			_open_pr_with_body(304, "Resolves: https://github.com/owner/repo/issues/141"),
 		]
-		proc, pr_exists, gh_out = _run_safety_check(tmp, "141", timeline)
+		proc, pr_exists, gh_out = _run_safety_check(tmp, "141", timeline, pulls=pulls)
 		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
 		assert pr_exists == "", f"near-miss keywords must not block; got: {pr_exists!r}"
 		assert "existing_pr=false" in gh_out, gh_out
@@ -941,7 +957,12 @@ def test_safety_check_closing_keyword_requires_exact_issue_number():
 	):
 		with tempfile.TemporaryDirectory() as td:
 			tmp = Path(td)
-			proc, pr_exists, gh_out = _run_safety_check(tmp, "141", [_open_pr_xref(310, body=body)])
+			proc, pr_exists, gh_out = _run_safety_check(
+				tmp,
+				"141",
+				[_open_pr_xref(310)],
+				pulls=[_open_pr_with_body(310, body)],
+			)
 			assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
 			assert "#310 https://github.com/owner/repo/pull/310" in pr_exists, (body, pr_exists)
 			assert "existing_pr=true" in gh_out, (body, gh_out)
@@ -951,7 +972,7 @@ def test_safety_check_finds_open_pr_on_conventional_head_branch():
 	"""The issue's own implementation PR lives on `ai/issue-<N>`. Even when
 	its cross-reference event is missing (edits, bot-authored PRs and
 	merge-queue interactions have all been observed to suppress it), the
-	`pulls?head=` lookup must still find it. A PR on `ai/issue-<N>-retry`
+	open-PR inventory must still find it. A PR on `ai/issue-<N>-retry`
 	or `ai/issue-<N>1` is not the conventional head and does not count."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
@@ -975,8 +996,8 @@ def test_safety_check_dedupes_head_branch_and_closing_cross_ref():
 		proc, pr_exists, gh_out = _run_safety_check(
 			tmp,
 			"141",
-			[_open_pr_xref(400, body="Closes #141")],
-			pulls=[_open_pr_on_head(400, "ai/issue-141")],
+			[_open_pr_xref(400)],
+			pulls=[_open_pr_with_body(400, "Closes #141", "ai/issue-141")],
 		)
 		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
 		lines = [ln for ln in pr_exists.splitlines() if ln.strip()]
@@ -996,8 +1017,9 @@ def test_safety_check_dedupes_head_branch_and_closing_cross_ref():
 def test_plan_gate_ignores_mention_only_cross_referenced_pr():
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
-		timeline = [_open_pr_xref(4072, body="tracked separately in #4073 and is not addressed here.")]
-		proc, github_env = _run_plan_existing_pr_gate(tmp, "4073", timeline)
+		timeline = [_open_pr_xref(4072)]
+		pulls = [_open_pr_with_body(4072, "tracked separately in #4073 and is not addressed here.")]
+		proc, github_env = _run_plan_existing_pr_gate(tmp, "4073", timeline, pulls=pulls)
 		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
 		assert "SKIP_PLAN=true" not in github_env, github_env
 		assert "AI_PHASE_GATE_V1 phase=plan gate=existing_pr_check" not in proc.stdout, proc.stdout
@@ -1014,7 +1036,10 @@ def test_plan_gate_skips_on_closing_cross_referenced_pr():
 		with tempfile.TemporaryDirectory() as td:
 			tmp = Path(td)
 			proc, github_env = _run_plan_existing_pr_gate(
-				tmp, "4073", [_open_pr_xref(500, body=closing_reference_body)]
+				tmp,
+				"4073",
+				[_open_pr_xref(500)],
+				pulls=[_open_pr_with_body(500, closing_reference_body)],
 			)
 			assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
 			assert "SKIP_PLAN=true" in github_env, (closing_reference_body, github_env)
@@ -1040,16 +1065,16 @@ def test_plan_gate_skips_on_conventional_head_branch_pr():
 def test_plan_gate_ignores_closed_prs_and_plain_issues():
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
-		closed_pr = _open_pr_xref(700, body="Closes #4073")
+		closed_pr = _open_pr_xref(700)
 		closed_pr["source"]["issue"]["state"] = "closed"
-		plain_issue = _open_pr_xref(701, body="Closes #4073")
+		plain_issue = _open_pr_xref(701)
 		plain_issue["source"]["issue"]["pull_request"] = None
 		proc, github_env = _run_plan_existing_pr_gate(tmp, "4073", [closed_pr, plain_issue])
 		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
 		assert "SKIP_PLAN=true" not in github_env, github_env
 
 
-def test_plan_gate_skips_when_timeline_lookup_fails():
+def test_plan_gate_fails_closed_when_timeline_lookup_errors():
 	"""plan.yml runs the gate under `set -euo pipefail` with no fail-open:
 	a failing timeline call fails the step (unchanged from the previous
 	gate), so a transient API error is visible instead of planning twice."""
@@ -1106,7 +1131,7 @@ def _run_create_pr_recovery(
 ) -> tuple[subprocess.CompletedProcess, str]:
 	"""Extract and execute the "Create Pull Request" step under a stubbed
 	`gh` that forces `gh pr create` to fail (to enter the recovery path)
-	and replays the supplied timeline and exact-head PR lookup responses.
+	and replays the supplied timeline and open-PR inventory responses.
 	Returns (proc, github_output_contents)."""
 	bin_dir = tmp / "bin"
 	_install_timeline_gh_stub(bin_dir)
@@ -1178,8 +1203,13 @@ def test_create_pr_recovery_finds_existing_linked_open_pr():
 	):
 		with tempfile.TemporaryDirectory() as td:
 			tmp = Path(td)
-			timeline = [_open_pr_xref(200, body=closing_reference_body)]
-			proc, gh_out = _run_create_pr_recovery(tmp, "141", timeline)
+			timeline = [_open_pr_xref(200)]
+			proc, gh_out = _run_create_pr_recovery(
+				tmp,
+				"141",
+				timeline,
+				recovery_pulls=[_open_pr_with_body(200, closing_reference_body)],
+			)
 			assert proc.returncode == 0, (
 				f"recovery should succeed for {closing_reference_body!r}; "
 				f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
@@ -1234,8 +1264,13 @@ def test_create_pr_recovery_ignores_mention_only_cross_referenced_pr():
 	`gh pr create` fails."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
-		timeline = [_open_pr_xref(199, body="Tracked separately in #141. Refs #141")]
-		proc, gh_out = _run_create_pr_recovery(tmp, "141", timeline)
+		timeline = [_open_pr_xref(199)]
+		proc, gh_out = _run_create_pr_recovery(
+			tmp,
+			"141",
+			timeline,
+			recovery_pulls=[_open_pr_with_body(199, "Tracked separately in #141. Refs #141")],
+		)
 		assert proc.returncode == 1, (
 			f"mention-only PR must not satisfy recovery; stderr: {proc.stderr}\nstdout: {proc.stdout}"
 		)
@@ -1247,8 +1282,11 @@ def test_create_pr_recovery_prefers_conventional_head_over_mention_only_xref():
 	instead of an older mention-only cross-reference."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
-		timeline = [_open_pr_xref(199, body="Tracked separately in #141. Refs #141")]
-		recovery_pulls = [_open_pr_on_head(200, "ai/issue-141")]
+		timeline = [_open_pr_xref(199)]
+		recovery_pulls = [
+			_open_pr_with_body(199, "Tracked separately in #141. Refs #141"),
+			_open_pr_on_head(200, "ai/issue-141"),
+		]
 		proc, gh_out = _run_create_pr_recovery(
 			tmp, "141", timeline, recovery_pulls=recovery_pulls
 		)
@@ -1267,7 +1305,7 @@ def test_create_pr_recovery_ignores_closed_pr():
 	merged historical artifact."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
-		closed_pr = _open_pr_xref(199, body="Closes #141")
+		closed_pr = _open_pr_xref(199)
 		closed_pr["source"]["issue"]["state"] = "closed"
 		timeline = [closed_pr]
 		proc, gh_out = _run_create_pr_recovery(tmp, "141", timeline)
@@ -1282,20 +1320,27 @@ def test_create_pr_recovery_picks_first_open_pr_when_multiple_present():
 	"""When multiple OPEN PRs cross-reference the issue (rare but
 	possible — e.g. a stale human-authored PR alongside a fresh
 	orchestrator-created one, both still open), recovery must pin
-	deterministically to a single URL. The jq filter ends in
-	`.[0] // ""`, so the FIRST cross-reference event wins. This test
-	guards against a regression that would broaden the selection
-	(e.g. `.[] |` instead of `.[0] |`) and write multiple
+	deterministically to a single URL. The candidate loop stops on the
+	first closing-keyword cross-reference, so the FIRST matching event wins.
+	This test guards against a regression that would write multiple
 	`pr_url=<URL>` lines to $GITHUB_OUTPUT, which the GHA spec treats
 	as later-line-wins for the same output key — silently changing
 	which PR the caller redirects to."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
 		timeline = [
-			_open_pr_xref(200, body="Closes #141"),
-			_open_pr_xref(201, body="Fixes #141"),
+			_open_pr_xref(200),
+			_open_pr_xref(201),
 		]
-		proc, gh_out = _run_create_pr_recovery(tmp, "141", timeline)
+		proc, gh_out = _run_create_pr_recovery(
+			tmp,
+			"141",
+			timeline,
+			recovery_pulls=[
+				_open_pr_with_body(200, "Closes #141"),
+				_open_pr_with_body(201, "Fixes #141"),
+			],
+		)
 		assert proc.returncode == 0, (
 			f"recovery should succeed; stderr: {proc.stderr}\nstdout: {proc.stdout}"
 		)

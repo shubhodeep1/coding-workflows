@@ -16,6 +16,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/mode-implement-repair.txt` — Role: post-Codex syntax repairer. Goal: fix syntax/parse failures captured after the main implementation pass using the captured diagnostics as source of truth.
 - `prompts/mode-implement.txt` — Role: implementation-phase coder. Goal: implement the approved plan; modify only the files the plan requires; keep changes minimal and safe.
 - `prompts/mode-judge-interim.txt` — Role: judge. Goal: evaluate whether the latest autofix round still leaves actionable issues.
+- `prompts/mode-judge-security-pass-exhaustion.txt` — Role: security-pass exhaustion judge. Goal: decide whether each remaining finding is accepted with follow-up, gets another fix cycle, or fails the project.
 - `prompts/mode-judge-review-blocked.txt` — Role: review-blocked judge. Goal: a PR linked to an orchestrator-managed issue has been labeled `ai:review-blocked` (the autofix cycle could not resolve all issues after exhausting its retry budget, or the editor/workflow failed entirely).
 - `prompts/mode-judge-stall-recovery.txt` — Role: stall-recovery judge. Goal: a single issue has stalled in one phase long enough that deterministic recovery actions are no longer sufficient.
 - `prompts/mode-judge.txt` — Role: judge. Goal: evaluate whether the project is progressing correctly after a wave of issues has been implemented and merged.
@@ -268,6 +269,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/contracts/mode-implement-repair.yml` — Strict render contract for mode-implement-repair.
 - `prompts/contracts/mode-implement.yml` — Strict render contract for mode-implement.
 - `prompts/contracts/mode-judge-interim.yml` — Strict render contract for mode-judge-interim.
+- `prompts/contracts/mode-judge-security-pass-exhaustion.yml` — Strict render contract for mode-judge-security-pass-exhaustion.
 - `prompts/contracts/mode-judge-review-blocked.yml` — Strict render contract for mode-judge-review-blocked.
 - `prompts/contracts/mode-judge-stall-recovery.yml` — Strict render contract for mode-judge-stall-recovery.
 - `prompts/contracts/mode-judge.yml` — Strict render contract for mode-judge.

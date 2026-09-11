@@ -5,7 +5,7 @@
 
 | The numbers that matter | Value |
 | --- | --- |
-| GitHub API calls per gate | 2 (timeline + `pulls?head=`), was 1 |
+| GitHub API calls per gate | 2 (timeline + paginated open-PR inventory), was 1 |
 | Planning runs silently skipped on #4073 | 3 (runs 34426969864, 34431425213, 34435890933) |
 | New resolver fixtures | 4 under `tests/fixtures/integration_ref_resolver/` |
 
@@ -13,4 +13,4 @@ What this means for operators: an issue that an unrelated open PR references wit
 
 ### For contributors
 
-`tests/test_stall_recovery_pr_lookup.py` now exercises the plan.yml gate as well as the implement.yml one, with a `MOCK_GH_PULLS_JSON` hook in the shared `gh` stub for the `pulls?head=` lookup. The alias pattern lives in two places by design (shell and Python parity is pinned by `test_resolve_integration_ref_parity_for_fixtures`).
+`tests/test_stall_recovery_pr_lookup.py` now exercises the plan.yml gate as well as the implement.yml one, with a `MOCK_GH_PULLS_JSON` hook in the shared `gh` stub for the paginated open-PR inventory. The alias pattern lives in two places by design (shell and Python parity is pinned by `test_resolve_integration_ref_parity_for_fixtures`).
