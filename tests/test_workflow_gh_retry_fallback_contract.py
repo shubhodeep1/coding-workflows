@@ -172,29 +172,19 @@ def test_safe_fetch_steps_define_canonical_safe_gh_jq_fallback() -> None:
 def test_bootstrapped_gh_retry_workflows_require_staged_helper_with_main_fallback() -> None:
 	for relative_path in BOOTSTRAPPED_GH_HELPER_WORKFLOWS:
 		text = _workflow_text(relative_path)
-		fallback_step = (
-			"Checkout workflow support source fallback for gh retry"
-			if relative_path.endswith("orchestrate_poll.yml")
-			else "Checkout workflow support source fallback"
-		)
-		fallback_block = _step_block(text, fallback_step)
+		assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}" in text
+		assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in text
+		assert "SCRIPT_REF=stable" not in text
+		assert ".codex-workflow-src-main" not in text
+		assert "Checkout workflow support source fallback" not in text
 		assert "path: .codex-workflow-src" in text, (
 			f"{relative_path} must stage the workflow support checkout before sourcing gh_helpers.sh"
-		)
-		assert "continue-on-error: true" in fallback_block, (
-			f"{relative_path} must keep the fallback checkout non-fatal until the explicit ensure step runs"
 		)
 		assert "if [ ! -d .codex-workflow-src ]; then" in text, (
 			f"{relative_path} must fail if the workflow support checkout is unavailable"
 		)
-		assert "path: .codex-workflow-src-main" in text, (
-			f"{relative_path} must keep the main-snapshot fallback for gh_helpers.sh staging"
-		)
 		assert 'src=".codex-workflow-src/scripts/gh_helpers.sh"' in text, (
 			f"{relative_path} must stage gh_helpers.sh from the workflow support checkout"
-		)
-		assert 'if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/gh_helpers.sh" ]; then' in text, (
-			f"{relative_path} must fall back to the main snapshot when the primary gh_helpers.sh is absent"
 		)
 		assert '::error::Missing required support script gh_helpers.sh' in text, (
 			f"{relative_path} must hard-fail when gh_helpers.sh cannot be staged"

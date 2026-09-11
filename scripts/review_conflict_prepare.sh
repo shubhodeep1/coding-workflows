@@ -539,6 +539,69 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
       echo "::warning::Ignoring unsigned or invalidly authenticated orchestrator state; state-derived scope expansion is disabled."
     fi
   fi
+
+  RESOLVER_RETRY_STATE_VERIFIED_FILE="${RUNTIME_DIR}/resolver_retry_state_verified.json"
+  RESOLVER_RETRY_STATE_COMMENT_ID=""
+  rm -f "${RESOLVER_RETRY_STATE_VERIFIED_FILE}"
+  if [ -s "${PR_ISSUE_COMMENTS_FILE:-/nonexistent}" ] \
+    && [ -f "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" ] \
+		&& [[ "${_state_producer_id:-}" =~ ^[1-9][0-9]*$ ]] \
+    && [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]]; then
+    _retry_state_candidates_dir="$(mktemp -d)"
+    _retry_head_sha="$(jq -r '.head.sha // empty' "${PR_PAYLOAD_FILE}" 2>/dev/null || echo '')"
+    python3 - "${PR_ISSUE_COMMENTS_FILE}" "${_retry_state_candidates_dir}" "${_state_producer_id}" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+comments = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+output_dir = Path(sys.argv[2])
+producer_id = int(sys.argv[3])
+pattern = re.compile(r"^<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n(\{.*\})\n-->$", re.S)
+for comment in comments if isinstance(comments, list) else []:
+	if not isinstance(comment, dict) or int((comment.get("user") or {}).get("id") or 0) != producer_id:
+		continue
+	match = pattern.fullmatch(str(comment.get("body") or "").replace("\r\n", "\n"))
+	if not match:
+		continue
+	try:
+		document = json.loads(match.group(1))
+	except json.JSONDecodeError:
+		continue
+	if not isinstance(document, dict):
+		continue
+	comment_id = int(comment.get("id") or 0)
+	if comment_id < 1:
+		continue
+	(output_dir / f"{comment_id}.json").write_text(json.dumps(document), encoding="utf-8")
+PY
+    _retry_best_generation=0
+    for _retry_candidate_file in "${_retry_state_candidates_dir}"/*.json; do
+      [ -f "${_retry_candidate_file}" ] || continue
+      _retry_verified_file="${_retry_candidate_file}.verified"
+      if PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" verify-resolver-retry \
+        --envelope-file "${_retry_candidate_file}" \
+        --repository "${GITHUB_REPOSITORY}" \
+        --tracking-issue "${INTEGRATION_TRACKING_NUM}" \
+        --integration-branch "${TARGET_BRANCH}" \
+        --source-pr "${PR_NUMBER}" \
+        --head-sha "${_retry_head_sha}" \
+        --producer-id "${_state_producer_id}" \
+        --out-file "${_retry_verified_file}"; then
+        _retry_generation="$(jq -r '.generation // 0' "${_retry_verified_file}" 2>/dev/null || echo 0)"
+        if [[ "${_retry_generation}" =~ ^[1-9][0-9]*$ ]] && [ "${_retry_generation}" -gt "${_retry_best_generation}" ]; then
+          install -m 0600 "${_retry_verified_file}" "${RESOLVER_RETRY_STATE_VERIFIED_FILE}"
+          _retry_best_generation="${_retry_generation}"
+          RESOLVER_RETRY_STATE_COMMENT_ID="${_retry_candidate_file##*/}"
+          RESOLVER_RETRY_STATE_COMMENT_ID="${RESOLVER_RETRY_STATE_COMMENT_ID%.json}"
+        fi
+      fi
+    done
+    rm -rf "${_retry_state_candidates_dir}"
+  fi
+  echo "RESOLVER_RETRY_STATE_VERIFIED_FILE=${RESOLVER_RETRY_STATE_VERIFIED_FILE}" >> "$GITHUB_ENV"
+  echo "RESOLVER_RETRY_STATE_COMMENT_ID=${RESOLVER_RETRY_STATE_COMMENT_ID}" >> "$GITHUB_ENV"
   rm -f "${_ti_comments_raw}" "${_ti_comments_json}" "${_trusted_ti_comments_json}" "${_state_json_file}"
   unset _ti_comments_raw _ti_comments_json _trusted_ti_comments_json _state_json_file
   unset _state_producer_json _state_producer_id _state_producer_login _state_acquisition_ready

@@ -42,7 +42,7 @@ mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_
   echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}"
 } >> "$GITHUB_ENV"
 
-REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh editor_isolation_preflight.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh"
+REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh model_provider_broker.py codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh editor_isolation_preflight.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_conflict_actuate.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh"
 # Immutable-source bootstrap scripts. The workflow checkout is pinned to
 # job.workflow_sha, so executable support must never fall back to a mutable
 # branch snapshot or the PR checkout.
@@ -55,7 +55,7 @@ REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.
 #
 # opencode_helpers.sh / write_opencode_config.sh stay beside the resolver so
 # the resolver and dependencies always come from one reviewed commit.
-MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py orchestrate_state_v2.py review_conflict_resolve.sh review_conflict_prepare.sh render_prompt.py opencode_helpers.sh write_opencode_config.sh"
+MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py orchestrate_state_v2.py review_conflict_resolve.sh review_conflict_prepare.sh review_conflict_actuate.sh model_provider_broker.py render_prompt.py opencode_helpers.sh write_opencode_config.sh"
 # Optional bootstrap scripts may be missing from the immutable source.
 # The bootstrap emits a warning and continues — callers
 # that depend on these must themselves tolerate absence.  Keep
@@ -460,6 +460,17 @@ checkout_support_ref()
 	auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
 
 	rm -rf "${dest}"
+	if [[ "${ref}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+		mkdir -p "${dest}"
+		git -C "${dest}" init --quiet
+		git -C "${dest}" remote add origin "${remote_url}"
+		if git -c "http.extraHeader=Authorization: Basic ${auth_header}" -C "${dest}" fetch --quiet --depth 1 origin "${ref}" \
+			&& git -C "${dest}" checkout --quiet --detach FETCH_HEAD; then
+			return 0
+		fi
+		rm -rf "${dest}"
+		return 1
+	fi
 	mkdir -p "$(dirname "${dest}")"
 	if git -c "http.extraHeader=Authorization: Basic ${auth_header}" clone --quiet --no-tags --depth 1 --branch "${ref}" "${remote_url}" "${dest}" 2>/dev/null; then
 		return 0
@@ -473,7 +484,13 @@ bootstrap_support_roots()
 	SUPPORT_PRIMARY_ROOT=""
 	SUPPORT_MAIN_ROOT=""
 
-	if [ "${IS_SELF_REPO}" = "true" ]; then
+	if [[ "${ORIGINAL_SCRIPT_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+		if ! checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/primary"; then
+			echo "::error::Failed to stage workflow support files from immutable ref ${ORIGINAL_SCRIPT_REF}." >&2
+			exit 1
+		fi
+		SUPPORT_PRIMARY_ROOT="${SUPPORT_STAGE_ROOT}/primary"
+	elif [ "${IS_SELF_REPO}" = "true" ]; then
 		SUPPORT_PRIMARY_ROOT="${REPO_ROOT}"
 	elif checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/primary"; then
 		SUPPORT_PRIMARY_ROOT="${SUPPORT_STAGE_ROOT}/primary"
@@ -486,7 +503,10 @@ bootstrap_support_roots()
 		exit 1
 	fi
 
-	if [ "${RESOLVED_SCRIPT_REF}" != "main" ] && [ -n "${GH_TOKEN:-}" ] && checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/main"; then
+	if ! [[ "${RESOLVED_SCRIPT_REF}" =~ ^[0-9a-fA-F]{40}$ ]] \
+		&& [ "${RESOLVED_SCRIPT_REF}" != "main" ] \
+		&& [ -n "${GH_TOKEN:-}" ] \
+		&& checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/main"; then
 		SUPPORT_MAIN_ROOT="${SUPPORT_STAGE_ROOT}/main"
 	fi
 }

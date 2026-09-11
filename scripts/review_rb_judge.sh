@@ -42,6 +42,13 @@ done
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"
+CODEX_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
+if [ ! -r "${CODEX_HELPERS_PATH}" ]; then
+  echo "::error::Missing required support script ${CODEX_HELPERS_PATH}" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "${CODEX_HELPERS_PATH}"
 # shellcheck source=/dev/null
 if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then
   rb_helpers_missing_alert="opencode_agent_failure phase=review_rb_judge role=reviewer model=${MODEL_EDITOR:-unknown} rc=1 failure_class=helpers_missing"
@@ -73,7 +80,8 @@ review_rb_prepare_opencode_config() {
     --model "${MODEL_EDITOR}" \
     --project-path "${workspace}" \
     --config-path "${config_path}" \
-    --serena "${serena_mode}"; then
+    --serena "${serena_mode}" \
+    --provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL}"; then
     opencode_emit_failure_alert "${phase}" "${role}" "${MODEL_EDITOR}" 1 config_generation || true
     return 1
   fi
@@ -1124,7 +1132,7 @@ RB_JUDGE_PR_META_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_meta.json"
 RB_JUDGE_PR_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_comments.json"
 RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_review_comments.json"
 RB_JUDGE_SEMBLE_PREFETCH=""
-trap '_cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE:-}" "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
+trap 'model_provider_broker_stop >/dev/null 2>&1 || true; _cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE:-}" "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
 
 {
   printf '%s\n' 'Review-blocked judge context.'
@@ -1322,6 +1330,7 @@ JUDGE_ATTEMPT_COUNT="${#JUDGE_ATTEMPT_LEVELS[@]}"
 RB_OPENCODE_WORKSPACE="$(pwd)"
 RB_JUDGE_OPENCODE_CONFIG="${RUNTIME_DIR}/rb_judge_opencode.json"
 RB_FIX_OPENCODE_CONFIG="${RUNTIME_DIR}/rb_fix_opencode.json"
+model_provider_broker_start
 if ! review_rb_prepare_opencode_config reviewer review_rb_judge "${RB_JUDGE_OPENCODE_CONFIG}" off; then
   exit 1
 fi
@@ -1431,20 +1440,20 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   : > "${RB_JUDGE_OUTPUT}"
   : > "${JUDGE_STDERR_FILE}"
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-    "${CODEX_STALL_GUARD_HELPER}" \
+    model_provider_broker_exec_sanitized "${CODEX_STALL_GUARD_HELPER}" \
       --phase review_rb_judge \
       --stdout-file "${RB_JUDGE_OUTPUT}" \
       --stderr-file "${JUDGE_STDERR_FILE}" \
       --status-file "${judge_stall_status_file}" \
       -- "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" || rc=$?
   elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-    "${CODEX_HEARTBEAT_HELPER}" \
+    model_provider_broker_exec_sanitized "${CODEX_HEARTBEAT_HELPER}" \
       --phase review_rb_judge \
       --stdout-file "${RB_JUDGE_OUTPUT}" \
       --stderr-file "${JUDGE_STDERR_FILE}" \
       -- "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" || rc=$?
   else
-    "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>"${JUDGE_STDERR_FILE}" || rc=$?
+    model_provider_broker_exec_sanitized "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>"${JUDGE_STDERR_FILE}" || rc=$?
   fi
   if judge_stall_state="$(read_codex_stall_guard_state_with_warning "${judge_stall_status_file}" "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT}" )"; then
     :
@@ -1500,6 +1509,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   fi
 done
 fi
+model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed after judge execution." >&2
 
 if [ "${JUDGE_SUCCESS}" != "true" ]; then
   opencode_emit_failure_alert review_rb_judge reviewer "${MODEL_EDITOR}" "${rc:-1}" attempts_exhausted || true
@@ -1836,8 +1846,8 @@ case "${RB_ACTION}" in
         echo "fix_description describing what you changed."
         echo
         # Edit-discipline guidance is scoped to THIS step (the fix
-        # step runs with --sandbox danger-full-access and is expected
-        # to write files). The read-only judge step intentionally
+        # step uses the writer tool policy and is expected to write files).
+        # The read-only judge step intentionally
         # omits this block — its sandbox would silently reject any
         # write, and including it there encouraged the model to
         # re-explore in pursuit of a write it could never land.
@@ -1874,6 +1884,7 @@ __EDIT_DISCIPLINE__
         rb_fix_serena_mode="on"
       fi
       rb_fix_opencode_ready=true
+      model_provider_broker_start
       if ! review_rb_prepare_opencode_config writer review_rb_fix "${RB_FIX_OPENCODE_CONFIG}" "${rb_fix_serena_mode}"; then
         rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"
         exit 1
@@ -1895,20 +1906,20 @@ __EDIT_DISCIPLINE__
       emit_review_rb_substate "review_rb_fix" "judge_fix" "StreamingTurn" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       : > "${RB_FIX_OUTPUT}"
       if [ "${rb_fix_opencode_ready}" = "true" ] && [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-        "${CODEX_STALL_GUARD_HELPER}" \
+        model_provider_broker_exec_sanitized "${CODEX_STALL_GUARD_HELPER}" \
           --phase review_rb_fix \
           --stdout-file "${RB_FIX_OUTPUT}" \
           --stderr-file "${RB_FIX_STDERR}" \
           --status-file "${rb_fix_stall_status_file}" \
           -- "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" || rb_fix_rc=$?
       elif [ "${rb_fix_opencode_ready}" = "true" ] && [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-        "${CODEX_HEARTBEAT_HELPER}" \
+        model_provider_broker_exec_sanitized "${CODEX_HEARTBEAT_HELPER}" \
           --phase review_rb_fix \
           --stdout-file "${RB_FIX_OUTPUT}" \
           --stderr-file "${RB_FIX_STDERR}" \
           -- "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" || rb_fix_rc=$?
       elif [ "${rb_fix_opencode_ready}" = "true" ]; then
-        "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>"${RB_FIX_STDERR}" || rb_fix_rc=$?
+        model_provider_broker_exec_sanitized "${rb_fix_opencode_cmd[@]}" < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>"${RB_FIX_STDERR}" || rb_fix_rc=$?
       fi
       if rb_fix_stall_state="$(read_codex_stall_guard_state_with_warning "${rb_fix_stall_status_file}" "Review-blocked fix OpenCode" )"; then
         :
@@ -1940,6 +1951,7 @@ __EDIT_DISCIPLINE__
         emit_review_rb_substate "review_rb_fix" "judge_fix" "Failed" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       fi
       rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"
+      model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed after fix execution." >&2
 
       # Check for changes and commit
       if codex_stall_guard_kill_detected "${rb_fix_rc}" "${rb_fix_stall_state}"; then

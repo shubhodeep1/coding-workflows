@@ -411,24 +411,20 @@ calls_path.write_text(json.dumps(calls), encoding="utf-8")
 def _install_mock_codex(bin_dir: Path) -> None:
 	codex_script = r'''#!/usr/bin/env python3
 import json
-import os
 import sys
 from pathlib import Path
 
 args = sys.argv[1:]
 stdin_text = sys.stdin.read()
+runtime_dir = Path(__file__).resolve().parent.parent / "runtime"
 
-calls_file = os.environ.get("MOCK_CODEX_CALLS_FILE")
-if calls_file:
-	with open(calls_file, "a", encoding="utf-8") as handle:
-		handle.write(json.dumps(args))
-		handle.write("\n")
+with (runtime_dir / "codex_calls.log").open("a", encoding="utf-8") as handle:
+	handle.write(json.dumps(args))
+	handle.write("\n")
 
-stdin_file = os.environ.get("MOCK_CODEX_STDIN_FILE")
-if stdin_file:
-	Path(stdin_file).write_text(stdin_text, encoding="utf-8")
+(runtime_dir / "codex_stdin.txt").write_text(stdin_text, encoding="utf-8")
 
-mode = os.environ.get("MOCK_CODEX_MODE", "success")
+mode = (runtime_dir / "mock_codex_mode.txt").read_text(encoding="utf-8").strip()
 if mode == "fail":
 	print("mock codex failure", file=sys.stderr)
 	sys.exit(1)
@@ -436,7 +432,7 @@ if mode == "invalid":
 	print("this is not json")
 	sys.exit(0)
 
-payload = os.environ.get("MOCK_CODEX_OUTPUT", "{}")
+payload = (runtime_dir / "mock_codex_output.json").read_text(encoding="utf-8")
 print(payload)
 sys.exit(0)
 '''
@@ -451,11 +447,15 @@ def _read_gh_state(state_file: Path) -> dict:
 
 def _copy_diagnose_assets(repo_dir: Path) -> None:
 	for rel in (
+		"scripts/codex_helpers.sh",
+		"scripts/codex_model_catalog.json",
 		"scripts/gh_helpers.sh",
 		"scripts/implement_diagnose_post_codex_failure.sh",
+		"scripts/model_provider_broker.py",
 		"scripts/render_prompt.py",
 		"scripts/render_prompt.sh",
 		"scripts/validate_changed_files_syntax.sh",
+		"scripts/write_codex_config.sh",
 		"prompts/contracts/mode-implement-diagnose.yml",
 		"prompts/references/output-contract.txt",
 		"prompts/mode-implement-diagnose.txt",
@@ -512,8 +512,10 @@ def _run_diagnose_step(
 	repo_dir = _prepare_diagnose_repo(tmp_path)
 	runtime_dir = tmp_path / "runtime"
 	bin_dir = tmp_path / "bin"
+	home_dir = tmp_path / "home"
 	runtime_dir.mkdir(parents=True, exist_ok=True)
 	bin_dir.mkdir(parents=True, exist_ok=True)
+	home_dir.mkdir(parents=True, exist_ok=True)
 
 	_install_mock_gh(bin_dir)
 	_install_mock_codex(bin_dir)
@@ -554,11 +556,14 @@ def _run_diagnose_step(
 	log_file = runtime_dir / "implement_diagnose_log.txt"
 	calls_file = runtime_dir / "codex_calls.log"
 	stdin_file = runtime_dir / "codex_stdin.txt"
+	(runtime_dir / "mock_codex_mode.txt").write_text(codex_mode, encoding="utf-8")
+	(runtime_dir / "mock_codex_output.json").write_text(json.dumps(codex_output or {}), encoding="utf-8")
 
 	script = _render_github_expressions(_extract_run_script("Diagnose post-Codex failure and create fix-up issues"))
 	env = os.environ.copy()
 	env.update(
 		{
+			"HOME": str(home_dir),
 			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			"GH_TOKEN": "test-token",
 			"OPENROUTER_API_KEY": "test-openrouter",

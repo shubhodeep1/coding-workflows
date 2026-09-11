@@ -63,10 +63,10 @@ Bounds (defensible default; override per caller):
                                   read with read tool)" marker so the
                                   model uses its native targeted-read
                                   flow instead of being misled by a
-                                  truncated head. At most 256 normalized
-                                  paths are processed; excess or invalid
-                                  paths are represented by the aggregate
-                                  omitted-path count in the final summary.
+                                  truncated head. At most 256 caller paths
+                                  are processed; excess paths are counted
+                                  separately in the aggregate omission
+                                  summary.
 
 Designed to be safe on missing inputs: if the plan has no recognised
 section, --paths-file is empty, and --paths is unset, the output is just
@@ -570,6 +570,7 @@ def emit_context(
 	read_fallback_rendered = 0
 	off_suppressed = 0
 	omitted_entries = 0
+	path_count_omissions = max(0, len(paths) - MAX_TARGET_PATHS)
 	# Stop spending subprocess time after an overflow query cannot produce a
 	# complete fragment within the remaining rendered-output budget.
 	semble_overflow_budget_exhausted = False
@@ -615,7 +616,7 @@ def emit_context(
 			omitted_entries += 1
 			continue
 		bounded_paths.append(normalized_candidate_path)
-	omitted_entries += max(0, len(paths) - MAX_TARGET_PATHS)
+	omitted_entries += path_count_omissions
 
 	for rel in bounded_paths:
 		try:
@@ -765,7 +766,19 @@ def emit_context(
 		if off_suppressed:
 			summary += f" Suppressed overflow entries: {off_suppressed}."
 	if omitted_entries:
-		summary += f" Omitted {omitted_entries} path(s) due to path or rendered-byte limits."
+		if path_count_omissions:
+			summary += f" Omitted {omitted_entries} path(s): {path_count_omissions} exceeded the {MAX_TARGET_PATHS}-path cap."
+			other_path_omissions = omitted_entries - path_count_omissions
+			if other_path_omissions:
+				summary += (
+					f" The other {other_path_omissions} path(s) failed validation, sensitivity, "
+					"filesystem, or byte limits."
+				)
+		else:
+			summary += (
+				f" Omitted {omitted_entries} path(s) due to validation, sensitivity, "
+				"filesystem, or byte limits."
+			)
 	append_complete(f"{summary}\n")
 	return "".join(fragments)
 

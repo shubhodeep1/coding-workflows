@@ -191,7 +191,7 @@ def test_validate_process_guards_codex_attempts_and_short_circuits_exit_78() -> 
 	text = VALIDATE_PROCESS.read_text(encoding="utf-8")
 	assert 'WORKSPACE_SAFETY_CHECK_HELPER=""' in text
 	assert '".codex-workflow-src/scripts/workspace_safety_check.sh"' in text
-	assert '".codex-workflow-src-main/scripts/workspace_safety_check.sh"' in text
+	assert '".codex-workflow-src-main/scripts/workspace_safety_check.sh"' not in text
 	assert 'bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?' in text
 	assert 'local exit_code="${5:-1}"' in text
 	assert 'exit "${exit_code}"' in text

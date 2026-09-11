@@ -11,6 +11,7 @@ fi
 
 OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"
+CODEX_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_helpers.sh"
 opencode_helpers_loaded=false
 if [ -f "${OPENCODE_HELPERS_PATH}" ]; then
 	# shellcheck source=/dev/null
@@ -533,7 +534,7 @@ tmp_out="$(mktemp)"
 tmp_err="$(mktemp)"
 tmp_cap="$(mktemp)"
 consolidator_opencode_dir=""
-trap 'rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"; if [ -n "${consolidator_opencode_dir}" ]; then rm -rf "${consolidator_opencode_dir}"; fi' EXIT INT TERM
+trap 'model_provider_broker_stop >/dev/null 2>&1 || true; rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"; if [ -n "${consolidator_opencode_dir}" ]; then rm -rf "${consolidator_opencode_dir}"; fi' EXIT INT TERM
 
 if [ "${opencode_helpers_loaded}" != true ] || ! command -v opencode_run_cmd >/dev/null 2>&1; then
 	: > "${CONSOLIDATOR_RAW_FILE}"
@@ -556,6 +557,17 @@ if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
 	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} missing=opencode_config_writer failopen=1 output_bytes=0"
 	exit 0
 fi
+# shellcheck source=/dev/null
+if [ ! -r "${CODEX_HELPERS_PATH}" ] || ! source "${CODEX_HELPERS_PATH}" 2>/dev/null; then
+	: > "${CONSOLIDATOR_RAW_FILE}"
+	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} missing=codex_helpers failopen=1 output_bytes=0"
+	exit 0
+fi
+if ! model_provider_broker_start; then
+	: > "${CONSOLIDATOR_RAW_FILE}"
+	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} broker_start_failed=1 failopen=1 output_bytes=0"
+	exit 0
+fi
 
 consolidator_opencode_dir="$(mktemp -d "${RUNNER_TEMP:-${RUNTIME_DIR}}/opencode_consolidator.XXXXXX")" || {
 	review_log "mktemp_failed=1"
@@ -568,7 +580,8 @@ if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
 	--model "${REVIEW_CONSOLIDATOR_MODEL}" \
 	--project-path "${consolidator_workspace}" \
 	--config-path "${consolidator_opencode_config}" \
-	--serena off; then
+	--serena off \
+	--provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL}"; then
 	opencode_emit_failure_alert review_consolidate writer "${REVIEW_CONSOLIDATOR_MODEL}" 1 config_generation || true
 	: > "${CONSOLIDATOR_RAW_FILE}"
 	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} failopen=1 output_bytes=0"
@@ -603,7 +616,7 @@ if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 fi
 	emit_context_budget_warn_for_prompt "consolidator" "${CONSOLIDATOR_PROMPT_FILE}" "${REVIEW_CONSOLIDATOR_MODEL}"
 	if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-		if timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
+		if model_provider_broker_exec_sanitized timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
 			"${CODEX_HEARTBEAT_HELPER}" \
 			--phase review_consolidate \
 			--stdout-file "${tmp_out}" \
@@ -613,7 +626,7 @@ fi
 		else
 			cmd_rc=$?
 		fi
-	elif timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
+	elif model_provider_broker_exec_sanitized timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
 		"${consolidator_cmd[@]}" < "${CONSOLIDATOR_PROMPT_FILE}" > "${tmp_out}" 2> "${tmp_err}"; then
 		cmd_rc=0
 	else

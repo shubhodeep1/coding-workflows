@@ -58,6 +58,8 @@ jobs:
         id: refctx
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}
         run: |
           set -euo pipefail
           issue_number="${ISSUE_NUMBER:-}"
@@ -68,14 +70,18 @@ jobs:
           fi
 
           resolver_repo="shubhodeep1/coding-workflows"
-          resolver_ref="stable"
-          if [ "${{ github.repository }}" = "${resolver_repo}" ]; then
-            resolver_ref="${{ github.sha }}"
+          if [ "${WORKFLOW_DEFINITION_REPOSITORY}" != "${resolver_repo}" ]; then
+            echo "::error::Reusable workflow repository '${WORKFLOW_DEFINITION_REPOSITORY}' does not match expected source '${resolver_repo}'."
+            exit 1
           fi
+          if ! [[ "${WORKFLOW_DEFINITION_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::job.workflow_sha is not an immutable 40-character commit SHA."
+            exit 1
+          fi
+          resolver_ref="${WORKFLOW_DEFINITION_SHA,,}"
 
           resolver_stage_root="${RUNNER_TEMP}/resolve-integration-ref-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           resolver_stage_primary="${resolver_stage_root}/primary"
-          resolver_stage_fallback="${resolver_stage_root}/fallback"
           resolver_repo_url="https://github.com/${resolver_repo}"
           rm -rf "${resolver_stage_root}"
           mkdir -p "${resolver_stage_root}"
@@ -89,25 +95,19 @@ jobs:
           }
           trap cleanup_resolver_stage EXIT
 
-          if resolver_git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_primary}" 2>"${resolver_clone_log}"; then
-            resolver_script="${resolver_stage_primary}/scripts/resolve_integration_ref.sh"
-            if ! resolver_git -C "${resolver_stage_primary}" fetch --quiet --depth 1 origin "${resolver_ref}" 2>>"${resolver_clone_log}" || \
-               ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}"; then
-              echo "::warning::Failed to stage canonical integration resolver ref ${resolver_ref}; using main fallback."
-              if [ -s "${resolver_clone_log}" ]; then
-                sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
-              fi
-            fi
-          elif resolver_git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_fallback}" 2>>"${resolver_clone_log}"; then
-            resolver_script="${resolver_stage_fallback}/scripts/resolve_integration_ref.sh"
-          else
-            echo "::warning::Failed to stage canonical integration resolver; falling back to default branch."
+          mkdir -p "${resolver_stage_primary}"
+          git -C "${resolver_stage_primary}" init --quiet
+          git -C "${resolver_stage_primary}" remote add origin "${resolver_repo_url}"
+          if ! resolver_git -C "${resolver_stage_primary}" fetch --quiet --depth 1 origin "${resolver_ref}" 2>"${resolver_clone_log}" \
+            || ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}"; then
+            echo "::warning::Failed to stage canonical integration resolver at immutable ref ${resolver_ref}; falling back to default branch."
             if [ -s "${resolver_clone_log}" ]; then
               sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
             fi
             echo "ref=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          resolver_script="${resolver_stage_primary}/scripts/resolve_integration_ref.sh"
 
           if [ ! -f "${resolver_script}" ]; then
             echo "::warning::Canonical integration resolver script not found in staged source; falling back to default branch."
@@ -168,18 +168,23 @@ jobs:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Resolve workflow support ref
+        env:
+          WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
-          if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
-          else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          if [ "${WORKFLOW_DEFINITION_REPOSITORY}" != "${wf_source}" ]; then
+            echo "::error::Reusable workflow repository '${WORKFLOW_DEFINITION_REPOSITORY}' does not match expected source '${wf_source}'."
+            exit 1
           fi
+          if ! [[ "${WORKFLOW_DEFINITION_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::job.workflow_sha is not an immutable 40-character commit SHA."
+            exit 1
+          fi
+          echo "SCRIPT_REF=${WORKFLOW_DEFINITION_SHA,,}" >> "$GITHUB_ENV"
 
       - name: Checkout workflow support source
-        id: checkout_support_source
-        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -187,39 +192,15 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
-
-          persist-credentials: false
-      - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src
-          fetch-depth: 1
-
           persist-credentials: false
       - name: Ensure workflow support source checkout
         run: |
           set -euo pipefail
           if [ ! -d .codex-workflow-src ]; then
-            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
+            echo "::error::Failed to checkout immutable workflow support source at ${SCRIPT_REF}"
             exit 1
           fi
 
-      - name: Checkout workflow support source main snapshot
-        if: ${{ env.SCRIPT_REF != 'main' }}
-        continue-on-error: true
-        uses: actions/checkout@v5
-        with:
-          repository: shubhodeep1/coding-workflows
-          ref: main
-          token: ${{ secrets.GH_PAT }}
-          path: .codex-workflow-src-main
-          fetch-depth: 1
-
-          persist-credentials: false
       - name: Stage workflow support files
         run: |
           set -euo pipefail
@@ -227,11 +208,8 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh; do
+            for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh model_provider_broker.py; do
             src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              src=".codex-workflow-src-main/scripts/${f}"
-            fi
             if [ ! -f "${src}" ]; then
               echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"
               exit 1
@@ -250,9 +228,6 @@ jobs:
           # shim resolves ${SCRIPT_DIR}/render_prompt.py.
           for f in render_prompt.py; do
             src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              src=".codex-workflow-src-main/scripts/${f}"
-            fi
             if [ ! -f "${src}" ]; then
               echo "::notice::Optional render_prompt.py backend unavailable on ${SCRIPT_REF}; render_prompt.sh shim (if present) resolves it elsewhere or the bundled bash renderer is used."
               continue
@@ -269,14 +244,11 @@ jobs:
           # Mirrors the staging block in implement.yml so clarify.yml's
           # codex calls aren't stuck in announce-without-emit mode.
           catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
-          if [ ! -f "${catalog_src}" ] && [ -f ".codex-workflow-src-main/scripts/codex_model_catalog.json" ]; then
-            catalog_src=".codex-workflow-src-main/scripts/codex_model_catalog.json"
-          fi
           if [ -f "${catalog_src}" ]; then
             install -m 0644 "${catalog_src}" scripts/codex_model_catalog.json
             _fetched_scripts+=(codex_model_catalog.json)
           else
-            echo "::warning::Codex model catalog not found in ${SCRIPT_REF}/main; apply_patch may not be registered for non-built-in models"
+            echo "::warning::Codex model catalog not found at ${SCRIPT_REF}; apply_patch may not be registered for non-built-in models"
           fi
 
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
@@ -290,9 +262,6 @@ jobs:
           mkdir -p ai-memory/schemas
           for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json validation_history.v1.json operator_bypass_audit.v1.json revalidate_events.v1.json validation_discovery.v1.json workflow_overlay.v1.json; do
             src=".codex-workflow-src/ai-memory/schemas/${sf}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/ai-memory/schemas/${sf}" ]; then
-              src=".codex-workflow-src-main/ai-memory/schemas/${sf}"
-            fi
             if [ ! -f "ai-memory/schemas/${sf}" ] && [ -f "${src}" ]; then
               install -m 0644 "${src}" "ai-memory/schemas/${sf}"
             fi
@@ -311,9 +280,6 @@ jobs:
           for f in unattended_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               src=".codex-workflow-src/${f}"
-              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${f}" ]; then
-                src=".codex-workflow-src-main/${f}"
-              fi
               if [ ! -f "${src}" ]; then
                 echo "::error::Failed to stage required file ${f}"
                 exit 1
@@ -334,9 +300,6 @@ jobs:
           mkdir -p prompts
           if [ ! -f prompts/header.txt ]; then
             src=".codex-workflow-src/prompts/header.txt"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/header.txt" ]; then
-              src=".codex-workflow-src-main/prompts/header.txt"
-            fi
             if [ ! -f "${src}" ]; then
               echo "::error::Failed to stage required file prompts/header.txt"
               exit 1
@@ -345,17 +308,12 @@ jobs:
           fi
           if [ ! -f prompts/_identity_recall.txt ]; then
             src=".codex-workflow-src/prompts/_identity_recall.txt"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/_identity_recall.txt" ]; then
-              src=".codex-workflow-src-main/prompts/_identity_recall.txt"
-            fi
             if [ ! -f "${src}" ]; then
               echo "::error::Failed to stage required file prompts/_identity_recall.txt"
               exit 1
             fi
             install -m 0644 "${src}" prompts/_identity_recall.txt
           fi
-
-          rm -rf .codex-workflow-src-main
 
       - name: Create runtime workspace
         run: |
@@ -768,6 +726,12 @@ jobs:
         run: |
           set -euo pipefail
 
+            source scripts/codex_helpers.sh
+            model_provider_broker_start
+            trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
+            configured_reasoning="$(grep -m1 '^model_reasoning_effort = ' "${HOME}/.codex/config.toml" | cut -d'"' -f2)"
+              model_provider_broker_prepare_codex_readonly nobody "${MODEL_EDITOR}" "${configured_reasoning}" "$(pwd)"
+
           # Source sanitize_codex_prompt_file (best-effort) so invalid
           # UTF-8 in the prompt cannot deterministically kill every
           # clarify retry.
@@ -950,7 +914,7 @@ jobs:
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex clarify attempt ${attempt}/${max_attempts}..."
-            if cat "${CODEX_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+                if model_provider_broker_exec_unprivileged nobody codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "Codex clarify succeeded on attempt ${attempt}."
                 break

@@ -74,6 +74,13 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 fi
 OPENCODE_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"
+CODEX_HELPERS_PATH="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_helpers.sh"
+if [ ! -r "${CODEX_HELPERS_PATH}" ]; then
+  echo "::error::Missing required support script ${CODEX_HELPERS_PATH}" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "${CODEX_HELPERS_PATH}"
 # shellcheck source=/dev/null
 if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then
   editor_helpers_missing_alert="opencode_agent_failure phase=review_apply_fixes role=writer model=${MODEL_EDITOR:-unknown} rc=1 failure_class=helpers_missing"
@@ -275,9 +282,8 @@ cleanup_editor_isolation() {
 editor_isolation_exit_trap() {
   local original_rc="$1"
   trap - EXIT
-  if ! cleanup_editor_isolation; then
-    exit 80
-  fi
+  cleanup_editor_isolation || original_rc=80
+  model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed after editor execution." >&2
   [ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true
   exit "${original_rc}"
 }
@@ -309,7 +315,8 @@ run_editor_codex_attempt() {
     --model "${editor_attempt_model}" \
     --project-path "${editor_workspace}" \
     --config-path "${editor_opencode_config}" \
-    --serena "${editor_opencode_serena}"; then
+    --serena "${editor_opencode_serena}" \
+    --provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL}"; then
     opencode_emit_failure_alert review_apply_fixes writer "${editor_attempt_model}" 1 config_generation || true
     return 79
   fi
@@ -332,7 +339,7 @@ run_editor_codex_attempt() {
     "LC_ALL=${LC_ALL:-C.UTF-8}"
     "USER=${EDITOR_ISOLATION_USER}"
     "LOGNAME=${EDITOR_ISOLATION_USER}"
-    "OPENROUTER_API_KEY=${OPENROUTER_API_KEY}"
+    "OPENROUTER_API_KEY=${MODEL_PROVIDER_BROKER_TOKEN}"
     bash --noprofile --norc -c
     # shellcheck disable=SC2016
     'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
@@ -1993,6 +2000,7 @@ JOB_TIMEOUT_SECS=$(( REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED * 60 ))
 JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
 _hb_tmpdir=""
 _hb_fifo=""
+model_provider_broker_start
 trap 'editor_isolation_exit_trap $?' EXIT
 if ! setup_editor_isolation; then
   echo "::error::Editor isolation prerequisites could not be established; refusing ambient-privilege fallback." >&2

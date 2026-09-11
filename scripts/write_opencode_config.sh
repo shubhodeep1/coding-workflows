@@ -7,8 +7,8 @@ usage()
 {
 	cat <<'EOF'
 Usage: write_opencode_config.sh --role reviewer|writer --model <slug>
-                                --project-path <path> --config-path <path>
-                                --serena on|off
+	                                --project-path <path> --config-path <path>
+	                                --serena on|off [--provider-base-url <url>]
 EOF
 }
 
@@ -30,6 +30,7 @@ model_slug=""
 project_path=""
 config_path=""
 serena_mode=""
+provider_base_url="https://openrouter.ai/api/v1"
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -58,6 +59,11 @@ while [ "$#" -gt 0 ]; do
 			serena_mode="$2"
 			shift 2
 			;;
+		--provider-base-url)
+			require_value "$@"
+			provider_base_url="$2"
+			shift 2
+			;;
 		-h|--help)
 			usage
 			exit 0
@@ -83,6 +89,10 @@ case "${serena_mode}" in
 	on|off) ;;
 	*) fail "invalid --serena '${serena_mode}' (expected on|off)" ;;
 esac
+provider_base_url_pattern='^(https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~:/?#@!$&()*+,;=%-]*)?|http://127\.0\.0\.1:[1-9][0-9]{0,4}/api/v1)$'
+if [[ ! "${provider_base_url}" =~ ${provider_base_url_pattern} ]]; then
+	fail "invalid --provider-base-url '${provider_base_url}'"
+fi
 
 if [[ ! "${model_slug}" =~ ^[A-Za-z0-9][A-Za-z0-9._:+-]*(/[A-Za-z0-9][A-Za-z0-9._:+-]*)+$ ]]; then
 	fail "invalid --model '${model_slug}'"
@@ -109,7 +119,7 @@ config_dir="$(dirname "${config_path}")"
 mkdir -p "${config_dir}"
 
 python3 - "${role}" "${model_slug}" "${project_path}" "${config_path}" \
-	"${catalog_path}" "${models_path}" "${serena_bin}" <<'PY'
+		"${catalog_path}" "${models_path}" "${serena_bin}" "${provider_base_url}" <<'PY'
 import json
 import os
 import sys
@@ -117,7 +127,7 @@ import tempfile
 from pathlib import Path
 
 
-role, model_slug, project_path, config_path, catalog_path, models_path, serena_bin = sys.argv[1:]
+role, model_slug, project_path, config_path, catalog_path, models_path, serena_bin, provider_base_url = sys.argv[1:]
 
 
 def load_json(path: str, label: str) -> object:
@@ -213,7 +223,7 @@ config = {
 		"openrouter": {
 			"npm": "@openrouter/ai-sdk-provider",
 			"options": {
-				"baseURL": "https://openrouter.ai/api/v1",
+				"baseURL": provider_base_url,
 				"apiKey": "{env:OPENROUTER_API_KEY}",
 			},
 			"models": {

@@ -26,12 +26,15 @@ def test_stall_control_env_defaults_are_declared() -> None:
 	assert "RECOVERY_COUNT_DISTINCT_FINDINGS: ${{ vars.RECOVERY_COUNT_DISTINCT_FINDINGS || 'false' }}" in wf
 
 
-def test_stall_recovery_prompt_is_bootstrapped_with_main_fallback() -> None:
+def test_stall_recovery_prompt_is_bootstrapped_from_immutable_workflow_source() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	assert "for pf in mode-judge.txt mode-judge-review-blocked.txt mode-judge-stall-recovery.txt; do" in wf
 	assert "src=\".codex-workflow-src/prompts/${pf}\"" in wf
-	assert "if [ ! -f \"${src}\" ] && [ -f \".codex-workflow-src-main/prompts/${pf}\" ]; then" in wf
-	assert "src=\".codex-workflow-src-main/prompts/${pf}\"" in wf
+	assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}" in wf
+	assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in wf
+	assert "SCRIPT_REF=${WORKFLOW_DEFINITION_SHA,,}" in wf
+	assert "SCRIPT_REF=stable" not in wf
+	assert ".codex-workflow-src-main" not in wf
 	assert "::error::Missing required support file prompts/${pf}" in wf
 	assert "install -m 0644 \"${src}\" \"prompts/${pf}\"" in wf
 
@@ -158,6 +161,11 @@ def test_poller_state_auth_and_readonly_model_security_contract() -> None:
 	assert "https://x-access-token:${GH_TOKEN}" not in wf
 	assert "poller_run_sanitized_command()" in poller
 	assert "poller_run_readonly_model()" in poller
+	assert "codex_helpers.sh" in wf
+	assert "model_provider_broker.py" in wf
+	assert "model_provider_broker_start" in wf
+	assert 'model_provider_broker_prepare_codex_writer "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT_JUDGE}" "$(pwd)"' in wf
+	assert "model_provider_broker_exec_sanitized" in poller
 	assert "--sandbox read-only" in poller
 	assert "-c web_search=disabled" in poller
 	assert "-c shell_environment_policy.ignore_default_excludes=false" in poller
@@ -172,11 +180,15 @@ def test_poller_state_auth_and_readonly_model_security_contract() -> None:
 		"ORCHESTRATOR_STATE_AUTH_KEYRING",
 	):
 		assert credential_name not in runner_block
+	assert 'OPENROUTER_API_KEY="${MODEL_PROVIDER_BROKER_TOKEN:-}"' in runner_block
+	readonly_model_block = poller.split("poller_run_readonly_model() {", 1)[1].split("\n}", 1)[0]
+	assert "model_provider_broker_exec_sanitized" in readonly_model_block
+	assert "OPENROUTER_API_KEY" not in readonly_model_block
 
 
 def main() -> int:
 	test_stall_control_env_defaults_are_declared()
-	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
+	test_stall_recovery_prompt_is_bootstrapped_from_immutable_workflow_source()
 	test_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_nag_reminder_assets_and_judge_wiring_are_present()

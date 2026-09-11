@@ -4826,8 +4826,6 @@ jobs:
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true'
         timeout-minutes: 170
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
-          GH_TOKEN: ${{ secrets.GH_PAT }}
           RESOLVER_ESCAPE_THRESHOLD_N: ${{ vars.RESOLVER_ESCAPE_THRESHOLD_N || '5' }}
           # Decoupled from EDITOR_REASONING_EFFORT: the smoke-test override
           # ("Detect smoke test PR" step) sets editor reasoning to "none" so
@@ -4936,6 +4934,14 @@ jobs:
           fi
           bash "${RESOLVER_SCRIPT}"
 
+      - name: Actuate validated resolver outcome
+        if: always() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ORCHESTRATOR_STATE_AUTH_KEYRING: ${{ secrets.ORCHESTRATOR_STATE_AUTH_KEYRING }}
+        run: |
+          set -euo pipefail
+          bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_actuate.sh"
       - name: Cache linked issues references
         # Claude-branch-review mode skips all the downstream label-mutating
         # steps (Mark linked issues ready to merge, Mark linked issues

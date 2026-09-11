@@ -19,6 +19,12 @@ if [ -f "scripts/gh_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/gh_helpers.sh
 fi
+if [ ! -f "scripts/codex_helpers.sh" ]; then
+  echo "::error::Missing required support script scripts/codex_helpers.sh" >&2
+  exit 1
+fi
+# shellcheck source=codex_helpers.sh
+source scripts/codex_helpers.sh
 if ! type emit_event >/dev/null 2>&1; then
   emit_event() { return 0; }
 fi
@@ -169,8 +175,8 @@ if ! command -v maybe_inject_nag >/dev/null 2>&1; then
 fi
 
 # Run untrusted model-facing commands without GitHub, Telegram, state-auth,
-# Git, or other ambient credentials. Codex keeps provider access, while its
-# spawned tools cannot inherit secret-named variables.
+# Git, or other ambient credentials. The only provider credential exposed is
+# the broker's bounded per-run token.
 poller_run_sanitized_command() {
   local -a sanitized_command_environment=(env -i \
     HOME="${HOME:-}" \
@@ -183,7 +189,10 @@ poller_run_sanitized_command() {
     XDG_CACHE_HOME="${XDG_CACHE_HOME:-${HOME:-}/.cache}" \
     GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$(pwd)}" \
     PYTHONDONTWRITEBYTECODE="1" \
-    OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" \
+    OPENROUTER_API_KEY="${MODEL_PROVIDER_BROKER_TOKEN:-}" \
+    MODEL_PROVIDER_BROKER_BASE_URL="${MODEL_PROVIDER_BROKER_BASE_URL:-}" \
+    MODEL_PROVIDER_BROKER_TOKEN="${MODEL_PROVIDER_BROKER_TOKEN:-}" \
+    MODEL_PROVIDER_BROKER_AGENT_HOME="${MODEL_PROVIDER_BROKER_AGENT_HOME:-}" \
     MOCK_CODEX_JSON="${MOCK_CODEX_JSON:-}" \
     REAL_PYTHON_BIN="${REAL_PYTHON_BIN:-}")
   if [ -n "${SSL_CERT_FILE:-}" ]; then
@@ -200,7 +209,10 @@ poller_run_readonly_model() {
   local output_file="$2"
   local error_file="$3"
   local model_name="$4"
-  poller_run_sanitized_command \
+  model_provider_broker_exec_sanitized env \
+    MOCK_CODEX_JSON="${MOCK_CODEX_JSON:-}" \
+    MOCK_CODEX_TOUCH_FILE="${MOCK_CODEX_TOUCH_FILE:-}" \
+    REAL_PYTHON_BIN="${REAL_PYTHON_BIN:-}" \
     codex --ask-for-approval never \
       -c model_verbosity=low \
       -c include_apply_patch_tool=true \
@@ -5226,7 +5238,11 @@ run_security_pass_inline() {
   echo "SECURITY_PASS_STARTED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} base_sha=${merge_base_sha}"
 
   effective_security_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-5.6-sol}}"
-  if ! bash scripts/write_codex_config.sh --model "${effective_security_model}" --reasoning xhigh >/dev/null 2>"${audit_error_file}"; then
+  if ! bash scripts/write_codex_config.sh \
+    --model "${effective_security_model}" \
+    --reasoning xhigh \
+    --provider-base-url "${MODEL_PROVIDER_BROKER_BASE_URL}" \
+    >/dev/null 2>"${audit_error_file}"; then
     security_pass_fail_closed "engine_unavailable" "The security-pass model configuration could not be prepared." "${prior_security_status}"
     return 1
   fi
@@ -5599,11 +5615,10 @@ ensure_integration_conflict_state_fields() {
       }' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 }
 
+# Compatibility parser for diagnostics and older external callers only.
+# Runtime retry-tier authority comes exclusively from the verified V2 comment
+# path below; this legacy PR-body value is never consulted by the poller.
 extract_autofix_resolver_retry_state_from_pr_body() {
-  # Read the PR body before invoking `python3 - <<'PY'`: the heredoc
-  # consumes stdin for the script itself, so piping directly into
-  # python would otherwise drop the body and make the extractor fail
-  # closed on every call.
   local retry_state_body=""
   retry_state_body="$(cat)"
 
@@ -5628,6 +5643,79 @@ for raw in reversed(matches):
     raise SystemExit(0)
 raise SystemExit(0)
 PY
+}
+
+extract_autofix_resolver_retry_state_from_comments() {
+  local repository="$1"
+  local tracking_issue="$2"
+  local integration_branch="$3"
+  local source_pr="$4"
+  local head_sha="$5"
+  local comments_json=""
+  local candidate_dir=""
+  local candidate_file=""
+  local verified_file=""
+  local best_file=""
+	local candidate_head_sha=""
+  local generation="0"
+  local best_generation="0"
+
+  comments_json="$(cat)"
+  if ! resolve_orchestrator_state_producer \
+		|| [ ! -f "scripts/orchestrate_state_v2.py" ]; then
+    return 0
+  fi
+  candidate_dir="$(mktemp -d)"
+  COMMENTS_JSON="${comments_json}" PRODUCER_ID="${ORCHESTRATOR_STATE_PRODUCER_ID}" CANDIDATE_DIR="${candidate_dir}" python3 - <<'PYINNER'
+import json
+import os
+import re
+from pathlib import Path
+
+try:
+    comments = json.loads(os.environ["COMMENTS_JSON"])
+except json.JSONDecodeError:
+    raise SystemExit(0)
+producer_id = int(os.environ["PRODUCER_ID"])
+output_dir = Path(os.environ["CANDIDATE_DIR"])
+pattern = re.compile(r"^<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n(\{.*\})\n-->$", re.S)
+for comment in comments if isinstance(comments, list) else []:
+    if not isinstance(comment, dict) or int((comment.get("user") or {}).get("id") or 0) != producer_id:
+        continue
+    match = pattern.fullmatch(str(comment.get("body") or "").replace("\r\n", "\n"))
+    if not match:
+        continue
+    try:
+        document = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        continue
+    comment_id = int(comment.get("id") or 0)
+    if isinstance(document, dict) and comment_id > 0:
+        (output_dir / f"{comment_id}.json").write_text(json.dumps(document), encoding="utf-8")
+PYINNER
+  for candidate_file in "${candidate_dir}"/*.json; do
+    [ -f "${candidate_file}" ] || continue
+    verified_file="${candidate_file}.verified"
+		candidate_head_sha="$(jq -r '.head_sha // empty' "${candidate_file}" 2>/dev/null || echo '')"
+		[[ "${candidate_head_sha}" =~ ^[0-9a-f]{40}$ ]] || continue
+    if PYTHONDONTWRITEBYTECODE=1 python3 "scripts/orchestrate_state_v2.py" verify-resolver-retry \
+      --envelope-file "${candidate_file}" \
+      --repository "${repository}" \
+      --tracking-issue "${tracking_issue}" \
+      --integration-branch "${integration_branch}" \
+      --source-pr "${source_pr}" \
+			--head-sha "${head_sha}" \
+      --producer-id "${ORCHESTRATOR_STATE_PRODUCER_ID}" \
+      --out-file "${verified_file}"; then
+      generation="$(jq -r '.generation // 0' "${verified_file}" 2>/dev/null || echo 0)"
+      if [[ "${generation}" =~ ^[1-9][0-9]*$ ]] && [ "${generation}" -gt "${best_generation}" ]; then
+        best_generation="${generation}"
+        best_file="${verified_file}"
+      fi
+    fi
+  done
+  [ -z "${best_file}" ] || cat "${best_file}"
+  rm -rf "${candidate_dir}"
 }
 
 # Create the judge's `new_issues` as fix-up GitHub issues and record them in
@@ -5712,7 +5800,7 @@ normalize_judge_justification_for_fingerprint() {
   local raw_text="${1-}"
   # Pass input via env var, not stdin: the GHA Ubuntu 24.04 runner's
   # `bash -e {0}` shell closes the heredoc-bound FD 3 before exec'ing
-  # python3, so the previous `python3 /dev/fd/3 3<<'PY'` form failed
+  # python3, so the previous FD-3 Python heredoc form failed
   # with "can't open file '/dev/fd/3': [Errno 2]" and turned every
   # poller invocation that touched judge fingerprints into a non-zero
   # exit. Reading the text from RAW_TEXT and the script from stdin
@@ -8366,7 +8454,6 @@ heal_integration_branch_conflict() {
 
   local final_pr_payload=""
   local final_pr_head_sha=""
-  local final_pr_body=""
   local final_pr_mergeable=""
   # GitHub API hygiene audit: this function already re-reads
   # `repos/.../pulls/${final_pr}` later for `.mergeable` during the
@@ -8377,7 +8464,6 @@ heal_integration_branch_conflict() {
   if final_pr_payload="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}")"; then
     if printf '%s' "${final_pr_payload}" | jq -e . >/dev/null 2>&1; then
       final_pr_head_sha="$(printf '%s' "${final_pr_payload}" | jq -r '.head.sha // ""' 2>/dev/null || echo "")"
-      final_pr_body="$(printf '%s' "${final_pr_payload}" | jq -r '.body // ""' 2>/dev/null || echo "")"
       final_pr_mergeable="$(printf '%s' "${final_pr_payload}" | jq -r 'if .mergeable != null then .mergeable else empty end' 2>/dev/null || echo "")"
     else
       echo "::warning::[integration-heal] Final PR #${final_pr} metadata fetch returned non-JSON; skipping resolver escape-valve gate this tick."
@@ -8387,11 +8473,21 @@ heal_integration_branch_conflict() {
     echo "::warning::[integration-heal] Could not load final PR #${final_pr} metadata; skipping resolver escape-valve gate this tick."
   fi
 
-  if [ -n "${final_pr_body}" ] && [ -n "${final_pr_head_sha}" ]; then
+	if [ -n "${final_pr_head_sha}" ]; then
     local resolver_retry_state=""
     local resolver_retry_head_sha=""
     local resolver_retry_escalated="false"
-    resolver_retry_state="$(printf '%s' "${final_pr_body}" | extract_autofix_resolver_retry_state_from_pr_body || true)"
+		local resolver_retry_comments_json=""
+		# The PR metadata call above cannot return issue comments. Bound this
+		# five-minute poll path to the 100 most recently updated comments; the
+		# actuator refreshes its single V2 marker on every state change.
+		resolver_retry_comments_json="$(gh_retry gh api \
+			"repos/${GITHUB_REPOSITORY}/issues/${final_pr}/comments?sort=updated&direction=desc&per_page=100" \
+			| jq -c 'if type == "array" then . else [] end' 2>/dev/null || echo '[]')"
+		resolver_retry_state="$(printf '%s' "${resolver_retry_comments_json}" \
+			| extract_autofix_resolver_retry_state_from_comments \
+				"${GITHUB_REPOSITORY}" "${TRACKING_NUM}" "${integration_branch}" \
+				"${final_pr}" "${final_pr_head_sha}" || true)"
     if [ -n "${resolver_retry_state}" ]; then
       resolver_retry_head_sha="$(printf '%s' "${resolver_retry_state}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
       resolver_retry_escalated="$(printf '%s' "${resolver_retry_state}" | jq -r '.escalated // false' 2>/dev/null || echo false)"
@@ -8413,14 +8509,6 @@ heal_integration_branch_conflict() {
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         post_state_comment || true
         return 0
-      fi
-      if [ -n "${resolver_retry_head_sha}" ] && [ "${resolver_retry_head_sha}" != "${final_pr_head_sha}" ]; then
-        echo "  [integration-heal] Final PR #${final_pr} head advanced from ${resolver_retry_head_sha} to ${final_pr_head_sha} since the persisted resolver retry state; resetting per-head conflict counters."
-        jq '.integration_conflict_unresolved_ticks = 0 |
-            .integration_conflict_dispatch_count = 0 |
-            .integration_conflict_dispatch_ts = 0 |
-            .integration_conflict_judge_retry_ts = 0' \
-          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       fi
     fi
   fi

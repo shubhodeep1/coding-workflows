@@ -84,6 +84,27 @@ SELF_HEAL_LOG_FILE="${RUNTIME_DIR}/validate_self_heal.log"
 SELF_HEAL_DECISION_FILE="${RUNTIME_DIR}/validate_self_heal_decision.json"
 SELF_HEAL_PATCH_TMP="${RUNTIME_DIR}/validate_self_heal_patch.diff"
 SELF_HEAL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -f "${SELF_HEAL_SCRIPT_DIR}/codex_helpers.sh" ]; then
+	echo "self-heal: codex_helpers.sh is required for brokered model execution" >&2
+	exit 2
+fi
+# shellcheck source=/dev/null
+source "${SELF_HEAL_SCRIPT_DIR}/codex_helpers.sh"
+SELF_HEAL_STARTED_MODEL_PROVIDER_BROKER="false"
+cleanup_self_heal_model_provider_broker()
+{
+	if [ "${SELF_HEAL_STARTED_MODEL_PROVIDER_BROKER}" = "true" ]; then
+		model_provider_broker_stop >/dev/null 2>&1 || true
+	fi
+}
+trap cleanup_self_heal_model_provider_broker EXIT
+if [ -z "${MODEL_PROVIDER_BROKER_TOKEN:-}" ] || [ -z "${MODEL_PROVIDER_BROKER_BASE_URL:-}" ]; then
+	MODEL_PROVIDER_BROKER_AGENT_HOME="${MODEL_PROVIDER_BROKER_AGENT_HOME:-${RUNTIME_DIR}/self-heal-model-provider-agent-home}"
+	export MODEL_PROVIDER_BROKER_AGENT_HOME
+	model_provider_broker_start
+	SELF_HEAL_STARTED_MODEL_PROVIDER_BROKER="true"
+	model_provider_broker_prepare_codex_writer "${MODEL_EDITOR:-openai/gpt-5.6-sol}" "${MODEL_REASONING_EFFORT:-xhigh}" "$(pwd)"
+fi
 CODEX_HEARTBEAT_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_stall_guard.sh"
 LEDGER_SUBSTATE_HELPER=""
@@ -314,7 +335,7 @@ run_self_heal_codex()
 	if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
 		stall_status_file="$(mktemp /tmp/self_heal_stall_status.XXXXXX)"
 		set +e
-		"${CODEX_STALL_GUARD_HELPER}" \
+		model_provider_broker_exec_sanitized "${CODEX_STALL_GUARD_HELPER}" \
 			--phase validate_self_heal \
 			--stdout-file "${SELF_HEAL_OUTPUT_FILE}" \
 			--status-file "${stall_status_file}" \
@@ -329,13 +350,13 @@ run_self_heal_codex()
 		rm -f "${stall_status_file}"
 		return "${rc}"
 	elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-		"${CODEX_HEARTBEAT_HELPER}" \
+		model_provider_broker_exec_sanitized "${CODEX_HEARTBEAT_HELPER}" \
 			--phase validate_self_heal \
 			--stdout-file "${SELF_HEAL_OUTPUT_FILE}" \
 			--stderr-file "${stderr_tmp}" \
 			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}"
 	else
-		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
+		model_provider_broker_exec_sanitized codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
 	fi
 }
 

@@ -69,6 +69,8 @@ fi
 source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/label_helpers.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/codex_helpers.sh"
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
 TRACKER_TITLE="AI Workflow Weekly Retro"
@@ -82,7 +84,11 @@ REQUIRED_RETRO_HEADINGS=(
 )
 
 FANOUT_RUNTIME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/workflow-retro-fanout.XXXXXX")"
-trap 'rm -rf "${FANOUT_RUNTIME_DIR}"' EXIT
+MODEL_PROVIDER_BROKER_AGENT_HOME="${FANOUT_RUNTIME_DIR}/model-provider-agent-home"
+export MODEL_PROVIDER_BROKER_AGENT_HOME
+trap 'model_provider_broker_stop >/dev/null 2>&1 || true; rm -rf "${FANOUT_RUNTIME_DIR}"' EXIT
+model_provider_broker_start
+model_provider_broker_prepare_codex_writer "${WORKFLOW_RETRO_MODEL}" "${WORKFLOW_RETRO_REASONING:-medium}" "${REPO_ROOT}"
 
 mapfile -t FANOUT_REPOS < <(jq -r '.[]' "${CONSUMER_REPOS_FILE}" 2>/dev/null | sort -u)
 if [ "${#FANOUT_REPOS[@]}" -eq 0 ]; then
@@ -120,6 +126,7 @@ run_consumer_retro() {
 	local ctx_file="${FANOUT_RUNTIME_DIR}/${safe_slug}-context.md"
 	local json_file="${FANOUT_RUNTIME_DIR}/${safe_slug}-context.json"
 	local prompt_file="${FANOUT_RUNTIME_DIR}/${safe_slug}-prompt.txt"
+	local candidate_file="${FANOUT_RUNTIME_DIR}/${safe_slug}-retro.candidate.md"
 	local body_file="${FANOUT_RUNTIME_DIR}/${safe_slug}-retro.md"
 	local comment_file="${FANOUT_RUNTIME_DIR}/${safe_slug}-comment.md"
 	local comment_payload="${FANOUT_RUNTIME_DIR}/${safe_slug}-comment-payload.json"
@@ -170,13 +177,13 @@ run_consumer_retro() {
 			sanitize_codex_prompt_file "${prompt_file}"
 		fi
 		set +e
-		bash "${SCRIPT_DIR}/codex_heartbeat.sh" \
+		model_provider_broker_exec_sanitized bash "${SCRIPT_DIR}/codex_heartbeat.sh" \
 			--phase workflow_weekly_retro \
-			--stdout-file "${body_file}" \
-			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${prompt_file}"
+			--stdout-file "${candidate_file}" \
+			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true -c web_search=disabled exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox read-only < "${prompt_file}"
 		codex_exit=$?
 		set -e
-		if [ "${codex_exit}" -eq 0 ] && grep -q '[^[:space:]]' "${body_file}"; then
+		if [ "${codex_exit}" -eq 0 ] && grep -q '[^[:space:]]' "${candidate_file}"; then
 			break
 		fi
 		if [ "${attempt}" -lt "${MAX_CODEX_ATTEMPTS}" ]; then
@@ -187,6 +194,11 @@ run_consumer_retro() {
 			return 1
 		fi
 	done
+	python3 "${SCRIPT_DIR}/workflow_log_output_contract.py" \
+		--mode retro \
+		--candidate "${candidate_file}" \
+		--output "${body_file}" \
+		--allowed-output-root "${FANOUT_RUNTIME_DIR}" || return 1
 
 	local heading previous_heading_line heading_line
 	previous_heading_line=0

@@ -86,6 +86,9 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 		"sed -nE 's/^- Integration branch:",
 		"grep -Eq '^orchestrator/project-[0-9]+$'",
 		"/git/ref/heads/",
+		'resolver_ref="stable"',
+		"resolver_stage_fallback",
+		"--branch main",
 	)
 
 	# Keep the GitHub ref-lookup ban shared so future baseline-resolution logic
@@ -125,6 +128,12 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 		resolver_idx = wf.find(resolver_step)
 		checkout_resolver_idx = wf.find(checkout_resolver_step) if checkout_resolver_step else -1
 		checkout_ref_idx = wf.find(checkout_ref)
+		resolver_block = wf[resolver_idx:checkout_ref_idx]
+		assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}" in resolver_block
+		assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in resolver_block
+		assert 'resolver_ref="${WORKFLOW_DEFINITION_SHA,,}"' in resolver_block
+		assert 'git -C "${resolver_stage_primary}" init --quiet' in resolver_block
+		assert 'fetch --quiet --depth 1 origin "${resolver_ref}"' in resolver_block
 		assert resolver_idx != -1 and checkout_ref_idx != -1 and resolver_idx < checkout_ref_idx, (
 			f"{workflow_name} must resolve integration ref before refctx-bound checkout"
 		)

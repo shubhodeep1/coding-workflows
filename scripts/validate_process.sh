@@ -1984,6 +1984,8 @@ cleanup_runtime_containers()
       "${_validate_codex_config}" 2>/dev/null || true
     _discover_reasoning_patched="false"
   fi
+
+  model_provider_broker_stop >/dev/null 2>&1 || true
 }
 
 ensure_validate_wrapper()
@@ -2810,8 +2812,7 @@ WORKSPACE_SAFETY_CHECK_HELPER=""
 for _workspace_safety_candidate in \
   "${_validate_script_dir}/workspace_safety_check.sh" \
   "scripts/workspace_safety_check.sh" \
-  ".codex-workflow-src/scripts/workspace_safety_check.sh" \
-  ".codex-workflow-src-main/scripts/workspace_safety_check.sh"; do
+  ".codex-workflow-src/scripts/workspace_safety_check.sh"; do
   if [ -f "${_workspace_safety_candidate}" ]; then
     WORKSPACE_SAFETY_CHECK_HELPER="${_workspace_safety_candidate}"
     break
@@ -2821,8 +2822,7 @@ CODEX_THREAD_REUSE_HELPER=""
 for _thread_reuse_candidate in \
   "${_validate_script_dir}/codex_thread_reuse.sh" \
   "scripts/codex_thread_reuse.sh" \
-  ".codex-workflow-src/scripts/codex_thread_reuse.sh" \
-  ".codex-workflow-src-main/scripts/codex_thread_reuse.sh"; do
+  ".codex-workflow-src/scripts/codex_thread_reuse.sh"; do
   if [ -f "${_thread_reuse_candidate}" ]; then
     CODEX_THREAD_REUSE_HELPER="${_thread_reuse_candidate}"
     break
@@ -2837,19 +2837,16 @@ LEDGER_SUBSTATE_HELPER=""
 for _ledger_candidate in \
   "${_validate_script_dir}/ledger_emit_substate.sh" \
   "scripts/ledger_emit_substate.sh" \
-  ".codex-workflow-src/scripts/ledger_emit_substate.sh" \
-  ".codex-workflow-src-main/scripts/ledger_emit_substate.sh"; do
+  ".codex-workflow-src/scripts/ledger_emit_substate.sh"; do
   if [ -f "${_ledger_candidate}" ]; then
     LEDGER_SUBSTATE_HELPER="${_ledger_candidate}"
     break
   fi
 done
-codex_config_assemble \
-  "${MODEL_EDITOR}" \
-  "${MODEL_REASONING_EFFORT}" \
-  "low" \
-  --scripts-dir "${_validate_script_dir}" \
-  --catalog-path "${_validate_script_dir}/codex_model_catalog.json"
+CODEX_HELPERS_SCRIPTS_DIR="${_validate_script_dir}"
+export CODEX_HELPERS_SCRIPTS_DIR
+model_provider_broker_start
+model_provider_broker_prepare_codex_writer "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "$(pwd)"
 
 emit_validate_substate() {
   local phase_name="$1"
@@ -2893,8 +2890,7 @@ resolve_validate_thread_reuse_asset() {
 
 	for candidate in \
 	  "${repo_path}" \
-	  ".codex-workflow-src/${repo_path}" \
-	  ".codex-workflow-src-main/${repo_path}"; do
+	  ".codex-workflow-src/${repo_path}"; do
 		if [ -f "${candidate}" ]; then
 			printf '%s\n' "${candidate}"
 			return 0
@@ -2932,12 +2928,12 @@ run_validate_codex_attempt() {
 		  CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_STALL_GUARD_HELPER}" \
 		  CODEX_THREAD_REUSE_HEARTBEAT_HELPER="${CODEX_HEARTBEAT_HELPER}" \
 		  CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK="true" \
-		  bash "${CODEX_THREAD_REUSE_HELPER}" direct-run
+		  model_provider_broker_exec_sanitized bash "${CODEX_THREAD_REUSE_HELPER}" direct-run
 		return $?
 	fi
 
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-    "${CODEX_STALL_GUARD_HELPER}" \
+    model_provider_broker_exec_sanitized "${CODEX_STALL_GUARD_HELPER}" \
       --phase "${phase_name}" \
       --stdout-file "${output_file}" \
       --status-file "${status_file}" \
@@ -2946,14 +2942,14 @@ run_validate_codex_attempt() {
   fi
 
   if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-    "${CODEX_HEARTBEAT_HELPER}" \
+    model_provider_broker_exec_sanitized "${CODEX_HEARTBEAT_HELPER}" \
       --phase "${phase_name}" \
       --stdout-file "${output_file}" \
       -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
     return $?
   fi
 
-  codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" > "${output_file}" 2> >(tee -a "${log_file}" >&2)
+  model_provider_broker_exec_sanitized codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" > "${output_file}" 2> >(tee -a "${log_file}" >&2)
 }
 
 export PATH="${HOME}/.local/bin:${PATH}"
@@ -3110,7 +3106,7 @@ else
   # restore `MODEL_REASONING_EFFORT` after. Matches the per-phase pattern
   # in implement.yml (MODEL_REPAIR_REASONING_EFFORT) and aligns the
   # runtime behaviour with the documented `agents.md` model table.
-  _validate_codex_config="${HOME:-/root}/.codex/config.toml"
+  _validate_codex_config="${CODEX_HOME:-${HOME:-/root}/.codex}/config.toml"
   _discover_reasoning_patched="false"
   if [ -f "${_validate_codex_config}" ] && grep -Eq '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${_validate_codex_config}"; then
     sed -i \
