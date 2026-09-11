@@ -591,24 +591,27 @@ jobs:
             ')"
           OPEN_PR_INVENTORY="$(gh_retry gh api --paginate \
             "repos/${repo_slug}/pulls?state=open&per_page=100" \
-            --jq '.[] | "\(.number)\t\(.html_url)\t\(.head.ref // "")\t\((.body // "") | @base64)"')"
+            --jq '.[] | "\(.number)\t\(.html_url)\t\(.head.ref // "")\t\(.head.repo.owner.login // "")\t\((.body // "") | @base64)"')"
           CROSS_REF_PRS=""
           HEAD_BRANCH_PRS=""
-          while IFS=$'\t' read -r inventory_pr_num inventory_pr_url inventory_head_ref inventory_body_b64; do
+          while IFS=$'\t' read -r inventory_pr_num inventory_pr_url inventory_head_ref inventory_head_owner inventory_body_b64; do
             [ -n "${inventory_pr_num}" ] || continue
-            if [ "${inventory_head_ref}" = "${impl_head}" ]; then
+            if [ "${inventory_head_ref}" = "${impl_head}" ] && [ "${inventory_head_owner,,}" = "${repo_owner,,}" ]; then
               HEAD_BRANCH_PRS+="#${inventory_pr_num} ${inventory_pr_url}"$'\n'
             fi
           done <<< "${OPEN_PR_INVENTORY}"
           while IFS=$'\t' read -r xref_candidate_num xref_candidate_url; do
             [ -n "${xref_candidate_num}" ] || continue
             xref_candidate_body_b64=""
-            while IFS=$'\t' read -r inventory_pr_num inventory_pr_url inventory_head_ref inventory_body_b64; do
+            while IFS=$'\t' read -r inventory_pr_num inventory_pr_url inventory_head_ref inventory_head_owner inventory_body_b64; do
               if [ "${inventory_pr_num}" = "${xref_candidate_num}" ]; then
                 xref_candidate_body_b64="${inventory_body_b64}"
                 break
               fi
             done <<< "${OPEN_PR_INVENTORY}"
+            if printf '%s' "${HEAD_BRANCH_PRS}" | grep -Fqx "#${xref_candidate_num} ${xref_candidate_url}"; then
+              continue
+            fi
             xref_candidate_body="$(printf '%s' "${xref_candidate_body_b64}" | base64 --decode)"
             if printf '%s' "${xref_candidate_body}" | grep -Eiq "${closing_kw_re}"; then
               CROSS_REF_PRS+="${xref_candidate_num}"$'\t'"${xref_candidate_url}"$'\tcloses\n'

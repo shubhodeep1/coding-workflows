@@ -772,7 +772,7 @@ def _open_pr_on_head(number: int, head_ref: str) -> dict:
 		"number": number,
 		"html_url": f"https://github.com/owner/repo/pull/{number}",
 		"state": "open",
-		"head": {"ref": head_ref},
+		"head": {"ref": head_ref, "repo": {"owner": {"login": "owner"}}},
 		"body": "",
 	}
 
@@ -988,6 +988,34 @@ def test_safety_check_finds_open_pr_on_conventional_head_branch():
 		assert "existing_pr=true" in gh_out, gh_out
 
 
+def test_safety_check_ignores_fork_pr_on_conventional_head_branch():
+	"""A fork can reuse the conventional branch name but is not the issue's
+	implementation branch in the base repository."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		fork_pull = _open_pr_on_head(403, "ai/issue-141")
+		fork_pull["head"]["repo"]["owner"]["login"] = "fork-owner"
+		proc, pr_exists, gh_out = _run_safety_check(tmp, "141", [], pulls=[fork_pull])
+		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		assert pr_exists == "", pr_exists
+		assert "existing_pr=false" in gh_out, gh_out
+
+
+def test_safety_check_does_not_log_conventional_head_as_ignored_mention():
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc, pr_exists, gh_out = _run_safety_check(
+			tmp,
+			"141",
+			[_open_pr_xref(404)],
+			pulls=[_open_pr_with_body(404, "Tracked separately in #141", "ai/issue-141")],
+		)
+		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		assert "#404 https://github.com/owner/repo/pull/404" in pr_exists, pr_exists
+		assert "existing_pr=true" in gh_out, gh_out
+		assert "only mention issue #141" not in proc.stdout, proc.stdout
+
+
 def test_safety_check_dedupes_head_branch_and_closing_cross_ref():
 	"""The same PR found by both lookups (on `ai/issue-<N>` AND closing the
 	issue in its body) is listed once."""
@@ -1060,6 +1088,31 @@ def test_plan_gate_skips_on_conventional_head_branch_pr():
 		assert "SKIP_PLAN=true" in github_env, github_env
 		assert "#600 https://github.com/owner/repo/pull/600" in proc.stdout, proc.stdout
 		assert "#601" not in proc.stdout, proc.stdout
+
+
+def test_plan_gate_ignores_fork_pr_on_conventional_head_branch():
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		fork_pull = _open_pr_on_head(602, "ai/issue-4073")
+		fork_pull["head"]["repo"]["owner"]["login"] = "fork-owner"
+		proc, github_env = _run_plan_existing_pr_gate(tmp, "4073", [], pulls=[fork_pull])
+		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		assert "SKIP_PLAN=true" not in github_env, github_env
+
+
+def test_plan_gate_does_not_log_conventional_head_as_ignored_mention():
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc, github_env = _run_plan_existing_pr_gate(
+			tmp,
+			"4073",
+			[_open_pr_xref(603)],
+			pulls=[_open_pr_with_body(603, "Tracked separately in #4073", "ai/issue-4073")],
+		)
+		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		assert "SKIP_PLAN=true" in github_env, github_env
+		assert "#603 https://github.com/owner/repo/pull/603" in proc.stdout, proc.stdout
+		assert "only mention issue #4073" not in proc.stdout, proc.stdout
 
 
 def test_plan_gate_ignores_closed_prs_and_plain_issues():
@@ -1297,6 +1350,20 @@ def test_create_pr_recovery_prefers_conventional_head_over_mention_only_xref():
 		assert "pull/199" not in gh_out, gh_out
 		pr_url_lines = [ln for ln in gh_out.splitlines() if ln.startswith("pr_url=")]
 		assert len(pr_url_lines) == 1, pr_url_lines
+
+
+def test_create_pr_recovery_ignores_fork_pr_on_target_branch():
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		fork_pull = _open_pr_on_head(201, "ai/issue-141")
+		fork_pull["head"]["repo"]["owner"]["login"] = "fork-owner"
+		proc, gh_out = _run_create_pr_recovery(
+			tmp, "141", [], recovery_pulls=[fork_pull]
+		)
+		assert proc.returncode == 1, (
+			f"fork PR must not satisfy recovery; stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		)
+		assert "pr_url=" not in gh_out, gh_out
 
 
 def test_create_pr_recovery_ignores_closed_pr():
