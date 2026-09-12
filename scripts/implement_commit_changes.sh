@@ -110,7 +110,7 @@ fi
 # `model_provider_broker_start: command not found`). The staging step records
 # every tracked file it overwrote in STAGED_SUPPORT_LEDGER, with the installed
 # content under STAGED_SUPPORT_BASE_DIR; put each one back before staging:
-#   - content still equal to the installed copy: the editor never touched it,
+#   - content and mode still equal to the installed copy: the editor never touched it,
 #     restore HEAD's version (IMPLEMENT_STAGED_SUPPORT_RESTORED);
 #   - content differs: the editor edited the installed copy, re-base that edit
 #     onto HEAD's version with a 3-way merge against the installed content
@@ -160,10 +160,18 @@ if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; the
       staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
       continue
     fi
+    staged_support_mode="$(stat -c '%a' -- "${staged_support_path}" 2>/dev/null || true)"
+    staged_support_base_mode="$(stat -c '%a' -- "${staged_support_base}" 2>/dev/null || true)"
+    if [ -e "${staged_support_path}" ] && { [ -z "${staged_support_mode}" ] || [ -z "${staged_support_base_mode}" ]; }; then
+      echo "::error::IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED path=${staged_support_path} reason=mode_read: could not compare the editor and installed-content modes safely."
+      staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+      continue
+    fi
     if ! git cat-file -e "HEAD:${staged_support_path}" >/dev/null 2>&1; then
       if [ ! -e "${staged_support_path}" ]; then
         echo "IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR path=${staged_support_path}"
-      elif cmp -s -- "${staged_support_path}" "${staged_support_base}"; then
+      elif cmp -s -- "${staged_support_path}" "${staged_support_base}" \
+        && [ "${staged_support_mode}" = "${staged_support_base_mode}" ]; then
         rm -f -- "${staged_support_path}"
         echo "IMPLEMENT_STAGED_SUPPORT_RESTORED path=${staged_support_path} state=absent-in-head"
         staged_support_restored=$((staged_support_restored + 1))
@@ -176,7 +184,8 @@ if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; the
       echo "IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR path=${staged_support_path}"
       continue
     fi
-    if cmp -s -- "${staged_support_path}" "${staged_support_base}"; then
+    if cmp -s -- "${staged_support_path}" "${staged_support_base}" \
+      && [ "${staged_support_mode}" = "${staged_support_base_mode}" ]; then
       git restore --source=HEAD --worktree -- "${staged_support_path}"
       echo "IMPLEMENT_STAGED_SUPPORT_RESTORED path=${staged_support_path}"
       staged_support_restored=$((staged_support_restored + 1))
@@ -199,6 +208,9 @@ if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; the
       # the merged content over it.
       git restore --source=HEAD --worktree -- "${staged_support_path}"
       cat "${staged_support_merged}" > "${staged_support_path}"
+      if [ "${staged_support_mode}" != "${staged_support_base_mode}" ]; then
+        chmod "${staged_support_mode}" -- "${staged_support_path}"
+      fi
       echo "IMPLEMENT_STAGED_SUPPORT_REBASED path=${staged_support_path}"
       staged_support_rebased=$((staged_support_rebased + 1))
     elif [ "${staged_support_merge_rc}" -le 127 ]; then

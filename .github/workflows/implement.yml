@@ -3330,8 +3330,12 @@ jobs:
                 } >> "$GITHUB_OUTPUT"
                 exit 1
               fi
+              preflight_staged_support_mode="$(stat -c '%a' -- "${preflight_staged_support_path}" 2>/dev/null || true)"
+              preflight_staged_support_base_mode="$(stat -c '%a' -- "${preflight_staged_support_base}" 2>/dev/null || true)"
               if [ -f "${preflight_staged_support_path}" ] \
-                && cmp -s -- "${preflight_staged_support_path}" "${preflight_staged_support_base}"; then
+                && cmp -s -- "${preflight_staged_support_path}" "${preflight_staged_support_base}" \
+                && [ -n "${preflight_staged_support_mode}" ] \
+                && [ "${preflight_staged_support_mode}" = "${preflight_staged_support_base_mode}" ]; then
                 git reset -q HEAD -- "${preflight_staged_support_path}" 2>/dev/null \
                   || git rm -q --cached --ignore-unmatch -- "${preflight_staged_support_path}" 2>/dev/null \
                   || true

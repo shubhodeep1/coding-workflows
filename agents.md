@@ -218,7 +218,7 @@ a new value, add it to the appropriate overrides file with a
   `GITHUB_ENV` and only exist when `github.repository` is this repository.
 - `scripts/implement_commit_changes.sh` consumes the ledger before `git add`:
   restore-to-HEAD for untouched copies, 3-way `git merge-file` re-base for
-  editor-edited copies, preserve branch/editor deletions, remove untouched
+  editor-edited copies, preserve editor-selected modes and branch/editor deletions, remove untouched
   staging recreations, and fail closed on incomplete inputs or merge conflicts.
   The workflow invokes the immutable runtime copy of the commit helper and uses
   runtime copies for all later helper calls, so restoring the worktree cannot
@@ -231,8 +231,8 @@ a new value, add it to the appropriate overrides file with a
   `IMPLEMENT_STAGED_SUPPORT_HEAD_READ_FAILED`, `IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT`,
   `IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED`, `IMPLEMENT_STAGED_SUPPORT_RESTORE`.
 - Staged-support failures are consumed by the runtime-preserved rejection handler,
-  which applies `ai:needs-human`, comments with the affected paths, sends the
-  configured CRITICAL alert, and prevents generic diagnosis/re-issue handling.
+  which attempts and verifies the `ai:needs-human` latch, comments with the affected paths and
+  latch status, sends the configured CRITICAL alert, and prevents generic diagnosis/re-issue handling.
 - The other in-tree staging workflows (`clarify.yml`, `plan.yml`,
   `orchestrate_clarify_respond.yml`, `orchestrate.yml`, `orchestrate_poll.yml`,
   `check_failure_triage.yml`) either never commit from that checkout or run on

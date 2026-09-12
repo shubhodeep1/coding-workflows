@@ -233,6 +233,9 @@ if args[0] == "label" and len(args) >= 3 and args[1] in ("create", "edit"):
 	sys.exit(0)
 
 if args[0] == "issue" and len(args) >= 3 and args[1] == "edit":
+	if os.environ.get("MOCK_GH_ISSUE_EDIT_FAILURE") == "true":
+		save()
+		sys.exit(1)
 	issue_num = args[2]
 	adds = collect_values("--add-label")
 	removes = collect_values("--remove-label")
@@ -1538,6 +1541,7 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 	base_dir = runtime_dir / "staged_support_base"
 	(base_dir / "scripts").mkdir(parents=True)
 	(base_dir / "scripts" / "helper.sh").write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
+	(base_dir / "scripts" / "helper.sh").chmod(0o755)
 	ledger = runtime_dir / "staged_support_overwrites.txt"
 	ledger.write_text("scripts/helper.sh\n", encoding="utf-8")
 	# What the staging step leaves behind: install -m 0755 of SCRIPT_REF's copy.
@@ -1628,6 +1632,21 @@ def test_commit_helper_rebases_editor_edits_of_staged_support_files_onto_head() 
 			"shared line 3\n", "shared line 3 edited by the editor\n"
 		)
 		assert "main line A" not in _git_out(["git", "show", "HEAD:scripts/helper.sh"], cwd=repo_dir)
+
+
+def test_commit_helper_preserves_editor_mode_change_on_staged_support_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_mode_rebase_") as td:
+		repo_dir, github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		helper = repo_dir / "scripts" / "helper.sh"
+		base_helper = Path(env["STAGED_SUPPORT_BASE_DIR"]) / "scripts" / "helper.sh"
+		base_helper.chmod(0o644)
+		helper.chmod(0o755)
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_REBASED path=scripts/helper.sh" in proc.stdout
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+		mode_line = _git_out(["git", "ls-files", "-s", "scripts/helper.sh"], cwd=repo_dir)
+		assert mode_line.startswith("100755 "), mode_line
 
 
 def test_commit_helper_fails_closed_when_staged_support_rebase_conflicts() -> None:
@@ -1841,6 +1860,16 @@ def test_preflight_scope_guard_projects_only_untouched_staged_support_files() ->
 		assert "scripts/helper.sh" in output_text
 
 		(repo_dir / "scripts" / "helper.sh").write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
+		(repo_dir / "scripts" / "helper.sh").chmod(0o644)
+		github_output.write_text("", encoding="utf-8")
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode != 0
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "scope_violation_blocked=out-of-scope" in output_text
+		assert "scripts/helper.sh" in output_text
+
+		(repo_dir / "scripts" / "helper.sh").write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
+		(repo_dir / "scripts" / "helper.sh").chmod(0o755)
 		(Path(env["STAGED_SUPPORT_BASE_DIR"]) / "scripts" / "helper.sh").unlink()
 		github_output.write_text("", encoding="utf-8")
 		proc = _run_shell_script(script, cwd=repo_dir, env=env)
@@ -1917,6 +1946,7 @@ def _run_guard_handler_case(
 	destructive_reason: str = "",
 	scope_reason: str = "",
 	staged_support_reason: str = "",
+	mock_issue_edit_failure: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]]]:
 	repo_dir = tmp_path / "repo"
 	runtime_dir = tmp_path / "runtime"
@@ -1965,6 +1995,7 @@ def _run_guard_handler_case(
 			"SVB_ALLOWLIST": "scripts/**/*.sh",
 			"SSB_REASON": staged_support_reason,
 			"SSB_FILES": "scripts/helper.sh",
+			"MOCK_GH_ISSUE_EDIT_FAILURE": "true" if mock_issue_edit_failure else "false",
 		},
 		cwd=repo_dir,
 	)
@@ -2019,6 +2050,21 @@ def test_guard_handler_executes_all_rejection_modes_after_support_cleanup() -> N
 			assert f"run: https://github.example.test/{repository}/actions/runs/777" in curl_text, f"case={case_name}"
 		finally:
 			shutil.rmtree(case_dir)
+
+
+def test_staged_support_guard_reports_failed_human_latch() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_staged_latch_") as td:
+		proc, gh_state, curl_calls = _run_guard_handler_case(
+			Path(td),
+			repository="shubhodeep1/coding-workflows",
+			staged_support_reason="true",
+			mock_issue_edit_failure=True,
+		)
+		assert proc.returncode != 0
+		assert "FAILED to latch ai:needs-human" in proc.stdout + proc.stderr
+		assert gh_state["issue_labels"] == ["ai:implementing"]
+		assert "did not find `ai:needs-human`" in gh_state["issue_comments"][0]["body"]
+		assert "FAILED to confirm ai:needs-human latch" in " ".join(curl_calls[0])
 
 
 def test_guard_handler_runtime_wiring_and_expression_size_contract() -> None:

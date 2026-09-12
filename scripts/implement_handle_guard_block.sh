@@ -18,18 +18,35 @@ if [ -n "${SSB_REASON:-}" ]; then
     --add-label 'ai:needs-human' --remove-label 'ai:implementing' 2>/dev/null || \
   gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
     --add-label 'ai:needs-human' 2>/dev/null || true
+  SSB_LATCH_STATUS_LINE="The workflow attempted to label this issue \`ai:needs-human\`, but the follow-up label read failed. Future redispatch is not confirmed blocked; re-check the label before redispatching."
+  SSB_TG_LATCH_LINE="Could not verify ai:needs-human; the latch state is unknown and must be checked before redispatching."
+  # No earlier staged-support call reads issue labels, so this dedicated read
+  # verifies that the best-effort writes above actually halted automation.
+  if staged_support_latched_labels="$(gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name' 2>/dev/null)"; then
+    if grep -qxF 'ai:needs-human' <<< "${staged_support_latched_labels}"; then
+      echo "Confirmed ai:needs-human is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it."
+      SSB_LATCH_STATUS_LINE="This issue is confirmed labeled \`ai:needs-human\`; autonomous recovery is paused until a human removes the label."
+      SSB_TG_LATCH_LINE="Confirmed ai:needs-human latch: autonomous recovery is paused until a human removes the label."
+    else
+      echo "::error::FAILED to latch ai:needs-human on #${ISSUE_NUMBER}; autonomous recovery is NOT paused. Apply the label manually before redispatching."
+      SSB_LATCH_STATUS_LINE="The follow-up label read did not find \`ai:needs-human\`. Autonomous recovery is not confirmed paused; apply the label manually before redispatching."
+      SSB_TG_LATCH_LINE="FAILED to confirm ai:needs-human latch: autonomous recovery is NOT paused until a human reapplies and verifies the label."
+    fi
+  else
+    echo "::warning::Could not verify ai:needs-human on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown."
+  fi
   {
     echo "🚨 **Staged-support restore failed; implementation halted.**"
     echo
     echo "- Workflow run: ${RUN_URL}"
     echo
-    echo "The commit was **not** created and **not** pushed. The listed support-ref copies could not be safely reconciled with this branch:"
+    echo "The commit was **not** created and **not** pushed. ${SSB_LATCH_STATUS_LINE} The listed support-ref copies could not be safely reconciled with this branch:"
     echo
     echo '```'
     printf '%s\n' "${SSB_FILES}" | sed '/^$/d'
     echo '```'
     echo
-    echo "The issue is labeled \`ai:needs-human\`. Apply the editor's intended changes against the branch versions, then remove the label before redispatching."
+    echo "Apply the editor's intended changes against the branch versions, then remove \`ai:needs-human\` before redispatching."
   } > "${GUARD_COMMENT_FILE}"
   gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
     --body-file "${GUARD_COMMENT_FILE}" 2>/dev/null || true
@@ -41,7 +58,8 @@ if [ -n "${SSB_REASON:-}" ]; then
       "paths: ${SSB_FILES}" \
       "run: ${RUN_URL}" \
       "" \
-      "Issue is now ai:needs-human. Reconcile the editor changes with the branch versions before redispatching.")"
+      "${SSB_TG_LATCH_LINE}" \
+      "Reconcile the editor changes with the branch versions before redispatching.")"
     curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
       -d "chat_id=${TG_ADMIN_CHAT_ID}" \
       -d "disable_web_page_preview=true" \

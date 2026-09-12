@@ -1792,8 +1792,8 @@ The staging step now inventories every actual worktree install, compares those e
 `STAGED_SUPPORT_BASE_DIR`, and preserves executable support-ref copies under
 `IMPLEMENT_STAGED_SUPPORT_RUN_DIR`. Before staging, `scripts/implement_commit_changes.sh` restores
 untouched tracked copies to `HEAD`, removes untouched copies recreated over branch-side deletions,
-keeps deliberate editor deletions or recreations, and 3-way merges editor changes onto the branch
-version. The commit helper and every later helper call execute from the immutable runtime directory,
+keeps deliberate editor deletions or recreations, and 3-way merges editor content changes onto the
+branch version while preserving editor-selected modes. The commit helper and every later helper call execute from the immutable runtime directory,
 so restoring the worktree cannot replace the running script or drop default-branch tooling fixes.
 The preflight scope guard projects the same restore into its temporary index for untouched installed
 copies, while editor-modified or deleted support files remain subject to `files_touched` enforcement.
@@ -1801,8 +1801,8 @@ copies, while editor-modified or deleted support files remain subject to `files_
 An unavailable ledger or baseline, unreadable branch blob, or merge conflict emits
 `IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT` or a more specific staged-support error, sets
 `staged_support_rebase_conflict=true` with `staged_support_rebase_conflict_files`, and fails closed.
-The dedicated rejection handler labels the issue `ai:needs-human`, posts the affected paths, sends a
-CRITICAL Telegram alert when configured, and suppresses generic diagnose/re-issue handling. The
+The dedicated rejection handler attempts to label the issue `ai:needs-human`, verifies the latch,
+reports an absent or unknown latch in its issue comment and CRITICAL Telegram alert, and suppresses generic diagnose/re-issue handling. The
 summary `IMPLEMENT_STAGED_SUPPORT_RESTORE restored=<n> rebased=<n> conflicts=<n>` remains available
 for log-based auditing. Consumer repos never set the ledger or runtime-directory override and retain
 their existing behavior.
