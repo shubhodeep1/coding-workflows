@@ -29,15 +29,27 @@ REVIEW_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "validate.yml"
 
 STABLE_CACHE_PATH_LIST = (
-	"${{ runner.temp }}/review-ledger-cache/.ai/review_issue_ledger/\n"
-	"${{ runner.temp }}/review-ledger-cache/.ai/review_runtime/\n"
-	"${{ runner.temp }}/review-ledger-cache/${{ env.REVIEW_LEDGER_PATH }}\n"
+	"${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_issue_ledger/\n"
+	"${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_runtime/\n"
+	"${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/${{ env.REVIEW_LEDGER_PATH }}\n"
 )
 VALIDATE_LEDGER_PATH_EXPR = (
 	"${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', "
 	"steps.behavioural_smoke_pr.outputs.pr_number) }}"
 )
 WORKSPACE_PATH_EXPR = "${{ steps.workspace_state.outputs.workspace_path }}"
+VALIDATE_PR_NUMBER_EXPR = "${{ steps.behavioural_smoke_pr.outputs.pr_number }}"
+VALIDATE_HINTS_HASH_EXPR = (
+	"${{ hashFiles('docker-compose*.yml', 'compose*.yml', '**/Dockerfile', '**/Dockerfile.*', "
+	"'**/package.json', '**/pyproject.toml', '**/requirements*.txt', '**/go.mod', '**/Cargo.toml') }}"
+)
+VALIDATE_HINTS_CACHE_PATH = (
+	"${{ runner.temp }}/validate-hints-cache/${{ github.repository }}/"
+	f"{VALIDATE_HINTS_HASH_EXPR}/.ai/validate-hints-cache"
+)
+TEST_REPOSITORY = "shubhodeep1/coding-workflows"
+TEST_PR_NUMBER = "4077"
+TEST_VALIDATE_HINTS_HASH = "validate-hints-fingerprint"
 RUN_SCOPED_MARKERS = (
 	"workspace_path",
 	"github.run_id",
@@ -55,6 +67,9 @@ REVIEW_LATE_STAGE_OUT_STEP = "Stage review-issue ledger for partial finalize cac
 REVIEW_LATE_SAVE_STEP = "Save review-issue ledger after partial finalize"
 VALIDATE_RESTORE_STEP = "Restore behavioural smoke runtime cache"
 VALIDATE_STAGE_IN_STEP = "Stage restored behavioural smoke runtime cache into workspace"
+VALIDATE_HINTS_RESTORE_STEP = "Restore validate hints cache"
+VALIDATE_HINTS_STAGE_IN_STEP = "Stage restored validate hints cache into workspace"
+VALIDATE_HINTS_STAGE_OUT_STEP = "Stage validate hints cache for save"
 
 
 def _job_steps(path: Path) -> list[dict[str, object]]:
@@ -102,11 +117,20 @@ def test_validate_behavioural_smoke_restore_uses_the_same_path_list() -> None:
 	# The PR-number source differs (validate resolves it from the tracking
 	# issue), but the expanded list must match review_autofix.yml's save
 	# byte-for-byte or the cache version differs and the restore never hits.
-	expected = STABLE_CACHE_PATH_LIST.replace("${{ env.REVIEW_LEDGER_PATH }}", VALIDATE_LEDGER_PATH_EXPR)
+	expected = STABLE_CACHE_PATH_LIST.replace("${{ env.PR_NUMBER }}", VALIDATE_PR_NUMBER_EXPR).replace(
+		"${{ env.REVIEW_LEDGER_PATH }}", VALIDATE_LEDGER_PATH_EXPR
+	)
 	cache_path = _cache_path(_step(VALIDATE_WORKFLOW, VALIDATE_RESTORE_STEP))
 	assert cache_path == expected
 	for marker in RUN_SCOPED_MARKERS:
 		assert marker not in cache_path, f"validate restore cache path is run-scoped via {marker!r}"
+
+
+def test_validate_hints_cache_uses_a_run_independent_fingerprint_path() -> None:
+	cache_path = _cache_path(_step(VALIDATE_WORKFLOW, VALIDATE_HINTS_RESTORE_STEP))
+	assert cache_path == VALIDATE_HINTS_CACHE_PATH
+	for marker in RUN_SCOPED_MARKERS:
+		assert marker not in cache_path, f"validate hints cache path is run-scoped via {marker!r}"
 
 
 def test_review_stage_steps_are_ordered_and_gated_like_their_cache_steps() -> None:
@@ -136,12 +160,28 @@ def test_review_stage_steps_are_ordered_and_gated_like_their_cache_steps() -> No
 	assert validate_stage_in.get("if") == validate_restore.get("if")
 	assert validate_stage_in.get("continue-on-error") is True
 
+	validate_hints_restore_idx = _step_index(VALIDATE_WORKFLOW, VALIDATE_HINTS_RESTORE_STEP)
+	validate_hints_stage_in_idx = _step_index(VALIDATE_WORKFLOW, VALIDATE_HINTS_STAGE_IN_STEP)
+	assert validate_hints_restore_idx + 1 == validate_hints_stage_in_idx
+	assert _step(VALIDATE_WORKFLOW, VALIDATE_HINTS_STAGE_IN_STEP).get("continue-on-error") is True
+	assert _step_index(VALIDATE_WORKFLOW, "Run workspace after_run hook") + 1 == _step_index(
+		VALIDATE_WORKFLOW, VALIDATE_HINTS_STAGE_OUT_STEP
+	)
+	assert _step(VALIDATE_WORKFLOW, VALIDATE_HINTS_STAGE_OUT_STEP).get("continue-on-error") is True
 
-def _run_step_script(step: dict[str, object], workspace: Path, runner_temp: Path | str, ledger_rel: str) -> subprocess.CompletedProcess[str]:
-	script = str(step.get("run", "")).replace(WORKSPACE_PATH_EXPR, str(workspace))
+
+def _run_step_script(step: dict[str, object], workspace: Path | str, runner_temp: Path | str, ledger_rel: str) -> subprocess.CompletedProcess[str]:
+	script = (
+		str(step.get("run", ""))
+		.replace(WORKSPACE_PATH_EXPR, str(workspace))
+		.replace(VALIDATE_PR_NUMBER_EXPR, TEST_PR_NUMBER)
+		.replace(VALIDATE_HINTS_HASH_EXPR, TEST_VALIDATE_HINTS_HASH)
+	)
 	assert "${{" not in script, "unexpected unexpanded expression in stage script"
 	env = {
 		"PATH": os.environ.get("PATH", ""),
+		"GITHUB_REPOSITORY": TEST_REPOSITORY,
+		"PR_NUMBER": TEST_PR_NUMBER,
 		"RUNNER_TEMP": str(runner_temp),
 		"REVIEW_LEDGER_PATH": ledger_rel,
 	}
@@ -168,14 +208,14 @@ def test_stage_out_then_stage_in_round_trips_ledger_state_across_workspaces() ->
 		(workspace_a / ledger_rel).parent.mkdir(parents=True)
 		(workspace_a / ledger_rel).write_text("ledger-v1\n", encoding="utf-8")
 		# Stale staging content from an earlier restore must not leak into the save.
-		stale = runner_temp / "review-ledger-cache" / ".ai" / "review_runtime" / "pr-4077" / "round-9" / "stale.json"
+		staging = runner_temp / "review-ledger-cache" / TEST_REPOSITORY / f"pr-{TEST_PR_NUMBER}"
+		stale = staging / ".ai" / "review_runtime" / "pr-4077" / "round-9" / "stale.json"
 		stale.parent.mkdir(parents=True)
 		stale.write_text("{}\n", encoding="utf-8")
 
 		out = _run_step_script(stage_out, workspace_a, runner_temp, ledger_rel)
 		assert out.returncode == 0, out.stderr
 		assert "REVIEW_LEDGER_CACHE_STAGE_OUT staged_entries=3" in out.stdout
-		staging = runner_temp / "review-ledger-cache"
 		assert (staging / marker_rel).read_text(encoding="utf-8") == '{"resume_round": 1, "head_sha": "abc"}\n'
 		assert (staging / ledger_rel).read_text(encoding="utf-8") == "ledger-v1\n"
 		assert not stale.exists(), "stage-out must clear stale staging content before copying"
@@ -210,6 +250,10 @@ def test_stage_steps_fail_open_without_cached_state_or_runner_temp() -> None:
 		assert no_temp.returncode == 0, no_temp.stderr
 		assert "::warning::RUNNER_TEMP is unset" in no_temp.stdout
 
+		no_workspace = _run_step_script(stage_out, "", runner_temp, ".ai/review_issue_ledger/pr-4077.txt")
+		assert no_workspace.returncode == 0, no_workspace.stderr
+		assert "::warning::workspace_path is empty" in no_workspace.stdout
+
 
 def test_validate_stage_in_copies_review_runtime_into_workspace() -> None:
 	stage_in = _step(VALIDATE_WORKFLOW, VALIDATE_STAGE_IN_STEP)
@@ -219,7 +263,7 @@ def test_validate_stage_in_copies_review_runtime_into_workspace() -> None:
 		workspace = runner_temp / "workspaces" / "3965-444-1"
 		workspace.mkdir(parents=True)
 		interim_rel = Path(".ai/review_runtime/pr-4077/round-1/judge_interim.json")
-		staged = runner_temp / "review-ledger-cache" / interim_rel
+		staged = runner_temp / "review-ledger-cache" / TEST_REPOSITORY / f"pr-{TEST_PR_NUMBER}" / interim_rel
 		staged.parent.mkdir(parents=True)
 		staged.write_text('{"priors": []}\n', encoding="utf-8")
 
@@ -229,13 +273,55 @@ def test_validate_stage_in_copies_review_runtime_into_workspace() -> None:
 		assert (workspace / interim_rel).read_text(encoding="utf-8") == '{"priors": []}\n'
 
 
+def test_validate_hints_stage_steps_round_trip_across_workspaces() -> None:
+	stage_in = _step(VALIDATE_WORKFLOW, VALIDATE_HINTS_STAGE_IN_STEP)
+	stage_out = _step(VALIDATE_WORKFLOW, VALIDATE_HINTS_STAGE_OUT_STEP)
+	with tempfile.TemporaryDirectory(prefix="validate-hints-cache-") as td:
+		root = Path(td)
+		runner_temp = root / "_temp"
+		workspace_a = runner_temp / "workspaces" / "3965-555-1"
+		workspace_b = runner_temp / "workspaces" / "3965-666-1"
+		staging_dir = (
+			runner_temp
+			/ "validate-hints-cache"
+			/ TEST_REPOSITORY
+			/ TEST_VALIDATE_HINTS_HASH
+			/ ".ai"
+			/ "validate-hints-cache"
+		)
+		staging_dir.mkdir(parents=True)
+		(staging_dir / "hints.yml").write_text("type: cached\n", encoding="utf-8")
+
+		workspace_a.mkdir(parents=True)
+		stage_in_result = _run_step_script(stage_in, workspace_a, runner_temp, "")
+		assert stage_in_result.returncode == 0, stage_in_result.stderr
+		assert "VALIDATE_HINTS_CACHE_STAGE_IN restored_entries=1" in stage_in_result.stdout
+		workspace_hints = workspace_a / ".ai" / "validate-hints-cache" / "hints.yml"
+		assert workspace_hints.read_text(encoding="utf-8") == "type: cached\n"
+
+		workspace_hints.write_text("type: refreshed\n", encoding="utf-8")
+		(staging_dir / "stale.yml").write_text("stale: true\n", encoding="utf-8")
+		stage_out_result = _run_step_script(stage_out, workspace_a, runner_temp, "")
+		assert stage_out_result.returncode == 0, stage_out_result.stderr
+		assert "VALIDATE_HINTS_CACHE_STAGE_OUT staged_entries=1" in stage_out_result.stdout
+		assert (staging_dir / "hints.yml").read_text(encoding="utf-8") == "type: refreshed\n"
+		assert not (staging_dir / "stale.yml").exists()
+
+		workspace_b.mkdir(parents=True)
+		second_stage_in_result = _run_step_script(stage_in, workspace_b, runner_temp, "")
+		assert second_stage_in_result.returncode == 0, second_stage_in_result.stderr
+		assert (workspace_b / ".ai" / "validate-hints-cache" / "hints.yml").read_text(encoding="utf-8") == "type: refreshed\n"
+
+
 def main() -> int:
 	test_review_ledger_cache_steps_share_one_run_independent_path_list()
 	test_validate_behavioural_smoke_restore_uses_the_same_path_list()
+	test_validate_hints_cache_uses_a_run_independent_fingerprint_path()
 	test_review_stage_steps_are_ordered_and_gated_like_their_cache_steps()
 	test_stage_out_then_stage_in_round_trips_ledger_state_across_workspaces()
 	test_stage_steps_fail_open_without_cached_state_or_runner_temp()
 	test_validate_stage_in_copies_review_runtime_into_workspace()
+	test_validate_hints_stage_steps_round_trip_across_workspaces()
 	print("ok")
 	return 0
 

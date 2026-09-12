@@ -156,14 +156,14 @@ def test_review_autofix_retargets_review_runtime_cache_into_workspace() -> None:
 	for step in (restore_step, save_step):
 		with_block = step.get('with', {})
 		assert with_block.get('path') == (
-			'${{ runner.temp }}/review-ledger-cache/.ai/review_issue_ledger/\n'
-			'${{ runner.temp }}/review-ledger-cache/.ai/review_runtime/\n'
-			'${{ runner.temp }}/review-ledger-cache/${{ env.REVIEW_LEDGER_PATH }}\n'
+			'${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_issue_ledger/\n'
+			'${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_runtime/\n'
+			'${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/${{ env.REVIEW_LEDGER_PATH }}\n'
 		)
 	for step in (stage_in_step, stage_out_step):
 		run_text = str(step.get('run', ''))
 		assert 'ledger_cache_workspace_root="${{ steps.workspace_state.outputs.workspace_path }}"' in run_text
-		assert 'ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache"' in run_text
+		assert 'ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache/${GITHUB_REPOSITORY}/pr-${PR_NUMBER}"' in run_text
 
 
 def test_removal_registry_documents_workspace_cache_maintenance_workflow() -> None:

@@ -276,11 +276,13 @@ def test_validate_workflow_stages_workspace_helper_and_uses_workspace_paths() ->
 	assert prepare_runtime_step.get("if") == "steps.behavioural_smoke_gate.outputs.enabled == 'true' && steps.behavioural_smoke_pr.outputs.pr_number != ''"
 	behavioural_smoke_restore_step = _step(VALIDATE_WORKFLOW, "Restore behavioural smoke runtime cache")
 	assert behavioural_smoke_restore_step.get("uses") == "actions/cache/restore@v5"
-	assert _step(VALIDATE_WORKFLOW, "Restore validate hints cache").get("with", {}).get("path") == "${{ steps.workspace_state.outputs.workspace_path }}/.ai/validate-hints-cache"
+	assert _step(VALIDATE_WORKFLOW, "Restore validate hints cache").get("with", {}).get("path") == (
+		"${{ runner.temp }}/validate-hints-cache/${{ github.repository }}/${{ hashFiles('docker-compose*.yml', 'compose*.yml', '**/Dockerfile', '**/Dockerfile.*', '**/package.json', '**/pyproject.toml', '**/requirements*.txt', '**/go.mod', '**/Cargo.toml') }}/.ai/validate-hints-cache"
+	)
 	assert behavioural_smoke_restore_step.get("with", {}).get("path") == (
-		"${{ runner.temp }}/review-ledger-cache/.ai/review_issue_ledger/\n"
-		"${{ runner.temp }}/review-ledger-cache/.ai/review_runtime/\n"
-		"${{ runner.temp }}/review-ledger-cache/${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', steps.behavioural_smoke_pr.outputs.pr_number) }}\n"
+		"${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}/.ai/review_issue_ledger/\n"
+		"${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}/.ai/review_runtime/\n"
+		"${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}/${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', steps.behavioural_smoke_pr.outputs.pr_number) }}\n"
 	)
 	behavioural_smoke_stage_in_step = _step(VALIDATE_WORKFLOW, "Stage restored behavioural smoke runtime cache into workspace")
 	assert behavioural_smoke_stage_in_step.get("if") == behavioural_smoke_restore_step.get("if")

@@ -2084,9 +2084,9 @@ jobs:
           # run-independent staging dir instead; the adjacent stage-in /
           # stage-out steps copy between it and the workspace.
           path: |
-            ${{ runner.temp }}/review-ledger-cache/.ai/review_issue_ledger/
-            ${{ runner.temp }}/review-ledger-cache/.ai/review_runtime/
-            ${{ runner.temp }}/review-ledger-cache/${{ env.REVIEW_LEDGER_PATH }}
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_issue_ledger/
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_runtime/
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-
@@ -2100,8 +2100,12 @@ jobs:
             echo "::warning::RUNNER_TEMP is unset; skipping review-issue ledger cache stage-in."
             exit 0
           fi
-          ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache"
           ledger_cache_workspace_root="${{ steps.workspace_state.outputs.workspace_path }}"
+          if [ -z "${ledger_cache_workspace_root}" ]; then
+            echo "::warning::workspace_path is empty; skipping review-issue ledger cache stage-in."
+            exit 0
+          fi
+          ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache/${GITHUB_REPOSITORY}/pr-${PR_NUMBER}"
           ledger_cache_ledger_rel="${REVIEW_LEDGER_PATH:-}"
           ledger_cache_restored_entries=0
           for ledger_cache_rel in .ai/review_issue_ledger .ai/review_runtime; do
@@ -4125,8 +4129,12 @@ jobs:
             echo "::warning::RUNNER_TEMP is unset; skipping review-issue ledger cache stage-out."
             exit 0
           fi
-          ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache"
           ledger_cache_workspace_root="${{ steps.workspace_state.outputs.workspace_path }}"
+          if [ -z "${ledger_cache_workspace_root}" ]; then
+            echo "::warning::workspace_path is empty; skipping review-issue ledger cache stage-out."
+            exit 0
+          fi
+          ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache/${GITHUB_REPOSITORY}/pr-${PR_NUMBER}"
           ledger_cache_ledger_rel="${REVIEW_LEDGER_PATH:-}"
           rm -rf "${ledger_cache_staging_root}"
           mkdir -p "${ledger_cache_staging_root}"
@@ -4157,9 +4165,9 @@ jobs:
           # run-independent staging dir instead; the adjacent stage-in /
           # stage-out steps copy between it and the workspace.
           path: |
-            ${{ runner.temp }}/review-ledger-cache/.ai/review_issue_ledger/
-            ${{ runner.temp }}/review-ledger-cache/.ai/review_runtime/
-            ${{ runner.temp }}/review-ledger-cache/${{ env.REVIEW_LEDGER_PATH }}
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_issue_ledger/
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_runtime/
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Post editor summary comment
@@ -6417,8 +6425,12 @@ jobs:
             echo "::warning::RUNNER_TEMP is unset; skipping review-issue ledger cache stage-out."
             exit 0
           fi
-          ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache"
           ledger_cache_workspace_root="${{ steps.workspace_state.outputs.workspace_path }}"
+          if [ -z "${ledger_cache_workspace_root}" ]; then
+            echo "::warning::workspace_path is empty; skipping review-issue ledger cache stage-out."
+            exit 0
+          fi
+          ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache/${GITHUB_REPOSITORY}/pr-${PR_NUMBER}"
           ledger_cache_ledger_rel="${REVIEW_LEDGER_PATH:-}"
           rm -rf "${ledger_cache_staging_root}"
           mkdir -p "${ledger_cache_staging_root}"
@@ -6449,9 +6461,9 @@ jobs:
           # run-independent staging dir instead; the adjacent stage-in /
           # stage-out steps copy between it and the workspace.
           path: |
-            ${{ runner.temp }}/review-ledger-cache/.ai/review_issue_ledger/
-            ${{ runner.temp }}/review-ledger-cache/.ai/review_runtime/
-            ${{ runner.temp }}/review-ledger-cache/${{ env.REVIEW_LEDGER_PATH }}
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_issue_ledger/
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/.ai/review_runtime/
+            ${{ runner.temp }}/review-ledger-cache/${{ github.repository }}/pr-${{ env.PR_NUMBER }}/${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Telegram success
