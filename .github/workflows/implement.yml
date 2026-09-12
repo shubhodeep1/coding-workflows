@@ -3289,6 +3289,25 @@ jobs:
             fi
           fi
 
+          # Project the staged-support restore into the temporary index before
+          # scope enforcement. Only untouched installed copies are reset;
+          # editor-modified or deleted support files remain scope-checked.
+          if [ "${is_self_repo}" = "true" ] && [ -s "${STAGED_SUPPORT_LEDGER:-}" ] && [ -d "${STAGED_SUPPORT_BASE_DIR:-}" ]; then
+            while IFS= read -r preflight_staged_support_path; do
+              [ -n "${preflight_staged_support_path}" ] || continue
+              case "${preflight_staged_support_path}" in
+                /*|../*|*/../*|..|*/..) continue ;;
+              esac
+              preflight_staged_support_base="${STAGED_SUPPORT_BASE_DIR}/${preflight_staged_support_path}"
+              if [ -f "${preflight_staged_support_path}" ] && [ -f "${preflight_staged_support_base}" ] \
+                && cmp -s -- "${preflight_staged_support_path}" "${preflight_staged_support_base}"; then
+                git reset -q HEAD -- "${preflight_staged_support_path}" 2>/dev/null \
+                  || git rm -q --cached --ignore-unmatch -- "${preflight_staged_support_path}" 2>/dev/null \
+                  || true
+              fi
+            done < "${STAGED_SUPPORT_LEDGER}"
+          fi
+
           # >>> files_touched scope-enforcement guard (preflight) >>>
           # Mirror of the destructive-commit guard above, for scope drift:
           # reject when the staged change set includes paths the issue's

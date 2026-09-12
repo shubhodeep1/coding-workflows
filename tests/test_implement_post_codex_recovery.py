@@ -1733,11 +1733,14 @@ def test_commit_helper_fails_closed_when_staged_support_ledger_file_is_missing()
 
 def test_commit_helper_rejects_unsafe_staged_support_ledger_paths() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_commit_staged_unsafe_") as td:
-		repo_dir, _github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		repo_dir, github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
 		Path(env["STAGED_SUPPORT_LEDGER"]).write_text("../outside.sh\n", encoding="utf-8")
 		proc = _run_commit_helper(repo_dir, env)
 		assert proc.returncode != 0
 		assert "IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path=../outside.sh reason=unsafe_path" in proc.stdout + proc.stderr
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "staged_support_rebase_conflict=true" in output_text
+		assert "staged_support_rebase_conflict_files=../outside.sh" in output_text
 		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() == baseline_head
 
 
@@ -1795,6 +1798,47 @@ def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -
 	assert 'python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/lint_pr_body_auto_close.py"' in _step_block_text(
 		"Pre-flight — lint PR title/body for auto-close keywords against tracking issues"
 	)
+
+
+def test_preflight_scope_guard_projects_only_untouched_staged_support_files() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_preflight_staged_support_scope_") as td:
+		tmp_path = Path(td)
+		repo_dir, github_output, env, _baseline_head = _staged_support_fixture(tmp_path, _STAGED_HELPER_MAIN)
+		support_run_dir = Path(env["IMPLEMENT_STAGED_SUPPORT_RUN_DIR"])
+		shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, support_run_dir / "files_touched_scope_guard.py")
+		issue_body = tmp_path / "issue_body.txt"
+		issue_body.write_text("files_touched:\n  - README.md\n", encoding="utf-8")
+		fetched_manifest = tmp_path / "fetched_manifest.txt"
+		fetched_manifest.write_text("__workflow_step_under_test.sh\n", encoding="utf-8")
+		env.update(
+			{
+				"ALLOW_BULK_DELETE": "false",
+				"ALLOW_OUT_OF_SCOPE_FILES": "false",
+				"ALLOW_WORKFLOW_EDITS": "false",
+				"ENFORCE_FILES_TOUCHED": "true",
+				"FETCHED_MANIFEST": str(fetched_manifest),
+				"ISSUE_BODY_FILE": str(issue_body),
+			}
+		)
+		script = _render_github_expressions(
+			_extract_run_script("Preflight destructive-commit guard"),
+			{"github.repository": "shubhodeep1/coding-workflows"},
+		)
+
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "scope_violation_blocked" not in github_output.read_text(encoding="utf-8")
+
+		(repo_dir / "scripts" / "helper.sh").write_text(
+			_STAGED_HELPER_MAIN.replace("shared line 3\n", "shared line 3 edited by the editor\n"),
+			encoding="utf-8",
+		)
+		github_output.write_text("", encoding="utf-8")
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode != 0
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "scope_violation_blocked=out-of-scope" in output_text
+		assert "scripts/helper.sh" in output_text
 
 
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:

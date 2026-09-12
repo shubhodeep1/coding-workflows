@@ -223,6 +223,8 @@ a new value, add it to the appropriate overrides file with a
   The workflow invokes the immutable runtime copy of the commit helper and uses
   runtime copies for all later helper calls, so restoring the worktree cannot
   replace the running script or downgrade post-commit tooling.
+  The preflight scope guard resets only ledger paths still equal to their installed
+  baseline in its temporary index; editor-modified or deleted paths remain checked.
   Log keys: `IMPLEMENT_STAGED_SUPPORT_LEDGER`, `IMPLEMENT_STAGED_SUPPORT_LEDGER_MISSING`, `IMPLEMENT_STAGED_SUPPORT_RESTORED`,
   `IMPLEMENT_STAGED_SUPPORT_REBASED`, `IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR`,
   `IMPLEMENT_STAGED_SUPPORT_RECREATED_BY_EDITOR`, `IMPLEMENT_STAGED_SUPPORT_BASE_MISSING`,

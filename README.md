@@ -1795,6 +1795,8 @@ untouched tracked copies to `HEAD`, removes untouched copies recreated over bran
 keeps deliberate editor deletions or recreations, and 3-way merges editor changes onto the branch
 version. The commit helper and every later helper call execute from the immutable runtime directory,
 so restoring the worktree cannot replace the running script or drop default-branch tooling fixes.
+The preflight scope guard projects the same restore into its temporary index for untouched installed
+copies, while editor-modified or deleted support files remain subject to `files_touched` enforcement.
 
 An unavailable ledger or baseline, unreadable branch blob, or merge conflict emits
 `IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT` or a more specific staged-support error, sets

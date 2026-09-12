@@ -147,6 +147,10 @@ if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; the
     case "${staged_support_path}" in
       /*|../*|*/../*|..|*/..)
         echo "::error::IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path=${staged_support_path} reason=unsafe_path"
+        {
+          echo "staged_support_rebase_conflict=true"
+          echo "staged_support_rebase_conflict_files=${staged_support_path}"
+        } >> "$GITHUB_OUTPUT"
         exit 1
         ;;
     esac
