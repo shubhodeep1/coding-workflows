@@ -201,6 +201,35 @@ a new value, add it to the appropriate overrides file with a
   `ai:scope:<glob>` labels are intentionally not enumerated there and are not
   part of contract-driven label repair.
 
+
+## Implement self-repo staged-support ledger
+
+- `implement.yml` stages the runtime helpers *in-tree* (`install -m … "scripts/${f}"`,
+  `prompts/*`, `ai-memory/schemas/*`) from `SCRIPT_REF`, which in this repository is
+  `github.sha` (the default branch) while the checkout may be an orchestrator
+  integration branch. Those installs overwrite tracked files, and the self-repo
+  commit path in `scripts/implement_commit_changes.sh` has no `scripts/` exclusion.
+- The staging step records every tracked file it overwrote in
+  `STAGED_SUPPORT_LEDGER` (`${RUNTIME_DIR}/staged_support_overwrites.txt`) with the
+  installed content under `STAGED_SUPPORT_BASE_DIR`; both are exported through
+  `GITHUB_ENV` and only exist when `github.repository` is this repository.
+- `scripts/implement_commit_changes.sh` consumes the ledger before `git add`:
+  restore-to-HEAD for untouched copies, 3-way `git merge-file` re-base for
+  editor-edited copies, keep editor deletions, fail closed on a merge conflict.
+  Log keys: `IMPLEMENT_STAGED_SUPPORT_LEDGER`, `IMPLEMENT_STAGED_SUPPORT_RESTORED`,
+  `IMPLEMENT_STAGED_SUPPORT_REBASED`, `IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR`,
+  `IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT`, `IMPLEMENT_STAGED_SUPPORT_RESTORE`.
+- The other in-tree staging workflows (`clarify.yml`, `plan.yml`,
+  `orchestrate_clarify_respond.yml`, `orchestrate.yml`, `orchestrate_poll.yml`,
+  `check_failure_triage.yml`) either never commit from that checkout or run on
+  the same ref they stage from, so the ledger is wired into `implement.yml` only.
+  `review_autofix.yml` and `validate.yml` stage out of tree via
+  `scripts/stage_workflow_support.sh`.
+- Incident: implement runs 34392788763 (PR #4071) and 34613019339 (PR #4079)
+  committed `main`'s copies of eight helpers onto `orchestrator/project-3965`,
+  reverting the branch's security-pass fixes. `tests/test_implement_post_codex_recovery.py`
+  pins the ledger contract and the three restore outcomes.
+
 ---
 
 ## Models in use (defaults; overridable via repo-vars)

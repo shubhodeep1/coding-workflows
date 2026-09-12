@@ -1494,6 +1494,215 @@ def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
 		assert status == "", "scope-lock rollback must leave the repo clean after rejecting the local commit"
 
 
+# ---------------------------------------------------------------------------
+# Self-repo staged-support restore (PR #4079 incident): implement.yml installs
+# SCRIPT_REF's helpers over tracked files before Codex runs; the commit helper
+# must not commit those staging-only modifications on a branch that diverged.
+# ---------------------------------------------------------------------------
+
+_STAGED_HELPER_SHARED = "".join(f"shared line {n}\n" for n in range(1, 7))
+# The branch changed line 2 and appended a line; SCRIPT_REF's copy has neither.
+_STAGED_HELPER_BRANCH = "#!/usr/bin/env bash\nbranch line A\n" + _STAGED_HELPER_SHARED + "branch line B\n"
+_STAGED_HELPER_MAIN = "#!/usr/bin/env bash\nmain line A\n" + _STAGED_HELPER_SHARED
+
+
+def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tuple[Path, Path, dict[str, str], str]:
+	"""Build a self-repo checkout whose scripts/helper.sh was overwritten by staging.
+
+	Returns (repo_dir, github_output, env, baseline_head). `worktree_helper` is the
+	content left in the worktree after staging + editing; None deletes the file.
+	"""
+	repo_dir = tmp_path / "repo"
+	_bootstrap_git_repo(repo_dir)
+	(repo_dir / "scripts").mkdir()
+	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+	helper = repo_dir / "scripts" / "helper.sh"
+	helper.write_text(_STAGED_HELPER_BRANCH, encoding="utf-8")
+	helper.chmod(0o644)
+	_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/helper.sh"], cwd=repo_dir)
+	_git(["git", "commit", "-m", "branch-side helper edit"], cwd=repo_dir)
+	baseline_head = subprocess.run(
+		["git", "rev-parse", "HEAD"],
+		cwd=str(repo_dir),
+		env=_isolated_test_env(cwd=repo_dir),
+		check=True,
+		capture_output=True,
+		text=True,
+	).stdout.strip()
+
+	runtime_dir = tmp_path / "runtime"
+	runtime_dir.mkdir()
+	base_dir = runtime_dir / "staged_support_base"
+	(base_dir / "scripts").mkdir(parents=True)
+	(base_dir / "scripts" / "helper.sh").write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
+	ledger = runtime_dir / "staged_support_overwrites.txt"
+	ledger.write_text("scripts/helper.sh\n", encoding="utf-8")
+	# What the staging step leaves behind: install -m 0755 of SCRIPT_REF's copy.
+	if worktree_helper is None:
+		helper.unlink()
+	else:
+		helper.write_text(worktree_helper, encoding="utf-8")
+		helper.chmod(0o755)
+	# The editor's own change.
+	(repo_dir / "README.md").write_text("editor change\n", encoding="utf-8")
+
+	github_output = tmp_path / "github_output.txt"
+	github_output.write_text("", encoding="utf-8")
+	env = _isolated_test_env(
+		{
+			"GITHUB_OUTPUT": str(github_output),
+			"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows",
+			"ISSUE_NUMBER": "4075",
+			"RUNTIME_DIR": str(runtime_dir),
+			"SCRIPT_REF": "abc123",
+			"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+			"SERENA_PROJECT_PREEXISTED": "false",
+			"STAGED_SUPPORT_BASE_DIR": str(base_dir),
+			"STAGED_SUPPORT_LEDGER": str(ledger),
+			"TMPDIR": str(runtime_dir),
+		},
+		cwd=repo_dir,
+	)
+	return repo_dir, github_output, env, baseline_head
+
+
+def _run_commit_helper(repo_dir: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
+		["bash", "scripts/implement_commit_changes.sh"],
+		cwd=str(repo_dir),
+		env=env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+
+
+def _git_out(args: list[str], *, cwd: Path) -> str:
+	return subprocess.run(
+		args,
+		cwd=str(cwd),
+		env=_isolated_test_env(cwd=cwd),
+		check=True,
+		capture_output=True,
+		text=True,
+	).stdout
+
+
+def test_commit_helper_restores_untouched_staged_support_files_to_head() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_restore_") as td:
+		repo_dir, github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORED path=scripts/helper.sh" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORE restored=1 rebased=0 conflicts=0" in proc.stdout
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() != baseline_head
+		committed = _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split()
+		assert committed == ["README.md"], committed
+		assert _git_out(["git", "show", "HEAD:scripts/helper.sh"], cwd=repo_dir) == _STAGED_HELPER_BRANCH
+		assert _git_out(["git", "status", "--porcelain"], cwd=repo_dir).strip() == ""
+		# install -m 0755 changed the mode; the restore put HEAD's mode back too.
+		mode_line = _git_out(["git", "ls-files", "-s", "scripts/helper.sh"], cwd=repo_dir)
+		assert mode_line.startswith("100644 "), mode_line
+
+
+def test_commit_helper_rebases_editor_edits_of_staged_support_files_onto_head() -> None:
+	# An edit away from the lines the branch changed: it must land on the
+	# branch's version, not drag SCRIPT_REF's copy in with it.
+	edited = _STAGED_HELPER_MAIN.replace("shared line 3\n", "shared line 3 edited by the editor\n")
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_rebase_") as td:
+		repo_dir, github_output, env, _baseline_head = _staged_support_fixture(Path(td), edited)
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_REBASED path=scripts/helper.sh" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORE restored=0 rebased=1 conflicts=0" in proc.stdout
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+		committed = _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split()
+		assert sorted(committed) == ["README.md", "scripts/helper.sh"], committed
+		# The branch's lines survive; only the editor's addition lands on top.
+		assert _git_out(["git", "show", "HEAD:scripts/helper.sh"], cwd=repo_dir) == _STAGED_HELPER_BRANCH.replace(
+			"shared line 3\n", "shared line 3 edited by the editor\n"
+		)
+		assert "main line A" not in _git_out(["git", "show", "HEAD:scripts/helper.sh"], cwd=repo_dir)
+
+
+def test_commit_helper_fails_closed_when_staged_support_rebase_conflicts() -> None:
+	conflicting = _STAGED_HELPER_MAIN.replace("main line A", "editor rewrote line A")
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_conflict_") as td:
+		repo_dir, github_output, env, baseline_head = _staged_support_fixture(Path(td), conflicting)
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode != 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT path=scripts/helper.sh" in proc.stdout + proc.stderr
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "staged_support_rebase_conflict=true" in output_text
+		assert "staged_support_rebase_conflict_files=scripts/helper.sh" in output_text
+		assert "did_commit=" not in output_text
+		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() == baseline_head
+		assert _git_out(["git", "diff", "--cached", "--name-only"], cwd=repo_dir).strip() == ""
+
+
+def test_commit_helper_keeps_editor_deletion_of_staged_support_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_deleted_") as td:
+		repo_dir, github_output, env, _baseline_head = _staged_support_fixture(Path(td), None)
+		# Deleting a canonical scripts/ file is otherwise refused by the
+		# destructive-commit guard; that guard is not under test here.
+		env["ALLOW_WORKFLOW_EDITS"] = "true"
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR path=scripts/helper.sh" in proc.stdout
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+		committed = _git_out(["git", "show", "--name-status", "--format=", "HEAD"], cwd=repo_dir)
+		assert "D\tscripts/helper.sh" in committed, committed
+
+
+def test_commit_helper_rejects_unsafe_staged_support_ledger_paths() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_unsafe_") as td:
+		repo_dir, _github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		Path(env["STAGED_SUPPORT_LEDGER"]).write_text("../outside.sh\n", encoding="utf-8")
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode != 0
+		assert "IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path=../outside.sh reason=unsafe_path" in proc.stdout + proc.stderr
+		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() == baseline_head
+
+
+def test_commit_helper_ignores_absent_staged_support_ledger() -> None:
+	# Consumer repos (and self-repo runs before the ledger exists) must behave exactly as before.
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_absent_") as td:
+		repo_dir, github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		env.pop("STAGED_SUPPORT_LEDGER")
+		env.pop("STAGED_SUPPORT_BASE_DIR")
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT" not in proc.stdout
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+
+
+def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -> None:
+	stage_block = _step_block_text("Stage workflow support files")
+	# Snapshot before the first install, ledger after the last one, both self-repo gated.
+	assert stage_block.index("_staged_support_pre_status=") < stage_block.index('install -m 0755 "${src}" "scripts/${f}"')
+	assert 'git status --porcelain --untracked-files=no > "${_staged_support_pre_status}"' in stage_block
+	assert stage_block.index("STAGED_SUPPORT_LEDGER=") > stage_block.rindex("install -m 0644")
+	assert 'STAGED_SUPPORT_LEDGER="${RUNTIME_DIR}/staged_support_overwrites.txt"' in stage_block
+	assert 'STAGED_SUPPORT_BASE_DIR="${RUNTIME_DIR}/staged_support_base"' in stage_block
+	assert 'echo "STAGED_SUPPORT_LEDGER=${STAGED_SUPPORT_LEDGER}"' in stage_block
+	assert 'echo "STAGED_SUPPORT_BASE_DIR=${STAGED_SUPPORT_BASE_DIR}"' in stage_block
+	assert "IMPLEMENT_STAGED_SUPPORT_LEDGER ref=${SCRIPT_REF} overwritten_tracked_files=" in stage_block
+	assert stage_block.count('if [ "${is_self_repo}" = "true" ]; then') >= 2
+	script_text = _implement_commit_script_text()
+	for marker in (
+		'staged_support_ledger="${STAGED_SUPPORT_LEDGER:-}"',
+		"IMPLEMENT_STAGED_SUPPORT_RESTORED",
+		"IMPLEMENT_STAGED_SUPPORT_REBASED",
+		"IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT",
+		"IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR",
+		"git merge-file -p",
+	):
+		assert marker in script_text, marker
+	# The restore runs before anything is staged.
+	assert script_text.index("IMPLEMENT_STAGED_SUPPORT_RESTORE ") < script_text.index('git add -u -- "${add_u_excludes[@]}"')
+
+
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
 	validate_block = _step_block_text("Validate syntax of changed files")
 	assert "continue-on-error: true" in validate_block

@@ -930,6 +930,27 @@ jobs:
             is_self_repo="true"
           fi
 
+          # Self-repo staged-support ledger. In consumer repos the helpers
+          # installed below are runtime artifacts: scripts/.gitignore and the
+          # commit-time pathspec exclusions keep them out of the commit. In
+          # this repository they are tracked files, and when the issue's
+          # branch is an orchestrator integration branch that diverged from
+          # SCRIPT_REF (github.sha, i.e. the default branch), every install
+          # below silently replaces the branch's own version. The implement
+          # runs for #4070 (34392788763) and #4075 (34613019339) committed
+          # those main-side copies, reverting the branch's security-pass
+          # fixes (PR #4079 dropped 1,117 lines across eight helpers and its
+          # own review editor then died on the missing broker helper).
+          # Snapshot the tracked-file status before and after staging so
+          # scripts/implement_commit_changes.sh can restore every
+          # staging-only modification to HEAD, or re-base an editor edit onto
+          # the branch's version, before it commits.
+          _staged_support_pre_status="${RUNTIME_DIR}/staged_support_pre_status.txt"
+          if [ "${is_self_repo}" = "true" ]; then
+            git status --porcelain --untracked-files=no > "${_staged_support_pre_status}" 2>/dev/null \
+              || : > "${_staged_support_pre_status}"
+          fi
+
           mkdir -p scripts
           _fetched_scripts=()
           for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py; do
@@ -1195,6 +1216,47 @@ jobs:
 
           if [ -f .codex-workflow-src/agents.md ]; then
             install -m 0644 .codex-workflow-src/agents.md "${RUNTIME_DIR}/agents_canonical.md"
+          fi
+
+          # Self-repo staged-support ledger (see the snapshot above). Every
+          # tracked file this step modified is listed in
+          # STAGED_SUPPORT_LEDGER, with a copy of the installed content under
+          # STAGED_SUPPORT_BASE_DIR so the commit helper can tell an untouched
+          # staged copy (restore from HEAD) from one the editor edited
+          # (re-base the edit onto the branch's version).
+          if [ "${is_self_repo}" = "true" ]; then
+            STAGED_SUPPORT_LEDGER="${RUNTIME_DIR}/staged_support_overwrites.txt"
+            STAGED_SUPPORT_BASE_DIR="${RUNTIME_DIR}/staged_support_base"
+            rm -rf -- "${STAGED_SUPPORT_BASE_DIR}"
+            mkdir -p -- "${STAGED_SUPPORT_BASE_DIR}"
+            : > "${STAGED_SUPPORT_LEDGER}"
+            _staged_support_count=0
+            while IFS= read -r _staged_status_line; do
+              [ -n "${_staged_status_line}" ] || continue
+              # Porcelain v1: `XY path`; only worktree modifications (Y=M) of
+              # tracked files can come from the installs above.
+              case "${_staged_status_line}" in
+                ?M\ *) ;;
+                *) continue ;;
+              esac
+              if grep -Fqx -- "${_staged_status_line}" "${_staged_support_pre_status}" 2>/dev/null; then
+                continue
+              fi
+              _staged_support_path="${_staged_status_line:3}"
+              [ -f "${_staged_support_path}" ] || continue
+              mkdir -p -- "${STAGED_SUPPORT_BASE_DIR}/$(dirname -- "${_staged_support_path}")"
+              cp -p -- "${_staged_support_path}" "${STAGED_SUPPORT_BASE_DIR}/${_staged_support_path}"
+              printf '%s\n' "${_staged_support_path}" >> "${STAGED_SUPPORT_LEDGER}"
+              _staged_support_count=$((_staged_support_count + 1))
+            done < <(git status --porcelain --untracked-files=no 2>/dev/null || true)
+            echo "IMPLEMENT_STAGED_SUPPORT_LEDGER ref=${SCRIPT_REF} overwritten_tracked_files=${_staged_support_count} ledger=${STAGED_SUPPORT_LEDGER}"
+            if [ "${_staged_support_count}" -gt 0 ]; then
+              sed 's/^/  staged over: /' "${STAGED_SUPPORT_LEDGER}"
+            fi
+            {
+              echo "STAGED_SUPPORT_LEDGER=${STAGED_SUPPORT_LEDGER}"
+              echo "STAGED_SUPPORT_BASE_DIR=${STAGED_SUPPORT_BASE_DIR}"
+            } >> "$GITHUB_ENV"
           fi
 
       - name: Probe Codex thread-reuse support
