@@ -98,6 +98,140 @@ if [ -n "${fetched_manifest_path}" ] && [ -f "${fetched_manifest_path}" ]; then
   fi
 fi
 
+# Self-repo staged-support restore. In this repository the "Stage workflow
+# support files" step of implement.yml installs SCRIPT_REF's copies of the
+# runtime helpers (scripts/*.sh, scripts/*.py, prompts/*, ai-memory/schemas/*)
+# over the checkout's tracked files, and the self-repo commit path below has
+# no scripts/ exclusions. When the issue's branch is an orchestrator
+# integration branch that diverged from SCRIPT_REF, that turned every
+# implementation commit into a silent revert of the branch's own edits to
+# those helpers (implement runs 34392788763 and 34613019339; PR #4079 dropped
+# 1,117 lines across eight helpers and its own review editor then failed with
+# `model_provider_broker_start: command not found`). The staging step records
+# every tracked file it overwrote in STAGED_SUPPORT_LEDGER, with the installed
+# content under STAGED_SUPPORT_BASE_DIR; put each one back before staging:
+#   - content and mode still equal to the installed copy: the editor never touched it,
+#     restore HEAD's version (IMPLEMENT_STAGED_SUPPORT_RESTORED);
+#   - content differs: the editor edited the installed copy, re-base that edit
+#     onto HEAD's version with a 3-way merge against the installed content
+#     (IMPLEMENT_STAGED_SUPPORT_REBASED);
+#   - the 3-way merge conflicts: fail closed (IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT)
+#     rather than commit a SCRIPT_REF-based copy that drops the branch's edits;
+#   - the editor deleted the file: keep the deletion, it is the editor's change.
+# Consumer repos never set the ledger (their staged helpers are excluded at
+# commit time), so this block is a no-op there.
+staged_support_ledger="${STAGED_SUPPORT_LEDGER:-}"
+staged_support_base_dir="${STAGED_SUPPORT_BASE_DIR:-}"
+if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; then
+  if [ -z "${staged_support_ledger}" ] || [ ! -f "${staged_support_ledger}" ]; then
+    echo "::error::IMPLEMENT_STAGED_SUPPORT_LEDGER_MISSING path=${staged_support_ledger:-<unset>}; refusing to commit without the staged-support inventory."
+    {
+      echo "staged_support_rebase_conflict=true"
+      echo "staged_support_rebase_conflict_files=${staged_support_ledger:-STAGED_SUPPORT_LEDGER}"
+    } >> "$GITHUB_OUTPUT"
+    exit 1
+  fi
+  if [ -z "${staged_support_base_dir}" ] || [ ! -d "${staged_support_base_dir}" ]; then
+    echo "::error::IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=${staged_support_base_dir:-<unset>}; refusing to commit without the installed-content baseline."
+    {
+      echo "staged_support_rebase_conflict=true"
+      echo "staged_support_rebase_conflict_files=${staged_support_base_dir:-STAGED_SUPPORT_BASE_DIR}"
+    } >> "$GITHUB_OUTPUT"
+    exit 1
+  fi
+  staged_support_restored=0
+  staged_support_rebased=0
+  staged_support_conflicts=""
+  while IFS= read -r staged_support_path; do
+    [ -n "${staged_support_path}" ] || continue
+    case "${staged_support_path}" in
+      /*|../*|*/../*|..|*/..)
+        echo "::error::IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path=${staged_support_path} reason=unsafe_path"
+        {
+          echo "staged_support_rebase_conflict=true"
+          echo "staged_support_rebase_conflict_files=${staged_support_path}"
+        } >> "$GITHUB_OUTPUT"
+        exit 1
+        ;;
+    esac
+    staged_support_base="${staged_support_base_dir}/${staged_support_path}"
+    if [ ! -f "${staged_support_base}" ]; then
+      echo "::error::IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=${staged_support_path}; refusing to leave an unverifiable support-ref copy eligible for commit."
+      staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+      continue
+    fi
+    staged_support_mode="$(stat -c '%a' -- "${staged_support_path}" 2>/dev/null || true)"
+    staged_support_base_mode="$(stat -c '%a' -- "${staged_support_base}" 2>/dev/null || true)"
+    if [ -e "${staged_support_path}" ] && { [ -z "${staged_support_mode}" ] || [ -z "${staged_support_base_mode}" ]; }; then
+      echo "::error::IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED path=${staged_support_path} reason=mode_read: could not compare the editor and installed-content modes safely."
+      staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+      continue
+    fi
+    if ! git cat-file -e "HEAD:${staged_support_path}" >/dev/null 2>&1; then
+      if [ ! -e "${staged_support_path}" ]; then
+        echo "IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR path=${staged_support_path}"
+      elif cmp -s -- "${staged_support_path}" "${staged_support_base}" \
+        && [ "${staged_support_mode}" = "${staged_support_base_mode}" ]; then
+        rm -f -- "${staged_support_path}"
+        echo "IMPLEMENT_STAGED_SUPPORT_RESTORED path=${staged_support_path} state=absent-in-head"
+        staged_support_restored=$((staged_support_restored + 1))
+      else
+        echo "IMPLEMENT_STAGED_SUPPORT_RECREATED_BY_EDITOR path=${staged_support_path}"
+      fi
+      continue
+    fi
+    if [ ! -e "${staged_support_path}" ]; then
+      echo "IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR path=${staged_support_path}"
+      continue
+    fi
+    if cmp -s -- "${staged_support_path}" "${staged_support_base}" \
+      && [ "${staged_support_mode}" = "${staged_support_base_mode}" ]; then
+      git restore --source=HEAD --worktree -- "${staged_support_path}"
+      echo "IMPLEMENT_STAGED_SUPPORT_RESTORED path=${staged_support_path}"
+      staged_support_restored=$((staged_support_restored + 1))
+      continue
+    fi
+    staged_support_head="$(mktemp)"
+    staged_support_merged="$(mktemp)"
+    if ! git show "HEAD:${staged_support_path}" > "${staged_support_head}"; then
+      echo "::error::IMPLEMENT_STAGED_SUPPORT_HEAD_READ_FAILED path=${staged_support_path}; refusing to commit without the branch-side merge input."
+      staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+      rm -f -- "${staged_support_head}" "${staged_support_merged}"
+      continue
+    fi
+    staged_support_merge_rc=0
+    git merge-file -p -L "editor" -L "staged ${SCRIPT_REF:-support ref}" -L "HEAD" \
+      -- "${staged_support_path}" "${staged_support_base}" "${staged_support_head}" \
+      > "${staged_support_merged}" || staged_support_merge_rc=$?
+    if [ "${staged_support_merge_rc}" -eq 0 ]; then
+      # Restore HEAD's mode bits first (install -m changed them), then write
+      # the merged content over it.
+      git restore --source=HEAD --worktree -- "${staged_support_path}"
+      cat "${staged_support_merged}" > "${staged_support_path}"
+      if [ "${staged_support_mode}" != "${staged_support_base_mode}" ]; then
+        chmod "${staged_support_mode}" -- "${staged_support_path}"
+      fi
+      echo "IMPLEMENT_STAGED_SUPPORT_REBASED path=${staged_support_path}"
+      staged_support_rebased=$((staged_support_rebased + 1))
+    elif [ "${staged_support_merge_rc}" -le 127 ]; then
+      echo "::error::IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT path=${staged_support_path} conflicts=${staged_support_merge_rc}: the editor edited a helper that implement.yml had replaced with the ${SCRIPT_REF:-support ref} copy, and those edits do not apply cleanly to this branch's version. Refusing to commit the ${SCRIPT_REF:-support ref}-based copy; apply the edit against the branch's own file."
+      staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+    else
+      echo "::error::IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED path=${staged_support_path} merge_file_rc=${staged_support_merge_rc}: git merge-file could not process the staged, support-ref, and branch-side inputs."
+      staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+    fi
+    rm -f -- "${staged_support_head}" "${staged_support_merged}"
+  done < "${staged_support_ledger}"
+  echo "IMPLEMENT_STAGED_SUPPORT_RESTORE restored=${staged_support_restored} rebased=${staged_support_rebased} conflicts=$(printf '%s' "${staged_support_conflicts}" | wc -w | tr -d ' ')"
+  if [ -n "${staged_support_conflicts}" ]; then
+    {
+      echo "staged_support_rebase_conflict=true"
+      echo "staged_support_rebase_conflict_files=${staged_support_conflicts}"
+    } >> "$GITHUB_OUTPUT"
+    exit 1
+  fi
+fi
+
 if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then
   current_serena_project_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
   if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then
@@ -306,9 +440,9 @@ else
     printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
     scope_violations=""
     scope_rc=0
-    if [ -f scripts/files_touched_scope_guard.py ]; then
+    if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
       set +e
-      scope_violations="$(python3 scripts/files_touched_scope_guard.py \
+      scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
         --issue-body-file "${ISSUE_BODY_FILE:-}" \
         --staged-file "${scope_staged_file}" \
         --allowlist-out "${scope_allowlist_file}")"
@@ -443,9 +577,9 @@ if [ "${SCOPE_LOCK_LABEL_ENABLED:-false}" = "true" ] && [ -n "${ISSUE_SCOPE_LOCK
     printf '%s\n' "${ISSUE_SCOPE_LOCK_GLOB}" > "${scope_glob_file}"
     scope_violations=""
     scope_rc=0
-    if [ -f scripts/files_touched_scope_guard.py ]; then
+    if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
       set +e
-      scope_violations="$(python3 scripts/files_touched_scope_guard.py \
+      scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
         --staged-file "${scope_committed_file}" \
         --allowlist-file "${scope_glob_file}" \
         --allowlist-out "${scope_allowlist_file}")"

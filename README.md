@@ -1779,6 +1779,34 @@ Per design (Q3=A), the surfacing is **informational**: it does not block the sub
 
 No auto-retry is attempted. A human must review the pathspec exclusions before automation resumes.
 
+**Staged-support restore (this repository only).** The "Stage workflow support files" step of
+`.github/workflows/implement.yml` installs `SCRIPT_REF`'s runtime helpers into the checkout before
+Codex runs. In consumer repos commit-time exclusions keep those artifacts out of commits; in
+`shubhodeep1/coding-workflows` they are tracked files, so installs from the default branch used to
+silently replace divergent integration-branch versions. Runs 34392788763 and 34613019339 exposed
+this defect; PR #4079 lost 1,117 lines across eight helpers and its review editor then failed after
+the overwritten helper set removed `model_provider_broker_start`.
+
+The staging step now inventories every actual worktree install, compares those explicit paths to
+`HEAD`, records modified or recreated support paths in `STAGED_SUPPORT_LEDGER`, and stores their installed content under
+`STAGED_SUPPORT_BASE_DIR`, and preserves executable support-ref copies under
+`IMPLEMENT_STAGED_SUPPORT_RUN_DIR`. Before staging, `scripts/implement_commit_changes.sh` restores
+untouched tracked copies to `HEAD`, removes untouched copies recreated over branch-side deletions,
+keeps deliberate editor deletions or recreations, and 3-way merges editor content changes onto the
+branch version while preserving editor-selected modes. The commit helper and every later helper call execute from the immutable runtime directory,
+so restoring the worktree cannot replace the running script or drop default-branch tooling fixes.
+The preflight scope guard projects the same restore into its temporary index for untouched installed
+copies, while editor-modified or deleted support files remain subject to `files_touched` enforcement.
+
+An unavailable ledger or baseline, unreadable branch blob, or merge conflict emits
+`IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT` or a more specific staged-support error, sets
+`staged_support_rebase_conflict=true` with `staged_support_rebase_conflict_files`, and fails closed.
+The dedicated rejection handler attempts to label the issue `ai:needs-human`, verifies the latch,
+reports an absent or unknown latch in its issue comment and CRITICAL Telegram alert, and suppresses generic diagnose/re-issue handling. The
+summary `IMPLEMENT_STAGED_SUPPORT_RESTORE restored=<n> rebased=<n> conflicts=<n>` remains available
+for log-based auditing. Consumer repos never set the ledger or runtime-directory override and retain
+their existing behavior.
+
 **Ancestor-chain no-op cap (belt-and-braces for `MAX_IMPL_NOOP_REISSUES`).** Both `.github/workflows/implement.yml` (via `IMPL_NOOP_ANCESTRY_THRESHOLD`) and `scripts/orchestrate_poll_process.sh` (via the shell helper `count_noop_ancestors`) walk the `Re-issued from #N` chain up to the cap and close the issue with `ai:closed` when the ancestor-count reaches the threshold. The poller wires the check into **all three** re-issue paths — main stall (`execute_stall_recovery_action close_and_reissue`), standalone stall (`run_standalone_stall_recovery close_and_reissue`), and the `no-op-implementation` branch of the `ai:implementation-failed` sweep — so the cap trips whether the state-based `get_impl_noop_count` counter is fresh, stale, or missing. Fail-open: any `gh api` / `_safe_gh_jq` / parse error returns `0` and the caller falls through to the legacy re-issue flow. API cost is bounded at `2 * MAX_IMPL_NOOP_REISSUES` calls per invocation (one `GET /issues/{n}` + one `GET /issues/{n}/comments` per hop, stops early on first non-no-op ancestor).
 
 ### Telegram Notifications & Cleanup

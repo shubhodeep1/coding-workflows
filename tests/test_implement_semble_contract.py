@@ -216,13 +216,13 @@ def test_repair_prompt_appends_bounded_semble_context() -> None:
 
 def test_diagnose_prompt_appends_bounded_semble_context() -> None:
 	diagnose = _diagnose_text()
-	assert "source scripts/semble_helpers.sh" in diagnose
+	assert 'source "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/semble_helpers.sh"' in diagnose
 	assert 'python3 - "${FAILED_STEP_NAME}" "${CAPTURE_FILE}" "${output_file}"' in diagnose
 	assert '::warning::Failed to build diagnose Semble query' in diagnose
 	assert 'DIAGNOSE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/implement_diagnose_semble_query.txt"' in diagnose
 	assert 'build_diagnose_semble_query "${DIAGNOSE_SEMBLE_QUERY_FILE}"' in diagnose
 	assert 'semble_query_block "$(cat "${DIAGNOSE_SEMBLE_QUERY_FILE}")" 6 "Implement Diagnose Context" || true' in diagnose
-	assert 'SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${DIAGNOSE_MODE_PROMPT_TEMPLATE}"' in diagnose
+	assert 'SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/render_prompt.sh" "${DIAGNOSE_MODE_PROMPT_TEMPLATE}"' in diagnose
 
 
 def test_setup_serena_step_runs_after_codex_config_and_emits_bootstrap_hash() -> None:
@@ -239,7 +239,7 @@ def test_setup_serena_step_runs_after_codex_config_and_emits_bootstrap_hash() ->
 	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH=${serena_project_hash}" >> "$GITHUB_ENV"' in setup_block
 	assert workflow.find("- name: Create Codex config") < workflow.find("- name: Setup Serena")
 	assert workflow.find("- name: Detect preexisting Serena project config") < workflow.find("- name: Setup Serena")
-	assert "bash scripts/implement_commit_changes.sh" in commit_step
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_step
 	assert 'if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then' in _commit_helper_text()
 
 
@@ -260,7 +260,7 @@ def test_emit_serena_stats_runs_before_cleanup_and_scans_implement_logs() -> Non
 	stats_block = _step_run_text("Emit Serena stats")
 	assert stats_step.get("if") == "always() && env.SKIP_IMPLEMENT != 'true'"
 	assert stats_step.get("continue-on-error") is True
-	assert 'python3 scripts/serena_stats_emit.py "${serena_stat_args[@]}"' in stats_block
+	assert 'python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/serena_stats_emit.py" "${serena_stat_args[@]}"' in stats_block
 	assert "post_codex_repair_log_attempt_*.txt" in stats_block
 	assert workflow.find("- name: Emit Serena stats") < workflow.find("- name: Cleanup temporary artifacts")
 
