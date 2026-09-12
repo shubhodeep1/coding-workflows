@@ -941,13 +941,14 @@ jobs:
           # those main-side copies, reverting the branch's security-pass
           # fixes (PR #4079 dropped 1,117 lines across eight helpers and its
           # own review editor then died on the missing broker helper).
-          # Snapshot the tracked-file status before and after staging so
+          # Snapshot the worktree status before and after staging so
           # scripts/implement_commit_changes.sh can restore every
-          # staging-only modification to HEAD, or re-base an editor edit onto
-          # the branch's version, before it commits.
+          # staging-only modification to HEAD, remove a helper recreated over
+          # a branch-side deletion, or re-base an editor edit onto the branch's
+          # version before it commits.
           _staged_support_pre_status="${RUNTIME_DIR}/staged_support_pre_status.txt"
           if [ "${is_self_repo}" = "true" ]; then
-            git status --porcelain --untracked-files=no > "${_staged_support_pre_status}" 2>/dev/null \
+            git status --porcelain --untracked-files=all > "${_staged_support_pre_status}" 2>/dev/null \
               || : > "${_staged_support_pre_status}"
           fi
 
@@ -1219,7 +1220,8 @@ jobs:
           fi
 
           # Self-repo staged-support ledger (see the snapshot above). Every
-          # tracked file this step modified is listed in
+          # tracked file this step modified, plus any helper it recreated over
+          # a branch-side deletion, is listed in
           # STAGED_SUPPORT_LEDGER, with a copy of the installed content under
           # STAGED_SUPPORT_BASE_DIR so the commit helper can tell an untouched
           # staged copy (restore from HEAD) from one the editor edited
@@ -1233,10 +1235,10 @@ jobs:
             _staged_support_count=0
             while IFS= read -r _staged_status_line; do
               [ -n "${_staged_status_line}" ] || continue
-              # Porcelain v1: `XY path`; only worktree modifications (Y=M) of
-              # tracked files can come from the installs above.
+              # Porcelain v1: `XY path`; capture worktree modifications (Y=M)
+              # and support paths recreated over a branch-side deletion (??).
               case "${_staged_status_line}" in
-                ?M\ *) ;;
+                ?M\ *|\?\?\ *) ;;
                 *) continue ;;
               esac
               if grep -Fqx -- "${_staged_status_line}" "${_staged_support_pre_status}" 2>/dev/null; then
@@ -1248,7 +1250,16 @@ jobs:
               cp -p -- "${_staged_support_path}" "${STAGED_SUPPORT_BASE_DIR}/${_staged_support_path}"
               printf '%s\n' "${_staged_support_path}" >> "${STAGED_SUPPORT_LEDGER}"
               _staged_support_count=$((_staged_support_count + 1))
-            done < <(git status --porcelain --untracked-files=no 2>/dev/null || true)
+            done < <(git status --porcelain --untracked-files=all 2>/dev/null || true)
+            IMPLEMENT_STAGED_SUPPORT_RUN_DIR="${RUNTIME_DIR}/staged_support_run/scripts"
+            rm -rf -- "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
+            mkdir -p -- "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
+            for _staged_support_runtime_script in "${_fetched_scripts[@]}"; do
+              install -m 0755 "scripts/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"
+            done
+            if [ -f scripts/codex_model_catalog.json ]; then
+              install -m 0644 scripts/codex_model_catalog.json "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_model_catalog.json"
+            fi
             echo "IMPLEMENT_STAGED_SUPPORT_LEDGER ref=${SCRIPT_REF} overwritten_tracked_files=${_staged_support_count} ledger=${STAGED_SUPPORT_LEDGER}"
             if [ "${_staged_support_count}" -gt 0 ]; then
               sed 's/^/  staged over: /' "${STAGED_SUPPORT_LEDGER}"
@@ -1256,6 +1267,7 @@ jobs:
             {
               echo "STAGED_SUPPORT_LEDGER=${STAGED_SUPPORT_LEDGER}"
               echo "STAGED_SUPPORT_BASE_DIR=${STAGED_SUPPORT_BASE_DIR}"
+              echo "IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
             } >> "$GITHUB_ENV"
           fi
 
@@ -3293,9 +3305,9 @@ jobs:
               printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
               scope_violations=""
               scope_rc=0
-              if [ -f scripts/files_touched_scope_guard.py ]; then
+              if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
                 set +e
-                scope_violations="$(python3 scripts/files_touched_scope_guard.py \
+                scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
                   --issue-body-file "${ISSUE_BODY_FILE:-}" \
                   --staged-file "${scope_staged_file}" \
                   --allowlist-out "${scope_allowlist_file}")"
@@ -3931,12 +3943,13 @@ jobs:
         id: commit_changes
         run: |
           set -euo pipefail
-          bash scripts/implement_commit_changes.sh
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"
 
       - name: Destructive-commit guard — label + alert on rejection
-        # Runs ONLY when the early preflight or commit step exited non-zero
-        # AND emitted the destructive_commit_blocked output. This is the P3 circuit
-        # breaker from PRs #917/#931: latch ai:destructive-blocked on
+        # Runs only when the early preflight or commit step exits non-zero and
+        # emits a destructive, scope, or staged-support rejection output. The
+        # destructive path is the P3 circuit breaker from PRs #917/#931: latch
+        # ai:destructive-blocked on
         # the issue so any future redispatch attempt is refused by the
         # Validate approval phase step, post a visible comment, and
         # fire a CRITICAL TG alert so a human can intervene before the
@@ -3950,9 +3963,9 @@ jobs:
         # This step also handles files_touched scope-guard rejections
         # (scope_violation_blocked): it latches the distinct ai:scope-blocked
         # label and posts a scope-specific comment/alert. The destructive and
-        # scope branches are mutually exclusive — each guard exits on the first
-        # tripped condition — so at most one fires per run.
-        if: env.SKIP_IMPLEMENT != 'true' && (failure() || cancelled()) && (steps.preflight_destructive_guard.outputs.destructive_commit_blocked != '' || steps.commit_changes.outputs.destructive_commit_blocked != '' || steps.preflight_destructive_guard.outputs.scope_violation_blocked != '' || steps.commit_changes.outputs.scope_violation_blocked != '')
+        # scope and staged-support branches are mutually exclusive — each guard
+        # exits on the first tripped condition — so at most one fires per run.
+        if: env.SKIP_IMPLEMENT != 'true' && (failure() || cancelled()) && (steps.preflight_destructive_guard.outputs.destructive_commit_blocked != '' || steps.commit_changes.outputs.destructive_commit_blocked != '' || steps.preflight_destructive_guard.outputs.scope_violation_blocked != '' || steps.commit_changes.outputs.scope_violation_blocked != '' || steps.commit_changes.outputs.staged_support_rebase_conflict != '')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -3966,6 +3979,8 @@ jobs:
           SVB_COUNT: ${{ steps.preflight_destructive_guard.outputs.scope_violation_count || steps.commit_changes.outputs.scope_violation_count }}
           SVB_FILES: ${{ steps.preflight_destructive_guard.outputs.scope_violation_files || steps.commit_changes.outputs.scope_violation_files }}
           SVB_ALLOWLIST: ${{ steps.preflight_destructive_guard.outputs.scope_violation_allowlist || steps.commit_changes.outputs.scope_violation_allowlist }}
+          SSB_REASON: ${{ steps.commit_changes.outputs.staged_support_rebase_conflict }}
+          SSB_FILES: ${{ steps.commit_changes.outputs.staged_support_rebase_conflict_files }}
         run: |
           set -euo pipefail
           bash "${RUNTIME_DIR}/implement_handle_guard_block.sh"
@@ -3980,7 +3995,7 @@ jobs:
           IMPL_NOOP_ANCESTRY_THRESHOLD: ${{ vars.IMPL_NOOP_ANCESTRY_THRESHOLD || '2' }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -4194,8 +4209,8 @@ jobs:
           # Remove ai:done (if present) and add failure label.
           # The commit step may already have removed fetched helper artifacts
           # in caller repos, so only source label_helpers when available.
-          if [ -f scripts/label_helpers.sh ]; then
-            source scripts/label_helpers.sh
+          if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/label_helpers.sh" ]; then
+            source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/label_helpers.sh"
             ensure_label_exists "ai:implementation-failed" "${{ github.repository }}"
           else
             gh_retry gh label create "ai:implementation-failed" --repo "${{ github.repository }}" \
@@ -4213,7 +4228,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           support_checkout_root="${GITHUB_WORKSPACE}/.codex-workflow-src"
@@ -4371,7 +4386,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           # Both `force-review` and `e2e-smoke-test` are now in the
@@ -4390,12 +4405,12 @@ jobs:
           # rather surface "label_helpers missing" than have a
           # parallel inline catalog drift over time (Copilot review
           # comment #4 on this PR).
-          if [ ! -f scripts/label_helpers.sh ]; then
+          if [ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/label_helpers.sh" ]; then
             echo "::error::scripts/label_helpers.sh not present in checkout; cannot ensure smoke-test labels via the catalog. Aborting smoke-test PR creation."
             exit 1
           fi
           # shellcheck disable=SC1091
-          source scripts/label_helpers.sh
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/label_helpers.sh"
           if ! type ensure_label_exists >/dev/null 2>&1; then
             echo "::error::scripts/label_helpers.sh did not export ensure_label_exists; aborting smoke-test PR creation (catalog drift risk)."
             exit 1
@@ -4485,7 +4500,7 @@ jobs:
           fi
           printf '%s\n\n' "${PR_TITLE}" > "${PR_LINT_FILE}"
           cat "${PR_BODY_FILE}" >> "${PR_LINT_FILE}"
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_pr_body_auto_close.py \
+          PYTHONDONTWRITEBYTECODE=1 python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/lint_pr_body_auto_close.py" \
             --pr-body-file "${PR_LINT_FILE}" \
             --repo "${GITHUB_REPOSITORY}"
 
@@ -4496,7 +4511,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           PR_TITLE_FILE="${RUNTIME_DIR}/pr-body-lint/title.txt"
           PR_BODY_FILE="${RUNTIME_DIR}/pr-body-lint/body.txt"
@@ -4638,7 +4653,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           PR_NUMBER="$(printf '%s\n' "${PR_URL}" | sed -E 's#.*/pull/([0-9]+).*#\1#')"
@@ -4656,9 +4671,9 @@ jobs:
           # happy path; the `Ensure E2E smoke-test labels exist on
           # repo` step has already aborted the run if the catalog
           # source itself is missing.
-          if [ -f scripts/label_helpers.sh ]; then
+          if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/label_helpers.sh" ]; then
             # shellcheck disable=SC1091
-            source scripts/label_helpers.sh
+            source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/label_helpers.sh"
           fi
           if type ensure_label_exists >/dev/null 2>&1; then
             ensure_label_exists "force-review" "${REPOSITORY}" >/dev/null 2>&1 || true
@@ -4689,7 +4704,7 @@ jobs:
             echo "::warning::Support source checkout missing; skipping helper restage"
             exit 0
           fi
-          mkdir -p scripts
+          mkdir -p "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}"
           for f in gh_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py orchestrate_force_tick.sh; do
             src="${support_checkout_root}/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f "${support_checkout_main_root}/scripts/${f}" ]; then
@@ -4699,7 +4714,7 @@ jobs:
               echo "::warning::Support source missing ${f}; keeping existing local copy if present"
               continue
             fi
-            install -m 0755 "${src}" "scripts/${f}"
+            install -m 0755 "${src}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/${f}"
           done
 
       - name: Collect PR metadata and changed files
@@ -4760,7 +4775,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh"
 
           PR_URL="$(jq -r '.pr_url // ""' "${PR_METADATA_FILE}")"
           SUMMARY="Implementation PR created for issue #${ISSUE_NUMBER}: ${PR_URL}"
@@ -4783,7 +4798,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh"
 
           memory_processed_command_complete \
             --issue-number "${ISSUE_NUMBER}" \
@@ -4796,7 +4811,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh"
 
           PR_NUMBER_STR="$(jq -r 'if .pr_number == null then "" else (.pr_number|tostring) end' "${PR_METADATA_FILE}")"
           FINALIZE_ARGS=(
@@ -4824,7 +4839,7 @@ jobs:
           # Source sanitize_codex_prompt_file (best-effort) so the
           # concatenated prompt is UTF-8-clean before piping to codex.
           # shellcheck source=/dev/null
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
 
           cat > "${ISSUE_SUMMARY_PROMPT_FILE}" <<EOF
           Generate a concise issue summary for a pull request comment.
@@ -4859,7 +4874,7 @@ jobs:
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${_summary_combined_prompt}"
             fi
-            bash scripts/workspace_safety_check.sh
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workspace_safety_check.sh"
             codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_summary_combined_prompt}" > "${ISSUE_SUMMARY_FILE}" || true
             if [ -s "${ISSUE_SUMMARY_FILE}" ] && grep -q '^### AI Issue Summary' "${ISSUE_SUMMARY_FILE}"; then
               echo "Summary generated on attempt ${_summary_attempt}."
@@ -4878,7 +4893,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
           if [ ! -s "${ISSUE_SUMMARY_FILE}" ]; then
@@ -4904,7 +4919,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           gh_retry gh label create "ai:done" --repo "${{ github.repository }}" \
             --color "0e8a16" --description "Implementation PR created" \
@@ -4919,7 +4934,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          bash scripts/orchestrate_force_tick.sh \
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/orchestrate_force_tick.sh" \
             --repo "${{ github.repository }}" \
             --issue "${ISSUE_NUMBER}" \
             --reason "implement-pr-created" \
@@ -4930,7 +4945,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh"
 
           PR_NUMBER_STR="$(jq -r 'if .pr_number == null then "" else (.pr_number|tostring) end' "${PR_METADATA_FILE}")"
           EVENT_ARGS=(
@@ -4954,7 +4969,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           gh_retry gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
             --color "fbca04" --description "Awaiting human approval to implement" \
@@ -4963,13 +4978,13 @@ jobs:
             --add-label 'ai:awaiting-approval' --remove-label 'ai:implementing' >/dev/null 2>&1 || true
 
       - name: Capture post-Codex validation errors
-        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == ''
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == ''
         id: capture_post_codex_validation_errors
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           type _safe_gh_jq &>/dev/null || _safe_gh_jq() {
             local _tmpf
@@ -5059,7 +5074,7 @@ jobs:
           fi
 
       - name: Diagnose post-Codex failure and create fix-up issues
-        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == ''
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == ''
         id: diagnose_post_codex_failure
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -5078,13 +5093,13 @@ jobs:
         run: |
           set -euo pipefail
           diagnose_path="${PATH}"
-          if [ "${CODEX_THREAD_REUSE_AVAILABLE:-false}" = 'true' ] && [ -x scripts/codex_thread_reuse.sh ]; then
+          if [ "${CODEX_THREAD_REUSE_AVAILABLE:-false}" = 'true' ] && [ -x "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" ]; then
             # shellcheck source=/dev/null
-            source scripts/codex_thread_reuse.sh
+            source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh"
             diagnose_continuation_source="$(codex_thread_reuse_resolve_asset 'prompts/mode-implement-diagnose-continuation.txt' 2>/dev/null || true)"
             if [ -n "${diagnose_continuation_source}" ]; then
               diagnose_continuation_rendered="${RUNTIME_DIR}/mode-implement-diagnose-continuation.rendered.txt"
-              if SERENA_TOOL_HINTS='' bash scripts/render_prompt.sh "${diagnose_continuation_source}" > "${diagnose_continuation_rendered}"; then
+              if SERENA_TOOL_HINTS='' bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/render_prompt.sh" "${diagnose_continuation_source}" > "${diagnose_continuation_rendered}"; then
                 if diagnose_wrapper_dir="$(codex_thread_reuse_install_wrapper \
                   'implement-diagnose' \
                   "${diagnose_continuation_rendered}" \
@@ -5100,15 +5115,15 @@ jobs:
               fi
             fi
           fi
-          PATH="${diagnose_path}" bash scripts/implement_diagnose_post_codex_failure.sh
+          PATH="${diagnose_path}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_diagnose_post_codex_failure.sh"
 
       - name: Comment on issue failure
-        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == ''
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == ''
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           # Reuse the cached issue snapshot when available — see the
           # "Fetch issue metadata" step.  Falls back to a fresh API
@@ -5137,7 +5152,7 @@ jobs:
             -f body="${REASON}"
 
       - name: Telegram failure notification
-        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == ''
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == ''
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -5145,11 +5160,11 @@ jobs:
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           set -euo pipefail
-          if [ ! -f scripts/tg_helpers.sh ]; then
+          if [ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/tg_helpers.sh" ]; then
             echo "tg_helpers.sh not available; skipping Telegram notification."
             exit 0
           fi
-          source scripts/tg_helpers.sh
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/tg_helpers.sh"
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
@@ -5175,13 +5190,13 @@ jobs:
           set -euo pipefail
           support_checkout_root="${GITHUB_WORKSPACE}/.codex-workflow-src"
           support_checkout_main_root="${GITHUB_WORKSPACE}/.codex-workflow-src-main"
-          if [ -f scripts/memory_helpers.sh ]; then
-            source scripts/memory_helpers.sh
+          if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh" ]; then
+            source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh"
           else
             if [ ! -d "${support_checkout_root}" ]; then
               exit 0
             fi
-            mkdir -p scripts
+            mkdir -p "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}"
             for f in gh_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py; do
               src="${support_checkout_root}/scripts/${f}"
               if [ ! -f "${src}" ] && [ -f "${support_checkout_main_root}/scripts/${f}" ]; then
@@ -5190,12 +5205,12 @@ jobs:
               if [ ! -f "${src}" ]; then
                 continue
               fi
-              install -m 0755 "${src}" "scripts/${f}"
+              install -m 0755 "${src}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/${f}"
             done
-            source scripts/memory_helpers.sh
+            source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh"
           fi
 
-          if [ -f scripts/memory_helpers.sh ]; then
+          if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/memory_helpers.sh" ]; then
             if [ "${{ job.status }}" = "cancelled" ]; then
               phase_message="Implementation phase cancelled"
             else
@@ -5277,7 +5292,7 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          if [ ! -f scripts/serena_stats_emit.py ]; then
+          if [ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/serena_stats_emit.py" ]; then
             echo "::notice::serena_stats_emit.py is unavailable; skipping Serena stats emission."
             exit 0
           fi
@@ -5301,13 +5316,13 @@ jobs:
             exit 0
           fi
 
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/serena_stats_emit.py "${serena_stat_args[@]}"
+          PYTHONDONTWRITEBYTECODE=1 python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/serena_stats_emit.py" "${serena_stat_args[@]}"
 
       - name: Run workspace before_remove hook
         if: always() && env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
-          bash scripts/run_workspace_hook.sh implement before_remove
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/run_workspace_hook.sh" implement before_remove
 
       - name: Cleanup temporary artifacts
         if: always()

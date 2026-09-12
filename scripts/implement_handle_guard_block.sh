@@ -1,11 +1,57 @@
 #!/usr/bin/env bash
-# Handle destructive-commit and scope-guard rejections after support cleanup.
-# shellcheck disable=SC2153 # DCB_* and SVB_* values are workflow environment inputs.
+# Handle destructive-commit, scope-guard, and staged-support rejections after support cleanup.
+# shellcheck disable=SC2153 # DCB_*, SVB_*, and SSB_* values are workflow environment inputs.
 set -euo pipefail
 
 RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 GUARD_COMMENT_FILE="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/implement-guard-comment.XXXXXX")"
 trap 'rm -f "${GUARD_COMMENT_FILE}"' EXIT
+
+# Staged-support branch. The commit helper could not safely restore or re-base
+# one or more support-ref copies onto the branch version, so halt this issue
+# rather than send the same deterministic conflict through generic re-issue.
+if [ -n "${SSB_REASON:-}" ]; then
+  gh label create 'ai:needs-human' --repo "${GITHUB_REPOSITORY}" \
+    --color 'e11d48' --description 'Escalated for human intervention; autonomous stall recovery is paused' \
+    2>/dev/null || true
+  gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+    --add-label 'ai:needs-human' --remove-label 'ai:implementing' 2>/dev/null || \
+  gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+    --add-label 'ai:needs-human' 2>/dev/null || true
+  {
+    echo "🚨 **Staged-support restore failed; implementation halted.**"
+    echo
+    echo "- Workflow run: ${RUN_URL}"
+    echo
+    echo "The commit was **not** created and **not** pushed. The listed support-ref copies could not be safely reconciled with this branch:"
+    echo
+    echo '```'
+    printf '%s\n' "${SSB_FILES}" | sed '/^$/d'
+    echo '```'
+    echo
+    echo "The issue is labeled \`ai:needs-human\`. Apply the editor's intended changes against the branch versions, then remove the label before redispatching."
+  } > "${GUARD_COMMENT_FILE}"
+  gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+    --body-file "${GUARD_COMMENT_FILE}" 2>/dev/null || true
+  if [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-}" ]; then
+    TG_MSG="$(printf '%s\n' \
+      "🚨 CRITICAL: staged-support restore blocked implementation" \
+      "repo: ${GITHUB_REPOSITORY}" \
+      "issue: #${ISSUE_NUMBER}" \
+      "paths: ${SSB_FILES}" \
+      "run: ${RUN_URL}" \
+      "" \
+      "Issue is now ai:needs-human. Reconcile the editor changes with the branch versions before redispatching.")"
+    curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+      -d "chat_id=${TG_ADMIN_CHAT_ID}" \
+      -d "disable_web_page_preview=true" \
+      --data-urlencode "text=${TG_MSG}" >/dev/null 2>&1 || \
+      echo "::warning::Telegram alert send failed for staged-support rejection on issue #${ISSUE_NUMBER}"
+  else
+    echo "::warning::TG_BOT_SECRET or TG_ADMIN_CHAT_ID unset; staged-support rejection was not sent to Telegram."
+  fi
+  exit 1
+fi
 
 # Scope-block branch. When either scope guard (files_touched preflight /
 # commit-time, or the post-commit ai:scope label verifier) latched

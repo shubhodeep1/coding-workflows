@@ -387,7 +387,7 @@ def test_both_guard_sites_invoke_script_and_emit_outputs() -> None:
 	combined_text = text + "\n" + commit_text
 	assert text.count("files_touched scope-enforcement guard (preflight)") >= 1
 	assert commit_text.count("files_touched scope-enforcement guard (commit)") >= 1
-	assert combined_text.count("python3 scripts/files_touched_scope_guard.py") == 3
+	assert combined_text.count('python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py"') == 3
 	assert combined_text.count("scope_violation_blocked=out-of-scope") == 2
 	assert "scope_violation_blocked=scope-lock-label" in commit_text
 

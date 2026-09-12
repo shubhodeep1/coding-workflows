@@ -1289,7 +1289,7 @@ def test_self_repo_guards_use_exact_canonical_repo_match() -> None:
 		assert 'if [ "${{ github.repository }}" = "${wf_source}" ]; then' in block
 		assert 'if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then' not in block
 
-	assert "bash scripts/implement_commit_changes.sh" in commit_step
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_step
 	assert 'wf_source="shubhodeep1/coding-workflows"' in commit_helper
 	assert 'if [ "${GITHUB_REPOSITORY:-}" = "${wf_source}" ]; then' in commit_helper
 	assert 'if [[ "${GITHUB_REPOSITORY:-}" == *"/coding-workflows" ]]; then' not in commit_helper
@@ -1532,6 +1532,9 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 
 	runtime_dir = tmp_path / "runtime"
 	runtime_dir.mkdir()
+	support_run_dir = runtime_dir / "staged_support_run" / "scripts"
+	support_run_dir.mkdir(parents=True)
+	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, support_run_dir / "implement_commit_changes.sh")
 	base_dir = runtime_dir / "staged_support_base"
 	(base_dir / "scripts").mkdir(parents=True)
 	(base_dir / "scripts" / "helper.sh").write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
@@ -1559,6 +1562,7 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 			"SERENA_PROJECT_PREEXISTED": "false",
 			"STAGED_SUPPORT_BASE_DIR": str(base_dir),
 			"STAGED_SUPPORT_LEDGER": str(ledger),
+			"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": str(support_run_dir),
 			"TMPDIR": str(runtime_dir),
 		},
 		cwd=repo_dir,
@@ -1568,7 +1572,7 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 
 def _run_commit_helper(repo_dir: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
 	return subprocess.run(
-		["bash", "scripts/implement_commit_changes.sh"],
+		["bash", str(Path(env.get("IMPLEMENT_STAGED_SUPPORT_RUN_DIR", "scripts")) / "implement_commit_changes.sh")],
 		cwd=str(repo_dir),
 		env=env,
 		text=True,
@@ -1655,6 +1659,56 @@ def test_commit_helper_keeps_editor_deletion_of_staged_support_file() -> None:
 		assert "D\tscripts/helper.sh" in committed, committed
 
 
+def test_commit_helper_preserves_branch_deletion_recreated_by_staging() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_branch_deleted_") as td:
+		repo_dir, github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		_git(["git", "restore", "scripts/helper.sh"], cwd=repo_dir)
+		_git(["git", "rm", "scripts/helper.sh"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "delete helper on branch"], cwd=repo_dir)
+		helper = repo_dir / "scripts" / "helper.sh"
+		helper.write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
+		helper.chmod(0o755)
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORED path=scripts/helper.sh state=absent-in-head" in proc.stdout
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+		assert not helper.exists()
+		assert _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split() == ["README.md"]
+
+
+def test_commit_helper_runtime_copy_survives_restoring_its_worktree_path() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_self_restore_") as td:
+		repo_dir, github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		worktree_script = repo_dir / "scripts" / "implement_commit_changes.sh"
+		worktree_script.write_text("#!/usr/bin/env bash\nexit 97\n", encoding="utf-8")
+		_git(["git", "add", "scripts/implement_commit_changes.sh"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "divergent branch commit helper"], cwd=repo_dir)
+		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, worktree_script)
+		base_script = Path(env["STAGED_SUPPORT_BASE_DIR"]) / "scripts" / "implement_commit_changes.sh"
+		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, base_script)
+		with Path(env["STAGED_SUPPORT_LEDGER"]).open("a", encoding="utf-8") as ledger_handle:
+			ledger_handle.write("scripts/implement_commit_changes.sh\n")
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORED path=scripts/implement_commit_changes.sh" in proc.stdout
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+		assert _git_out(["git", "show", "HEAD:scripts/implement_commit_changes.sh"], cwd=repo_dir) == "#!/usr/bin/env bash\nexit 97\n"
+		assert _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split() == ["README.md"]
+
+
+def test_commit_helper_fails_closed_when_staged_support_base_is_missing() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_base_missing_") as td:
+		repo_dir, github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		(Path(env["STAGED_SUPPORT_BASE_DIR"]) / "scripts" / "helper.sh").unlink()
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode != 0
+		assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh" in proc.stdout + proc.stderr
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "staged_support_rebase_conflict=true" in output_text
+		assert "staged_support_rebase_conflict_files=scripts/helper.sh" in output_text
+		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() == baseline_head
+
+
 def test_commit_helper_rejects_unsafe_staged_support_ledger_paths() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_commit_staged_unsafe_") as td:
 		repo_dir, _github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
@@ -1681,12 +1735,17 @@ def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -
 	stage_block = _step_block_text("Stage workflow support files")
 	# Snapshot before the first install, ledger after the last one, both self-repo gated.
 	assert stage_block.index("_staged_support_pre_status=") < stage_block.index('install -m 0755 "${src}" "scripts/${f}"')
-	assert 'git status --porcelain --untracked-files=no > "${_staged_support_pre_status}"' in stage_block
-	assert stage_block.index("STAGED_SUPPORT_LEDGER=") > stage_block.rindex("install -m 0644")
+	assert 'git status --porcelain --untracked-files=all > "${_staged_support_pre_status}"' in stage_block
+	assert 'done < <(git status --porcelain --untracked-files=all' in stage_block
+	assert '?M\\ *|\\?\\?\\ *)' in stage_block
+	assert stage_block.index("STAGED_SUPPORT_LEDGER=") > stage_block.index('install -m 0644 "${src}" "prompts/${prompt_assembly_asset}"')
 	assert 'STAGED_SUPPORT_LEDGER="${RUNTIME_DIR}/staged_support_overwrites.txt"' in stage_block
 	assert 'STAGED_SUPPORT_BASE_DIR="${RUNTIME_DIR}/staged_support_base"' in stage_block
+	assert 'IMPLEMENT_STAGED_SUPPORT_RUN_DIR="${RUNTIME_DIR}/staged_support_run/scripts"' in stage_block
 	assert 'echo "STAGED_SUPPORT_LEDGER=${STAGED_SUPPORT_LEDGER}"' in stage_block
 	assert 'echo "STAGED_SUPPORT_BASE_DIR=${STAGED_SUPPORT_BASE_DIR}"' in stage_block
+	assert 'echo "IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"' in stage_block
+	assert 'install -m 0755 "scripts/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"' in stage_block
 	assert "IMPLEMENT_STAGED_SUPPORT_LEDGER ref=${SCRIPT_REF} overwritten_tracked_files=" in stage_block
 	assert stage_block.count('if [ "${is_self_repo}" = "true" ]; then') >= 2
 	script_text = _implement_commit_script_text()
@@ -1695,12 +1754,20 @@ def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -
 		"IMPLEMENT_STAGED_SUPPORT_RESTORED",
 		"IMPLEMENT_STAGED_SUPPORT_REBASED",
 		"IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT",
+		"IMPLEMENT_STAGED_SUPPORT_HEAD_READ_FAILED",
+		"IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED",
 		"IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR",
 		"git merge-file -p",
 	):
 		assert marker in script_text, marker
 	# The restore runs before anything is staged.
 	assert script_text.index("IMPLEMENT_STAGED_SUPPORT_RESTORE ") < script_text.index('git add -u -- "${add_u_excludes[@]}"')
+	commit_block = _step_block_text("Commit changes")
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_block
+	assert 'source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh"' in _step_block_text("Push branch")
+	assert 'python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/lint_pr_body_auto_close.py"' in _step_block_text(
+		"Pre-flight — lint PR title/body for auto-close keywords against tracking issues"
+	)
 
 
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
@@ -1741,6 +1808,21 @@ def test_telegram_failure_step_skips_destructive_blocked_runs() -> None:
 		"Post-failure Telegram flow must be skipped for destructive-blocked runs; only the dedicated "
 		"destructive-guard CRITICAL alert should fire"
 	)
+	assert "steps.commit_changes.outputs.staged_support_rebase_conflict == ''" in telegram_block
+
+
+def test_staged_support_failure_uses_dedicated_handler_and_skips_generic_diagnose() -> None:
+	guard_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	assert "steps.commit_changes.outputs.staged_support_rebase_conflict != ''" in guard_block
+	assert "SSB_REASON:" in guard_block
+	assert "SSB_FILES:" in guard_block
+	for step_name in (
+		"Capture post-Codex validation errors",
+		"Diagnose post-Codex failure and create fix-up issues",
+		"Comment on issue failure",
+		"Telegram failure notification",
+	):
+		assert "steps.commit_changes.outputs.staged_support_rebase_conflict == ''" in _step_block_text(step_name), step_name
 
 
 def _run_guard_handler_case(
@@ -1749,6 +1831,7 @@ def _run_guard_handler_case(
 	repository: str,
 	destructive_reason: str = "",
 	scope_reason: str = "",
+	staged_support_reason: str = "",
 ) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]]]:
 	repo_dir = tmp_path / "repo"
 	runtime_dir = tmp_path / "runtime"
@@ -1795,6 +1878,8 @@ def _run_guard_handler_case(
 			"SVB_COUNT": "1",
 			"SVB_FILES": "README.md",
 			"SVB_ALLOWLIST": "scripts/**/*.sh",
+			"SSB_REASON": staged_support_reason,
+			"SSB_FILES": "scripts/helper.sh",
 		},
 		cwd=repo_dir,
 	)
@@ -1815,12 +1900,13 @@ def _run_guard_handler_case(
 
 def test_guard_handler_executes_all_rejection_modes_after_support_cleanup() -> None:
 	cases = (
-		("canonical", "shubhodeep1/coding-workflows", "canonical-source", "", "ai:destructive-blocked", "canonical workflow-source file deletion"),
-		("unsafe-manifest", "owner/consumer", "unsafe-fetched-manifest", "", "ai:destructive-blocked", "artifact-cleanup manifest contained unsafe path(s)"),
-		("files-touched", "shubhodeep1/coding-workflows", "", "files-touched", "ai:scope-blocked", "files_touched scope guard rejected"),
-		("scope-lock", "owner/consumer", "", "scope-lock-label", "ai:scope-blocked", "Issue scope-lock rejected"),
+		("canonical", "shubhodeep1/coding-workflows", "canonical-source", "", "", "ai:destructive-blocked", "canonical workflow-source file deletion"),
+		("unsafe-manifest", "owner/consumer", "unsafe-fetched-manifest", "", "", "ai:destructive-blocked", "artifact-cleanup manifest contained unsafe path(s)"),
+		("files-touched", "shubhodeep1/coding-workflows", "", "files-touched", "", "ai:scope-blocked", "files_touched scope guard rejected"),
+		("scope-lock", "owner/consumer", "", "scope-lock-label", "", "ai:scope-blocked", "Issue scope-lock rejected"),
+		("staged-support", "shubhodeep1/coding-workflows", "", "", "true", "ai:needs-human", "Staged-support restore failed"),
 	)
-	for case_name, repository, destructive_reason, scope_reason, expected_label, expected_comment in cases:
+	for case_name, repository, destructive_reason, scope_reason, staged_support_reason, expected_label, expected_comment in cases:
 		case_dir = Path(tempfile.mkdtemp(prefix=f"test_guard_handler_{case_name}_"))
 		try:
 			proc, gh_state, curl_calls = _run_guard_handler_case(
@@ -1828,6 +1914,7 @@ def test_guard_handler_executes_all_rejection_modes_after_support_cleanup() -> N
 				repository=repository,
 				destructive_reason=destructive_reason,
 				scope_reason=scope_reason,
+				staged_support_reason=staged_support_reason,
 			)
 			assert proc.returncode != 0, f"case={case_name}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
 			assert gh_state["label_creates"] == [{"name": expected_label, "repo": repository}], f"case={case_name}"
@@ -1874,6 +1961,8 @@ def test_guard_handler_runtime_wiring_and_expression_size_contract() -> None:
 		"SVB_COUNT",
 		"SVB_FILES",
 		"SVB_ALLOWLIST",
+		"SSB_REASON",
+		"SSB_FILES",
 	):
 		assert f"{env_name}:" in guard_block
 
@@ -1979,7 +2068,7 @@ def test_destructive_guard_handler_covers_unsafe_fetched_manifest_rejections() -
 def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None:
 	commit_step = _step_block_text("Commit changes")
 	commit_helper = _implement_commit_script_text()
-	assert "bash scripts/implement_commit_changes.sh" in commit_step
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_step
 	assert 'STEP_NAME="Commit changes"' not in commit_step
 	assert "canonical_deletions" in commit_helper
 	assert "ALLOW_WORKFLOW_EDITS" in commit_helper

@@ -137,10 +137,20 @@ if [ -n "${staged_support_ledger}" ] && [ -f "${staged_support_ledger}" ] \
     esac
     staged_support_base="${staged_support_base_dir}/${staged_support_path}"
     if [ ! -f "${staged_support_base}" ]; then
-      echo "::warning::IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=${staged_support_path}; leaving the worktree copy as-is."
+      echo "::error::IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=${staged_support_path}; refusing to leave an unverifiable support-ref copy eligible for commit."
+      staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
       continue
     fi
-    if ! git ls-files --error-unmatch -- "${staged_support_path}" >/dev/null 2>&1; then
+    if ! git cat-file -e "HEAD:${staged_support_path}" >/dev/null 2>&1; then
+      if [ ! -e "${staged_support_path}" ]; then
+        echo "IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR path=${staged_support_path}"
+      elif cmp -s -- "${staged_support_path}" "${staged_support_base}"; then
+        rm -f -- "${staged_support_path}"
+        echo "IMPLEMENT_STAGED_SUPPORT_RESTORED path=${staged_support_path} state=absent-in-head"
+        staged_support_restored=$((staged_support_restored + 1))
+      else
+        echo "IMPLEMENT_STAGED_SUPPORT_RECREATED_BY_EDITOR path=${staged_support_path}"
+      fi
       continue
     fi
     if [ ! -e "${staged_support_path}" ]; then
@@ -155,7 +165,12 @@ if [ -n "${staged_support_ledger}" ] && [ -f "${staged_support_ledger}" ] \
     fi
     staged_support_head="$(mktemp)"
     staged_support_merged="$(mktemp)"
-    git show "HEAD:${staged_support_path}" > "${staged_support_head}"
+    if ! git show "HEAD:${staged_support_path}" > "${staged_support_head}"; then
+      echo "::error::IMPLEMENT_STAGED_SUPPORT_HEAD_READ_FAILED path=${staged_support_path}; refusing to commit without the branch-side merge input."
+      staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+      rm -f -- "${staged_support_head}" "${staged_support_merged}"
+      continue
+    fi
     staged_support_merge_rc=0
     git merge-file -p -L "editor" -L "staged ${SCRIPT_REF:-support ref}" -L "HEAD" \
       -- "${staged_support_path}" "${staged_support_base}" "${staged_support_head}" \
@@ -167,8 +182,11 @@ if [ -n "${staged_support_ledger}" ] && [ -f "${staged_support_ledger}" ] \
       cat "${staged_support_merged}" > "${staged_support_path}"
       echo "IMPLEMENT_STAGED_SUPPORT_REBASED path=${staged_support_path}"
       staged_support_rebased=$((staged_support_rebased + 1))
-    else
+    elif [ "${staged_support_merge_rc}" -le 127 ]; then
       echo "::error::IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT path=${staged_support_path} conflicts=${staged_support_merge_rc}: the editor edited a helper that implement.yml had replaced with the ${SCRIPT_REF:-support ref} copy, and those edits do not apply cleanly to this branch's version. Refusing to commit the ${SCRIPT_REF:-support ref}-based copy; apply the edit against the branch's own file."
+      staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+    else
+      echo "::error::IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED path=${staged_support_path} merge_file_rc=${staged_support_merge_rc}: git merge-file could not process the staged, support-ref, and branch-side inputs."
       staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
     fi
     rm -f -- "${staged_support_head}" "${staged_support_merged}"
@@ -391,9 +409,9 @@ else
     printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
     scope_violations=""
     scope_rc=0
-    if [ -f scripts/files_touched_scope_guard.py ]; then
+    if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
       set +e
-      scope_violations="$(python3 scripts/files_touched_scope_guard.py \
+      scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
         --issue-body-file "${ISSUE_BODY_FILE:-}" \
         --staged-file "${scope_staged_file}" \
         --allowlist-out "${scope_allowlist_file}")"
@@ -528,9 +546,9 @@ if [ "${SCOPE_LOCK_LABEL_ENABLED:-false}" = "true" ] && [ -n "${ISSUE_SCOPE_LOCK
     printf '%s\n' "${ISSUE_SCOPE_LOCK_GLOB}" > "${scope_glob_file}"
     scope_violations=""
     scope_rc=0
-    if [ -f scripts/files_touched_scope_guard.py ]; then
+    if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
       set +e
-      scope_violations="$(python3 scripts/files_touched_scope_guard.py \
+      scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
         --staged-file "${scope_committed_file}" \
         --allowlist-file "${scope_glob_file}" \
         --allowlist-out "${scope_allowlist_file}")"

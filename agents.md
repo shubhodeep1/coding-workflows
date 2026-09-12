@@ -211,14 +211,25 @@ a new value, add it to the appropriate overrides file with a
   commit path in `scripts/implement_commit_changes.sh` has no `scripts/` exclusion.
 - The staging step records every tracked file it overwrote in
   `STAGED_SUPPORT_LEDGER` (`${RUNTIME_DIR}/staged_support_overwrites.txt`) with the
-  installed content under `STAGED_SUPPORT_BASE_DIR`; both are exported through
+  installed content under `STAGED_SUPPORT_BASE_DIR`; it also records support
+  paths recreated over branch-side deletions. Executable support-ref copies live
+  under `IMPLEMENT_STAGED_SUPPORT_RUN_DIR`. All three paths are exported through
   `GITHUB_ENV` and only exist when `github.repository` is this repository.
 - `scripts/implement_commit_changes.sh` consumes the ledger before `git add`:
   restore-to-HEAD for untouched copies, 3-way `git merge-file` re-base for
-  editor-edited copies, keep editor deletions, fail closed on a merge conflict.
+  editor-edited copies, preserve branch/editor deletions, remove untouched
+  staging recreations, and fail closed on incomplete inputs or merge conflicts.
+  The workflow invokes the immutable runtime copy of the commit helper and uses
+  runtime copies for all later helper calls, so restoring the worktree cannot
+  replace the running script or downgrade post-commit tooling.
   Log keys: `IMPLEMENT_STAGED_SUPPORT_LEDGER`, `IMPLEMENT_STAGED_SUPPORT_RESTORED`,
   `IMPLEMENT_STAGED_SUPPORT_REBASED`, `IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR`,
-  `IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT`, `IMPLEMENT_STAGED_SUPPORT_RESTORE`.
+  `IMPLEMENT_STAGED_SUPPORT_RECREATED_BY_EDITOR`, `IMPLEMENT_STAGED_SUPPORT_BASE_MISSING`,
+  `IMPLEMENT_STAGED_SUPPORT_HEAD_READ_FAILED`, `IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT`,
+  `IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED`, `IMPLEMENT_STAGED_SUPPORT_RESTORE`.
+- Staged-support failures are consumed by the runtime-preserved rejection handler,
+  which applies `ai:needs-human`, comments with the affected paths, sends the
+  configured CRITICAL alert, and prevents generic diagnosis/re-issue handling.
 - The other in-tree staging workflows (`clarify.yml`, `plan.yml`,
   `orchestrate_clarify_respond.yml`, `orchestrate.yml`, `orchestrate_poll.yml`,
   `check_failure_triage.yml`) either never commit from that checkout or run on
@@ -228,7 +239,7 @@ a new value, add it to the appropriate overrides file with a
 - Incident: implement runs 34392788763 (PR #4071) and 34613019339 (PR #4079)
   committed `main`'s copies of eight helpers onto `orchestrator/project-3965`,
   reverting the branch's security-pass fixes. `tests/test_implement_post_codex_recovery.py`
-  pins the ledger contract and the three restore outcomes.
+  pins the ledger, immutable-execution, deleted-path, handler, and restore outcomes.
 
 ---
 
