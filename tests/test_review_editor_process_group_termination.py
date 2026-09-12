@@ -54,7 +54,7 @@ def _function_block(text: str, start_marker: str, end_marker: str) -> str:
 
 def _termination_functions() -> str:
 	text = EDITOR_SCRIPT.read_text(encoding="utf-8")
-	return _function_block(text, "# _editor_process_group_from_guard <guard_pid>", "\neditor_isolation_exit_trap() {")
+	return _function_block(text, "# _editor_process_identity <pid>", "\neditor_isolation_exit_trap() {")
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -101,7 +101,9 @@ def _run_terminate(
 	ledger: str,
 	*,
 	probe_failure: bool = False,
+	malformed_probe: bool = False,
 	sudo_failure: bool = False,
+	guard_identity_mismatch: bool = False,
 ) -> subprocess.CompletedProcess[str]:
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir(exist_ok=True)
@@ -112,11 +114,28 @@ def _run_terminate(
 		fake_pgrep = bin_dir / "pgrep"
 		fake_pgrep.write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
 		fake_pgrep.chmod(0o755)
+	elif malformed_probe:
+		fake_pgrep = bin_dir / "pgrep"
+		fake_pgrep.write_text("#!/bin/sh\nprintf 'not-a-pid\\n'\n", encoding="utf-8")
+		fake_pgrep.chmod(0o755)
+	expected_guard_uid = ""
+	expected_guard_start_time_ticks = ""
+	guard_stat_path = Path(f"/proc/{guard_pid}/stat")
+	if guard_pid.isdigit() and guard_stat_path.exists():
+		guard_stat_fields = guard_stat_path.read_text(
+			encoding="ascii", errors="replace"
+		).rpartition(")")[2].split()
+		expected_guard_uid = str(Path(f"/proc/{guard_pid}").stat().st_uid)
+		expected_guard_start_time_ticks = guard_stat_fields[19]
+	if guard_identity_mismatch:
+		expected_guard_start_time_ticks = "1"
 	script = tmp_path / "terminate_under_test.sh"
 	script.write_text(
 		"set -uo pipefail\n"
 		f"source {HELPER}\n"
 		f"EDITOR_ISOLATION_USER={pwd.getpwuid(os.getuid()).pw_name}\n"
+		f"EDITOR_ISOLATION_EXPECTED_GUARD_UID={expected_guard_uid}\n"
+		f"EDITOR_ISOLATION_EXPECTED_GUARD_START_TIME_TICKS={expected_guard_start_time_ticks}\n"
 		+ _termination_functions()
 		+ f'\nterminate_editor_attempt_process_group "{guard_pid}" "{ledger}"\n',
 		encoding="utf-8",
@@ -201,6 +220,58 @@ def test_fallback_probe_failure_kills_group_but_reports_unverified() -> None:
 			guard.wait(timeout=10)
 
 
+def test_fallback_malformed_member_probe_kills_group_but_reports_unverified() -> None:
+	with tempfile.TemporaryDirectory(prefix="editor-terminate-malformed-probe-") as td:
+		tmp_path = Path(td)
+		pid_file = tmp_path / "editor.pid"
+		guard = subprocess.Popen([sys.executable, "-c", GUARD, str(pid_file)])
+		editor_pid: int | None = None
+		try:
+			for _ in range(100):
+				if pid_file.exists() and pid_file.read_text(encoding="ascii"):
+					break
+				time.sleep(0.05)
+			editor_pid = int(pid_file.read_text(encoding="ascii"))
+			result = _run_terminate(tmp_path, str(guard.pid), "", malformed_probe=True)
+			assert result.returncode == 1, result.stderr
+			assert "reason=invalid_member_pid" in result.stderr
+			assert not _pid_is_running(editor_pid)
+			assert guard.poll() is not None
+		finally:
+			if editor_pid is not None and _pid_is_running(editor_pid):
+				os.killpg(editor_pid, 9)
+			if guard.poll() is None:
+				guard.kill()
+			guard.wait(timeout=10)
+
+
+def test_fallback_rejects_stale_guard_identity_before_privileged_signal() -> None:
+	with tempfile.TemporaryDirectory(prefix="editor-terminate-stale-guard-") as td:
+		tmp_path = Path(td)
+		pid_file = tmp_path / "editor.pid"
+		guard = subprocess.Popen([sys.executable, "-c", GUARD, str(pid_file)])
+		editor_pid: int | None = None
+		try:
+			for _ in range(100):
+				if pid_file.exists() and pid_file.read_text(encoding="ascii"):
+					break
+				time.sleep(0.05)
+			editor_pid = int(pid_file.read_text(encoding="ascii"))
+			result = _run_terminate(
+				tmp_path, str(guard.pid), "", guard_identity_mismatch=True
+			)
+			assert result.returncode == 1, result.stderr
+			assert "EDITOR_PROCESS_GROUP_GUARD_IDENTITY_MISMATCH" in result.stderr
+			assert not (tmp_path / "sudo.log").exists()
+			assert _pid_is_running(editor_pid)
+		finally:
+			if editor_pid is not None and _pid_is_running(editor_pid):
+				os.killpg(editor_pid, 9)
+			if guard.poll() is None:
+				guard.kill()
+			guard.wait(timeout=10)
+
+
 def test_metadata_identity_and_probe_failures_are_hard_failures() -> None:
 	with tempfile.TemporaryDirectory(prefix="editor-terminate-metadata-failure-") as td:
 		tmp_path = Path(td)
@@ -247,6 +318,8 @@ def main() -> int:
 	test_fallback_locates_editor_group_through_guard_child_and_kills_it()
 	test_fallback_reports_unresolved_group_when_guard_has_no_session_child()
 	test_fallback_probe_failure_kills_group_but_reports_unverified()
+	test_fallback_malformed_member_probe_kills_group_but_reports_unverified()
+	test_fallback_rejects_stale_guard_identity_before_privileged_signal()
 	test_metadata_identity_and_probe_failures_are_hard_failures()
 	print("OK: review editor process-group termination holds")
 	return 0

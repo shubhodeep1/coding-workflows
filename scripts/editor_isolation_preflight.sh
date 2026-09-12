@@ -227,7 +227,8 @@ _editor_isolation_load_process_group_metadata()
 editor_isolation_process_group_has_members()
 {
 	local metadata_path="$1" expected_user="$2" expected_guard_pid="${3:-}"
-	local member_pid member_state process_group_member_pids process_group_probe_status
+	local member_pid member_state member_stat_path member_stat_text member_stat_tail
+	local process_group_member_pids process_group_probe_status
 	_editor_isolation_load_process_group_metadata "${metadata_path}" "${expected_user}" "${expected_guard_pid}" || return 2
 	if process_group_member_pids="$(pgrep -u "${EDITOR_ISOLATION_TARGET_USER}" -g "${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" 2>/dev/null)"; then
 		process_group_probe_status=0
@@ -238,8 +239,22 @@ editor_isolation_process_group_has_members()
 		return 2
 	fi
 	while read -r member_pid; do
-		[[ "${member_pid}" =~ ^[0-9]+$ ]] || continue
-		member_state="$(sed -E 's/^[0-9]+ \(.*\) ([A-Za-z]).*$/\1/' "/proc/${member_pid}/stat" 2>/dev/null || true)"
+		if ! [[ "${member_pid}" =~ ^[0-9]+$ ]]; then
+			echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_PROBE_FAILED user=${EDITOR_ISOLATION_TARGET_USER} pgid=${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID} reason=invalid_member_pid" >&2
+			return 2
+		fi
+		member_stat_path="/proc/${member_pid}/stat"
+		if ! member_stat_text="$(<"${member_stat_path}")"; then
+			[ ! -e "${member_stat_path}" ] && continue
+			echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_PROBE_FAILED user=${EDITOR_ISOLATION_TARGET_USER} pgid=${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID} pid=${member_pid} reason=stat_unreadable" >&2
+			return 2
+		fi
+		member_stat_tail="${member_stat_text##*) }"
+		member_state="${member_stat_tail%% *}"
+		if ! [[ "${member_state}" =~ ^[A-Za-z]$ ]]; then
+			echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_PROBE_FAILED user=${EDITOR_ISOLATION_TARGET_USER} pgid=${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID} pid=${member_pid} reason=stat_malformed" >&2
+			return 2
+		fi
 		[ "${member_state}" = "Z" ] && continue
 		return 0
 	done <<< "${process_group_member_pids}"

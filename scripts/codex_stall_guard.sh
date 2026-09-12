@@ -299,20 +299,9 @@ if child_identity is None:
 	_emit_wrapper_stderr(
 		f"::error::codex_stall_guard could not capture child process identity pgid={child_pgid}; terminating group\n"
 	)
-	if ISOLATED_USER:
-		subprocess.run(
-			["sudo", "-n", "kill", "-KILL", "--", f"-{child_pgid}"],
-			stdout=subprocess.DEVNULL,
-			stderr=subprocess.DEVNULL,
-			check=False,
-		)
-	else:
-		try:
-			os.killpg(child_pgid, signal.SIGKILL)
-		except ProcessLookupError:
-			pass
-	raise SystemExit(126)
-CHILD_START_TIME_TICKS, CHILD_UID = child_identity
+	CHILD_START_TIME_TICKS, CHILD_UID = -1, -1
+else:
+	CHILD_START_TIME_TICKS, CHILD_UID = child_identity
 ISOLATED_UID = pwd.getpwnam(ISOLATED_USER).pw_uid if ISOLATED_USER else -1
 
 
@@ -415,6 +404,11 @@ def _isolated_group_has_members() -> bool:
 		return True
 	if result.returncode == 0:
 		for member_pid_text in result.stdout.splitlines():
+			if re.fullmatch(r"[1-9][0-9]*", member_pid_text) is None:
+				_emit_wrapper_stderr(
+					f"::error::codex_stall_guard received invalid process-group member pid={member_pid_text!r} pgid={child_pgid}\n"
+				)
+				return True
 			try:
 				member_state_fields = Path(f"/proc/{member_pid_text}/stat").read_text(
 					encoding="ascii", errors="replace"
@@ -574,6 +568,13 @@ for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
 		signal.signal(signum, _forward_signal)
 	except OSError:
 		pass
+
+
+if child_identity is None:
+	# Use the checked group-signal and survivor-verification path even when
+	# the short-lived wrapper exited before its identity could be captured.
+	_kill_child_group_if_running()
+	raise SystemExit(126)
 
 
 _write_process_group_metadata()

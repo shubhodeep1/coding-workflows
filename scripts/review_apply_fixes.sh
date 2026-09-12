@@ -289,14 +289,38 @@ cleanup_editor_isolation() {
   return "${cleanup_rc}"
 }
 
+# _editor_process_identity <pid>
+#   Prints the process UID and start-time ticks from one /proc snapshot.
+_editor_process_identity() {
+  local identity_pid="$1" identity_stat_text identity_stat_tail identity_uid
+  local -a identity_stat_fields=()
+  [[ "${identity_pid}" =~ ^[1-9][0-9]*$ ]] || return 1
+  [ -e "/proc/${identity_pid}/stat" ] || return 1
+  identity_stat_text="$(<"/proc/${identity_pid}/stat")" || return 1
+  identity_stat_tail="${identity_stat_text##*) }"
+  read -r -a identity_stat_fields <<< "${identity_stat_tail}"
+  identity_uid="$(stat -c '%u' -- "/proc/${identity_pid}" 2>/dev/null || true)"
+  [[ "${identity_uid}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${identity_stat_fields[19]:-}" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s %s' "${identity_uid}" "${identity_stat_fields[19]}"
+}
+
 # _editor_process_group_from_guard <guard_pid>
 #   Fallback locator for the isolated editor's process group when the stall
 #   guard published no usable ledger: the guard starts exactly one child (the
 #   `sudo` wrapper) in a new session, so that child's PID is the group ID.
-#   Prints the PGID, or nothing when it cannot be determined unambiguously.
+#   Prints the PGID only while the guard still matches the identity captured
+#   by its parent, or nothing when it cannot be determined unambiguously.
 _editor_process_group_from_guard() {
-  local guard_pid="$1" own_pgid candidate_pid candidate_pgid found=""
+  local guard_pid="$1" own_pgid candidate_pid candidate_pgid found="" guard_identity
   [[ "${guard_pid}" =~ ^[1-9][0-9]*$ ]] || return 1
+  [ -n "${EDITOR_ISOLATION_EXPECTED_GUARD_UID:-}" ] \
+    && [ -n "${EDITOR_ISOLATION_EXPECTED_GUARD_START_TIME_TICKS:-}" ] || return 1
+  guard_identity="$(_editor_process_identity "${guard_pid}")" || return 1
+  if [ "${guard_identity}" != "${EDITOR_ISOLATION_EXPECTED_GUARD_UID} ${EDITOR_ISOLATION_EXPECTED_GUARD_START_TIME_TICKS}" ]; then
+    echo "::error::EDITOR_PROCESS_GROUP_GUARD_IDENTITY_MISMATCH guard_pid=${guard_pid}" >&2
+    return 1
+  fi
   own_pgid="$(ps -o pgid= -p "${BASHPID:-$$}" 2>/dev/null | tr -d '[:space:]')"
   while read -r candidate_pid candidate_pgid; do
     [[ "${candidate_pid}" =~ ^[1-9][0-9]*$ ]] || continue
@@ -320,7 +344,8 @@ _editor_process_group_from_guard() {
 #   zombie that pgrep still lists; it holds no resources and cannot write to
 #   the workspace, so it must not count as a survivor.
 _editor_isolated_group_has_survivors() {
-  local survivor_pid survivor_state survivor_pid_list survivor_probe_status
+  local survivor_pid survivor_state survivor_stat_path survivor_stat_text survivor_stat_tail
+  local survivor_pid_list survivor_probe_status
   if survivor_pid_list="$(pgrep -u "${EDITOR_ISOLATION_USER}" -g "$1" 2>/dev/null)"; then
     survivor_probe_status=0
   else
@@ -330,8 +355,22 @@ _editor_isolated_group_has_survivors() {
     return 2
   fi
   while read -r survivor_pid; do
-    [[ "${survivor_pid}" =~ ^[0-9]+$ ]] || continue
-    survivor_state="$(sed -E 's/^[0-9]+ \(.*\) ([A-Za-z]).*$/\1/' "/proc/${survivor_pid}/stat" 2>/dev/null || true)"
+    if ! [[ "${survivor_pid}" =~ ^[0-9]+$ ]]; then
+      echo "::error::EDITOR_PROCESS_GROUP_PROBE_FAILED user=${EDITOR_ISOLATION_USER} pgid=$1 reason=invalid_member_pid" >&2
+      return 2
+    fi
+    survivor_stat_path="/proc/${survivor_pid}/stat"
+    if ! survivor_stat_text="$(<"${survivor_stat_path}")"; then
+      [ ! -e "${survivor_stat_path}" ] && continue
+      echo "::error::EDITOR_PROCESS_GROUP_PROBE_FAILED user=${EDITOR_ISOLATION_USER} pgid=$1 pid=${survivor_pid} reason=stat_unreadable" >&2
+      return 2
+    fi
+    survivor_stat_tail="${survivor_stat_text##*) }"
+    survivor_state="${survivor_stat_tail%% *}"
+    if ! [[ "${survivor_state}" =~ ^[A-Za-z]$ ]]; then
+      echo "::error::EDITOR_PROCESS_GROUP_PROBE_FAILED user=${EDITOR_ISOLATION_USER} pgid=$1 pid=${survivor_pid} reason=stat_malformed" >&2
+      return 2
+    fi
     [ "${survivor_state}" = "Z" ] && continue
     return 0
   done <<< "${survivor_pid_list}"
@@ -2261,7 +2300,10 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
       # Hard wall-time limit (budget-aware)
       if [ "${wall_secs}" -ge "${attempt_wall}" ]; then
         echo "Editor killed — wall time ${attempt_wall}s exceeded (attempt ${attempt})." >&2
-        cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+        cpid=""
+        EDITOR_ISOLATION_EXPECTED_GUARD_UID=""
+        EDITOR_ISOLATION_EXPECTED_GUARD_START_TIME_TICKS=""
+        read -r cpid EDITOR_ISOLATION_EXPECTED_GUARD_UID EDITOR_ISOLATION_EXPECTED_GUARD_START_TIME_TICKS < "${codex_pid_file}" || true
         terminate_editor_attempt_process_group "${cpid}" "${process_group_file}" \
           || echo "::error::EDITOR_PROCESS_GROUP_TERMINATION_FAILED attempt=${attempt} trigger=wall_time; the post-attempt survivor check refuses workspace ownership restoration." >&2
         rm -f "${hb_file}"
@@ -2270,7 +2312,10 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
 
       # Idle check with network-activity probe
       if [ "${idle_secs}" -ge "${EDITOR_IDLE_TIMEOUT}" ]; then
-        cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+        cpid=""
+        EDITOR_ISOLATION_EXPECTED_GUARD_UID=""
+        EDITOR_ISOLATION_EXPECTED_GUARD_START_TIME_TICKS=""
+        read -r cpid EDITOR_ISOLATION_EXPECTED_GUARD_UID EDITOR_ISOLATION_EXPECTED_GUARD_START_TIME_TICKS < "${codex_pid_file}" || true
         net_active=false
         probe_pid="$(resolve_editor_network_probe_pid "${cpid}" || true)"
         if [ -n "${probe_pid}" ] && [ -d "/proc/${probe_pid}/fd" ]; then
@@ -2367,7 +2412,8 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     PATH="${EDITOR_CODEX_PATH}" run_editor_codex_attempt "${attempt_prompt_file}" "${tmp_output}" "${_hb_fifo}" "${hb_file}" "${stall_status_file}" "${process_group_file}"
   ) &
   codex_bg_pid=$!
-  echo "${codex_bg_pid}" > "${codex_pid_file}"
+  codex_guard_identity="$(_editor_process_identity "${codex_bg_pid}" || true)"
+  printf '%s %s\n' "${codex_bg_pid}" "${codex_guard_identity}" > "${codex_pid_file}"
   cmd_rc=0
   wait "${codex_bg_pid}" 2>/dev/null || cmd_rc=$?
   # Drain the stderr FIFO, but never block on it indefinitely. The

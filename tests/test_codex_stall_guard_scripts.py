@@ -725,6 +725,33 @@ def test_isolated_stall_guard_ignores_zombie_only_probe_results() -> None:
 			)
 			assert result.returncode == 0, result.stderr
 			assert "isolated process-group survivor" not in result.stderr
+
+			fake_pgrep.write_text("#!/bin/sh\nprintf 'not-a-pid\\n'\n", encoding="utf-8")
+			result = subprocess.run(
+				[
+					"bash",
+					str(STALL_GUARD_SCRIPT),
+					"--phase",
+					"malformed_probe_test",
+					"--process-group-file",
+					str(tmp / "process-group.env"),
+					"--",
+					"sudo",
+					"-n",
+					"-u",
+					pwd.getpwuid(os.getuid()).pw_name,
+					"--",
+					"/bin/sh",
+					"-c",
+					"/bin/sleep 0.2",
+				],
+				env=env,
+				capture_output=True,
+				text=True,
+				timeout=10,
+			)
+			assert result.returncode == 126, result.stderr
+			assert "invalid process-group member pid='not-a-pid'" in result.stderr
 		finally:
 			zombie_parent.kill()
 			zombie_parent.wait(timeout=10)
@@ -884,6 +911,9 @@ def test_stall_guard_script_and_callers_keep_the_expected_contract() -> None:
 	assert "[ \"${cmd_rc}\" -eq 78 ] || [ \"${cmd_rc}\" -eq 79 ]" in editor_text
 	assert "{ [ \"${cmd_rc}\" -eq 0 ]" in editor_text
 	assert "grep -qxF 'state=unguarded' \"${stall_status_file}\"" in editor_text
+	guard_text = (REPO_ROOT / "scripts/codex_stall_guard.sh").read_text(encoding="utf-8")
+	deferred_identity_failure = guard_text.index("if child_identity is None:", guard_text.index("for signum in"))
+	assert "_kill_child_group_if_running()" in guard_text[deferred_identity_failure:]
 	# PR #4072: the watchdog reap tolerates an already-exited watchdog under set -e.
 	assert 'kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true' in editor_text
 	termination_start = editor_text.index("terminate_editor_attempt_process_group()")

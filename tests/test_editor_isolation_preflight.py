@@ -435,6 +435,43 @@ def test_process_group_signal_accepts_only_exited_guard_convergence(tmp_path: Pa
 		child.wait(timeout=10)
 
 
+def test_process_group_member_probe_rejects_malformed_pgrep_output(tmp_path: Path) -> None:
+	child = subprocess.Popen(["sleep", "1000"], start_new_session=True)
+	metadata_path = tmp_path / "process-group-malformed-probe.env"
+	bin_dir = tmp_path / "malformed-probe-bin"
+	bin_dir.mkdir()
+	current_user = pwd.getpwuid(os.getuid()).pw_name
+	try:
+		_write_process_group_metadata(
+			metadata_path,
+			guard_pid=str(os.getpid()),
+			child_pid=str(child.pid),
+			process_group_id=str(child.pid),
+			isolated_user=current_user,
+		)
+		fake_pgrep = bin_dir / "pgrep"
+		fake_pgrep.write_text("#!/bin/sh\nprintf 'not-a-pid\\n'\n", encoding="utf-8")
+		fake_pgrep.chmod(0o755)
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				f"source {HELPER}; editor_isolation_process_group_has_members {metadata_path} {current_user}",
+			],
+			check=False,
+			capture_output=True,
+			text=True,
+			env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+			cwd=REPO_ROOT,
+			timeout=30,
+		)
+		assert result.returncode == 2
+		assert "reason=invalid_member_pid" in result.stderr
+	finally:
+		os.killpg(child.pid, signal.SIGKILL)
+		child.wait(timeout=10)
+
+
 @pytest.mark.skipif(not _sudo_to_nobody_available(), reason="passwordless sudo to nobody unavailable")
 def test_probe_reports_first_denied_component_then_passes_after_prepare(tmp_path: Path) -> None:
 	env = _fixture(tmp_path)
@@ -593,6 +630,7 @@ def main() -> int:
 		test_process_group_signal_reports_failed_privileged_kill(tmp_path)
 		test_process_group_metadata_rejects_reused_process_identity(tmp_path)
 		test_process_group_signal_accepts_only_exited_guard_convergence(tmp_path)
+		test_process_group_member_probe_rejects_malformed_pgrep_output(tmp_path)
 	print("OK: editor isolation preflight process-group contract holds")
 	return 0
 
