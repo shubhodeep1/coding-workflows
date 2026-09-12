@@ -1709,6 +1709,28 @@ def test_commit_helper_fails_closed_when_staged_support_base_is_missing() -> Non
 		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() == baseline_head
 
 
+def test_commit_helper_fails_closed_when_staged_support_base_directory_is_missing() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_base_dir_missing_") as td:
+		repo_dir, github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		shutil.rmtree(env["STAGED_SUPPORT_BASE_DIR"])
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode != 0
+		assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING" in proc.stdout + proc.stderr
+		assert "staged_support_rebase_conflict=true" in github_output.read_text(encoding="utf-8")
+		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() == baseline_head
+
+
+def test_commit_helper_fails_closed_when_staged_support_ledger_file_is_missing() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_ledger_missing_") as td:
+		repo_dir, github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		Path(env["STAGED_SUPPORT_LEDGER"]).unlink()
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode != 0
+		assert "IMPLEMENT_STAGED_SUPPORT_LEDGER_MISSING" in proc.stdout + proc.stderr
+		assert "staged_support_rebase_conflict=true" in github_output.read_text(encoding="utf-8")
+		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() == baseline_head
+
+
 def test_commit_helper_rejects_unsafe_staged_support_ledger_paths() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_commit_staged_unsafe_") as td:
 		repo_dir, _github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
@@ -1733,11 +1755,13 @@ def test_commit_helper_ignores_absent_staged_support_ledger() -> None:
 
 def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
-	# Snapshot before the first install, ledger after the last one, both self-repo gated.
-	assert stage_block.index("_staged_support_pre_status=") < stage_block.index('install -m 0755 "${src}" "scripts/${f}"')
-	assert 'git status --porcelain --untracked-files=all > "${_staged_support_pre_status}"' in stage_block
-	assert 'done < <(git status --porcelain --untracked-files=all' in stage_block
-	assert '?M\\ *|\\?\\?\\ *)' in stage_block
+	# Explicit install destinations are inventoried before the ledger is rendered.
+	assert stage_block.index("_staged_support_installed_paths=()") < stage_block.index('install -m 0755 "${src}" "scripts/${f}"')
+	assert 'grep -Fqx -- "${_staged_status_line}"' not in stage_block
+	assert 'git status --porcelain --untracked-files=all' not in stage_block
+	assert '_staged_support_installed_paths+=("scripts/${f}")' in stage_block
+	assert '_staged_support_installed_paths+=("ai-memory/schemas/${sf}")' in stage_block
+	assert '_staged_support_installed_paths+=("prompts/${prompt_assembly_asset}")' in stage_block
 	assert stage_block.index("STAGED_SUPPORT_LEDGER=") > stage_block.index('install -m 0644 "${src}" "prompts/${prompt_assembly_asset}"')
 	assert 'STAGED_SUPPORT_LEDGER="${RUNTIME_DIR}/staged_support_overwrites.txt"' in stage_block
 	assert 'STAGED_SUPPORT_BASE_DIR="${RUNTIME_DIR}/staged_support_base"' in stage_block
@@ -1746,14 +1770,17 @@ def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -
 	assert 'echo "STAGED_SUPPORT_BASE_DIR=${STAGED_SUPPORT_BASE_DIR}"' in stage_block
 	assert 'echo "IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"' in stage_block
 	assert 'install -m 0755 "scripts/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"' in stage_block
+	assert 'for _staged_support_path in "${_staged_support_installed_paths[@]}"; do' in stage_block
+	assert 'git diff --quiet HEAD -- "${_staged_support_path}"' in stage_block
 	assert "IMPLEMENT_STAGED_SUPPORT_LEDGER ref=${SCRIPT_REF} overwritten_tracked_files=" in stage_block
-	assert stage_block.count('if [ "${is_self_repo}" = "true" ]; then') >= 2
+	assert stage_block.count('if [ "${is_self_repo}" = "true" ]; then') >= 1
 	script_text = _implement_commit_script_text()
 	for marker in (
 		'staged_support_ledger="${STAGED_SUPPORT_LEDGER:-}"',
 		"IMPLEMENT_STAGED_SUPPORT_RESTORED",
 		"IMPLEMENT_STAGED_SUPPORT_REBASED",
 		"IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT",
+		"IMPLEMENT_STAGED_SUPPORT_LEDGER_MISSING",
 		"IMPLEMENT_STAGED_SUPPORT_HEAD_READ_FAILED",
 		"IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED",
 		"IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR",

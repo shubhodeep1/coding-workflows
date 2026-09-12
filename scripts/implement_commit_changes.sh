@@ -122,8 +122,23 @@ fi
 # commit time), so this block is a no-op there.
 staged_support_ledger="${STAGED_SUPPORT_LEDGER:-}"
 staged_support_base_dir="${STAGED_SUPPORT_BASE_DIR:-}"
-if [ -n "${staged_support_ledger}" ] && [ -f "${staged_support_ledger}" ] \
-  && [ -n "${staged_support_base_dir}" ] && [ -d "${staged_support_base_dir}" ]; then
+if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; then
+  if [ -z "${staged_support_ledger}" ] || [ ! -f "${staged_support_ledger}" ]; then
+    echo "::error::IMPLEMENT_STAGED_SUPPORT_LEDGER_MISSING path=${staged_support_ledger:-<unset>}; refusing to commit without the staged-support inventory."
+    {
+      echo "staged_support_rebase_conflict=true"
+      echo "staged_support_rebase_conflict_files=${staged_support_ledger:-STAGED_SUPPORT_LEDGER}"
+    } >> "$GITHUB_OUTPUT"
+    exit 1
+  fi
+  if [ -z "${staged_support_base_dir}" ] || [ ! -d "${staged_support_base_dir}" ]; then
+    echo "::error::IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=${staged_support_base_dir:-<unset>}; refusing to commit without the installed-content baseline."
+    {
+      echo "staged_support_rebase_conflict=true"
+      echo "staged_support_rebase_conflict_files=${staged_support_base_dir:-STAGED_SUPPORT_BASE_DIR}"
+    } >> "$GITHUB_OUTPUT"
+    exit 1
+  fi
   staged_support_restored=0
   staged_support_rebased=0
   staged_support_conflicts=""

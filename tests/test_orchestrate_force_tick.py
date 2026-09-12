@@ -479,7 +479,7 @@ def test_phase_end_paths_call_shared_force_tick_helper() -> None:
 	resolver_text = RESOLVER_SCRIPT.read_text(encoding="utf-8")
 
 	assert "orchestrate_force_tick.sh" in implement_text
-	assert "bash scripts/orchestrate_force_tick.sh" in implement_text
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/orchestrate_force_tick.sh"' in implement_text
 	assert "orchestrate_force_tick.sh" in review_text
 	assert review_text.count("orchestrate_force_tick.sh") >= 4
 	assert "bash scripts/orchestrate_force_tick.sh" in validate_text

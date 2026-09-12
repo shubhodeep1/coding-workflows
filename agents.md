@@ -209,7 +209,8 @@ a new value, add it to the appropriate overrides file with a
   `github.sha` (the default branch) while the checkout may be an orchestrator
   integration branch. Those installs overwrite tracked files, and the self-repo
   commit path in `scripts/implement_commit_changes.sh` has no `scripts/` exclusion.
-- The staging step records every tracked file it overwrote in
+- The staging step inventories every actual worktree install and records each path whose post-stage
+  state differs from `HEAD` in
   `STAGED_SUPPORT_LEDGER` (`${RUNTIME_DIR}/staged_support_overwrites.txt`) with the
   installed content under `STAGED_SUPPORT_BASE_DIR`; it also records support
   paths recreated over branch-side deletions. Executable support-ref copies live
@@ -222,7 +223,7 @@ a new value, add it to the appropriate overrides file with a
   The workflow invokes the immutable runtime copy of the commit helper and uses
   runtime copies for all later helper calls, so restoring the worktree cannot
   replace the running script or downgrade post-commit tooling.
-  Log keys: `IMPLEMENT_STAGED_SUPPORT_LEDGER`, `IMPLEMENT_STAGED_SUPPORT_RESTORED`,
+  Log keys: `IMPLEMENT_STAGED_SUPPORT_LEDGER`, `IMPLEMENT_STAGED_SUPPORT_LEDGER_MISSING`, `IMPLEMENT_STAGED_SUPPORT_RESTORED`,
   `IMPLEMENT_STAGED_SUPPORT_REBASED`, `IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR`,
   `IMPLEMENT_STAGED_SUPPORT_RECREATED_BY_EDITOR`, `IMPLEMENT_STAGED_SUPPORT_BASE_MISSING`,
   `IMPLEMENT_STAGED_SUPPORT_HEAD_READ_FAILED`, `IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT`,

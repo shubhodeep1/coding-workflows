@@ -941,16 +941,10 @@ jobs:
           # those main-side copies, reverting the branch's security-pass
           # fixes (PR #4079 dropped 1,117 lines across eight helpers and its
           # own review editor then died on the missing broker helper).
-          # Snapshot the worktree status before and after staging so
-          # scripts/implement_commit_changes.sh can restore every
-          # staging-only modification to HEAD, remove a helper recreated over
-          # a branch-side deletion, or re-base an editor edit onto the branch's
-          # version before it commits.
-          _staged_support_pre_status="${RUNTIME_DIR}/staged_support_pre_status.txt"
-          if [ "${is_self_repo}" = "true" ]; then
-            git status --porcelain --untracked-files=all > "${_staged_support_pre_status}" 2>/dev/null \
-              || : > "${_staged_support_pre_status}"
-          fi
+          # Record each actual worktree install destination. Comparing this
+          # explicit inventory to HEAD after staging catches paths that were
+          # already dirty before the install and avoids porcelain path parsing.
+          _staged_support_installed_paths=()
 
           mkdir -p scripts
           _fetched_scripts=()
@@ -965,6 +959,7 @@ jobs:
             fi
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
+            _staged_support_installed_paths+=("scripts/${f}")
             # Intentionally NOT adding scripts/${f} to FETCHED_MANIFEST —
             # see the persistence note above the loop.
           done
@@ -991,6 +986,7 @@ jobs:
             fi
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
+            _staged_support_installed_paths+=("scripts/${f}")
           done
 
           for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do
@@ -1004,6 +1000,7 @@ jobs:
             fi
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
+            _staged_support_installed_paths+=("scripts/${f}")
           done
 
           for f in emit_event.sh emit_event.py; do
@@ -1017,6 +1014,7 @@ jobs:
             fi
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
+            _staged_support_installed_paths+=("scripts/${f}")
           done
 
           for f in transcript_archive.sh; do
@@ -1030,6 +1028,7 @@ jobs:
             fi
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
+            _staged_support_installed_paths+=("scripts/${f}")
           done
 
           mkdir -p scripts/templates
@@ -1043,6 +1042,7 @@ jobs:
             echo "::notice::Consumer repo already tracks scripts/templates/serena_project.yml.j2; preserving caller-owned Serena template."
           else
             install -m 0644 "${serena_template_src}" "scripts/templates/serena_project.yml.j2"
+            _staged_support_installed_paths+=("scripts/templates/serena_project.yml.j2")
             if [ "${is_self_repo}" = "false" ]; then
               echo "scripts/templates/serena_project.yml.j2" >> "${FETCHED_MANIFEST}"
             fi
@@ -1063,6 +1063,7 @@ jobs:
             fi
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
+            _staged_support_installed_paths+=("scripts/${f}")
           done
 
           if [ "${is_self_repo}" = "false" ]; then
@@ -1079,6 +1080,7 @@ jobs:
           fi
           if [ -f "${catalog_src}" ]; then
             install -m 0644 "${catalog_src}" scripts/codex_model_catalog.json
+            _staged_support_installed_paths+=("scripts/codex_model_catalog.json")
             if [ "${is_self_repo}" = "false" ]; then
               echo "scripts/codex_model_catalog.json" >> "${FETCHED_MANIFEST}"
             fi
@@ -1094,6 +1096,7 @@ jobs:
             fi
             if [ ! -f "ai-memory/schemas/${sf}" ] && [ -f "${src}" ]; then
               install -m 0644 "${src}" "ai-memory/schemas/${sf}"
+              _staged_support_installed_paths+=("ai-memory/schemas/${sf}")
               if [ "${is_self_repo}" = "false" ]; then
                 echo "ai-memory/schemas/${sf}" >> "${FETCHED_MANIFEST}"
               fi
@@ -1121,6 +1124,7 @@ jobs:
                 exit 1
               fi
               install -m 0644 "${src}" "${f}"
+              _staged_support_installed_paths+=("${f}")
               if [ "${is_self_repo}" = "false" ]; then
                 echo "${f}" >> "${FETCHED_MANIFEST}"
               fi
@@ -1138,6 +1142,7 @@ jobs:
               exit 1
             fi
             install -m 0644 "${src}" prompts/mode-implement-diagnose.txt
+            _staged_support_installed_paths+=("prompts/mode-implement-diagnose.txt")
             if [ "${is_self_repo}" = "false" ]; then
               echo "prompts/mode-implement-diagnose.txt" >> "${FETCHED_MANIFEST}"
             fi
@@ -1157,6 +1162,7 @@ jobs:
               exit 1
             fi
             install -m 0644 "${src}" prompts/mode-implement-repair.txt
+            _staged_support_installed_paths+=("prompts/mode-implement-repair.txt")
             if [ "${is_self_repo}" = "false" ]; then
               echo "prompts/mode-implement-repair.txt" >> "${FETCHED_MANIFEST}"
             fi
@@ -1174,6 +1180,7 @@ jobs:
               exit 1
             fi
             install -m 0644 "${src}" "prompts/${f}"
+            _staged_support_installed_paths+=("prompts/${f}")
             if [ "${is_self_repo}" = "false" ]; then
               echo "prompts/${f}" >> "${FETCHED_MANIFEST}"
             fi
@@ -1191,6 +1198,7 @@ jobs:
               exit 1
             fi
             install -m 0644 "${src}" "prompts/contracts/${f}"
+            _staged_support_installed_paths+=("prompts/contracts/${f}")
             if [ "${is_self_repo}" = "false" ]; then
               echo "prompts/contracts/${f}" >> "${FETCHED_MANIFEST}"
             fi
@@ -1210,6 +1218,7 @@ jobs:
             fi
             mkdir -p "$(dirname -- "prompts/${prompt_assembly_asset}")"
             install -m 0644 "${src}" "prompts/${prompt_assembly_asset}"
+            _staged_support_installed_paths+=("prompts/${prompt_assembly_asset}")
             if [ "${is_self_repo}" = "false" ]; then
               echo "prompts/${prompt_assembly_asset}" >> "${FETCHED_MANIFEST}"
             fi
@@ -1219,9 +1228,9 @@ jobs:
             install -m 0644 .codex-workflow-src/agents.md "${RUNTIME_DIR}/agents_canonical.md"
           fi
 
-          # Self-repo staged-support ledger (see the snapshot above). Every
-          # tracked file this step modified, plus any helper it recreated over
-          # a branch-side deletion, is listed in
+          # Self-repo staged-support ledger (see the install inventory above).
+          # Every installed path whose resulting content or mode differs from
+          # HEAD, including a path recreated over a branch-side deletion, is listed in
           # STAGED_SUPPORT_LEDGER, with a copy of the installed content under
           # STAGED_SUPPORT_BASE_DIR so the commit helper can tell an untouched
           # staged copy (restore from HEAD) from one the editor edited
@@ -1233,24 +1242,17 @@ jobs:
             mkdir -p -- "${STAGED_SUPPORT_BASE_DIR}"
             : > "${STAGED_SUPPORT_LEDGER}"
             _staged_support_count=0
-            while IFS= read -r _staged_status_line; do
-              [ -n "${_staged_status_line}" ] || continue
-              # Porcelain v1: `XY path`; capture worktree modifications (Y=M)
-              # and support paths recreated over a branch-side deletion (??).
-              case "${_staged_status_line}" in
-                ?M\ *|\?\?\ *) ;;
-                *) continue ;;
-              esac
-              if grep -Fqx -- "${_staged_status_line}" "${_staged_support_pre_status}" 2>/dev/null; then
+            for _staged_support_path in "${_staged_support_installed_paths[@]}"; do
+              [ -f "${_staged_support_path}" ] || continue
+              if git cat-file -e "HEAD:${_staged_support_path}" >/dev/null 2>&1 \
+                && git diff --quiet HEAD -- "${_staged_support_path}"; then
                 continue
               fi
-              _staged_support_path="${_staged_status_line:3}"
-              [ -f "${_staged_support_path}" ] || continue
               mkdir -p -- "${STAGED_SUPPORT_BASE_DIR}/$(dirname -- "${_staged_support_path}")"
               cp -p -- "${_staged_support_path}" "${STAGED_SUPPORT_BASE_DIR}/${_staged_support_path}"
               printf '%s\n' "${_staged_support_path}" >> "${STAGED_SUPPORT_LEDGER}"
               _staged_support_count=$((_staged_support_count + 1))
-            done < <(git status --porcelain --untracked-files=all 2>/dev/null || true)
+            done
             IMPLEMENT_STAGED_SUPPORT_RUN_DIR="${RUNTIME_DIR}/staged_support_run/scripts"
             rm -rf -- "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
             mkdir -p -- "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"

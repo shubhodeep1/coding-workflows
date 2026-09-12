@@ -1787,8 +1787,8 @@ silently replace divergent integration-branch versions. Runs 34392788763 and 346
 this defect; PR #4079 lost 1,117 lines across eight helpers and its review editor then failed after
 the overwritten helper set removed `model_provider_broker_start`.
 
-The staging step now snapshots `git status --porcelain --untracked-files=all`, records modified or
-recreated support paths in `STAGED_SUPPORT_LEDGER`, stores their installed content under
+The staging step now inventories every actual worktree install, compares those explicit paths to
+`HEAD`, records modified or recreated support paths in `STAGED_SUPPORT_LEDGER`, and stores their installed content under
 `STAGED_SUPPORT_BASE_DIR`, and preserves executable support-ref copies under
 `IMPLEMENT_STAGED_SUPPORT_RUN_DIR`. Before staging, `scripts/implement_commit_changes.sh` restores
 untouched tracked copies to `HEAD`, removes untouched copies recreated over branch-side deletions,
@@ -1796,7 +1796,7 @@ keeps deliberate editor deletions or recreations, and 3-way merges editor change
 version. The commit helper and every later helper call execute from the immutable runtime directory,
 so restoring the worktree cannot replace the running script or drop default-branch tooling fixes.
 
-An unresolved ledger entry, unreadable branch blob, or merge conflict emits
+An unavailable ledger or baseline, unreadable branch blob, or merge conflict emits
 `IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT` or a more specific staged-support error, sets
 `staged_support_rebase_conflict=true` with `staged_support_rebase_conflict_files`, and fails closed.
 The dedicated rejection handler labels the issue `ai:needs-human`, posts the affected paths, sends a
