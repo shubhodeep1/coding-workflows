@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:3295-3309 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The preflight projection block does not validate that every per-path baseline under `STAGED_SUPPORT_BASE_DIR/<path>` exists before running `cmp -s`.\n  WHY: A missing per-path baseline silently skips the reset, leaves SCRIPT_REF-overwritten content staged, and causes the scope guard to report a misleading out-of-scope violation instead of the dedicated staged-support failure path.\n- scripts/implement_commit_changes.sh:158-162 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When a per-file baseline is missing, the loop continues processing later ledger entries after partially mutating the worktree.\n  WHY: Although the command ultimately exits 1, direct reinvocation from the same checkout can observe a partially restored worktree and produce commits that do not reflect the operator's intent.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"An unavailable ledger or baseline, unreadable branch blob, or merge conflict emits IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT or a more specific staged-support error, sets staged_support_rebase_conflict=true with staged_support_rebase_conflict_files, and fails closed.\" (README.md:1795-1801)\n  expected_change_site: .github/workflows/implement.yml preflight block at lines 3295-3309\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The preflight projection block is silent on per-file baseline existence \u2014 `[ -f \"${preflight_staged_support_base}\" ]` returns false, no diagnostic is logged, no `staged_support_rebase_conflict` output is emitted, and the block falls through; the commit helper at scripts/implement_commit_changes.sh:158-162 handles this at commit time, but the preflight's silence allows the scope guard to misclassify the failure first.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/implement.yml:3295-3309 | severity=high | confidence=3\n  PROBLEM: The preflight block only validates the ledger file's existence (`[ -s \"${STAGED_SUPPORT_LEDGER:-}\" ]`) and the base directory's existence (`[ -d \"${STAGED_SUPPORT_BASE_DIR:-}\" ]`), but does NOT validate that every per-path baseline under `STAGED_SUPPORT_BASE_DIR/<path>` actually exists before running `cmp -s`.\n  WHY: When a single per-path baseline copy is missing, `[ -f \"${preflight_staged_support_base}\" ]` silently returns false, the `git reset` does not run, and the worktree retains the SCRIPT_REF-overwritten content; on the subsequent files_touched scope guard, that path is still seen in `git diff --cached` and could be reported as out-of-scope, masking the real problem. The ledger record fires a misleading scope violation rather than the dedicated staged-support failure path. Operators see a `scope_violation_blocked=out-of-scope` for `scripts/foo.sh` instead of `IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/foo.sh`, and the `ai:scope-blocked` handler runs instead of the `ai:needs-human` handler. The PR description's \"fail closed\" promise is partially defeated when a single baseline copy is missing \u2014 the staging step could legitimately lose one baseline copy if RUNTIME_DIR is partially wiped between staging and commit.\n- scripts/implement_commit_changes.sh:158-162 | severity=low | confidence=2\n  PROBLEM: When the loop encounters a per-file baseline that is missing, it logs the error, appends the path to `staged_support_conflicts`, and uses `continue` to keep processing the remaining ledger entries.\n  WHY: A retry of the implement job from the same checkout resumes with the staging step reinstalling everything, so the partial restore is overwritten in practice. But any direct re-invocation of the commit helper from the worktree (debugging, manual re-run) sees the partial state and may produce commits that don't reflect the operator's intent.\n- TASK_GAP\n  Requirement: \"An unavailable ledger or baseline, unreadable branch blob, or merge conflict emits IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT or a more specific staged-support error, sets staged_support_rebase_conflict=true with staged_support_rebase_conflict_files, and fails closed.\" (README.md:1795-1801)\n  Expected change site: .github/workflows/implement.yml preflight block at lines 3295-3309\n  Evidence of absence: The preflight projection block is silent on per-file baseline existence \u2014 `[ -f \"${preflight_staged_support_base}\" ]` returns false, no diagnostic is logged, no `staged_support_rebase_conflict` output is emitted, and the block falls through. The dedicated `ai:needs-human` handler is therefore never reached for per-file baseline misses in the preflight layer. (The commit helper at scripts/implement_commit_changes.sh:158-162 does handle this at commit time, but the preflight's silence allows the scope guard to misclassify the failure first.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "cdf1f9f485229e5f26e51671f1a032ec5f1f34cdc408f657436a1ab0dc2ce49f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4081,
+    "run_id": "34683828646",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34683828646",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260912095535_4c324cb3df",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4081,
+    "run_id": "34683828646"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-12T09:55:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
