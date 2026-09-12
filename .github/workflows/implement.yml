@@ -3292,14 +3292,45 @@ jobs:
           # Project the staged-support restore into the temporary index before
           # scope enforcement. Only untouched installed copies are reset;
           # editor-modified or deleted support files remain scope-checked.
-          if [ "${is_self_repo}" = "true" ] && [ -s "${STAGED_SUPPORT_LEDGER:-}" ] && [ -d "${STAGED_SUPPORT_BASE_DIR:-}" ]; then
+          if [ "${is_self_repo}" = "true" ]; then
+            if [ -z "${STAGED_SUPPORT_LEDGER:-}" ] || [ ! -f "${STAGED_SUPPORT_LEDGER:-}" ]; then
+              echo "::error::IMPLEMENT_STAGED_SUPPORT_LEDGER_MISSING path=${STAGED_SUPPORT_LEDGER:-<unset>}; refusing preflight without the staged-support inventory."
+              {
+                echo "staged_support_rebase_conflict=true"
+                echo "staged_support_rebase_conflict_files=${STAGED_SUPPORT_LEDGER:-STAGED_SUPPORT_LEDGER}"
+              } >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            if [ -z "${STAGED_SUPPORT_BASE_DIR:-}" ] || [ ! -d "${STAGED_SUPPORT_BASE_DIR:-}" ]; then
+              echo "::error::IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=${STAGED_SUPPORT_BASE_DIR:-<unset>}; refusing preflight without the installed-content baseline."
+              {
+                echo "staged_support_rebase_conflict=true"
+                echo "staged_support_rebase_conflict_files=${STAGED_SUPPORT_BASE_DIR:-STAGED_SUPPORT_BASE_DIR}"
+              } >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
             while IFS= read -r preflight_staged_support_path; do
               [ -n "${preflight_staged_support_path}" ] || continue
               case "${preflight_staged_support_path}" in
-                /*|../*|*/../*|..|*/..) continue ;;
+                /*|../*|*/../*|..|*/..)
+                  echo "::error::IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path=${preflight_staged_support_path} reason=unsafe_path"
+                  {
+                    echo "staged_support_rebase_conflict=true"
+                    echo "staged_support_rebase_conflict_files=${preflight_staged_support_path}"
+                  } >> "$GITHUB_OUTPUT"
+                  exit 1
+                  ;;
               esac
               preflight_staged_support_base="${STAGED_SUPPORT_BASE_DIR}/${preflight_staged_support_path}"
-              if [ -f "${preflight_staged_support_path}" ] && [ -f "${preflight_staged_support_base}" ] \
+              if [ ! -f "${preflight_staged_support_base}" ]; then
+                echo "::error::IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=${preflight_staged_support_path}; refusing preflight without the installed-content baseline."
+                {
+                  echo "staged_support_rebase_conflict=true"
+                  echo "staged_support_rebase_conflict_files=${preflight_staged_support_path}"
+                } >> "$GITHUB_OUTPUT"
+                exit 1
+              fi
+              if [ -f "${preflight_staged_support_path}" ] \
                 && cmp -s -- "${preflight_staged_support_path}" "${preflight_staged_support_base}"; then
                 git reset -q HEAD -- "${preflight_staged_support_path}" 2>/dev/null \
                   || git rm -q --cached --ignore-unmatch -- "${preflight_staged_support_path}" 2>/dev/null \
@@ -3986,7 +4017,7 @@ jobs:
         # label and posts a scope-specific comment/alert. The destructive and
         # scope and staged-support branches are mutually exclusive — each guard
         # exits on the first tripped condition — so at most one fires per run.
-        if: env.SKIP_IMPLEMENT != 'true' && (failure() || cancelled()) && (steps.preflight_destructive_guard.outputs.destructive_commit_blocked != '' || steps.commit_changes.outputs.destructive_commit_blocked != '' || steps.preflight_destructive_guard.outputs.scope_violation_blocked != '' || steps.commit_changes.outputs.scope_violation_blocked != '' || steps.commit_changes.outputs.staged_support_rebase_conflict != '')
+        if: env.SKIP_IMPLEMENT != 'true' && (failure() || cancelled()) && (steps.preflight_destructive_guard.outputs.destructive_commit_blocked != '' || steps.commit_changes.outputs.destructive_commit_blocked != '' || steps.preflight_destructive_guard.outputs.scope_violation_blocked != '' || steps.commit_changes.outputs.scope_violation_blocked != '' || steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict != '' || steps.commit_changes.outputs.staged_support_rebase_conflict != '')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -4000,8 +4031,8 @@ jobs:
           SVB_COUNT: ${{ steps.preflight_destructive_guard.outputs.scope_violation_count || steps.commit_changes.outputs.scope_violation_count }}
           SVB_FILES: ${{ steps.preflight_destructive_guard.outputs.scope_violation_files || steps.commit_changes.outputs.scope_violation_files }}
           SVB_ALLOWLIST: ${{ steps.preflight_destructive_guard.outputs.scope_violation_allowlist || steps.commit_changes.outputs.scope_violation_allowlist }}
-          SSB_REASON: ${{ steps.commit_changes.outputs.staged_support_rebase_conflict }}
-          SSB_FILES: ${{ steps.commit_changes.outputs.staged_support_rebase_conflict_files }}
+          SSB_REASON: ${{ steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict || steps.commit_changes.outputs.staged_support_rebase_conflict }}
+          SSB_FILES: ${{ steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict_files || steps.commit_changes.outputs.staged_support_rebase_conflict_files }}
         run: |
           set -euo pipefail
           bash "${RUNTIME_DIR}/implement_handle_guard_block.sh"
@@ -4999,7 +5030,7 @@ jobs:
             --add-label 'ai:awaiting-approval' --remove-label 'ai:implementing' >/dev/null 2>&1 || true
 
       - name: Capture post-Codex validation errors
-        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == ''
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == ''
         id: capture_post_codex_validation_errors
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -5095,7 +5126,7 @@ jobs:
           fi
 
       - name: Diagnose post-Codex failure and create fix-up issues
-        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == ''
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == ''
         id: diagnose_post_codex_failure
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -5139,7 +5170,7 @@ jobs:
           PATH="${diagnose_path}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_diagnose_post_codex_failure.sh"
 
       - name: Comment on issue failure
-        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == ''
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == ''
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -5173,7 +5204,7 @@ jobs:
             -f body="${REASON}"
 
       - name: Telegram failure notification
-        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == ''
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == ''
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}

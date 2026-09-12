@@ -1840,6 +1840,17 @@ def test_preflight_scope_guard_projects_only_untouched_staged_support_files() ->
 		assert "scope_violation_blocked=out-of-scope" in output_text
 		assert "scripts/helper.sh" in output_text
 
+		(repo_dir / "scripts" / "helper.sh").write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
+		(Path(env["STAGED_SUPPORT_BASE_DIR"]) / "scripts" / "helper.sh").unlink()
+		github_output.write_text("", encoding="utf-8")
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode != 0
+		assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh" in proc.stdout + proc.stderr
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "staged_support_rebase_conflict=true" in output_text
+		assert "staged_support_rebase_conflict_files=scripts/helper.sh" in output_text
+		assert "scope_violation_blocked" not in output_text
+
 
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
 	validate_block = _step_block_text("Validate syntax of changed files")
@@ -1879,20 +1890,23 @@ def test_telegram_failure_step_skips_destructive_blocked_runs() -> None:
 		"Post-failure Telegram flow must be skipped for destructive-blocked runs; only the dedicated "
 		"destructive-guard CRITICAL alert should fire"
 	)
+	assert "steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict == ''" in telegram_block
 	assert "steps.commit_changes.outputs.staged_support_rebase_conflict == ''" in telegram_block
 
 
 def test_staged_support_failure_uses_dedicated_handler_and_skips_generic_diagnose() -> None:
 	guard_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	assert "steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict != ''" in guard_block
 	assert "steps.commit_changes.outputs.staged_support_rebase_conflict != ''" in guard_block
-	assert "SSB_REASON:" in guard_block
-	assert "SSB_FILES:" in guard_block
+	assert "SSB_REASON: ${{ steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict || steps.commit_changes.outputs.staged_support_rebase_conflict }}" in guard_block
+	assert "SSB_FILES: ${{ steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict_files || steps.commit_changes.outputs.staged_support_rebase_conflict_files }}" in guard_block
 	for step_name in (
 		"Capture post-Codex validation errors",
 		"Diagnose post-Codex failure and create fix-up issues",
 		"Comment on issue failure",
 		"Telegram failure notification",
 	):
+		assert "steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict == ''" in _step_block_text(step_name), step_name
 		assert "steps.commit_changes.outputs.staged_support_rebase_conflict == ''" in _step_block_text(step_name), step_name
 
 
