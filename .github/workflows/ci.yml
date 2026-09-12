@@ -548,6 +548,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
 
+      - name: Implement workflow-support overlay drift unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_support_overlay_drift.py
+
       - name: Implement files_touched scope guard unit tests
         run: |
           set -euo pipefail

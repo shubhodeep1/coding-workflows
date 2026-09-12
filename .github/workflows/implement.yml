@@ -2195,6 +2195,34 @@ jobs:
             fi
           fi
 
+          # Blob-level snapshot of tracked paths that were ALREADY modified
+          # before Codex ran.  The "Stage workflow support files" step
+          # `install`s the SCRIPT_REF copies of the runtime helper scripts
+          # over the checked-out tree.  On the workflow-source repo those
+          # helpers are tracked, so when the implementation branch was cut
+          # from an integration branch that has diverged from main in any of
+          # them (orchestrator/project-* branches) the overlay leaves them
+          # dirty vs HEAD before the model writes a byte.  Commit-time
+          # `git add -u` then stages that drift as if Codex had authored it
+          # and the PR silently reverts the base branch's helper changes
+          # (PR #4079 dropped the model_provider_broker_* functions from
+          # scripts/codex_helpers.sh and every AI review run on it died with
+          # `model_provider_broker_start: command not found`).  Record the
+          # pre-Codex blob per dirty tracked path so the preflight guard and
+          # scripts/implement_commit_changes.sh can keep paths whose content
+          # Codex never changed out of the staged set.
+          PRE_CODEX_DIRTY_TRACKED_FILE="${RUNTIME_DIR}/pre_codex_dirty_tracked.tsv"
+          : > "${PRE_CODEX_DIRTY_TRACKED_FILE}"
+          while IFS= read -r -d '' pre_codex_dirty_path; do
+            [ -n "${pre_codex_dirty_path}" ] || continue
+            [ -f "${pre_codex_dirty_path}" ] || continue
+            pre_codex_dirty_blob="$(git hash-object -- "${pre_codex_dirty_path}" 2>/dev/null || true)"
+            [ -n "${pre_codex_dirty_blob}" ] || continue
+            printf '%s\t%s\n' "${pre_codex_dirty_blob}" "${pre_codex_dirty_path}" >> "${PRE_CODEX_DIRTY_TRACKED_FILE}"
+          done < <(git diff --name-only -z HEAD 2>/dev/null || true)
+          echo "PRE_CODEX_DIRTY_TRACKED_FILE=${PRE_CODEX_DIRTY_TRACKED_FILE}" >> "$GITHUB_ENV"
+          echo "Pre-Codex dirty tracked snapshot: $(wc -l < "${PRE_CODEX_DIRTY_TRACKED_FILE}" | tr -d ' ') tracked path(s) already modified vs HEAD"
+
           # Consecutive empty-output streak counter for Fix #2: when
           # Codex returns empty stdout `empty_streak_threshold` attempts
           # in a row the agent loop is stuck in exploration and further
@@ -3127,6 +3155,22 @@ jobs:
             # both tracked updates (-u) and untracked additions.
             add_u_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
             add_o_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
+          fi
+          # Workflow-support overlay drift (source repo only): keep tracked
+          # paths that were already dirty before Codex ran and whose content
+          # Codex never changed out of the projected staged set, so this
+          # preflight (and the files_touched scope guard reading it) matches
+          # the real commit path in scripts/implement_commit_changes.sh.
+          # The snapshot is written by the "Run Codex implementation" step.
+          if [ "${is_self_repo}" = "true" ] && [ -s "${PRE_CODEX_DIRTY_TRACKED_FILE:-}" ]; then
+            while IFS=$'\t' read -r overlay_pre_blob overlay_path; do
+              [ -n "${overlay_path}" ] && [ -f "${overlay_path}" ] || continue
+              overlay_now_blob="$(git hash-object -- "${overlay_path}" 2>/dev/null || true)"
+              [ -n "${overlay_now_blob}" ] && [ "${overlay_now_blob}" = "${overlay_pre_blob}" ] || continue
+              overlay_head_blob="$(git rev-parse --verify --quiet "HEAD:${overlay_path}" 2>/dev/null || true)"
+              [ -n "${overlay_head_blob}" ] && [ "${overlay_head_blob}" != "${overlay_now_blob}" ] || continue
+              add_u_excludes+=(":(exclude,literal)${overlay_path}")
+            done < "${PRE_CODEX_DIRTY_TRACKED_FILE}"
           fi
           git add -u -- "${add_u_excludes[@]}"
           while IFS= read -r -d '' untracked_candidate; do
@@ -4154,6 +4198,41 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
+          # Park workflow-support overlay copies for the duration of this
+          # step.  scripts/implement_commit_changes.sh keeps tracked helper
+          # files that the "Stage workflow support files" overlay dirtied
+          # (and Codex never edited) OUT of the commit, but leaves the
+          # SCRIPT_REF copies in the worktree because later steps source
+          # them.  The non-fast-forward reconcile path below runs
+          # `git rebase`, which refuses to start on a dirty worktree, and its
+          # abort path asserts a clean tree before the force-with-lease
+          # fallback.  Restore HEAD content for exactly those paths now and
+          # re-materialise the overlay blobs on exit (the commit step stored
+          # them with `git hash-object -w`), so every later step still sees
+          # the SCRIPT_REF helpers.  Every EXIT trap in this step must chain
+          # restore_support_overlay_copies.
+          SUPPORT_OVERLAY_EXCLUDED_FILE="${RUNTIME_DIR:+${RUNTIME_DIR}/support_overlay_excluded.tsv}"
+          restore_support_overlay_copies() {
+            [ -s "${SUPPORT_OVERLAY_EXCLUDED_FILE:-}" ] || return 0
+            while IFS=$'\t' read -r overlay_blob overlay_mode overlay_path; do
+              [ -n "${overlay_path}" ] || continue
+              if git cat-file blob "${overlay_blob}" > "${overlay_path}" 2>/dev/null; then
+                chmod "${overlay_mode}" "${overlay_path}" 2>/dev/null || true
+              else
+                echo "::warning::Could not re-materialise workflow-support overlay copy for ${overlay_path} (blob ${overlay_blob}); later steps will see the committed HEAD version."
+              fi
+            done < "${SUPPORT_OVERLAY_EXCLUDED_FILE}"
+          }
+          if [ -s "${SUPPORT_OVERLAY_EXCLUDED_FILE:-}" ]; then
+            trap restore_support_overlay_copies EXIT
+            while IFS=$'\t' read -r overlay_blob overlay_mode overlay_path; do
+              [ -n "${overlay_path}" ] || continue
+              git restore --source=HEAD --staged --worktree -- "${overlay_path}" 2>/dev/null \
+                || echo "::warning::Could not park workflow-support overlay copy for ${overlay_path}; a non-fast-forward rebase may refuse to start."
+            done < "${SUPPORT_OVERLAY_EXCLUDED_FILE}"
+            echo "Parked $(wc -l < "${SUPPORT_OVERLAY_EXCLUDED_FILE}" | tr -d ' ') workflow-support overlay path(s) for the push step."
+          fi
+
           support_checkout_root="${GITHUB_WORKSPACE}/.codex-workflow-src"
           support_checkout_main_root="${GITHUB_WORKSPACE}/.codex-workflow-src-main"
 
@@ -4189,12 +4268,13 @@ jobs:
           fi
           # Ensure the temp file is always cleaned up even if `install`,
           # `chmod`, or the script itself fails under `set -euo pipefail`.
-          trap 'rm -f "${health_script}"' EXIT
+          # Chains the overlay restore so parking above is always undone.
+          trap 'rm -f "${health_script}"; restore_support_overlay_copies' EXIT
           install -m 0755 "${src}" "${health_script}"
 
           bash "${health_script}" repair
           rm -f "${health_script}"
-          trap - EXIT
+          trap restore_support_overlay_copies EXIT
 
           for attempt in 1 2 3; do
             # Fetch latest remote state before pushing so local tracking refs

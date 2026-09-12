@@ -184,6 +184,25 @@ a new value, add it to the appropriate overrides file with a
   shape while deriving the suffix from
   `sha256(salt.encode("utf-8"))`, including the empty-string salt.
 
+## Implement commit staging on the source repo
+
+- The implement phase installs the `SCRIPT_REF` copies of the runtime helper
+  scripts over the checked-out tree. In this repo those helpers are tracked,
+  so on an integration branch that has diverged from `main` in any of them
+  the overlay dirties tracked files before Codex runs.
+- `.github/workflows/implement.yml` ("Run Codex implementation") snapshots the
+  blob of every tracked path already modified vs `HEAD` before the first
+  Codex attempt into `PRE_CODEX_DIRTY_TRACKED_FILE`. On the source repo only,
+  the preflight guard and `scripts/implement_commit_changes.sh` exclude any
+  such path whose content Codex never changed from staging, so a PR never
+  reverts the base branch's helper changes to the `main` versions (the
+  PR #4079 failure mode, where `scripts/codex_helpers.sh` lost
+  `model_provider_broker_*` and its own review runs broke).
+- Excluded overlay copies stay in the worktree for later steps and are
+  listed in `RUNTIME_DIR/support_overlay_excluded.tsv`; the "Push branch"
+  step parks them around its rebase fallback and restores them on exit.
+  Consumer repos are unaffected (fetched helpers are gitignored there).
+
 ## Implement scope-lock label
 
 - When `SCOPE_LOCK_LABEL_ENABLED=true`, `implement.yml` recognizes one active

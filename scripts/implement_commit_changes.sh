@@ -162,8 +162,77 @@ if [ "${is_self_repo}" = "false" ]; then
   add_u_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
   add_o_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
 fi
+# >>> workflow-support overlay drift guard (source repo) >>>
+# The "Stage workflow support files" step installs the SCRIPT_REF copies of
+# the runtime helper scripts over the checked-out tree.  In the canonical
+# repo those helpers are TRACKED, so when the implementation branch was cut
+# from an integration branch that has diverged from main in any of them
+# (orchestrator/project-* branches), the overlay leaves those files modified
+# vs HEAD before Codex runs.  `git add -u` below would stage that drift as if
+# the model had authored it, and the PR silently reverts the base branch's
+# own helper changes (PR #4079: scripts/codex_helpers.sh lost the
+# model_provider_broker_* functions and every AI review run on that PR died
+# with `model_provider_broker_start: command not found`).
+#
+# The "Run Codex implementation" step snapshots the blob of every tracked
+# path that was already dirty before Codex ran (PRE_CODEX_DIRTY_TRACKED_FILE,
+# one `<blob>\t<path>` per line).  A path whose content is still exactly the
+# pre-Codex blob was not touched by the model: keep it out of staging and
+# leave the overlay copy in the worktree, because later steps in this job
+# still source the SCRIPT_REF helper versions from it.  Paths the model DID
+# edit are staged as usual (and flagged, because the edit sits on top of the
+# overlay copy rather than the base branch's).  The excluded set is recorded
+# in SUPPORT_OVERLAY_EXCLUDED_FILE (`<stored blob>\t<mode>\t<path>`) so the
+# "Push branch" step can park the overlay copies while it reconciles a
+# non-fast-forward push and re-materialise them afterwards.
+support_overlay_excluded_paths=()
+SUPPORT_OVERLAY_EXCLUDED_FILE=""
+if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] && [ -w "${RUNTIME_DIR}" ]; then
+  SUPPORT_OVERLAY_EXCLUDED_FILE="${RUNTIME_DIR}/support_overlay_excluded.tsv"
+  : > "${SUPPORT_OVERLAY_EXCLUDED_FILE}"
+fi
+if [ "${is_self_repo}" = "true" ] && [ -s "${PRE_CODEX_DIRTY_TRACKED_FILE:-}" ]; then
+  while IFS=$'\t' read -r overlay_pre_blob overlay_path; do
+    [ -n "${overlay_path}" ] && [ -f "${overlay_path}" ] || continue
+    overlay_head_blob="$(git rev-parse --verify --quiet "HEAD:${overlay_path}" 2>/dev/null || true)"
+    [ -n "${overlay_head_blob}" ] || continue
+    overlay_now_blob="$(git hash-object -- "${overlay_path}" 2>/dev/null || true)"
+    [ -n "${overlay_now_blob}" ] || continue
+    if [ "${overlay_now_blob}" != "${overlay_pre_blob}" ]; then
+      if [ "${overlay_pre_blob}" != "${overlay_head_blob}" ]; then
+        echo "::warning::Codex edited ${overlay_path} on top of the workflow-support overlay copy (its pre-Codex content already differed from HEAD); base-branch-only content in that file may be reverted by this commit."
+      fi
+      continue
+    fi
+    [ "${overlay_now_blob}" != "${overlay_head_blob}" ] || continue
+    support_overlay_excluded_paths+=("${overlay_path}")
+    add_u_excludes+=(":(exclude,literal)${overlay_path}")
+    if [ -n "${SUPPORT_OVERLAY_EXCLUDED_FILE}" ]; then
+      overlay_mode=644
+      if [ -x "${overlay_path}" ]; then
+        overlay_mode=755
+      fi
+      # -w keeps the overlay blob in the object store so the push step can
+      # re-materialise it byte-for-byte after parking the worktree copy.
+      overlay_stored_blob="$(git hash-object -w -- "${overlay_path}" 2>/dev/null || true)"
+      if [ -n "${overlay_stored_blob}" ]; then
+        printf '%s\t%s\t%s\n' "${overlay_stored_blob}" "${overlay_mode}" "${overlay_path}" >> "${SUPPORT_OVERLAY_EXCLUDED_FILE}"
+      fi
+    fi
+  done < "${PRE_CODEX_DIRTY_TRACKED_FILE}"
+  if [ "${#support_overlay_excluded_paths[@]}" -gt 0 ]; then
+    echo "Workflow-support overlay drift excluded from staging (${#support_overlay_excluded_paths[@]} tracked path(s) already modified before Codex ran and unchanged by it):"
+    printf '  - %s\n' "${support_overlay_excluded_paths[@]}"
+  fi
+fi
+# <<< workflow-support overlay drift guard (source repo) <<<
 git add -u -- "${add_u_excludes[@]}"
 git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git add --
+if [ "${#support_overlay_excluded_paths[@]}" -gt 0 ]; then
+  # Defensive: nothing above should have staged these, but an index entry
+  # left behind by an earlier step would survive the -u pathspec exclusion.
+  git reset -q HEAD -- "${support_overlay_excluded_paths[@]}" 2>/dev/null || true
+fi
 if [ "${is_self_repo}" = "false" ] && [ -f scripts/.gitignore ]; then
   while IFS= read -r fetched_script; do
     case "${fetched_script}" in ''|'#'*|'.gitignore') continue ;; esac
@@ -409,6 +478,26 @@ if [ -z "$(git diff --cached --name-only)" ]; then
       fi
     fi
   done
+  # Workflow-support overlay drift excluded above is expected worktree
+  # state, not a stripped Codex edit: drop it from the report so the no-op
+  # handler does not describe it as "created by the model but excluded".
+  if [ "${#support_overlay_excluded_paths[@]}" -gt 0 ] && [ -n "${remaining_changes}" ]; then
+    filtered_remaining_changes=""
+    while IFS= read -r remaining_line; do
+      [ -n "${remaining_line}" ] || continue
+      remaining_path="${remaining_line:3}"
+      remaining_is_overlay="false"
+      for overlay_excluded_path in "${support_overlay_excluded_paths[@]}"; do
+        if [ "${remaining_path}" = "${overlay_excluded_path}" ]; then
+          remaining_is_overlay="true"
+          break
+        fi
+      done
+      [ "${remaining_is_overlay}" = "false" ] || continue
+      filtered_remaining_changes="${filtered_remaining_changes}${filtered_remaining_changes:+$'\n'}${remaining_line}"
+    done <<< "${remaining_changes}"
+    remaining_changes="${filtered_remaining_changes}"
+  fi
   if [ -n "${remaining_changes}" ]; then
     echo "::warning::Files present in worktree but excluded from staging:"
 # shellcheck disable=SC2001
