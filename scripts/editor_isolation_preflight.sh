@@ -316,7 +316,7 @@ editor_isolation_verify_process_group_stopped()
 		fi
 		sleep 0.1
 	done
-	echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_SURVIVOR user=${EDITOR_ISOLATION_TARGET_USER} pgid=${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" >&2
+	echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_SURVIVOR user=${EDITOR_ISOLATION_TARGET_USER} pgid=${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID} attempts=${verify_attempts} interval_seconds=0.1" >&2
 	return 1
 }
 

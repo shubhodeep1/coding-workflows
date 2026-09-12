@@ -264,6 +264,7 @@ def test_fallback_rejects_stale_guard_identity_before_privileged_signal() -> Non
 			assert "EDITOR_PROCESS_GROUP_GUARD_IDENTITY_MISMATCH" in result.stderr
 			assert not (tmp_path / "sudo.log").exists()
 			assert _pid_is_running(editor_pid)
+			assert guard.poll() is None
 		finally:
 			if editor_pid is not None and _pid_is_running(editor_pid):
 				os.killpg(editor_pid, 9)

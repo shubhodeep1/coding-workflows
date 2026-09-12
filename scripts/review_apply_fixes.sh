@@ -379,7 +379,7 @@ _editor_isolated_group_has_survivors() {
 
 terminate_editor_attempt_process_group() {
   local guard_pid="$1" process_group_file="$2"
-  local termination_rc=0 member_status=1 fallback_pgid="" verify_index
+  local termination_rc=0 member_status=1 fallback_pgid="" guard_cleanup_identity="" verify_index
   if [ -n "${guard_pid}" ] && [ -n "${process_group_file}" ] && [ -s "${process_group_file}" ] \
     && command -v editor_isolation_signal_process_group >/dev/null 2>&1; then
     if ! editor_isolation_signal_process_group "${process_group_file}" "${EDITOR_ISOLATION_USER}" TERM "${guard_pid}"; then
@@ -450,9 +450,15 @@ terminate_editor_attempt_process_group() {
   # child; this bounded fallback prevents a signalling failure from hanging
   # the parent wait while cleanup remains fail-closed on group survivors.
   if [ -n "${guard_pid}" ] && kill -0 "${guard_pid}" 2>/dev/null; then
-    kill -TERM "${guard_pid}" 2>/dev/null || true
-    sleep 1
-    kill -KILL "${guard_pid}" 2>/dev/null || true
+    guard_cleanup_identity="$(_editor_process_identity "${guard_pid}" || true)"
+    if [ "${guard_cleanup_identity}" = "${EDITOR_ISOLATION_EXPECTED_GUARD_UID:-} ${EDITOR_ISOLATION_EXPECTED_GUARD_START_TIME_TICKS:-}" ]; then
+      kill -TERM "${guard_pid}" 2>/dev/null || true
+      sleep 1
+      kill -KILL "${guard_pid}" 2>/dev/null || true
+    else
+      echo "::error::EDITOR_PROCESS_GROUP_GUARD_IDENTITY_MISMATCH guard_pid=${guard_pid} stage=guard_cleanup" >&2
+      termination_rc=1
+    fi
   fi
   return "${termination_rc}"
 }
