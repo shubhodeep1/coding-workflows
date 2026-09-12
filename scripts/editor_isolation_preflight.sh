@@ -170,13 +170,13 @@ _editor_isolation_load_process_group_metadata()
 		return 1
 	fi
 	if [ "${require_live_guard}" = "true" ]; then
-		if [ -z "${expected_guard_pid}" ] || [ ! -e "/proc/${loaded_guard_pid}/stat" ]; then
+		if [ -z "${expected_guard_pid}" ]; then
 			echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=guard_identity_unavailable" >&2
 			return 1
 		fi
+		[ -e "/proc/${loaded_guard_pid}/stat" ] || return 3
 		guard_stat_text="$(<"/proc/${loaded_guard_pid}/stat")" || {
-			echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=guard_identity_unreadable" >&2
-			return 1
+			return 3
 		}
 		guard_stat_tail="${guard_stat_text##*) }"
 		read -r -a guard_stat_fields <<< "${guard_stat_tail}"
@@ -249,7 +249,7 @@ editor_isolation_process_group_has_members()
 editor_isolation_signal_process_group()
 {
 	local metadata_path="$1" expected_user="$2" requested_signal="$3" expected_guard_pid="${4:-}"
-	local process_group_probe_status
+	local metadata_load_status=0 process_group_probe_status
 	case "${requested_signal}" in
 		TERM|KILL) ;;
 		*)
@@ -257,7 +257,20 @@ editor_isolation_signal_process_group()
 			return 1
 			;;
 	esac
-	_editor_isolation_load_process_group_metadata "${metadata_path}" "${expected_user}" "${expected_guard_pid}" true || return 1
+	_editor_isolation_load_process_group_metadata "${metadata_path}" "${expected_user}" "${expected_guard_pid}" true \
+		|| metadata_load_status=$?
+	if [ "${metadata_load_status}" -eq 3 ]; then
+		if editor_isolation_process_group_has_members "${metadata_path}" "${expected_user}" "${expected_guard_pid}"; then
+			echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=guard_identity_unavailable" >&2
+			return 1
+		else
+			process_group_probe_status=$?
+			[ "${process_group_probe_status}" -eq 1 ] && return 0
+			return 1
+		fi
+	elif [ "${metadata_load_status}" -ne 0 ]; then
+		return 1
+	fi
 	if sudo -n kill "-${requested_signal}" -- "-${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" 2>/dev/null; then
 		return 0
 	fi

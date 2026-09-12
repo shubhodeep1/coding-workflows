@@ -617,6 +617,119 @@ def test_isolated_stall_guard_kills_group_survivors_after_wrapper_exit() -> None
 		_kill_pid_if_running(grandchild_pid)
 
 
+def test_pythonless_isolated_fallback_marks_unguarded_status() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex-stall-pythonless-") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		fake_tr = bin_dir / "tr"
+		fake_tr.write_text("#!/bin/sh\n/bin/cat\n", encoding="utf-8")
+		fake_tr.chmod(0o755)
+		status_file = tmp / "guard.status"
+		metadata_file = tmp / "process-group.env"
+		env = _stall_guard_test_env()
+		env["PATH"] = str(bin_dir)
+		result = subprocess.run(
+			[
+				"/bin/bash",
+				str(STALL_GUARD_SCRIPT),
+				"--phase",
+				"pythonless_editor_test",
+				"--status-file",
+				str(status_file),
+				"--process-group-file",
+				str(metadata_file),
+				"--",
+				"/bin/sh",
+				"-c",
+				"exit 0",
+			],
+			env=env,
+			capture_output=True,
+			text=True,
+			timeout=10,
+		)
+		assert result.returncode == 0, result.stderr
+		assert status_file.read_text(encoding="utf-8") == "state=unguarded\n"
+		assert not metadata_file.exists()
+
+
+def test_isolated_stall_guard_ignores_zombie_only_probe_results() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex-stall-zombie-probe-") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		_write_fake_sudo(bin_dir / "sudo")
+		zombie_pid_file = tmp / "zombie.pid"
+		zombie_parent = subprocess.Popen(
+			[
+				sys.executable,
+				"-c",
+				(
+					"import os, pathlib, sys, time\n"
+					"pid = os.fork()\n"
+					"if pid == 0:\n\tos._exit(0)\n"
+					"pathlib.Path(sys.argv[1]).write_text(str(pid), encoding='ascii')\n"
+					"time.sleep(1000)\n"
+				),
+				str(zombie_pid_file),
+			]
+		)
+		try:
+			for _ in range(100):
+				if zombie_pid_file.exists() and zombie_pid_file.read_text(encoding="ascii"):
+					break
+				time.sleep(0.05)
+			zombie_pid = int(zombie_pid_file.read_text(encoding="ascii"))
+			for _ in range(100):
+				state = Path(f"/proc/{zombie_pid}/stat").read_text(encoding="ascii").rpartition(")")[2].split()[0]
+				if state == "Z":
+					break
+				time.sleep(0.01)
+			assert state == "Z"
+			fake_pgrep = bin_dir / "pgrep"
+			fake_pgrep.write_text("#!/bin/sh\nprintf '%s\\n' \"$FAKE_PGREP_PID\"\n", encoding="utf-8")
+			fake_pgrep.chmod(0o755)
+			env = _stall_guard_test_env()
+			env.update(
+				{
+					"PATH": f"{bin_dir}:{env['PATH']}",
+					"FAKE_PGREP_PID": str(zombie_pid),
+					"FAKE_SUDO_LOG": str(tmp / "sudo.log"),
+					"FAKE_SUDO_SIGNAL_MODE": "signal",
+					"CODEX_HEARTBEAT_ENABLED": "0",
+				}
+			)
+			result = subprocess.run(
+				[
+					"bash",
+					str(STALL_GUARD_SCRIPT),
+					"--phase",
+					"zombie_probe_test",
+					"--process-group-file",
+					str(tmp / "process-group.env"),
+					"--",
+					"sudo",
+					"-n",
+					"-u",
+					pwd.getpwuid(os.getuid()).pw_name,
+					"--",
+					"/bin/sh",
+					"-c",
+					"/bin/sleep 0.2",
+				],
+				env=env,
+				capture_output=True,
+				text=True,
+				timeout=10,
+			)
+			assert result.returncode == 0, result.stderr
+			assert "isolated process-group survivor" not in result.stderr
+		finally:
+			zombie_parent.kill()
+			zombie_parent.wait(timeout=10)
+
+
 def test_codex_stall_guard_heartbeat_appends_budget_fields_when_run_budget_env_present() -> None:
 	with tempfile.TemporaryDirectory(prefix="codex-stall-guard-budget-") as td:
 		tmp = Path(td)
@@ -768,6 +881,9 @@ def test_stall_guard_script_and_callers_keep_the_expected_contract() -> None:
 	# A failed group termination must be visible; the post-attempt survivor check decides.
 	assert 'terminate_editor_attempt_process_group "${cpid}" "${process_group_file}" || true' not in editor_text
 	assert editor_text.count("EDITOR_PROCESS_GROUP_TERMINATION_FAILED attempt=${attempt} trigger=") == 2
+	assert "[ \"${cmd_rc}\" -eq 78 ] || [ \"${cmd_rc}\" -eq 79 ]" in editor_text
+	assert "{ [ \"${cmd_rc}\" -eq 0 ]" in editor_text
+	assert "grep -qxF 'state=unguarded' \"${stall_status_file}\"" in editor_text
 	# PR #4072: the watchdog reap tolerates an already-exited watchdog under set -e.
 	assert 'kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true' in editor_text
 	termination_start = editor_text.index("terminate_editor_attempt_process_group()")
@@ -798,6 +914,8 @@ def main() -> int:
 	test_isolated_stall_guard_reports_privileged_signal_failure()
 	test_isolated_stall_guard_reports_survivors_after_privileged_kill()
 	test_isolated_stall_guard_kills_group_survivors_after_wrapper_exit()
+	test_pythonless_isolated_fallback_marks_unguarded_status()
+	test_isolated_stall_guard_ignores_zombie_only_probe_results()
 	test_codex_stall_guard_heartbeat_appends_budget_fields_when_run_budget_env_present()
 	test_stall_guard_caller_contracts_cover_observe_only_mode()
 	test_stall_guard_caller_contracts_cover_kill_mode()

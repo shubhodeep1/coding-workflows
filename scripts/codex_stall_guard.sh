@@ -10,6 +10,10 @@ EOF
 
 run_without_guard()
 {
+	if [ -n "${process_group_file}" ] && [ -n "${status_file}" ]; then
+		printf 'state=unguarded\n' > "${status_file}" \
+			|| echo "::warning::Could not record the Python-less stall-guard fallback." >&2
+	fi
 	if [ -n "${stdout_file}" ] && [ -n "${stderr_file}" ]; then
 		exec "$@" > "${stdout_file}" 2> "${stderr_file}"
 	elif [ -n "${stdout_file}" ]; then
@@ -399,8 +403,9 @@ def _isolated_group_has_members() -> bool:
 	try:
 		result = subprocess.run(
 			["pgrep", "-u", ISOLATED_USER, "-g", str(child_pgid)],
-			stdout=subprocess.DEVNULL,
+			stdout=subprocess.PIPE,
 			stderr=subprocess.DEVNULL,
+			text=True,
 			check=False,
 		)
 	except OSError as exc:
@@ -409,7 +414,21 @@ def _isolated_group_has_members() -> bool:
 		)
 		return True
 	if result.returncode == 0:
-		return True
+		for member_pid_text in result.stdout.splitlines():
+			try:
+				member_state_fields = Path(f"/proc/{member_pid_text}/stat").read_text(
+					encoding="ascii", errors="replace"
+				).rpartition(")")[2].split()
+			except FileNotFoundError:
+				continue
+			except OSError as exc:
+				_emit_wrapper_stderr(
+					f"::error::codex_stall_guard could not inspect process-group member pid={member_pid_text}: {exc}\n"
+				)
+				return True
+			if not member_state_fields or member_state_fields[0] != "Z":
+				return True
+		return False
 	if result.returncode == 1:
 		return False
 	_emit_wrapper_stderr(

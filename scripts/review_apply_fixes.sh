@@ -2411,8 +2411,14 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
   if [ -n "${process_group_file}" ]; then
-    if [ "${cmd_rc}" -eq 79 ] && [ ! -s "${process_group_file}" ]; then
-      : # Configuration failed before the guard launched an editor group.
+    if [ ! -s "${process_group_file}" ] \
+      && { [ "${cmd_rc}" -eq 78 ] || [ "${cmd_rc}" -eq 79 ] \
+        || { [ "${cmd_rc}" -eq 0 ] \
+          && grep -qxF 'state=unguarded' "${stall_status_file}" 2>/dev/null; }; }; then
+      : # A documented pre-launch or Python-less path created no editor group ledger.
+      if [ "${cmd_rc}" -eq 0 ]; then
+        : > "${stall_status_file}"
+      fi
     elif [ ! -s "${process_group_file}" ]; then
       echo "::error::Editor attempt ${attempt}: the stall guard published no process-group ledger (exit=${cmd_rc}); cannot prove the isolated editor stopped, refusing workspace ownership restoration." >&2
       exit 80

@@ -398,6 +398,43 @@ def test_process_group_metadata_rejects_reused_process_identity(tmp_path: Path) 
 		child.wait(timeout=10)
 
 
+def test_process_group_signal_accepts_only_exited_guard_convergence(tmp_path: Path) -> None:
+	metadata_path = tmp_path / "process-group-exited-guard.env"
+	current_user = pwd.getpwuid(os.getuid()).pw_name
+	missing_pid = "99999999"
+	_write_process_group_metadata(
+		metadata_path,
+		guard_pid=missing_pid,
+		child_pid=missing_pid,
+		process_group_id=missing_pid,
+		isolated_user=current_user,
+	)
+	converged = _run_process_group_helper(
+		tmp_path, metadata_path, current_user, "TERM", missing_pid
+	)
+	assert converged.returncode == 0, converged.stderr
+	assert "guard_identity_unavailable" not in converged.stderr
+
+	child = subprocess.Popen(["sleep", "1000"], start_new_session=True)
+	try:
+		_write_process_group_metadata(
+			metadata_path,
+			guard_pid=missing_pid,
+			child_pid=str(child.pid),
+			process_group_id=str(child.pid),
+			isolated_user=current_user,
+		)
+		live_group = _run_process_group_helper(
+			tmp_path, metadata_path, current_user, "TERM", missing_pid
+		)
+		assert live_group.returncode == 1
+		assert "reason=guard_identity_unavailable" in live_group.stderr
+		assert child.poll() is None
+	finally:
+		os.killpg(child.pid, signal.SIGKILL)
+		child.wait(timeout=10)
+
+
 @pytest.mark.skipif(not _sudo_to_nobody_available(), reason="passwordless sudo to nobody unavailable")
 def test_probe_reports_first_denied_component_then_passes_after_prepare(tmp_path: Path) -> None:
 	env = _fixture(tmp_path)
@@ -555,6 +592,7 @@ def main() -> int:
 		test_process_group_signal_rejects_invalid_metadata_signal_and_user(tmp_path)
 		test_process_group_signal_reports_failed_privileged_kill(tmp_path)
 		test_process_group_metadata_rejects_reused_process_identity(tmp_path)
+		test_process_group_signal_accepts_only_exited_guard_convergence(tmp_path)
 	print("OK: editor isolation preflight process-group contract holds")
 	return 0
 
