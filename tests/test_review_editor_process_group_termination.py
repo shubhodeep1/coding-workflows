@@ -178,6 +178,33 @@ def test_fallback_locates_editor_group_through_guard_child_and_kills_it() -> Non
 			guard.wait(timeout=10)
 
 
+def test_fallback_reports_privileged_signal_failure() -> None:
+	with tempfile.TemporaryDirectory(prefix="editor-terminate-signal-failure-") as td:
+		tmp_path = Path(td)
+		pid_file = tmp_path / "editor.pid"
+		guard = subprocess.Popen([sys.executable, "-c", GUARD, str(pid_file)])
+		editor_pid: int | None = None
+		try:
+			for _ in range(100):
+				if pid_file.exists() and pid_file.read_text(encoding="ascii"):
+					break
+				time.sleep(0.05)
+			editor_pid = int(pid_file.read_text(encoding="ascii"))
+			result = _run_terminate(tmp_path, str(guard.pid), "", sudo_failure=True)
+			assert result.returncode == 1, result.stderr
+			signal_lines = (tmp_path / "sudo.log").read_text(encoding="utf-8").splitlines()
+			assert f"-n kill -TERM -- -{editor_pid}" in signal_lines, signal_lines
+			assert f"-n kill -KILL -- -{editor_pid}" in signal_lines, signal_lines
+			assert _pid_is_running(editor_pid)
+			assert guard.poll() is not None
+		finally:
+			if editor_pid is not None and _pid_is_running(editor_pid):
+				os.killpg(editor_pid, 9)
+			if guard.poll() is None:
+				guard.kill()
+			guard.wait(timeout=10)
+
+
 def test_fallback_reports_unresolved_group_when_guard_has_no_session_child() -> None:
 	with tempfile.TemporaryDirectory(prefix="editor-terminate-unresolved-") as td:
 		tmp_path = Path(td)
@@ -317,6 +344,7 @@ def test_metadata_identity_and_probe_failures_are_hard_failures() -> None:
 
 def main() -> int:
 	test_fallback_locates_editor_group_through_guard_child_and_kills_it()
+	test_fallback_reports_privileged_signal_failure()
 	test_fallback_reports_unresolved_group_when_guard_has_no_session_child()
 	test_fallback_probe_failure_kills_group_but_reports_unverified()
 	test_fallback_malformed_member_probe_kills_group_but_reports_unverified()

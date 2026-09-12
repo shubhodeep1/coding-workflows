@@ -124,6 +124,7 @@ def _write_fake_sudo(path: Path) -> None:
 import os
 import signal
 import sys
+import time
 
 args = sys.argv[1:]
 if args[:2] == ["-n", "kill"]:
@@ -132,6 +133,8 @@ if args[:2] == ["-n", "kill"]:
 	mode = os.environ.get("FAKE_SUDO_SIGNAL_MODE", "signal")
 	if mode == "fail":
 		raise SystemExit(42)
+	if mode == "hang":
+		time.sleep(1000)
 	if mode == "noop":
 		raise SystemExit(0)
 	signum = getattr(signal, "SIG" + args[2].removeprefix("-"))
@@ -496,7 +499,7 @@ def _run_isolated_stall_guard(signal_mode: str) -> tuple[subprocess.CompletedPro
 		env=env,
 		capture_output=True,
 		text=True,
-		timeout=30,
+		timeout=60,
 	)
 	return result, metadata_file, sudo_log, int(child_pid_file.read_text(encoding="ascii"))
 
@@ -524,6 +527,17 @@ def test_isolated_stall_guard_reports_privileged_signal_failure() -> None:
 		result, _metadata_file, _sudo_log, child_pgid = _run_isolated_stall_guard("fail")
 		assert result.returncode == 126, result.stderr
 		assert "privileged process-group signal failed" in result.stderr
+		assert _pid_is_running(child_pgid)
+	finally:
+		_kill_process_group_if_running(child_pgid)
+
+
+def test_isolated_stall_guard_bounds_hung_privileged_signal() -> None:
+	child_pgid: int | None = None
+	try:
+		result, _metadata_file, _sudo_log, child_pgid = _run_isolated_stall_guard("hang")
+		assert result.returncode == 126, result.stderr
+		assert "error=TimeoutExpired" in result.stderr
 		assert _pid_is_running(child_pgid)
 	finally:
 		_kill_process_group_if_running(child_pgid)
@@ -649,9 +663,31 @@ def test_pythonless_isolated_fallback_marks_unguarded_status() -> None:
 			text=True,
 			timeout=10,
 		)
+		assert result.returncode == 126, result.stderr
+		assert "refusing an isolated launch without process-group supervision" in result.stderr
+		assert status_file.read_text(encoding="utf-8") == "state=isolated_guard_unavailable\n"
+		assert not metadata_file.exists()
+
+		result = subprocess.run(
+			[
+				"/bin/bash",
+				str(STALL_GUARD_SCRIPT),
+				"--phase",
+				"pythonless_status_test",
+				"--status-file",
+				str(status_file),
+				"--",
+				"/bin/sh",
+				"-c",
+				"exit 0",
+			],
+			env=env,
+			capture_output=True,
+			text=True,
+			timeout=10,
+		)
 		assert result.returncode == 0, result.stderr
 		assert status_file.read_text(encoding="utf-8") == "state=unguarded\n"
-		assert not metadata_file.exists()
 
 
 def test_isolated_stall_guard_ignores_zombie_only_probe_results() -> None:
@@ -911,7 +947,9 @@ def test_stall_guard_script_and_callers_keep_the_expected_contract() -> None:
 	assert "[ \"${cmd_rc}\" -eq 78 ] || [ \"${cmd_rc}\" -eq 79 ]" in editor_text
 	assert "{ [ \"${cmd_rc}\" -eq 0 ]" in editor_text
 	assert "grep -qxF 'state=unguarded' \"${stall_status_file}\"" in editor_text
+	assert "grep -qxF 'state=isolated_guard_unavailable' \"${stall_status_file}\"" in editor_text
 	guard_text = (REPO_ROOT / "scripts/codex_stall_guard.sh").read_text(encoding="utf-8")
+	assert "state=isolated_guard_unavailable" in guard_text
 	deferred_identity_failure = guard_text.index("if child_identity is None:", guard_text.index("for signum in"))
 	assert "_kill_child_group_if_running()" in guard_text[deferred_identity_failure:]
 	# PR #4072: the watchdog reap tolerates an already-exited watchdog under set -e.
@@ -942,6 +980,7 @@ def main() -> int:
 	test_codex_stall_guard_kill_mode_terminates_idle_child_and_returns_nonzero()
 	test_isolated_stall_guard_publishes_metadata_and_uses_privileged_group_signals()
 	test_isolated_stall_guard_reports_privileged_signal_failure()
+	test_isolated_stall_guard_bounds_hung_privileged_signal()
 	test_isolated_stall_guard_reports_survivors_after_privileged_kill()
 	test_isolated_stall_guard_kills_group_survivors_after_wrapper_exit()
 	test_pythonless_isolated_fallback_marks_unguarded_status()

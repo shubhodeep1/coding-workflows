@@ -428,7 +428,8 @@ def test_process_group_signal_accepts_only_exited_guard_convergence(tmp_path: Pa
 			tmp_path, metadata_path, current_user, "TERM", missing_pid
 		)
 		assert live_group.returncode == 1
-		assert "reason=guard_identity_unavailable" in live_group.stderr
+		assert "reason=guard_identity_unavailable" not in live_group.stderr
+		assert "EDITOR_ISOLATION_PROCESS_GROUP_SIGNAL_FAILED" in live_group.stderr
 		assert child.poll() is None
 	finally:
 		os.killpg(child.pid, signal.SIGKILL)

@@ -10,7 +10,7 @@ EOF
 
 run_without_guard()
 {
-	if [ -n "${process_group_file}" ] && [ -n "${status_file}" ]; then
+	if [ -n "${status_file}" ]; then
 		printf 'state=unguarded\n' > "${status_file}" \
 			|| echo "::warning::Could not record the Python-less stall-guard fallback." >&2
 	fi
@@ -136,6 +136,14 @@ if ! [[ "${stall_kill_grace_raw}" =~ ^[0-9]+$ ]] || [ "${stall_kill_grace_raw}" 
 fi
 
 if ! command -v python3 >/dev/null 2>&1; then
+	if [ -n "${process_group_file}" ]; then
+		if [ -n "${status_file}" ]; then
+			printf 'state=isolated_guard_unavailable\n' > "${status_file}" \
+				|| echo "::warning::Could not record the unavailable isolated stall guard." >&2
+		fi
+		echo "::error::python3 unavailable; refusing an isolated launch without process-group supervision." >&2
+		exit 126
+	fi
 	echo "::warning::python3 unavailable; running ${phase} without codex stall guard wrapper support." >&2
 	run_without_guard "$@"
 fi
@@ -277,7 +285,7 @@ signal_failure = False
 
 try:
 	guard_identity = _process_identity(os.getpid())
-except ValueError as exc:
+except (OSError, ValueError) as exc:
 	_emit_wrapper_stderr(f"::error::codex_stall_guard could not capture guard process identity: {exc}\n")
 	raise SystemExit(126)
 if guard_identity is None:
@@ -294,7 +302,13 @@ child = subprocess.Popen(
 )
 
 child_pgid = os.getpgid(child.pid)
-child_identity = _process_identity(child.pid)
+try:
+	child_identity = _process_identity(child.pid)
+except (OSError, ValueError) as child_identity_error:
+	_emit_wrapper_stderr(
+		f"::error::codex_stall_guard could not capture child process identity pgid={child_pgid}: {child_identity_error}\n"
+	)
+	child_identity = None
 if child_identity is None:
 	_emit_wrapper_stderr(
 		f"::error::codex_stall_guard could not capture child process identity pgid={child_pgid}; terminating group\n"
@@ -302,6 +316,7 @@ if child_identity is None:
 	CHILD_START_TIME_TICKS, CHILD_UID = -1, -1
 else:
 	CHILD_START_TIME_TICKS, CHILD_UID = child_identity
+CHILD_IDENTITY_CAPTURED = child_identity is not None
 ISOLATED_UID = pwd.getpwnam(ISOLATED_USER).pw_uid if ISOLATED_USER else -1
 
 
@@ -487,6 +502,8 @@ def _isolated_group_alive() -> bool:
 
 def _child_identity_matches() -> bool:
 	global signal_failure
+	if not CHILD_IDENTITY_CAPTURED:
+		return True
 	try:
 		current_identity = _process_identity(child.pid)
 	except (OSError, ValueError) as exc:
@@ -513,12 +530,20 @@ def _signal_child_group(signum: signal.Signals) -> bool:
 	if ISOLATED_USER:
 		if not _child_identity_matches():
 			return False
-		result = subprocess.run(
-		["sudo", "-n", "kill", f"-{signum.name.removeprefix('SIG')}", "--", f"-{child_pgid}"],
-		stdout=subprocess.DEVNULL,
-		stderr=subprocess.DEVNULL,
-		check=False,
-		)
+		try:
+			result = subprocess.run(
+				["sudo", "-n", "kill", f"-{signum.name.removeprefix('SIG')}", "--", f"-{child_pgid}"],
+				stdout=subprocess.DEVNULL,
+				stderr=subprocess.DEVNULL,
+				check=False,
+				timeout=10,
+			)
+		except (OSError, subprocess.TimeoutExpired) as signal_error:
+			_emit_wrapper_stderr(
+				f"::error::codex_stall_guard privileged process-group signal failed pgid={child_pgid} user={ISOLATED_USER} signal={signum.name} error={type(signal_error).__name__}\n"
+			)
+			signal_failure = True
+			return False
 		if result.returncode == 0:
 			return True
 		# A concurrently-exited group is successful convergence. Any process
@@ -703,6 +728,8 @@ finally:
 		kill_timer.cancel()
 	if _isolated_group_alive():
 		_kill_child_group_if_running()
+	if signal_failure:
+		wrapper_returncode = 126
 	if close_stdout:
 		stdout_handle.close()
 	if close_stderr:

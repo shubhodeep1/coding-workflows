@@ -406,7 +406,7 @@ terminate_editor_attempt_process_group() {
     # child instead and take it down with the same privileged signals.
     if fallback_pgid="$(_editor_process_group_from_guard "${guard_pid}")"; then
       echo "::warning::EDITOR_PROCESS_GROUP_FALLBACK guard_pid=${guard_pid} pgid=${fallback_pgid} reason=ledger_unavailable" >&2
-      sudo -n kill -TERM -- "-${fallback_pgid}" 2>/dev/null || true
+      timeout --kill-after=2s 10s sudo -n kill -TERM -- "-${fallback_pgid}" 2>/dev/null || termination_rc=1
       sleep 5
       if _editor_isolated_group_has_survivors "${fallback_pgid}"; then
         member_status=0
@@ -414,7 +414,7 @@ terminate_editor_attempt_process_group() {
         member_status=$?
       fi
       if [ "${member_status}" -ne 1 ]; then
-        sudo -n kill -KILL -- "-${fallback_pgid}" 2>/dev/null || true
+        timeout --kill-after=2s 10s sudo -n kill -KILL -- "-${fallback_pgid}" 2>/dev/null || termination_rc=1
         [ "${member_status}" -eq 0 ] || termination_rc=1
       fi
       for (( verify_index = 0; verify_index < 20; verify_index++ )); do
@@ -2466,9 +2466,11 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     if [ ! -s "${process_group_file}" ] \
       && { [ "${cmd_rc}" -eq 78 ] || [ "${cmd_rc}" -eq 79 ] \
         || { [ "${cmd_rc}" -eq 0 ] \
-          && grep -qxF 'state=unguarded' "${stall_status_file}" 2>/dev/null; }; }; then
+          && grep -qxF 'state=unguarded' "${stall_status_file}" 2>/dev/null; } \
+        || { [ "${cmd_rc}" -eq 126 ] \
+          && grep -qxF 'state=isolated_guard_unavailable' "${stall_status_file}" 2>/dev/null; }; }; then
       : # A documented pre-launch or Python-less path created no editor group ledger.
-      if [ "${cmd_rc}" -eq 0 ]; then
+      if [ "${cmd_rc}" -eq 0 ] || [ "${cmd_rc}" -eq 126 ]; then
         : > "${stall_status_file}"
       fi
     elif [ ! -s "${process_group_file}" ]; then

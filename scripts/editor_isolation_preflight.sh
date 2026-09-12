@@ -215,6 +215,7 @@ _editor_isolation_load_process_group_metadata()
 	fi
 	EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID="${loaded_process_group_id}"
 	EDITOR_ISOLATION_TARGET_USER="${loaded_isolated_user}"
+	EDITOR_ISOLATION_TARGET_CHILD_PID="${loaded_child_pid}"
 	return 0
 }
 
@@ -276,8 +277,10 @@ editor_isolation_signal_process_group()
 		|| metadata_load_status=$?
 	if [ "${metadata_load_status}" -eq 3 ]; then
 		if editor_isolation_process_group_has_members "${metadata_path}" "${expected_user}" "${expected_guard_pid}"; then
-			echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=guard_identity_unavailable" >&2
-			return 1
+			if [ ! -e "/proc/${EDITOR_ISOLATION_TARGET_CHILD_PID}/stat" ]; then
+				echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=guard_and_child_identity_unavailable" >&2
+				return 1
+			fi
 		else
 			process_group_probe_status=$?
 			[ "${process_group_probe_status}" -eq 1 ] && return 0
@@ -286,7 +289,7 @@ editor_isolation_signal_process_group()
 	elif [ "${metadata_load_status}" -ne 0 ]; then
 		return 1
 	fi
-	if sudo -n kill "-${requested_signal}" -- "-${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" 2>/dev/null; then
+	if timeout --kill-after=2s 10s sudo -n kill "-${requested_signal}" -- "-${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" 2>/dev/null; then
 		return 0
 	fi
 	pgrep -g "${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" >/dev/null 2>&1 || process_group_probe_status=$?
