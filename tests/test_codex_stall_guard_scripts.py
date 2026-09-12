@@ -537,6 +537,83 @@ def test_isolated_stall_guard_reports_survivors_after_privileged_kill() -> None:
 		_kill_process_group_if_running(child_pgid)
 
 
+def _run_isolated_stall_guard_wrapper_exits_early() -> tuple[subprocess.CompletedProcess[str], Path, Path, int]:
+	"""Launch an isolated command whose `sudo`-side wrapper exits at once while a
+	TERM-ignoring descendant stays alive in the session. The tracked child is gone,
+	so every kill and verification path must follow the surviving group."""
+	tmp = Path(tempfile.mkdtemp(prefix="codex-stall-isolated-wrapper-exit-"))
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	_write_fake_sudo(bin_dir / "sudo")
+	metadata_file = tmp / "process-group.env"
+	sudo_log = tmp / "sudo.log"
+	grandchild_pid_file = tmp / "grandchild.pid"
+	env = _stall_guard_test_env()
+	env.update(
+		{
+			"PATH": f"{bin_dir}:{env['PATH']}",
+			"FAKE_SUDO_LOG": str(sudo_log),
+			"FAKE_SUDO_SIGNAL_MODE": "signal",
+			"CODEX_HEARTBEAT_ENABLED": "0",
+			"CODEX_STALL_GUARD_ENABLED": "true",
+			"CODEX_STALL_TIMEOUT_SECONDS": "1",
+			"CODEX_STALL_KILL_GRACE_SECONDS": "1",
+		}
+	)
+	current_user = pwd.getpwuid(os.getuid()).pw_name
+	grandchild = (
+		"import os, signal, sys, time; "
+		"signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+		"open(sys.argv[1], 'w', encoding='ascii').write(str(os.getpid())); "
+		"print('start', flush=True); time.sleep(1000)"
+	)
+	result = subprocess.run(
+		[
+			"bash",
+			str(STALL_GUARD_SCRIPT),
+			"--phase",
+			"isolated_editor_test",
+			"--process-group-file",
+			str(metadata_file),
+			"--",
+			"sudo",
+			"-n",
+			"-u",
+			current_user,
+			"--",
+			"bash",
+			"-c",
+			'python3 -c "$1" "$2" & exit 0',
+			"wrapper",
+			grandchild,
+			str(grandchild_pid_file),
+		],
+		env=env,
+		capture_output=True,
+		text=True,
+		timeout=30,
+	)
+	return result, metadata_file, sudo_log, int(grandchild_pid_file.read_text(encoding="ascii"))
+
+
+def test_isolated_stall_guard_kills_group_survivors_after_wrapper_exit() -> None:
+	grandchild_pid: int | None = None
+	try:
+		result, metadata_file, sudo_log, grandchild_pid = _run_isolated_stall_guard_wrapper_exits_early()
+		assert result.returncode == 137, result.stderr
+		metadata = _read_status_file(metadata_file)
+		child_pgid = int(metadata["process_group_id"])
+		assert grandchild_pid != child_pgid
+		signal_lines = sudo_log.read_text(encoding="utf-8").splitlines()
+		assert f"-n kill -TERM -- -{child_pgid}" in signal_lines, signal_lines
+		assert f"-n kill -KILL -- -{child_pgid}" in signal_lines, signal_lines
+		assert "codex_stall_killed" in result.stderr
+		assert "isolated process-group survivor" not in result.stderr
+		assert not _pid_is_running(grandchild_pid)
+	finally:
+		_kill_pid_if_running(grandchild_pid)
+
+
 def test_codex_stall_guard_heartbeat_appends_budget_fields_when_run_budget_env_present() -> None:
 	with tempfile.TemporaryDirectory(prefix="codex-stall-guard-budget-") as td:
 		tmp = Path(td)
@@ -631,6 +708,8 @@ def test_stall_guard_script_and_callers_keep_the_expected_contract() -> None:
 			"codex_stall_killed",
 			"terminate_editor_attempt_process_group",
 			"editor_isolation_verify_process_group_stopped",
+			"_editor_process_group_from_guard",
+			"EDITOR_PROCESS_GROUP_TERMINATION_FAILED",
 		],
 		"scripts/editor_isolation_preflight.sh": [
 			'editor_isolation_signal_process_group',
@@ -683,6 +762,11 @@ def test_stall_guard_script_and_callers_keep_the_expected_contract() -> None:
 
 	editor_text = (REPO_ROOT / "scripts/review_apply_fixes.sh").read_text(encoding="utf-8")
 	assert 'kill -TERM "${cpid}"' not in editor_text
+	# A failed group termination must be visible; the post-attempt survivor check decides.
+	assert 'terminate_editor_attempt_process_group "${cpid}" "${process_group_file}" || true' not in editor_text
+	assert editor_text.count("EDITOR_PROCESS_GROUP_TERMINATION_FAILED attempt=${attempt} trigger=") == 2
+	# PR #4072: the watchdog reap tolerates an already-exited watchdog under set -e.
+	assert 'kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true' in editor_text
 	termination_start = editor_text.index("terminate_editor_attempt_process_group()")
 	termination_end = editor_text.index("\nrun_editor_codex_attempt()", termination_start)
 	termination_block = editor_text[termination_start:termination_end]
@@ -695,6 +779,7 @@ def main() -> int:
 	test_isolated_stall_guard_publishes_metadata_and_uses_privileged_group_signals()
 	test_isolated_stall_guard_reports_privileged_signal_failure()
 	test_isolated_stall_guard_reports_survivors_after_privileged_kill()
+	test_isolated_stall_guard_kills_group_survivors_after_wrapper_exit()
 	test_codex_stall_guard_heartbeat_appends_budget_fields_when_run_budget_env_present()
 	test_stall_guard_caller_contracts_cover_observe_only_mode()
 	test_stall_guard_caller_contracts_cover_kill_mode()

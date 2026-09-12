@@ -293,11 +293,12 @@ def _write_process_group_metadata() -> None:
 			os.fsync(handle.fileno())
 		os.replace(tmp_path, metadata_path)
 	except OSError as exc:
+		# Without the ledger neither the watchdog nor cleanup can find the
+		# editor's group: take the child down here rather than orphan it.
 		_emit_wrapper_stderr(f"::error::codex_stall_guard failed to publish process-group metadata: {exc}\n")
-		raise
+		_kill_child_group_if_running()
+		raise SystemExit(126)
 
-
-_write_process_group_metadata()
 
 assert child.stdout is not None
 assert child.stderr is not None
@@ -401,9 +402,20 @@ def _reap_child_after_kill() -> None:
 		return
 
 
+def _isolated_group_alive() -> bool:
+	"""True while the tracked child runs or, for an isolated launch, while any
+	process owned by the isolated user is still in the child's process group.
+	The `sudo` wrapper can exit ahead of its `nobody` descendants (a TERM it
+	relays is honoured by sudo but ignored by the editor), and every kill and
+	verification path below must keep targeting the surviving group."""
+	if child.poll() is None:
+		return True
+	return _isolated_group_has_members()
+
+
 def _signal_child_group(signum: signal.Signals) -> bool:
 	global signal_failure
-	if child.poll() is not None:
+	if not _isolated_group_alive():
 		return True
 	if ISOLATED_USER:
 		result = subprocess.run(
@@ -438,19 +450,16 @@ def _signal_child_group(signum: signal.Signals) -> bool:
 
 def _kill_child_group_if_running() -> None:
 	global signal_failure
-	if child.poll() is not None:
-		if not _verify_isolated_group_stopped():
-			signal_failure = True
-		return
-	_signal_child_group(signal.SIGKILL)
-	_reap_child_after_kill()
+	if _isolated_group_alive():
+		_signal_child_group(signal.SIGKILL)
+		_reap_child_after_kill()
 	if not _verify_isolated_group_stopped():
 		signal_failure = True
 
 
 def _forward_signal(signum: int, _frame) -> None:
 	global kill_timer
-	if child.poll() is not None:
+	if not _isolated_group_alive():
 		return
 	_signal_child_group(signal.Signals(signum))
 	if kill_timer is None or not kill_timer.is_alive():
@@ -465,6 +474,8 @@ for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
 	except OSError:
 		pass
 
+
+_write_process_group_metadata()
 
 selector = selectors.DefaultSelector()
 for stream, output_handle, event_kind in (
@@ -534,7 +545,8 @@ try:
 			while next_heartbeat_at <= time.monotonic():
 				next_heartbeat_at += HEARTBEAT_INTERVAL_SECS
 
-		if child.poll() is None:
+		group_alive = _isolated_group_alive()
+		if group_alive:
 			idle_secs = int(now - last_child_event_monotonic)
 			if idle_secs >= STALL_TIMEOUT_SECS:
 				signature = (last_event_epoch, last_event_kind)
@@ -557,7 +569,7 @@ try:
 			elif guard_term_sent_at is None:
 				observed_signature = None
 
-		if guard_term_sent_at is not None and child.poll() is None:
+		if guard_term_sent_at is not None and group_alive:
 			if (time.monotonic() - guard_term_sent_at) >= STALL_KILL_GRACE_SECS and guard_signal_name != "SIGKILL":
 				guard_signal_name = "SIGKILL"
 				_signal_child_group(signal.SIGKILL)
@@ -576,13 +588,18 @@ try:
 		wrapper_returncode = 137
 	elif returncode is not None:
 		wrapper_returncode = _shell_rc(returncode)
-	if ISOLATED_USER and guard_term_sent_at is not None and not _verify_isolated_group_stopped():
-		wrapper_returncode = 126
+	if ISOLATED_USER and not _verify_isolated_group_stopped():
+		_emit_wrapper_stderr(
+			f"::error::codex_stall_guard isolated process-group survivors after child exit pgid={child_pgid} user={ISOLATED_USER}; sending SIGKILL\n"
+		)
+		_signal_child_group(signal.SIGKILL)
+		if not _verify_isolated_group_stopped():
+			wrapper_returncode = 126
 finally:
 	selector.close()
 	if kill_timer is not None:
 		kill_timer.cancel()
-	if child.poll() is None:
+	if _isolated_group_alive():
 		_kill_child_group_if_running()
 	if close_stdout:
 		stdout_handle.close()

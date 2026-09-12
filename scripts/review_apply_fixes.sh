@@ -289,20 +289,56 @@ cleanup_editor_isolation() {
   return "${cleanup_rc}"
 }
 
+# _editor_process_group_from_guard <guard_pid>
+#   Fallback locator for the isolated editor's process group when the stall
+#   guard published no usable ledger: the guard starts exactly one child (the
+#   `sudo` wrapper) in a new session, so that child's PID is the group ID.
+#   Prints the PGID, or nothing when it cannot be determined unambiguously.
+_editor_process_group_from_guard() {
+  local guard_pid="$1" own_pgid candidate_pid candidate_pgid found=""
+  [[ "${guard_pid}" =~ ^[1-9][0-9]*$ ]] || return 1
+  own_pgid="$(ps -o pgid= -p "${BASHPID:-$$}" 2>/dev/null | tr -d '[:space:]')"
+  while read -r candidate_pid candidate_pgid; do
+    [[ "${candidate_pid}" =~ ^[1-9][0-9]*$ ]] || continue
+    # Only a session leader (pid == pgid) outside our own group qualifies;
+    # the guard's transient pgrep/ps helpers share the guard's group.
+    [ "${candidate_pid}" = "${candidate_pgid}" ] || continue
+    [ "${candidate_pgid}" != "${own_pgid}" ] || continue
+    [ "${candidate_pgid}" -gt 1 ] || continue
+    if [ -n "${found}" ] && [ "${found}" != "${candidate_pgid}" ]; then
+      return 1
+    fi
+    found="${candidate_pgid}"
+  done < <(ps -o pid=,pgid= --ppid "${guard_pid}" 2>/dev/null || true)
+  [ -n "${found}" ] || return 1
+  printf '%s' "${found}"
+}
+
+# _editor_isolated_group_has_survivors <pgid>
+#   True while a live (non-zombie) process owned by EDITOR_ISOLATION_USER is
+#   still in <pgid>. A killed child whose parent has not reaped it yet is a
+#   zombie that pgrep still lists; it holds no resources and cannot write to
+#   the workspace, so it must not count as a survivor.
+_editor_isolated_group_has_survivors() {
+  local survivor_pid survivor_state
+  while read -r survivor_pid; do
+    [[ "${survivor_pid}" =~ ^[0-9]+$ ]] || continue
+    survivor_state="$(sed -E 's/^[0-9]+ \(.*\) ([A-Za-z]).*$/\1/' "/proc/${survivor_pid}/stat" 2>/dev/null || true)"
+    [ "${survivor_state}" = "Z" ] && continue
+    return 0
+  done < <(pgrep -u "${EDITOR_ISOLATION_USER}" -g "$1" 2>/dev/null || true)
+  return 1
+}
+
 terminate_editor_attempt_process_group() {
   local guard_pid="$1" process_group_file="$2"
-  local termination_rc=0 member_status=1
-  if [ -z "${guard_pid}" ] || [ -z "${process_group_file}" ] \
-    || ! command -v editor_isolation_signal_process_group >/dev/null 2>&1; then
-    echo "::error::Editor process-group metadata or signalling helper is unavailable; terminating the guard as a fallback." >&2
-    termination_rc=1
-  elif ! editor_isolation_signal_process_group "${process_group_file}" "${EDITOR_ISOLATION_USER}" TERM "${guard_pid}"; then
-    termination_rc=1
-  fi
-
-  sleep 5
-  if [ -n "${process_group_file}" ] \
-    && command -v editor_isolation_process_group_has_members >/dev/null 2>&1; then
+  local termination_rc=0 member_status=1 fallback_pgid="" verify_index
+  if [ -n "${guard_pid}" ] && [ -n "${process_group_file}" ] && [ -s "${process_group_file}" ] \
+    && command -v editor_isolation_signal_process_group >/dev/null 2>&1; then
+    if ! editor_isolation_signal_process_group "${process_group_file}" "${EDITOR_ISOLATION_USER}" TERM "${guard_pid}"; then
+      termination_rc=1
+    fi
+    sleep 5
     if editor_isolation_process_group_has_members "${process_group_file}" "${EDITOR_ISOLATION_USER}" "${guard_pid}"; then
       member_status=0
     else
@@ -317,7 +353,30 @@ terminate_editor_attempt_process_group() {
       termination_rc=1
     fi
   else
-    termination_rc=1
+    # No usable ledger (the guard died before publishing it, or the helper
+    # is not sourced). Killing only the runner-owned guard would leave the
+    # `nobody` editor tree running: locate the group through the guard's
+    # child instead and take it down with the same privileged signals.
+    if fallback_pgid="$(_editor_process_group_from_guard "${guard_pid}")"; then
+      echo "::warning::EDITOR_PROCESS_GROUP_FALLBACK guard_pid=${guard_pid} pgid=${fallback_pgid} reason=ledger_unavailable" >&2
+      sudo -n kill -TERM -- "-${fallback_pgid}" 2>/dev/null || true
+      sleep 5
+      if _editor_isolated_group_has_survivors "${fallback_pgid}"; then
+        sudo -n kill -KILL -- "-${fallback_pgid}" 2>/dev/null || true
+      fi
+      for (( verify_index = 0; verify_index < 20; verify_index++ )); do
+        _editor_isolated_group_has_survivors "${fallback_pgid}" || break
+        sleep 0.1
+      done
+      if _editor_isolated_group_has_survivors "${fallback_pgid}"; then
+        echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_SURVIVOR user=${EDITOR_ISOLATION_USER} pgid=${fallback_pgid} source=guard_child" >&2
+        termination_rc=1
+      fi
+    else
+      echo "::error::EDITOR_PROCESS_GROUP_TERMINATION_UNRESOLVED guard_pid=${guard_pid} reason=ledger_unavailable_and_no_guard_child; terminating the guard only." >&2
+      sleep 5
+      termination_rc=1
+    fi
   fi
 
   # The editor group is handled first. The guard normally exits after its
@@ -2175,7 +2234,8 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
       if [ "${wall_secs}" -ge "${attempt_wall}" ]; then
         echo "Editor killed — wall time ${attempt_wall}s exceeded (attempt ${attempt})." >&2
         cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-        terminate_editor_attempt_process_group "${cpid}" "${process_group_file}" || true
+        terminate_editor_attempt_process_group "${cpid}" "${process_group_file}" \
+          || echo "::error::EDITOR_PROCESS_GROUP_TERMINATION_FAILED attempt=${attempt} trigger=wall_time; the post-attempt survivor check refuses workspace ownership restoration." >&2
         rm -f "${hb_file}"
         exit 143
       fi
@@ -2197,7 +2257,8 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
           printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
         else
           echo "Editor killed — no output for ${idle_secs}s and no active network connections (idle limit: ${EDITOR_IDLE_TIMEOUT}s, attempt ${attempt})." >&2
-          terminate_editor_attempt_process_group "${cpid}" "${process_group_file}" || true
+          terminate_editor_attempt_process_group "${cpid}" "${process_group_file}" \
+            || echo "::error::EDITOR_PROCESS_GROUP_TERMINATION_FAILED attempt=${attempt} trigger=idle; the post-attempt survivor check refuses workspace ownership restoration." >&2
           rm -f "${hb_file}"
           exit 142
         fi
@@ -2316,11 +2377,17 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   _hb_tmpdir=""
   _hb_fifo=""
 
-  kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
+  # The watchdog exits on its own (143/142) after its kill sequence, so it is
+  # usually gone by the time we reap it; an unguarded `kill` here aborted the
+  # whole editor loop under `set -e` (AI Review run 34397466777, PR #4072).
+  kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
   if [ -n "${process_group_file}" ]; then
     if [ "${cmd_rc}" -eq 79 ] && [ ! -s "${process_group_file}" ]; then
       : # Configuration failed before the guard launched an editor group.
+    elif [ ! -s "${process_group_file}" ]; then
+      echo "::error::Editor attempt ${attempt}: the stall guard published no process-group ledger (exit=${cmd_rc}); cannot prove the isolated editor stopped, refusing workspace ownership restoration." >&2
+      exit 80
     elif ! editor_isolation_verify_process_group_stopped "${process_group_file}" "${EDITOR_ISOLATION_USER}" "${codex_bg_pid}"; then
       echo "::error::Editor attempt ${attempt} left an isolated process-group survivor; refusing workspace ownership restoration." >&2
       exit 80

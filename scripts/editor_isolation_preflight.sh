@@ -150,11 +150,24 @@ _editor_isolation_load_process_group_metadata()
 	return 0
 }
 
+# editor_isolation_process_group_has_members <metadata> <user> [guard_pid]
+#   0 when a live (non-zombie) process owned by <user> is still in the
+#   recorded group, 1 when none is, 2 when the metadata is unusable. A killed
+#   member its parent has not reaped yet is a zombie that pgrep still lists;
+#   it holds no resources and cannot touch the workspace, so it is not a
+#   survivor.
 editor_isolation_process_group_has_members()
 {
 	local metadata_path="$1" expected_user="$2" expected_guard_pid="${3:-}"
+	local member_pid member_state
 	_editor_isolation_load_process_group_metadata "${metadata_path}" "${expected_user}" "${expected_guard_pid}" || return 2
-	pgrep -u "${EDITOR_ISOLATION_TARGET_USER}" -g "${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" >/dev/null 2>&1
+	while read -r member_pid; do
+		[[ "${member_pid}" =~ ^[0-9]+$ ]] || continue
+		member_state="$(sed -E 's/^[0-9]+ \(.*\) ([A-Za-z]).*$/\1/' "/proc/${member_pid}/stat" 2>/dev/null || true)"
+		[ "${member_state}" = "Z" ] && continue
+		return 0
+	done < <(pgrep -u "${EDITOR_ISOLATION_TARGET_USER}" -g "${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" 2>/dev/null || true)
+	return 1
 }
 
 editor_isolation_signal_process_group()
