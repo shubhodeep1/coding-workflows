@@ -320,13 +320,21 @@ _editor_process_group_from_guard() {
 #   zombie that pgrep still lists; it holds no resources and cannot write to
 #   the workspace, so it must not count as a survivor.
 _editor_isolated_group_has_survivors() {
-  local survivor_pid survivor_state
+  local survivor_pid survivor_state survivor_pid_list survivor_probe_status
+  if survivor_pid_list="$(pgrep -u "${EDITOR_ISOLATION_USER}" -g "$1" 2>/dev/null)"; then
+    survivor_probe_status=0
+  else
+    survivor_probe_status=$?
+    [ "${survivor_probe_status}" -eq 1 ] && return 1
+    echo "::error::EDITOR_PROCESS_GROUP_PROBE_FAILED user=${EDITOR_ISOLATION_USER} pgid=$1 rc=${survivor_probe_status}" >&2
+    return 2
+  fi
   while read -r survivor_pid; do
     [[ "${survivor_pid}" =~ ^[0-9]+$ ]] || continue
     survivor_state="$(sed -E 's/^[0-9]+ \(.*\) ([A-Za-z]).*$/\1/' "/proc/${survivor_pid}/stat" 2>/dev/null || true)"
     [ "${survivor_state}" = "Z" ] && continue
     return 0
-  done < <(pgrep -u "${EDITOR_ISOLATION_USER}" -g "$1" 2>/dev/null || true)
+  done <<< "${survivor_pid_list}"
   return 1
 }
 
@@ -362,14 +370,34 @@ terminate_editor_attempt_process_group() {
       sudo -n kill -TERM -- "-${fallback_pgid}" 2>/dev/null || true
       sleep 5
       if _editor_isolated_group_has_survivors "${fallback_pgid}"; then
+        member_status=0
+      else
+        member_status=$?
+      fi
+      if [ "${member_status}" -ne 1 ]; then
         sudo -n kill -KILL -- "-${fallback_pgid}" 2>/dev/null || true
+        [ "${member_status}" -eq 0 ] || termination_rc=1
       fi
       for (( verify_index = 0; verify_index < 20; verify_index++ )); do
-        _editor_isolated_group_has_survivors "${fallback_pgid}" || break
+        if _editor_isolated_group_has_survivors "${fallback_pgid}"; then
+          member_status=0
+        else
+          member_status=$?
+          [ "${member_status}" -eq 1 ] && break
+          termination_rc=1
+          break
+        fi
         sleep 0.1
       done
       if _editor_isolated_group_has_survivors "${fallback_pgid}"; then
+        member_status=0
+      else
+        member_status=$?
+      fi
+      if [ "${member_status}" -eq 0 ]; then
         echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_SURVIVOR user=${EDITOR_ISOLATION_USER} pgid=${fallback_pgid} source=guard_child" >&2
+        termination_rc=1
+      elif [ "${member_status}" -ne 1 ]; then
         termination_rc=1
       fi
     else

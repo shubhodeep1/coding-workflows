@@ -10,6 +10,7 @@ import re
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -505,6 +506,8 @@ def test_isolated_stall_guard_publishes_metadata_and_uses_privileged_group_signa
 	assert result.returncode == 137, result.stderr
 	metadata = _read_status_file(metadata_file)
 	assert stat.S_IMODE(metadata_file.stat().st_mode) == 0o600
+	assert metadata["guard_uid"] == str(os.getuid())
+	assert metadata["guard_start_time_ticks"].isdigit()
 	assert metadata["child_pid"] == str(child_pgid)
 	assert metadata["process_group_id"] == str(child_pgid)
 	assert metadata["isolated_user"] == pwd.getpwuid(os.getuid()).pw_name
@@ -773,6 +776,21 @@ def test_stall_guard_script_and_callers_keep_the_expected_contract() -> None:
 	assert termination_block.index("editor_isolation_signal_process_group") < termination_block.index('kill -TERM "${guard_pid}"')
 
 
+def test_isolation_runtime_modules_run_directly() -> None:
+	for module_name in (
+		"test_editor_isolation_preflight.py",
+		"test_review_editor_process_group_termination.py",
+	):
+		result = subprocess.run(
+			[sys.executable, str(REPO_ROOT / "tests" / module_name)],
+			env=_stall_guard_test_env(),
+			capture_output=True,
+			text=True,
+			timeout=180,
+		)
+		assert result.returncode == 0, f"{module_name}\n{result.stdout}\n{result.stderr}"
+
+
 def main() -> int:
 	test_codex_stall_guard_observe_only_records_event_idle_without_killing_child()
 	test_codex_stall_guard_kill_mode_terminates_idle_child_and_returns_nonzero()
@@ -784,6 +802,7 @@ def main() -> int:
 	test_stall_guard_caller_contracts_cover_observe_only_mode()
 	test_stall_guard_caller_contracts_cover_kill_mode()
 	test_stall_guard_script_and_callers_keep_the_expected_contract()
+	test_isolation_runtime_modules_run_directly()
 	print("OK: codex stall guard helper contract holds")
 	return 0
 

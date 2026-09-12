@@ -18,14 +18,33 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-import pytest
+try:
+	import pytest
+except ModuleNotFoundError:
+	class _StandalonePytestMark:
+		@staticmethod
+		def skipif(_condition: bool, *, reason: str):
+			return lambda function: function
+
+	class _StandalonePytest:
+		mark = _StandalonePytestMark()
+
+		@staticmethod
+		def skip(reason: str) -> None:
+			raise RuntimeError(reason)
+
+	pytest = _StandalonePytest()
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from repo_root import repo_root  # noqa: E402
 
-REPO_ROOT = repo_root()
+try:
+	REPO_ROOT = repo_root()
+except RuntimeError:
+	REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPER = REPO_ROOT / "scripts" / "editor_isolation_preflight.sh"
 STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 EDITOR_SCRIPT = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
@@ -121,11 +140,36 @@ def _write_process_group_metadata(
 	process_group_id: str,
 	isolated_user: str,
 ) -> None:
+	guard_stat_path = Path(f"/proc/{guard_pid}/stat")
+	guard_stat_fields = (
+		guard_stat_path.read_text(encoding="ascii", errors="replace").rpartition(")")[2].split()
+		if guard_pid.isdigit() and guard_stat_path.exists()
+		else []
+	)
+	guard_start_time_ticks = guard_stat_fields[19] if len(guard_stat_fields) > 19 else "1"
+	guard_uid = Path(f"/proc/{guard_pid}").stat().st_uid if guard_pid.isdigit() and Path(f"/proc/{guard_pid}").exists() else os.getuid()
+	child_stat_path = Path(f"/proc/{child_pid}/stat")
+	child_stat_fields = (
+		child_stat_path.read_text(encoding="ascii", errors="replace").rpartition(")")[2].split()
+		if child_pid.isdigit() and child_stat_path.exists()
+		else []
+	)
+	child_start_time_ticks = child_stat_fields[19] if len(child_stat_fields) > 19 else "1"
+	child_uid = Path(f"/proc/{child_pid}").stat().st_uid if child_pid.isdigit() and Path(f"/proc/{child_pid}").exists() else os.getuid()
+	try:
+		isolated_uid = pwd.getpwnam(isolated_user).pw_uid
+	except KeyError:
+		isolated_uid = os.getuid()
 	path.write_text(
 		f"guard_pid={guard_pid}\n"
+		f"guard_uid={guard_uid}\n"
+		f"guard_start_time_ticks={guard_start_time_ticks}\n"
 		f"child_pid={child_pid}\n"
 		f"process_group_id={process_group_id}\n"
 		f"isolated_user={isolated_user}\n"
+		f"isolated_uid={isolated_uid}\n"
+		f"child_uid={child_uid}\n"
+		f"child_start_time_ticks={child_start_time_ticks}\n"
 		"signal_mode=privileged\n",
 		encoding="utf-8",
 	)
@@ -311,6 +355,49 @@ def test_process_group_signal_reports_failed_privileged_kill(tmp_path: Path) -> 
 		child.wait(timeout=10)
 
 
+def test_process_group_metadata_rejects_reused_process_identity(tmp_path: Path) -> None:
+	child = subprocess.Popen(["sleep", "1000"], start_new_session=True)
+	metadata_path = tmp_path / "process-group-reused.env"
+	current_user = pwd.getpwuid(os.getuid()).pw_name
+	try:
+		_write_process_group_metadata(
+			metadata_path,
+			guard_pid=str(os.getpid()),
+			child_pid=str(child.pid),
+			process_group_id=str(child.pid),
+			isolated_user=current_user,
+		)
+		metadata_path.write_text(
+			metadata_path.read_text(encoding="utf-8").replace("child_start_time_ticks=", "child_start_time_ticks=9", 1),
+			encoding="utf-8",
+		)
+		result = _run_process_group_helper(
+			tmp_path, metadata_path, current_user, "TERM", str(os.getpid())
+		)
+		assert result.returncode == 1
+		assert "reason=process_identity_mismatch" in result.stderr
+
+		_write_process_group_metadata(
+			metadata_path,
+			guard_pid=str(os.getpid()),
+			child_pid=str(child.pid),
+			process_group_id=str(child.pid),
+			isolated_user=current_user,
+		)
+		metadata_path.write_text(
+			metadata_path.read_text(encoding="utf-8").replace("guard_start_time_ticks=", "guard_start_time_ticks=9", 1),
+			encoding="utf-8",
+		)
+		guard_result = _run_process_group_helper(
+			tmp_path, metadata_path, current_user, "TERM", str(os.getpid())
+		)
+		assert guard_result.returncode == 1
+		assert "reason=guard_identity_mismatch" in guard_result.stderr
+	finally:
+		os.killpg(child.pid, signal.SIGKILL)
+		child.wait(timeout=10)
+
+
 @pytest.mark.skipif(not _sudo_to_nobody_available(), reason="passwordless sudo to nobody unavailable")
 def test_probe_reports_first_denied_component_then_passes_after_prepare(tmp_path: Path) -> None:
 	env = _fixture(tmp_path)
@@ -457,3 +544,20 @@ def test_probe_flags_missing_opencode_on_editor_path(tmp_path: Path) -> None:
 	result = _run_probe(env, prepare=True)
 	assert result.returncode == 1
 	assert "reason=opencode_not_on_editor_path" in result.stderr
+
+
+def main() -> int:
+	test_helper_is_staged_and_wired_into_both_review_scripts()
+	test_helper_has_no_top_level_side_effects_and_parses()
+	test_kill_switch_disables_preflight()
+	with tempfile.TemporaryDirectory(prefix="editor-isolation-direct-") as td:
+		tmp_path = Path(td)
+		test_process_group_signal_rejects_invalid_metadata_signal_and_user(tmp_path)
+		test_process_group_signal_reports_failed_privileged_kill(tmp_path)
+		test_process_group_metadata_rejects_reused_process_identity(tmp_path)
+	print("OK: editor isolation preflight process-group contract holds")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

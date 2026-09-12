@@ -82,8 +82,15 @@ editor_isolation_preflight_enabled()
 _editor_isolation_load_process_group_metadata()
 {
 	local metadata_path="$1" expected_user="$2" expected_guard_pid="${3:-}"
-	local metadata_key metadata_value metadata_owner metadata_mode metadata_size current_pgid actual_pgid
-	local loaded_guard_pid="" loaded_child_pid="" loaded_process_group_id="" loaded_isolated_user="" loaded_signal_mode=""
+	local require_live_guard="${4:-false}"
+	local metadata_key metadata_value metadata_owner metadata_mode metadata_size current_pgid actual_pgid expected_isolated_uid
+	local child_stat_text child_stat_tail actual_child_uid actual_child_start_time_ticks
+	local guard_stat_text guard_stat_tail actual_guard_uid actual_guard_start_time_ticks
+	local -a child_stat_fields=()
+	local -a guard_stat_fields=()
+	local loaded_guard_pid="" loaded_guard_uid="" loaded_guard_start_time_ticks=""
+	local loaded_child_pid="" loaded_process_group_id="" loaded_isolated_user="" loaded_isolated_uid=""
+	local loaded_child_uid="" loaded_child_start_time_ticks="" loaded_signal_mode=""
 	if [ ! -f "${metadata_path}" ] || [ -L "${metadata_path}" ]; then
 		echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=missing_or_not_regular" >&2
 		return 1
@@ -102,6 +109,14 @@ _editor_isolation_load_process_group_metadata()
 				[ -z "${loaded_guard_pid}" ] || return 1
 				loaded_guard_pid="${metadata_value}"
 				;;
+			guard_uid)
+				[ -z "${loaded_guard_uid}" ] || return 1
+				loaded_guard_uid="${metadata_value}"
+				;;
+			guard_start_time_ticks)
+				[ -z "${loaded_guard_start_time_ticks}" ] || return 1
+				loaded_guard_start_time_ticks="${metadata_value}"
+				;;
 			child_pid)
 				[ -z "${loaded_child_pid}" ] || return 1
 				loaded_child_pid="${metadata_value}"
@@ -114,6 +129,18 @@ _editor_isolation_load_process_group_metadata()
 				[ -z "${loaded_isolated_user}" ] || return 1
 				loaded_isolated_user="${metadata_value}"
 				;;
+			isolated_uid)
+				[ -z "${loaded_isolated_uid}" ] || return 1
+				loaded_isolated_uid="${metadata_value}"
+				;;
+			child_uid)
+				[ -z "${loaded_child_uid}" ] || return 1
+				loaded_child_uid="${metadata_value}"
+				;;
+			child_start_time_ticks)
+				[ -z "${loaded_child_start_time_ticks}" ] || return 1
+				loaded_child_start_time_ticks="${metadata_value}"
+				;;
 			signal_mode)
 				[ -z "${loaded_signal_mode}" ] || return 1
 				loaded_signal_mode="${metadata_value}"
@@ -124,16 +151,42 @@ _editor_isolation_load_process_group_metadata()
 				;;
 		esac
 	done < "${metadata_path}"
+	expected_isolated_uid="$(id -u -- "${expected_user}" 2>/dev/null || true)"
 	if ! [[ "${loaded_guard_pid}" =~ ^[1-9][0-9]*$ ]] \
+		|| ! [[ "${loaded_guard_uid}" =~ ^[0-9]+$ ]] \
+		|| ! [[ "${loaded_guard_start_time_ticks}" =~ ^[1-9][0-9]*$ ]] \
 		|| ! [[ "${loaded_child_pid}" =~ ^[1-9][0-9]*$ ]] \
 		|| ! [[ "${loaded_process_group_id}" =~ ^[1-9][0-9]*$ ]] \
+		|| ! [[ "${loaded_isolated_uid}" =~ ^[0-9]+$ ]] \
+		|| ! [[ "${loaded_child_uid}" =~ ^[0-9]+$ ]] \
+		|| ! [[ "${loaded_child_start_time_ticks}" =~ ^[1-9][0-9]*$ ]] \
 		|| [ "${loaded_process_group_id}" -le 1 ] \
 		|| [ "${loaded_child_pid}" != "${loaded_process_group_id}" ] \
 		|| [ "${loaded_isolated_user}" != "${expected_user}" ] \
+		|| [ "${loaded_isolated_uid}" != "${expected_isolated_uid}" ] \
 		|| [ "${loaded_signal_mode}" != "privileged" ] \
 		|| { [ -n "${expected_guard_pid}" ] && [ "${loaded_guard_pid}" != "${expected_guard_pid}" ]; }; then
 		echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=field_mismatch" >&2
 		return 1
+	fi
+	if [ "${require_live_guard}" = "true" ]; then
+		if [ -z "${expected_guard_pid}" ] || [ ! -e "/proc/${loaded_guard_pid}/stat" ]; then
+			echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=guard_identity_unavailable" >&2
+			return 1
+		fi
+		guard_stat_text="$(<"/proc/${loaded_guard_pid}/stat")" || {
+			echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=guard_identity_unreadable" >&2
+			return 1
+		}
+		guard_stat_tail="${guard_stat_text##*) }"
+		read -r -a guard_stat_fields <<< "${guard_stat_tail}"
+		actual_guard_start_time_ticks="${guard_stat_fields[19]:-}"
+		actual_guard_uid="$(stat -c '%u' -- "/proc/${loaded_guard_pid}" 2>/dev/null || true)"
+		if [ "${actual_guard_start_time_ticks}" != "${loaded_guard_start_time_ticks}" ] \
+			|| [ "${actual_guard_uid}" != "${loaded_guard_uid}" ]; then
+			echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=guard_identity_mismatch" >&2
+			return 1
+		fi
 	fi
 	current_pgid="$(ps -o pgid= -p "${BASHPID:-$$}" 2>/dev/null | tr -d '[:space:]')"
 	if [ -n "${current_pgid}" ] && [ "${loaded_process_group_id}" = "${current_pgid}" ]; then
@@ -144,6 +197,21 @@ _editor_isolation_load_process_group_metadata()
 	if [ -n "${actual_pgid}" ] && [ "${actual_pgid}" != "${loaded_process_group_id}" ]; then
 		echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=live_group_mismatch" >&2
 		return 1
+	fi
+	if [ -e "/proc/${loaded_child_pid}/stat" ]; then
+		child_stat_text="$(<"/proc/${loaded_child_pid}/stat")" || {
+			echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=process_identity_unreadable" >&2
+			return 1
+		}
+		child_stat_tail="${child_stat_text##*) }"
+		read -r -a child_stat_fields <<< "${child_stat_tail}"
+		actual_child_start_time_ticks="${child_stat_fields[19]:-}"
+		actual_child_uid="$(stat -c '%u' -- "/proc/${loaded_child_pid}" 2>/dev/null || true)"
+		if [ "${actual_child_start_time_ticks}" != "${loaded_child_start_time_ticks}" ] \
+			|| [ "${actual_child_uid}" != "${loaded_child_uid}" ]; then
+			echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID path=${metadata_path} reason=process_identity_mismatch" >&2
+			return 1
+		fi
 	fi
 	EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID="${loaded_process_group_id}"
 	EDITOR_ISOLATION_TARGET_USER="${loaded_isolated_user}"
@@ -159,20 +227,29 @@ _editor_isolation_load_process_group_metadata()
 editor_isolation_process_group_has_members()
 {
 	local metadata_path="$1" expected_user="$2" expected_guard_pid="${3:-}"
-	local member_pid member_state
+	local member_pid member_state process_group_member_pids process_group_probe_status
 	_editor_isolation_load_process_group_metadata "${metadata_path}" "${expected_user}" "${expected_guard_pid}" || return 2
+	if process_group_member_pids="$(pgrep -u "${EDITOR_ISOLATION_TARGET_USER}" -g "${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" 2>/dev/null)"; then
+		process_group_probe_status=0
+	else
+		process_group_probe_status=$?
+		[ "${process_group_probe_status}" -eq 1 ] && return 1
+		echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_PROBE_FAILED user=${EDITOR_ISOLATION_TARGET_USER} pgid=${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID} rc=${process_group_probe_status}" >&2
+		return 2
+	fi
 	while read -r member_pid; do
 		[[ "${member_pid}" =~ ^[0-9]+$ ]] || continue
 		member_state="$(sed -E 's/^[0-9]+ \(.*\) ([A-Za-z]).*$/\1/' "/proc/${member_pid}/stat" 2>/dev/null || true)"
 		[ "${member_state}" = "Z" ] && continue
 		return 0
-	done < <(pgrep -u "${EDITOR_ISOLATION_TARGET_USER}" -g "${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" 2>/dev/null || true)
+	done <<< "${process_group_member_pids}"
 	return 1
 }
 
 editor_isolation_signal_process_group()
 {
 	local metadata_path="$1" expected_user="$2" requested_signal="$3" expected_guard_pid="${4:-}"
+	local process_group_probe_status
 	case "${requested_signal}" in
 		TERM|KILL) ;;
 		*)
@@ -180,12 +257,15 @@ editor_isolation_signal_process_group()
 			return 1
 			;;
 	esac
-	_editor_isolation_load_process_group_metadata "${metadata_path}" "${expected_user}" "${expected_guard_pid}" || return 1
+	_editor_isolation_load_process_group_metadata "${metadata_path}" "${expected_user}" "${expected_guard_pid}" true || return 1
 	if sudo -n kill "-${requested_signal}" -- "-${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" 2>/dev/null; then
 		return 0
 	fi
-	if ! pgrep -g "${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" >/dev/null 2>&1; then
-		return 0
+	pgrep -g "${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID}" >/dev/null 2>&1 || process_group_probe_status=$?
+	[ "${process_group_probe_status:-0}" -eq 1 ] && return 0
+	if [ "${process_group_probe_status:-0}" -ne 0 ]; then
+		echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_PROBE_FAILED user=${EDITOR_ISOLATION_TARGET_USER} pgid=${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID} rc=${process_group_probe_status}" >&2
+		return 1
 	fi
 	echo "::error::EDITOR_ISOLATION_PROCESS_GROUP_SIGNAL_FAILED user=${EDITOR_ISOLATION_TARGET_USER} pgid=${EDITOR_ISOLATION_TARGET_PROCESS_GROUP_ID} signal=${requested_signal}" >&2
 	return 1

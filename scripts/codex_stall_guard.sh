@@ -254,10 +254,32 @@ def _budget_suffix_for_now() -> str:
 	return f" budget_elapsed_secs={budget_elapsed} budget_remaining_secs={budget_remaining}"
 
 
+def _process_identity(pid: int) -> tuple[int, int] | None:
+	stat_path = Path(f"/proc/{pid}/stat")
+	try:
+		stat_fields = stat_path.read_text(encoding="ascii", errors="replace").rpartition(")")[2].split()
+		process_uid = stat_path.stat().st_uid
+	except FileNotFoundError:
+		return None
+	if len(stat_fields) <= 19 or not stat_fields[19].isdigit():
+		raise ValueError(f"invalid /proc/{pid}/stat")
+	return int(stat_fields[19]), process_uid
+
+
 stdout_handle, close_stdout = _open_output(STDOUT_FILE, sys.stdout.buffer)
 stderr_handle, close_stderr = _open_output(STDERR_FILE, sys.stderr.buffer)
 kill_timer: threading.Timer | None = None
 signal_failure = False
+
+try:
+	guard_identity = _process_identity(os.getpid())
+except ValueError as exc:
+	_emit_wrapper_stderr(f"::error::codex_stall_guard could not capture guard process identity: {exc}\n")
+	raise SystemExit(126)
+if guard_identity is None:
+	_emit_wrapper_stderr("::error::codex_stall_guard could not capture guard process identity\n")
+	raise SystemExit(126)
+GUARD_START_TIME_TICKS, GUARD_UID = guard_identity
 
 child = subprocess.Popen(
 	COMMAND,
@@ -268,6 +290,26 @@ child = subprocess.Popen(
 )
 
 child_pgid = os.getpgid(child.pid)
+child_identity = _process_identity(child.pid)
+if child_identity is None:
+	_emit_wrapper_stderr(
+		f"::error::codex_stall_guard could not capture child process identity pgid={child_pgid}; terminating group\n"
+	)
+	if ISOLATED_USER:
+		subprocess.run(
+			["sudo", "-n", "kill", "-KILL", "--", f"-{child_pgid}"],
+			stdout=subprocess.DEVNULL,
+			stderr=subprocess.DEVNULL,
+			check=False,
+		)
+	else:
+		try:
+			os.killpg(child_pgid, signal.SIGKILL)
+		except ProcessLookupError:
+			pass
+	raise SystemExit(126)
+CHILD_START_TIME_TICKS, CHILD_UID = child_identity
+ISOLATED_UID = pwd.getpwnam(ISOLATED_USER).pw_uid if ISOLATED_USER else -1
 
 
 def _write_process_group_metadata() -> None:
@@ -277,9 +319,14 @@ def _write_process_group_metadata() -> None:
 	metadata_content = "\n".join(
 		(
 			f"guard_pid={os.getpid()}",
+			f"guard_uid={GUARD_UID}",
+			f"guard_start_time_ticks={GUARD_START_TIME_TICKS}",
 			f"child_pid={child.pid}",
 			f"process_group_id={child_pgid}",
 			f"isolated_user={ISOLATED_USER}",
+			f"isolated_uid={ISOLATED_UID}",
+			f"child_uid={CHILD_UID}",
+			f"child_start_time_ticks={CHILD_START_TIME_TICKS}",
 			f"signal_mode={'privileged' if ISOLATED_USER else 'standard'}",
 		)
 	) + "\n"
@@ -349,12 +396,18 @@ def _write_status(state: str, idle_secs: int, signal_name: str = "") -> None:
 def _isolated_group_has_members() -> bool:
 	if not ISOLATED_USER:
 		return False
-	result = subprocess.run(
-		["pgrep", "-u", ISOLATED_USER, "-g", str(child_pgid)],
-		stdout=subprocess.DEVNULL,
-		stderr=subprocess.DEVNULL,
-		check=False,
-	)
+	try:
+		result = subprocess.run(
+			["pgrep", "-u", ISOLATED_USER, "-g", str(child_pgid)],
+			stdout=subprocess.DEVNULL,
+			stderr=subprocess.DEVNULL,
+			check=False,
+		)
+	except OSError as exc:
+		_emit_wrapper_stderr(
+			f"::error::codex_stall_guard could not execute isolated process-group probe pgid={child_pgid} user={ISOLATED_USER}: {exc}\n"
+		)
+		return True
 	if result.returncode == 0:
 		return True
 	if result.returncode == 1:
@@ -366,12 +419,18 @@ def _isolated_group_has_members() -> bool:
 
 
 def _process_group_exists() -> bool:
-	result = subprocess.run(
-		["pgrep", "-g", str(child_pgid)],
-		stdout=subprocess.DEVNULL,
-		stderr=subprocess.DEVNULL,
-		check=False,
-	)
+	try:
+		result = subprocess.run(
+			["pgrep", "-g", str(child_pgid)],
+			stdout=subprocess.DEVNULL,
+			stderr=subprocess.DEVNULL,
+			check=False,
+		)
+	except OSError as exc:
+		_emit_wrapper_stderr(
+			f"::error::codex_stall_guard could not execute process-group probe pgid={child_pgid}: {exc}\n"
+		)
+		return True
 	if result.returncode == 0:
 		return True
 	if result.returncode == 1:
@@ -413,11 +472,34 @@ def _isolated_group_alive() -> bool:
 	return _isolated_group_has_members()
 
 
+def _child_identity_matches() -> bool:
+	global signal_failure
+	try:
+		current_identity = _process_identity(child.pid)
+	except (OSError, ValueError) as exc:
+		_emit_wrapper_stderr(
+			f"::error::codex_stall_guard could not verify process-group identity pgid={child_pgid}: {exc}\n"
+		)
+		signal_failure = True
+		return False
+	if current_identity is None:
+		return True
+	if current_identity != (CHILD_START_TIME_TICKS, CHILD_UID):
+		_emit_wrapper_stderr(
+			f"::error::codex_stall_guard process-group identity mismatch pgid={child_pgid}; refusing privileged signal\n"
+		)
+		signal_failure = True
+		return False
+	return True
+
+
 def _signal_child_group(signum: signal.Signals) -> bool:
 	global signal_failure
 	if not _isolated_group_alive():
 		return True
 	if ISOLATED_USER:
+		if not _child_identity_matches():
+			return False
 		result = subprocess.run(
 		["sudo", "-n", "kill", f"-{signum.name.removeprefix('SIG')}", "--", f"-{child_pgid}"],
 		stdout=subprocess.DEVNULL,
