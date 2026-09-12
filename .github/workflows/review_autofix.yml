@@ -2077,13 +2077,46 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
+          # The path list is hashed into the actions/cache *version*, so it
+          # must be byte-identical across runs. The per-run workspace path
+          # (`<runner.temp>/workspaces/<pr>-<run_id>-<run_attempt>`) is not,
+          # which made every restore miss its predecessor's save. Cache a
+          # run-independent staging dir instead; the adjacent stage-in /
+          # stage-out steps copy between it and the workspace.
           path: |
-            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_issue_ledger/
-            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/
-            ${{ steps.workspace_state.outputs.workspace_path }}/${{ env.REVIEW_LEDGER_PATH }}
+            ${{ runner.temp }}/review-ledger-cache/.ai/review_issue_ledger/
+            ${{ runner.temp }}/review-ledger-cache/.ai/review_runtime/
+            ${{ runner.temp }}/review-ledger-cache/${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-
+
+      - name: Stage restored review-issue ledger into workspace
+        if: env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [ -z "${RUNNER_TEMP:-}" ]; then
+            echo "::warning::RUNNER_TEMP is unset; skipping review-issue ledger cache stage-in."
+            exit 0
+          fi
+          ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache"
+          ledger_cache_workspace_root="${{ steps.workspace_state.outputs.workspace_path }}"
+          ledger_cache_ledger_rel="${REVIEW_LEDGER_PATH:-}"
+          ledger_cache_restored_entries=0
+          for ledger_cache_rel in .ai/review_issue_ledger .ai/review_runtime; do
+            if [ -d "${ledger_cache_staging_root}/${ledger_cache_rel}" ]; then
+              mkdir -p "${ledger_cache_workspace_root}/${ledger_cache_rel}"
+              cp -a "${ledger_cache_staging_root}/${ledger_cache_rel}/." "${ledger_cache_workspace_root}/${ledger_cache_rel}/"
+              ledger_cache_restored_entries=$((ledger_cache_restored_entries + 1))
+            fi
+          done
+          if [ -n "${ledger_cache_ledger_rel}" ] && [ -f "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}" ]; then
+            mkdir -p "$(dirname "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}")"
+            cp -a "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}" "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}"
+            ledger_cache_restored_entries=$((ledger_cache_restored_entries + 1))
+          fi
+          echo "REVIEW_LEDGER_CACHE_STAGE_IN restored_entries=${ledger_cache_restored_entries} staging_root=${ledger_cache_staging_root} workspace_root=${ledger_cache_workspace_root}"
 
       - name: Restore same-head partial resume state
         if: env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
@@ -4083,15 +4116,50 @@ jobs:
       # any per-round judge-interim artifact above. Runs even if the apply,
       # commit, or interim-judge path failed partway so cross-iteration state
       # remains best-effort and fail-open.
+      - name: Stage review-issue ledger for cache save
+        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [ -z "${RUNNER_TEMP:-}" ]; then
+            echo "::warning::RUNNER_TEMP is unset; skipping review-issue ledger cache stage-out."
+            exit 0
+          fi
+          ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache"
+          ledger_cache_workspace_root="${{ steps.workspace_state.outputs.workspace_path }}"
+          ledger_cache_ledger_rel="${REVIEW_LEDGER_PATH:-}"
+          rm -rf "${ledger_cache_staging_root}"
+          mkdir -p "${ledger_cache_staging_root}"
+          ledger_cache_staged_entries=0
+          for ledger_cache_rel in .ai/review_issue_ledger .ai/review_runtime; do
+            if [ -d "${ledger_cache_workspace_root}/${ledger_cache_rel}" ]; then
+              mkdir -p "${ledger_cache_staging_root}/${ledger_cache_rel}"
+              cp -a "${ledger_cache_workspace_root}/${ledger_cache_rel}/." "${ledger_cache_staging_root}/${ledger_cache_rel}/"
+              ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
+            fi
+          done
+          if [ -n "${ledger_cache_ledger_rel}" ] && [ -f "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}" ]; then
+            mkdir -p "$(dirname "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}")"
+            cp -a "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}" "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}"
+            ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
+          fi
+          echo "REVIEW_LEDGER_CACHE_STAGE_OUT staged_entries=${ledger_cache_staged_entries} staging_root=${ledger_cache_staging_root} workspace_root=${ledger_cache_workspace_root}"
+
       - name: Save review-issue ledger
         if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
+          # The path list is hashed into the actions/cache *version*, so it
+          # must be byte-identical across runs. The per-run workspace path
+          # (`<runner.temp>/workspaces/<pr>-<run_id>-<run_attempt>`) is not,
+          # which made every restore miss its predecessor's save. Cache a
+          # run-independent staging dir instead; the adjacent stage-in /
+          # stage-out steps copy between it and the workspace.
           path: |
-            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_issue_ledger/
-            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/
-            ${{ steps.workspace_state.outputs.workspace_path }}/${{ env.REVIEW_LEDGER_PATH }}
+            ${{ runner.temp }}/review-ledger-cache/.ai/review_issue_ledger/
+            ${{ runner.temp }}/review-ledger-cache/.ai/review_runtime/
+            ${{ runner.temp }}/review-ledger-cache/${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Post editor summary comment
@@ -6340,15 +6408,50 @@ jobs:
           echo "AUTOFIX_PARTIAL_MARKER_FILE=${partial_marker_file}" >> "$GITHUB_ENV"
           echo "AUTOFIX_RESUME_MARKER_FILE=${partial_marker_file}" >> "$GITHUB_ENV"
 
+      - name: Stage review-issue ledger for partial finalize cache save
+        if: always() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [ -z "${RUNNER_TEMP:-}" ]; then
+            echo "::warning::RUNNER_TEMP is unset; skipping review-issue ledger cache stage-out."
+            exit 0
+          fi
+          ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache"
+          ledger_cache_workspace_root="${{ steps.workspace_state.outputs.workspace_path }}"
+          ledger_cache_ledger_rel="${REVIEW_LEDGER_PATH:-}"
+          rm -rf "${ledger_cache_staging_root}"
+          mkdir -p "${ledger_cache_staging_root}"
+          ledger_cache_staged_entries=0
+          for ledger_cache_rel in .ai/review_issue_ledger .ai/review_runtime; do
+            if [ -d "${ledger_cache_workspace_root}/${ledger_cache_rel}" ]; then
+              mkdir -p "${ledger_cache_staging_root}/${ledger_cache_rel}"
+              cp -a "${ledger_cache_workspace_root}/${ledger_cache_rel}/." "${ledger_cache_staging_root}/${ledger_cache_rel}/"
+              ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
+            fi
+          done
+          if [ -n "${ledger_cache_ledger_rel}" ] && [ -f "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}" ]; then
+            mkdir -p "$(dirname "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}")"
+            cp -a "${ledger_cache_workspace_root}/${ledger_cache_ledger_rel}" "${ledger_cache_staging_root}/${ledger_cache_ledger_rel}"
+            ledger_cache_staged_entries=$((ledger_cache_staged_entries + 1))
+          fi
+          echo "REVIEW_LEDGER_CACHE_STAGE_OUT staged_entries=${ledger_cache_staged_entries} staging_root=${ledger_cache_staging_root} workspace_root=${ledger_cache_workspace_root}"
+
       - name: Save review-issue ledger after partial finalize
         if: always() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
+          # The path list is hashed into the actions/cache *version*, so it
+          # must be byte-identical across runs. The per-run workspace path
+          # (`<runner.temp>/workspaces/<pr>-<run_id>-<run_attempt>`) is not,
+          # which made every restore miss its predecessor's save. Cache a
+          # run-independent staging dir instead; the adjacent stage-in /
+          # stage-out steps copy between it and the workspace.
           path: |
-            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_issue_ledger/
-            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/
-            ${{ steps.workspace_state.outputs.workspace_path }}/${{ env.REVIEW_LEDGER_PATH }}
+            ${{ runner.temp }}/review-ledger-cache/.ai/review_issue_ledger/
+            ${{ runner.temp }}/review-ledger-cache/.ai/review_runtime/
+            ${{ runner.temp }}/review-ledger-cache/${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Telegram success

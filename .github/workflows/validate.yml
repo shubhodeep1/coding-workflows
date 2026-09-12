@@ -622,10 +622,38 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
-          path: ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/
+          # Must be byte-identical to the `Save review-issue ledger*` path
+          # list in review_autofix.yml: actions/cache hashes the path list
+          # into the cache version, so any difference (including the old
+          # per-run workspace prefix) makes the review run's save
+          # unreachable from here. The stage-in step below copies the
+          # restored runtime dir into the per-run workspace.
+          path: |
+            ${{ runner.temp }}/review-ledger-cache/.ai/review_issue_ledger/
+            ${{ runner.temp }}/review-ledger-cache/.ai/review_runtime/
+            ${{ runner.temp }}/review-ledger-cache/${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', steps.behavioural_smoke_pr.outputs.pr_number) }}
           key: review-ledger-${{ github.repository }}-pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             review-ledger-${{ github.repository }}-pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}-
+
+      - name: Stage restored behavioural smoke runtime cache into workspace
+        if: steps.behavioural_smoke_gate.outputs.enabled == 'true' && steps.behavioural_smoke_pr.outputs.pr_number != ''
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [ -z "${RUNNER_TEMP:-}" ]; then
+            echo "::warning::RUNNER_TEMP is unset; skipping behavioural smoke runtime cache stage-in."
+            exit 0
+          fi
+          ledger_cache_staging_root="${RUNNER_TEMP}/review-ledger-cache"
+          ledger_cache_workspace_root="${{ steps.workspace_state.outputs.workspace_path }}"
+          ledger_cache_restored_entries=0
+          if [ -d "${ledger_cache_staging_root}/.ai/review_runtime" ]; then
+            mkdir -p "${ledger_cache_workspace_root}/.ai/review_runtime"
+            cp -a "${ledger_cache_staging_root}/.ai/review_runtime/." "${ledger_cache_workspace_root}/.ai/review_runtime/"
+            ledger_cache_restored_entries=1
+          fi
+          echo "REVIEW_LEDGER_CACHE_STAGE_IN restored_entries=${ledger_cache_restored_entries} staging_root=${ledger_cache_staging_root} workspace_root=${ledger_cache_workspace_root}"
 
       - name: Record validation run start
         continue-on-error: true
