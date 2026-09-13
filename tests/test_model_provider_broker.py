@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -216,6 +217,68 @@ def test_request_and_output_budget_reservation_is_race_safe() -> None:
 	assert state.output_tokens_reserved == 150
 
 
+def test_broker_connection_admission_is_bounded_and_recovers() -> None:
+	module = _broker_module()
+	assert module.BROKER_CLIENT_READ_TIMEOUT_SECONDS == 30
+	assert module.BROKER_MAX_ACTIVE_CONNECTIONS == 8
+	module.BROKER_CLIENT_READ_TIMEOUT_SECONDS = 2
+	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, _broker_policy(module))
+	server = module.BrokerServer(("127.0.0.1", 0), state)
+	server_thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+	server_thread.start()
+	partial_clients: list[socket.socket] = []
+	try:
+		partial_request = (
+			b"POST /api/v1/responses HTTP/1.1\r\n"
+			b"Host: 127.0.0.1\r\n"
+			b"Authorization: Bearer token\r\n"
+			b"Content-Type: application/json\r\n"
+			b"Content-Length: 64\r\n\r\n{"
+		)
+		partial_header = b"POST /api/v1/responses HTTP/1.1\r\nHost: 127.0.0.1"
+		for index in range(module.BROKER_MAX_ACTIVE_CONNECTIONS):
+			client = socket.create_connection(("127.0.0.1", server.server_port), timeout=2)
+			client.sendall(partial_header if index % 2 else partial_request)
+			partial_clients.append(client)
+		deadline = time.monotonic() + 1
+		while server._active_connection_slots._value != 0 and time.monotonic() < deadline:
+			time.sleep(0.01)
+		assert server._active_connection_slots._value == 0
+
+		excess_client = socket.create_connection(("127.0.0.1", server.server_port), timeout=2)
+		excess_client.settimeout(0.5)
+		excess_client.sendall(partial_request)
+		try:
+			assert excess_client.recv(1) == b""
+		except ConnectionResetError:
+			pass
+		finally:
+			excess_client.close()
+
+		deadline = time.monotonic() + 4
+		while server._active_connection_slots._value != module.BROKER_MAX_ACTIVE_CONNECTIONS and time.monotonic() < deadline:
+			time.sleep(0.01)
+		assert server._active_connection_slots._value == module.BROKER_MAX_ACTIVE_CONNECTIONS
+
+		request = urllib.request.Request(
+			f"http://127.0.0.1:{server.server_port}/api/v1/responses",
+			data=b"{}",
+			headers={"Authorization": "Bearer token", "Content-Type": "application/json"},
+			method="POST",
+		)
+		try:
+			urllib.request.urlopen(request, timeout=2)
+		except urllib.error.HTTPError as error:
+			assert error.code == 400
+		else:
+			raise AssertionError("broker did not accept a normal request after timed-out clients released their slots")
+	finally:
+		for client in partial_clients:
+			client.close()
+		server.shutdown()
+		server.server_close()
+
+
 def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 	for relative_path in (
 		".github/workflows/clarify.yml",
@@ -284,6 +347,32 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 		assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in workflow_text
 		assert "SCRIPT_REF=stable" not in workflow_text
 		assert "Checkout workflow support source fallback" not in workflow_text
+
+
+def test_model_facing_workflows_export_broker_price_policy() -> None:
+	price_defaults = {
+		"MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE": "10",
+		"MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE": "30",
+		"MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE": "0.10",
+		"MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE": "1",
+	}
+	for workflow_name in (
+		"check_failure_triage.yml",
+		"clarify.yml",
+		"implement.yml",
+		"orchestrate.yml",
+		"orchestrate_clarify_respond.yml",
+		"orchestrate_poll.yml",
+		"plan.yml",
+		"review_autofix.yml",
+		"security-audit.yml",
+		"validate.yml",
+		"workflow-log-analysis.yml",
+	):
+		workflow_text = (REPO_ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+		for variable_name, default_value in price_defaults.items():
+			expected_mapping = f"{variable_name}: ${{{{ vars.{variable_name} || '{default_value}' }}}}"
+			assert expected_mapping in workflow_text, (workflow_name, expected_mapping)
 
 
 def test_sanitized_launcher_exposes_only_ephemeral_provider_token(tmp_path: Path) -> None:

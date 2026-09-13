@@ -431,6 +431,8 @@ def test_resolver_retry_comment_lookups_are_bounded() -> None:
 	assert bounded_endpoint in poller
 	assert "resolver_retry_comments_max_pages=10" in poller
 	assert "resolver_retry_comments_max_bytes=$((32 * 1024 * 1024))" in poller
+	assert "AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1" in poller
+	assert 'issues/comments/${resolver_retry_locator_id}' in poller
 	poller_lookup = poller.split('local resolver_retry_comments_pages_file=""', 1)[1].split('if [ -n "${resolver_retry_state}" ]', 1)[0]
 	assert "--paginate" not in poller_lookup
 	assert '--comments-json "${PR_ISSUE_COMMENTS_FILE}"' in actuator
@@ -439,6 +441,9 @@ def test_resolver_retry_comment_lookups_are_bounded() -> None:
 	assert "select-resolver-retry" in poller
 	assert "select-resolver-retry" in prepare
 	assert "select-resolver-retry" in actuator
+	assert "persisted_comment_id=" in actuator
+	assert "AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1" in actuator
+	assert '-X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --input "${locator_payload_file}"' in actuator
 	assert "RESOLVER_RETRY_STATE_COMMENT_ID=${RESOLVER_RETRY_STATE_COMMENT_ID}" in prepare
 	assert 'existing_comment_id="${RESOLVER_RETRY_STATE_COMMENT_ID:-}"' in actuator
 	assert actuator.index('existing_comment_id="${RESOLVER_RETRY_STATE_COMMENT_ID:-}"') < actuator.index('PR_ISSUE_COMMENTS_FILE')

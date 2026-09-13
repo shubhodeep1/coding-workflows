@@ -22,6 +22,10 @@ name: AI Orchestrate (Reusable)
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   MODEL_EDITOR: ${{ vars.WORKFLOW_ORCHESTRATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.6-sol' }}
+  MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE || '10' }}
+  MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE || '30' }}
+  MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE || '0.10' }}
+  MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE || '1' }}
   # Defaults to xhigh to match the repo-wide gpt-5.6-sol reasoning-level
   # policy. Override per-repo via vars.THINKING_LEVEL_ORCHESTRATE.
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_ORCHESTRATE || 'xhigh' }}
@@ -109,8 +113,8 @@ jobs:
           python-version: "3.12"
 
       - name: Install Codex CLI
-        # Intentionally use the released action ref as the rollout boundary.
-        # Consumers pick this up when test-and-mark-stable retags @stable.
+        # Execute only the reviewed installer commit. Installer changes require
+        # an explicit SHA update here rather than movement of a mutable tag.
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@f03b8d657a63d64b87324e8a1047a8b90d3221e0
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}

@@ -39,7 +39,8 @@ if [ -s "${candidate_file:-/nonexistent}" ]; then
 	signed_file="$(mktemp)"
 	comment_file="$(mktemp)"
 	selection_file="$(mktemp)"
-	trap 'rm -f "${signed_file}" "${comment_file}" "${selection_file}"' EXIT
+	locator_payload_file="$(mktemp)"
+	trap 'rm -f "${signed_file}" "${comment_file}" "${selection_file}" "${locator_payload_file}"' EXIT
 	PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_state_v2.py" sign-resolver-retry \
 		--candidate-file "${candidate_file}" \
 		--repository "${GITHUB_REPOSITORY}" \
@@ -50,9 +51,9 @@ if [ -s "${candidate_file:-/nonexistent}" ]; then
 		--producer-id "${producer_id}" \
 		--out-file "${signed_file}"
 	{
-		echo '<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2'
+		printf '%s\n' '<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2'
 		cat "${signed_file}"
-		echo '-->'
+		printf '%s' '-->'
 	} > "${comment_file}"
 	existing_comment_id="${RESOLVER_RETRY_STATE_COMMENT_ID:-}"
 	if ! [[ "${existing_comment_id}" =~ ^[1-9][0-9]*$ ]]; then
@@ -80,10 +81,29 @@ if [ -s "${candidate_file:-/nonexistent}" ]; then
 	fi
 	comment_payload="$(jq -n --rawfile body "${comment_file}" '{body:$body}')"
 	if [[ "${existing_comment_id}" =~ ^[1-9][0-9]*$ ]]; then
-		printf '%s' "${comment_payload}" | gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_comment_id}" --input - >/dev/null
+		persisted_comment_json="$(printf '%s' "${comment_payload}" | gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_comment_id}" --input -)"
 	else
-		printf '%s' "${comment_payload}" | gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --input - >/dev/null
+		persisted_comment_json="$(printf '%s' "${comment_payload}" | gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --input -)"
 	fi
+	persisted_comment_id="$(printf '%s' "${persisted_comment_json}" | jq -r '.id // empty' 2>/dev/null || true)"
+	if ! [[ "${persisted_comment_id}" =~ ^[1-9][0-9]*$ ]]; then
+		echo "::error::Resolver retry-state comment write did not return a valid comment ID."
+		exit 1
+	fi
+	locator_marker="<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:${persisted_comment_id} -->"
+	# API hygiene: live_pr_json already supplies the current body, while the
+	# marker write above is the only existing call that supplies its new ID.
+	printf '%s' "${live_pr_json}" | jq --arg locator "${locator_marker}" '
+		(.body // "") as $body
+		| {body: (
+			if ($body | test("(?m)^<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:[1-9][0-9]* -->$")) then
+				($body | gsub("(?m)^<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:[1-9][0-9]* -->$"; $locator))
+			else
+				$body + (if $body == "" or ($body | endswith("\n")) then "" else "\n" end) + $locator + "\n"
+			end
+		)}
+	' > "${locator_payload_file}"
+	gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --input "${locator_payload_file}" >/dev/null
 	if [ "$(jq -r '.escalated // false' "${signed_file}")" = "true" ]; then
 		gh_retry gh issue edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:resolver-escalated" >/dev/null
 	fi

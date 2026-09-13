@@ -23,6 +23,12 @@ concurrency:
   group: security-audit-${{ github.repository }}
   cancel-in-progress: false
 
+env:
+  MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE || '10' }}
+  MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE || '30' }}
+  MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE || '0.10' }}
+  MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE || '1' }}
+
 jobs:
   security-audit:
     runs-on: ubuntu-24.04

@@ -10,6 +10,7 @@ import json
 import os
 import secrets
 import signal
+import socket
 import ssl
 import sys
 import tempfile
@@ -34,6 +35,8 @@ USAGE_SCAN_TAIL_BYTES = 1024 * 1024
 USAGE_OUTPUT_TOKEN_FIELDS = ("completion_tokens", "output_tokens")
 MAX_HEADER_COUNT = 64
 MAX_HEADER_BYTES = 32 * 1024
+BROKER_CLIENT_READ_TIMEOUT_SECONDS = 30
+BROKER_MAX_ACTIVE_CONNECTIONS = 8
 HOP_BY_HOP_HEADERS = frozenset(
 	("connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade")
 )
@@ -374,7 +377,14 @@ class BrokerHandler(BaseHTTPRequestHandler):
 		if not 0 < content_length <= MAX_REQUEST_BODY_BYTES:
 			self._reject(413, "request body size is invalid")
 			return
-		body = self.rfile.read(content_length)
+		try:
+			body = self.rfile.read(content_length)
+		except OSError:
+			try:
+				self._reject(408, "request body read timed out")
+			except OSError:
+				self.close_connection = True
+			return
 		if len(body) != content_length:
 			self._reject(400, "request body was truncated")
 			return
@@ -463,6 +473,29 @@ class BrokerServer(ThreadingHTTPServer):
 	def __init__(self, address: tuple[str, int], state: BrokerState) -> None:
 		super().__init__(address, BrokerHandler)
 		self.broker_state = state
+		self._active_connection_slots = threading.BoundedSemaphore(BROKER_MAX_ACTIVE_CONNECTIONS)
+
+	def process_request(self, request: socket.socket, client_address: tuple[str, int]) -> None:
+		try:
+			request.settimeout(BROKER_CLIENT_READ_TIMEOUT_SECONDS)
+		except OSError:
+			self.shutdown_request(request)
+			return
+		if not self._active_connection_slots.acquire(blocking=False):
+			self.shutdown_request(request)
+			return
+		try:
+			super().process_request(request, client_address)
+		except BaseException:
+			self._active_connection_slots.release()
+			self.shutdown_request(request)
+			raise
+
+	def process_request_thread(self, request: socket.socket, client_address: tuple[str, int]) -> None:
+		try:
+			super().process_request_thread(request, client_address)
+		finally:
+			self._active_connection_slots.release()
 
 
 def _atomic_write_ready_file(path: Path, document: dict[str, object]) -> None:

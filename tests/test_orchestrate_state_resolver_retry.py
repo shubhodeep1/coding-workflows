@@ -118,6 +118,16 @@ def test_selector_finds_evicted_marker_and_chooses_highest_verified_generation(t
 			"body": f"<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n{json.dumps(forged, separators=(',', ':'))}\n-->\n",
 		},
 		{
+			"id": 13,
+			"user": {"id": 123},
+			"body": "<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n{\"generation\":" + ("9" * 5000) + "}\n-->\n",
+		},
+		{
+			"id": 14,
+			"user": {"id": 123},
+			"body": "<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n" + ("[" * 2000) + ("]" * 2000) + "\n-->\n",
+		},
+		{
 			"id": 12,
 			"user": {"id": 123},
 			"body": f"<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n{json.dumps(generation_three, separators=(',', ':'))}\n-->\n",

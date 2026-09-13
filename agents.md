@@ -379,7 +379,14 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   valid range `1..100`) and fail closed with HTTP 429 after exhaustion. Each
   session also enforces exact model IDs, a per-request output limit (default
   `16384`), a total output-token budget (default `1638400`, i.e. `100 x 16384`), and
-  server-controlled provider price ceilings before forwarding. The total
+  server-controlled provider price ceilings before forwarding. Active clients
+  are capped at 8 and each accepted socket has a 30-second read timeout.
+  Price defaults are `MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE=10` USD per
+  million input tokens, `MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE=30` USD
+  per million output tokens, `MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE=0.10`
+  USD per request, and `MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE=1` USD per image.
+  Request values can only lower those ceilings; malformed, negative, or
+  non-finite configured values prevent broker startup. The total
   budget counts tokens the provider actually generated: a request is charged
   its full per-request ceiling only while it is in flight and is trued up to
   the provider-reported `usage` once its response completes (streamed chat
@@ -395,11 +402,13 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
 - Resolver retry tiers trust only signed
   `AUTOFIX_RESOLVER_RETRY_STATE_V2` producer comments. User-editable V1 PR-body
   markers remain recognizable as legacy text but cannot weaken verification.
-  Poller discovery selects the highest verified generation from a complete scan
-  bounded to 10 pages and 32 MiB; a short page must prove completeness within
-  those bounds. The trusted actuator reuses the review pipeline's collected
-  comment snapshot. An unproven history, API failure, or verification
-  uncertainty defers mutation to the next poll tick.
+  The trusted actuator persists the marker comment ID as an untrusted PR-body
+  locator, and the poller verifies the directly fetched comment's producer,
+  context, and signature before use. A missing or invalid locator falls back to
+  selecting the highest verified generation from a complete scan bounded to 10
+  pages and 32 MiB, then refreshes the locator. The actuator reuses the review
+  pipeline's collected comment snapshot. An unproven history, API failure, or
+  verification uncertainty defers mutation to the next poll tick.
 - `scripts/workflow_log_output_contract.py` validates and atomically publishes
   model report candidates for analysis, retro, deep-audit, and API-redundancy
   modes before any tracked report or tracker comment consumes them.

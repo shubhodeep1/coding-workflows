@@ -727,7 +727,7 @@ def cmd_select_resolver_retry(args: argparse.Namespace) -> int:
 		if comments_path.stat().st_size > 32 * 1024 * 1024:
 			raise ValueError("comments payload is oversized")
 		comments = json.loads(comments_path.read_text(encoding="utf-8"))
-	except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+	except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
 		print("resolver retry selection failed: comments payload is invalid", file=sys.stderr)
 		return 2
 	if not isinstance(comments, list) or len(comments) > 100_000:
@@ -761,7 +761,7 @@ def cmd_select_resolver_retry(args: argparse.Namespace) -> int:
 			continue
 		try:
 			document = json.loads(body[len(marker_prefix):-len(marker_suffix)])
-		except json.JSONDecodeError:
+		except (json.JSONDecodeError, ValueError, RecursionError):
 			continue
 		if not isinstance(document, dict) or not _resolver_retry_document_is_verified(document, context, auth_keys):
 			continue

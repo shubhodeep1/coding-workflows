@@ -82,6 +82,7 @@ def test_remote_codex_runtime_actions_are_immutable() -> None:
 		text = path.read_text(encoding="utf-8")
 		assert "install-codex@stable" not in text, path
 		assert "setup-runtime@stable" not in text, path
+		assert "Intentionally use the released action ref as the rollout boundary" not in text, path
 		for line in text.splitlines():
 			if "shubhodeep1/coding-workflows/.github/actions/install-codex@" in line:
 				assert line.rstrip().endswith(f"install-codex@{REVIEWED_CODEX_ACTION_SHA}"), (path, line)
