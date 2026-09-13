@@ -1699,11 +1699,26 @@ case "${RB_ACTION}" in
     ;;
 esac
 
-post_review_blocked_assessment \
-  "${RB_JUDGE_COMMENT_FILE}" \
-  "${RB_OUTBOUND_REVIEW_STATE}" \
-  "${POST_REVIEW_HEAD_SHA}" \
-  "${POST_REVIEW_HEAD_REF}" || true
+# A pending approval request is published below only after its assessment
+# succeeds. Its presence therefore makes re-posting the same assessment on
+# every review-sweep dispatch unnecessary. If the initial assessment fails,
+# stop terminal recommendations before request creation so a later dispatch
+# can retry instead of permanently suppressing the missing comment.
+if [ -n "${RB_PENDING_DECISION_JSON}" ]; then
+  echo "Pending review-blocked approval request reused; request creation follows a successful judge assessment post, so it is not re-posted."
+elif ! post_review_blocked_assessment \
+    "${RB_JUDGE_COMMENT_FILE}" \
+    "${RB_OUTBOUND_REVIEW_STATE}" \
+    "${POST_REVIEW_HEAD_SHA}" \
+    "${POST_REVIEW_HEAD_REF}"; then
+  echo "::warning::Could not publish review-blocked judge assessment; terminal approval requests will not be created without it."
+  case "${RB_ACTION}" in
+    merge|merge_with_followup|close_and_reissue)
+      echo "judge_skip_reason=assessment_publish_failed" >> "$GITHUB_OUTPUT"
+      exit 0
+      ;;
+  esac
+fi
 
 RB_APPROVAL_REQUEST_ID=""
 case "${RB_ACTION}" in
