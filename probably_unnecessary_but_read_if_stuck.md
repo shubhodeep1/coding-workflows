@@ -591,6 +591,21 @@ Contract:
 - The `[ignore — retry-attempt diagnostic only, not part of the task]` trailer text is the operator-facing form of the cache-busting nonce. Models that mistakenly treat it as task content should be retrained or routed around; the wording can be tightened but the bracket-labeled "ignore" framing is the established pattern.
 - Rollback: revert the three edits independently. (a) Removing the `cp ... .attempt_${attempt}` block and the trailer append, and reverting the codex `< "${attempt_prompt_file}"` back to `< "${EDITOR_PROMPT_FILE}"` restores byte-identical-prompt retries. (b) Removing the refusal short-circuit `if grep -qiE "I'?m sorry…"; then break; fi` restores the full retry budget for refusals. (c) Removing the Check 1b block and the parallel poller branch removes the refusal-specific alert path — `EDITOR_NOOP_SUSPICIOUS` continues to gate auto-merge unchanged.
 
+#### 20.10.2 Recoverable-failure signal (`EDITOR_NOOP_RECOVERABLE_FAILURE`)
+
+Context: PR #4077 / Actions runs 34692519987, 34700918528, 34702442346 (September 2026) — the editor's model broker answered HTTP 429 (`broker request or output-token limit reached`) on every attempt of every review run for 38 hours (21 partial-finalize rounds). Each run ended in the `recoverable_failure` partial-finalize summary from `scripts/review_apply_fixes.sh`, whose `Review file issue audit:` section is only `- none (...)`, so Check 2 of `Validate editor no-op disposition` correctly set `EDITOR_NOOP_SUSPICIOUS=true` and blocked auto-merge. The operator alert, however, read "Editor claimed no changes needed but disposition could not be verified. Manual review or re-run required." — the editor had claimed nothing; it never produced output, and the re-run the alert asked for could not help a deterministic failure.
+
+One additive change addresses this:
+
+- `Validate editor no-op disposition` runs an additive Check 1c that greps the summary for the recoverable-failure sentinel `partial finalize requested after a recoverable editor failure` (the `Runtime failure path:` line of that fallback summary) and sets `EDITOR_NOOP_RECOVERABLE_FAILURE=true` alongside the existing flags, plus a `::notice::Editor stopped after a recoverable failure on every attempt — …` annotation. It does not set or change `EDITOR_NOOP_SUSPICIOUS` (Check 2 already does that for this summary shape), so no auto-merge gate moves.
+- `Telegram editor-noop-suspicious warning` branches on the flag between the refusal branch and the generic branch. It counts the `editor_attempt_<n>.err` copies the retry loop leaves in `PREVIOUS_REVIEWS_DIR`, quotes the last `Error:` line (fallback: the last opencode `level=ERROR … error="…"` value) of the highest-numbered file clipped to 240 characters, and posts "⚠️ Editor failed on all N attempts: #PR / No editor output was produced (recoverable failure). Last provider error: …". The PR comment keeps the `⚠️ **Editor no-op suspicious**` literal so the orchestrator-poll noop-suspicious recovery sweep still recognises the PR.
+
+Contract:
+
+- The sentinel MUST stay verbatim in `scripts/review_apply_fixes.sh` (recoverable_failure fallback summary) and `review_autofix.yml` (Check 1c); `tests/test_review_autofix_editor_noop_cascade_contract.py` pins the lockstep. The soft-deadline fallback summary (`partial finalize requested at the soft deadline …`) is deliberately not matched — it means budget exhaustion, not an editor failure.
+- Only the final attempt's single error line is quoted, never the whole stderr, so provider/tool noise (and anything an agent printed) does not reach Telegram or the PR thread.
+- Rollback: removing the Check 1c block and the `elif` branch restores the generic alert for this case; the auto-merge gate is unaffected either way.
+
 ---
 
 
