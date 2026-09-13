@@ -1108,20 +1108,21 @@ def test_noop_warning_step_branches_on_recoverable_failure_with_last_error(tmp_p
 	)
 	tg_capture = tmp_path / "tg.txt"
 	gh_capture = tmp_path / "gh.txt"
+	warning_env = {
+		"PATH": os.environ["PATH"],
+		"SUPPORT_SCRIPTS_DIR": str(support_dir),
+		"PREVIOUS_REVIEWS_DIR": str(previous_reviews),
+		"EDITOR_NOOP_SUSPICIOUS": "true",
+		"EDITOR_NOOP_REFUSAL": "false",
+		"EDITOR_NOOP_RECOVERABLE_FAILURE": "true",
+		"PR_NUMBER": "4077",
+		"TG_CAPTURE_FILE": str(tg_capture),
+		"GH_CAPTURE_FILE": str(gh_capture),
+	}
 	result = subprocess.run(
-		["bash", "-c", script],
+		["bash", "-eo", "pipefail", "-c", script],
 		cwd=REPO_ROOT,
-		env={
-			"PATH": os.environ["PATH"],
-			"SUPPORT_SCRIPTS_DIR": str(support_dir),
-			"PREVIOUS_REVIEWS_DIR": str(previous_reviews),
-			"EDITOR_NOOP_SUSPICIOUS": "true",
-			"EDITOR_NOOP_REFUSAL": "false",
-			"EDITOR_NOOP_RECOVERABLE_FAILURE": "true",
-			"PR_NUMBER": "4077",
-			"TG_CAPTURE_FILE": str(tg_capture),
-			"GH_CAPTURE_FILE": str(gh_capture),
-		},
+		env=warning_env,
 		text=True,
 		capture_output=True,
 		check=False,
@@ -1136,6 +1137,23 @@ def test_noop_warning_step_branches_on_recoverable_failure_with_last_error(tmp_p
 	assert NOOP_WARNING_LITERAL in pr_comment
 	assert "failed on all 3 attempts" in pr_comment
 	assert "broker request or output-token limit reached" in pr_comment
+
+	for editor_attempt_error_file in previous_reviews.glob("editor_attempt_*.err"):
+		editor_attempt_error_file.unlink()
+	result = subprocess.run(
+		["bash", "-eo", "pipefail", "-c", script],
+		cwd=REPO_ROOT,
+		env=warning_env,
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	assert result.returncode == 0, f"warning step failed without stderr artifacts: {result.stderr}"
+	telegram_message = tg_capture.read_text(encoding="utf-8")
+	assert "Last provider error: not captured" in telegram_message
+	pr_comment = gh_capture.read_text(encoding="utf-8")
+	assert NOOP_WARNING_LITERAL in pr_comment
+	assert "Last provider error from the final attempt: `not captured" in pr_comment
 
 
 if __name__ == "__main__":
