@@ -285,3 +285,191 @@ def test_sanitized_launcher_exposes_only_ephemeral_provider_token(tmp_path: Path
 	assert "ORCHESTRATOR_STATE_AUTH_KEYRING=" not in result.stdout
 	assert "TG_BOT_SECRET=" not in result.stdout
 	assert "TG_ADMIN_CHAT_ID=" not in result.stdout
+
+
+def test_policy_opts_streamed_chat_requests_into_usage_reporting() -> None:
+	module = _broker_module()
+	policy = _broker_policy(module)
+	streamed, _ = policy.normalize_request(
+		"/api/v1/chat/completions",
+		b'{"model":"openai/test-model","messages":[],"stream":true}',
+	)
+	assert json.loads(streamed)["stream_options"] == {"include_usage": True}
+	merged, _ = policy.normalize_request(
+		"/api/v1/chat/completions",
+		b'{"model":"openai/test-model","messages":[],"stream":true,"stream_options":{"include_usage":false}}',
+	)
+	assert json.loads(merged)["stream_options"] == {"include_usage": True}
+	unstreamed, _ = policy.normalize_request(
+		"/api/v1/chat/completions",
+		b'{"model":"openai/test-model","messages":[]}',
+	)
+	assert "stream_options" not in json.loads(unstreamed)
+	try:
+		policy.normalize_request(
+			"/api/v1/chat/completions",
+			b'{"model":"openai/test-model","messages":[],"stream":true,"stream_options":[]}',
+		)
+	except module.BrokerRequestError:
+		pass
+	else:
+		raise AssertionError("broker accepted a non-object stream_options")
+
+
+def test_usage_extraction_reads_final_chunk_or_keeps_reservation() -> None:
+	module = _broker_module()
+	extract = module._extract_output_token_usage
+	chat_stream = (
+		b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+		b'data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":7}}\n\n'
+		b"data: [DONE]\n\n"
+	)
+	assert extract(chat_stream, "text/event-stream; charset=utf-8") == 7
+	responses_stream = (
+		b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hi"}\n\n'
+		b'event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"output_tokens":11}}}\n\n'
+	)
+	assert extract(responses_stream, "text/event-stream") == 11
+	assert extract(b'{"choices":[],"usage":{"completion_tokens":3}}', "application/json") == 3
+	assert extract(b'{"usage":{"output_tokens":4}}', "application/json") == 4
+	# Truncated leading SSE line is skipped; a later usage chunk still wins.
+	assert extract(b'oices":[]}\n\ndata: {"usage":{"completion_tokens":2}}\n\n', "text/event-stream") == 2
+	# No usage, an error event, or malformed usage keeps the reservation.
+	assert extract(b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n', "text/event-stream") is None
+	assert extract(b'data: {"error":{"message":"overloaded"}}\n\n', "text/event-stream") is None
+	assert extract(b'{"usage":{"completion_tokens":"7"}}', "application/json") is None
+	assert extract(b'{"usage":{"completion_tokens":true}}', "application/json") is None
+	assert extract(b"not json", "application/json") is None
+
+
+def test_settle_request_trues_up_reservation_against_actual_usage() -> None:
+	module = _broker_module()
+	policy = _broker_policy(module)
+	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
+	assert state.reserve_request(100)
+	assert state.output_tokens_reserved == 100
+	state.settle_request(100, 7)
+	assert state.output_tokens_reserved == 7
+	assert state.reserve_request(100)
+	state.settle_request(100, None)
+	assert state.output_tokens_reserved == 107, "unreadable usage must keep the full reservation"
+	# The provider exceeding the ceiling is charged at what it actually generated.
+	state.output_tokens_reserved = 0
+	assert state.reserve_request(100)
+	state.settle_request(100, 130)
+	assert state.output_tokens_reserved == 130
+	state.settle_request(100, 0)
+	assert state.output_tokens_reserved == 30
+
+
+def test_sequential_completed_requests_do_not_exhaust_output_budget() -> None:
+	"""Regression for PR #4077 / runs 34692519987, 34700918528, 34702442346:
+	the editor's agentic loop made 4 calls, each charged the full 16384
+	ceiling against a 65536 total, and every later call got HTTP 429."""
+	module = _broker_module()
+	policy = _broker_policy(module)  # per-request ceiling 100, total 150
+	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
+	for _ in range(5):
+		assert state.reserve_request(100), "a completed request must release its unused ceiling"
+		state.settle_request(100, 10)
+	assert state.output_tokens_reserved == 50
+	# Budget is still enforced against real usage once it is genuinely spent:
+	# an in-flight request is charged its full ceiling until it settles, so
+	# 110 spent + 100 ceiling exceeds the 150 total and the next call is refused.
+	assert state.reserve_request(100)
+	state.settle_request(100, 60)
+	assert state.output_tokens_reserved == 110
+	assert not state.reserve_request(100)
+
+
+class _FakeUpstreamResponse:
+	def __init__(self, status: int, body: bytes, content_type: str) -> None:
+		self.status = status
+		self.reason = "OK" if status < 400 else "ERR"
+		self._body = body
+		self._offset = 0
+		self._content_type = content_type
+
+	def getheaders(self) -> list[tuple[str, str]]:
+		return [("Content-Type", self._content_type), ("Content-Length", str(len(self._body)))]
+
+	def getheader(self, name: str, default: str = "") -> str:
+		return self._content_type if name.lower() == "content-type" else default
+
+	def read(self, size: int = -1) -> bytes:
+		if self._offset >= len(self._body):
+			return b""
+		chunk = self._body[self._offset : self._offset + max(size, 1)]
+		self._offset += len(chunk)
+		return chunk
+
+
+def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> None:
+	"""End-to-end through BrokerHandler with a fake HTTPS upstream: streamed
+	turns that report usage are settled to their real cost, an upstream error
+	settles to zero, and a stream without usage keeps its full reservation."""
+	module = _broker_module()
+	policy = _broker_policy(module)  # per-request ceiling 100, total 150
+	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
+	scripted: list[tuple[int, bytes, str]] = []
+
+	class _FakeConnection:
+		def __init__(self, *_args: object, **_kwargs: object) -> None:
+			pass
+
+		def request(self, *_args: object, **_kwargs: object) -> None:
+			pass
+
+		def getresponse(self) -> _FakeUpstreamResponse:
+			return _FakeUpstreamResponse(*scripted.pop(0))
+
+		def close(self) -> None:
+			pass
+
+	original_connection = module.http.client.HTTPSConnection
+	module.http.client.HTTPSConnection = _FakeConnection  # type: ignore[misc]
+	server = module.BrokerServer(("127.0.0.1", 0), state)
+	server_thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+	server_thread.start()
+	try:
+		def post(body: dict[str, object]) -> int:
+			request = urllib.request.Request(
+				f"http://127.0.0.1:{server.server_port}/api/v1/chat/completions",
+				data=json.dumps(body).encode("utf-8"),
+				headers={"Authorization": "Bearer token", "Content-Type": "application/json"},
+				method="POST",
+			)
+			try:
+				with urllib.request.urlopen(request, timeout=5) as response:
+					response.read()
+					return response.status
+			except urllib.error.HTTPError as error:
+				error.read()
+				return error.code
+
+		usage_stream = (
+			b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+			b'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":10}}\n\n'
+			b"data: [DONE]\n\n"
+		)
+		streamed_request: dict[str, object] = {"model": "openai/test-model", "messages": [], "stream": True}
+		for _ in range(5):
+			scripted.append((200, usage_stream, "text/event-stream"))
+			assert post(streamed_request) == 200
+		assert state.output_tokens_reserved == 50, "five settled turns cost their real usage, not 5 x ceiling"
+
+		scripted.append((429, b'{"error":{"message":"rate limited"}}', "application/json"))
+		assert post(streamed_request) == 429
+		assert state.output_tokens_reserved == 50, "an upstream error generated nothing and settles to zero"
+
+		scripted.append((200, b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n', "text/event-stream"))
+		assert post(streamed_request) == 200
+		assert state.output_tokens_reserved == 150, "a stream without usage keeps the full 100-token reservation"
+
+		scripted.append((200, usage_stream, "text/event-stream"))
+		assert post(streamed_request) == 429, "the real budget is still enforced once spent"
+		assert len(scripted) == 1, "the rejected request must not reach the upstream"
+	finally:
+		server.shutdown()
+		server.server_close()
+		module.http.client.HTTPSConnection = original_connection  # type: ignore[misc]

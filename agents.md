@@ -378,8 +378,15 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   accept at most `MODEL_PROVIDER_BROKER_MAX_REQUESTS` requests (default `100`,
   valid range `1..100`) and fail closed with HTTP 429 after exhaustion. Each
   session also enforces exact model IDs, a per-request output limit (default
-  `16384`), a total requested-output budget (default `65536`), and
-  server-controlled provider price ceilings before forwarding.
+  `16384`), a total output-token budget (default `1638400`, i.e. `100 x 16384`), and
+  server-controlled provider price ceilings before forwarding. The total
+  budget counts tokens the provider actually generated: a request is charged
+  its full per-request ceiling only while it is in flight and is trued up to
+  the provider-reported `usage` once its response completes (streamed chat
+  requests are opted into `stream_options.include_usage` for this). A
+  cut-off or usage-less response keeps the full reservation and an upstream
+  error status settles at zero, so an agentic phase is bounded by real spend
+  rather than by `total / per-request` turns.
 - Read-only Codex phases run with `--sandbox read-only` and web search disabled.
   Writer phases retain only their required workspace permissions in a sanitized
   environment. The conflict writer additionally runs as `nobody` with temporary

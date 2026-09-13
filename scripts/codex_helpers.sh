@@ -187,7 +187,7 @@ model_provider_broker_start()
 		python3 "${broker_path}" --ready-file "${ready_file}" \
 		--max-requests "${MODEL_PROVIDER_BROKER_MAX_REQUESTS:-100}" \
 		--max-output-tokens "${MODEL_PROVIDER_BROKER_MAX_OUTPUT_TOKENS:-16384}" \
-		--max-total-output-tokens "${MODEL_PROVIDER_BROKER_MAX_TOTAL_OUTPUT_TOKENS:-65536}" \
+		--max-total-output-tokens "${MODEL_PROVIDER_BROKER_MAX_TOTAL_OUTPUT_TOKENS:-1638400}" \
 		--max-prompt-price "${MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE:-10}" \
 		--max-completion-price "${MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE:-30}" \
 		--max-request-price "${MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE:-0.10}" \

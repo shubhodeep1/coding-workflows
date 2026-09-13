@@ -23,6 +23,15 @@ from urllib.parse import urlsplit
 ALLOWED_PATHS = frozenset(("/api/v1/responses", "/api/v1/chat/completions"))
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_RESPONSE_BODY_BYTES = 64 * 1024 * 1024
+# The provider reports the output tokens it actually generated in the `usage`
+# object, which sits at the very end of both response shapes: the final
+# `data:` chunk of a chat-completions SSE stream, the `response.completed`
+# event of a Responses API stream, or the trailing key of a non-streamed JSON
+# body. Only this many trailing bytes of the upstream body are retained for
+# the usage true-up, so a large response does not pin its whole body in
+# memory while it is relayed to the agent.
+USAGE_SCAN_TAIL_BYTES = 1024 * 1024
+USAGE_OUTPUT_TOKEN_FIELDS = ("completion_tokens", "output_tokens")
 MAX_HEADER_COUNT = 64
 MAX_HEADER_BYTES = 32 * 1024
 HOP_BY_HOP_HEADERS = frozenset(
@@ -127,6 +136,20 @@ class BrokerPolicy:
 			)
 			document.pop("max_tokens", None)
 			document["max_completion_tokens"] = output_tokens
+			# A streamed chat completion only carries `usage` in its final
+			# chunk when the request opts in. Without it the broker could
+			# never true up the reservation below, so every streamed
+			# agent turn would stay charged at the full per-request
+			# ceiling and an agentic loop would exhaust the total budget
+			# after `max_total_output_tokens / max_output_tokens` turns.
+			if document.get("stream") is True:
+				stream_options = document.get("stream_options")
+				if stream_options is None:
+					stream_options = {}
+					document["stream_options"] = stream_options
+				if not isinstance(stream_options, dict):
+					raise BrokerRequestError("stream_options must be an object")
+				stream_options["include_usage"] = True
 
 		provider = document.get("provider")
 		if provider is None:
@@ -155,6 +178,66 @@ class BrokerPolicy:
 		if isinstance(value, bool) or not isinstance(value, int) or value < 1:
 			raise BrokerRequestError(f"{field_name} must be a positive integer")
 		return min(value, self.max_output_tokens)
+
+
+def _usage_output_tokens(document: object) -> int | None:
+	"""Return the provider-reported output token count in a response document.
+
+	Accepts a chat-completions object or chunk (`usage.completion_tokens`),
+	a Responses API object (`usage.output_tokens`), or a Responses API stream
+	event that wraps the object (`response.usage.output_tokens`). Returns None
+	when the document carries no usable usage so the caller keeps the
+	pessimistic reservation instead of guessing.
+	"""
+	if not isinstance(document, dict):
+		return None
+	usage = document.get("usage")
+	if usage is None:
+		wrapped = document.get("response")
+		if isinstance(wrapped, dict):
+			usage = wrapped.get("usage")
+	if not isinstance(usage, dict):
+		return None
+	for field_name in USAGE_OUTPUT_TOKEN_FIELDS:
+		value = usage.get(field_name)
+		if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+			return value
+	return None
+
+
+def _extract_output_token_usage(response_tail: bytes, content_type: str) -> int | None:
+	"""Parse the actual output token usage from the tail of an upstream body.
+
+	`response_tail` is at most USAGE_SCAN_TAIL_BYTES of the end of the body.
+	For SSE bodies the `data:` lines are scanned from the end so the final
+	usage-bearing chunk wins and a truncated first line is simply skipped.
+	Non-streamed bodies must fit in the tail to be parsed. Returns None
+	whenever no usage can be read (fail-closed: the reservation stays).
+	"""
+	text = response_tail.decode("utf-8", errors="replace")
+	if content_type.partition(";")[0].strip().lower() == "text/event-stream":
+		for line in reversed(text.splitlines()):
+			stripped = line.strip()
+			if not stripped.startswith("data:"):
+				continue
+			payload = stripped[len("data:"):].strip()
+			if not payload or payload == "[DONE]":
+				continue
+			try:
+				chunk = json.loads(payload)
+			except json.JSONDecodeError:
+				continue
+			usage = _usage_output_tokens(chunk)
+			if usage is not None:
+				return usage
+		return None
+	if len(response_tail) >= USAGE_SCAN_TAIL_BYTES:
+		return None
+	try:
+		document = json.loads(text)
+	except json.JSONDecodeError:
+		return None
+	return _usage_output_tokens(document)
 
 
 class BrokerState:
@@ -190,6 +273,28 @@ class BrokerState:
 			self.requests_started += 1
 			self.output_tokens_reserved += output_tokens
 			return True
+
+	def settle_request(self, reserved_output_tokens: int, actual_output_tokens: int | None) -> None:
+		"""True up a completed request's reservation against real usage.
+
+		`reserve_request` charges the request's full output ceiling while it
+		is in flight, which is the only safe assumption before the provider
+		answers. Once the response is complete the provider-reported usage
+		replaces that ceiling so the total budget bounds tokens actually
+		generated rather than the number of requests: without this, every
+		agentic turn stayed charged at the ceiling and the editor hit HTTP
+		429 after `max_total_output_tokens / max_output_tokens` (4 by
+		default) turns. `actual_output_tokens=None` means usage could not
+		be read (cut-off body, missing `usage`), and the full reservation
+		stays charged — fail closed, never fail open.
+		"""
+		if actual_output_tokens is None:
+			return
+		with self.lock:
+			self.output_tokens_reserved = max(
+				0,
+				self.output_tokens_reserved - reserved_output_tokens + actual_output_tokens,
+			)
 
 
 class BrokerHandler(BaseHTTPRequestHandler):
@@ -287,9 +392,20 @@ class BrokerHandler(BaseHTTPRequestHandler):
 			timeout=600,
 			context=ssl.create_default_context(),
 		)
+		# Usage true-up state: the request is charged its full output ceiling
+		# until the upstream body has been relayed completely, then settled
+		# against the provider-reported usage (see BrokerState.settle_request).
+		# An upstream error status generated no output, so it settles at 0;
+		# a cut-off or unparseable body keeps the full reservation.
+		upstream_status: int | None = None
+		upstream_content_type = ""
+		response_tail = bytearray()
+		body_complete = False
 		try:
 			connection.request("POST", upstream_path, body=body, headers=upstream_headers)
 			response = connection.getresponse()
+			upstream_status = response.status
+			upstream_content_type = response.getheader("Content-Type", "") or ""
 			self.send_response(response.status, response.reason)
 			for header_name, header_value in response.getheaders():
 				if header_name.lower() not in HOP_BY_HOP_HEADERS:
@@ -300,11 +416,15 @@ class BrokerHandler(BaseHTTPRequestHandler):
 			while True:
 				chunk = response.read(64 * 1024)
 				if not chunk:
+					body_complete = True
 					break
 				response_bytes += len(chunk)
 				if response_bytes > MAX_RESPONSE_BODY_BYTES:
 					self.close_connection = True
 					break
+				response_tail += chunk
+				if len(response_tail) > USAGE_SCAN_TAIL_BYTES:
+					del response_tail[:-USAGE_SCAN_TAIL_BYTES]
 				self.wfile.write(chunk)
 				self.wfile.flush()
 		except (OSError, http.client.HTTPException, ssl.SSLError):
@@ -315,6 +435,12 @@ class BrokerHandler(BaseHTTPRequestHandler):
 		finally:
 			connection.close()
 			self.close_connection = True
+			actual_output_tokens: int | None = None
+			if upstream_status is not None and upstream_status >= 400:
+				actual_output_tokens = 0
+			elif body_complete:
+				actual_output_tokens = _extract_output_token_usage(bytes(response_tail), upstream_content_type)
+			self.broker_state.settle_request(output_tokens, actual_output_tokens)
 
 
 class BrokerServer(ThreadingHTTPServer):
@@ -357,7 +483,10 @@ def main() -> int:
 	parser.add_argument("--max-requests", type=int, default=100)
 	parser.add_argument("--allowed-model", action="append", required=True)
 	parser.add_argument("--max-output-tokens", type=int, default=16_384)
-	parser.add_argument("--max-total-output-tokens", type=int, default=65_536)
+	# Default = max-requests (100) x max-output-tokens (16384): the total budget
+	# never bites below what the request cap already permits, while the price
+	# ceilings still bound the spend of one phase.
+	parser.add_argument("--max-total-output-tokens", type=int, default=1_638_400)
 	for price_field in PRICE_FIELDS:
 		parser.add_argument(f"--max-{price_field}-price", default="0")
 	args = parser.parse_args()
