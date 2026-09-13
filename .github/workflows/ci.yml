@@ -506,6 +506,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_editor_isolation_preflight.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_editor_process_group_termination.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py

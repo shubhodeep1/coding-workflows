@@ -12,18 +12,39 @@ component.
 from __future__ import annotations
 
 import os
+import pwd
 import re
+import signal
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-import pytest
+try:
+	import pytest
+except ModuleNotFoundError:
+	class _StandalonePytestMark:
+		@staticmethod
+		def skipif(_condition: bool, *, reason: str):
+			return lambda function: function
+
+	class _StandalonePytest:
+		mark = _StandalonePytestMark()
+
+		@staticmethod
+		def skip(reason: str) -> None:
+			raise RuntimeError(reason)
+
+	pytest = _StandalonePytest()
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from repo_root import repo_root  # noqa: E402
 
-REPO_ROOT = repo_root()
+try:
+	REPO_ROOT = repo_root()
+except RuntimeError:
+	REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPER = REPO_ROOT / "scripts" / "editor_isolation_preflight.sh"
 STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 EDITOR_SCRIPT = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
@@ -111,6 +132,77 @@ def _fixture(tmp_path: Path, root: Path | None = None) -> dict[str, str]:
 	}
 
 
+def _write_process_group_metadata(
+	path: Path,
+	*,
+	guard_pid: str,
+	child_pid: str,
+	process_group_id: str,
+	isolated_user: str,
+) -> None:
+	guard_stat_path = Path(f"/proc/{guard_pid}/stat")
+	guard_stat_fields = (
+		guard_stat_path.read_text(encoding="ascii", errors="replace").rpartition(")")[2].split()
+		if guard_pid.isdigit() and guard_stat_path.exists()
+		else []
+	)
+	guard_start_time_ticks = guard_stat_fields[19] if len(guard_stat_fields) > 19 else "1"
+	guard_uid = Path(f"/proc/{guard_pid}").stat().st_uid if guard_pid.isdigit() and Path(f"/proc/{guard_pid}").exists() else os.getuid()
+	child_stat_path = Path(f"/proc/{child_pid}/stat")
+	child_stat_fields = (
+		child_stat_path.read_text(encoding="ascii", errors="replace").rpartition(")")[2].split()
+		if child_pid.isdigit() and child_stat_path.exists()
+		else []
+	)
+	child_start_time_ticks = child_stat_fields[19] if len(child_stat_fields) > 19 else "1"
+	child_uid = Path(f"/proc/{child_pid}").stat().st_uid if child_pid.isdigit() and Path(f"/proc/{child_pid}").exists() else os.getuid()
+	try:
+		isolated_uid = pwd.getpwnam(isolated_user).pw_uid
+	except KeyError:
+		isolated_uid = os.getuid()
+	path.write_text(
+		f"guard_pid={guard_pid}\n"
+		f"guard_uid={guard_uid}\n"
+		f"guard_start_time_ticks={guard_start_time_ticks}\n"
+		f"child_pid={child_pid}\n"
+		f"process_group_id={process_group_id}\n"
+		f"isolated_user={isolated_user}\n"
+		f"isolated_uid={isolated_uid}\n"
+		f"child_uid={child_uid}\n"
+		f"child_start_time_ticks={child_start_time_ticks}\n"
+		"signal_mode=privileged\n",
+		encoding="utf-8",
+	)
+	path.chmod(0o600)
+
+
+def _run_process_group_helper(
+	tmp_path: Path,
+	metadata_path: Path,
+	expected_user: str,
+	requested_signal: str,
+	expected_guard_pid: str,
+) -> subprocess.CompletedProcess[str]:
+	bin_dir = tmp_path / "signal-bin"
+	bin_dir.mkdir(exist_ok=True)
+	fake_sudo = bin_dir / "sudo"
+	fake_sudo.write_text("#!/bin/sh\nexit 42\n", encoding="utf-8")
+	fake_sudo.chmod(0o755)
+	command = (
+		f"source {HELPER}; editor_isolation_signal_process_group "
+		f"{metadata_path} {expected_user} {requested_signal} {expected_guard_pid}"
+	)
+	return subprocess.run(
+		["bash", "-c", command],
+		check=False,
+		capture_output=True,
+		text=True,
+		env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+		cwd=REPO_ROOT,
+		timeout=30,
+	)
+
+
 def test_helper_is_staged_and_wired_into_both_review_scripts() -> None:
 	assert HELPER.is_file()
 	stage_text = STAGE_HELPER.read_text(encoding="utf-8")
@@ -152,6 +244,7 @@ def test_helper_is_staged_and_wired_into_both_review_scripts() -> None:
 	cleanup_start = rollback_end
 	cleanup_end = editor_text.index("\neditor_isolation_exit_trap() {", cleanup_start)
 	cleanup_block = editor_text[cleanup_start:cleanup_end]
+	assert cleanup_block.index("editor_isolation_verify_process_group_stopped") < cleanup_block.index("sudo -n chown -R")
 	assert "editor_isolation_restore_ancestor_traverse" in cleanup_block
 	assert cleanup_block.index('chmod "${EDITOR_ISOLATION_GIT_MODE}"') < cleanup_block.index("editor_isolation_restore_ancestor_traverse")
 
@@ -165,7 +258,7 @@ def test_helper_is_staged_and_wired_into_both_review_scripts() -> None:
 def test_helper_has_no_top_level_side_effects_and_parses() -> None:
 	subprocess.run(["bash", "-n", str(HELPER)], check=True)
 	result = subprocess.run(
-		["bash", "-c", f"set -euo pipefail; source {HELPER}; declare -F editor_isolation_preflight_probe editor_isolation_prepare_shared_paths editor_isolation_preflight_enabled editor_isolation_open_ancestor_traverse editor_isolation_restore_ancestor_traverse"],
+		["bash", "-c", f"set -euo pipefail; source {HELPER}; declare -F editor_isolation_preflight_probe editor_isolation_prepare_shared_paths editor_isolation_preflight_enabled editor_isolation_open_ancestor_traverse editor_isolation_restore_ancestor_traverse editor_isolation_signal_process_group editor_isolation_process_group_has_members editor_isolation_verify_process_group_stopped"],
 		check=True,
 		capture_output=True,
 		text=True,
@@ -177,6 +270,9 @@ def test_helper_has_no_top_level_side_effects_and_parses() -> None:
 		"editor_isolation_preflight_enabled",
 		"editor_isolation_open_ancestor_traverse",
 		"editor_isolation_restore_ancestor_traverse",
+		"editor_isolation_signal_process_group",
+		"editor_isolation_process_group_has_members",
+		"editor_isolation_verify_process_group_stopped",
 	]
 	# restore with nothing recorded is a no-op that succeeds, also under set -u.
 	subprocess.run(
@@ -196,6 +292,185 @@ def test_kill_switch_disables_preflight() -> None:
 			env={"PATH": "/usr/bin:/bin", "EDITOR_ISOLATION_PREFLIGHT_ENABLED": value},
 		)
 		assert result.returncode == expected_rc, value
+
+
+def test_process_group_signal_rejects_invalid_metadata_signal_and_user(tmp_path: Path) -> None:
+	metadata_path = tmp_path / "process-group.env"
+	current_user = pwd.getpwuid(os.getuid()).pw_name
+	_write_process_group_metadata(
+		metadata_path,
+		guard_pid=str(os.getpid()),
+		child_pid="-7",
+		process_group_id="-7",
+		isolated_user=current_user,
+	)
+	malformed = _run_process_group_helper(
+		tmp_path, metadata_path, current_user, "TERM", str(os.getpid())
+	)
+	assert malformed.returncode == 1
+	assert "EDITOR_ISOLATION_PROCESS_GROUP_METADATA_INVALID" in malformed.stderr
+
+	unsupported = _run_process_group_helper(
+		tmp_path, metadata_path, current_user, "USR1", str(os.getpid())
+	)
+	assert unsupported.returncode == 1
+	assert "EDITOR_ISOLATION_PROCESS_GROUP_SIGNAL_INVALID" in unsupported.stderr
+
+	_write_process_group_metadata(
+		metadata_path,
+		guard_pid=str(os.getpid()),
+		child_pid="999999",
+		process_group_id="999999",
+		isolated_user=current_user,
+	)
+	mismatched = _run_process_group_helper(
+		tmp_path, metadata_path, f"{current_user}-mismatch", "TERM", str(os.getpid())
+	)
+	assert mismatched.returncode == 1
+	assert "reason=field_mismatch" in mismatched.stderr
+
+
+def test_process_group_signal_reports_failed_privileged_kill(tmp_path: Path) -> None:
+	child = subprocess.Popen(["sleep", "1000"], start_new_session=True)
+	metadata_path = tmp_path / "process-group-live.env"
+	current_user = pwd.getpwuid(os.getuid()).pw_name
+	try:
+		_write_process_group_metadata(
+			metadata_path,
+			guard_pid=str(os.getpid()),
+			child_pid=str(child.pid),
+			process_group_id=str(child.pid),
+			isolated_user=current_user,
+		)
+		result = _run_process_group_helper(
+			tmp_path, metadata_path, current_user, "TERM", str(os.getpid())
+		)
+		assert result.returncode == 1
+		assert "EDITOR_ISOLATION_PROCESS_GROUP_SIGNAL_FAILED" in result.stderr
+	finally:
+		try:
+			os.killpg(child.pid, signal.SIGKILL)
+		except ProcessLookupError:
+			pass
+		child.wait(timeout=10)
+
+
+def test_process_group_metadata_rejects_reused_process_identity(tmp_path: Path) -> None:
+	child = subprocess.Popen(["sleep", "1000"], start_new_session=True)
+	metadata_path = tmp_path / "process-group-reused.env"
+	current_user = pwd.getpwuid(os.getuid()).pw_name
+	try:
+		_write_process_group_metadata(
+			metadata_path,
+			guard_pid=str(os.getpid()),
+			child_pid=str(child.pid),
+			process_group_id=str(child.pid),
+			isolated_user=current_user,
+		)
+		metadata_path.write_text(
+			metadata_path.read_text(encoding="utf-8").replace("child_start_time_ticks=", "child_start_time_ticks=9", 1),
+			encoding="utf-8",
+		)
+		result = _run_process_group_helper(
+			tmp_path, metadata_path, current_user, "TERM", str(os.getpid())
+		)
+		assert result.returncode == 1
+		assert "reason=process_identity_mismatch" in result.stderr
+
+		_write_process_group_metadata(
+			metadata_path,
+			guard_pid=str(os.getpid()),
+			child_pid=str(child.pid),
+			process_group_id=str(child.pid),
+			isolated_user=current_user,
+		)
+		metadata_path.write_text(
+			metadata_path.read_text(encoding="utf-8").replace("guard_start_time_ticks=", "guard_start_time_ticks=9", 1),
+			encoding="utf-8",
+		)
+		guard_result = _run_process_group_helper(
+			tmp_path, metadata_path, current_user, "TERM", str(os.getpid())
+		)
+		assert guard_result.returncode == 1
+		assert "reason=guard_identity_mismatch" in guard_result.stderr
+	finally:
+		os.killpg(child.pid, signal.SIGKILL)
+		child.wait(timeout=10)
+
+
+def test_process_group_signal_accepts_only_exited_guard_convergence(tmp_path: Path) -> None:
+	metadata_path = tmp_path / "process-group-exited-guard.env"
+	current_user = pwd.getpwuid(os.getuid()).pw_name
+	missing_pid = "99999999"
+	_write_process_group_metadata(
+		metadata_path,
+		guard_pid=missing_pid,
+		child_pid=missing_pid,
+		process_group_id=missing_pid,
+		isolated_user=current_user,
+	)
+	converged = _run_process_group_helper(
+		tmp_path, metadata_path, current_user, "TERM", missing_pid
+	)
+	assert converged.returncode == 0, converged.stderr
+	assert "guard_identity_unavailable" not in converged.stderr
+
+	child = subprocess.Popen(["sleep", "1000"], start_new_session=True)
+	try:
+		_write_process_group_metadata(
+			metadata_path,
+			guard_pid=missing_pid,
+			child_pid=str(child.pid),
+			process_group_id=str(child.pid),
+			isolated_user=current_user,
+		)
+		live_group = _run_process_group_helper(
+			tmp_path, metadata_path, current_user, "TERM", missing_pid
+		)
+		assert live_group.returncode == 1
+		assert "reason=guard_identity_unavailable" not in live_group.stderr
+		assert "EDITOR_ISOLATION_PROCESS_GROUP_SIGNAL_FAILED" in live_group.stderr
+		assert child.poll() is None
+	finally:
+		os.killpg(child.pid, signal.SIGKILL)
+		child.wait(timeout=10)
+
+
+def test_process_group_member_probe_rejects_malformed_pgrep_output(tmp_path: Path) -> None:
+	child = subprocess.Popen(["sleep", "1000"], start_new_session=True)
+	metadata_path = tmp_path / "process-group-malformed-probe.env"
+	bin_dir = tmp_path / "malformed-probe-bin"
+	bin_dir.mkdir()
+	current_user = pwd.getpwuid(os.getuid()).pw_name
+	try:
+		_write_process_group_metadata(
+			metadata_path,
+			guard_pid=str(os.getpid()),
+			child_pid=str(child.pid),
+			process_group_id=str(child.pid),
+			isolated_user=current_user,
+		)
+		fake_pgrep = bin_dir / "pgrep"
+		fake_pgrep.write_text("#!/bin/sh\nprintf 'not-a-pid\\n'\n", encoding="utf-8")
+		fake_pgrep.chmod(0o755)
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				f"source {HELPER}; editor_isolation_process_group_has_members {metadata_path} {current_user}",
+			],
+			check=False,
+			capture_output=True,
+			text=True,
+			env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+			cwd=REPO_ROOT,
+			timeout=30,
+		)
+		assert result.returncode == 2
+		assert "reason=invalid_member_pid" in result.stderr
+	finally:
+		os.killpg(child.pid, signal.SIGKILL)
+		child.wait(timeout=10)
 
 
 @pytest.mark.skipif(not _sudo_to_nobody_available(), reason="passwordless sudo to nobody unavailable")
@@ -344,3 +619,22 @@ def test_probe_flags_missing_opencode_on_editor_path(tmp_path: Path) -> None:
 	result = _run_probe(env, prepare=True)
 	assert result.returncode == 1
 	assert "reason=opencode_not_on_editor_path" in result.stderr
+
+
+def main() -> int:
+	test_helper_is_staged_and_wired_into_both_review_scripts()
+	test_helper_has_no_top_level_side_effects_and_parses()
+	test_kill_switch_disables_preflight()
+	with tempfile.TemporaryDirectory(prefix="editor-isolation-direct-") as td:
+		tmp_path = Path(td)
+		test_process_group_signal_rejects_invalid_metadata_signal_and_user(tmp_path)
+		test_process_group_signal_reports_failed_privileged_kill(tmp_path)
+		test_process_group_metadata_rejects_reused_process_identity(tmp_path)
+		test_process_group_signal_accepts_only_exited_guard_convergence(tmp_path)
+		test_process_group_member_probe_rejects_malformed_pgrep_output(tmp_path)
+	print("OK: editor isolation preflight process-group contract holds")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
