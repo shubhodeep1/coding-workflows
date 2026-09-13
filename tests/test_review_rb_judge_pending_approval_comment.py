@@ -84,11 +84,14 @@ def test_reuse_path_precedes_assessment_guard() -> None:
 	"""The model-skip reuse branch must set RB_PENDING_DECISION_JSON before
 	the assessment guard reads it, otherwise the guard could never fire."""
 	src = _rb_judge_text()
+	assignment_idx = src.index(
+		'RB_PENDING_DECISION_JSON="$(printf \'%s\' "${RB_PENDING_APPROVAL_REQUEST}"'
+	)
 	reuse_idx = src.index(
 		'echo "Reusing pending review-blocked approval request; skipping a new model decision."'
 	)
 	guard_idx = src.index('if [ -n "${RB_PENDING_DECISION_JSON}" ]; then', src.index("# Post judge assessment to PR"))
-	assert reuse_idx < guard_idx
+	assert assignment_idx < reuse_idx < guard_idx
 
 
 def main() -> int:
