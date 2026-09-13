@@ -257,6 +257,7 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 	assert "model_provider_broker_exec_sanitized" in validate_process
 	poller_workflow = (REPO_ROOT / ".github/workflows/orchestrate_poll.yml").read_text(encoding="utf-8")
 	poller_process = (REPO_ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert 'MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR}${WORKFLOW_EDITOR_MODEL:+,${WORKFLOW_EDITOR_MODEL}}" model_provider_broker_start' in poller_workflow
 	assert "codex_helpers.sh" in poller_workflow
 	assert "model_provider_broker.py" in poller_workflow
 	assert "model_provider_broker_prepare_codex_writer" in poller_workflow
@@ -450,10 +451,12 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 	policy = _broker_policy(module)  # per-request ceiling 100, total 150
 	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
 	scripted: list[tuple[int, bytes, str]] = []
+	fail_connection_construction = False
 
 	class _FakeConnection:
 		def __init__(self, *_args: object, **_kwargs: object) -> None:
-			pass
+			if fail_connection_construction:
+				raise OSError("connection setup failed")
 
 		def request(self, *_args: object, **_kwargs: object) -> None:
 			pass
@@ -491,6 +494,10 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 			b"data: [DONE]\n\n"
 		)
 		streamed_request: dict[str, object] = {"model": "openai/test-model", "messages": [], "stream": True}
+		fail_connection_construction = True
+		assert post(streamed_request) == 502
+		assert state.output_tokens_reserved == 0, "connection setup failure must release its reservation"
+		fail_connection_construction = False
 		for _ in range(5):
 			scripted.append((200, usage_stream, "text/event-stream"))
 			assert post(streamed_request) == 200

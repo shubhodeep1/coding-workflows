@@ -397,12 +397,7 @@ class BrokerHandler(BaseHTTPRequestHandler):
 			"Accept": self.headers.get("Accept", "application/json"),
 		}
 		upstream_path = f"{self.broker_state.upstream_prefix}{self.path.removeprefix('/api/v1')}"
-		connection = http.client.HTTPSConnection(
-			self.broker_state.upstream_host,
-			self.broker_state.upstream_port,
-			timeout=600,
-			context=ssl.create_default_context(),
-		)
+		connection: http.client.HTTPSConnection | None = None
 		# Usage true-up state: the request is charged its full output ceiling
 		# until the upstream body has been relayed completely, then settled
 		# against the provider-reported usage (see BrokerState.settle_request).
@@ -413,6 +408,12 @@ class BrokerHandler(BaseHTTPRequestHandler):
 		response_tail = bytearray()
 		body_complete = False
 		try:
+			connection = http.client.HTTPSConnection(
+				self.broker_state.upstream_host,
+				self.broker_state.upstream_port,
+				timeout=600,
+				context=ssl.create_default_context(),
+			)
 			connection.request("POST", upstream_path, body=body, headers=upstream_headers)
 			response = connection.getresponse()
 			upstream_status = response.status
@@ -444,14 +445,15 @@ class BrokerHandler(BaseHTTPRequestHandler):
 			else:
 				self.close_connection = True
 		finally:
-			connection.close()
 			self.close_connection = True
 			actual_output_tokens: int | None = None
-			if upstream_status is not None and upstream_status >= 400:
+			if connection is None or upstream_status is not None and upstream_status >= 400:
 				actual_output_tokens = 0
 			elif body_complete:
 				actual_output_tokens = _extract_output_token_usage(bytes(response_tail), upstream_content_type)
 			self.broker_state.settle_request(output_tokens, actual_output_tokens)
+			if connection is not None:
+				connection.close()
 
 
 class BrokerServer(ThreadingHTTPServer):

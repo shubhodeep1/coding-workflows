@@ -708,7 +708,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/codex_helpers.sh
-          model_provider_broker_start
+          MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR}${WORKFLOW_EDITOR_MODEL:+,${WORKFLOW_EDITOR_MODEL}}" model_provider_broker_start
           trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
           model_provider_broker_prepare_codex_writer "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT_JUDGE}" "$(pwd)"
           bash scripts/orchestrate_poll_process.sh
