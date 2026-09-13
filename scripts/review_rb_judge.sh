@@ -1699,22 +1699,25 @@ case "${RB_ACTION}" in
     ;;
 esac
 
-# A reused pending approval request means the model was not consulted
-# this run: the decision, and therefore this assessment, is byte-for-byte
-# the one already posted when the request was created. Re-posting it on
-# every re-dispatch (the 30-minute review sweep re-runs the judge until a
-# trusted human approves) buried PR #4079 under 22 identical decision
-# comments in eleven hours. Mirror the poller's rung in
-# scripts/orchestrate_poll_process.sh, which posts its assessment only
-# when RB_PENDING_APPROVAL_REQUEST is empty.
+# A pending approval request is published below only after its assessment
+# succeeds. Its presence therefore makes re-posting the same assessment on
+# every review-sweep dispatch unnecessary. If the initial assessment fails,
+# stop terminal recommendations before request creation so a later dispatch
+# can retry instead of permanently suppressing the missing comment.
 if [ -n "${RB_PENDING_DECISION_JSON}" ]; then
-  echo "Pending review-blocked approval request reused; the judge assessment was posted when the request was created, so it is not re-posted."
-else
-  post_review_blocked_assessment \
+  echo "Pending review-blocked approval request reused; request creation follows a successful judge assessment post, so it is not re-posted."
+elif ! post_review_blocked_assessment \
     "${RB_JUDGE_COMMENT_FILE}" \
     "${RB_OUTBOUND_REVIEW_STATE}" \
     "${POST_REVIEW_HEAD_SHA}" \
-    "${POST_REVIEW_HEAD_REF}" || true
+    "${POST_REVIEW_HEAD_REF}"; then
+  echo "::warning::Could not publish review-blocked judge assessment; terminal approval requests will not be created without it."
+  case "${RB_ACTION}" in
+    merge|merge_with_followup|close_and_reissue)
+      echo "judge_skip_reason=assessment_publish_failed" >> "$GITHUB_OUTPUT"
+      exit 0
+      ;;
+  esac
 fi
 
 RB_APPROVAL_REQUEST_ID=""

@@ -34,7 +34,7 @@ def _install_mock_opencode(mock_bin_dir: Path, output_fixture: Path, *, exit_cod
 		"set -euo pipefail\n\n"
 			"if [ \"${1:-}\" = \"--version\" ]; then printf '1.18.23\\n'; exit 0; fi\n"
 			"if [ \"${1:-}\" != \"run\" ]; then echo \"mock-opencode supports only run\" >&2; exit 2; fi\n"
-			"cat \"${MOCK_OPENCODE_OUTPUT_FILE}\"\n"
+			f"cat {shlex.quote(str(output_file))}\n"
 			f"exit {exit_code}\n",
 			encoding="utf-8",
 		)
@@ -71,6 +71,12 @@ def _run_consolidator(
 	effective_support_dir = support_scripts_dir or (REPO_ROOT / "scripts")
 	if support_scripts_dir is not None:
 		shutil.copy2(REPO_ROOT / "scripts" / "opencode_helpers.sh", effective_support_dir / "opencode_helpers.sh")
+		(effective_support_dir / "codex_helpers.sh").write_text(
+			"model_provider_broker_start()\n{\n\texport MODEL_PROVIDER_BROKER_BASE_URL='http://127.0.0.1:1'\n}\n"
+			"model_provider_broker_stop()\n{\n\t:\n}\n"
+			"model_provider_broker_exec_sanitized()\n{\n\t\"$@\"\n}\n",
+			encoding="utf-8",
+		)
 
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -485,7 +491,7 @@ def test_review_blocked_judge_hides_review_state_when_rubric_disabled() -> None:
 	comment_block = _extract_shell_block(
 		script_text,
 		'JUDGE_COMMENT="## Review-Blocked Judge Decision"',
-		'\n\npost_review_blocked_assessment',
+		'\n\ncase "${RB_ACTION}" in',
 	)
 
 	with tempfile.TemporaryDirectory(prefix="rb-judge-review-state-") as td:
