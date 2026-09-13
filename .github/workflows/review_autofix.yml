@@ -4553,6 +4553,16 @@ jobs:
           # alerts, operators) distinguish "model refused — re-run" from
           # generic "no-op suspicious — manual review".
           EDITOR_NOOP_REFUSAL="false"
+          # Additive recoverable-failure signal (CLAUDE.md §6 — add
+          # alongside, never rename). Set when the summary is the
+          # `recoverable_failure` partial-finalize fallback that
+          # review_apply_fixes.sh writes after every editor attempt
+          # failed (provider/broker error, timeout, empty output). Lets
+          # the Telegram step say "editor failed on every attempt" with
+          # the real provider error instead of the generic "editor
+          # claimed no changes needed" wording, which is wrong for this
+          # case: the editor never produced output at all.
+          EDITOR_NOOP_RECOVERABLE_FAILURE="false"
 
           if [ ! -s "${EDITOR_SUMMARY_FILE:-}" ]; then
             echo "::warning::Editor summary file is missing or empty — editor never produced output."
@@ -4582,6 +4592,23 @@ jobs:
               EDITOR_NOOP_REFUSAL="true"
             fi
 
+            # ── Check 1c: Detect recoverable-failure partial-finalize sentinel ──
+            # When all editor attempts fail, review_apply_fixes.sh writes
+            # the recoverable_failure partial-finalize summary whose
+            # "Runtime failure path:" line carries the sentinel below.
+            # Check 2 still flags that summary as no-op suspicious (its
+            # audit section is only "- none (...)"), so auto-merge stays
+            # blocked exactly as before; this check only classifies the
+            # cause. Observed on PR #4077 (runs 34692519987, 34700918528,
+            # 34702442346): the editor's broker returned HTTP 429 on every
+            # attempt and the operator was told the editor "claimed no
+            # changes needed". The sentinel must stay verbatim in lockstep
+            # with review_apply_fixes.sh (tests/test_review_autofix_editor_noop_cascade_contract.py).
+            if grep -qiE 'partial finalize requested after a recoverable editor failure' "${EDITOR_SUMMARY_FILE}"; then
+              echo "::notice::Editor stopped after a recoverable failure on every attempt — no editor output was produced; see the editor step log for the provider error."
+              EDITOR_NOOP_RECOVERABLE_FAILURE="true"
+            fi
+
             # ── Check 2: Reviewer audit sanity ──
             # When reviewer execution succeeded (REVIEWERS_SUCCESSFUL > 0)
             # but the editor claims no changes, verify the audit section has
@@ -4609,6 +4636,7 @@ jobs:
 
           echo "EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_ENV"
           echo "EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL}" >> "$GITHUB_ENV"
+          echo "EDITOR_NOOP_RECOVERABLE_FAILURE=${EDITOR_NOOP_RECOVERABLE_FAILURE}" >> "$GITHUB_ENV"
 
       - name: Detect merge conflicts
         # The pre-review gate above only short-circuits deterministic stale/
@@ -6736,6 +6764,56 @@ jobs:
             BODY+="This is typically transient. Re-running the AI Review workflow after the provider-side prompt cache expires usually clears it; manual review is only needed if the refusal recurs."
             BODY+=$'\n'
             BODY+="Auto-merge has been **blocked**."
+            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
+          elif [ "${EDITOR_NOOP_RECOVERABLE_FAILURE:-false}" = "true" ]; then
+            # Every editor attempt failed and review_apply_fixes.sh wrote
+            # the recoverable_failure partial-finalize summary (validator
+            # Check 1c). The editor produced no output, so "claimed no
+            # changes needed" would misdirect the operator; name the
+            # attempt count and the final attempt's provider error
+            # instead. Observed on PR #4077 (runs 34692519987,
+            # 34700918528, 34702442346): the broker answered HTTP 429 on
+            # every attempt for 21 consecutive runs while the alert kept
+            # asking for a "manual review or re-run". The attempt stderr
+            # files are the editor_attempt_<n>.err copies the retry loop
+            # leaves in PREVIOUS_REVIEWS_DIR; only the final `Error:` line
+            # (or the last opencode level=ERROR value) is quoted, clipped
+            # to 240 characters, never the whole stderr.
+            editor_attempts=0
+            editor_last_error=""
+            if [ -n "${PREVIOUS_REVIEWS_DIR:-}" ] && [ -d "${PREVIOUS_REVIEWS_DIR}" ]; then
+              editor_attempts="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | wc -l | tr -d '[:space:]' || true)"
+              last_err_file="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | sort -V | tail -n 1 || true)"
+              if [ -n "${last_err_file}" ] && [ -s "${last_err_file}" ]; then
+                editor_last_error="$(grep -aE '^Error: ' "${last_err_file}" | tail -n 1 | tr -d '\r\140' | cut -c1-240 || true)"
+                if [ -z "${editor_last_error}" ]; then
+                  editor_last_error="$(grep -aoE 'level=ERROR .*error="[^"]*"' "${last_err_file}" | tail -n 1 | sed -E 's/.*error="([^"]*)".*/\1/' | tr -d '\140' | cut -c1-240 || true)"
+                fi
+              fi
+            fi
+            [ -n "${editor_last_error}" ] || editor_last_error="not captured — see the editor step log of the linked run"
+            attempts_label="every attempt"
+            if [ "${editor_attempts:-0}" -eq 1 ] 2>/dev/null; then
+              attempts_label="1 attempt"
+            elif [ "${editor_attempts:-0}" -gt 1 ] 2>/dev/null; then
+              attempts_label="all ${editor_attempts} attempts"
+            fi
+            MSG="⚠️ Editor failed on ${attempts_label}: #${PR_NUMBER}"
+            MSG+=$'\n'
+            MSG+="No editor output was produced (recoverable failure). Last provider error: ${editor_last_error}"
+            MSG+=$'\n'
+            MSG+="Auto-merge blocked. Re-dispatch happens automatically; if the same error recurs the cause needs a fix, not a re-run."
+            MSG+=$'\n'
+            MSG+="PR: ${PR_URL}"
+            MSG+=$'\n'
+            MSG+="Run: ${RUN_URL}"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+
+            BODY="⚠️ **Editor no-op suspicious** — the editor failed on ${attempts_label} and produced no output (recoverable failure), so no fix was applied this pass."
+            BODY+=$'\n\n'
+            BODY+="Last provider error from the final attempt: \`${editor_last_error}\`"
+            BODY+=$'\n\n'
+            BODY+="Auto-merge has been **blocked**. The review run is re-dispatched automatically; if the same error recurs, inspect the editor step log of the linked run — a re-run will not clear a deterministic failure."
             gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
           else
             MSG="⚠️ Editor no-op suspicious: #${PR_NUMBER}"

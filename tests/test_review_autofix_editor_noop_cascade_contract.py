@@ -33,7 +33,10 @@ prompt copies, and success-path cleanup of the per-attempt prompt file.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -954,10 +957,10 @@ def test_noop_warning_refusal_branch_preserves_poller_literal() -> None:
 	force-merge)."""
 	block = _step_block(_review_autofix_text(), WARNING_STEP_NAME)
 	body_prefix = f'BODY="{NOOP_WARNING_LITERAL}'
-	assert block.count(body_prefix) == 2, (
-		f"Both branches must keep {body_prefix!r} so the poller recovery "
-		f"sweep still detects refusal-caused noop PRs. Found "
-		f"{block.count(body_prefix)} matching BODY assignment(s)."
+	assert block.count(body_prefix) == 3, (
+		f"All three branches (refusal, recoverable failure, generic) must keep "
+		f"{body_prefix!r} so the poller recovery sweep still detects "
+		f"noop PRs. Found {block.count(body_prefix)} matching BODY assignment(s)."
 	)
 
 
@@ -975,6 +978,207 @@ def test_noop_warning_generic_branch_preserved() -> None:
 		"Generic-branch PR-comment causes list must be preserved (additive "
 		"change)."
 	)
+
+
+RECOVERABLE_FAILURE_SENTINEL_TEXT = "partial finalize requested after a recoverable editor failure"
+RECOVERABLE_FAILURE_VALIDATOR_NOTICE = "::notice::Editor stopped after a recoverable failure on every attempt"
+VALIDATOR_STEP_NAME = "Validate editor no-op disposition"
+
+
+def _step_run_script(block: str) -> str:
+	"""Return the de-indented bash body of a step block's `run: |` key with
+	every `${{ ... }}` expression replaced by a literal placeholder so the
+	body can be executed by bash outside Actions."""
+	marker = "run: |"
+	start = block.find(marker)
+	assert start != -1, "Step block has no `run: |` body."
+	body_lines = block[start + len(marker):].splitlines()[1:]
+	indented = [line for line in body_lines if line.strip()]
+	assert indented, "Step run body is empty."
+	indent = min(len(line) - len(line.lstrip(" ")) for line in indented)
+	script = "\n".join(line[indent:] if line.strip() else "" for line in body_lines)
+	return re.sub(r"\$\{\{[^}]*\}\}", "ACTIONS_EXPR", script) + "\n"
+
+
+def test_validator_sets_editor_noop_recoverable_failure_alongside_suspicious() -> None:
+	"""The validator must set `EDITOR_NOOP_RECOVERABLE_FAILURE` additively
+	alongside `EDITOR_NOOP_SUSPICIOUS` / `EDITOR_NOOP_REFUSAL` (CLAUDE.md §6)
+	and export it via GITHUB_ENV without touching the existing exports."""
+	block = _step_block(_review_autofix_text(), VALIDATOR_STEP_NAME)
+	assert 'EDITOR_NOOP_RECOVERABLE_FAILURE="false"' in block
+	assert 'echo "EDITOR_NOOP_RECOVERABLE_FAILURE=${EDITOR_NOOP_RECOVERABLE_FAILURE}" >> "$GITHUB_ENV"' in block
+	assert 'echo "EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_ENV"' in block
+	assert 'echo "EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL}" >> "$GITHUB_ENV"' in block
+
+
+def test_validator_greps_for_recoverable_failure_sentinel_in_lockstep() -> None:
+	"""Check 1c must grep the exact sentinel that the recoverable_failure
+	fallback summary in review_apply_fixes.sh writes; a paraphrase on
+	either side silently drops the failure-specific alert."""
+	block = _step_block(_review_autofix_text(), VALIDATOR_STEP_NAME)
+	assert f"grep -qiE '{RECOVERABLE_FAILURE_SENTINEL_TEXT}'" in block
+	assert RECOVERABLE_FAILURE_VALIDATOR_NOTICE in block
+	script = REVIEW_APPLY_FIXES.read_text(encoding="utf-8")
+	assert f"- {RECOVERABLE_FAILURE_SENTINEL_TEXT}" in script, (
+		"review_apply_fixes.sh must keep the recoverable-failure sentinel "
+		"verbatim on the fallback summary's `Runtime failure path:` line."
+	)
+	assert RUNBOOK.read_text(encoding="utf-8").count("EDITOR_NOOP_RECOVERABLE_FAILURE") >= 2
+
+
+def test_validator_classifies_recoverable_failure_summary(tmp_path: Path) -> None:
+	"""Execute the validator step body against the real recoverable_failure
+	fallback summary shape: SUSPICIOUS must still be true (Check 2, audit
+	section is fallback-only), REFUSAL false, and the new flag true. The
+	refusal summary shape must leave the new flag false."""
+	block = _step_block(_review_autofix_text(), VALIDATOR_STEP_NAME)
+	script = _step_run_script(block)
+	fixtures = {
+		"recoverable": (
+			"Changes made:\n- none (editor requested partial finalize after a recoverable failure before another validated attempt completed)\n\n"
+			"Review file issue audit:\n- none (editor stopped after a recoverable failure before another validated attempt completed)\n\n"
+			"Regression fingerprint:\n- unavailable (partial finalize after recoverable editor failure)\n\n"
+			f"Runtime failure path:\n- {RECOVERABLE_FAILURE_SENTINEL_TEXT} before another validated attempt\n"
+		),
+		"refusal": (
+			"Changes made:\n- none (editor returned a safety-policy refusal before another validated attempt could complete)\n\n"
+			"Review file issue audit:\n- none (editor stopped after a safety-policy refusal before another validated attempt could complete)\n\n"
+			"Regression fingerprint:\n- unavailable (partial finalize after safety-policy refusal)\n\n"
+			f"Runtime failure path:\n- {REFUSAL_SENTINEL_TEXT}\n"
+		),
+	}
+	expectations = {
+		"recoverable": {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
+		"refusal": {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false"},
+	}
+	for name, summary in fixtures.items():
+		summary_file = tmp_path / f"{name}_summary.txt"
+		summary_file.write_text(summary, encoding="utf-8")
+		github_env = tmp_path / f"{name}_github_env"
+		github_env.write_text("", encoding="utf-8")
+		result = subprocess.run(
+			["bash", "-c", script],
+			cwd=REPO_ROOT,
+			env={
+				"PATH": os.environ["PATH"],
+				"EDITOR_SUMMARY_FILE": str(summary_file),
+				"REVIEWERS_SUCCESSFUL": "6",
+				"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+				"GITHUB_ENV": str(github_env),
+			},
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+		assert result.returncode == 0, f"validator body failed for {name}: {result.stderr}"
+		exported = dict(line.split("=", 1) for line in github_env.read_text(encoding="utf-8").splitlines() if "=" in line)
+		for key, expected in expectations[name].items():
+			assert exported.get(key) == expected, f"{name}: expected {key}={expected}, got {exported}"
+		if name == "recoverable":
+			assert RECOVERABLE_FAILURE_VALIDATOR_NOTICE in result.stdout
+			assert REFUSAL_VALIDATOR_NOTICE not in result.stdout
+
+
+def test_noop_warning_step_branches_on_recoverable_failure_with_last_error(tmp_path: Path) -> None:
+	"""Execute the warning step body with stubbed Telegram/GitHub helpers:
+	the recoverable-failure branch must report the attempt count and the
+	final attempt's `Error:` line (clipped) in both the Telegram message and
+	the PR comment, keep the poller literal in the comment, and never quote
+	earlier attempts' errors."""
+	block = _step_block(_review_autofix_text(), WARNING_STEP_NAME)
+	assert '"${EDITOR_NOOP_RECOVERABLE_FAILURE:-false}" = "true"' in block
+	script = _step_run_script(block)
+	support_dir = tmp_path / "support"
+	support_dir.mkdir()
+	(support_dir / "tg_helpers.sh").write_text(
+		'tg_send_tracked() { printf \'%s\\n\' "$2" > "${TG_CAPTURE_FILE}"; }\n', encoding="utf-8"
+	)
+	(support_dir / "gh_helpers.sh").write_text(
+		'gh_retry() { shift; printf \'%s\\n\' "$@" > "${GH_CAPTURE_FILE}"; }\n', encoding="utf-8"
+	)
+	previous_reviews = tmp_path / "previous_reviews"
+	previous_reviews.mkdir()
+	(previous_reviews / "editor_attempt_1.err").write_text("Error: first attempt failure\n", encoding="utf-8")
+	(previous_reviews / "editor_attempt_2.err").write_text("Error: second attempt failure\n", encoding="utf-8")
+	(previous_reviews / "editor_attempt_3.err").write_text(
+		"opencode_agent_start role=writer\n"
+		'timestamp=2026-09-12T15:54:08.842Z level=ERROR message="stream error" error.error="AI_APICallError: broker request or output-token limit reached"\n'
+		"Error: broker request or `output-token` limit reached\n"
+		"timestamp=2026-09-12T15:54:08.860Z level=INFO message=\"disposing instance\"\n",
+		encoding="utf-8",
+	)
+	tg_capture = tmp_path / "tg.txt"
+	gh_capture = tmp_path / "gh.txt"
+	warning_env = {
+		"PATH": os.environ["PATH"],
+		"SUPPORT_SCRIPTS_DIR": str(support_dir),
+		"PREVIOUS_REVIEWS_DIR": str(previous_reviews),
+		"EDITOR_NOOP_SUSPICIOUS": "true",
+		"EDITOR_NOOP_REFUSAL": "false",
+		"EDITOR_NOOP_RECOVERABLE_FAILURE": "true",
+		"PR_NUMBER": "4077",
+		"TG_CAPTURE_FILE": str(tg_capture),
+		"GH_CAPTURE_FILE": str(gh_capture),
+	}
+	result = subprocess.run(
+		["bash", "-eo", "pipefail", "-c", script],
+		cwd=REPO_ROOT,
+		env=warning_env,
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	assert result.returncode == 0, f"warning step body failed: {result.stderr}"
+	telegram_message = tg_capture.read_text(encoding="utf-8")
+	assert "Editor failed on all 3 attempts: #4077" in telegram_message
+	assert "Last provider error: Error: broker request or output-token limit reached" in telegram_message
+	assert "second attempt failure" not in telegram_message
+	assert "Editor claimed no changes needed" not in telegram_message
+	pr_comment = gh_capture.read_text(encoding="utf-8")
+	assert NOOP_WARNING_LITERAL in pr_comment
+	assert "failed on all 3 attempts" in pr_comment
+	assert "broker request or output-token limit reached" in pr_comment
+
+	for editor_attempt_error_file in previous_reviews.glob("editor_attempt_*.err"):
+		editor_attempt_error_file.unlink()
+	(previous_reviews / "editor_attempt_1.err").write_text(
+		'timestamp=2026-09-12T15:54:08.842Z level=ERROR message="stream error" error.error="AI_APICallError: structured `fallback` failure"\n',
+		encoding="utf-8",
+	)
+	result = subprocess.run(
+		["bash", "-eo", "pipefail", "-c", script],
+		cwd=REPO_ROOT,
+		env=warning_env,
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	assert result.returncode == 0, f"warning step failed for structured fallback: {result.stderr}"
+	telegram_message = tg_capture.read_text(encoding="utf-8")
+	assert "Editor failed on 1 attempt: #4077" in telegram_message
+	assert "Last provider error: AI_APICallError: structured fallback failure" in telegram_message
+	pr_comment = gh_capture.read_text(encoding="utf-8")
+	assert "failed on 1 attempt" in pr_comment
+	assert "AI_APICallError: structured fallback failure" in pr_comment
+
+	for editor_attempt_error_file in previous_reviews.glob("editor_attempt_*.err"):
+		editor_attempt_error_file.unlink()
+	result = subprocess.run(
+		["bash", "-eo", "pipefail", "-c", script],
+		cwd=REPO_ROOT,
+		env=warning_env,
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	assert result.returncode == 0, f"warning step failed without stderr artifacts: {result.stderr}"
+	telegram_message = tg_capture.read_text(encoding="utf-8")
+	assert "Editor failed on every attempt: #4077" in telegram_message
+	assert "Last provider error: not captured" in telegram_message
+	pr_comment = gh_capture.read_text(encoding="utf-8")
+	assert NOOP_WARNING_LITERAL in pr_comment
+	assert "failed on every attempt" in pr_comment
+	assert "Last provider error from the final attempt: `not captured" in pr_comment
 
 
 if __name__ == "__main__":
@@ -1009,4 +1213,9 @@ if __name__ == "__main__":
 	test_noop_warning_refusal_branch_emits_refusal_specific_text()
 	test_noop_warning_refusal_branch_preserves_poller_literal()
 	test_noop_warning_generic_branch_preserved()
+	test_validator_sets_editor_noop_recoverable_failure_alongside_suspicious()
+	test_validator_greps_for_recoverable_failure_sentinel_in_lockstep()
+	with tempfile.TemporaryDirectory() as temporary_test_directory:
+		test_validator_classifies_recoverable_failure_summary(Path(temporary_test_directory))
+		test_noop_warning_step_branches_on_recoverable_failure_with_last_error(Path(temporary_test_directory))
 	print("All EDITOR_NOOP_SUSPICIOUS cascade-guard contract tests passed.")
