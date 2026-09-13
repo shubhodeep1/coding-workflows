@@ -6781,6 +6781,13 @@ jobs:
           fi
           if [ "${JUDGE_HANDLED}" = "true" ]; then
             case "${JUDGE_ACTION}" in
+              approval_pending)
+                if [ "${JUDGE_SKIP_REASON}" = "approval_request_created" ]; then
+                  MSG="Review-blocked terminal recommendation needs trusted human approval"
+                else
+                  echo "Review-blocked terminal recommendation is awaiting trusted human approval; suppressing duplicate alert."
+                  exit 0
+                fi ;;
               merge)
                 MSG="Review-blocked judge merged PR as-is" ;;
               fix)
