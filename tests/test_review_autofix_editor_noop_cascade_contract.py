@@ -1103,7 +1103,7 @@ def test_noop_warning_step_branches_on_recoverable_failure_with_last_error(tmp_p
 	(previous_reviews / "editor_attempt_3.err").write_text(
 		"opencode_agent_start role=writer\n"
 		'timestamp=2026-09-12T15:54:08.842Z level=ERROR message="stream error" error.error="AI_APICallError: broker request or output-token limit reached"\n'
-		"Error: broker request or output-token limit reached\n"
+		"Error: broker request or `output-token` limit reached\n"
 		"timestamp=2026-09-12T15:54:08.860Z level=INFO message=\"disposing instance\"\n",
 		encoding="utf-8",
 	)
@@ -1142,7 +1142,7 @@ def test_noop_warning_step_branches_on_recoverable_failure_with_last_error(tmp_p
 	for editor_attempt_error_file in previous_reviews.glob("editor_attempt_*.err"):
 		editor_attempt_error_file.unlink()
 	(previous_reviews / "editor_attempt_1.err").write_text(
-		'timestamp=2026-09-12T15:54:08.842Z level=ERROR message="stream error" error.error="AI_APICallError: structured fallback failure"\n',
+		'timestamp=2026-09-12T15:54:08.842Z level=ERROR message="stream error" error.error="AI_APICallError: structured `fallback` failure"\n',
 		encoding="utf-8",
 	)
 	result = subprocess.run(

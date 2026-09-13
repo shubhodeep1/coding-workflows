@@ -6785,9 +6785,9 @@ jobs:
               editor_attempts="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | wc -l | tr -d '[:space:]' || true)"
               last_err_file="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | sort -V | tail -n 1 || true)"
               if [ -n "${last_err_file}" ] && [ -s "${last_err_file}" ]; then
-                editor_last_error="$(grep -aE '^Error: ' "${last_err_file}" | tail -n 1 | tr -d '\r' | cut -c1-240 || true)"
+                editor_last_error="$(grep -aE '^Error: ' "${last_err_file}" | tail -n 1 | tr -d '\r\140' | cut -c1-240 || true)"
                 if [ -z "${editor_last_error}" ]; then
-                  editor_last_error="$(grep -aoE 'level=ERROR .*error="[^"]*"' "${last_err_file}" | tail -n 1 | sed -E 's/.*error="([^"]*)".*/\1/' | cut -c1-240 || true)"
+                  editor_last_error="$(grep -aoE 'level=ERROR .*error="[^"]*"' "${last_err_file}" | tail -n 1 | sed -E 's/.*error="([^"]*)".*/\1/' | tr -d '\140' | cut -c1-240 || true)"
                 fi
               fi
             fi
