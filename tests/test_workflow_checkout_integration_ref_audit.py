@@ -9,6 +9,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 REVIEWED_CODEX_ACTION_SHA = "f03b8d657a63d64b87324e8a1047a8b90d3221e0"
+REVIEWED_SETUP_NODE_ACTION_SHA = "249970729cb0ef3589644e2896645e5dc5ba9c38"
+REVIEWED_SETUP_PYTHON_ACTION_SHA = "ece7cb06caefa5fff74198d8649806c4678c61a1"
 
 REQUIRED_RESOLVER_WORKFLOWS = {
 	"plan.yml",
@@ -78,6 +80,9 @@ def test_allowlist_entries_have_rationale() -> None:
 
 def test_remote_codex_runtime_actions_are_immutable() -> None:
 	paths = [REPO_ROOT / ".github" / "actions" / "setup-runtime" / "action.yml", *WORKFLOWS_DIR.glob("*.yml")]
+	runtime_action_text = paths[0].read_text(encoding="utf-8")
+	assert f"actions/setup-node@{REVIEWED_SETUP_NODE_ACTION_SHA}" in runtime_action_text
+	assert f"actions/setup-python@{REVIEWED_SETUP_PYTHON_ACTION_SHA}" in runtime_action_text
 	for path in paths:
 		text = path.read_text(encoding="utf-8")
 		assert "install-codex@stable" not in text, path
