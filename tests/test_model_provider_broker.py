@@ -468,6 +468,16 @@ def test_usage_extraction_reads_final_chunk_or_keeps_reservation() -> None:
 	assert extract(b'{"usage":{"completion_tokens":"7"}}', "application/json") is None
 	assert extract(b'{"usage":{"completion_tokens":true}}', "application/json") is None
 	assert extract(b"not json", "application/json") is None
+	boundary_document = json.dumps(
+		{"padding": "", "usage": {"completion_tokens": 6}},
+		separators=(",", ":"),
+	).encode("utf-8")
+	boundary_document = boundary_document.replace(
+		b'"padding":""',
+		b'"padding":"' + (b"x" * (module.USAGE_SCAN_TAIL_BYTES - len(boundary_document))) + b'"',
+	)
+	assert len(boundary_document) == module.USAGE_SCAN_TAIL_BYTES
+	assert extract(boundary_document, "application/json") == 6
 
 
 def test_settle_request_trues_up_reservation_against_actual_usage() -> None:
@@ -557,6 +567,7 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 			pass
 
 	original_connection = module.http.client.HTTPSConnection
+	original_usage_scan_tail_bytes = module.USAGE_SCAN_TAIL_BYTES
 	module.http.client.HTTPSConnection = _FakeConnection  # type: ignore[misc]
 	server = module.BrokerServer(("127.0.0.1", 0), state)
 	server_thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
@@ -596,6 +607,26 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 		assert post(streamed_request) == 429
 		assert state.output_tokens_reserved == 50, "an upstream error generated nothing and settles to zero"
 
+		module.USAGE_SCAN_TAIL_BYTES = 128
+		boundary_body = json.dumps(
+			{"padding": "", "usage": {"completion_tokens": 10}},
+			separators=(",", ":"),
+		).encode("utf-8")
+		boundary_body = boundary_body.replace(
+			b'"padding":""',
+			b'"padding":"' + (b"x" * (module.USAGE_SCAN_TAIL_BYTES - len(boundary_body))) + b'"',
+		)
+		state.output_tokens_reserved = 0
+		scripted.append((200, boundary_body, "application/json"))
+		assert post(streamed_request) == 200
+		assert state.output_tokens_reserved == 10, "a complete body exactly at the tail cap must settle from usage"
+
+		state.output_tokens_reserved = 0
+		scripted.append((200, b" " + boundary_body, "application/json"))
+		assert post(streamed_request) == 200
+		assert state.output_tokens_reserved == 100, "a body larger than the retained tail must keep its reservation"
+
+		state.output_tokens_reserved = 50
 		scripted.append((200, b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n', "text/event-stream"))
 		assert post(streamed_request) == 200
 		assert state.output_tokens_reserved == 150, "a stream without usage keeps the full 100-token reservation"
@@ -607,3 +638,4 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 		server.shutdown()
 		server.server_close()
 		module.http.client.HTTPSConnection = original_connection  # type: ignore[misc]
+		module.USAGE_SCAN_TAIL_BYTES = original_usage_scan_tail_bytes

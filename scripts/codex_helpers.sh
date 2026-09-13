@@ -164,6 +164,8 @@ model_provider_broker_start()
 	broker_allowed_models_csv="${MODEL_PROVIDER_BROKER_ALLOWED_MODELS:-${MODEL_EDITOR:-}}"
 	IFS=',' read -r -a broker_allowed_models <<< "${broker_allowed_models_csv}"
 	for broker_model in "${broker_allowed_models[@]}"; do
+		broker_model="${broker_model#"${broker_model%%[![:space:]]*}"}"
+		broker_model="${broker_model%"${broker_model##*[![:space:]]}"}"
 		if ! [[ "${broker_model}" =~ ^[A-Za-z0-9._:-]+/[A-Za-z0-9._:-]+$ ]]; then
 			echo "::error::model provider broker allowed-model policy is missing or invalid" >&2
 			return 1

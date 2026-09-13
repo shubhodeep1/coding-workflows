@@ -97,7 +97,7 @@ esac
 # `model = ...` would create duplicate TOML keys (which strict TOML
 # parsers reject as invalid).
 patch_diagnose_reasoning_into_config() {
-	  local cfg="${CODEX_HOME:-${HOME:-/root}/.codex}/config.toml"
+	local cfg="${CODEX_HOME:-${HOME:-/root}/.codex}/config.toml"
   mkdir -p "$(dirname "${cfg}")"
   PYTHONDONTWRITEBYTECODE=1 python3 - "${cfg}" "${DIAGNOSE_REASONING}" <<'PY'
 from pathlib import Path

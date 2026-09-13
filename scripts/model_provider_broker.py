@@ -225,8 +225,9 @@ def _extract_output_token_usage(response_tail: bytes, content_type: str) -> int 
 	`response_tail` is at most USAGE_SCAN_TAIL_BYTES of the end of the body.
 	For SSE bodies the `data:` lines are scanned from the end so the final
 	usage-bearing chunk wins and a truncated first line is simply skipped.
-	Non-streamed bodies must fit in the tail to be parsed. Returns None
-	whenever no usage can be read (fail-closed: the reservation stays).
+	Callers must pass complete non-streamed bodies; streamed bodies may be a
+	tail. Returns None whenever no usage can be read (fail-closed: the
+	reservation stays).
 	"""
 	text = response_tail.decode("utf-8", errors="replace")
 	if content_type.partition(";")[0].strip().lower() == "text/event-stream":
@@ -244,8 +245,6 @@ def _extract_output_token_usage(response_tail: bytes, content_type: str) -> int 
 			usage = _usage_output_tokens(chunk)
 			if usage is not None:
 				return usage
-		return None
-	if len(response_tail) >= USAGE_SCAN_TAIL_BYTES:
 		return None
 	try:
 		document = json.loads(text)
@@ -459,7 +458,10 @@ class BrokerHandler(BaseHTTPRequestHandler):
 			actual_output_tokens: int | None = None
 			if connection is None or upstream_status is not None and upstream_status >= 400:
 				actual_output_tokens = 0
-			elif body_complete:
+			elif body_complete and (
+				upstream_content_type.partition(";")[0].strip().lower() == "text/event-stream"
+				or response_bytes <= USAGE_SCAN_TAIL_BYTES
+			):
 				actual_output_tokens = _extract_output_token_usage(bytes(response_tail), upstream_content_type)
 			self.broker_state.settle_request(output_tokens, actual_output_tokens)
 			if connection is not None:

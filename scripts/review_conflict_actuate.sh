@@ -103,9 +103,11 @@ if [ -s "${candidate_file:-/nonexistent}" ]; then
 			end
 		)}
 	' > "${locator_payload_file}"
-	gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --input "${locator_payload_file}" >/dev/null
 	if [ "$(jq -r '.escalated // false' "${signed_file}")" = "true" ]; then
 		gh_retry gh issue edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:resolver-escalated" >/dev/null
+	fi
+	if ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --input "${locator_payload_file}" >/dev/null; then
+		echo "::warning::Could not persist the resolver retry-state locator; continuing after the authoritative comment update."
 	fi
 fi
 
