@@ -144,7 +144,7 @@ jobs:
 
       - name: Install dependencies
         if: env.SKIP_IMPLEMENT != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@f03b8d657a63d64b87324e8a1047a8b90d3221e0
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
@@ -1734,7 +1734,7 @@ jobs:
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
           source scripts/codex_helpers.sh
-          model_provider_broker_start
+          MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR}${MODEL_EDITOR_FALLBACK:+,${MODEL_EDITOR_FALLBACK}}" model_provider_broker_start
           trap 'model_provider_broker_stop || echo "::warning::Model provider broker cleanup failed; preserving phase result." >&2' EXIT
           model_provider_broker_prepare_codex_writer "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "$(pwd)"
 

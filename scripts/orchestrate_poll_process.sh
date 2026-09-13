@@ -5652,70 +5652,33 @@ extract_autofix_resolver_retry_state_from_comments() {
   local source_pr="$4"
   local head_sha="$5"
   local comments_json=""
-  local candidate_dir=""
-  local candidate_file=""
-  local verified_file=""
-  local best_file=""
-	local candidate_head_sha=""
-  local generation="0"
-  local best_generation="0"
+  local comments_file=""
+  local selection_file=""
+  local selector_rc=0
 
   comments_json="$(cat)"
   if ! resolve_orchestrator_state_producer \
 		|| [ ! -f "scripts/orchestrate_state_v2.py" ]; then
-    return 0
+    return 2
   fi
-  candidate_dir="$(mktemp -d)"
-  COMMENTS_JSON="${comments_json}" PRODUCER_ID="${ORCHESTRATOR_STATE_PRODUCER_ID}" CANDIDATE_DIR="${candidate_dir}" python3 - <<'PYINNER'
-import json
-import os
-import re
-from pathlib import Path
-
-try:
-    comments = json.loads(os.environ["COMMENTS_JSON"])
-except json.JSONDecodeError:
-    raise SystemExit(0)
-producer_id = int(os.environ["PRODUCER_ID"])
-output_dir = Path(os.environ["CANDIDATE_DIR"])
-pattern = re.compile(r"^<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n(\{.*\})\n-->$", re.S)
-for comment in comments if isinstance(comments, list) else []:
-    if not isinstance(comment, dict) or int((comment.get("user") or {}).get("id") or 0) != producer_id:
-        continue
-    match = pattern.fullmatch(str(comment.get("body") or "").replace("\r\n", "\n"))
-    if not match:
-        continue
-    try:
-        document = json.loads(match.group(1))
-    except json.JSONDecodeError:
-        continue
-    comment_id = int(comment.get("id") or 0)
-    if isinstance(document, dict) and comment_id > 0:
-        (output_dir / f"{comment_id}.json").write_text(json.dumps(document), encoding="utf-8")
-PYINNER
-  for candidate_file in "${candidate_dir}"/*.json; do
-    [ -f "${candidate_file}" ] || continue
-    verified_file="${candidate_file}.verified"
-		candidate_head_sha="$(jq -r '.head_sha // empty' "${candidate_file}" 2>/dev/null || echo '')"
-		[[ "${candidate_head_sha}" =~ ^[0-9a-f]{40}$ ]] || continue
-    if PYTHONDONTWRITEBYTECODE=1 python3 "scripts/orchestrate_state_v2.py" verify-resolver-retry \
-      --envelope-file "${candidate_file}" \
+  comments_file="$(mktemp)"
+  selection_file="$(mktemp)"
+  printf '%s' "${comments_json}" > "${comments_file}"
+  if PYTHONDONTWRITEBYTECODE=1 python3 "scripts/orchestrate_state_v2.py" select-resolver-retry \
+      --comments-json "${comments_file}" \
       --repository "${repository}" \
       --tracking-issue "${tracking_issue}" \
       --integration-branch "${integration_branch}" \
       --source-pr "${source_pr}" \
-			--head-sha "${head_sha}" \
+      --head-sha "${head_sha}" \
       --producer-id "${ORCHESTRATOR_STATE_PRODUCER_ID}" \
-      --out-file "${verified_file}"; then
-      generation="$(jq -r '.generation // 0' "${verified_file}" 2>/dev/null || echo 0)"
-      if [[ "${generation}" =~ ^[1-9][0-9]*$ ]] && [ "${generation}" -gt "${best_generation}" ]; then
-        best_generation="${generation}"
-        best_file="${verified_file}"
-      fi
-    fi
-  done
-  [ -z "${best_file}" ] || cat "${best_file}"
-  rm -rf "${candidate_dir}"
+      --out-file "${selection_file}"; then
+    jq -c '.envelope' "${selection_file}"
+  else
+    selector_rc=$?
+  fi
+  rm -f "${comments_file}" "${selection_file}"
+  return "${selector_rc}"
 }
 
 # Create the judge's `new_issues` as fix-up GitHub issues and record them in
@@ -8477,17 +8440,32 @@ heal_integration_branch_conflict() {
     local resolver_retry_state=""
     local resolver_retry_head_sha=""
     local resolver_retry_escalated="false"
-		local resolver_retry_comments_json=""
-		# The PR metadata call above cannot return issue comments. Bound this
-		# five-minute poll path to the 100 most recently updated comments; the
-		# actuator refreshes its single V2 marker on every state change.
-		resolver_retry_comments_json="$(gh_retry gh api \
-			"repos/${GITHUB_REPOSITORY}/issues/${final_pr}/comments?sort=updated&direction=desc&per_page=100" \
-			| jq -c 'if type == "array" then . else [] end' 2>/dev/null || echo '[]')"
-		resolver_retry_state="$(printf '%s' "${resolver_retry_comments_json}" \
+		local resolver_retry_comments_pages_file=""
+		local resolver_retry_comments_file=""
+		local resolver_retry_selector_rc=0
+		resolver_retry_comments_pages_file="$(mktemp)"
+		resolver_retry_comments_file="$(mktemp)"
+		if ! gh_retry_to_file "${resolver_retry_comments_pages_file}" gh api --paginate \
+			"repos/${GITHUB_REPOSITORY}/issues/${final_pr}/comments?per_page=100" \
+			|| ! jq -s 'add // []' "${resolver_retry_comments_pages_file}" > "${resolver_retry_comments_file}"; then
+			echo "::warning::[integration-heal] Resolver retry-state comments are unavailable; deferring conflict redispatch this tick."
+			rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}"
+			return 0
+		fi
+		if resolver_retry_state="$(cat "${resolver_retry_comments_file}" \
 			| extract_autofix_resolver_retry_state_from_comments \
 				"${GITHUB_REPOSITORY}" "${TRACKING_NUM}" "${integration_branch}" \
-				"${final_pr}" "${final_pr_head_sha}" || true)"
+				"${final_pr}" "${final_pr_head_sha}")"; then
+			:
+		else
+			resolver_retry_selector_rc=$?
+			if [ "${resolver_retry_selector_rc}" -ne 1 ]; then
+				echo "::warning::[integration-heal] Resolver retry-state verification is unavailable; deferring conflict redispatch this tick."
+				rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}"
+				return 0
+			fi
+		fi
+		rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}"
     if [ -n "${resolver_retry_state}" ]; then
       resolver_retry_head_sha="$(printf '%s' "${resolver_retry_state}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
       resolver_retry_escalated="$(printf '%s' "${resolver_retry_state}" | jq -r '.escalated // false' 2>/dev/null || echo false)"

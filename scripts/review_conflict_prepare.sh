@@ -547,58 +547,27 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
     && [ -f "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" ] \
 		&& [[ "${_state_producer_id:-}" =~ ^[1-9][0-9]*$ ]] \
     && [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]]; then
-    _retry_state_candidates_dir="$(mktemp -d)"
+    _retry_state_selection_file="$(mktemp)"
     _retry_head_sha="$(jq -r '.head.sha // empty' "${PR_PAYLOAD_FILE}" 2>/dev/null || echo '')"
-    python3 - "${PR_ISSUE_COMMENTS_FILE}" "${_retry_state_candidates_dir}" "${_state_producer_id}" <<'PY'
-import json
-import re
-import sys
-from pathlib import Path
-
-comments = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-output_dir = Path(sys.argv[2])
-producer_id = int(sys.argv[3])
-pattern = re.compile(r"^<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n(\{.*\})\n-->$", re.S)
-for comment in comments if isinstance(comments, list) else []:
-	if not isinstance(comment, dict) or int((comment.get("user") or {}).get("id") or 0) != producer_id:
-		continue
-	match = pattern.fullmatch(str(comment.get("body") or "").replace("\r\n", "\n"))
-	if not match:
-		continue
-	try:
-		document = json.loads(match.group(1))
-	except json.JSONDecodeError:
-		continue
-	if not isinstance(document, dict):
-		continue
-	comment_id = int(comment.get("id") or 0)
-	if comment_id < 1:
-		continue
-	(output_dir / f"{comment_id}.json").write_text(json.dumps(document), encoding="utf-8")
-PY
-    _retry_best_generation=0
-    for _retry_candidate_file in "${_retry_state_candidates_dir}"/*.json; do
-      [ -f "${_retry_candidate_file}" ] || continue
-      _retry_verified_file="${_retry_candidate_file}.verified"
-      if PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" verify-resolver-retry \
-        --envelope-file "${_retry_candidate_file}" \
+    if PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/orchestrate_state_v2.py" select-resolver-retry \
+        --comments-json "${PR_ISSUE_COMMENTS_FILE}" \
         --repository "${GITHUB_REPOSITORY}" \
         --tracking-issue "${INTEGRATION_TRACKING_NUM}" \
         --integration-branch "${TARGET_BRANCH}" \
         --source-pr "${PR_NUMBER}" \
         --head-sha "${_retry_head_sha}" \
         --producer-id "${_state_producer_id}" \
-        --out-file "${_retry_verified_file}"; then
-        _retry_generation="$(jq -r '.generation // 0' "${_retry_verified_file}" 2>/dev/null || echo 0)"
-        if [[ "${_retry_generation}" =~ ^[1-9][0-9]*$ ]] && [ "${_retry_generation}" -gt "${_retry_best_generation}" ]; then
-          install -m 0600 "${_retry_verified_file}" "${RESOLVER_RETRY_STATE_VERIFIED_FILE}"
-          _retry_best_generation="${_retry_generation}"
-          RESOLVER_RETRY_STATE_COMMENT_ID="${_retry_candidate_file##*/}"
-          RESOLVER_RETRY_STATE_COMMENT_ID="${RESOLVER_RETRY_STATE_COMMENT_ID%.json}"
-        fi
+        --out-file "${_retry_state_selection_file}"; then
+      jq -c '.envelope' "${_retry_state_selection_file}" > "${RESOLVER_RETRY_STATE_VERIFIED_FILE}"
+      chmod 0600 "${RESOLVER_RETRY_STATE_VERIFIED_FILE}"
+      RESOLVER_RETRY_STATE_COMMENT_ID="$(jq -r '.comment_id' "${_retry_state_selection_file}")"
+    else
+      _retry_selector_rc=$?
+      if [ "${_retry_selector_rc}" -ne 1 ]; then
+        echo "::warning::Resolver retry-state comments could not be verified; retry state is unavailable for this run."
       fi
-    done
-    rm -rf "${_retry_state_candidates_dir}"
+    fi
+    rm -f "${_retry_state_selection_file}"
   fi
   echo "RESOLVER_RETRY_STATE_VERIFIED_FILE=${RESOLVER_RETRY_STATE_VERIFIED_FILE}" >> "$GITHUB_ENV"
   echo "RESOLVER_RETRY_STATE_COMMENT_ID=${RESOLVER_RETRY_STATE_COMMENT_ID}" >> "$GITHUB_ENV"

@@ -376,7 +376,17 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   workflow-log analysis, and conflict resolution. Agent environments contain an ephemeral broker token, never the
   upstream provider key or GitHub/state/Telegram credentials. Broker instances
   accept at most `MODEL_PROVIDER_BROKER_MAX_REQUESTS` requests (default `100`,
-  valid range `1..100`) and fail closed with HTTP 429 after exhaustion.
+  valid range `1..100`) and fail closed with HTTP 429 after exhaustion. Each
+  session also enforces exact model IDs, a per-request output limit (default
+  `16384`), a total output-token budget (default `1638400`, i.e. `100 x 16384`), and
+  server-controlled provider price ceilings before forwarding. The total
+  budget counts tokens the provider actually generated: a request is charged
+  its full per-request ceiling only while it is in flight and is trued up to
+  the provider-reported `usage` once its response completes (streamed chat
+  requests are opted into `stream_options.include_usage` for this). A
+  cut-off or usage-less response keeps the full reservation and an upstream
+  error status settles at zero, so an agentic phase is bounded by real spend
+  rather than by `total / per-request` turns.
 - Read-only Codex phases run with `--sandbox read-only` and web search disabled.
   Writer phases retain only their required workspace permissions in a sanitized
   environment. The conflict writer additionally runs as `nobody` with temporary
@@ -385,6 +395,8 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
 - Resolver retry tiers trust only signed
   `AUTOFIX_RESOLVER_RETRY_STATE_V2` producer comments. User-editable V1 PR-body
   markers remain recognizable as legacy text but cannot weaken verification.
+  Discovery paginates all comments and selects the highest verified generation;
+  API or verification uncertainty defers mutation to the next poll tick.
 - `scripts/workflow_log_output_contract.py` validates and atomically publishes
   model report candidates for analysis, retro, deep-audit, and API-redundancy
   modes before any tracked report or tracker comment consumes them.

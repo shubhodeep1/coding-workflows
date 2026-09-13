@@ -150,7 +150,8 @@ codex_config_assemble()
 model_provider_broker_start()
 {
 	local scripts_dir="" broker_path="" ready_file="" pid_file="" broker_pid="" broker_runtime_dir=""
-	local ready_deadline=0 ready_json=""
+	local ready_deadline=0 ready_json="" broker_allowed_models_csv="" broker_model=""
+	local -a broker_policy_args=() broker_allowed_models=()
 	scripts_dir="$(_codex_helpers_resolve_scripts_dir "${CODEX_HELPERS_SCRIPTS_DIR:-}")"
 	broker_path="${scripts_dir}/model_provider_broker.py"
 	ready_file="${MODEL_PROVIDER_BROKER_READY_FILE:-${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/model-provider-broker-ready.json}"
@@ -158,6 +159,19 @@ model_provider_broker_start()
 	broker_runtime_dir="$(dirname -- "${ready_file}")"
 	if [ ! -r "${broker_path}" ] || [ -z "${OPENROUTER_API_KEY:-}" ]; then
 		echo "::error::model provider broker prerequisites are unavailable" >&2
+		return 1
+	fi
+	broker_allowed_models_csv="${MODEL_PROVIDER_BROKER_ALLOWED_MODELS:-${MODEL_EDITOR:-}}"
+	IFS=',' read -r -a broker_allowed_models <<< "${broker_allowed_models_csv}"
+	for broker_model in "${broker_allowed_models[@]}"; do
+		if ! [[ "${broker_model}" =~ ^[A-Za-z0-9._:-]+/[A-Za-z0-9._:-]+$ ]]; then
+			echo "::error::model provider broker allowed-model policy is missing or invalid" >&2
+			return 1
+		fi
+		broker_policy_args+=(--allowed-model "${broker_model}")
+	done
+	if [ "${#broker_policy_args[@]}" -eq 0 ]; then
+		echo "::error::model provider broker allowed-model policy is missing or invalid" >&2
 		return 1
 	fi
 	rm -f -- "${ready_file}" "${pid_file}"
@@ -171,7 +185,14 @@ model_provider_broker_start()
 	env -i PATH="${PATH}" HOME="${HOME:-/root}" PYTHONDONTWRITEBYTECODE=1 \
 		OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
 		python3 "${broker_path}" --ready-file "${ready_file}" \
-		--max-requests "${MODEL_PROVIDER_BROKER_MAX_REQUESTS:-100}" &
+		--max-requests "${MODEL_PROVIDER_BROKER_MAX_REQUESTS:-100}" \
+		--max-output-tokens "${MODEL_PROVIDER_BROKER_MAX_OUTPUT_TOKENS:-16384}" \
+		--max-total-output-tokens "${MODEL_PROVIDER_BROKER_MAX_TOTAL_OUTPUT_TOKENS:-1638400}" \
+		--max-prompt-price "${MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE:-10}" \
+		--max-completion-price "${MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE:-30}" \
+		--max-request-price "${MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE:-0.10}" \
+		--max-image-price "${MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE:-1}" \
+		"${broker_policy_args[@]}" &
 	broker_pid=$!
 	printf '%s\n' "${broker_pid}" > "${pid_file}"
 	chmod 0600 "${pid_file}"
