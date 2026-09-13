@@ -5659,7 +5659,7 @@ extract_autofix_resolver_retry_state_from_comments() {
   comments_json="$(cat)"
   if ! resolve_orchestrator_state_producer \
 		|| [ ! -f "scripts/orchestrate_state_v2.py" ]; then
-    return 0
+    return 2
   fi
   comments_file="$(mktemp)"
   selection_file="$(mktemp)"
