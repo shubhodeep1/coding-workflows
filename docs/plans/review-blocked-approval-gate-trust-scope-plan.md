@@ -15,9 +15,11 @@ security-pass findings recommend automated controls instead of human gates.
 - **New script vs extension:** no new standalone script. The change extends
   `scripts/review_rb_judge.sh`, `scripts/gh_helpers.sh`,
   `scripts/orchestrate_poll_process.sh`, `scripts/label_helpers.sh`,
+  `.github/ai/label_contract.v1.json`,
   `.github/workflows/review_autofix.yml`,
-  `.github/workflows/review_autofix_sweep.yml`, and the two security-pass
-  prompts. Nothing requires manual invocation.
+  `.github/workflows/review_autofix_sweep.yml`,
+  `.github/workflows/issue_pr_status.yml`, and the two security-pass prompts.
+  Nothing requires manual invocation.
 - **Scheduler entry points:** the existing review workflow
   (`.github/workflows/review_autofix.yml`, called `@main` by
   `internal-review.yml` here and by the synced `workflow-templates/ai-review.yml`
@@ -25,7 +27,9 @@ security-pass findings recommend automated controls instead of human gates.
   (`.github/workflows/orchestrate_poll.yml` via `internal-orchestrate-poll.yml`,
   cron every 5 minutes), and the review sweep
   (`.github/workflows/review_autofix_sweep.yml`, cron `*/30 * * * *`, this
-  repository only). Every change runs inside those ticks.
+  repository only). Closed PR cleanup uses the existing
+  `.github/workflows/issue_pr_status.yml` reusable workflow, invoked by the
+  `pull_request: closed` wrapper. Every change runs inside those triggers.
 - **Long-running supervisor:** none. The poller is the supervisor.
 - **DB operations:** none. No MongoDB collections, indexes, or contracts (§10
   not applicable).
@@ -86,10 +90,12 @@ security-pass findings recommend automated controls instead of human gates.
 
 ### D4 — "Awaiting human approval" is a label, not a new phase
 
-- **Chosen:** register `ai:awaiting-human-approval` in `scripts/label_helpers.sh`
-  as a non-phase marker label applied to the PR and its linked issue(s) while
-  a `REVIEW_BLOCKED_APPROVAL_V1` request is pending, removed when the request
-  is consumed, invalidated by a head change, or refused.
+- **Chosen:** register `ai:awaiting-human-approval` in
+  `scripts/label_helpers.sh` and `.github/ai/label_contract.v1.json` as a
+  non-phase marker label applied to the PR and its linked issue(s) while a
+  `REVIEW_BLOCKED_APPROVAL_V1` request is pending, removed when the request is
+  consumed, invalidated by a head change, refused, or made obsolete by PR
+  closure.
 - **Alternatives considered:** a new phase in `_AI_PHASE_LABELS`; scanning PR
   comments for the pending marker on every poll tick.
 - **Why:** a phase label would change the orchestrator state machine
@@ -198,13 +204,17 @@ security-pass findings recommend automated controls instead of human gates.
 
 - §6: no rename or removal. New env vars get defaults (§4). New names listed
   under Goals are the only new identifiers.
-- §14: `scripts/`, `prompts/`, `review_autofix.yml`, and `label_helpers.sh`
-  propagate to every repo in `.github/ai/consumer_repos.json` on the next
-  `@stable` tag; `review_autofix_sweep.yml` is internal to this repository.
+- §14: `scripts/`, `prompts/`, `review_autofix.yml`, `issue_pr_status.yml`,
+  `label_helpers.sh`, and the label contract propagate to every repo in
+  `.github/ai/consumer_repos.json` on the next `@stable` tag;
+  `review_autofix_sweep.yml` is internal to this repository.
 - §15: the policy helper reads only payloads the judge already holds
   (`PR_META_JSON`, `PR_COMMENTS`, `PR_REVIEW_COMMENTS`, the diff in
   `RB_JUDGE_PR_DIFF_FILE`); the sweep and poller read labels from payloads
-  they already fetch. No new `gh api` call is added in any phase.
+  they already fetch. Phase 2 adds only the required label-mutation writes for
+  known PR and issue numbers; PR-close cleanup reuses the linked issue numbers
+  already resolved by `issue_pr_status.yml`. It adds no per-item discovery
+  reads. Phase 3 adds no `gh api` call.
 - §20: one `changelog.d/` fragment per phase PR.
 - Security: trust is identity-based (`author_association`, `user.type`,
   head-repo equality) and path-based; no free-text content influences the
@@ -238,20 +248,24 @@ requests.
    body carries the implementer rule, `tests/test_assemble_prompt.py` and the
    new test pass. Rollback: revert the PR; no state involved.
 2. **`ai:awaiting-human-approval` state, single alert, ladder and sweep
-   awareness.** Files: `scripts/label_helpers.sh`, `scripts/gh_helpers.sh`
-   (apply/remove helpers beside the request helpers),
+   awareness.** Files: `.github/ai/label_contract.v1.json`,
+   `scripts/label_helpers.sh`, `scripts/gh_helpers.sh` (apply/remove helpers
+   beside the request helpers),
    `scripts/review_rb_judge.sh`, `scripts/orchestrate_poll_process.sh`
    (review-blocked rung, standalone and managed stall paths, candidate
    details cache), `.github/workflows/review_autofix_sweep.yml`,
    `.github/workflows/review_autofix.yml` (alert text carries the command),
-   tests, `README.md`, `agents.md`, `changelog.d/`. Done when: creating a
-   request applies the label, consuming/invalidating removes it, a labelled
-   issue is skipped by the stall ladder with a `STALL_SKIP … reason=awaiting_human_approval`
-   line, a labelled PR is skipped by the sweep with
+   `.github/workflows/issue_pr_status.yml` (closed-PR cleanup), tests,
+   `README.md`, `agents.md`, `changelog.d/`. Done when: the helper and contract
+   catalogs remain identical, creating a request applies the label,
+   consuming/invalidating or closing the PR removes it, a labelled issue is
+   skipped by the stall ladder with a
+   `STALL_SKIP … reason=awaiting_human_approval` line, a labelled PR is skipped
+   by the sweep with
    `AUTOFIX_SWEEP_SKIP … reason=awaiting_human_approval`, and the Telegram
    alert on `approval_request_created` includes the exact command. Rollback:
    revert the PR; stray labels are removed by the next judge run's consumed
-   path or by hand-free label cleanup in the poller's merged-issue sweep.
+   path, the PR-close workflow, or the poller's verified-merge backstop.
 3. **Trust-scoped approval policy.** Files: `scripts/gh_helpers.sh`
    (`review_blocked_approval_required`), `scripts/review_rb_judge.sh`,
    `scripts/orchestrate_poll_process.sh` (review-blocked rung),
@@ -310,8 +324,9 @@ files in different blocks; whichever merges second rebases trivially.
 
 6. `scripts/label_helpers.sh` — add `ai:awaiting-human-approval` to
    `_AI_LABEL_COLORS` (`fbca04`) and `_AI_LABEL_DESCS` ("Review-blocked
-   judge decision awaiting trusted human approval"); do not add it to
-   `_AI_PHASE_LABELS`.
+   judge decision awaiting trusted human approval"). Add the same color and
+   description to `.github/ai/label_contract.v1.json`; do not add it to
+   `_AI_PHASE_LABELS` or any contract `phase_groups` entry.
 7. `scripts/gh_helpers.sh` — add `review_blocked_mark_awaiting_approval
    <repo> <pr> <issue_numbers_json>` and
    `review_blocked_clear_awaiting_approval <repo> <pr> <issue_numbers_json>`
@@ -323,7 +338,9 @@ files in different blocks; whichever merges second rebases trivially.
    refusal paths.
 9. `scripts/orchestrate_poll_process.sh` review-blocked rung — same two
    calls at the same points; in the `tg_notify` on request creation, append
-   the exact `/review-blocked-approve <request_id> <digest>` line.
+   the exact `/review-blocked-approve <request_id> <digest>` line. In
+   `close_merged_issues_sweep`, remove the marker from the issue and verified
+   implementation PR as a fail-open backstop before closing the issue.
 10. `scripts/orchestrate_poll_process.sh` stall paths — before
     `recovery_action_for_phase` is applied in the managed and standalone
     stall loops, skip issues whose cached labels include
@@ -335,16 +352,22 @@ files in different blocks; whichever merges second rebases trivially.
     to the PR projection and skip labelled PRs with
     `AUTOFIX_SWEEP_SKIP pr=#<n> reason=awaiting_human_approval`; count them
     in a new `skipped_awaiting_approval` counter in `AUTOFIX_SWEEP_END`.
-12. `.github/workflows/review_autofix.yml` `Telegram review-blocked judge
-    decision` step — in the `approval_request_created` branch, read the
-    request id and digest from `steps.rb_judge.outputs` (add
+12. `.github/workflows/issue_pr_status.yml` — on the existing
+    `pull_request: closed` path, clear the marker from the PR and every linked
+    non-tracking issue using `PR_NUMBER` and the already-resolved
+    `ISSUE_NUMBERS`; do not add a discovery API call. In
+    `.github/workflows/review_autofix.yml`'s `Telegram review-blocked judge
+    decision` step, read the request id and digest from
+    `steps.rb_judge.outputs` in the `approval_request_created` branch (add
     `approval_request_id` and `approval_decision_digest` outputs in step 8)
     and append the command line to `MSG`.
 13. Tests: extend `tests/test_review_rb_judge_label_propagation.py` for the
     mark/clear calls, `tests/test_orchestrate_poll_process.py` for the stall
     skip, a new `tests/test_review_autofix_sweep_awaiting_approval.py` for
-    the sweep skip, and `tests/test_review_rb_judge_self_run_exclusion.py`
-    for the alert text.
+    the sweep skip and verified-merge cleanup,
+    `tests/test_issue_pr_status_payload_fallback_contract.py` for closed-PR
+    cleanup, `tests/test_ai_labels.py` for non-phase contract parity, and
+    `tests/test_review_rb_judge_self_run_exclusion.py` for the alert text.
 14. `README.md` (label table and item 9), `agents.md` (review-blocked
     paragraph), `changelog.d/<issue>-awaiting-human-approval-label.md`,
     section `added`.
@@ -393,15 +416,19 @@ files in different blocks; whichever merges second rebases trivially.
 - `scripts/gh_helpers.sh`
 - `scripts/review_rb_judge.sh`
 - `scripts/label_helpers.sh`
+- `.github/ai/label_contract.v1.json`
 - `.github/workflows/review_autofix.yml`
 - `.github/workflows/orchestrate_poll.yml`
 - `.github/workflows/review_autofix_sweep.yml`
+- `.github/workflows/issue_pr_status.yml`
 - `workflow-templates/ai-review.yml`, `workflow-templates/ai-orchestrate-poll.yml`
   (only if they forward vars explicitly)
 - `tests/test_security_audit_prompt_policy.py` [new]
 - `tests/test_review_autofix_sweep_awaiting_approval.py` [new]
 - `tests/test_review_blocked_approval_policy.py` [new]
 - `tests/test_review_rb_judge_label_propagation.py`,
+  `tests/test_issue_pr_status_payload_fallback_contract.py`,
+  `tests/test_ai_labels.py`,
   `tests/test_orchestrate_poll_process.py`,
   `tests/test_review_rb_judge_self_run_exclusion.py`
 - `README.md`, `agents.md`, `docs/how-it-works.md`
@@ -412,8 +439,9 @@ files in different blocks; whichever merges second rebases trivially.
 - Unit: policy helper matrix (each D3 condition, `always`, invalid input),
   label mark/clear helpers against a stubbed `gh`.
 - Contract (text-anchored, the repository's norm): prompt bullets present
-  in both prompt and template; assemble parity; call sites in the judge and
-  poller; sweep skip; stall skip; alert text.
+  in both prompt and template; assemble parity; helper/label-contract parity;
+  call sites in the judge and poller; sweep skip; stall skip; closed-PR and
+  verified-merge cleanup; alert text.
 - Integration (existing harness in `tests/test_review_rb_judge_label_propagation.py`
   that runs extracted script blocks with a fake `gh`): a trusted `merge`
   decision reaches the execute path with no request posted; a protected-path
@@ -430,9 +458,11 @@ files in different blocks; whichever merges second rebases trivially.
 - **Sync conflicts if implemented while #3965 is open.** Mitigation: D1;
   the orchestrator project is started only after #3965 is `ai:merged`.
 - **Stale `ai:awaiting-human-approval` labels after a manual merge.**
-  Mitigation: the poller's merged-issue sweep removes it alongside the other
-  `ai:*` labels; the judge's pending lookup ignores labels and only trusts
-  markers, so a stale label can never grant approval.
+  Mitigation: the existing PR-close workflow clears the marker from the PR
+  and its already-resolved linked issues, and the poller's merged-issue sweep
+  clears it again when it verifies a merged implementation PR. Both paths are
+  fail-open and idempotent; the judge's pending lookup ignores labels and only
+  trusts markers, so a stale label can never grant approval.
 - **Consumer repos on `always` see no change; on the default they see fewer
   human requests.** ACCEPTED — that is the intended behaviour and is
   documented in the changelog fragment.
@@ -442,8 +472,8 @@ files in different blocks; whichever merges second rebases trivially.
 ## Rollout
 
 - Phase 1 takes effect on the next security audit; no flag.
-- Phase 2 is additive; no flag. Labels are created on first use via
-  `ensure_label_exists`.
+- Phase 2 is additive; no flag. The label contract pre-creates the marker on
+  sync, and `ensure_label_exists` retains first-use compatibility.
 - Phase 3 is an instant cutover to `trust-scoped` on merge. Rollback is the
   repo variable `REVIEW_BLOCKED_APPROVAL_MODE=always`. Consumer propagation
   follows the next `@stable` tag (§14); consumer wrappers need no edit

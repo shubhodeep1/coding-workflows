@@ -335,11 +335,13 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 		if "gh_retry gh api" in line and '"search/issues"' in line
 	]
 
-	assert len(parameterized_search_calls) == 4
+	assert len(parameterized_search_calls) == 5
 	assert all("--method GET" in call for call in parameterized_search_calls)
-	assert sum("--paginate" in call for call in parameterized_search_calls) == 2
+	assert sum("--paginate" in call for call in parameterized_search_calls) == 3
 
-	# Preserve the two marker-search fallbacks and their paginated aggregation.
+	# Preserve the advisory reconciliation search and the two marker-search
+	# fallbacks, including their paginated aggregation.
+	assert '-f q="repo:${GITHUB_REPOSITORY} is:issue label:ai:security security-pass-advisory:${TRACKING_NUM} in:body"' in poller_source_text
 	assert '-f per_page=100 -f q="${q_state}"' in poller_source_text
 	assert '-f per_page=100 -f q="${q_clarify}"' in poller_source_text
 	assert "jq -s '[.[].items[]? | {number}] | unique_by(.number)' 2>/dev/null || echo '[]'" in poller_source_text
