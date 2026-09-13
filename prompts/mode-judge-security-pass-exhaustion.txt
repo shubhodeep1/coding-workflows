@@ -35,6 +35,7 @@ Rules:
 - `fail` is project-wide. If any finding requires `fail`, use `fail` for every remaining finding; mixing `fail` with another action invalidates the verdict.
 - Decide from the code, not from the finding text alone.
 - Keep justifications concise and concrete; cite the code path or commit you verified.
+- Mitigation policy for `keep_fixing` and `accept_with_followup`: the fix or follow-up you describe must preserve unattended operation. Do not prescribe a human approval step, an operator-run command, a manual sign-off, or any control whose normal path needs a person; prescribe deterministic, automated controls (identity- and provenance-scoped authorization, fail-closed validation, least-privilege tokens, sandboxing, author-controlled text treated as data). Only when no automated control can mitigate the finding may the justification involve a person, and then it must start with `HUMAN GATE REQUIRED:` and name the narrowest trigger condition.
 - Never edit, commit, or push. This is a read-only decision.
 
 {{REFERENCE_OUTPUT_CONTRACT}}

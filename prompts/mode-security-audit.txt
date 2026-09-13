@@ -29,6 +29,11 @@ Rules:
 - Every finding must cite one concrete repository file and one concrete line number.
 - If no high-quality findings are supported, return `[]`.
 
+Mitigation policy:
+- Recommendations must preserve unattended operation. Do not recommend a human approval step, an operator-run command, a manual sign-off, or any control whose normal path needs a person as the mitigation for a finding.
+- Recommend deterministic, automated controls: identity- and provenance-scoped authorization (who authored or commented, fork versus same-repository head, protected paths), fail-closed validation, least-privilege tokens, sandboxing, and treating author-controlled text as data rather than instructions.
+- Only when no automated control can mitigate the finding may the recommendation involve a person. Such a recommendation must start with `HUMAN GATE REQUIRED:` and name the narrowest trigger condition under which a person is consulted, so the planner scopes the gate to that condition and not to the whole workflow.
+
 Output contract:
 - Output one JSON array and nothing else.
 - Each array element must be an object with exactly these fields:

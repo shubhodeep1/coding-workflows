@@ -426,6 +426,44 @@ def test_workflow_telegram_reason_messages_use_printf_for_newlines() -> None:
 		)
 
 
+def test_workflow_suppresses_repeat_approval_pending_alert() -> None:
+	"""`judge_action=approval_pending` must alert only when the approval
+	request was created this run (`judge_skip_reason=approval_request_created`)
+	and stay silent on every later re-dispatch that merely reuses the
+	pending request.
+
+	The judge executes from the PR head's SCRIPT_REF, so a PR whose branch
+	carries the trusted-human-approval gate reports `approval_pending` even
+	while the reusable workflow runs `@main`. Without this arm the generic
+	`*)` fallback fired a CRITICAL "Review-blocked judge action:
+	approval_pending" Telegram alert on every 30-minute review-sweep
+	re-dispatch (24 identical alerts on PR #4079 in eleven hours)."""
+	wf = _review_autofix_text()
+	step_anchor = "- name: Telegram review-blocked judge decision"
+	idx = wf.find(step_anchor)
+	assert idx >= 0
+	next_step = wf.find("\n      - name:", idx + len(step_anchor))
+	step_body = wf[idx:next_step if next_step > 0 else len(wf)]
+
+	handled_case = step_body.find('case "${JUDGE_ACTION}" in')
+	assert handled_case >= 0
+	generic_arm = step_body.find("\n              *)\n", handled_case)
+	assert generic_arm >= 0
+	handled_body = step_body[handled_case:generic_arm]
+
+	assert re.search(r"\n\s*approval_pending\)\s*\n", handled_body), (
+		"`Telegram review-blocked judge decision` must carry an "
+		"`approval_pending)` arm ahead of the generic `*)` fallback."
+	)
+	assert 'if [ "${JUDGE_SKIP_REASON}" = "approval_request_created" ]; then' in handled_body
+	assert "needs trusted human approval" in handled_body
+	assert "suppressing duplicate alert" in handled_body
+	assert re.search(r"suppressing duplicate alert\.\"\n\s+exit 0\n", handled_body), (
+		"the repeat approval_pending branch must exit 0 before tg_send_tracked "
+		"so no duplicate CRITICAL alert is sent."
+	)
+
+
 def test_workflow_preserves_max_iterations_fallback() -> None:
 	"""The default `*)` branch of the case must preserve the original
 	"maximum number of autofix iterations" body so legacy callers (no
