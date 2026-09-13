@@ -213,7 +213,9 @@ security-pass findings recommend automated controls instead of human gates.
 
 ## Approach
 
-Three independent phases. Phase 1 is prompt-only and can merge first or last.
+Three independent phases. Phase 1 is prompt-only and already landed in
+PR #4084 alongside this plan (user answer `Q6: B`), so the orchestrator
+implements Phases 2 and 3 only.
 Phase 2 adds the label and the wait-state plumbing without touching the
 policy, so a repository on `always` also benefits. Phase 3 adds the policy
 helper and consults it from both judge paths; with Phase 2 absent it still
@@ -223,6 +225,8 @@ requests.
 ## Phases & Merge Strategy
 
 1. **Security-audit mitigation policy in prompts and fix-issue body.**
+   **Shipped in PR #4084 (user answer `Q6: B`); the orchestrator must skip
+   this phase.** Recorded here so the plan stays complete on its own.
    Files: `prompts/mode-security-audit.txt`,
    `prompts/_templates/mode-security-audit.txt`,
    `prompts/mode-judge-security-pass-exhaustion.txt`,

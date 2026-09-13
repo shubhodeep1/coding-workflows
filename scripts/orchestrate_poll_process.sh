@@ -5160,6 +5160,10 @@ lines = [
 	"",
 	"Fix every instance of each finding's defect class across this project's changes, not only the cited line: the re-audit checks sibling code paths (other venues, adapters, handlers, workers) for the same defect and re-opens the loop if any remain.",
 	"",
+	"### Mitigation policy",
+	"",
+	"Implement each mitigation as an automated, deterministic control (unattended_system_instructions.md §20, Automation Bias). A human approval step, an operator-run command, or a manual sign-off is in scope only where the finding's recommendation starts with `HUMAN GATE REQUIRED:`, and then only for the trigger condition it names; otherwise implement an automated equivalent (identity- and provenance-scoped authorization, fail-closed validation, least-privilege tokens, sandboxing) and say so in the PR body.",
+	"",
 ]
 lines.extend(table_path.read_text(encoding="utf-8").splitlines())
 lines.extend(
@@ -5536,6 +5540,10 @@ lines = [
 	"### Recommendation",
 	"",
 	prose(finding.get("recommendation")),
+	"",
+	"### Mitigation policy",
+	"",
+	"Implement the mitigation as an automated, deterministic control (unattended_system_instructions.md §20, Automation Bias). A human approval step, an operator-run command, or a manual sign-off is in scope only where the recommendation starts with `HUMAN GATE REQUIRED:`, and then only for the trigger condition it names; otherwise implement an automated equivalent.",
 	"",
 ]
 body_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
