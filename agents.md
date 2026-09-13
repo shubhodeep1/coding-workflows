@@ -395,8 +395,11 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
 - Resolver retry tiers trust only signed
   `AUTOFIX_RESOLVER_RETRY_STATE_V2` producer comments. User-editable V1 PR-body
   markers remain recognizable as legacy text but cannot weaken verification.
-  Discovery paginates all comments and selects the highest verified generation;
-  API or verification uncertainty defers mutation to the next poll tick.
+  Poller discovery selects the highest verified generation from a complete scan
+  bounded to 10 pages and 32 MiB; a short page must prove completeness within
+  those bounds. The trusted actuator reuses the review pipeline's collected
+  comment snapshot. An unproven history, API failure, or verification
+  uncertainty defers mutation to the next poll tick.
 - `scripts/workflow_log_output_contract.py` validates and atomically publishes
   model report candidates for analysis, retro, deep-audit, and API-redundancy
   modes before any tracked report or tracker comment consumes them.

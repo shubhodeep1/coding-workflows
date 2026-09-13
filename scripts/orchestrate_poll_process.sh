@@ -8442,14 +8442,48 @@ heal_integration_branch_conflict() {
     local resolver_retry_escalated="false"
 		local resolver_retry_comments_pages_file=""
 		local resolver_retry_comments_file=""
+		local resolver_retry_comments_page_file=""
+		local resolver_retry_comments_page=1
+		local resolver_retry_comments_page_count=0
+		local resolver_retry_comments_page_bytes=0
+		local resolver_retry_comments_total_bytes=0
+		local resolver_retry_comments_max_pages=10
+		local resolver_retry_comments_max_bytes=$((32 * 1024 * 1024))
+		local resolver_retry_comments_complete="false"
 		local resolver_retry_selector_rc=0
 		resolver_retry_comments_pages_file="$(mktemp)"
 		resolver_retry_comments_file="$(mktemp)"
-		if ! gh_retry_to_file "${resolver_retry_comments_pages_file}" gh api --paginate \
-			"repos/${GITHUB_REPOSITORY}/issues/${final_pr}/comments?per_page=100" \
+		resolver_retry_comments_page_file="$(mktemp)"
+		: > "${resolver_retry_comments_pages_file}"
+		# The former automatic pagination had no fetch-time bound. Fetch at most 10
+		# pages and 32 MiB, and defer unless a short page proves completeness.
+		while [ "${resolver_retry_comments_page}" -le "${resolver_retry_comments_max_pages}" ]; do
+			if ! gh_retry_to_file "${resolver_retry_comments_page_file}" gh api \
+				"repos/${GITHUB_REPOSITORY}/issues/${final_pr}/comments?per_page=100&page=${resolver_retry_comments_page}" \
+				|| ! jq -e 'type == "array"' "${resolver_retry_comments_page_file}" >/dev/null 2>&1; then
+				echo "::warning::[integration-heal] Resolver retry-state comments are unavailable; deferring conflict redispatch this tick."
+				rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}"
+				return 0
+			fi
+			resolver_retry_comments_page_count="$(jq 'length' "${resolver_retry_comments_page_file}")"
+			resolver_retry_comments_page_bytes="$(wc -c < "${resolver_retry_comments_page_file}")"
+			if [ $((resolver_retry_comments_total_bytes + resolver_retry_comments_page_bytes)) -gt "${resolver_retry_comments_max_bytes}" ]; then
+				echo "::warning::[integration-heal] Resolver retry-state comments exceed the bounded scan; deferring conflict redispatch this tick."
+				rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}"
+				return 0
+			fi
+			resolver_retry_comments_total_bytes=$((resolver_retry_comments_total_bytes + resolver_retry_comments_page_bytes))
+			cat "${resolver_retry_comments_page_file}" >> "${resolver_retry_comments_pages_file}"
+			if [ "${resolver_retry_comments_page_count}" -lt 100 ]; then
+				resolver_retry_comments_complete="true"
+				break
+			fi
+			resolver_retry_comments_page=$((resolver_retry_comments_page + 1))
+		done
+		if [ "${resolver_retry_comments_complete}" != "true" ] \
 			|| ! jq -s 'add // []' "${resolver_retry_comments_pages_file}" > "${resolver_retry_comments_file}"; then
-			echo "::warning::[integration-heal] Resolver retry-state comments are unavailable; deferring conflict redispatch this tick."
-			rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}"
+			echo "::warning::[integration-heal] Resolver retry-state comment history exceeds the bounded scan; deferring conflict redispatch this tick."
+			rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}"
 			return 0
 		fi
 		if resolver_retry_state="$(cat "${resolver_retry_comments_file}" \
@@ -8461,11 +8495,11 @@ heal_integration_branch_conflict() {
 			resolver_retry_selector_rc=$?
 			if [ "${resolver_retry_selector_rc}" -ne 1 ]; then
 				echo "::warning::[integration-heal] Resolver retry-state verification is unavailable; deferring conflict redispatch this tick."
-				rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}"
+				rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}"
 				return 0
 			fi
 		fi
-		rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}"
+		rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}"
     if [ -n "${resolver_retry_state}" ]; then
       resolver_retry_head_sha="$(printf '%s' "${resolver_retry_state}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
       resolver_retry_escalated="$(printf '%s' "${resolver_retry_state}" | jq -r '.escalated // false' 2>/dev/null || echo false)"

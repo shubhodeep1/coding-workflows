@@ -105,9 +105,9 @@ class BrokerPolicy:
 				parse_float=Decimal,
 				parse_constant=lambda _value: (_ for _ in ()).throw(BrokerRequestError("request JSON contains a non-finite number")),
 			)
-		except (UnicodeDecodeError, json.JSONDecodeError, InvalidOperation, BrokerRequestError) as exc:
-			if isinstance(exc, BrokerRequestError):
-				raise
+		except BrokerRequestError:
+			raise
+		except (InvalidOperation, ValueError, RecursionError) as exc:
 			raise BrokerRequestError("request body must be valid JSON") from exc
 		if not isinstance(document, dict):
 			raise BrokerRequestError("request JSON must be an object")
@@ -128,6 +128,9 @@ class BrokerPolicy:
 			output_tokens = self._bounded_token_limit(document.get("max_output_tokens"), "max_output_tokens")
 			document["max_output_tokens"] = output_tokens
 		else:
+			choice_count = document.get("n", 1)
+			if isinstance(choice_count, bool) or not isinstance(choice_count, int) or choice_count != 1:
+				raise BrokerRequestError("only single-choice chat requests are authorized")
 			completion_limit = document.get("max_completion_tokens")
 			legacy_limit = document.get("max_tokens")
 			if completion_limit is not None and legacy_limit is not None and completion_limit != legacy_limit:
@@ -172,7 +175,10 @@ class BrokerPolicy:
 				policy_ceiling,
 			)
 		provider["max_price"] = bounded_prices
-		normalized_body = _encode_json(document).encode("utf-8")
+		try:
+			normalized_body = _encode_json(document).encode("utf-8")
+		except RecursionError as exc:
+			raise BrokerRequestError("request JSON is too deeply nested") from exc
 		if len(normalized_body) > MAX_REQUEST_BODY_BYTES:
 			raise BrokerRequestError("normalized request body is too large")
 		return normalized_body, output_tokens

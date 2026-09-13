@@ -38,10 +38,8 @@ fi
 if [ -s "${candidate_file:-/nonexistent}" ]; then
 	signed_file="$(mktemp)"
 	comment_file="$(mktemp)"
-	comments_file="$(mktemp)"
-	comments_pages_file="$(mktemp)"
 	selection_file="$(mktemp)"
-	trap 'rm -f "${signed_file}" "${comment_file}" "${comments_file}" "${comments_pages_file}" "${selection_file}"' EXIT
+	trap 'rm -f "${signed_file}" "${comment_file}" "${selection_file}"' EXIT
 	PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_state_v2.py" sign-resolver-retry \
 		--candidate-file "${candidate_file}" \
 		--repository "${GITHUB_REPOSITORY}" \
@@ -58,10 +56,12 @@ if [ -s "${candidate_file:-/nonexistent}" ]; then
 	} > "${comment_file}"
 	existing_comment_id="${RESOLVER_RETRY_STATE_COMMENT_ID:-}"
 	if ! [[ "${existing_comment_id}" =~ ^[1-9][0-9]*$ ]]; then
-		gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" > "${comments_pages_file}"
-		jq -s 'add // []' "${comments_pages_file}" > "${comments_file}"
+		if [ ! -r "${PR_ISSUE_COMMENTS_FILE:-}" ]; then
+			echo "::error::Resolver retry-state comment snapshot is unavailable; refusing to create a duplicate marker."
+			exit 1
+		fi
 		if PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_state_v2.py" select-resolver-retry \
-			--comments-json "${comments_file}" \
+			--comments-json "${PR_ISSUE_COMMENTS_FILE}" \
 			--repository "${GITHUB_REPOSITORY}" \
 			--tracking-issue "${INTEGRATION_TRACKING_NUM}" \
 			--integration-branch "${TARGET_BRANCH}" \

@@ -150,6 +150,8 @@ def test_policy_rejects_ambiguous_or_unauthorized_requests() -> None:
 		b'{"model":"openai/test-model","plugins":[]}',
 		b'{"model":"openai/test-model","modalities":["text","audio"]}',
 		b'{"model":"openai/test-model","temperature":1e-999999999999999999999999999999999999}',
+		b'{"model":"openai/test-model","input":' + (b"9" * 5000) + b"}",
+		b'{"model":"openai/test-model","input":' + (b"[" * 2000) + (b"]" * 2000) + b"}",
 	)
 	for body in invalid_bodies:
 		try:
@@ -165,11 +167,12 @@ def test_policy_normalizes_legacy_chat_limit_and_rejects_conflict() -> None:
 	policy = _broker_policy(module)
 	body, output_tokens = policy.normalize_request(
 		"/api/v1/chat/completions",
-		b'{"model":"openai/test-model","messages":[],"max_tokens":40}',
+		b'{"model":"openai/test-model","messages":[],"max_tokens":40,"n":1}',
 	)
 	document = json.loads(body)
 	assert output_tokens == 40
 	assert document["max_completion_tokens"] == 40
+	assert document["n"] == 1
 	assert "max_tokens" not in document
 	try:
 		policy.normalize_request(
@@ -180,6 +183,16 @@ def test_policy_normalizes_legacy_chat_limit_and_rejects_conflict() -> None:
 		pass
 	else:
 		raise AssertionError("broker accepted conflicting chat token limits")
+	for invalid_choice_count in (True, 0, 2, "1"):
+		try:
+			policy.normalize_request(
+				"/api/v1/chat/completions",
+				json.dumps({"model": "openai/test-model", "messages": [], "n": invalid_choice_count}).encode("utf-8"),
+			)
+		except module.BrokerRequestError:
+			pass
+		else:
+			raise AssertionError(f"broker accepted invalid choice count: {invalid_choice_count!r}")
 
 
 def test_request_and_output_budget_reservation_is_race_safe() -> None:
