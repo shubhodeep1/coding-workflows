@@ -366,6 +366,9 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   validated `job.workflow_repository` plus immutable `job.workflow_sha`.
   Missing or malformed workflow identity fails closed; `stable` and `main`
   support fallbacks are not permitted.
+- Source workflows and `.github/actions/setup-runtime/action.yml` pin every
+  `actions/setup-node` and `actions/setup-python` use to its reviewed full SHA;
+  `test_remote_codex_runtime_actions_are_immutable` enforces the complete set.
 
 ## Model credential isolation
 
@@ -407,8 +410,10 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   context, and signature before use. A missing or invalid locator falls back to
   selecting the highest verified generation from a complete scan bounded to 10
   pages and 32 MiB, then refreshes the locator. The actuator reuses the review
-  pipeline's collected comment snapshot. An unproven history, API failure, or
-  verification uncertainty defers mutation to the next poll tick.
+  pipeline's collected comment snapshot. Locator writes refresh the live PR body
+  and verify its head immediately before PATCH so concurrent body edits are not
+  replaced. An unproven history, API failure, or verification uncertainty defers
+  mutation to the next poll tick.
 - `scripts/workflow_log_output_contract.py` validates and atomically publishes
   model report candidates for analysis, retro, deep-audit, and API-redundancy
   modes before any tracked report or tracker comment consumes them.

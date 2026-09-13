@@ -8552,7 +8552,11 @@ heal_integration_branch_conflict() {
 			resolver_retry_selected_comment_id="$(jq -r '.comment_id // empty' "${resolver_retry_selection_file}" 2>/dev/null || true)"
 			if [[ "${resolver_retry_selected_comment_id}" =~ ^[1-9][0-9]*$ ]]; then
 				resolver_retry_locator_marker="<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:${resolver_retry_selected_comment_id} -->"
-				if printf '%s' "${final_pr_payload}" | jq --arg locator "${resolver_retry_locator_marker}" '
+				# The earlier PR read predates the bounded comment scan, so it cannot
+				# safely supply the body for this full-body PATCH.
+				if final_pr_payload="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}")" \
+					&& [ "$(printf '%s' "${final_pr_payload}" | jq -r '.head.sha // empty' 2>/dev/null)" = "${final_pr_head_sha}" ] \
+					&& printf '%s' "${final_pr_payload}" | jq --arg locator "${resolver_retry_locator_marker}" '
 					(.body // "") as $body
 					| {body: (
 						if ($body | test("(?m)^<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:[1-9][0-9]* -->$")) then

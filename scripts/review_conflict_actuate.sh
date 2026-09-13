@@ -91,22 +91,27 @@ if [ -s "${candidate_file:-/nonexistent}" ]; then
 		exit 1
 	fi
 	locator_marker="<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:${persisted_comment_id} -->"
-	# API hygiene: live_pr_json already supplies the current body, while the
-	# marker write above is the only existing call that supplies its new ID.
-	printf '%s' "${live_pr_json}" | jq --arg locator "${locator_marker}" '
-		(.body // "") as $body
-		| {body: (
-			if ($body | test("(?m)^<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:[1-9][0-9]* -->$")) then
-				($body | gsub("(?m)^<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:[1-9][0-9]* -->$"; $locator))
-			else
-				$body + (if $body == "" or ($body | endswith("\n")) then "" else "\n" end) + $locator + "\n"
-			end
-		)}
-	' > "${locator_payload_file}"
 	if [ "$(jq -r '.escalated // false' "${signed_file}")" = "true" ]; then
 		gh_retry gh issue edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:resolver-escalated" >/dev/null
 	fi
-	if ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --input "${locator_payload_file}" >/dev/null; then
+	# The initial PR read predates the comment write. Refresh it so persisting
+	# this locator cannot replace body edits made during trusted actuation.
+	if live_pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")" \
+		&& [ "$(printf '%s' "${live_pr_json}" | jq -r '.head.sha // empty' 2>/dev/null)" = "${live_head_sha}" ] \
+		&& printf '%s' "${live_pr_json}" | jq --arg locator "${locator_marker}" '
+			(.body // "") as $body
+			| {body: (
+				if ($body | test("(?m)^<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:[1-9][0-9]* -->$")) then
+					($body | gsub("(?m)^<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:[1-9][0-9]* -->$"; $locator))
+				else
+					$body + (if $body == "" or ($body | endswith("\n")) then "" else "\n" end) + $locator + "\n"
+				end
+			)}
+		' > "${locator_payload_file}"; then
+		if ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --input "${locator_payload_file}" >/dev/null; then
+			echo "::warning::Could not persist the resolver retry-state locator; continuing after the authoritative comment update."
+		fi
+	else
 		echo "::warning::Could not persist the resolver retry-state locator; continuing after the authoritative comment update."
 	fi
 fi

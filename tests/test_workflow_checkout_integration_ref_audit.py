@@ -89,6 +89,10 @@ def test_remote_codex_runtime_actions_are_immutable() -> None:
 		assert "setup-runtime@stable" not in text, path
 		assert "Intentionally use the released action ref as the rollout boundary" not in text, path
 		for line in text.splitlines():
+			if "uses: actions/setup-node@" in line:
+				assert line.rstrip().endswith(f"actions/setup-node@{REVIEWED_SETUP_NODE_ACTION_SHA}"), (path, line)
+			if "uses: actions/setup-python@" in line:
+				assert line.rstrip().endswith(f"actions/setup-python@{REVIEWED_SETUP_PYTHON_ACTION_SHA}"), (path, line)
 			if "shubhodeep1/coding-workflows/.github/actions/install-codex@" in line:
 				assert line.rstrip().endswith(f"install-codex@{REVIEWED_CODEX_ACTION_SHA}"), (path, line)
 		for cache_block in text.split("- name: Cache Codex CLI")[1:]:
