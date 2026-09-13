@@ -6792,11 +6792,13 @@ jobs:
               fi
             fi
             [ -n "${editor_last_error}" ] || editor_last_error="not captured — see the editor step log of the linked run"
-            attempts_label="every"
-            if [ "${editor_attempts:-0}" -gt 0 ] 2>/dev/null; then
-              attempts_label="all ${editor_attempts}"
+            attempts_label="every attempt"
+            if [ "${editor_attempts:-0}" -eq 1 ] 2>/dev/null; then
+              attempts_label="1 attempt"
+            elif [ "${editor_attempts:-0}" -gt 1 ] 2>/dev/null; then
+              attempts_label="all ${editor_attempts} attempts"
             fi
-            MSG="⚠️ Editor failed on ${attempts_label} attempts: #${PR_NUMBER}"
+            MSG="⚠️ Editor failed on ${attempts_label}: #${PR_NUMBER}"
             MSG+=$'\n'
             MSG+="No editor output was produced (recoverable failure). Last provider error: ${editor_last_error}"
             MSG+=$'\n'
@@ -6807,7 +6809,7 @@ jobs:
             MSG+="Run: ${RUN_URL}"
             tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
 
-            BODY="⚠️ **Editor no-op suspicious** — the editor failed on ${attempts_label} attempts and produced no output (recoverable failure), so no fix was applied this pass."
+            BODY="⚠️ **Editor no-op suspicious** — the editor failed on ${attempts_label} and produced no output (recoverable failure), so no fix was applied this pass."
             BODY+=$'\n\n'
             BODY+="Last provider error from the final attempt: \`${editor_last_error}\`"
             BODY+=$'\n\n'

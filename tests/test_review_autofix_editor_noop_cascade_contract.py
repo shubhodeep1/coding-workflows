@@ -36,6 +36,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -1140,6 +1141,28 @@ def test_noop_warning_step_branches_on_recoverable_failure_with_last_error(tmp_p
 
 	for editor_attempt_error_file in previous_reviews.glob("editor_attempt_*.err"):
 		editor_attempt_error_file.unlink()
+	(previous_reviews / "editor_attempt_1.err").write_text(
+		'timestamp=2026-09-12T15:54:08.842Z level=ERROR message="stream error" error.error="AI_APICallError: structured fallback failure"\n',
+		encoding="utf-8",
+	)
+	result = subprocess.run(
+		["bash", "-eo", "pipefail", "-c", script],
+		cwd=REPO_ROOT,
+		env=warning_env,
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	assert result.returncode == 0, f"warning step failed for structured fallback: {result.stderr}"
+	telegram_message = tg_capture.read_text(encoding="utf-8")
+	assert "Editor failed on 1 attempt: #4077" in telegram_message
+	assert "Last provider error: AI_APICallError: structured fallback failure" in telegram_message
+	pr_comment = gh_capture.read_text(encoding="utf-8")
+	assert "failed on 1 attempt" in pr_comment
+	assert "AI_APICallError: structured fallback failure" in pr_comment
+
+	for editor_attempt_error_file in previous_reviews.glob("editor_attempt_*.err"):
+		editor_attempt_error_file.unlink()
 	result = subprocess.run(
 		["bash", "-eo", "pipefail", "-c", script],
 		cwd=REPO_ROOT,
@@ -1150,9 +1173,11 @@ def test_noop_warning_step_branches_on_recoverable_failure_with_last_error(tmp_p
 	)
 	assert result.returncode == 0, f"warning step failed without stderr artifacts: {result.stderr}"
 	telegram_message = tg_capture.read_text(encoding="utf-8")
+	assert "Editor failed on every attempt: #4077" in telegram_message
 	assert "Last provider error: not captured" in telegram_message
 	pr_comment = gh_capture.read_text(encoding="utf-8")
 	assert NOOP_WARNING_LITERAL in pr_comment
+	assert "failed on every attempt" in pr_comment
 	assert "Last provider error from the final attempt: `not captured" in pr_comment
 
 
@@ -1190,4 +1215,7 @@ if __name__ == "__main__":
 	test_noop_warning_generic_branch_preserved()
 	test_validator_sets_editor_noop_recoverable_failure_alongside_suspicious()
 	test_validator_greps_for_recoverable_failure_sentinel_in_lockstep()
+	with tempfile.TemporaryDirectory() as temporary_test_directory:
+		test_validator_classifies_recoverable_failure_summary(Path(temporary_test_directory))
+		test_noop_warning_step_branches_on_recoverable_failure_with_last_error(Path(temporary_test_directory))
 	print("All EDITOR_NOOP_SUSPICIOUS cascade-guard contract tests passed.")
