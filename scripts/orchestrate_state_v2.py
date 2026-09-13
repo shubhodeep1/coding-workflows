@@ -745,6 +745,9 @@ def cmd_select_resolver_retry(args: argparse.Namespace) -> int:
 		body = comment.get("body")
 		if isinstance(body, str):
 			body = body.replace("\r\n", "\n").replace("\r", "\n")
+			if len(body.encode("utf-8")) > RESOLVER_RETRY_MAX_BYTES + 64:
+				continue
+			body = body.rstrip("\n")
 		if (
 			not isinstance(comment_id, int)
 			or isinstance(comment_id, bool)
@@ -752,7 +755,6 @@ def cmd_select_resolver_retry(args: argparse.Namespace) -> int:
 			or not isinstance(user, dict)
 			or user.get("id") != args.producer_id
 			or not isinstance(body, str)
-			or len(body.encode("utf-8")) > RESOLVER_RETRY_MAX_BYTES + 64
 			or not body.startswith(marker_prefix)
 			or not body.endswith(marker_suffix)
 		):

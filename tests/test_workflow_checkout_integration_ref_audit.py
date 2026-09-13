@@ -85,6 +85,9 @@ def test_remote_codex_runtime_actions_are_immutable() -> None:
 		for line in text.splitlines():
 			if "shubhodeep1/coding-workflows/.github/actions/install-codex@" in line:
 				assert line.rstrip().endswith(f"install-codex@{REVIEWED_CODEX_ACTION_SHA}"), (path, line)
+		for cache_block in text.split("- name: Cache Codex CLI")[1:]:
+			cache_key_line = next(line.strip() for line in cache_block.splitlines() if line.strip().startswith("key:"))
+			assert REVIEWED_CODEX_ACTION_SHA in cache_key_line, (path, cache_key_line)
 
 
 def test_required_workflows_enforce_integration_ref_contract() -> None:

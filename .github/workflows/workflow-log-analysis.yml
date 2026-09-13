@@ -221,7 +221,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ runner.tool_cache }}/codex
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
+          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2-install-f03b8d657a63d64b87324e8a1047a8b90d3221e0
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
@@ -717,7 +717,7 @@ jobs:
           # startup with "Missing optional dependency @openai/codex-linux-x64".
           # Bump invalidates the broken entries; persist+restore below now
           # handle both packages symmetrically.
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
+          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2-install-f03b8d657a63d64b87324e8a1047a8b90d3221e0
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
@@ -1421,7 +1421,7 @@ jobs:
           # startup with "Missing optional dependency @openai/codex-linux-x64".
           # Bump invalidates the broken entries; persist+restore below now
           # handle both packages symmetrically.
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
+          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2-install-f03b8d657a63d64b87324e8a1047a8b90d3221e0
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
@@ -1952,7 +1952,7 @@ jobs:
           # startup with "Missing optional dependency @openai/codex-linux-x64".
           # Bump invalidates the broken entries; persist+restore below now
           # handle both packages symmetrically.
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
+          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2-install-f03b8d657a63d64b87324e8a1047a8b90d3221e0
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'

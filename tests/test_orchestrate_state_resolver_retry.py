@@ -108,19 +108,19 @@ def test_selector_finds_evicted_marker_and_chooses_highest_verified_generation(t
 	comments = [{
 		"id": 10,
 		"user": {"id": 123},
-		"body": f"<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n{json.dumps(generation_one, separators=(',', ':'))}\n-->",
+		"body": f"<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n{json.dumps(generation_one, separators=(',', ':'))}\n-->\n",
 	}]
 	comments.extend({"id": 1000 + index, "user": {"id": 999}, "body": "noise"} for index in range(105))
 	comments.extend((
 		{
 			"id": 11,
 			"user": {"id": 123},
-			"body": f"<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n{json.dumps(forged, separators=(',', ':'))}\n-->",
+			"body": f"<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n{json.dumps(forged, separators=(',', ':'))}\n-->\n",
 		},
 		{
 			"id": 12,
 			"user": {"id": 123},
-			"body": f"<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n{json.dumps(generation_three, separators=(',', ':'))}\n-->",
+			"body": f"<!-- AUTOFIX_RESOLVER_RETRY_STATE_V2\n{json.dumps(generation_three, separators=(',', ':'))}\n-->\n",
 		},
 	))
 	comments_file = tmp_path / "comments.json"
