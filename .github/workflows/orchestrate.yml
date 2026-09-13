@@ -177,6 +177,7 @@ jobs:
           echo "SCRIPT_REF=${WORKFLOW_DEFINITION_SHA,,}" >> "$GITHUB_ENV"
 
       - name: Checkout workflow support source for run-start
+        id: run_start_support_checkout
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -187,12 +188,14 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
       - name: Stage workflow memory support files for run-start
+        id: run_start_support_stage
+        if: steps.run_start_support_checkout.outcome == 'success'
         run: |
           set -euo pipefail
 
           if [ ! -d .codex-workflow-src ]; then
-            echo "::warning::Support source checkout unavailable before run-start memory event"
-            exit 0
+            echo "::error::Immutable support source checkout unavailable before run-start memory event"
+            exit 1
           fi
 
           wf_source="shubhodeep1/coding-workflows"
@@ -201,8 +204,8 @@ jobs:
           for f in gh_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
-              echo "::warning::Missing required run-start support script ${f}; run-start memory event may be skipped"
-              continue
+              echo "::error::Missing required immutable run-start support script ${f}"
+              exit 1
             fi
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
@@ -225,6 +228,7 @@ jobs:
           done
 
       - name: Record orchestration run start
+        if: steps.run_start_support_checkout.outcome == 'success' && steps.run_start_support_stage.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"

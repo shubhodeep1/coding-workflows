@@ -77,7 +77,9 @@ def _encode_json(value: object) -> str:
 	if isinstance(value, int) and not isinstance(value, bool):
 		return str(value)
 	if isinstance(value, Decimal):
-		return format(value, "f")
+		# Preserve exponent notation so compact inputs cannot expand into an
+		# attacker-controlled fixed-point allocation during normalization.
+		return str(value)
 	if isinstance(value, list):
 		return "[" + ",".join(_encode_json(item) for item in value) + "]"
 	if isinstance(value, dict):
@@ -103,7 +105,7 @@ class BrokerPolicy:
 				parse_float=Decimal,
 				parse_constant=lambda _value: (_ for _ in ()).throw(BrokerRequestError("request JSON contains a non-finite number")),
 			)
-		except (UnicodeDecodeError, json.JSONDecodeError, BrokerRequestError) as exc:
+		except (UnicodeDecodeError, json.JSONDecodeError, InvalidOperation, BrokerRequestError) as exc:
 			if isinstance(exc, BrokerRequestError):
 				raise
 			raise BrokerRequestError("request body must be valid JSON") from exc
@@ -170,7 +172,10 @@ class BrokerPolicy:
 				policy_ceiling,
 			)
 		provider["max_price"] = bounded_prices
-		return _encode_json(document).encode("utf-8"), output_tokens
+		normalized_body = _encode_json(document).encode("utf-8")
+		if len(normalized_body) > MAX_REQUEST_BODY_BYTES:
+			raise BrokerRequestError("normalized request body is too large")
+		return normalized_body, output_tokens
 
 	def _bounded_token_limit(self, value: object, field_name: str) -> int:
 		if value is None:

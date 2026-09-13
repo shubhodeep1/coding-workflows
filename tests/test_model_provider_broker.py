@@ -115,6 +115,30 @@ def test_policy_normalizes_response_limits_and_server_price_ceilings() -> None:
 	}
 
 
+def test_policy_keeps_extreme_decimal_exponents_bounded() -> None:
+	module = _broker_module()
+	policy = _broker_policy(module)
+	body, _ = policy.normalize_request(
+		"/api/v1/responses",
+		b'{"model":"openai/test-model","input":"hello","temperature":1e-1000000000,"provider":{"max_price":{"prompt":"1e-1000000000"}}}',
+	)
+	assert len(body) < 1000
+	assert body.count(b"1E-1000000000") == 2
+
+
+def test_policy_rejects_normalized_bodies_over_request_limit() -> None:
+	module = _broker_module()
+	policy = _broker_policy(module)
+	request_body = b'{"model":"openai/test-model","input":"hello"}'
+	module.MAX_REQUEST_BODY_BYTES = len(request_body)
+	try:
+		policy.normalize_request("/api/v1/responses", request_body)
+	except module.BrokerRequestError:
+		pass
+	else:
+		raise AssertionError("broker accepted an oversized normalized request")
+
+
 def test_policy_rejects_ambiguous_or_unauthorized_requests() -> None:
 	module = _broker_module()
 	policy = _broker_policy(module)
@@ -125,6 +149,7 @@ def test_policy_rejects_ambiguous_or_unauthorized_requests() -> None:
 		b'{"model":"openai/test-model","models":["openai/other"]}',
 		b'{"model":"openai/test-model","plugins":[]}',
 		b'{"model":"openai/test-model","modalities":["text","audio"]}',
+		b'{"model":"openai/test-model","temperature":1e-999999999999999999999999999999999999}',
 	)
 	for body in invalid_bodies:
 		try:
