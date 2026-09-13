@@ -1699,11 +1699,23 @@ case "${RB_ACTION}" in
     ;;
 esac
 
-post_review_blocked_assessment \
-  "${RB_JUDGE_COMMENT_FILE}" \
-  "${RB_OUTBOUND_REVIEW_STATE}" \
-  "${POST_REVIEW_HEAD_SHA}" \
-  "${POST_REVIEW_HEAD_REF}" || true
+# A reused pending approval request means the model was not consulted
+# this run: the decision, and therefore this assessment, is byte-for-byte
+# the one already posted when the request was created. Re-posting it on
+# every re-dispatch (the 30-minute review sweep re-runs the judge until a
+# trusted human approves) buried PR #4079 under 22 identical decision
+# comments in eleven hours. Mirror the poller's rung in
+# scripts/orchestrate_poll_process.sh, which posts its assessment only
+# when RB_PENDING_APPROVAL_REQUEST is empty.
+if [ -n "${RB_PENDING_DECISION_JSON}" ]; then
+  echo "Pending review-blocked approval request reused; the judge assessment was posted when the request was created, so it is not re-posted."
+else
+  post_review_blocked_assessment \
+    "${RB_JUDGE_COMMENT_FILE}" \
+    "${RB_OUTBOUND_REVIEW_STATE}" \
+    "${POST_REVIEW_HEAD_SHA}" \
+    "${POST_REVIEW_HEAD_REF}" || true
+fi
 
 RB_APPROVAL_REQUEST_ID=""
 case "${RB_ACTION}" in

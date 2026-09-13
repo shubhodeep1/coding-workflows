@@ -706,6 +706,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_label_propagation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_pending_approval_comment.py
 
       - name: Shared PR check-runs merge gate (pr_checks_lib) tests
         run: |
