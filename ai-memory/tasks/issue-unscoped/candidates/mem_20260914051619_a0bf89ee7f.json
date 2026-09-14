@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:4590-4593 | severity=high | confidence=4\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The zero-reviewer partial-finalize refusal path sets `EDITOR_NOOP_REFUSAL` but not `EDITOR_NOOP_SUSPICIOUS`, leaving the refusal summary unclassified.\n  WHY: The refusal partial-finalize summary written by scripts/review_apply_fixes.sh lines 2503-2526 contains no Check 1 markers, and Check 2 is skipped when `REVIEWERS_SUCCESSFUL` is 0, so the Telegram warning and resolver gates do not activate; no severity disagreement reported.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/review_autofix.yml, Check 1b block lines 4590-4593 (interacting with the modified Check 1c at 4622-4626 and the Check 2 gate at 4639) | severity=MAJOR | confidence=4\n  PROBLEM: The exact zero-reviewer blind spot this PR fixes for the recoverable-failure summary remains open for the sibling refusal partial-finalize summary, and the PR pins the hole in a test instead of closing it.\n  WHY: `if grep -qiE 'model refused \\(safety filter\\)' \"${EDITOR_SUMMARY_FILE}\"; then ... EDITOR_NOOP_REFUSAL=\"true\"` \u2014 Check 1b sets only EDITOR_NOOP_REFUSAL, never EDITOR_NOOP_SUSPICIOUS; Check 2 is skipped when `REVIEWERS_SUCCESSFUL` is 0 (line 4639). The refusal partial-finalize summary written by scripts/review_apply_fixes.sh lines 2503-2526 contains no Check 1 markers (its lines are \"editor returned a safety-policy refusal...\", \"unavailable (partial finalize after safety-policy refusal)\", \"partial finalize requested after a safety-policy refusal...\"), so Check 1's regex (`editor failed before producing|unavailable \\(editor fallback\\)`) does not match it. With REVIEWERS_SUCCESSFUL=0 (reachable via skipped_open / skipped_unmapped per the PR's own trace), Check 1 does not fire, Check 1b sets only REFUSAL, and Check 2 is skipped, leaving SUSPICIOUS=false. The `Telegram editor-noop-suspicious warning` step (gated on `env.EDITOR_NOOP_SUSPICIOUS == 'true'`, line 6736) never fires, so the refusal-specific alert text added in #4083 is unreachable on this path; the merge-conflict detect/resolver chain gated on `EDITOR_NOOP_SUSPICIOUS != 'true'` (lines 4680, 5031, 5074) still runs with nothing to land; and the run summary records the editor slot as `status: success, failure_class: none` (line 7896-7898 branch) instead of `failed/refusal`. The stale Check 1b comment (lines 4584-4587, \"Check 1 above already set EDITOR_NOOP_SUSPICIOUS=true via the existing markers (which the refusal fallback preserves verbatim)\") compounds this: it is only true for the non-partial-finalize refusal fallback, not for the partial-finalize refusal shape at lines 2503-2526. The minimal fix mirrors this PR's own change: set `EDITOR_NOOP_SUSPICIOUS=\"true\"` inside Check 1b (the pinned `(\"refusal\", \"0\")` expectation would flip to true, matching the recoverable case).\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "d5454b8f1d1683dc6981a607c40dee09979279bd9f43e72a04e82c0e86825a6d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4086,
+    "run_id": "34805781123",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "34805781123",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260914051619_a0bf89ee7f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4086,
+    "run_id": "34805781123"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-14T05:16:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
