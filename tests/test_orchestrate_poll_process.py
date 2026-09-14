@@ -3964,6 +3964,7 @@ def test_security_pass_reaudit_hands_fix_cycle_diff_to_engine_and_carries_it_onc
 				# Malformed rows never reach the engine.
 				"not-an-object",
 				{"cycle": 1, "files": ["scripts/no_shas.py"]},
+				{"cycle": 1, "since_sha": "not-a-sha", "head_sha": "b" * 40, "files": ["scripts/bad_sha.py"]},
 			],
 		}
 	)

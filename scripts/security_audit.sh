@@ -676,7 +676,11 @@ def text_field(finding: dict, key: str) -> str:
 	if not isinstance(value, (str, int, float)) or isinstance(value, bool):
 		return ""
 	sanitized_prompt_value = " ".join(str(value).split()).replace("`", "")
-	for untrusted_fence in ("=== BEGIN UNTRUSTED PRIOR FINDINGS ===", "=== END UNTRUSTED PRIOR FINDINGS ==="):
+	for untrusted_fence in (
+		"=== BEGIN UNTRUSTED PRIOR FINDINGS ===", "=== END UNTRUSTED PRIOR FINDINGS ===",
+		"=== BEGIN UNTRUSTED FIX-CYCLE CODE ===", "=== END UNTRUSTED FIX-CYCLE CODE ===",
+		"=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===", "=== END UNTRUSTED ACCEPTED FINDINGS ===",
+	):
 		sanitized_prompt_value = sanitized_prompt_value.replace(untrusted_fence, "[untrusted marker removed]")
 	return sanitized_prompt_value
 
@@ -780,7 +784,11 @@ max_lines = int(sys.argv[5])
 max_bytes = int(sys.argv[6])
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
-FENCES = ("=== BEGIN UNTRUSTED FIX-CYCLE CODE ===", "=== END UNTRUSTED FIX-CYCLE CODE ===")
+FENCES = (
+	"=== BEGIN UNTRUSTED PRIOR FINDINGS ===", "=== END UNTRUSTED PRIOR FINDINGS ===",
+	"=== BEGIN UNTRUSTED FIX-CYCLE CODE ===", "=== END UNTRUSTED FIX-CYCLE CODE ===",
+	"=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===", "=== END UNTRUSTED ACCEPTED FINDINGS ===",
+)
 MAX_FILES_PER_ENTRY = 200
 
 
@@ -1008,7 +1016,11 @@ def text_field(finding: dict, key: str) -> str:
 	if not isinstance(value, (str, int, float)) or isinstance(value, bool):
 		return ""
 	sanitized_prompt_value = " ".join(str(value).split()).replace("`", "")
-	for untrusted_fence in ("=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===", "=== END UNTRUSTED ACCEPTED FINDINGS ==="):
+	for untrusted_fence in (
+		"=== BEGIN UNTRUSTED PRIOR FINDINGS ===", "=== END UNTRUSTED PRIOR FINDINGS ===",
+		"=== BEGIN UNTRUSTED FIX-CYCLE CODE ===", "=== END UNTRUSTED FIX-CYCLE CODE ===",
+		"=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===", "=== END UNTRUSTED ACCEPTED FINDINGS ===",
+	):
 		sanitized_prompt_value = sanitized_prompt_value.replace(untrusted_fence, "[untrusted marker removed]")
 	return sanitized_prompt_value
 

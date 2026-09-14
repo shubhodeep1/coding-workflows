@@ -4527,8 +4527,8 @@ ensure_security_pass_state_fields() {
         | map(select(
           type == "object"
           and (.cycle | type) == "number" and (.cycle | floor) == .cycle and .cycle >= 0
-          and (.since_sha | type) == "string" and (.since_sha | length) > 0
-          and (.head_sha | type) == "string" and (.head_sha | length) > 0
+          and (.since_sha | type) == "string" and (.since_sha | test("^[0-9a-fA-F]{7,40}$"))
+          and (.head_sha | type) == "string" and (.head_sha | test("^[0-9a-fA-F]{7,40}$"))
           and (.files | type) == "array"
         ))
         | map(.files = (
@@ -6134,8 +6134,8 @@ run_security_pass_inline() {
     security_pass_fix_cycle_range_files="${RUNTIME_DIR}/security_pass_fix_cycle_range_${TRACKING_NUM}.txt"
     security_pass_fix_cycle_since_files="${RUNTIME_DIR}/security_pass_fix_cycle_since_${TRACKING_NUM}.txt"
     security_pass_fix_cycle_files_file="${RUNTIME_DIR}/security_pass_fix_cycle_files_${TRACKING_NUM}.txt"
-    if git diff --name-only "${merge_base_sha}..${current_head_sha}" -- > "${security_pass_fix_cycle_range_files}" 2>/dev/null \
-      && git diff --name-only --diff-filter=AM "${security_pass_audit_since_sha}..${current_head_sha}" -- > "${security_pass_fix_cycle_since_files}" 2>/dev/null; then
+    if git diff --name-only --end-of-options "${merge_base_sha}..${current_head_sha}" -- > "${security_pass_fix_cycle_range_files}" 2>/dev/null \
+      && git diff --name-only --diff-filter=AM --end-of-options "${security_pass_audit_since_sha}..${current_head_sha}" -- > "${security_pass_fix_cycle_since_files}" 2>/dev/null; then
       { grep -Fxf "${security_pass_fix_cycle_range_files}" "${security_pass_fix_cycle_since_files}" 2>/dev/null || true; } \
         | grep . | sort -u > "${security_pass_fix_cycle_files_file}" || : > "${security_pass_fix_cycle_files_file}"
       security_pass_fix_cycle_file_total="$(grep -c . "${security_pass_fix_cycle_files_file}" 2>/dev/null || true)"
