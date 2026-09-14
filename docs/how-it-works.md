@@ -54,7 +54,10 @@ Happy path
 Security-pass gate (default on, before validation or finalization)
   judge complete -> ai:security-pass -> clean -> ai:validating
   judge complete -> ai:security-pass -> findings -> ai:security-pass-fixing
-    -> fix issue merged -> ai:security-pass (re-audit)
+    -> fix issue merged -> ai:security-pass (delta re-audit: files changed since
+       the last audited commit + files of prior findings + the previous fix
+       cycle's own code, whose hunks the auditor is told to treat as fresh
+       attack surface; prior findings are re-verified by id)
   ai:security-pass -> MAX_SECURITY_PASS_CYCLES exhausted -> exhaustion judge
     -> accept all -> ai:validating | keep_fixing -> ai:security-pass-fixing
     -> fail or judge unavailable -> ai:security-pass-failed
