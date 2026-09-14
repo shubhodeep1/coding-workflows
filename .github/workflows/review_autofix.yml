@@ -7877,10 +7877,21 @@ jobs:
               editor_slot = {"attempt_count": max(editor_attempt_count, 1), "status": "failed", "failure_class": "changes_lost"}
           elif bool_env("EDITOR_NOOP_SUSPICIOUS"):
               editor_phase_state = "completed"
+              # Additive classification (CLAUDE.md §6): "refusal" keeps
+              # precedence, "recoverable_failure" is new for the
+              # EDITOR_NOOP_RECOVERABLE_FAILURE flag set by the validator's
+              # Check 1c (every editor attempt failed, no editor output),
+              # and "unexpected_noop" stays the fallback value unchanged.
+              if bool_env("EDITOR_NOOP_REFUSAL"):
+                  editor_noop_failure_class = "refusal"
+              elif bool_env("EDITOR_NOOP_RECOVERABLE_FAILURE"):
+                  editor_noop_failure_class = "recoverable_failure"
+              else:
+                  editor_noop_failure_class = "unexpected_noop"
               editor_slot = {
                   "attempt_count": max(editor_attempt_count, 1),
                   "status": "failed",
-                  "failure_class": "refusal" if bool_env("EDITOR_NOOP_REFUSAL") else "unexpected_noop",
+                  "failure_class": editor_noop_failure_class,
               }
           elif editor_attempt_count > 0 or editor_summary_exists:
               editor_phase_state = "completed"
@@ -8032,6 +8043,11 @@ jobs:
                   return "editor_changes_lost"
               if bool_env("EDITOR_NOOP_SUSPICIOUS") and bool_env("EDITOR_NOOP_REFUSAL"):
                   return "editor_noop_refusal"
+              # Additive outcome (CLAUDE.md §6): refusal keeps precedence
+              # above; the generic editor_noop_suspicious value below is
+              # unchanged for runs without either specific flag.
+              if bool_env("EDITOR_NOOP_SUSPICIOUS") and bool_env("EDITOR_NOOP_RECOVERABLE_FAILURE"):
+                  return "editor_noop_recoverable_failure"
               if bool_env("EDITOR_NOOP_SUSPICIOUS"):
                   return "editor_noop_suspicious"
               if max_iterations_reached and not skip_judge:
