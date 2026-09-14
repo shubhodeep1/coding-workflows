@@ -496,10 +496,36 @@ does not resolve or is not an ancestor of the head falls back to the full
 range; every choice is logged as `SECURITY_PASS_SCOPE tracking_issue=<N>
 mode=full|delta reason=<no_prior_audit|head_advanced_since_last_audit|head_unchanged_since_last_audit|last_audited_sha_not_ancestor_of_head>
 base_sha=<merge-base> since_sha=<sha|none> head_sha=<sha> prior_findings=<count>
-waived_findings=<count>`.
+waived_findings=<count> fix_cycle_diff_entries=<count> fix_cycle_diff_files=<count>`.
 Incident: tele-funtoken-msg-scoring#3928, fun-token-multi-chain#471 and
 binance-blessings#249 each merged every fix issue, never repeated a finding ID
 between cycles, and still exhausted the budget on fresh full-range samples.
+A delta re-audit also sees the code the previous fix cycle wrote as newly
+introduced attack surface. `run_security_pass_inline` computes the current
+fix-cycle diff entry `{cycle, since_sha, head_sha, files}` (range files changed
+between `security_pass_last_audited_sha` and the head, added/modified only,
+capped at 200 files) from the local checkout, carries the previous cycle's
+entry over exactly once from `security_pass_fix_touched_files` (entries with
+`cycle >= security_pass_cycle - 1`; older and malformed rows are dropped by
+`ensure_security_pass_state_fields` and at read time), and hands the list to
+`scripts/security_audit.sh` as `SECURITY_AUDIT_FIX_CYCLE_DIFFS`. The engine
+keeps those files in scope and appends their unified diff hunks to the prompt
+between `=== BEGIN/END UNTRUSTED FIX-CYCLE CODE ===` fences with rules to audit
+them as fresh attack surface for new defect classes (readiness and
+state-transition predicates, money-state transitions, idempotency fences), in
+addition to the unchanged prior-findings rules. Hunks are capped by
+`SECURITY_AUDIT_FIX_DIFF_MAX_LINES` (`1200`) and
+`SECURITY_AUDIT_FIX_DIFF_MAX_BYTES` (`96000`); past the cap files are listed by
+name only. The current entry is written by the same `jq` that records
+`security_pass_head_sha` (a blocked result keeps at most the last 3 entries, a
+clean result empties the list), and `/re-security-pass`, `/security-pass-waive`
+in the failed state, the exhaustion judge's accept-all path, and the
+`ENABLE_SECURITY_PASS=false` release clear it with the reported findings.
+Every step fails open with a `::warning::` and today's behaviour; no GitHub
+API call is involved. Incident: tele-funtoken-msg-scoring#4281 exhausted 3/3
+cycles with every fix merged and no repeated finding because the last finding
+sat in `_season_pool_settlement_readiness`, a predicate cycle 1's fix created
+and cycles 2 and 3 were never told to audit as new code.
 Persistent findings after `MAX_SECURITY_PASS_CYCLES` (default `5`)
 terminalize as `ai:security-pass-failed`; `/re-security-pass` resets the
 bounded loop and the next audit covers the full range again.

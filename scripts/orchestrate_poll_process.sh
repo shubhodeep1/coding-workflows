@@ -4520,6 +4520,28 @@ ensure_security_pass_state_fields() {
         and (.security_pass_judge_rounds | floor) == .security_pass_judge_rounds
         and .security_pass_judge_rounds >= 0
       then .security_pass_judge_rounds else 0 end
+    )
+    | .security_pass_fix_touched_files = (
+      if (.security_pass_fix_touched_files | type) == "array" then
+        .security_pass_fix_touched_files
+        | map(select(
+          type == "object"
+          and (.cycle | type) == "number" and (.cycle | floor) == .cycle and .cycle >= 0
+          and (.since_sha | type) == "string" and (.since_sha | length) > 0
+          and (.head_sha | type) == "string" and (.head_sha | length) > 0
+          and (.files | type) == "array"
+        ))
+        | map(.files = (
+          [.files[] | select(
+            type == "string"
+            and ((gsub("^\\./"; "")) | length > 0)
+            and ((gsub("^\\./"; "")) != ".")
+            and ((startswith("/")) | not)
+            and ((split("/") | index("..")) == null)
+          )] | .[0:200]
+        ))
+        | .[-3:]
+      else [] end
     )' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 }
 
@@ -5839,6 +5861,7 @@ ${decisions_table}}"
     | .security_pass_head_sha = $head_sha
     | .security_pass_active_fix_issues = []
     | .security_pass_reported_findings = []
+    | .security_pass_fix_touched_files = []
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
@@ -6083,7 +6106,88 @@ run_security_pass_inline() {
   if [ "${security_pass_waived_findings_count}" -eq 0 ]; then
     security_pass_waived_findings_file=""
   fi
-  echo "SECURITY_PASS_SCOPE tracking_issue=${TRACKING_NUM} mode=${security_pass_audit_scope_mode} reason=${security_pass_audit_scope_reason} base_sha=${merge_base_sha} since_sha=${security_pass_audit_since_sha:-none} head_sha=${current_head_sha} prior_findings=${security_pass_prior_findings_count} waived_findings=${security_pass_waived_findings_count}"
+  # Fix-cycle diffs: the code the previous fix cycle wrote, handed to the
+  # engine as newly introduced attack surface (SECURITY_AUDIT_FIX_CYCLE_DIFFS).
+  # The delta scope above already keeps files changed since the last audited
+  # commit in scope, and SECURITY_AUDIT_PRIOR_FINDINGS keeps the files of
+  # earlier findings; but nothing told the model that the fix's own new code
+  # is fresh attack surface, and a fix-touched file that no finding cited left
+  # scope after one re-audit.  tele-funtoken-msg-scoring#4281 exhausted 3/3
+  # cycles that way: every fix merged, no finding repeated, and the last
+  # finding sat in `_season_pool_settlement_readiness`, a predicate cycle 1's
+  # fix created and cycles 2 and 3 were never told to audit as new code.
+  # Each entry is {cycle, since_sha, head_sha, files}: the current cycle's
+  # entry is computed here from the local checkout (range files that changed
+  # since the last audited commit, added/modified only, capped at 200) and the
+  # previous cycle's entry is carried over once from
+  # security_pass_fix_touched_files, so fix code stays in scope for one
+  # re-audit beyond the one that follows its merge.  Every step fails open:
+  # a git or jq failure warns and the audit runs exactly as before.
+  security_pass_fix_cycle_diffs_file="${RUNTIME_DIR}/security_pass_fix_cycle_diffs_${TRACKING_NUM}.json"
+  rm -f "${security_pass_fix_cycle_diffs_file}"
+  security_pass_fix_cycle_current_entry="null"
+  security_pass_fix_cycle_current="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${security_pass_fix_cycle_current}" =~ ^[0-9]+$ ]] || security_pass_fix_cycle_current=0
+  security_pass_fix_cycle_diff_entries=0
+  security_pass_fix_cycle_diff_files=0
+  if [ "${security_pass_audit_scope_mode}" = "delta" ] && [ "${security_pass_audit_since_sha}" != "${current_head_sha}" ]; then
+    security_pass_fix_cycle_range_files="${RUNTIME_DIR}/security_pass_fix_cycle_range_${TRACKING_NUM}.txt"
+    security_pass_fix_cycle_since_files="${RUNTIME_DIR}/security_pass_fix_cycle_since_${TRACKING_NUM}.txt"
+    security_pass_fix_cycle_files_file="${RUNTIME_DIR}/security_pass_fix_cycle_files_${TRACKING_NUM}.txt"
+    if git diff --name-only "${merge_base_sha}..${current_head_sha}" -- > "${security_pass_fix_cycle_range_files}" 2>/dev/null \
+      && git diff --name-only --diff-filter=AM "${security_pass_audit_since_sha}..${current_head_sha}" -- > "${security_pass_fix_cycle_since_files}" 2>/dev/null; then
+      { grep -Fxf "${security_pass_fix_cycle_range_files}" "${security_pass_fix_cycle_since_files}" 2>/dev/null || true; } \
+        | grep . | sort -u > "${security_pass_fix_cycle_files_file}" || : > "${security_pass_fix_cycle_files_file}"
+      security_pass_fix_cycle_file_total="$(grep -c . "${security_pass_fix_cycle_files_file}" 2>/dev/null || true)"
+      [[ "${security_pass_fix_cycle_file_total}" =~ ^[0-9]+$ ]] || security_pass_fix_cycle_file_total=0
+      if [ "${security_pass_fix_cycle_file_total}" -gt 200 ]; then
+        head -n 200 "${security_pass_fix_cycle_files_file}" > "${security_pass_fix_cycle_files_file}.capped" \
+          && mv "${security_pass_fix_cycle_files_file}.capped" "${security_pass_fix_cycle_files_file}"
+        echo "::warning::The fix-cycle diff for tracking issue #${TRACKING_NUM} touches ${security_pass_fix_cycle_file_total} files; only the first 200 are handed to the audit as newly introduced code."
+      fi
+      if [ "${security_pass_fix_cycle_file_total}" -gt 0 ]; then
+        if ! security_pass_fix_cycle_current_entry="$(jq -cn \
+          --argjson cycle "${security_pass_fix_cycle_current}" \
+          --arg since_sha "${security_pass_audit_since_sha}" \
+          --arg head_sha "${current_head_sha}" \
+          --rawfile files "${security_pass_fix_cycle_files_file}" '
+          {cycle: $cycle, since_sha: $since_sha, head_sha: $head_sha,
+           files: ($files | split("\n") | map(select(length > 0)))}' 2>/dev/null)"; then
+          security_pass_fix_cycle_current_entry="null"
+          echo "::warning::Could not assemble the fix-cycle diff entry for tracking issue #${TRACKING_NUM}; the re-audit runs without the current cycle's newly introduced code."
+        fi
+      fi
+    else
+      echo "::warning::Could not compute the fix-cycle diff ${security_pass_audit_since_sha}..${current_head_sha} for tracking issue #${TRACKING_NUM}; the re-audit runs without the current cycle's newly introduced code."
+    fi
+  fi
+  if [ "${security_pass_audit_scope_mode}" = "delta" ]; then
+    # Carry the previous cycle's entry over once (cycle >= current - 1); the
+    # current cycle's entry replaces any stale entry recorded for the same
+    # cycle (a re-audit repeated after the head changed during the audit).
+    if jq -c --argjson cycle "${security_pass_fix_cycle_current}" --argjson current "${security_pass_fix_cycle_current_entry}" '
+        [ (.security_pass_fix_touched_files // [])[]
+          | select(type == "object" and (.cycle | type) == "number"
+            and .cycle >= ($cycle - 1)
+            and (if $current == null then true else .cycle != $current.cycle end)) ]
+        + (if $current == null then [] else [$current] end)
+      ' "${STATE_FILE}" > "${security_pass_fix_cycle_diffs_file}" 2>/dev/null; then
+      security_pass_fix_cycle_diff_entries="$(jq -r 'length' "${security_pass_fix_cycle_diffs_file}" 2>/dev/null || echo 0)"
+      [[ "${security_pass_fix_cycle_diff_entries}" =~ ^[0-9]+$ ]] || security_pass_fix_cycle_diff_entries=0
+      security_pass_fix_cycle_diff_files="$(jq -r '[.[].files[]] | length' "${security_pass_fix_cycle_diffs_file}" 2>/dev/null || echo 0)"
+      [[ "${security_pass_fix_cycle_diff_files}" =~ ^[0-9]+$ ]] || security_pass_fix_cycle_diff_files=0
+    else
+      rm -f "${security_pass_fix_cycle_diffs_file}"
+      security_pass_fix_cycle_diff_entries=0
+      security_pass_fix_cycle_diff_files=0
+      echo "::warning::Could not export the fix-cycle diff entries for tracking issue #${TRACKING_NUM}; the re-audit runs without the newly introduced code section."
+    fi
+  fi
+  if [ "${security_pass_fix_cycle_diff_entries}" -eq 0 ]; then
+    rm -f "${security_pass_fix_cycle_diffs_file}"
+    security_pass_fix_cycle_diffs_file=""
+  fi
+  echo "SECURITY_PASS_SCOPE tracking_issue=${TRACKING_NUM} mode=${security_pass_audit_scope_mode} reason=${security_pass_audit_scope_reason} base_sha=${merge_base_sha} since_sha=${security_pass_audit_since_sha:-none} head_sha=${current_head_sha} prior_findings=${security_pass_prior_findings_count} waived_findings=${security_pass_waived_findings_count} fix_cycle_diff_entries=${security_pass_fix_cycle_diff_entries} fix_cycle_diff_files=${security_pass_fix_cycle_diff_files}"
 
   context_file="${RUNTIME_DIR}/security_pass_project_${TRACKING_NUM}.txt"
   findings_file="${RUNTIME_DIR}/security_pass_findings_${TRACKING_NUM}.json"
@@ -6118,6 +6222,7 @@ run_security_pass_inline() {
     SECURITY_AUDIT_DIFF_SINCE="${security_pass_audit_since_sha}" \
     SECURITY_AUDIT_PRIOR_FINDINGS="${security_pass_prior_findings_file}" \
     SECURITY_AUDIT_WAIVED_FINDINGS="${security_pass_waived_findings_file}" \
+    SECURITY_AUDIT_FIX_CYCLE_DIFFS="${security_pass_fix_cycle_diffs_file}" \
     SECURITY_AUDIT_CONFIDENCE_GATE="${SECURITY_PASS_CONFIDENCE_GATE}" \
     SECURITY_AUDIT_SKIP_IF_UNCHANGED="false" \
     SECURITY_AUDIT_INCREMENTAL="true" \
@@ -6193,12 +6298,27 @@ run_security_pass_inline() {
   # remember every blocking finding so the next audit verifies it instead of
   # re-discovering the project.  A clean result clears the memory: nothing is
   # outstanding, and the next audit (after a head advance) covers only the new
-  # commits.  Long free-text fields are trimmed so state stays bounded.
+  # commits.  Long free-text fields are trimmed so state stays bounded.  The
+  # current cycle's fix-cycle diff entry is remembered the same way so the
+  # next re-audit carries it over once (security_pass_fix_touched_files).
   jq --arg head_sha "${current_head_sha}" --argjson findings_count "${finding_count}" \
-    --argjson cycle "$((completed_cycles + 1))" --slurpfile audit_result "${findings_file}" '
+    --argjson cycle "$((completed_cycles + 1))" --slurpfile audit_result "${findings_file}" \
+    --argjson fix_cycle_entry "${security_pass_fix_cycle_current_entry:-null}" \
+    --argjson fix_cycle_current "${security_pass_fix_cycle_current:-0}" '
     .security_pass_head_sha = $head_sha
     | .security_pass_last_audited_sha = $head_sha
     | .security_pass_status = (if $findings_count == 0 then "passed" else "blocked" end)
+    | .security_pass_fix_touched_files = (
+        if $findings_count == 0 then []
+        else (
+          [ (.security_pass_fix_touched_files // [])[]
+            | select(type == "object" and (.cycle | type) == "number"
+              and .cycle >= ($fix_cycle_current - 1)
+              and (if $fix_cycle_entry == null then true else .cycle != $fix_cycle_entry.cycle end)) ]
+          + (if $fix_cycle_entry == null then [] else [$fix_cycle_entry] end)
+        ) | .[-3:]
+        end
+      )
     | .security_pass_reported_findings = (
         if $findings_count == 0 then []
         else (
@@ -15933,7 +16053,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 			|| [ "${PROJECT_STATUS}" = "security-pass-fixing" ] \
 			|| has_label "${TRACKING_LABELS}" "ai:security-pass-failed"; }; then
 		echo "SECURITY_PASS_SKIPPED_DISABLED tracking_issue=${TRACKING_NUM} releasing_state=${PROJECT_STATUS}"
-		jq '.status = "in_progress" | .security_pass_cycle = 0 | .security_pass_judge_rounds = 0 | .security_pass_status = "pending" | .security_pass_active_fix_issues = [] | .security_pass_head_sha = "" | .security_pass_last_audited_sha = "" | .security_pass_reported_findings = [] | del(.security_pass_fix_reissue_count) | del(.security_pass_fix_defer)' \
+		jq '.status = "in_progress" | .security_pass_cycle = 0 | .security_pass_judge_rounds = 0 | .security_pass_status = "pending" | .security_pass_active_fix_issues = [] | .security_pass_head_sha = "" | .security_pass_last_audited_sha = "" | .security_pass_reported_findings = [] | .security_pass_fix_touched_files = [] | del(.security_pass_fix_reissue_count) | del(.security_pass_fix_defer)' \
 			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 		post_state_comment || true
 		set_tracking_phase_label "ai:done"
@@ -16068,6 +16188,7 @@ The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was no
             | .security_pass_head_sha = ""
             | .security_pass_last_audited_sha = ""
             | .security_pass_reported_findings = []
+            | .security_pass_fix_touched_files = []
             | del(.security_pass_fix_reissue_count)
             | del(.security_pass_fix_defer)
           ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
@@ -16785,6 +16906,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
         | .security_pass_head_sha = ""
         | .security_pass_last_audited_sha = ""
         | .security_pass_reported_findings = []
+        | .security_pass_fix_touched_files = []
         | del(.security_pass_fix_reissue_count)
         | del(.security_pass_fix_defer)
       ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"

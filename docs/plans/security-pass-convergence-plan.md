@@ -121,6 +121,20 @@ fuzzy waiver matching; three phases.
 - **Why:** the first alternative cannot converge on a large diff (#3928 saw
   no repeated finding in four runs). A second model call doubles cost per
   cycle; re-emission with a stable id keeps the output contract unchanged.
+- **Shipped independently — fix-cycle attack surface (Refs
+  shubhodeep1/tele-funtoken-msg-scoring#4281):** the delta re-audit
+  (`SECURITY_AUDIT_DIFF_SINCE` + `SECURITY_AUDIT_PRIOR_FINDINGS`) landed
+  before this plan and now also hands the engine
+  `SECURITY_AUDIT_FIX_CYCLE_DIFFS`: the hunks the previous fix cycle wrote,
+  carried over for one further re-audit via `security_pass_fix_touched_files`,
+  with a prompt rule to audit them as fresh attack surface for *new* defect
+  classes. That change is orthogonal to D2: D2 narrows what *blocks*, the
+  fix-cycle diff widens what the auditor is *told to look at*. If D2 ships,
+  its post-filter must treat a project-owned finding on a line inside a
+  carried-over fix-cycle hunk as blocking even though that line is older than
+  `SECURITY_AUDIT_NEW_SINCE_SHA`; otherwise the carry-over degrades to
+  advisory-only and the #4281 pattern (a hole in cycle 1's fix found only in
+  cycle 3) would no longer block.
 
 ### D3 — Pre-existing findings become capped `ai:security` follow-ups
 

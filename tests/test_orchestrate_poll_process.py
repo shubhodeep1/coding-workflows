@@ -878,6 +878,32 @@ def _run_poller(
 			env=_git_test_env(),
 		).stdout.strip()
 
+		# `__advanced_integration_head_with_fix__` is an integration-head child
+		# whose tree differs: one new file and one modified file, the shape of
+		# a merged security-fix PR, so fix-cycle diff tests see real hunks.
+		fix_index_file = tmp / "fix-index"
+		fix_git_env = {**_git_test_env(), "GIT_INDEX_FILE": str(fix_index_file)}
+
+		def _fix_git(*args: str, stdin: str | None = None) -> str:
+			return subprocess.run(
+				["git", "-C", str(sandbox), *args],
+				check=True,
+				capture_output=True,
+				text=True,
+				env=fix_git_env,
+				input=stdin,
+			).stdout.strip()
+
+		_fix_git("read-tree", integration_tree_sha)
+		fix_new_blob = _fix_git("hash-object", "-w", "--stdin", stdin="def _season_pool_settlement_readiness(pool):\n\treturn pool.closed\n")
+		fix_modified_blob = _fix_git("hash-object", "-w", "--stdin", stdin="integration-branch-only-symbol\nsecurity-fix-marker\n")
+		_fix_git("update-index", "--add", "--cacheinfo", f"100644,{fix_new_blob},scripts/season_pool.py")
+		_fix_git("update-index", "--add", "--cacheinfo", f"100644,{fix_modified_blob},.orchestrator_judge_context_sentinel.txt")
+		fix_tree_sha = _fix_git("write-tree")
+		sandbox_sha_aliases["__advanced_integration_head_with_fix__"] = _fix_git(
+			"commit-tree", fix_tree_sha, "-p", integration_head_sha, "-m", "security fix",
+		)
+
 		def _resolve_sandbox_sha_alias(raw_sha: str) -> str:
 			return sandbox_sha_aliases.get(str(raw_sha), str(raw_sha))
 
@@ -982,6 +1008,10 @@ def _run_poller(
 				"  'waived_findings': (\n"
 				"    json.loads(Path(os.environ['SECURITY_AUDIT_WAIVED_FINDINGS']).read_text(encoding='utf-8'))\n"
 				"    if os.environ.get('SECURITY_AUDIT_WAIVED_FINDINGS') else None\n"
+				"  ),\n"
+				"  'fix_cycle_diffs': (\n"
+				"    json.loads(Path(os.environ['SECURITY_AUDIT_FIX_CYCLE_DIFFS']).read_text(encoding='utf-8'))\n"
+				"    if os.environ.get('SECURITY_AUDIT_FIX_CYCLE_DIFFS') else None\n"
 				"  ),\n"
 				"  'confidence_gate': os.environ.get('SECURITY_AUDIT_CONFIDENCE_GATE'),\n"
 				"  'model': os.environ.get('WORKFLOW_EDITOR_MODEL'),\n"
@@ -3790,11 +3820,14 @@ def test_security_pass_first_audit_records_delta_pointer_and_findings_memory() -
 	assert latest_state["status"] == "security-pass-fixing"
 	assert not capture["diff_since"]
 	assert capture["prior_findings"] is None
+	assert capture["fix_cycle_diffs"] is None
 	assert (
 		"SECURITY_PASS_SCOPE tracking_issue=192 mode=full reason=no_prior_audit "
 		f"base_sha={capture['diff_base']} since_sha=none head_sha={capture['diff_head']} prior_findings=0"
+		" waived_findings=0 fix_cycle_diff_entries=0 fix_cycle_diff_files=0"
 	) in combined_log
 	assert latest_state["security_pass_last_audited_sha"] == capture["diff_head"]
+	assert latest_state["security_pass_fix_touched_files"] == []
 	reported = latest_state["security_pass_reported_findings"]
 	assert [finding["finding_id"] for finding in reported] == ["SEC-TEST-1"]
 	assert reported[0]["cycle"] == 1
@@ -3838,6 +3871,12 @@ def test_security_pass_reaudit_after_merged_fix_is_a_delta_with_prior_findings()
 					"recommendation": "Enforce authorisation before the state mutation.",
 				}
 			],
+			# The head advance here changes no file, so no current-cycle entry
+			# is computed; the carried entry from cycle 0 must still reach the
+			# engine and a clean pass must clear the memory.
+			"security_pass_fix_touched_files": [
+				{"cycle": 0, "since_sha": "a" * 40, "head_sha": "b" * 40, "files": ["scripts/example.py"]},
+			],
 		}
 	)
 	result = _run_poller(
@@ -3862,6 +3901,12 @@ def test_security_pass_reaudit_after_merged_fix_is_a_delta_with_prior_findings()
 	assert capture["diff_base"] != previously_audited_sha
 	assert [finding["finding_id"] for finding in capture["prior_findings"]] == ["SEC-TEST-1"]
 	assert capture["prior_findings"][0]["cycle"] == 1
+	assert capture["fix_cycle_diffs"] == [
+		{"cycle": 0, "since_sha": "a" * 40, "head_sha": "b" * 40, "files": ["scripts/example.py"]},
+	]
+	assert "fix_cycle_diff_entries=1 fix_cycle_diff_files=1" in combined_log
+	assert "::warning::Could not compute the fix-cycle diff" not in combined_log
+	assert latest_state["security_pass_fix_touched_files"] == []
 	assert (
 		"SECURITY_PASS_SCOPE tracking_issue=192 mode=delta reason=head_advanced_since_last_audit "
 		f"base_sha={capture['diff_base']} since_sha={previously_audited_sha} head_sha={capture['diff_head']} prior_findings=1"
@@ -3872,6 +3917,95 @@ def test_security_pass_reaudit_after_merged_fix_is_a_delta_with_prior_findings()
 	assert latest_state["security_pass_head_sha"] == capture["diff_head"]
 	assert latest_state["security_pass_last_audited_sha"] == capture["diff_head"]
 	assert latest_state["security_pass_reported_findings"] == []
+
+
+def test_security_pass_reaudit_hands_fix_cycle_diff_to_engine_and_carries_it_once() -> None:
+	"""The re-audit after a merged fix tells the engine which code the fix wrote.
+
+	Regression for tele-funtoken-msg-scoring#4281: every fix issue merged, no
+	finding repeated, and the final finding sat in a readiness predicate that
+	cycle 1's fix created -- cycles 2 and 3 had the file in scope but were
+	never told to audit the fix's new code as fresh attack surface.  The
+	poller now computes the fix-cycle diff entry from the local checkout
+	(range files changed since the last audited commit), carries the previous
+	cycle's entry over exactly once, drops older and malformed entries, and
+	records the current entry with the blocked result.  Everything reaches
+	the engine as SECURITY_AUDIT_FIX_CYCLE_DIFFS.
+	"""
+	integration_branch = "orchestrator/project-192"
+	state = _base_state(status="security-pass")
+	state.update(
+		{
+			"integration_branch": integration_branch,
+			"security_pass_cycle": 2,
+			"security_pass_status": "pending",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "",
+			"security_pass_last_audited_sha": "__integration_head__",
+			"security_pass_reported_findings": [
+				{
+					"cycle": 1,
+					"finding_id": "SEC-TEST-1",
+					"owasp_or_stride_category": "A01: Broken Access Control",
+					"severity": "high",
+					"confidence": 9,
+					"file": "scripts/example.py",
+					"line": 1,
+					"exploit_scenario": "An unauthorised caller crosses the trust boundary.",
+					"recommendation": "Enforce authorisation before the state mutation.",
+				}
+			],
+			"security_pass_fix_touched_files": [
+				# Two cycles old: already carried over once, so it is dropped.
+				{"cycle": 0, "since_sha": "0" * 40, "head_sha": "1" * 40, "files": ["scripts/stale.py"]},
+				# Previous cycle: carried over exactly once more.  Files that
+				# are not repository-relative are dropped by the normalizer.
+				{"cycle": 1, "since_sha": "a" * 40, "head_sha": "b" * 40, "files": ["scripts/cycle_one.py", "../escape.py", "/abs.py", ""]},
+				# Malformed rows never reach the engine.
+				"not-an-object",
+				{"cycle": 1, "files": ["scripts/no_shas.py"]},
+			],
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", integration_branch],
+		branch_ref_shas={integration_branch: "__advanced_integration_head_with_fix__"},
+	)
+
+	latest_state = result["latest_state"]
+	capture = result["security_audit_capture"]
+	combined_log = result["stdout"] + result["stderr"]
+	seeded_state = json.loads(_extract_state_payloads([result["issues"]["192"]["comments"][0]])[0])
+	previously_audited_sha = seeded_state["security_pass_last_audited_sha"]
+	assert capture["diff_since"] == previously_audited_sha
+	assert capture["diff_head"] != previously_audited_sha
+	current_entry = {
+		"cycle": 2,
+		"since_sha": previously_audited_sha,
+		"head_sha": capture["diff_head"],
+		"files": [".orchestrator_judge_context_sentinel.txt", "scripts/season_pool.py"],
+	}
+	carried_entry = {"cycle": 1, "since_sha": "a" * 40, "head_sha": "b" * 40, "files": ["scripts/cycle_one.py"]}
+	assert capture["fix_cycle_diffs"] == [carried_entry, current_entry]
+	assert (
+		"SECURITY_PASS_SCOPE tracking_issue=192 mode=delta reason=head_advanced_since_last_audit "
+		f"base_sha={capture['diff_base']} since_sha={previously_audited_sha} head_sha={capture['diff_head']} prior_findings=1"
+		" waived_findings=0 fix_cycle_diff_entries=2 fix_cycle_diff_files=3"
+	) in combined_log
+	assert "::warning::Could not compute the fix-cycle diff" not in combined_log
+	assert "::warning::Could not export the fix-cycle diff entries" not in combined_log
+	# Blocked result: the current entry is remembered for the next re-audit,
+	# the previous cycle's entry stays for its one carry-over, older rows go.
+	assert latest_state["status"] == "security-pass-fixing"
+	assert latest_state["security_pass_status"] == "blocked"
+	assert latest_state["security_pass_fix_touched_files"] == [carried_entry, current_entry]
+	assert latest_state["security_pass_last_audited_sha"] == capture["diff_head"]
 
 
 def test_security_pass_head_advance_after_clean_pass_reaudits_only_the_delta() -> None:
@@ -4198,6 +4332,9 @@ def test_re_security_pass_resets_terminal_state_and_reaudits() -> None:
 			"security_pass_reported_findings": [
 				{"cycle": 3, "finding_id": "SEC-OLD", "file": "scripts/example.py", "line": 1},
 			],
+			"security_pass_fix_touched_files": [
+				{"cycle": 3, "since_sha": "a" * 40, "head_sha": "b" * 40, "files": ["scripts/example.py"]},
+			],
 		}
 	)
 	result = _run_poller(
@@ -4223,6 +4360,8 @@ def test_re_security_pass_resets_terminal_state_and_reaudits() -> None:
 	capture = result["security_audit_capture"]
 	assert not capture["diff_since"]
 	assert capture["prior_findings"] is None
+	assert capture["fix_cycle_diffs"] is None
+	assert latest_state["security_pass_fix_touched_files"] == []
 	assert "mode=full reason=no_prior_audit" in result["stdout"] + result["stderr"]
 	assert "ai:security-pass-failed" not in result["tracking_labels"]
 	assert any("re-security-pass-dedup:" in comment["body"] for comment in result["issues"]["192"]["comments"])
