@@ -280,7 +280,7 @@ jobs:
           # Same expression as the retrigger_guard step: a stall-poller
           # force_rb_judge dispatch must never be swallowed by the terminal
           # same-head skip (it runs only the review-blocked judge).
-          FORCE_RB_JUDGE: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true') || (github.event_name != 'workflow_dispatch' && inputs.force_rb_judge)) && 'true' || 'false' }}
+          FORCE_RB_JUDGE: ${{ (inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true') && 'true' || 'false' }}
           # Deterministic pre-review skip (CLAUDE.md §4: env vars get defaults).
           # Skip the reviewer panel + editor cycle when:
           #   * AUTOFIX_SKIP_DOC_ONLY=true (default) AND every changed file
@@ -578,12 +578,12 @@ jobs:
             elif [ -z "${pr_head_sha_gate}" ]; then
               echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_UNCHECKED pr=${PR_NUMBER} head_sha=unknown reason=head_sha_unavailable"
             else
-              # Keep only marker comments (id, created_at, body) so the
-              # parser below never sees unrelated comment text.
+              # Keep only marker comments (id, author, created_at, body) so
+              # the parser below can authenticate the workflow-owned state.
               partial_marker_comments_json=""
               if ! partial_marker_comments_json="$(gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
                 -f per_page=100 \
-                --jq '[.[] | select((.body // "") | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) | {id: .id, created_at: (.created_at // ""), body: (.body // "")}]' \
+                --jq '[.[] | select((.body // "") | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) | {id: .id, author_login: (.user.login // ""), created_at: (.created_at // ""), body: (.body // "")}]' \
                 2>/dev/null | jq -c -s 'add // []' 2>/dev/null)"; then
                 partial_marker_comments_json=""
               fi
@@ -591,7 +591,7 @@ jobs:
                 echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=api_error"
               else
                 terminal_decision=""
-                if ! terminal_decision="$(PARTIAL_MARKER_COMMENTS_JSON="${partial_marker_comments_json}" GATE_HEAD_SHA="${pr_head_sha_gate}" python3 - <<'PY'
+                if ! terminal_decision="$(PARTIAL_MARKER_COMMENTS_JSON="${partial_marker_comments_json}" GATE_HEAD_SHA="${pr_head_sha_gate}" GATE_BOT_LOGIN="${AUTOFIX_BOT_LOGIN:-codex}" python3 - <<'PY'
           import json
           import os
           import re
@@ -601,6 +601,7 @@ jobs:
           # Output is KEY=VALUE lines consumed by the shell below; every value
           # is reduced to [A-Za-z0-9_.-] so it is safe inside a log line.
           head_sha = (os.environ.get("GATE_HEAD_SHA") or "").strip().lower()
+          bot_login = (os.environ.get("GATE_BOT_LOGIN") or "").strip().lower()
           try:
               comments = json.loads(os.environ.get("PARTIAL_MARKER_COMMENTS_JSON") or "[]")
           except ValueError:
@@ -633,6 +634,8 @@ jobs:
           matching = 0
           for comment in comments:
               if not isinstance(comment, dict):
+                  continue
+              if not bot_login or str(comment.get("author_login") or "").strip().lower() != bot_login:
                   continue
               fields = marker_fields(comment.get("body"))
               if fields.get("partial_finalize") != "true":
@@ -2739,7 +2742,7 @@ jobs:
         id: retrigger_guard
         env:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
-          FORCE_RB_JUDGE: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true') || (github.event_name != 'workflow_dispatch' && inputs.force_rb_judge)) && 'true' || 'false' }}
+          FORCE_RB_JUDGE: ${{ (inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true') && 'true' || 'false' }}
           # Orchestrator PR autofix flow (see README §"Orchestrator PR autofix flow"):
           # When enabled, classify the PR by base/head branch for orchestrator-
           # side observability and the orch_final cap bypass:
