@@ -544,7 +544,10 @@ jobs:
           #   * workflow_dispatch only. pull_request events either carry a
           #     new head (the marker no longer matches) or are the
           #     opened/reopened/ready_for_review events that are never
-          #     skipped; leaving them untouched keeps this guard narrow.
+          #     skipped; leaving them untouched keeps this guard narrow. A
+          #     reusable workflow retains its caller's `github` context, so
+          #     the sweep's internal-review.yml dispatch reaches this block
+          #     with EVENT_NAME=workflow_dispatch.
           #   * force_rb_judge dispatches (stall poller) bypass the skip.
           #   * `[force-review]` in the title or the `force-review` label
           #     bypasses the skip, mirroring the deterministic-skip override.
@@ -556,9 +559,10 @@ jobs:
           #     AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED and runs normally.
           #   * vars.AUTOFIX_SKIP_TERMINAL_SAME_HEAD=false disables the check.
           # Cost (CLAUDE.md §15): head_sha rides on the existing /pulls fetch
-          # above; the only new call is one paginated
-          # GET /issues/{n}/comments, issued solely for workflow_dispatch runs
-          # that passed every earlier gate and are mergeable.
+          # above. The authenticated marker author cannot be derived from that
+          # response or the comments response, so eligible dispatches issue one
+          # GET /user plus one paginated GET /issues/{n}/comments. Both calls
+          # are skipped unless every earlier gate passed and the PR is mergeable.
           if [ "${SHOULD_RUN}" = "true" ] \
             && [ "${EVENT_NAME}" = "workflow_dispatch" ] \
             && [ "${AUTOFIX_SKIP_TERMINAL_SAME_HEAD:-true}" != "false" ] \
@@ -578,20 +582,30 @@ jobs:
             elif [ -z "${pr_head_sha_gate}" ]; then
               echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_UNCHECKED pr=${PR_NUMBER} head_sha=unknown reason=head_sha_unavailable"
             else
-              # Keep only marker comments (id, author, created_at, body) so
-              # the parser below can authenticate the workflow-owned state.
-              partial_marker_comments_json=""
-              if ! partial_marker_comments_json="$(gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-                -f per_page=100 \
-                --jq '[.[] | select((.body // "") | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) | {id: .id, author_login: (.user.login // ""), created_at: (.created_at // ""), body: (.body // "")}]' \
-                2>/dev/null | jq -c -s 'add // []' 2>/dev/null)"; then
-                partial_marker_comments_json=""
+              terminal_marker_author_login=""
+              # The existing PR and comments calls do not expose the identity
+              # authenticated by GH_PAT, so this lookup cannot be merged into
+              # either response. Resolve it once for this gate evaluation.
+              if ! terminal_marker_author_login="$(gh api user --jq '.login // ""' 2>/dev/null)"; then
+                terminal_marker_author_login=""
               fi
-              if [ -z "${partial_marker_comments_json}" ]; then
-                echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=api_error"
+              if [ -z "${terminal_marker_author_login}" ]; then
+                echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=marker_author_unavailable"
               else
-                terminal_decision=""
-                if ! terminal_decision="$(PARTIAL_MARKER_COMMENTS_JSON="${partial_marker_comments_json}" GATE_HEAD_SHA="${pr_head_sha_gate}" GATE_BOT_LOGIN="${AUTOFIX_BOT_LOGIN:-codex}" python3 - <<'PY'
+                # Keep only marker comments (id, author, created_at, body) so
+                # the parser below can authenticate the workflow-owned state.
+                partial_marker_comments_json=""
+                if ! partial_marker_comments_json="$(gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+                  -f per_page=100 \
+                  --jq '[.[] | select((.body // "") | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")) | {id: .id, author_login: (.user.login // ""), created_at: (.created_at // ""), body: (.body // "")}]' \
+                  2>/dev/null | jq -c -s 'add // []' 2>/dev/null)"; then
+                  partial_marker_comments_json=""
+                fi
+                if [ -z "${partial_marker_comments_json}" ]; then
+                  echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=api_error"
+                else
+                  terminal_decision=""
+                  if ! terminal_decision="$(PARTIAL_MARKER_COMMENTS_JSON="${partial_marker_comments_json}" GATE_HEAD_SHA="${pr_head_sha_gate}" GATE_BOT_LOGIN="${AUTOFIX_BOT_LOGIN:-codex}" GATE_MARKER_AUTHOR_LOGIN="${terminal_marker_author_login}" python3 - <<'PY'
           import json
           import os
           import re
@@ -602,12 +616,13 @@ jobs:
           # is reduced to [A-Za-z0-9_.-] so it is safe inside a log line.
           head_sha = (os.environ.get("GATE_HEAD_SHA") or "").strip().lower()
           bot_login = (os.environ.get("GATE_BOT_LOGIN") or "").strip().lower()
+          marker_author_login = (os.environ.get("GATE_MARKER_AUTHOR_LOGIN") or "").strip().lower()
           try:
               comments = json.loads(os.environ.get("PARTIAL_MARKER_COMMENTS_JSON") or "[]")
-          except ValueError:
-              comments = []
+          except (TypeError, ValueError):
+              raise SystemExit(2)
           if not isinstance(comments, list):
-              comments = []
+              raise SystemExit(2)
 
           field_re = re.compile(r"^\s*([a-z_]+)=(.*?)\s*$")
 
@@ -632,15 +647,21 @@ jobs:
           latest_fields: dict[str, str] = {}
           latest_id = ""
           matching = 0
+          untrusted_markers = 0
+          commit_bot_markers = 0
           for comment in comments:
               if not isinstance(comment, dict):
-                  continue
-              if not bot_login or str(comment.get("author_login") or "").strip().lower() != bot_login:
                   continue
               fields = marker_fields(comment.get("body"))
               if fields.get("partial_finalize") != "true":
                   continue
               if not head_sha or fields.get("head_sha", "").strip().lower() != head_sha:
+                  continue
+              author_login = str(comment.get("author_login") or "").strip().lower()
+              if not marker_author_login or author_login != marker_author_login:
+                  untrusted_markers += 1
+                  if bot_login and author_login == bot_login:
+                      commit_bot_markers += 1
                   continue
               matching += 1
               try:
@@ -658,29 +679,34 @@ jobs:
               terminal = "true"
           print(f"terminal={terminal}")
           print(f"matching_markers={matching}")
+          print(f"untrusted_markers={untrusted_markers}")
+          print(f"commit_bot_markers={commit_bot_markers}")
           print(f"resume_state={clean(latest_fields.get('resume_state'))}")
           print(f"resume_round={clean(latest_fields.get('resume_round'))}")
           print(f"resume_round_limit={clean(latest_fields.get('resume_round_limit'))}")
           print(f"marker_comment_id={clean(latest_id)}")
           PY
-                )"; then
-                  terminal_decision=""
-                fi
-                if [ -z "${terminal_decision}" ]; then
-                  echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=parse_error"
-                else
-                  terminal_same_head="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "terminal" { print $2 }' | tail -n 1)"
-                  terminal_matching_markers="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "matching_markers" { print $2 }' | tail -n 1)"
-                  terminal_resume_state="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "resume_state" { print $2 }' | tail -n 1)"
-                  terminal_resume_round="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "resume_round" { print $2 }' | tail -n 1)"
-                  terminal_resume_round_limit="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "resume_round_limit" { print $2 }' | tail -n 1)"
-                  terminal_marker_comment_id="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "marker_comment_id" { print $2 }' | tail -n 1)"
-                  if [ "${terminal_same_head}" = "true" ]; then
-                    SHOULD_RUN="false"
-                    SKIP_REASON="terminal_same_head"
-                    echo "AUTOFIX_GATE_SKIP reason=terminal_same_head pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} resume_state=${terminal_resume_state} resume_round=${terminal_resume_round} resume_round_limit=${terminal_resume_round_limit} marker_comment_id=${terminal_marker_comment_id} mergeable=${pr_mergeable}"
-                  elif [ "${terminal_matching_markers:-0}" != "0" ]; then
-                    echo "AUTOFIX_GATE_NO_SKIP_TERMINAL_SAME_HEAD pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} resume_state=${terminal_resume_state} resume_round=${terminal_resume_round} resume_round_limit=${terminal_resume_round_limit} matching_markers=${terminal_matching_markers}"
+                  )"; then
+                    terminal_decision=""
+                  fi
+                  if [ -z "${terminal_decision}" ]; then
+                    echo "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=parse_error"
+                  else
+                    terminal_same_head="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "terminal" { print $2 }' | tail -n 1)"
+                    terminal_matching_markers="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "matching_markers" { print $2 }' | tail -n 1)"
+                    terminal_untrusted_markers="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "untrusted_markers" { print $2 }' | tail -n 1)"
+                    terminal_commit_bot_markers="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "commit_bot_markers" { print $2 }' | tail -n 1)"
+                    terminal_resume_state="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "resume_state" { print $2 }' | tail -n 1)"
+                    terminal_resume_round="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "resume_round" { print $2 }' | tail -n 1)"
+                    terminal_resume_round_limit="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "resume_round_limit" { print $2 }' | tail -n 1)"
+                    terminal_marker_comment_id="$(printf '%s\n' "${terminal_decision}" | awk -F= '$1 == "marker_comment_id" { print $2 }' | tail -n 1)"
+                    if [ "${terminal_same_head}" = "true" ]; then
+                      SHOULD_RUN="false"
+                      SKIP_REASON="terminal_same_head"
+                      echo "AUTOFIX_GATE_SKIP reason=terminal_same_head pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} resume_state=${terminal_resume_state} resume_round=${terminal_resume_round} resume_round_limit=${terminal_resume_round_limit} marker_comment_id=${terminal_marker_comment_id} mergeable=${pr_mergeable}"
+                    elif [ "${terminal_matching_markers:-0}" != "0" ] || [ "${terminal_untrusted_markers:-0}" != "0" ]; then
+                      echo "AUTOFIX_GATE_NO_SKIP_TERMINAL_SAME_HEAD pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} resume_state=${terminal_resume_state} resume_round=${terminal_resume_round} resume_round_limit=${terminal_resume_round_limit} matching_markers=${terminal_matching_markers:-0} untrusted_markers=${terminal_untrusted_markers:-0} commit_bot_markers=${terminal_commit_bot_markers:-0} marker_author_login=${terminal_marker_author_login}"
+                    fi
                   fi
                 fi
               fi

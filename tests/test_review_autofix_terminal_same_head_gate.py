@@ -34,6 +34,7 @@ README = REPO_ROOT / "README.md"
 HEAD = "0d30bc69a97515971054c8a867cdef4cb5bf6003"
 OTHER_HEAD = "a3d0b5d9facbab7ba4c51ccf78dfe0cfd0236ebf"
 BOT_LOGIN = "codex"
+MARKER_AUTHOR_LOGIN = "workflow-pat-user"
 
 
 def _workflow_text() -> str:
@@ -112,9 +113,10 @@ def _marker(head_sha: str, *, resume_state: str, resume_round: int, should_conti
 def _run_parser(comments: list[dict[str, object]], head_sha: str) -> dict[str, str]:
 	env = dict(os.environ)
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
-	env["PARTIAL_MARKER_COMMENTS_JSON"] = json.dumps([{"author_login": BOT_LOGIN, **comment} for comment in comments])
+	env["PARTIAL_MARKER_COMMENTS_JSON"] = json.dumps([{"author_login": MARKER_AUTHOR_LOGIN, **comment} for comment in comments])
 	env["GATE_HEAD_SHA"] = head_sha
 	env["GATE_BOT_LOGIN"] = BOT_LOGIN
+	env["GATE_MARKER_AUTHOR_LOGIN"] = MARKER_AUTHOR_LOGIN
 	result = subprocess.run(
 		[sys.executable, "-"],
 		input=_terminal_parser_script(),
@@ -160,7 +162,10 @@ def test_gate_head_sha_rides_on_existing_pulls_fetch() -> None:
 
 def test_gate_terminal_skip_is_dispatch_only_and_has_bypasses() -> None:
 	gate = _gate_block()
+	# GitHub documents the called workflow's github context as the caller's
+	# context, so wrapper workflow_dispatch runs retain this event name.
 	assert '[ "${EVENT_NAME}" = "workflow_dispatch" ]' in gate
+	assert "reusable workflow retains its caller's `github` context" in gate
 	# force-review marker + label bypass, mirroring the deterministic skip.
 	assert 'AUTOFIX_GATE_TERMINAL_SAME_HEAD_OVERRIDE pr=${PR_NUMBER} head_sha=${pr_head_sha_gate:-unknown} reason=force_review_marker' in gate
 	# Conflicted / unknown mergeability keeps the PR on codex-agent.
@@ -171,8 +176,11 @@ def test_gate_terminal_skip_is_dispatch_only_and_has_bypasses() -> None:
 	assert 'select((.body // "") | contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->"))' in gate
 	assert 'author_login: (.user.login // "")' in gate
 	assert 'GATE_BOT_LOGIN="${AUTOFIX_BOT_LOGIN:-codex}"' in gate
+	assert 'GATE_MARKER_AUTHOR_LOGIN="${terminal_marker_author_login}"' in gate
+	assert "gh api user --jq '.login // \"\"'" in gate
 	assert 'gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments"' in gate
 	# Fail-open paths are logged with stable prefixes.
+	assert "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=marker_author_unavailable" in gate
 	assert "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=api_error" in gate
 	assert "AUTOFIX_GATE_TERMINAL_SAME_HEAD_QUERY_FAILED pr=${PR_NUMBER} head_sha=${pr_head_sha_gate} reason=parse_error" in gate
 	# The skip decision itself.
@@ -204,6 +212,7 @@ def test_readme_documents_terminal_same_head_skip() -> None:
 
 
 def test_parser_marks_newest_terminal_marker_for_current_head() -> None:
+	assert MARKER_AUTHOR_LOGIN != BOT_LOGIN
 	comments = [
 		{"id": 1, "created_at": "2026-09-12T15:24:58Z", "body": _marker(HEAD, resume_state="in_progress", resume_round=2, should_continue=True)},
 		{"id": 2, "created_at": "2026-09-12T15:55:33Z", "body": _marker(HEAD, resume_state="no_progress", resume_round=3, should_continue=False)},
@@ -215,6 +224,7 @@ def test_parser_marks_newest_terminal_marker_for_current_head() -> None:
 	assert decision["resume_round"] == "3"
 	assert decision["resume_round_limit"] == "3"
 	assert decision["marker_comment_id"] == "2"
+	assert decision["untrusted_markers"] == "0"
 
 
 def test_parser_ignores_markers_for_other_heads() -> None:
@@ -242,10 +252,12 @@ def test_parser_newest_marker_wins_even_when_older_one_was_terminal() -> None:
 
 def test_parser_ignores_newer_markers_from_untrusted_authors() -> None:
 	trusted_resumable = {"id": 12, "created_at": "2026-09-12T15:55:33Z", "body": _marker(HEAD, resume_state="in_progress", resume_round=2, should_continue=True)}
-	untrusted_terminal = {"id": 13, "created_at": "2026-09-12T16:00:00Z", "author_login": "mallory", "body": _marker(HEAD, resume_state="no_progress", resume_round=3, should_continue=False)}
+	untrusted_terminal = {"id": 13, "created_at": "2026-09-12T16:00:00Z", "author_login": BOT_LOGIN, "body": _marker(HEAD, resume_state="no_progress", resume_round=3, should_continue=False)}
 	decision = _run_parser([trusted_resumable, untrusted_terminal], HEAD)
 	assert decision["terminal"] == "false"
 	assert decision["matching_markers"] == "1"
+	assert decision["untrusted_markers"] == "1"
+	assert decision["commit_bot_markers"] == "1"
 	assert decision["marker_comment_id"] == "12"
 
 	trusted_terminal = {"id": 14, "created_at": "2026-09-12T16:05:00Z", "body": _marker(HEAD, resume_state="no_progress", resume_round=3, should_continue=False)}
@@ -253,6 +265,8 @@ def test_parser_ignores_newer_markers_from_untrusted_authors() -> None:
 	decision = _run_parser([trusted_terminal, untrusted_resumable], HEAD)
 	assert decision["terminal"] == "true"
 	assert decision["matching_markers"] == "1"
+	assert decision["untrusted_markers"] == "1"
+	assert decision["commit_bot_markers"] == "0"
 	assert decision["marker_comment_id"] == "14"
 
 
@@ -274,9 +288,11 @@ def test_parser_fails_open_on_garbage_input() -> None:
 	env["PARTIAL_MARKER_COMMENTS_JSON"] = "not json at all"
 	env["GATE_HEAD_SHA"] = HEAD
 	env["GATE_BOT_LOGIN"] = BOT_LOGIN
-	result = subprocess.run([sys.executable, "-"], input=_terminal_parser_script(), env=env, text=True, capture_output=True, check=True)
-	assert "terminal=false" in result.stdout
-	assert "matching_markers=0" in result.stdout
+	env["GATE_MARKER_AUTHOR_LOGIN"] = MARKER_AUTHOR_LOGIN
+	result = subprocess.run([sys.executable, "-"], input=_terminal_parser_script(), env=env, text=True, capture_output=True, check=False)
+	assert result.returncode != 0
+	assert result.stdout == ""
+	assert "reason=parse_error" in _gate_block()
 
 	# An empty head SHA can never match a marker.
 	decision = _run_parser(
