@@ -12,6 +12,10 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE || '10' }}
+  MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE || '30' }}
+  MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE || '0.10' }}
+  MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE || '1' }}
 
 jobs:
   plan:
@@ -79,11 +83,11 @@ jobs:
           # startup with "Missing optional dependency @openai/codex-linux-x64".
           # Bump invalidates the broken entries; persist+restore below now
           # handle both packages symmetrically.
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
+          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2-install-f03b8d657a63d64b87324e8a1047a8b90d3221e0
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@f03b8d657a63d64b87324e8a1047a8b90d3221e0
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 

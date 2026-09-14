@@ -87,7 +87,7 @@ FANOUT_RUNTIME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/workflow-retro-fanout.XXXXXX")"
 MODEL_PROVIDER_BROKER_AGENT_HOME="${FANOUT_RUNTIME_DIR}/model-provider-agent-home"
 export MODEL_PROVIDER_BROKER_AGENT_HOME
 trap 'model_provider_broker_stop >/dev/null 2>&1 || true; rm -rf "${FANOUT_RUNTIME_DIR}"' EXIT
-model_provider_broker_start
+MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${WORKFLOW_RETRO_MODEL}" model_provider_broker_start
 model_provider_broker_prepare_codex_writer "${WORKFLOW_RETRO_MODEL}" "${WORKFLOW_RETRO_REASONING:-medium}" "${REPO_ROOT}"
 
 mapfile -t FANOUT_REPOS < <(jq -r '.[]' "${CONSUMER_REPOS_FILE}" 2>/dev/null | sort -u)

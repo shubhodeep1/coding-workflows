@@ -116,7 +116,25 @@ def test_pr_meta_fallback_precedes_pull_fetch_in_target_steps() -> None:
 		assert meta_pos < fetch_call_pos, f"{step_name}: expected PR_META_FILE fallback before GH fetch"
 
 
+def test_post_merge_jobs_use_only_immutable_workflow_support() -> None:
+	text = _workflow_text()
+	for job_name, next_job_name in (
+		("post-merge-validate-dispatch", "post-merge-force-poll"),
+		("post-merge-force-poll", "deterministic-skip-merge"),
+	):
+		start = text.index(f"  {job_name}:")
+		next_job = text.find(f"\n  {next_job_name}:", start + 3)
+		job = text[start:] if next_job == -1 else text[start:next_job]
+		assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}" in job
+		assert "WORKFLOW_SUPPORT_REF: ${{ job.workflow_sha }}" in job
+		assert "ref: ${{ job.workflow_sha }}" in job
+		assert "continue-on-error: true" not in job
+		assert "'stable'" not in job
+		assert "job.workflow_sha is not an immutable 40-character commit SHA" in job
+
+
 if __name__ == "__main__":
 	test_target_steps_use_shared_helper_and_remove_inline_phase_array()
 	test_pr_meta_fallback_precedes_pull_fetch_in_target_steps()
+	test_post_merge_jobs_use_only_immutable_workflow_support()
 	print("PASS")

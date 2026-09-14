@@ -2,24 +2,48 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import socket
 import subprocess
+import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BROKER = REPO_ROOT / "scripts" / "model_provider_broker.py"
+
+
+def _broker_module():
+	spec = importlib.util.spec_from_file_location("model_provider_broker_test", BROKER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	sys.modules[spec.name] = module
+	spec.loader.exec_module(module)
+	return module
+
+
+def _broker_policy(module):
+	return module.BrokerPolicy(
+		frozenset(("openai/test-model",)),
+		100,
+		150,
+		tuple(module.Decimal(value) for value in ("1", "2", "0.1", "0.5")),
+	)
 
 
 def _start_broker(tmp_path: Path) -> tuple[subprocess.Popen[bytes], dict[str, object]]:
 	ready_file = tmp_path / "ready.json"
 	environment = {"PATH": os.environ["PATH"], "OPENROUTER_API_KEY": "upstream-secret"}
 	process = subprocess.Popen(
-		["python3", str(BROKER), "--ready-file", str(ready_file), "--max-requests", "2"],
+		[
+			"python3", str(BROKER), "--ready-file", str(ready_file), "--max-requests", "2",
+			"--allowed-model", "openai/test-model",
+		],
 		env=environment,
 		stdout=subprocess.PIPE,
 		stderr=subprocess.PIPE,
@@ -74,6 +98,187 @@ def test_broker_rejects_invalid_session_token(tmp_path: Path) -> None:
 		process.wait(timeout=3)
 
 
+def test_policy_normalizes_response_limits_and_server_price_ceilings() -> None:
+	module = _broker_module()
+	policy = _broker_policy(module)
+	body, output_tokens = policy.normalize_request(
+		"/api/v1/responses",
+		b'{"model":"openai/test-model","input":"hello","max_output_tokens":500,"provider":{"max_price":{"prompt":0.5,"completion":9}}}',
+	)
+	document = json.loads(body)
+	assert output_tokens == 100
+	assert document["max_output_tokens"] == 100
+	assert document["provider"]["max_price"] == {
+		"prompt": 0.5,
+		"completion": 2,
+		"request": 0.1,
+		"image": 0.5,
+	}
+
+
+def test_policy_keeps_extreme_decimal_exponents_bounded() -> None:
+	module = _broker_module()
+	policy = _broker_policy(module)
+	body, _ = policy.normalize_request(
+		"/api/v1/responses",
+		b'{"model":"openai/test-model","input":"hello","temperature":1e-1000000000,"provider":{"max_price":{"prompt":"1e-1000000000"}}}',
+	)
+	assert len(body) < 1000
+	assert body.count(b"1E-1000000000") == 2
+
+
+def test_policy_rejects_normalized_bodies_over_request_limit() -> None:
+	module = _broker_module()
+	policy = _broker_policy(module)
+	request_body = b'{"model":"openai/test-model","input":"hello"}'
+	module.MAX_REQUEST_BODY_BYTES = len(request_body)
+	try:
+		policy.normalize_request("/api/v1/responses", request_body)
+	except module.BrokerRequestError:
+		pass
+	else:
+		raise AssertionError("broker accepted an oversized normalized request")
+
+
+def test_policy_rejects_ambiguous_or_unauthorized_requests() -> None:
+	module = _broker_module()
+	policy = _broker_policy(module)
+	invalid_bodies = (
+		b'{"model":"openai/test-model","model":"openai/other"}',
+		b'{"input":"hello"}',
+		b'{"model":"openai/other"}',
+		b'{"model":"openai/test-model","models":["openai/other"]}',
+		b'{"model":"openai/test-model","plugins":[]}',
+		b'{"model":"openai/test-model","modalities":["text","audio"]}',
+		b'{"model":"openai/test-model","temperature":1e-999999999999999999999999999999999999}',
+		b'{"model":"openai/test-model","input":' + (b"9" * 5000) + b"}",
+		b'{"model":"openai/test-model","input":' + (b"[" * 2000) + (b"]" * 2000) + b"}",
+	)
+	for body in invalid_bodies:
+		try:
+			policy.normalize_request("/api/v1/responses", body)
+		except module.BrokerRequestError:
+			pass
+		else:
+			raise AssertionError(f"broker accepted invalid request: {body!r}")
+
+
+def test_policy_normalizes_legacy_chat_limit_and_rejects_conflict() -> None:
+	module = _broker_module()
+	policy = _broker_policy(module)
+	body, output_tokens = policy.normalize_request(
+		"/api/v1/chat/completions",
+		b'{"model":"openai/test-model","messages":[],"max_tokens":40,"n":1}',
+	)
+	document = json.loads(body)
+	assert output_tokens == 40
+	assert document["max_completion_tokens"] == 40
+	assert document["n"] == 1
+	assert "max_tokens" not in document
+	try:
+		policy.normalize_request(
+			"/api/v1/chat/completions",
+			b'{"model":"openai/test-model","messages":[],"max_tokens":40,"max_completion_tokens":41}',
+		)
+	except module.BrokerRequestError:
+		pass
+	else:
+		raise AssertionError("broker accepted conflicting chat token limits")
+	for invalid_choice_count in (True, 0, 2, "1"):
+		try:
+			policy.normalize_request(
+				"/api/v1/chat/completions",
+				json.dumps({"model": "openai/test-model", "messages": [], "n": invalid_choice_count}).encode("utf-8"),
+			)
+		except module.BrokerRequestError:
+			pass
+		else:
+			raise AssertionError(f"broker accepted invalid choice count: {invalid_choice_count!r}")
+
+
+def test_request_and_output_budget_reservation_is_race_safe() -> None:
+	module = _broker_module()
+	policy = _broker_policy(module)
+	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
+	results: list[bool] = []
+	results_lock = threading.Lock()
+
+	def reserve() -> None:
+		result = state.reserve_request(50)
+		with results_lock:
+			results.append(result)
+
+	threads = [threading.Thread(target=reserve) for _ in range(20)]
+	for thread in threads:
+		thread.start()
+	for thread in threads:
+		thread.join()
+	assert results.count(True) == 3
+	assert state.output_tokens_reserved == 150
+
+
+def test_broker_connection_admission_is_bounded_and_recovers() -> None:
+	module = _broker_module()
+	assert module.BROKER_CLIENT_READ_TIMEOUT_SECONDS == 30
+	assert module.BROKER_MAX_ACTIVE_CONNECTIONS == 8
+	module.BROKER_CLIENT_READ_TIMEOUT_SECONDS = 2
+	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, _broker_policy(module))
+	server = module.BrokerServer(("127.0.0.1", 0), state)
+	server_thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+	server_thread.start()
+	partial_clients: list[socket.socket] = []
+	try:
+		partial_request = (
+			b"POST /api/v1/responses HTTP/1.1\r\n"
+			b"Host: 127.0.0.1\r\n"
+			b"Authorization: Bearer token\r\n"
+			b"Content-Type: application/json\r\n"
+			b"Content-Length: 64\r\n\r\n{"
+		)
+		partial_header = b"POST /api/v1/responses HTTP/1.1\r\nHost: 127.0.0.1"
+		for index in range(module.BROKER_MAX_ACTIVE_CONNECTIONS):
+			client = socket.create_connection(("127.0.0.1", server.server_port), timeout=2)
+			client.sendall(partial_header if index % 2 else partial_request)
+			partial_clients.append(client)
+		deadline = time.monotonic() + 1
+		while server._active_connection_slots._value != 0 and time.monotonic() < deadline:
+			time.sleep(0.01)
+		assert server._active_connection_slots._value == 0
+
+		excess_client = socket.create_connection(("127.0.0.1", server.server_port), timeout=2)
+		excess_client.settimeout(0.5)
+		excess_client.sendall(partial_request)
+		try:
+			assert excess_client.recv(1) == b""
+		except ConnectionResetError:
+			pass
+		finally:
+			excess_client.close()
+
+		deadline = time.monotonic() + 4
+		while server._active_connection_slots._value != module.BROKER_MAX_ACTIVE_CONNECTIONS and time.monotonic() < deadline:
+			time.sleep(0.01)
+		assert server._active_connection_slots._value == module.BROKER_MAX_ACTIVE_CONNECTIONS
+
+		request = urllib.request.Request(
+			f"http://127.0.0.1:{server.server_port}/api/v1/responses",
+			data=b"{}",
+			headers={"Authorization": "Bearer token", "Content-Type": "application/json"},
+			method="POST",
+		)
+		try:
+			urllib.request.urlopen(request, timeout=2)
+		except urllib.error.HTTPError as error:
+			assert error.code == 400
+		else:
+			raise AssertionError("broker did not accept a normal request after timed-out clients released their slots")
+	finally:
+		for client in partial_clients:
+			client.close()
+		server.shutdown()
+		server.server_close()
+
+
 def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 	for relative_path in (
 		".github/workflows/clarify.yml",
@@ -115,6 +320,7 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 	assert "model_provider_broker_exec_sanitized" in validate_process
 	poller_workflow = (REPO_ROOT / ".github/workflows/orchestrate_poll.yml").read_text(encoding="utf-8")
 	poller_process = (REPO_ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert 'MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR}${WORKFLOW_EDITOR_MODEL:+,${WORKFLOW_EDITOR_MODEL}}" model_provider_broker_start' in poller_workflow
 	assert "codex_helpers.sh" in poller_workflow
 	assert "model_provider_broker.py" in poller_workflow
 	assert "model_provider_broker_prepare_codex_writer" in poller_workflow
@@ -141,6 +347,36 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 		assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in workflow_text
 		assert "SCRIPT_REF=stable" not in workflow_text
 		assert "Checkout workflow support source fallback" not in workflow_text
+	helpers_text = (REPO_ROOT / "scripts" / "codex_helpers.sh").read_text(encoding="utf-8")
+	assert "unshare --fork --pid --mount-proc --kill-child=KILL" in helpers_text
+	assert helpers_text.index('kill -TERM "${broker_pid}"') < helpers_text.index('setfacl --restore="${MODEL_PROVIDER_BROKER_ACL_BACKUP}"')
+	assert 'setfacl --restore="${MODEL_PROVIDER_BROKER_ACL_BACKUP}" >/dev/null 2>&1 || return 1' not in helpers_text
+
+
+def test_model_facing_workflows_export_broker_price_policy() -> None:
+	price_defaults = {
+		"MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE": "10",
+		"MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE": "30",
+		"MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE": "0.10",
+		"MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE": "1",
+	}
+	for workflow_name in (
+		"check_failure_triage.yml",
+		"clarify.yml",
+		"implement.yml",
+		"orchestrate.yml",
+		"orchestrate_clarify_respond.yml",
+		"orchestrate_poll.yml",
+		"plan.yml",
+		"review_autofix.yml",
+		"security-audit.yml",
+		"validate.yml",
+		"workflow-log-analysis.yml",
+	):
+		workflow_text = (REPO_ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+		for variable_name, default_value in price_defaults.items():
+			expected_mapping = f"{variable_name}: ${{{{ vars.{variable_name} || '{default_value}' }}}}"
+			assert expected_mapping in workflow_text, (workflow_name, expected_mapping)
 
 
 def test_sanitized_launcher_exposes_only_ephemeral_provider_token(tmp_path: Path) -> None:
@@ -155,8 +391,17 @@ def test_sanitized_launcher_exposes_only_ephemeral_provider_token(tmp_path: Path
 		export ORCHESTRATOR_STATE_AUTH_KEYRING="state-secret"
 		export TG_BOT_SECRET="telegram-secret"
 		export TG_ADMIN_CHAT_ID="telegram-chat"
+		export MODEL_EDITOR="openai/test-model"
 		model_provider_broker_start
-		model_provider_broker_exec_sanitized sh -c env
+		model_provider_broker_exec_sanitized sh -c '
+			sudo -n -u nobody true
+			for process_environment in /proc/[0-9]*/environ; do
+				if grep -aEq "upstream-secret|repository-secret|repository-pat|github-token|state-secret|telegram-secret|telegram-chat" "${{process_environment}}" 2>/dev/null; then
+					exit 97
+				fi
+			done
+			env
+		'
 		model_provider_broker_stop
 	'''
 	result = subprocess.run(
@@ -180,3 +425,288 @@ def test_sanitized_launcher_exposes_only_ephemeral_provider_token(tmp_path: Path
 	assert "ORCHESTRATOR_STATE_AUTH_KEYRING=" not in result.stdout
 	assert "TG_BOT_SECRET=" not in result.stdout
 	assert "TG_ADMIN_CHAT_ID=" not in result.stdout
+
+
+def test_broker_cleanup_stops_process_before_failed_acl_restore(tmp_path: Path) -> None:
+	fake_bin = tmp_path / "bin"
+	fake_bin.mkdir()
+	fake_setfacl = fake_bin / "setfacl"
+	fake_setfacl.write_text("#!/usr/bin/env sh\nexit 1\n", encoding="utf-8")
+	fake_setfacl.chmod(0o755)
+	broker_started = tmp_path / "broker.started"
+	broker_process = subprocess.Popen([
+		sys.executable,
+		"-c",
+		f'import signal,time; from pathlib import Path; signal.signal(signal.SIGTERM, signal.SIG_IGN); Path({str(broker_started)!r}).touch(); time.sleep(60)',
+	])
+	for _ in range(100):
+		if broker_started.exists():
+			break
+		time.sleep(0.01)
+	assert broker_started.exists()
+	pid_file = tmp_path / "broker.pid"
+	ready_file = tmp_path / "ready.json"
+	acl_file = tmp_path / "broker.acl"
+	pid_file.write_text(f"{broker_process.pid}\n", encoding="utf-8")
+	ready_file.write_text("{}\n", encoding="utf-8")
+	acl_file.write_text("forced restore failure\n", encoding="utf-8")
+	try:
+		result = subprocess.run(
+			[
+				"bash", "-c",
+				f'''set -uo pipefail
+				source "{REPO_ROOT / 'scripts' / 'codex_helpers.sh'}"
+				export PATH="{fake_bin}:$PATH"
+				export MODEL_PROVIDER_BROKER_PID_FILE="{pid_file}"
+				export MODEL_PROVIDER_BROKER_READY_FILE="{ready_file}"
+				export MODEL_PROVIDER_BROKER_ACL_BACKUP="{acl_file}"
+				model_provider_broker_stop
+				printf 'cleanup_rc=%s\n' "$?"
+				''',
+			],
+			cwd=REPO_ROOT,
+			text=True,
+			capture_output=True,
+			check=True,
+		)
+		assert "cleanup_rc=1" in result.stdout
+		broker_process.wait(timeout=3)
+		assert broker_process.returncode is not None
+		assert not pid_file.exists()
+		assert not ready_file.exists()
+	finally:
+		if broker_process.poll() is None:
+			broker_process.terminate()
+			broker_process.wait(timeout=3)
+
+
+def test_policy_opts_streamed_chat_requests_into_usage_reporting() -> None:
+	module = _broker_module()
+	policy = _broker_policy(module)
+	streamed, _ = policy.normalize_request(
+		"/api/v1/chat/completions",
+		b'{"model":"openai/test-model","messages":[],"stream":true}',
+	)
+	assert json.loads(streamed)["stream_options"] == {"include_usage": True}
+	merged, _ = policy.normalize_request(
+		"/api/v1/chat/completions",
+		b'{"model":"openai/test-model","messages":[],"stream":true,"stream_options":{"include_usage":false}}',
+	)
+	assert json.loads(merged)["stream_options"] == {"include_usage": True}
+	unstreamed, _ = policy.normalize_request(
+		"/api/v1/chat/completions",
+		b'{"model":"openai/test-model","messages":[]}',
+	)
+	assert "stream_options" not in json.loads(unstreamed)
+	try:
+		policy.normalize_request(
+			"/api/v1/chat/completions",
+			b'{"model":"openai/test-model","messages":[],"stream":true,"stream_options":[]}',
+		)
+	except module.BrokerRequestError:
+		pass
+	else:
+		raise AssertionError("broker accepted a non-object stream_options")
+
+
+def test_usage_extraction_reads_final_chunk_or_keeps_reservation() -> None:
+	module = _broker_module()
+	extract = module._extract_output_token_usage
+	chat_stream = (
+		b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+		b'data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":7}}\n\n'
+		b"data: [DONE]\n\n"
+	)
+	assert extract(chat_stream, "text/event-stream; charset=utf-8") == 7
+	responses_stream = (
+		b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hi"}\n\n'
+		b'event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"output_tokens":11}}}\n\n'
+	)
+	assert extract(responses_stream, "text/event-stream") == 11
+	assert extract(b'{"choices":[],"usage":{"completion_tokens":3}}', "application/json") == 3
+	assert extract(b'{"usage":{"output_tokens":4}}', "application/json") == 4
+	# Truncated leading SSE line is skipped; a later usage chunk still wins.
+	assert extract(b'oices":[]}\n\ndata: {"usage":{"completion_tokens":2}}\n\n', "text/event-stream") == 2
+	# No usage, an error event, or malformed usage keeps the reservation.
+	assert extract(b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n', "text/event-stream") is None
+	assert extract(b'data: {"error":{"message":"overloaded"}}\n\n', "text/event-stream") is None
+	assert extract(b'{"usage":{"completion_tokens":"7"}}', "application/json") is None
+	assert extract(b'{"usage":{"completion_tokens":true}}', "application/json") is None
+	assert extract(b"not json", "application/json") is None
+	boundary_document = json.dumps(
+		{"padding": "", "usage": {"completion_tokens": 6}},
+		separators=(",", ":"),
+	).encode("utf-8")
+	boundary_document = boundary_document.replace(
+		b'"padding":""',
+		b'"padding":"' + (b"x" * (module.USAGE_SCAN_TAIL_BYTES - len(boundary_document))) + b'"',
+	)
+	assert len(boundary_document) == module.USAGE_SCAN_TAIL_BYTES
+	assert extract(boundary_document, "application/json") == 6
+
+
+def test_settle_request_trues_up_reservation_against_actual_usage() -> None:
+	module = _broker_module()
+	policy = _broker_policy(module)
+	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
+	assert state.reserve_request(100)
+	assert state.output_tokens_reserved == 100
+	state.settle_request(100, 7)
+	assert state.output_tokens_reserved == 7
+	assert state.reserve_request(100)
+	state.settle_request(100, None)
+	assert state.output_tokens_reserved == 107, "unreadable usage must keep the full reservation"
+	# The provider exceeding the ceiling is charged at what it actually generated.
+	state.output_tokens_reserved = 0
+	assert state.reserve_request(100)
+	state.settle_request(100, 130)
+	assert state.output_tokens_reserved == 130
+	state.settle_request(100, 0)
+	assert state.output_tokens_reserved == 30
+
+
+def test_sequential_completed_requests_do_not_exhaust_output_budget() -> None:
+	"""Regression for PR #4077 / runs 34692519987, 34700918528, 34702442346:
+	the editor's agentic loop made 4 calls, each charged the full 16384
+	ceiling against a 65536 total, and every later call got HTTP 429."""
+	module = _broker_module()
+	policy = _broker_policy(module)  # per-request ceiling 100, total 150
+	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
+	for _ in range(5):
+		assert state.reserve_request(100), "a completed request must release its unused ceiling"
+		state.settle_request(100, 10)
+	assert state.output_tokens_reserved == 50
+	# Budget is still enforced against real usage once it is genuinely spent:
+	# an in-flight request is charged its full ceiling until it settles, so
+	# 110 spent + 100 ceiling exceeds the 150 total and the next call is refused.
+	assert state.reserve_request(100)
+	state.settle_request(100, 60)
+	assert state.output_tokens_reserved == 110
+	assert not state.reserve_request(100)
+
+
+class _FakeUpstreamResponse:
+	def __init__(self, status: int, body: bytes, content_type: str) -> None:
+		self.status = status
+		self.reason = "OK" if status < 400 else "ERR"
+		self._body = body
+		self._offset = 0
+		self._content_type = content_type
+
+	def getheaders(self) -> list[tuple[str, str]]:
+		return [("Content-Type", self._content_type), ("Content-Length", str(len(self._body)))]
+
+	def getheader(self, name: str, default: str = "") -> str:
+		return self._content_type if name.lower() == "content-type" else default
+
+	def read(self, size: int = -1) -> bytes:
+		if self._offset >= len(self._body):
+			return b""
+		chunk = self._body[self._offset : self._offset + max(size, 1)]
+		self._offset += len(chunk)
+		return chunk
+
+
+def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> None:
+	"""End-to-end through BrokerHandler with a fake HTTPS upstream: streamed
+	turns that report usage are settled to their real cost, an upstream error
+	settles to zero, and a stream without usage keeps its full reservation."""
+	module = _broker_module()
+	policy = _broker_policy(module)  # per-request ceiling 100, total 150
+	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
+	scripted: list[tuple[int, bytes, str]] = []
+	fail_connection_construction = False
+	fail_upstream_request = False
+
+	class _FakeConnection:
+		def __init__(self, *_args: object, **_kwargs: object) -> None:
+			if fail_connection_construction:
+				raise OSError("connection setup failed")
+
+		def request(self, *_args: object, **_kwargs: object) -> None:
+			if fail_upstream_request:
+				raise OSError("request failed before an upstream response")
+
+		def getresponse(self) -> _FakeUpstreamResponse:
+			return _FakeUpstreamResponse(*scripted.pop(0))
+
+		def close(self) -> None:
+			pass
+
+	original_connection = module.http.client.HTTPSConnection
+	original_usage_scan_tail_bytes = module.USAGE_SCAN_TAIL_BYTES
+	module.http.client.HTTPSConnection = _FakeConnection  # type: ignore[misc]
+	server = module.BrokerServer(("127.0.0.1", 0), state)
+	server_thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+	server_thread.start()
+	try:
+		def post(body: dict[str, object]) -> int:
+			request = urllib.request.Request(
+				f"http://127.0.0.1:{server.server_port}/api/v1/chat/completions",
+				data=json.dumps(body).encode("utf-8"),
+				headers={"Authorization": "Bearer token", "Content-Type": "application/json"},
+				method="POST",
+			)
+			try:
+				with urllib.request.urlopen(request, timeout=5) as response:
+					response.read()
+					return response.status
+			except urllib.error.HTTPError as error:
+				error.read()
+				return error.code
+
+		usage_stream = (
+			b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+			b'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":10}}\n\n'
+			b"data: [DONE]\n\n"
+		)
+		streamed_request: dict[str, object] = {"model": "openai/test-model", "messages": [], "stream": True}
+		fail_connection_construction = True
+		assert post(streamed_request) == 502
+		assert state.output_tokens_reserved == 0, "connection setup failure must release its reservation"
+		fail_connection_construction = False
+		fail_upstream_request = True
+		assert post(streamed_request) == 502
+		assert state.output_tokens_reserved == 0, "request failure before a response must release its reservation"
+		fail_upstream_request = False
+		for _ in range(5):
+			scripted.append((200, usage_stream, "text/event-stream"))
+			assert post(streamed_request) == 200
+		assert state.output_tokens_reserved == 50, "five settled turns cost their real usage, not 5 x ceiling"
+
+		scripted.append((429, b'{"error":{"message":"rate limited"}}', "application/json"))
+		assert post(streamed_request) == 429
+		assert state.output_tokens_reserved == 50, "an upstream error generated nothing and settles to zero"
+
+		module.USAGE_SCAN_TAIL_BYTES = 128
+		boundary_body = json.dumps(
+			{"padding": "", "usage": {"completion_tokens": 10}},
+			separators=(",", ":"),
+		).encode("utf-8")
+		boundary_body = boundary_body.replace(
+			b'"padding":""',
+			b'"padding":"' + (b"x" * (module.USAGE_SCAN_TAIL_BYTES - len(boundary_body))) + b'"',
+		)
+		state.output_tokens_reserved = 0
+		scripted.append((200, boundary_body, "application/json"))
+		assert post(streamed_request) == 200
+		assert state.output_tokens_reserved == 10, "a complete body exactly at the tail cap must settle from usage"
+
+		state.output_tokens_reserved = 0
+		scripted.append((200, b" " + boundary_body, "application/json"))
+		assert post(streamed_request) == 200
+		assert state.output_tokens_reserved == 100, "a body larger than the retained tail must keep its reservation"
+
+		state.output_tokens_reserved = 50
+		scripted.append((200, b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n', "text/event-stream"))
+		assert post(streamed_request) == 200
+		assert state.output_tokens_reserved == 150, "a stream without usage keeps the full 100-token reservation"
+
+		scripted.append((200, usage_stream, "text/event-stream"))
+		assert post(streamed_request) == 429, "the real budget is still enforced once spent"
+		assert len(scripted) == 1, "the rejected request must not reach the upstream"
+	finally:
+		server.shutdown()
+		server.server_close()
+		module.http.client.HTTPSConnection = original_connection  # type: ignore[misc]
+		module.USAGE_SCAN_TAIL_BYTES = original_usage_scan_tail_bytes

@@ -2065,6 +2065,17 @@ if args[0] == 'api':
 		sys.exit(0)
 
 	m = re.search(r'/issues/comments/(\d+)$', path)
+	if m and method == 'GET':
+		comment_id = int(m.group(1))
+		for issue in store['issues'].values():
+			for comment in issue.get('comments', []):
+				if int(comment.get('id', 0) or 0) == comment_id:
+					save()
+					print(json.dumps(comment))
+					sys.exit(0)
+		save()
+		print('comment not found', file=sys.stderr)
+		sys.exit(1)
 	if m and method == 'PATCH' and (fields or input_file):
 		comment_id = int(m.group(1))
 		body = ''
@@ -2288,6 +2299,7 @@ if args[0] == 'api':
 				'merged_at': pr.get('merged_at', ('mock-merged-at' if pr.get('merged', False) else None)),
 				'title': pr.get('title', ''),
 				'body': pr.get('body', ''),
+				'labels': [{'name': label} for label in pr.get('labels', [])],
 				'base': {
 					'ref': pr.get('baseRefName', ''),
 				},
@@ -2307,8 +2319,37 @@ if args[0] == 'api':
 				key, value = f.split('=', 1)
 				payload[key] = value
 		store.setdefault('commit_status_posts', []).append(payload)
+		for pr in store.get('prs', []):
+			if pr.get('headSha') == sha:
+				pr.setdefault('commitStatuses', []).insert(0, {
+					'context': payload.get('context', ''),
+					'description': payload.get('description', ''),
+					'state': payload.get('state', ''),
+				})
 		save()
 		print(json.dumps(payload))
+		sys.exit(0)
+
+	m = re.search(r'/commits/([^/?]+)/status(?:\?.*)?$', path)
+	if m and method == 'GET':
+		sha = m.group(1)
+		statuses = []
+		for pr in store.get('prs', []):
+			if pr.get('headSha') == sha:
+				statuses = list(pr.get('commitStatuses', []))
+				break
+		per_page_match = re.search(r'(?:[?&])per_page=(\d+)', path)
+		page_match = re.search(r'(?:[?&])page=(\d+)', path)
+		per_page = int(per_page_match.group(1)) if per_page_match else 30
+		page = int(page_match.group(1)) if page_match else 1
+		page_start = (page - 1) * per_page
+		save()
+		print(json.dumps({
+			'state': 'success',
+			'sha': sha,
+			'total_count': len(statuses),
+			'statuses': statuses[page_start:page_start + per_page],
+		}))
 		sys.exit(0)
 
 	if re.search(r'/merges$', path) and (method == 'POST' or fields):
@@ -15302,6 +15343,179 @@ def test_integration_conflict_redispatch_stops_when_current_final_pr_head_is_res
 	assert latest_state["integration_sync_status"] == "escalated"
 	assert latest_state["integration_conflict_unresolved_ticks"] == 2
 	assert latest_state["integration_conflict_dispatch_count"] == 4
+
+
+def test_integration_conflict_retry_locator_survives_comment_flood():
+	head_sha = "3" * 40
+	marker = _resolver_retry_state_block_for_test(source_pr=353, head_sha=head_sha, consecutive_failure_count=20)
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	noise_comments = [
+		{"id": 1000 + index, "body": "noise", "user": {"login": "outsider", "id": 999}}
+		for index in range(1005)
+	]
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 353: []},
+		issue_comments={353: [{"id": 777, "body": marker, "user": {"login": "github-actions[bot]", "id": 41898282}}, *noise_comments]},
+		prs=[{
+			"number": 353, "state": "open", "baseRefName": "main",
+			"headRefName": "orchestrator/project-192", "headSha": head_sha,
+			"mergeable": False, "mergeable_state": "dirty",
+			"body": "Existing PR body\n",
+			"commitStatuses": [
+				*[
+					{"context": f"ci/noise-{index}", "description": "completed", "state": "success"}
+					for index in range(100)
+				],
+				{
+					"context": "ai/resolver-retry-state-locator",
+					"description": "comment_id=777",
+					"state": "success",
+				},
+			],
+		}],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+	)
+	assert f"repos/owner/repo/commits/{head_sha}/status?per_page=100&page=1" in result["api_calls"]
+	assert f"repos/owner/repo/commits/{head_sha}/status?per_page=100&page=2" in result["api_calls"]
+	assert f"repos/owner/repo/commits/{head_sha}/status?per_page=100&page=3" not in result["api_calls"]
+	assert "repos/owner/repo/issues/comments/777" in result["api_calls"]
+	assert not any("/issues/353/comments?per_page=" in path for path in result["api_calls"])
+	assert [dispatch for dispatch in result["review_dispatches"] if dispatch.get("pr_number") == 353] == []
+	assert result["latest_state"]["integration_sync_status"] == "escalated"
+
+
+def test_integration_conflict_retry_locator_status_scan_defers_when_incomplete():
+	head_sha = "7" * 40
+	marker = _resolver_retry_state_block_for_test(source_pr=357, head_sha=head_sha, consecutive_failure_count=20)
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 357: []},
+		issue_comments={357: [{"id": 782, "body": marker, "user": {"login": "github-actions[bot]", "id": 41898282}}]},
+		prs=[{
+			"number": 357, "state": "open", "baseRefName": "main",
+			"headRefName": "orchestrator/project-192", "headSha": head_sha,
+			"mergeable": False, "mergeable_state": "dirty", "body": "Existing PR body\n",
+			"commitStatuses": [
+				{"context": f"ci/noise-{index}", "description": "completed", "state": "success"}
+				for index in range(1001)
+			],
+		}],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+	)
+	assert f"repos/owner/repo/commits/{head_sha}/status?per_page=100&page=10" in result["api_calls"]
+	assert f"repos/owner/repo/commits/{head_sha}/status?per_page=100&page=11" not in result["api_calls"]
+	assert not any("/issues/357/comments?per_page=" in path for path in result["api_calls"])
+	assert [dispatch for dispatch in result["review_dispatches"] if dispatch.get("pr_number") == 357] == []
+	assert "status locator history exceeds the bounded scan" in (result["stdout"] + result["stderr"])
+
+
+def test_integration_conflict_forged_locator_is_not_authority():
+	head_sha = "4" * 40
+	marker = _resolver_retry_state_block_for_test(source_pr=354, head_sha=head_sha, consecutive_failure_count=20)
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	noise_comments = [
+		{"id": 2000 + index, "body": "noise", "user": {"login": "outsider", "id": 999}}
+		for index in range(1005)
+	]
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 354: []},
+		issue_comments={354: [
+			{"id": 778, "body": marker, "user": {"login": "outsider", "id": 999}},
+			{"id": 777, "body": marker, "user": {"login": "github-actions[bot]", "id": 41898282}},
+			*noise_comments,
+		]},
+		prs=[{
+			"number": 354, "state": "open", "baseRefName": "main",
+			"headRefName": "orchestrator/project-192", "headSha": head_sha,
+			"mergeable": False, "mergeable_state": "dirty",
+			"body": "<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:778 -->\n",
+		}],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+	)
+	assert "repos/owner/repo/issues/comments/778" in result["api_calls"]
+	assert any("/issues/354/comments?per_page=" in path for path in result["api_calls"])
+	assert [dispatch for dispatch in result["review_dispatches"] if dispatch.get("pr_number") == 354] == []
+	assert "history exceeds the bounded scan" in (result["stdout"] + result["stderr"])
+
+
+def test_integration_conflict_locator_cannot_downgrade_escalated_label():
+	head_sha = "6" * 40
+	non_escalated_marker = _resolver_retry_state_block_for_test(
+		source_pr=356, head_sha=head_sha, consecutive_failure_count=5, escalated=False,
+	)
+	escalated_marker = _resolver_retry_state_block_for_test(
+		source_pr=356, head_sha=head_sha, consecutive_failure_count=20,
+	)
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 356: []},
+		issue_comments={356: [
+			{"id": 780, "body": non_escalated_marker, "user": {"login": "github-actions[bot]", "id": 41898282}},
+			{"id": 781, "body": escalated_marker, "user": {"login": "github-actions[bot]", "id": 41898282}},
+		]},
+		prs=[{
+			"number": 356, "state": "open", "baseRefName": "main",
+			"headRefName": "orchestrator/project-192", "headSha": head_sha,
+			"mergeable": False, "mergeable_state": "dirty",
+			"labels": ["ai:resolver-escalated"],
+			"body": "<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:780 -->\n",
+		}],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+	)
+	assert "repos/owner/repo/issues/comments/780" in result["api_calls"]
+	assert any("/issues/356/comments?per_page=" in path for path in result["api_calls"])
+	assert [dispatch for dispatch in result["review_dispatches"] if dispatch.get("pr_number") == 356] == []
+	assert result["latest_state"]["integration_sync_status"] == "escalated"
+
+
+def test_integration_conflict_fallback_persists_verified_locator():
+	head_sha = "5" * 40
+	marker = _resolver_retry_state_block_for_test(source_pr=355, head_sha=head_sha, consecutive_failure_count=20)
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 355: []},
+		issue_comments={355: [{"id": 779, "body": marker, "user": {"login": "github-actions[bot]", "id": 41898282}}]},
+		prs=[{
+			"number": 355, "state": "open", "baseRefName": "main",
+			"headRefName": "orchestrator/project-192", "headSha": head_sha,
+			"mergeable": False, "mergeable_state": "dirty", "body": "Existing PR body\n",
+		}],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+	)
+	assert result["prs"][0]["body"] == "Existing PR body\n"
+	assert result.get("pr_body_update_calls", []) == []
+	assert {
+		"sha": head_sha,
+		"state": "success",
+		"context": "ai/resolver-retry-state-locator",
+		"description": "comment_id=779",
+	} in result["commit_status_posts"]
+	assert [dispatch for dispatch in result["review_dispatches"] if dispatch.get("pr_number") == 355] == []
 
 
 def test_integration_conflict_redispatch_resumes_when_retry_state_head_sha_is_stale():

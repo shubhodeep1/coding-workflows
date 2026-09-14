@@ -351,11 +351,11 @@ def test_security_audit_workflow_has_required_triggers_and_checkout_contract() -
 def test_security_audit_workflow_wires_codex_and_audit_env() -> None:
 	content = WORKFLOW_PATH.read_text(encoding="utf-8")
 	# Source-repo runs must keep using the local action so branch-local changes
-	# to install-codex stay testable; consumer-called runs use the stable ref.
+	# to install-codex stay testable; consumer-called runs use the reviewed immutable ref.
 	assert "if: env.SECURITY_AUDIT_IS_SOURCE_REPO == 'true'" in content
 	assert 'uses: ./.github/actions/install-codex' in content
 	assert "if: env.SECURITY_AUDIT_IS_SOURCE_REPO != 'true'" in content
-	assert 'uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable' in content
+	assert 'uses: shubhodeep1/coding-workflows/.github/actions/install-codex@f03b8d657a63d64b87324e8a1047a8b90d3221e0' in content
 	assert 'scripts/write_codex_config.sh' in content
 	assert '--catalog-path "${SECURITY_AUDIT_SUPPORT_DIR:-.}/scripts/codex_model_catalog.json"' in content
 	assert 'OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}' in content

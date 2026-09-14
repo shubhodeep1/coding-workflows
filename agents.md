@@ -366,6 +366,9 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   validated `job.workflow_repository` plus immutable `job.workflow_sha`.
   Missing or malformed workflow identity fails closed; `stable` and `main`
   support fallbacks are not permitted.
+- Source workflows and `.github/actions/setup-runtime/action.yml` pin every
+  `actions/setup-node` and `actions/setup-python` use to its reviewed full SHA;
+  `test_remote_codex_runtime_actions_are_immutable` enforces the complete set.
 
 ## Model credential isolation
 
@@ -376,7 +379,28 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   workflow-log analysis, and conflict resolution. Agent environments contain an ephemeral broker token, never the
   upstream provider key or GitHub/state/Telegram credentials. Broker instances
   accept at most `MODEL_PROVIDER_BROKER_MAX_REQUESTS` requests (default `100`,
-  valid range `1..100`) and fail closed with HTTP 429 after exhaustion.
+  valid range `1..100`) and fail closed with HTTP 429 after exhaustion. Each
+  session also enforces exact model IDs, a per-request output limit (default
+  `16384`), a total output-token budget (default `1638400`, i.e. `100 x 16384`), and
+  server-controlled provider price ceilings before forwarding. Active clients
+  are capped at 8 and each accepted socket has a 30-second read timeout.
+  Price defaults are `MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE=10` USD per
+  million input tokens, `MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE=30` USD
+  per million output tokens, `MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE=0.10`
+  USD per request, and `MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE=1` USD per image.
+  Request values can only lower those ceilings; malformed, negative, or
+  non-finite configured values prevent broker startup. The total
+  budget counts tokens the provider actually generated: a request is charged
+  its full per-request ceiling only while it is in flight and is trued up to
+  the provider-reported `usage` once its response completes (streamed chat
+  requests are opted into `stream_options.include_usage` for this). A
+  cut-off or usage-less response keeps the full reservation and an upstream
+  error status settles at zero, so an agentic phase is bounded by real spend
+  rather than by `total / per-request` turns.
+- Same-UID model launches run inside a private PID namespace with a fresh
+  `/proc`, so danger-full-access agents retain their existing workspace file
+  permissions but cannot inspect the secret-bearing workflow or broker process
+  environments. Missing `sudo`/`unshare` support fails closed before launch.
 - Read-only Codex phases run with `--sandbox read-only` and web search disabled.
   Writer phases retain only their required workspace permissions in a sanitized
   environment. The conflict writer additionally runs as `nobody` with temporary
@@ -385,6 +409,18 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
 - Resolver retry tiers trust only signed
   `AUTOFIX_RESOLVER_RETRY_STATE_V2` producer comments. User-editable V1 PR-body
   markers remain recognizable as legacy text but cannot weaken verification.
+  The trusted actuator persists the marker comment ID as an untrusted commit
+  status on the signed head SHA. The poller searches up to 10 combined-status
+  pages for that context, then verifies the directly fetched comment's producer,
+  context, and signature before use; incomplete status history defers mutation.
+  A non-escalated locator cannot override
+  the trusted `ai:resolver-escalated` label; that mismatch falls back to
+  highest-generation selection. A missing or invalid locator likewise scans up
+  to 10 pages and 32 MiB, then refreshes the locator. The actuator reuses the review
+  pipeline's collected comment snapshot. Legacy PR-body locators remain readable,
+  but new locator writes never replace PR descriptions. An unproven history,
+  API failure, or verification uncertainty defers
+  mutation to the next poll tick.
 - `scripts/workflow_log_output_contract.py` validates and atomically publishes
   model report candidates for analysis, retro, deep-audit, and API-redundancy
   modes before any tracked report or tracker comment consumes them.

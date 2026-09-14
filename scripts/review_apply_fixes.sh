@@ -2191,7 +2191,7 @@ JOB_TIMEOUT_SECS=$(( REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED * 60 ))
 JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
 _hb_tmpdir=""
 _hb_fifo=""
-model_provider_broker_start
+MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${MODEL_EDITOR}${MODEL_EDITOR_FALLBACK:+,${MODEL_EDITOR_FALLBACK}}" model_provider_broker_start
 trap 'editor_isolation_exit_trap $?' EXIT
 if ! setup_editor_isolation; then
   echo "::error::Editor isolation prerequisites could not be established; refusing ambient-privilege fallback." >&2

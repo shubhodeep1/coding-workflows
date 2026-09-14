@@ -84,9 +84,9 @@ Usage: write_codex_config.sh --model <slug> --reasoning <effort>
                              [--web-search live|disabled]
                              [--catalog-path PATH]
                              [--project-path PATH]
-	                             [--config-path  PATH]
-	                             [--allow-elevation auto|force|forbid]
-	                             [--provider-base-url URL]
+                             [--config-path  PATH]
+                             [--allow-elevation auto|force|forbid]
+                             [--provider-base-url URL]
 USAGE
 }
 
