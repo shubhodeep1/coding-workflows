@@ -616,6 +616,7 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
 	scripted: list[tuple[int, bytes, str]] = []
 	fail_connection_construction = False
+	fail_upstream_request = False
 
 	class _FakeConnection:
 		def __init__(self, *_args: object, **_kwargs: object) -> None:
@@ -623,7 +624,8 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 				raise OSError("connection setup failed")
 
 		def request(self, *_args: object, **_kwargs: object) -> None:
-			pass
+			if fail_upstream_request:
+				raise OSError("request failed before an upstream response")
 
 		def getresponse(self) -> _FakeUpstreamResponse:
 			return _FakeUpstreamResponse(*scripted.pop(0))
@@ -663,6 +665,10 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 		assert post(streamed_request) == 502
 		assert state.output_tokens_reserved == 0, "connection setup failure must release its reservation"
 		fail_connection_construction = False
+		fail_upstream_request = True
+		assert post(streamed_request) == 502
+		assert state.output_tokens_reserved == 0, "request failure before a response must release its reservation"
+		fail_upstream_request = False
 		for _ in range(5):
 			scripted.append((200, usage_stream, "text/event-stream"))
 			assert post(streamed_request) == 200

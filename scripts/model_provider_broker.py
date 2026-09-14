@@ -413,6 +413,7 @@ class BrokerHandler(BaseHTTPRequestHandler):
 		# An upstream error status generated no output, so it settles at 0;
 		# a cut-off or unparseable body keeps the full reservation.
 		upstream_status: int | None = None
+		upstream_response_received = False
 		upstream_content_type = ""
 		response_tail = bytearray()
 		body_complete = False
@@ -425,6 +426,7 @@ class BrokerHandler(BaseHTTPRequestHandler):
 			)
 			connection.request("POST", upstream_path, body=body, headers=upstream_headers)
 			response = connection.getresponse()
+			upstream_response_received = True
 			upstream_status = response.status
 			upstream_content_type = response.getheader("Content-Type", "") or ""
 			self.send_response(response.status, response.reason)
@@ -456,7 +458,7 @@ class BrokerHandler(BaseHTTPRequestHandler):
 		finally:
 			self.close_connection = True
 			actual_output_tokens: int | None = None
-			if connection is None or upstream_status is not None and upstream_status >= 400:
+			if not upstream_response_received or upstream_status is not None and upstream_status >= 400:
 				actual_output_tokens = 0
 			elif body_complete and (
 				upstream_content_type.partition(";")[0].strip().lower() == "text/event-stream"
