@@ -263,11 +263,18 @@ def main() -> int:
 		return 2
 	rejections_path = Path(args.rejections_file) if args.rejections_file else None
 	if rejections_path is not None:
-		rejections_path.parent.mkdir(parents=True, exist_ok=True)
 		try:
-			rejections_path.unlink()
-		except FileNotFoundError:
-			pass
+			rejections_path.parent.mkdir(parents=True, exist_ok=True)
+			try:
+				rejections_path.unlink()
+			except FileNotFoundError:
+				pass
+		except OSError:
+			try:
+				print("model provider broker: rejection file unavailable; continuing without file recording", file=sys.stderr)
+			except OSError:
+				pass
+			rejections_path = None
 	server = BrokerServer(("127.0.0.1", 0), state, rejections_path)
 	stop_event = threading.Event()
 

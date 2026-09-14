@@ -277,6 +277,50 @@ def test_broker_rejections_file_is_optional(tmp_path: Path) -> None:
 	assert "MODEL_PROVIDER_BROKER_REJECT status=404" in stderr.decode("utf-8")
 
 
+def test_broker_ignores_unusable_rejections_file(tmp_path: Path) -> None:
+	ready_file = tmp_path / "ready.json"
+	invalid_parent_path = tmp_path / "not-a-directory"
+	invalid_parent_path.write_text("blocked", encoding="utf-8")
+	environment = {"PATH": os.environ["PATH"], "OPENROUTER_API_KEY": "upstream-secret"}
+	process = subprocess.Popen(
+		[
+			"python3",
+			str(BROKER),
+			"--ready-file",
+			str(ready_file),
+			"--rejections-file",
+			str(invalid_parent_path / "rejections.jsonl"),
+		],
+		env=environment,
+		stdout=subprocess.PIPE,
+		stderr=subprocess.PIPE,
+	)
+	try:
+		for _ in range(100):
+			if ready_file.exists():
+				break
+			if process.poll() is not None:
+				break
+			time.sleep(0.02)
+		ready = json.loads(ready_file.read_text(encoding="utf-8"))
+		request = urllib.request.Request(
+			str(ready["base_url"]) + "/models",
+			data=b"{}",
+			headers={"Authorization": f"Bearer {ready['token']}", "Content-Type": "application/json"},
+			method="POST",
+		)
+		try:
+			urllib.request.urlopen(request, timeout=2)
+		except urllib.error.HTTPError as exc:
+			assert exc.code == 404
+	finally:
+		process.terminate()
+		_, stderr = process.communicate(timeout=3)
+	stderr_text = stderr.decode("utf-8")
+	assert "rejection file unavailable; continuing without file recording" in stderr_text
+	assert "MODEL_PROVIDER_BROKER_REJECT status=404" in stderr_text
+
+
 def test_broker_start_wires_rejections_file_and_count_helpers(tmp_path: Path) -> None:
 	"""codex_helpers.sh passes --rejections-file, exports the path, and the
 	count helper only counts deterministic 4xx policy rejections."""
