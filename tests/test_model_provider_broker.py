@@ -180,3 +180,147 @@ def test_sanitized_launcher_exposes_only_ephemeral_provider_token(tmp_path: Path
 	assert "ORCHESTRATOR_STATE_AUTH_KEYRING=" not in result.stdout
 	assert "TG_BOT_SECRET=" not in result.stdout
 	assert "TG_ADMIN_CHAT_ID=" not in result.stdout
+
+
+def _read_rejections(path: Path) -> list[dict[str, object]]:
+	return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def test_broker_records_policy_rejections_to_file_and_stderr(tmp_path: Path) -> None:
+	"""Every `_reject` answer is mirrored to --rejections-file and stderr.
+
+	PR #4077 (runs 34663517732 / 34654303940): the editor's three attempts and
+	the fallback model all failed on the same deterministic HTTP 429, but the
+	only trace was the model runtime's opaque `AI_APICallError`. The launcher
+	needs a broker-side record to stop retrying.
+	"""
+	ready_file = tmp_path / "ready.json"
+	rejections_file = tmp_path / "nested" / "rejections.jsonl"
+	environment = {"PATH": os.environ["PATH"], "OPENROUTER_API_KEY": "upstream-secret"}
+	process = subprocess.Popen(
+		[
+			"python3",
+			str(BROKER),
+			"--ready-file",
+			str(ready_file),
+			"--rejections-file",
+			str(rejections_file),
+			"--max-requests",
+			"2",
+		],
+		env=environment,
+		stdout=subprocess.PIPE,
+		stderr=subprocess.PIPE,
+	)
+	try:
+		for _ in range(100):
+			if ready_file.exists():
+				break
+			if process.poll() is not None:
+				break
+			time.sleep(0.02)
+		ready = json.loads(ready_file.read_text(encoding="utf-8"))
+		for path, token, expected in (
+			("/models", str(ready["token"]), 404),
+			("/responses", "attacker-token", 401),
+		):
+			request = urllib.request.Request(
+				str(ready["base_url"]) + path,
+				data=b"{}",
+				headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+				method="POST",
+			)
+			try:
+				urllib.request.urlopen(request, timeout=2)
+			except urllib.error.HTTPError as exc:
+				assert exc.code == expected
+			else:
+				raise AssertionError(f"broker accepted {path}")
+	finally:
+		process.terminate()
+		_, stderr = process.communicate(timeout=3)
+
+	records = _read_rejections(rejections_file)
+	assert [(record["status"], record["path"], record["message"]) for record in records] == [
+		(404, "/api/v1/models", "path not allowed"),
+		(401, "/api/v1/responses", "invalid broker token"),
+	]
+	assert all(isinstance(record["ts"], int) for record in records)
+	# The record never carries the session token or the upstream key.
+	assert "upstream-secret" not in rejections_file.read_text(encoding="utf-8")
+	assert str(ready["token"]) not in rejections_file.read_text(encoding="utf-8")
+	assert (rejections_file.stat().st_mode & 0o777) == 0o600
+	reject_lines = [line for line in stderr.decode("utf-8").splitlines() if line.startswith("MODEL_PROVIDER_BROKER_REJECT ")]
+	assert reject_lines == [
+		'MODEL_PROVIDER_BROKER_REJECT status=404 path=/api/v1/models message="path not allowed"',
+		'MODEL_PROVIDER_BROKER_REJECT status=401 path=/api/v1/responses message="invalid broker token"',
+	]
+
+
+def test_broker_rejections_file_is_optional(tmp_path: Path) -> None:
+	process, ready = _start_broker(tmp_path)
+	try:
+		request = urllib.request.Request(
+			str(ready["base_url"]) + "/models",
+			data=b"{}",
+			headers={"Authorization": f"Bearer {ready['token']}", "Content-Type": "application/json"},
+			method="POST",
+		)
+		try:
+			urllib.request.urlopen(request, timeout=2)
+		except urllib.error.HTTPError as exc:
+			assert exc.code == 404
+	finally:
+		process.terminate()
+		_, stderr = process.communicate(timeout=3)
+	assert not list(tmp_path.glob("*.jsonl"))
+	assert "MODEL_PROVIDER_BROKER_REJECT status=404" in stderr.decode("utf-8")
+
+
+def test_broker_start_wires_rejections_file_and_count_helpers(tmp_path: Path) -> None:
+	"""codex_helpers.sh passes --rejections-file, exports the path, and the
+	count helper only counts deterministic 4xx policy rejections."""
+	command = f'''
+		set -euo pipefail
+		source "{REPO_ROOT / 'scripts' / 'codex_helpers.sh'}"
+		export RUNTIME_DIR="{tmp_path}"
+		export OPENROUTER_API_KEY="upstream-secret"
+		model_provider_broker_start
+		echo "rejections_file=${{MODEL_PROVIDER_BROKER_REJECTIONS_FILE}}"
+		echo "before=$(model_provider_broker_policy_rejection_count)"
+		curl -sS -o /dev/null -X POST -H "Authorization: Bearer ${{MODEL_PROVIDER_BROKER_TOKEN}}" -H "Content-Type: application/json" --data "{{}}" "${{MODEL_PROVIDER_BROKER_BASE_URL}}/models" || true
+		echo "after=$(model_provider_broker_policy_rejection_count)"
+		echo "last=$(model_provider_broker_last_policy_rejection)"
+		# A relayed upstream failure is transient and must not count.
+		printf '%s\\n' '{{"message":"upstream request failed","path":"/api/v1/responses","status":502,"ts":1}}' >> "${{MODEL_PROVIDER_BROKER_REJECTIONS_FILE}}"
+		echo "after_502=$(model_provider_broker_policy_rejection_count)"
+		model_provider_broker_stop
+		echo "stopped_count=$(model_provider_broker_policy_rejection_count)"
+		echo "stopped_file=${{MODEL_PROVIDER_BROKER_REJECTIONS_FILE:-unset}}"
+	'''
+	result = subprocess.run(["bash", "-c", command], cwd=REPO_ROOT, text=True, capture_output=True, check=True)
+	lines = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+	assert lines["rejections_file"] == str(tmp_path / "model-provider-broker-rejections.jsonl")
+	assert lines["before"] == "0"
+	assert lines["after"] == "1"
+	assert lines["last"].startswith('status=404 message="path not allowed"')
+	assert lines["after_502"] == "1"
+	assert lines["stopped_count"] == "0"
+	assert lines["stopped_file"] == "unset"
+	assert not (tmp_path / "model-provider-broker-rejections.jsonl").exists()
+
+
+def test_count_helper_is_zero_without_a_rejections_file() -> None:
+	command = f'''
+		set -euo pipefail
+		source "{REPO_ROOT / 'scripts' / 'codex_helpers.sh'}"
+		unset MODEL_PROVIDER_BROKER_REJECTIONS_FILE
+		echo "count=$(model_provider_broker_policy_rejection_count)"
+		echo "last=[$(model_provider_broker_last_policy_rejection)]"
+		export MODEL_PROVIDER_BROKER_REJECTIONS_FILE=/nonexistent/rejections.jsonl
+		echo "missing=$(model_provider_broker_policy_rejection_count)"
+	'''
+	result = subprocess.run(["bash", "-c", command], cwd=REPO_ROOT, text=True, capture_output=True, check=True)
+	assert "count=0" in result.stdout
+	assert "last=[]" in result.stdout
+	assert "missing=0" in result.stdout

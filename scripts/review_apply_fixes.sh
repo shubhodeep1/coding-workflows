@@ -2277,6 +2277,18 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     echo "Editor attempt ${attempt}: capping wall time to ${attempt_wall}s (budget-limited, ${remaining}s remain)."
   fi
 
+  # Broker policy-rejection snapshot for this attempt. The broker started
+  # above lives for the whole retry loop, so a deterministic 4xx it returns
+  # (request cap, output-token budget, unauthorized model) is returned to
+  # every later attempt and to the capacity fallback model too. Compare
+  # after the attempt to stop retrying instead of burning the remaining
+  # attempts (PR #4077, runs 34663517732 / 34654303940: three attempts and
+  # the fallback all failed on the same HTTP 429, ~18 minutes per round).
+  attempt_broker_rejections_before="0"
+  if command -v model_provider_broker_policy_rejection_count >/dev/null 2>&1; then
+    attempt_broker_rejections_before="$(model_provider_broker_policy_rejection_count 2>/dev/null || echo 0)"
+  fi
+
   tmp_output="$(mktemp)"
   tmp_err="$(mktemp)"
 
@@ -2846,6 +2858,33 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   fi
   cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.txt" || true
   cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
+  # ── Broker policy-rejection short-circuit ──
+  # A failed attempt during which the broker recorded new 4xx rejections
+  # (see the snapshot above) cannot be helped by another attempt or by the
+  # fallback model: the same broker instance answers them, and its policy
+  # decision is deterministic for the rest of this run. Log the rejection,
+  # emit the alert with its own failure class so the operator sees the real
+  # cause instead of "capacity-limited", and leave the loop. The fallback
+  # summary below still classifies this as recoverable_failure (a fresh run
+  # gets a fresh broker), so the workflow's partial-finalize handling and
+  # the no-op validator sentinels stay exactly as before.
+  attempt_broker_rejections_after="${attempt_broker_rejections_before}"
+  if command -v model_provider_broker_policy_rejection_count >/dev/null 2>&1; then
+    attempt_broker_rejections_after="$(model_provider_broker_policy_rejection_count 2>/dev/null || echo "${attempt_broker_rejections_before}")"
+  fi
+  if [ "${cmd_rc}" -ne 0 ] \
+    && [ "${attempt_broker_rejections_after}" -gt "${attempt_broker_rejections_before}" ] 2>/dev/null; then
+    attempt_broker_last_rejection=""
+    if command -v model_provider_broker_last_policy_rejection >/dev/null 2>&1; then
+      attempt_broker_last_rejection="$(model_provider_broker_last_policy_rejection 2>/dev/null || true)"
+    fi
+    echo "EDITOR_BROKER_POLICY_REJECTION attempt=${attempt} model=${EDITOR_ATTEMPT_MODEL} rc=${cmd_rc} new_rejections=$(( attempt_broker_rejections_after - attempt_broker_rejections_before )) total_rejections=${attempt_broker_rejections_after} ${attempt_broker_last_rejection:-status=unknown} — the model provider broker rejected this attempt's requests; further attempts share the same broker policy, breaking out of the retry loop."
+    if [ "${attempt}" -lt "${editor_max_attempts}" ]; then
+      opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" broker_policy_rejection || true
+    fi
+    rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file_cleanup_path}"
+    break
+  fi
   # ── Safety-policy refusal short-circuit ──
   # An OpenAI-style refusal as the final-channel output (despite the
   # cache-busting nonce above sometimes failing to defeat very sticky

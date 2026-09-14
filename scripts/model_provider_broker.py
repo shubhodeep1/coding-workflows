@@ -14,6 +14,7 @@ import ssl
 import sys
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -72,6 +73,7 @@ class BrokerHandler(BaseHTTPRequestHandler):
 		self.end_headers()
 		self.wfile.write(payload)
 		self.close_connection = True
+		self.server.record_rejection(status, message, self.path)  # type: ignore[attr-defined]
 
 	def _authorized(self) -> bool:
 		authorization = self.headers.get("Authorization", "")
@@ -172,9 +174,45 @@ class BrokerServer(ThreadingHTTPServer):
 	daemon_threads = True
 	allow_reuse_address = False
 
-	def __init__(self, address: tuple[str, int], state: BrokerState) -> None:
+	def __init__(self, address: tuple[str, int], state: BrokerState, rejections_path: Path | None = None) -> None:
 		super().__init__(address, BrokerHandler)
 		self.broker_state = state
+		self.rejections_path = rejections_path
+		self.rejections_lock = threading.Lock()
+
+	def record_rejection(self, status: int, message: str, path: str) -> None:
+		"""Make a policy rejection observable to the launching shell.
+
+		The handler answers the agent with the rejection body, but that body
+		only ever reaches the model runtime, which logs it as an opaque
+		``AI_APICallError`` (PR #4077 editor runs: three attempts and the
+		model fallback all burned on the same deterministic HTTP 429). One
+		structured stderr line lands in the job log, and one JSON line is
+		appended to ``--rejections-file`` so ``codex_helpers.sh`` can count
+		4xx policy rejections between attempts and stop retrying a broker
+		that will keep saying no. Both writes are best-effort: a logging
+		failure must never turn into a second failure mode for the request.
+		"""
+		try:
+			print(f"MODEL_PROVIDER_BROKER_REJECT status={status} path={path} message={json.dumps(message)}", file=sys.stderr, flush=True)
+		except (OSError, ValueError):
+			pass
+		if self.rejections_path is None:
+			return
+		record = json.dumps(
+			{"ts": int(time.time()), "status": int(status), "path": path, "message": message},
+			sort_keys=True,
+			separators=(",", ":"),
+		)
+		try:
+			with self.rejections_lock:
+				file_descriptor = os.open(self.rejections_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+				try:
+					os.write(file_descriptor, (record + "\n").encode("utf-8"))
+				finally:
+					os.close(file_descriptor)
+		except OSError:
+			pass
 
 
 def _atomic_write_ready_file(path: Path, document: dict[str, object]) -> None:
@@ -206,6 +244,11 @@ def main() -> int:
 	parser.add_argument("--ready-file", required=True)
 	parser.add_argument("--upstream-url", default="https://openrouter.ai/api/v1")
 	parser.add_argument("--max-requests", type=int, default=100)
+	parser.add_argument(
+		"--rejections-file",
+		default="",
+		help="append one JSON line per rejected request (status, path, message) so the launcher can detect deterministic policy rejections; empty disables the file",
+	)
 	args = parser.parse_args()
 	if not 1 <= args.max_requests <= 100:
 		parser.error("--max-requests must be between 1 and 100")
@@ -218,7 +261,14 @@ def main() -> int:
 	except ValueError as exc:
 		print(f"model provider broker: {exc}", file=sys.stderr)
 		return 2
-	server = BrokerServer(("127.0.0.1", 0), state)
+	rejections_path = Path(args.rejections_file) if args.rejections_file else None
+	if rejections_path is not None:
+		rejections_path.parent.mkdir(parents=True, exist_ok=True)
+		try:
+			rejections_path.unlink()
+		except FileNotFoundError:
+			pass
+	server = BrokerServer(("127.0.0.1", 0), state, rejections_path)
 	stop_event = threading.Event()
 
 	def request_stop(_signum: int, _frame: object) -> None:

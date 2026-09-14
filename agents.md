@@ -377,6 +377,21 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   upstream provider key or GitHub/state/Telegram credentials. Broker instances
   accept at most `MODEL_PROVIDER_BROKER_MAX_REQUESTS` requests (default `100`,
   valid range `1..100`) and fail closed with HTTP 429 after exhaustion.
+  Every rejection the broker answers (any `_reject` status, 4xx policy or
+  502 upstream relay) is mirrored as a `MODEL_PROVIDER_BROKER_REJECT status=<n>
+  path=<path> message=<json>` stderr line and appended as one JSON line to
+  `--rejections-file` (`MODEL_PROVIDER_BROKER_REJECTIONS_FILE`, default
+  `<runtime dir>/model-provider-broker-rejections.jsonl`, mode 0600, removed
+  by `model_provider_broker_stop`). `model_provider_broker_policy_rejection_count`
+  counts only the deterministic 4xx lines and
+  `model_provider_broker_last_policy_rejection` prints the newest one;
+  `scripts/review_apply_fixes.sh` snapshots the count before each editor
+  attempt and, when a failed attempt recorded new rejections, logs
+  `EDITOR_BROKER_POLICY_REJECTION ...`, emits the `broker_policy_rejection`
+  failure class, and leaves the retry loop instead of spending the remaining
+  attempts and the capacity fallback model on the same broker decision
+  (PR #4077 runs 34663517732 / 34654303940 lost ~18 minutes per round to
+  HTTP 429 replays). The fallback summary stays `recoverable_failure`.
 - Read-only Codex phases run with `--sandbox read-only` and web search disabled.
   Writer phases retain only their required workspace permissions in a sanitized
   environment. The conflict writer additionally runs as `nobody` with temporary
