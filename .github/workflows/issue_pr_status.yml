@@ -512,16 +512,19 @@ jobs:
             echo "Telegram not configured; skipping PR merged alert."
             exit 0
           fi
-          if [ ! -s "scripts/gh_helpers.sh" ] || [ ! -s "scripts/tg_helpers.sh" ] || \
+          if [ ! -s "scripts/gh_helpers.sh" ] || \
+            [ ! -s ".codex-workflow-src/scripts/gh_helpers.sh" ] || \
+            ! cmp -s ".codex-workflow-src/scripts/gh_helpers.sh" "scripts/gh_helpers.sh" || \
+            [ ! -s "scripts/tg_helpers.sh" ] || \
             [ ! -s ".codex-workflow-src/scripts/tg_helpers.sh" ] || \
             ! cmp -s ".codex-workflow-src/scripts/tg_helpers.sh" "scripts/tg_helpers.sh"; then
-            echo "::error::Trusted issue-status Telegram support is unavailable at ${SCRIPT_REF}."
+            echo "::error::Trusted issue-status Telegram support is unavailable at ${SCRIPT_REF:-unknown}."
             exit 1
           fi
           source scripts/gh_helpers.sh
           source scripts/tg_helpers.sh
           if ! declare -F tg_send_msg >/dev/null 2>&1; then
-            echo "::error::tg_send_msg is missing from trusted Telegram support at ${SCRIPT_REF}."
+            echo "::error::tg_send_msg is missing from trusted Telegram support at ${SCRIPT_REF:-unknown}."
             exit 1
           fi
 
@@ -586,13 +589,13 @@ jobs:
           if [ ! -s "scripts/tg_helpers.sh" ] || \
             [ ! -s ".codex-workflow-src/scripts/tg_helpers.sh" ] || \
             ! cmp -s ".codex-workflow-src/scripts/tg_helpers.sh" "scripts/tg_helpers.sh"; then
-            echo "::error::Trusted issue-status Telegram support is unavailable at ${SCRIPT_REF}."
+            echo "::error::Trusted issue-status Telegram support is unavailable at ${SCRIPT_REF:-unknown}."
             exit 1
           fi
           export GITHUB_REPOSITORY="${REPOSITORY}"
           source scripts/tg_helpers.sh
           if ! declare -F tg_cleanup_msgs >/dev/null 2>&1; then
-            echo "::error::tg_cleanup_msgs is missing from trusted Telegram support at ${SCRIPT_REF}."
+            echo "::error::tg_cleanup_msgs is missing from trusted Telegram support at ${SCRIPT_REF:-unknown}."
             exit 1
           fi
 

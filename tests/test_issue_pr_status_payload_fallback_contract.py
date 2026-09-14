@@ -120,6 +120,8 @@ def test_configured_telegram_paths_require_staged_immutable_helper() -> None:
 		assert "git clone" not in step
 
 	assert "api.telegram.org" not in _step_script("Send PR merged Telegram alert")
+	alert_step = _step_script("Send PR merged Telegram alert")
+	assert '! cmp -s ".codex-workflow-src/scripts/gh_helpers.sh" "scripts/gh_helpers.sh"' in alert_step
 
 
 def test_lineage_finalization_noop_paths_emit_ai_memory_telemetry_before_exit() -> None:
