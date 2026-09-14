@@ -4596,16 +4596,32 @@ jobs:
             # When all editor attempts fail, review_apply_fixes.sh writes
             # the recoverable_failure partial-finalize summary whose
             # "Runtime failure path:" line carries the sentinel below.
-            # Check 2 still flags that summary as no-op suspicious (its
-            # audit section is only "- none (...)"), so auto-merge stays
-            # blocked exactly as before; this check only classifies the
-            # cause. Observed on PR #4077 (runs 34692519987, 34700918528,
+            # This is the same class of failure Check 1 exists for (the
+            # editor never completed a validated review), so it sets
+            # EDITOR_NOOP_SUSPICIOUS=true itself instead of relying on
+            # Check 2: Check 2 runs only when REVIEWERS_SUCCESSFUL > 0, and
+            # the editor can run with zero successful reviewers when every
+            # reviewer slot was skipped fail-open (skipped_open /
+            # skipped_unmapped, scripts/review_run_reviewers.sh) — in that
+            # state the summary used to leave EDITOR_NOOP_SUSPICIOUS=false,
+            # so the "Telegram editor-noop-suspicious warning" alert never
+            # fired and the merge-conflict detect/resolver chain gated on
+            # `EDITOR_NOOP_SUSPICIOUS != 'true'` still ran with nothing to
+            # land (§20.10). With reviewers > 0 the result is unchanged
+            # (Check 2 flagged the fallback-only audit section anyway).
+            # The additive flag classifies the cause for the alert.
+            # Observed on PR #4077 (runs 34692519987, 34700918528,
             # 34702442346): the editor's broker returned HTTP 429 on every
             # attempt and the operator was told the editor "claimed no
             # changes needed". The sentinel must stay verbatim in lockstep
             # with review_apply_fixes.sh (tests/test_review_autofix_editor_noop_cascade_contract.py).
+            # The soft-deadline fallback summary ("partial finalize
+            # requested at the soft deadline before another editor
+            # attempt") is deliberately NOT matched here: it means the run
+            # budget was exhausted, not that the editor failed.
             if grep -qiE 'partial finalize requested after a recoverable editor failure' "${EDITOR_SUMMARY_FILE}"; then
               echo "::notice::Editor stopped after a recoverable failure on every attempt — no editor output was produced; see the editor step log for the provider error."
+              EDITOR_NOOP_SUSPICIOUS="true"
               EDITOR_NOOP_RECOVERABLE_FAILURE="true"
             fi
 
