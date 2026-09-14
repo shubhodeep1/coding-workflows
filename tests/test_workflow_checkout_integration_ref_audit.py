@@ -11,6 +11,8 @@ WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 REVIEWED_CODEX_ACTION_SHA = "f03b8d657a63d64b87324e8a1047a8b90d3221e0"
 REVIEWED_SETUP_NODE_ACTION_SHA = "249970729cb0ef3589644e2896645e5dc5ba9c38"
 REVIEWED_SETUP_PYTHON_ACTION_SHA = "ece7cb06caefa5fff74198d8649806c4678c61a1"
+REVIEWED_SETUP_UV_ACTION_SHA = "37802adc94f370d6bfd71619e3f0bf239e1f3b78"
+REVIEWED_FREE_DISK_SPACE_ACTION_SHA = "54081f138730dfa15788a46383842cd2f914a1be"
 
 REQUIRED_RESOLVER_WORKFLOWS = {
 	"plan.yml",
@@ -93,6 +95,12 @@ def test_remote_codex_runtime_actions_are_immutable() -> None:
 				assert line.rstrip().endswith(f"actions/setup-node@{REVIEWED_SETUP_NODE_ACTION_SHA}"), (path, line)
 			if "uses: actions/setup-python@" in line:
 				assert line.rstrip().endswith(f"actions/setup-python@{REVIEWED_SETUP_PYTHON_ACTION_SHA}"), (path, line)
+			if "uses: astral-sh/setup-uv@" in line:
+				assert line.rstrip().endswith(f"astral-sh/setup-uv@{REVIEWED_SETUP_UV_ACTION_SHA}"), (path, line)
+			if "uses: jlumbroso/free-disk-space@" in line:
+				assert line.rstrip().endswith(
+					f"jlumbroso/free-disk-space@{REVIEWED_FREE_DISK_SPACE_ACTION_SHA}"
+				), (path, line)
 			if "shubhodeep1/coding-workflows/.github/actions/install-codex@" in line:
 				assert line.rstrip().endswith(f"install-codex@{REVIEWED_CODEX_ACTION_SHA}"), (path, line)
 		for cache_block in text.split("- name: Cache Codex CLI")[1:]:

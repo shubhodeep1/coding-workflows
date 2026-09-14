@@ -58,6 +58,72 @@ def test_issue_pr_status_bootstraps_revalidate_lifecycle_ai_memory_schemas() -> 
 	assert "revalidate_events.v1.json" in text
 
 
+def test_issue_pr_status_support_bootstrap_is_immutable_and_fail_closed() -> None:
+	text = _workflow_text()
+	checkout_step = text[text.index("      - name: Checkout workflow support source\n"):]
+	checkout_step = checkout_step[:checkout_step.index("\n      - name: ", 1)]
+	verify_step = _step_script("Ensure workflow support source checkout")
+	stage_step = _step_script("Fetch memory helper scripts")
+
+	assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}" in text
+	assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in text
+	assert 'if [ "${WORKFLOW_DEFINITION_REPOSITORY}" != "${wf_source}" ]; then' in text
+	assert '[[ "${WORKFLOW_DEFINITION_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]' in text
+	assert 'echo "SCRIPT_REF=${WORKFLOW_DEFINITION_SHA,,}" >> "$GITHUB_ENV"' in text
+	assert "repository: shubhodeep1/coding-workflows" in checkout_step
+	assert "ref: ${{ env.SCRIPT_REF }}" in checkout_step
+	assert "path: .codex-workflow-src" in checkout_step
+	assert "persist-credentials: false" in checkout_step
+	assert 'support_head="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)"' in verify_step
+	assert 'if [ "${support_head,,}" != "${SCRIPT_REF}" ]; then' in verify_step
+
+	required_helpers = (
+		"gh_helpers.sh",
+		"label_helpers.sh",
+		"memory_helpers.sh",
+		"tg_helpers.sh",
+		"ai_memory.py",
+		"ai_memory_lib.py",
+		"openrouter_prompt_cache.py",
+	)
+	for helper_name in required_helpers:
+		assert helper_name in stage_step
+	assert 'support_script=".codex-workflow-src/scripts/${f}"' in stage_step
+	assert 'if [ ! -s "${support_script}" ]; then' in stage_step
+	assert 'install -m 0755 "${support_script}" "scripts/${f}"' in stage_step
+	assert 'if [ ! -s "scripts/${f}" ] || [ ! -x "scripts/${f}" ]; then' in stage_step
+	assert 'support_schema=".codex-workflow-src/ai-memory/schemas/${sf}"' in stage_step
+	assert 'install -m 0644 "${support_schema}" "ai-memory/schemas/${sf}"' in stage_step
+	assert 'echo "MEMORY_HELPERS_READY=${MEMORY_HELPERS_READY}" >> "$GITHUB_ENV"' in stage_step
+	assert 'script_ref="stable"' not in stage_step
+	assert "git clone" not in stage_step
+	assert "falling back to main" not in stage_step
+	assert "local fallback" not in stage_step
+
+
+def test_configured_telegram_paths_require_staged_immutable_helper() -> None:
+	for step_name, function_name in (
+		("Send PR merged Telegram alert", "tg_send_msg"),
+		("Cleanup tracked Telegram messages", "tg_cleanup_msgs"),
+	):
+		step = _step_script(step_name)
+		config_gate = 'if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then'
+		trusted_gate = '! cmp -s ".codex-workflow-src/scripts/tg_helpers.sh" "scripts/tg_helpers.sh"'
+		assert config_gate in step
+		assert trusted_gate in step
+		assert "Trusted issue-status Telegram support is unavailable" in step
+		assert "source scripts/tg_helpers.sh" in step
+		assert f"declare -F {function_name}" in step
+		assert f"{function_name} is missing from trusted Telegram support" in step
+		assert step.index(config_gate) < step.index(trusted_gate) < step.index("source scripts/tg_helpers.sh")
+		assert 'script_ref="stable"' not in step
+		assert "git clone" not in step
+
+	assert "api.telegram.org" not in _step_script("Send PR merged Telegram alert")
+	alert_step = _step_script("Send PR merged Telegram alert")
+	assert '! cmp -s ".codex-workflow-src/scripts/gh_helpers.sh" "scripts/gh_helpers.sh"' in alert_step
+
+
 def test_lineage_finalization_noop_paths_emit_ai_memory_telemetry_before_exit() -> None:
 	finalize_step = _step_script("Finalize linked issue lineage state")
 
@@ -380,6 +446,8 @@ def test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge() ->
 if __name__ == "__main__":
 	test_payload_first_fallback_and_shared_helper_usage()
 	test_issue_pr_status_bootstraps_revalidate_lifecycle_ai_memory_schemas()
+	test_issue_pr_status_support_bootstrap_is_immutable_and_fail_closed()
+	test_configured_telegram_paths_require_staged_immutable_helper()
 	test_lineage_finalization_noop_paths_emit_ai_memory_telemetry_before_exit()
 	test_orchestrator_classification_is_exported_for_downstream_reuse()
 	test_fallback_regex_drops_bare_mentions_keeps_closing_keywords_and_urls()

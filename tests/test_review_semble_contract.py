@@ -185,16 +185,16 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert "EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}" in workflow
 	assert "UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}" in workflow
 	assert 'helper=".codex-workflow-src/scripts/stage_workflow_support.sh"' in stage_step_block
-	assert 'helper=".codex-workflow-src-main/scripts/stage_workflow_support.sh"' in stage_step_block
+	assert ".codex-workflow-src-main" not in stage_step_block
 	assert 'WORKFLOW_SOURCE_REPO="shubhodeep1/coding-workflows" \\' in stage_step_block
 	assert 'bash "${helper}"' in stage_step_block
-	assert 'Backfilled transcript_archive.sh into the runtime support bundle from ${backfill_src}' in stage_step_block
+	assert 'Backfilled transcript_archive.sh from immutable support source ${SCRIPT_REF}.' in stage_step_block
 	assert "render_prompt.py" in main_primary_line
 	assert "nag_reminder.sh" in required_bootstrap_line
 	# build_semble_wrapper.sh stays in the optional-bootstrap loop once the BM25
 	# wrapper was extracted to a shared script (semble 0.1.3 ships no
-	# index/query CLI). render_prompt.py is main-primary so validator fixes from
-	# main reach wedged/in-flight branches immediately.
+	# index/query CLI). render_prompt.py stays in the immutable workflow support
+	# source so validator and executable bootstrap code share one provenance root.
 	assert "assemble_prompt.sh" in required_bootstrap_line
 	assert "render_prompt.py" not in required_bootstrap_line
 	assert "render_prompt.py" not in optional_bootstrap_line
@@ -208,7 +208,7 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert "REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS: >-\n    render_prompt.py" in workflow
 	assert "for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS} ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do" in stage_step_block
 	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/_nag_reminders.txt" ]; then' in stage_step_block
-	assert 'Backfilled _nag_reminders.txt into the runtime support bundle from ${src} (branch-pinned stage_workflow_support.sh at ${SCRIPT_REF} did not stage it).' in stage_step_block
+	assert 'Backfilled _nag_reminders.txt from immutable support source ${SCRIPT_REF}.' in stage_step_block
 	assert 'for f in ${REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS}; do' in preflight_block
 	assert 'check_required_file "${SUPPORT_SCRIPTS_DIR}/${f}"' in preflight_block
 	assert 'for f in ${REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS}; do' in preflight_block
@@ -271,7 +271,7 @@ def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() 
 	clear_serena_block = _step_block(workflow, "Clear Serena after editor")
 	detect_serena_block = _step_block(workflow, "Detect preexisting Serena project config")
 
-	assert "astral-sh/setup-uv@v7" in uv_block
+	assert "astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78" in uv_block
 	assert "if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')" in uv_block
 	assert "continue-on-error: true" in uv_block
 	assert "if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')" in install_block
@@ -384,7 +384,7 @@ def test_reviewer_checklist_prompt_contract_and_gate() -> None:
 	assert "REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || 'false' }}" in workflow
 	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then' in stage_helper
 	assert 'src=".codex-workflow-src/prompts/review-reviewer-checklist.txt"' in stage_helper
-	assert 'src=".codex-workflow-src-main/prompts/review-reviewer-checklist.txt"' in stage_helper
+	assert ".codex-workflow-src-main" not in stage_helper
 	assert 'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"' in stage_helper
 	assert 'review-reviewer-checklist.txt not found in checked-out support sources' in stage_helper
 	assert 'REVIEWER_CHECKLIST_PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-reviewer-checklist.txt"' in reviewers
