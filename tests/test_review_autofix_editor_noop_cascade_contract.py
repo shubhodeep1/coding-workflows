@@ -1051,14 +1051,40 @@ def test_validator_check_1c_sets_suspicious_without_touching_check_1() -> None:
 	assert 'if [ "${EDITOR_NOOP_SUSPICIOUS}" = "false" ] && [ "${REVIEWERS_SUCCESSFUL:-0}" -gt 0 ]; then' in block
 
 
+def test_validator_gate_runs_for_editor_partial_finalize_without_validation_tail() -> None:
+	"""The workflow gate must keep cheap editor-summary classification reachable
+	when a late refusal or recoverable failure leaves too little time for the
+	validation tail, without reclassifying soft-deadline budget exhaustion."""
+	block = _step_block(_review_autofix_text(), VALIDATOR_STEP_NAME)
+	if_line = next(line.strip() for line in block.splitlines() if line.strip().startswith("if:"))
+	gate_start = if_line.index("(env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED")
+	gate_end = if_line.index(" && env.AUTOFIX_RESUME_TERMINAL", gate_start)
+	partial_finalize_gate = if_line[gate_start:gate_end]
+	gate_cases = (
+		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor", "AUTOFIX_PARTIAL_FINALIZE_REASON": "recoverable_failure"}, True),
+		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor", "AUTOFIX_PARTIAL_FINALIZE_REASON": "refusal"}, True),
+		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor", "AUTOFIX_PARTIAL_FINALIZE_REASON": "soft_deadline"}, False),
+		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "reviewers", "AUTOFIX_PARTIAL_FINALIZE_REASON": "recoverable_failure"}, False),
+		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "true", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "reviewers", "AUTOFIX_PARTIAL_FINALIZE_REASON": "soft_deadline"}, True),
+	)
+	for gate_env, expected_result in gate_cases:
+		def replace_gate_comparison(match: re.Match[str]) -> str:
+			actual_value = gate_env[match.group(1)]
+			return str(actual_value == match.group(3) if match.group(2) == "==" else actual_value != match.group(3))
+
+		python_gate = re.sub(r"env\.([A-Z0-9_]+)\s*(==|!=)\s*'([^']*)'", replace_gate_comparison, partial_finalize_gate)
+		python_gate = python_gate.replace("||", "or").replace("&&", "and")
+		assert re.fullmatch(r"[() TrueFalsorand]+", python_gate), python_gate
+		assert eval(python_gate, {"__builtins__": {}}, {}) is expected_result, gate_env
+
+
 def test_validator_classifies_recoverable_failure_summary(tmp_path: Path) -> None:
 	"""Execute the validator step body against the real fallback summary
 	shapes at two reviewer counts.
 
 	REVIEWERS_SUCCESSFUL=6: the recoverable_failure summary is flagged by
-	Check 1c (and would be by Check 2 — its audit section is fallback-only),
-	the refusal summary by Check 2: SUSPICIOUS true for both, only the
-	matching specific flag set.
+	Check 1c and the refusal summary by Check 1b before Check 2 can run:
+	SUSPICIOUS true for both, only the matching specific flag set.
 
 	REVIEWERS_SUCCESSFUL=0: Check 2 is skipped. The editor still runs in that
 	state when every reviewer slot was skipped fail-open (`skipped_open` /
@@ -1263,6 +1289,7 @@ if __name__ == "__main__":
 	test_validator_sets_editor_noop_recoverable_failure_alongside_suspicious()
 	test_validator_greps_for_recoverable_failure_sentinel_in_lockstep()
 	test_validator_check_1c_sets_suspicious_without_touching_check_1()
+	test_validator_gate_runs_for_editor_partial_finalize_without_validation_tail()
 	with tempfile.TemporaryDirectory() as temporary_test_directory:
 		test_validator_classifies_recoverable_failure_summary(Path(temporary_test_directory))
 		test_noop_warning_step_branches_on_recoverable_failure_with_last_error(Path(temporary_test_directory))

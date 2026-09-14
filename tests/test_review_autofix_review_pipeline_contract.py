@@ -5215,11 +5215,12 @@ def test_review_pipeline_summary_recoverable_failure_keeps_partial_finalize_reas
 			"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true",
 			"AUTOFIX_PARTIAL_FINALIZE_REASON": "recoverable_failure",
 			"AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor",
-			"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false",
 		},
 	)["summary"]
 	assert summary["partial_finalize"] is True
 	assert summary["partial_finalize_reason"] == "recoverable_failure"
+	assert summary["partial_finalize_validation_tail_can_complete"] is False
 	assert summary["finalize_reason"] == "partial_finalize"
 	assert summary["slot_results"]["editor"]["failure_class"] == "recoverable_failure"
 	assert summary["slot_results"]["editor"]["status"] == "failed"
@@ -5434,7 +5435,6 @@ def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
 		"Run interim judge",
 		"Synthesize behavioural smoke",
 		"Detect editor-claimed-but-uncommitted changes",
-		"Validate editor no-op disposition",
 		"Detect merge conflicts",
 		"Prepare merge-conflict resolver prompt and pre-snapshot",
 		"Run Codex resolver, validate, stage, commit",
@@ -5444,6 +5444,8 @@ def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
 		assert "(env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')" in block, (
 			f"step should stay available only when the partial-finalize validation tail can complete: {step_name}"
 		)
+	validator_block = _step_block("Validate editor no-op disposition")
+	assert "(env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal'))" in validator_block
 
 
 def test_review_partial_finalize_keeps_commit_and_push_path_available() -> None:
