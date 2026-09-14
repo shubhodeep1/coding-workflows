@@ -149,7 +149,7 @@ codex_config_assemble()
 
 model_provider_broker_start()
 {
-	local scripts_dir="" broker_path="" ready_file="" pid_file="" broker_pid="" broker_runtime_dir=""
+	local scripts_dir="" broker_path="" ready_file="" pid_file="" broker_pid="" broker_runtime_dir="" rejections_file=""
 	local ready_deadline=0 ready_json=""
 	scripts_dir="$(_codex_helpers_resolve_scripts_dir "${CODEX_HELPERS_SCRIPTS_DIR:-}")"
 	broker_path="${scripts_dir}/model_provider_broker.py"
@@ -160,17 +160,25 @@ model_provider_broker_start()
 		echo "::error::model provider broker prerequisites are unavailable" >&2
 		return 1
 	fi
-	rm -f -- "${ready_file}" "${pid_file}"
+	# Per-broker rejection log (see model_provider_broker.py record_rejection):
+	# one JSON line per rejected request, read back by
+	# model_provider_broker_policy_rejection_count so a retry loop can stop
+	# after a deterministic 4xx policy rejection instead of burning every
+	# remaining attempt on the same broker instance.
+	rejections_file="${MODEL_PROVIDER_BROKER_REJECTIONS_FILE:-${broker_runtime_dir}/model-provider-broker-rejections.jsonl}"
+	rm -f -- "${ready_file}" "${pid_file}" "${rejections_file}"
 	umask 077
 	MODEL_PROVIDER_BROKER_PID_FILE="${pid_file}"
 	MODEL_PROVIDER_BROKER_READY_FILE="${ready_file}"
+	MODEL_PROVIDER_BROKER_REJECTIONS_FILE="${rejections_file}"
 	MODEL_PROVIDER_BROKER_AGENT_HOME="${MODEL_PROVIDER_BROKER_AGENT_HOME:-${broker_runtime_dir}/model-provider-agent-home}"
 	mkdir -p "${MODEL_PROVIDER_BROKER_AGENT_HOME}/tmp" "${MODEL_PROVIDER_BROKER_AGENT_HOME}/.cache"
 	chmod 0700 "${MODEL_PROVIDER_BROKER_AGENT_HOME}"
-	export MODEL_PROVIDER_BROKER_PID_FILE MODEL_PROVIDER_BROKER_READY_FILE MODEL_PROVIDER_BROKER_AGENT_HOME
+	export MODEL_PROVIDER_BROKER_PID_FILE MODEL_PROVIDER_BROKER_READY_FILE MODEL_PROVIDER_BROKER_AGENT_HOME MODEL_PROVIDER_BROKER_REJECTIONS_FILE
 	env -i PATH="${PATH}" HOME="${HOME:-/root}" PYTHONDONTWRITEBYTECODE=1 \
 		OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
 		python3 "${broker_path}" --ready-file "${ready_file}" \
+		--rejections-file "${rejections_file}" \
 		--max-requests "${MODEL_PROVIDER_BROKER_MAX_REQUESTS:-100}" &
 	broker_pid=$!
 	printf '%s\n' "${broker_pid}" > "${pid_file}"
@@ -223,12 +231,50 @@ model_provider_broker_stop()
 	fi
 	[ -z "${MODEL_PROVIDER_BROKER_PID_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_PID_FILE}"
 	[ -z "${MODEL_PROVIDER_BROKER_READY_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_READY_FILE}"
+	[ -z "${MODEL_PROVIDER_BROKER_REJECTIONS_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_REJECTIONS_FILE}"
 	if [ -n "${MODEL_PROVIDER_BROKER_AGENT_HOME:-}" ] && [ -d "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ] \
 		&& [ "$(stat -c %u "${MODEL_PROVIDER_BROKER_AGENT_HOME}")" != "$(id -u)" ]; then
 		sudo -n chown -R "$(id -u):$(id -g)" "${MODEL_PROVIDER_BROKER_AGENT_HOME}" || return 1
 	fi
 	unset MODEL_PROVIDER_BROKER_BASE_URL MODEL_PROVIDER_BROKER_TOKEN MODEL_PROVIDER_BROKER_PID_FILE MODEL_PROVIDER_BROKER_READY_FILE MODEL_PROVIDER_BROKER_AGENT_HOME MODEL_PROVIDER_BROKER_ACL_BACKUP MODEL_PROVIDER_BROKER_ISOLATION_USER
-	unset MODEL_PROVIDER_BROKER_ACL_CAPTURED
+	unset MODEL_PROVIDER_BROKER_ACL_CAPTURED MODEL_PROVIDER_BROKER_REJECTIONS_FILE
+}
+
+# Count the deterministic policy rejections (HTTP 4xx) the running broker has
+# recorded so far. Prints a non-negative integer; 0 when the broker has no
+# rejection log (older broker, file unreadable, or no rejections yet). Upstream
+# failures the broker relays as 502 are transient and deliberately not counted.
+# Callers snapshot the count before an attempt and compare after it: a higher
+# count on a failed attempt means the broker itself refused the requests, so a
+# retry against the same broker cannot succeed.
+model_provider_broker_policy_rejection_count()
+{
+	local rejections_file="${MODEL_PROVIDER_BROKER_REJECTIONS_FILE:-}" count="0"
+	if [ -n "${rejections_file}" ] && [ -r "${rejections_file}" ]; then
+		count="$(grep -cE '"status":[[:space:]]*4[0-9]{2}([^0-9]|$)' -- "${rejections_file}" 2>/dev/null || true)"
+	fi
+	case "${count}" in
+		''|*[!0-9]*) count="0" ;;
+	esac
+	printf '%s\n' "${count}"
+}
+
+# Print the most recent policy rejection as `status=<n> message=<json-string>`
+# for a log line, or nothing when no rejection has been recorded.
+model_provider_broker_last_policy_rejection()
+{
+	local rejections_file="${MODEL_PROVIDER_BROKER_REJECTIONS_FILE:-}" last_line=""
+	if [ -z "${rejections_file}" ] || [ ! -r "${rejections_file}" ]; then
+		return 0
+	fi
+	last_line="$(grep -E '"status":[[:space:]]*4[0-9]{2}([^0-9]|$)' -- "${rejections_file}" 2>/dev/null | tail -n 1 || true)"
+	[ -n "${last_line}" ] || return 0
+	printf '%s' "${last_line}" | python3 -c 'import json, sys
+try:
+	record = json.loads(sys.stdin.read())
+except ValueError:
+	sys.exit(0)
+print("status=%s message=%s" % (record.get("status", "unknown"), json.dumps(str(record.get("message", "")))))' 2>/dev/null || true
 }
 
 _model_provider_broker_capture_acl()
