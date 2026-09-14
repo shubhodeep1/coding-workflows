@@ -129,7 +129,6 @@ def _run_stage_chain(
 		cwd=workspace_dir,
 	)
 	if mock_bin_dir is not None:
-		env["MOCK_OPENCODE_OUTPUT_FILE"] = str(mock_bin_dir / "opencode_output.txt")
 		env["OPENCODE_CONFIG_WRITER_PATH"] = str(mock_bin_dir / "write_opencode_config.sh")
 		env["PATH"] = f"{mock_bin_dir}:{env.get('PATH', '')}"
 
