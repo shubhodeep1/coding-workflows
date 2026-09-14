@@ -410,8 +410,10 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   `AUTOFIX_RESOLVER_RETRY_STATE_V2` producer comments. User-editable V1 PR-body
   markers remain recognizable as legacy text but cannot weaken verification.
   The trusted actuator persists the marker comment ID as an untrusted commit
-  status on the signed head SHA, and the poller verifies the directly fetched
-  comment's producer, context, and signature before use. A non-escalated locator cannot override
+  status on the signed head SHA. The poller searches up to 10 combined-status
+  pages for that context, then verifies the directly fetched comment's producer,
+  context, and signature before use; incomplete status history defers mutation.
+  A non-escalated locator cannot override
   the trusted `ai:resolver-escalated` label; that mismatch falls back to
   highest-generation selection. A missing or invalid locator likewise scans up
   to 10 pages and 32 MiB, then refreshes the locator. The actuator reuses the review

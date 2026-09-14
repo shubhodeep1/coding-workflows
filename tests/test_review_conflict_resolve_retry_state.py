@@ -442,7 +442,9 @@ def test_resolver_retry_comment_lookups_are_bounded() -> None:
 	assert "select-resolver-retry" in prepare
 	assert "select-resolver-retry" in actuator
 	assert "persisted_comment_id=" in actuator
-	assert 'commits/${final_pr_head_sha}/status' in poller
+	assert 'commits/${final_pr_head_sha}/status?per_page=100&page=${resolver_retry_status_page}' in poller
+	assert "resolver_retry_status_max_pages=10" in poller
+	assert 'status locator history exceeds the bounded scan' in poller
 	assert 'statuses/${final_pr_head_sha}' in poller
 	assert 'statuses/${live_head_sha}' in actuator
 	assert 'context=ai/resolver-retry-state-locator' in poller

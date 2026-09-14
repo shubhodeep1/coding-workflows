@@ -2330,7 +2330,7 @@ if args[0] == 'api':
 		print(json.dumps(payload))
 		sys.exit(0)
 
-	m = re.search(r'/commits/([^/?]+)/status$', path)
+	m = re.search(r'/commits/([^/?]+)/status(?:\?.*)?$', path)
 	if m and method == 'GET':
 		sha = m.group(1)
 		statuses = []
@@ -2338,8 +2338,18 @@ if args[0] == 'api':
 			if pr.get('headSha') == sha:
 				statuses = list(pr.get('commitStatuses', []))
 				break
+		per_page_match = re.search(r'(?:[?&])per_page=(\d+)', path)
+		page_match = re.search(r'(?:[?&])page=(\d+)', path)
+		per_page = int(per_page_match.group(1)) if per_page_match else 30
+		page = int(page_match.group(1)) if page_match else 1
+		page_start = (page - 1) * per_page
 		save()
-		print(json.dumps({'state': 'success', 'sha': sha, 'statuses': statuses}))
+		print(json.dumps({
+			'state': 'success',
+			'sha': sha,
+			'total_count': len(statuses),
+			'statuses': statuses[page_start:page_start + per_page],
+		}))
 		sys.exit(0)
 
 	if re.search(r'/merges$', path) and (method == 'POST' or fields):
@@ -15355,20 +15365,58 @@ def test_integration_conflict_retry_locator_survives_comment_flood():
 			"headRefName": "orchestrator/project-192", "headSha": head_sha,
 			"mergeable": False, "mergeable_state": "dirty",
 			"body": "Existing PR body\n",
-			"commitStatuses": [{
-				"context": "ai/resolver-retry-state-locator",
-				"description": "comment_id=777",
-				"state": "success",
-			}],
+			"commitStatuses": [
+				*[
+					{"context": f"ci/noise-{index}", "description": "completed", "state": "success"}
+					for index in range(100)
+				],
+				{
+					"context": "ai/resolver-retry-state-locator",
+					"description": "comment_id=777",
+					"state": "success",
+				},
+			],
 		}],
 		existing_branches=["main", "orchestrator/project-192"],
 		merge_tree_conflict_paths=["scripts/example.py"],
 	)
-	assert f"repos/owner/repo/commits/{head_sha}/status" in result["api_calls"]
+	assert f"repos/owner/repo/commits/{head_sha}/status?per_page=100&page=1" in result["api_calls"]
+	assert f"repos/owner/repo/commits/{head_sha}/status?per_page=100&page=2" in result["api_calls"]
+	assert f"repos/owner/repo/commits/{head_sha}/status?per_page=100&page=3" not in result["api_calls"]
 	assert "repos/owner/repo/issues/comments/777" in result["api_calls"]
 	assert not any("/issues/353/comments?per_page=" in path for path in result["api_calls"])
 	assert [dispatch for dispatch in result["review_dispatches"] if dispatch.get("pr_number") == 353] == []
 	assert result["latest_state"]["integration_sync_status"] == "escalated"
+
+
+def test_integration_conflict_retry_locator_status_scan_defers_when_incomplete():
+	head_sha = "7" * 40
+	marker = _resolver_retry_state_block_for_test(source_pr=357, head_sha=head_sha, consecutive_failure_count=20)
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 357: []},
+		issue_comments={357: [{"id": 782, "body": marker, "user": {"login": "github-actions[bot]", "id": 41898282}}]},
+		prs=[{
+			"number": 357, "state": "open", "baseRefName": "main",
+			"headRefName": "orchestrator/project-192", "headSha": head_sha,
+			"mergeable": False, "mergeable_state": "dirty", "body": "Existing PR body\n",
+			"commitStatuses": [
+				{"context": f"ci/noise-{index}", "description": "completed", "state": "success"}
+				for index in range(1001)
+			],
+		}],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+	)
+	assert f"repos/owner/repo/commits/{head_sha}/status?per_page=100&page=10" in result["api_calls"]
+	assert f"repos/owner/repo/commits/{head_sha}/status?per_page=100&page=11" not in result["api_calls"]
+	assert not any("/issues/357/comments?per_page=" in path for path in result["api_calls"])
+	assert [dispatch for dispatch in result["review_dispatches"] if dispatch.get("pr_number") == 357] == []
+	assert "status locator history exceeds the bounded scan" in (result["stdout"] + result["stderr"])
 
 
 def test_integration_conflict_forged_locator_is_not_authority():
