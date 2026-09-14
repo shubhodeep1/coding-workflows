@@ -493,20 +493,6 @@ gh_retry()
 	return 1
 }
 
-# Run one networked git command with GitHub authentication that exists only
-# for that child process. The token is never written to repository config.
-git_with_github_auth()
-{
-	local auth_token="${GH_PAT:-${GH_TOKEN:-}}"
-	local auth_header=""
-	if [ -z "${auth_token}" ]; then
-		git "$@"
-		return
-	fi
-	auth_header="$(printf 'x-access-token:%s' "${auth_token}" | base64 | tr -d '\n')"
-	git -c "http.extraHeader=Authorization: Basic ${auth_header}" "$@"
-}
-
 # ---------------------------------------------------------------
 # gh_retry_to_file — Like gh_retry but captures stdout to a file.
 #
@@ -746,7 +732,7 @@ curl_gh_api()
 # Emits JSON object:
 # {
 #   "meta": {"title", "body", "head_ref", "base_ref", "head_sha"},
-#   "comments": [{"id", "author", "author_id", "author_type", "author_association", "body", "created_at"}],
+#   "comments": [{"author", "body", "created_at"}],
 #   "review_comments": [{"author", "path", "line", "body"}]
 # }
 #
@@ -780,7 +766,7 @@ _gh_pr_with_all_comments_rest()
 			|| echo '{}')"
 	fi
 	comments_json="$(gh_retry gh api --paginate "repos/${repo_path}/issues/${pr_number}/comments" 2>/dev/null \
-		| jq -c -s 'add // [] | [.[] | {id: .id, author: .user.login, author_id: .user.id, author_type: .user.type, author_association: .author_association, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.id // 0))' 2>/dev/null \
+		| jq -c -s 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null \
 		|| echo '[]')"
 	review_comments_json="$(gh_retry gh api --paginate "repos/${repo_path}/pulls/${pr_number}/comments" 2>/dev/null \
 		| jq -c -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null \
@@ -807,7 +793,7 @@ _gh_pr_with_all_comments_rest()
 # Emits JSON object:
 # {
 #   "meta": {"title", "body", "head_ref", "base_ref", "head_sha"},
-#   "comments": [{"id", "author", "author_id", "author_type", "author_association", "body", "created_at"}],
+#   "comments": [{"author", "body", "created_at"}],
 #   "review_comments": [{"author", "path", "line", "body"}]
 # }
 #
@@ -847,14 +833,7 @@ gh_pr_with_all_comments()
 				headRefOid
 				comments(first: 100) {
 					nodes {
-						databaseId
-						author {
-							login
-							__typename
-							... on User { databaseId }
-							... on Bot { databaseId }
-						}
-						authorAssociation
+						author { login }
 						body
 						createdAt
 					}
@@ -934,16 +913,12 @@ gh_pr_with_all_comments()
 					[
 						($pr.comments.nodes // [])[]
 						| {
-							id: (.databaseId // null),
 							author: (.author.login // null),
-							author_id: (.author.databaseId // null),
-							author_type: (if .author.__typename == "User" then "User" else (.author.__typename // null) end),
-							author_association: (.authorAssociation // null),
 							body: (.body // ""),
 							created_at: (.createdAt // null)
 						}
 					]
-					| sort_by((.created_at // ""), (.id // 0))
+					| sort_by((.created_at // ""), (.author // ""), (.body // ""))
 				),
 				review_comments: (
 					[
@@ -970,406 +945,6 @@ gh_pr_with_all_comments()
 	rm -f "${_gql_file:-}"
 	echo "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments reason=${_fallback_reason:-unknown} owner=${owner} repo=${repo} pr=${pr_number}" >&2
 	_gh_pr_with_all_comments_rest "${owner}" "${repo}" "${pr_number}" "${preloaded_meta_json}"
-}
-
-# Review-blocked terminal decisions are model recommendations until a trusted
-# human approves the exact request and decision digest on the PR. Approval and
-# refusal checks consume prefetched PR comments; replacement-issue dedup uses
-# one bounded search/issues read.
-review_blocked_decision_digest()
-{
-	printf '%s' "${1:?decision JSON required}" | jq -cS . | sha256sum | awk '{print $1}'
-}
-
-review_blocked_find_pending_request()
-{
-	local comments_json="${1:-[]}"
-	local pr_number="${2:?PR number required}"
-	local head_sha="${3:?head SHA required}"
-	local producer_id="${4:?authenticated producer ID required}"
-	[[ "${producer_id}" =~ ^[1-9][0-9]*$ ]] || return 1
-	printf '%s' "${comments_json}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
-import json, re, sys
-comments = json.load(sys.stdin)
-pr = int(sys.argv[1]); head = sys.argv[2]; producer_id = int(sys.argv[3])
-request_re = re.compile(r"<!-- REVIEW_BLOCKED_APPROVAL_V1\s*\n(\{.*?\})\s*\nREVIEW_BLOCKED_APPROVAL_V1 -->", re.S)
-consumed_re = re.compile(r"<!-- REVIEW_BLOCKED_APPROVAL_CONSUMED_V1\s*\n(\{.*?\})\s*\nREVIEW_BLOCKED_APPROVAL_CONSUMED_V1 -->", re.S)
-requests = []
-consumed = set()
-for comment in comments if isinstance(comments, list) else []:
-    if not isinstance(comment, dict): continue
-    trusted_producer = comment.get("author_id") == producer_id
-    if not trusted_producer: continue
-    body = comment.get("body", "") if isinstance(comment, dict) else ""
-    for match in consumed_re.finditer(body):
-        try: consumed.add(json.loads(match.group(1)).get("request_id"))
-        except (json.JSONDecodeError, TypeError): pass
-    for match in request_re.finditer(body):
-        try: request = json.loads(match.group(1))
-        except (json.JSONDecodeError, TypeError): continue
-        if request.get("schema_version") != "review_blocked_approval.v1": continue
-        if request.get("pr_number") != pr or request.get("head_sha") != head: continue
-        if request.get("action") not in {"merge", "merge_with_followup", "close_and_reissue"}: continue
-        if not isinstance(request.get("decision"), dict): continue
-        if request["decision"].get("action") != request.get("action"): continue
-        if not re.fullmatch(r"review_blocked_approval_\d{14}_[0-9a-f]{10}", str(request.get("request_id", ""))): continue
-        if not re.fullmatch(r"[0-9a-f]{64}", str(request.get("decision_digest", ""))): continue
-        requests.append(request)
-for request in reversed(requests):
-    if request.get("request_id") not in consumed:
-        print(json.dumps(request, separators=(",", ":"), sort_keys=True))
-        break
-' "${pr_number}" "${head_sha}" "${producer_id}"
-}
-
-review_blocked_build_approval_request()
-{
-	local pr_number="${1:?PR number required}"
-	local issue_number="${2:-0}"
-	local head_sha="${3:?head SHA required}"
-	local decision_json="${4:?decision JSON required}"
-	local action request_id decision_digest created_at helper_dir
-	action="$(printf '%s' "${decision_json}" | jq -r '.action // empty')"
-	decision_digest="$(review_blocked_decision_digest "${decision_json}")"
-	helper_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-	request_id="$(PYTHONPATH="${helper_dir}:${PYTHONPATH:-}" PYTHONDONTWRITEBYTECODE=1 python3 -c 'from ai_memory_lib import make_record_id; print(make_record_id("review_blocked_approval"))')" || return 1
-	created_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-	jq -cn --arg request_id "${request_id}" --argjson pr_number "${pr_number}" \
-		--argjson issue_number "${issue_number:-0}" --arg action "${action}" \
-		--arg head_sha "${head_sha}" --arg decision_digest "${decision_digest}" \
-		--arg created_at "${created_at}" --argjson decision "${decision_json}" \
-		'{schema_version:"review_blocked_approval.v1",request_id:$request_id,pr_number:$pr_number,linked_issue_number:$issue_number,action:$action,head_sha:$head_sha,decision_digest:$decision_digest,created_at:$created_at,decision:$decision}'
-}
-
-review_blocked_approval_status()
-{
-	local comments_json="${1:-[]}"
-	local request_json="${2:?request JSON required}"
-	local repository="${3:-${GITHUB_REPOSITORY:-}}"
-	local pending_json approval_candidate approver repository_role
-	pending_json="$(printf '%s' "${request_json}" | jq -c '{status:"pending",request_id:(.request_id // null),decision_digest:(.decision_digest // null)}' 2>/dev/null || printf '%s' '{"status":"pending","request_id":null,"decision_digest":null}')"
-	if ! [[ "${repository}" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
-		printf '%s\n' "${pending_json}"
-		return 0
-	fi
-	approval_candidate="$(printf '%s' "${comments_json}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
-import json, re, sys
-try:
-    comments = json.load(sys.stdin); request = json.loads(sys.argv[1])
-    request_id = request["request_id"]; digest = request["decision_digest"]
-except (json.JSONDecodeError, KeyError, TypeError):
-    raise SystemExit(0)
-command = "/review-blocked-approve {} {}".format(request_id, digest)
-trusted = {"OWNER", "MEMBER", "COLLABORATOR"}
-selected = None
-for comment in comments if isinstance(comments, list) else []:
-    if not isinstance(comment, dict) or comment.get("body", "").strip() != command: continue
-    if comment.get("author_type") != "User" or comment.get("author_association") not in trusted: continue
-    if (comment.get("created_at") or "") < request.get("created_at", ""): continue
-    author = comment.get("author")
-    if not isinstance(author, str) or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})", author): continue
-    selected = comment
-if selected:
-    print(json.dumps(selected, separators=(",", ":")))
-' "${request_json}" 2>/dev/null || true)"
-	if [ -z "${approval_candidate}" ]; then
-		printf '%s\n' "${pending_json}"
-		return 0
-	fi
-	approver="$(printf '%s' "${approval_candidate}" | jq -r '.author // empty' 2>/dev/null || true)"
-	if [ -z "${approver}" ]; then
-		printf '%s\n' "${pending_json}"
-		return 0
-	fi
-	# The prefetched comment payload carries historical association only; no
-	# existing PR-context call exposes the commenter's current repository role.
-	# GitHub's legacy `permission` field maps maintain to write, so only the
-	# exact role_name can distinguish terminal-action authority safely.
-	if ! repository_role="$(gh_retry gh api -X GET "repos/${repository}/collaborators/${approver}/permission" --jq '.role_name // empty' 2>/dev/null)"; then
-		echo "::warning::Review-blocked approval remains pending because the current repository role for ${approver} could not be resolved." >&2
-		printf '%s\n' "${pending_json}"
-		return 0
-	fi
-	case "${repository_role}" in
-		maintain|admin)
-			printf '%s' "${approval_candidate}" | jq -c --arg role "${repository_role}" --arg request_id "$(printf '%s' "${request_json}" | jq -r '.request_id')" --arg decision_digest "$(printf '%s' "${request_json}" | jq -r '.decision_digest')" '{status:"approved",request_id:$request_id,decision_digest:$decision_digest,approver:(.author // null),approval_comment_id:(.id // null),repository_role:$role}'
-			;;
-		*)
-			printf '%s\n' "${pending_json}"
-			;;
-	esac
-}
-
-review_blocked_post_approval_request()
-{
-	local repository="${1:?repository required}"
-	local pr_number="${2:?PR number required}"
-	local request_json="${3:?request JSON required}"
-	local request_id decision_digest action head_sha body
-	request_id="$(printf '%s' "${request_json}" | jq -r '.request_id')"
-	decision_digest="$(printf '%s' "${request_json}" | jq -r '.decision_digest')"
-	action="$(printf '%s' "${request_json}" | jq -r '.action')"
-	head_sha="$(printf '%s' "${request_json}" | jq -r '.head_sha')"
-	body="## Review-Blocked Judge — Human Approval Required
-
-The model recommends **${action}**, but no terminal PR mutation has run. A GitHub User whose current repository role is exactly maintain or admin must approve this exact request at head \`${head_sha}\` by posting:
-
-\`/review-blocked-approve ${request_id} ${decision_digest}\`
-
-<!-- REVIEW_BLOCKED_APPROVAL_V1
-${request_json}
-REVIEW_BLOCKED_APPROVAL_V1 -->"
-	gh_retry gh api "repos/${repository}/issues/${pr_number}/comments" -f body="${body}" >/dev/null
-}
-
-review_blocked_post_consumed_marker()
-{
-	local repository="${1:?repository required}" pr_number="${2:?PR number required}"
-	local request_id="${3:?request ID required}" result="${4:?result required}"
-	local consumed_at body
-	consumed_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-	body="<!-- REVIEW_BLOCKED_APPROVAL_CONSUMED_V1
-$(jq -cn --arg request_id "${request_id}" --arg result "${result}" --arg consumed_at "${consumed_at}" '{schema_version:"review_blocked_approval_consumed.v1",request_id:$request_id,result:$result,consumed_at:$consumed_at}')
-REVIEW_BLOCKED_APPROVAL_CONSUMED_V1 -->"
-	gh_retry gh api "repos/${repository}/issues/${pr_number}/comments" -f body="${body}" >/dev/null
-}
-
-review_blocked_find_issue_for_request()
-{
-	local repository="${1:?repository required}" request_id="${2:?request ID required}"
-	# Audited existing calls: PR comment hydration cannot find repository issues
-	# by a durable body marker. One bounded search call is required for retry
-	# deduplication; failures intentionally return empty and preserve legacy flow.
-	gh_retry gh api -X GET search/issues \
-		-f q="repo:${repository} is:issue is:open in:body review-blocked-approval-request:${request_id}" \
-		--jq '.items // [] | map(select((.body // "") | contains("<!-- review-blocked-approval-request:'"${request_id}"' -->"))) | first | .html_url // empty' \
-		2>/dev/null || true
-}
-
-review_blocked_build_successor_intent()
-{
-	local request_json="${1:?approval request JSON required}"
-	local successor_type="${2:?successor type required}"
-	local successor_title="${3:?successor title required}"
-	local successor_body="${4:?successor body required}"
-	local required_labels_json="${5:?required labels JSON required}"
-	local producer_id="${6:?producer ID required}"
-	REQUEST_JSON="${request_json}" SUCCESSOR_TYPE="${successor_type}" \
-	SUCCESSOR_TITLE="${successor_title}" SUCCESSOR_BODY="${successor_body}" \
-	REQUIRED_LABELS_JSON="${required_labels_json}" PRODUCER_ID="${producer_id}" \
-	PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
-import hashlib
-import json
-import os
-import re
-import sys
-
-try:
-	request = json.loads(os.environ["REQUEST_JSON"])
-	labels = json.loads(os.environ["REQUIRED_LABELS_JSON"])
-	producer_id = int(os.environ["PRODUCER_ID"])
-except (KeyError, ValueError, TypeError, json.JSONDecodeError):
-	raise SystemExit(2)
-successor_type = os.environ.get("SUCCESSOR_TYPE", "")
-title = os.environ.get("SUCCESSOR_TITLE", "")
-body = os.environ.get("SUCCESSOR_BODY", "")
-action = request.get("action")
-expected_type = {"merge_with_followup": "followup", "close_and_reissue": "reissue"}.get(action)
-if (
-	request.get("schema_version") != "review_blocked_approval.v1"
-	or expected_type != successor_type
-	or not re.fullmatch(r"review_blocked_approval_\d{14}_[0-9a-f]{10}", str(request.get("request_id", "")))
-	or not isinstance(request.get("pr_number"), int) or request["pr_number"] < 1
-	or not isinstance(request.get("linked_issue_number"), int) or request["linked_issue_number"] < 1
-	or not re.fullmatch(r"[0-9a-f]{40}", str(request.get("head_sha", "")))
-	or producer_id < 1
-	or not title or len(title) > 240
-	or not body or len(body) > 20000
-	or not isinstance(labels, list) or not labels
-	or any(not isinstance(label, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", label) for label in labels)
-):
-	raise SystemExit(2)
-labels = sorted(set(labels))
-intent = {
-	"schema_version": "review_blocked_successor.v1",
-	"request_id": request["request_id"],
-	"action": action,
-	"source_pr": request["pr_number"],
-	"linked_issue": request["linked_issue_number"],
-	"approved_head_sha": request["head_sha"],
-	"producer_id": producer_id,
-	"successor_type": successor_type,
-	"title_digest": hashlib.sha256(title.encode()).hexdigest(),
-	"body_digest": hashlib.sha256(body.encode()).hexdigest(),
-	"required_labels": labels,
-}
-canonical = json.dumps(intent, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-intent["payload_digest"] = hashlib.sha256(canonical).hexdigest()
-print(json.dumps(intent, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
-PY
-}
-
-review_blocked_successor_marker()
-{
-	local intent_json="${1:?successor intent JSON required}"
-	printf '<!-- REVIEW_BLOCKED_SUCCESSOR_V1\n%s\nREVIEW_BLOCKED_SUCCESSOR_V1 -->' "${intent_json}"
-}
-
-review_blocked_ensure_successor_intent()
-{
-	local repository="${1:?repository required}"
-	local pr_number="${2:?PR number required}"
-	local intent_json="${3:?successor intent JSON required}"
-	local producer_id="${4:?producer ID required}"
-	local comments_json="${5:-[]}"
-	local marker response_json
-	marker="$(review_blocked_successor_marker "${intent_json}")" || return 1
-	if printf '%s' "${comments_json}" | jq -e --arg marker "${marker}" --argjson producer_id "${producer_id}" \
-		'any(.[]?; (.author_id == $producer_id) and (.body == $marker))' >/dev/null 2>&1; then
-		return 0
-	fi
-	if ! response_json="$(gh_retry gh api "repos/${repository}/issues/${pr_number}/comments" -f body="${marker}" 2>/dev/null)"; then
-		return 1
-	fi
-	printf '%s' "${response_json}" | jq -e --arg marker "${marker}" --argjson producer_id "${producer_id}" \
-		'(.user.id == $producer_id) and (.body == $marker)' >/dev/null 2>&1
-}
-
-review_blocked_resolve_successor_issue()
-{
-	local repository="${1:?repository required}"
-	local intent_json="${2:?successor intent JSON required}"
-	local producer_id="${3:?producer ID required}"
-	local request_id search_json
-	request_id="$(printf '%s' "${intent_json}" | jq -r '.request_id // empty' 2>/dev/null || true)"
-	if ! [[ "${repository}" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] \
-		|| ! [[ "${request_id}" =~ ^review_blocked_approval_[0-9]{14}_[0-9a-f]{10}$ ]] \
-		|| ! [[ "${producer_id}" =~ ^[1-9][0-9]*$ ]]; then
-		printf '%s\n' '{"status":"inconclusive","url":null}'
-		return 0
-	fi
-	# Audited existing calls: PR comment hydration cannot return repository issue
-	# candidates. This is one bounded search call; candidate validation is local.
-	if ! search_json="$(gh_retry gh api -X GET search/issues \
-		-f q="repo:${repository} is:issue is:open in:body REVIEW_BLOCKED_SUCCESSOR_V1 ${request_id}" 2>/dev/null)"; then
-		printf '%s\n' '{"status":"inconclusive","url":null}'
-		return 0
-	fi
-	INTENT_JSON="${intent_json}" SEARCH_JSON="${search_json}" PRODUCER_ID="${producer_id}" \
-	PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
-import hashlib
-import json
-import os
-import re
-
-def canonical(value):
-	return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-try:
-	intent = json.loads(os.environ["INTENT_JSON"])
-	search = json.loads(os.environ["SEARCH_JSON"])
-	producer_id = int(os.environ["PRODUCER_ID"])
-except (KeyError, ValueError, TypeError, json.JSONDecodeError):
-	print('{"status":"inconclusive","url":null}')
-	raise SystemExit(0)
-unsigned = dict(intent)
-payload_digest = unsigned.pop("payload_digest", None)
-required = {
-	"schema_version", "request_id", "action", "source_pr", "linked_issue",
-	"approved_head_sha", "producer_id", "successor_type", "title_digest",
-	"body_digest", "required_labels",
-}
-valid_intent = (
-	set(unsigned) == required
-	and intent.get("schema_version") == "review_blocked_successor.v1"
-	and intent.get("producer_id") == producer_id
-	and re.fullmatch(r"[0-9a-f]{64}", str(payload_digest or "")) is not None
-	and hashlib.sha256(canonical(unsigned).encode()).hexdigest() == payload_digest
-)
-items = search.get("items") if isinstance(search, dict) else None
-if not valid_intent or not isinstance(items, list) or len(items) > 100:
-	print('{"status":"inconclusive","url":null}')
-	raise SystemExit(0)
-opener = "<!-- REVIEW_BLOCKED_SUCCESSOR_V1\n"
-closer = "\nREVIEW_BLOCKED_SUCCESSOR_V1 -->"
-valid = []
-for item in items:
-	if not isinstance(item, dict) or item.get("state") != "open":
-		continue
-	if (item.get("user") or {}).get("id") != producer_id:
-		continue
-	title = item.get("title")
-	body = item.get("body")
-	url = item.get("html_url")
-	labels = item.get("labels")
-	if not isinstance(title, str) or not isinstance(body, str) or not isinstance(url, str) or not isinstance(labels, list):
-		continue
-	marker_start = body.rfind("\n\n" + opener)
-	if marker_start < 0 or not body.endswith(closer):
-		continue
-	base_body = body[:marker_start]
-	marker_json = body[marker_start + 2 + len(opener):-len(closer)]
-	try:
-		marker_intent = json.loads(marker_json)
-	except json.JSONDecodeError:
-		continue
-	actual_labels = {entry.get("name") for entry in labels if isinstance(entry, dict)}
-	if (
-		canonical(marker_intent) != canonical(intent)
-		or hashlib.sha256(title.encode()).hexdigest() != intent.get("title_digest")
-		or hashlib.sha256(base_body.encode()).hexdigest() != intent.get("body_digest")
-		or not set(intent.get("required_labels", [])).issubset(actual_labels)
-		or re.fullmatch(r"https?://[^\s]+/issues/[1-9][0-9]*", url) is None
-	):
-		continue
-	valid.append(url)
-if len(valid) == 1:
-	print(canonical({"status": "valid", "url": valid[0]}))
-elif valid:
-	print('{"status":"inconclusive","url":null}')
-else:
-	print('{"status":"not_found","url":null}')
-PY
-}
-
-review_blocked_prepare_successor_issue()
-{
-	local repository="${1:?repository required}"
-	local pr_number="${2:?PR number required}"
-	local comments_json="${3:-[]}"
-	local request_json="${4:?approval request JSON required}"
-	local producer_id="${5:?producer ID required}"
-	local successor_type="${6:?successor type required}"
-	local successor_title="${7:?successor title required}"
-	local successor_body="${8:?successor body required}"
-	local required_labels_json="${9:?required labels JSON required}"
-	local intent_json resolution_json resolution_status prepared_body
-	if ! intent_json="$(review_blocked_build_successor_intent "${request_json}" "${successor_type}" \
-		"${successor_title}" "${successor_body}" "${required_labels_json}" "${producer_id}")"; then
-		printf '%s\n' '{"status":"inconclusive","url":null,"body":null}'
-		return 0
-	fi
-	if ! review_blocked_ensure_successor_intent "${repository}" "${pr_number}" \
-		"${intent_json}" "${producer_id}" "${comments_json}"; then
-		printf '%s\n' '{"status":"inconclusive","url":null,"body":null}'
-		return 0
-	fi
-	resolution_json="$(review_blocked_resolve_successor_issue "${repository}" "${intent_json}" "${producer_id}")"
-	resolution_status="$(printf '%s' "${resolution_json}" | jq -r '.status // "inconclusive"' 2>/dev/null || echo inconclusive)"
-	case "${resolution_status}" in
-		valid)
-			printf '%s\n' "${resolution_json}"
-			;;
-		not_found)
-			prepared_body="${successor_body}
-
-$(review_blocked_successor_marker "${intent_json}")"
-			jq -cn --arg body "${prepared_body}" '{status:"not_found",url:null,body:$body}'
-			;;
-		*)
-			printf '%s\n' '{"status":"inconclusive","url":null,"body":null}'
-			;;
-	esac
 }
 
 _gh_issue_timeline_with_cross_refs_rest()
