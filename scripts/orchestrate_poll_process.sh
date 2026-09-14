@@ -8500,6 +8500,13 @@ heal_integration_branch_conflict() {
 				echo "::notice::[integration-heal] Resolver retry-state locator is stale or unavailable; falling back to bounded comment discovery."
 			fi
 		fi
+		if [ "${resolver_retry_lookup_source}" = "locator" ] \
+			&& [ "$(printf '%s' "${resolver_retry_state}" | jq -r '.escalated // false' 2>/dev/null || echo false)" != "true" ] \
+			&& printf '%s' "${final_pr_payload}" | jq -e '[.labels[]?.name] | index("ai:resolver-escalated") != null' >/dev/null 2>&1; then
+			echo "::notice::[integration-heal] Resolver retry-state locator predates the trusted escalation label; selecting the highest verified generation."
+			resolver_retry_state=""
+			resolver_retry_lookup_source=""
+		fi
 
 		if [ -z "${resolver_retry_state}" ]; then
 			# The former automatic pagination had no fetch-time bound. Fetch at most

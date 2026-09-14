@@ -2299,6 +2299,7 @@ if args[0] == 'api':
 				'merged_at': pr.get('merged_at', ('mock-merged-at' if pr.get('merged', False) else None)),
 				'title': pr.get('title', ''),
 				'body': pr.get('body', ''),
+				'labels': [{'name': label} for label in pr.get('labels', [])],
 				'base': {
 					'ref': pr.get('baseRefName', ''),
 				},
@@ -15377,6 +15378,41 @@ def test_integration_conflict_forged_locator_is_not_authority():
 	assert any("/issues/354/comments?per_page=" in path for path in result["api_calls"])
 	assert [dispatch for dispatch in result["review_dispatches"] if dispatch.get("pr_number") == 354] == []
 	assert "history exceeds the bounded scan" in (result["stdout"] + result["stderr"])
+
+
+def test_integration_conflict_locator_cannot_downgrade_escalated_label():
+	head_sha = "6" * 40
+	non_escalated_marker = _resolver_retry_state_block_for_test(
+		source_pr=356, head_sha=head_sha, consecutive_failure_count=5, escalated=False,
+	)
+	escalated_marker = _resolver_retry_state_block_for_test(
+		source_pr=356, head_sha=head_sha, consecutive_failure_count=20,
+	)
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 356: []},
+		issue_comments={356: [
+			{"id": 780, "body": non_escalated_marker, "user": {"login": "github-actions[bot]", "id": 41898282}},
+			{"id": 781, "body": escalated_marker, "user": {"login": "github-actions[bot]", "id": 41898282}},
+		]},
+		prs=[{
+			"number": 356, "state": "open", "baseRefName": "main",
+			"headRefName": "orchestrator/project-192", "headSha": head_sha,
+			"mergeable": False, "mergeable_state": "dirty",
+			"labels": ["ai:resolver-escalated"],
+			"body": "<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:780 -->\n",
+		}],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+	)
+	assert "repos/owner/repo/issues/comments/780" in result["api_calls"]
+	assert any("/issues/356/comments?per_page=" in path for path in result["api_calls"])
+	assert [dispatch for dispatch in result["review_dispatches"] if dispatch.get("pr_number") == 356] == []
+	assert result["latest_state"]["integration_sync_status"] == "escalated"
 
 
 def test_integration_conflict_fallback_persists_verified_locator():

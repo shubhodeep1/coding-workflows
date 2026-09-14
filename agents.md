@@ -407,9 +407,10 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   markers remain recognizable as legacy text but cannot weaken verification.
   The trusted actuator persists the marker comment ID as an untrusted PR-body
   locator, and the poller verifies the directly fetched comment's producer,
-  context, and signature before use. A missing or invalid locator falls back to
-  selecting the highest verified generation from a complete scan bounded to 10
-  pages and 32 MiB, then refreshes the locator. The actuator reuses the review
+  context, and signature before use. A non-escalated locator cannot override
+  the trusted `ai:resolver-escalated` label; that mismatch falls back to
+  highest-generation selection. A missing or invalid locator likewise scans up
+  to 10 pages and 32 MiB, then refreshes the locator. The actuator reuses the review
   pipeline's collected comment snapshot. Locator writes refresh the live PR body
   and verify its head immediately before PATCH so concurrent body edits are not
   replaced. An unproven history, API failure, or verification uncertainty defers
