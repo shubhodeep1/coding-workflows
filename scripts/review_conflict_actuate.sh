@@ -39,8 +39,7 @@ if [ -s "${candidate_file:-/nonexistent}" ]; then
 	signed_file="$(mktemp)"
 	comment_file="$(mktemp)"
 	selection_file="$(mktemp)"
-	locator_payload_file="$(mktemp)"
-	trap 'rm -f "${signed_file}" "${comment_file}" "${selection_file}" "${locator_payload_file}"' EXIT
+	trap 'rm -f "${signed_file}" "${comment_file}" "${selection_file}"' EXIT
 	PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_state_v2.py" sign-resolver-retry \
 		--candidate-file "${candidate_file}" \
 		--repository "${GITHUB_REPOSITORY}" \
@@ -90,28 +89,15 @@ if [ -s "${candidate_file:-/nonexistent}" ]; then
 		echo "::error::Resolver retry-state comment write did not return a valid comment ID."
 		exit 1
 	fi
-	locator_marker="<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:${persisted_comment_id} -->"
 	if [ "$(jq -r '.escalated // false' "${signed_file}")" = "true" ]; then
 		gh_retry gh issue edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:resolver-escalated" >/dev/null
 	fi
-	# The initial PR read predates the comment write. Refresh it so persisting
-	# this locator cannot replace body edits made during trusted actuation.
-	if live_pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")" \
-		&& [ "$(printf '%s' "${live_pr_json}" | jq -r '.head.sha // empty' 2>/dev/null)" = "${live_head_sha}" ] \
-		&& printf '%s' "${live_pr_json}" | jq --arg locator "${locator_marker}" '
-			(.body // "") as $body
-			| {body: (
-				if ($body | test("(?m)^<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:[1-9][0-9]* -->$")) then
-					($body | gsub("(?m)^<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:[1-9][0-9]* -->$"; $locator))
-				else
-					$body + (if $body == "" or ($body | endswith("\n")) then "" else "\n" end) + $locator + "\n"
-				end
-			)}
-		' > "${locator_payload_file}"; then
-		if ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --input "${locator_payload_file}" >/dev/null; then
-			echo "::warning::Could not persist the resolver retry-state locator; continuing after the authoritative comment update."
-		fi
-	else
+	# The existing PR read established the head used to sign the envelope.
+	# Store the locator on that immutable commit instead of replacing the PR body.
+	if ! gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${live_head_sha}" \
+		-f state=success \
+		-f context=ai/resolver-retry-state-locator \
+		-f description="comment_id=${persisted_comment_id}" >/dev/null; then
 		echo "::warning::Could not persist the resolver retry-state locator; continuing after the authoritative comment update."
 	fi
 fi

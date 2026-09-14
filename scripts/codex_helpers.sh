@@ -221,15 +221,12 @@ model_provider_broker_start()
 
 model_provider_broker_stop()
 {
-	local broker_pid=""
-	if [ -s "${MODEL_PROVIDER_BROKER_ACL_BACKUP:-/nonexistent}" ] && command -v setfacl >/dev/null 2>&1; then
-		setfacl --restore="${MODEL_PROVIDER_BROKER_ACL_BACKUP}" >/dev/null 2>&1 || return 1
-	fi
+	local broker_pid="" cleanup_rc=0
 	if [ -n "${MODEL_PROVIDER_BROKER_PID_FILE:-}" ] && [ -r "${MODEL_PROVIDER_BROKER_PID_FILE}" ]; then
 		broker_pid="$(cat "${MODEL_PROVIDER_BROKER_PID_FILE}")"
 	fi
 	if [[ "${broker_pid}" =~ ^[1-9][0-9]*$ ]] && kill -0 "${broker_pid}" 2>/dev/null; then
-		kill -TERM "${broker_pid}" 2>/dev/null || return 1
+		kill -TERM "${broker_pid}" 2>/dev/null || cleanup_rc=1
 		for _broker_wait in $(seq 1 50); do
 			kill -0 "${broker_pid}" 2>/dev/null || break
 			if [ -r "/proc/${broker_pid}/stat" ] && grep -q ') Z ' "/proc/${broker_pid}/stat"; then
@@ -239,19 +236,34 @@ model_provider_broker_stop()
 		done
 		if kill -0 "${broker_pid}" 2>/dev/null \
 			&& { [ ! -r "/proc/${broker_pid}/stat" ] || ! grep -q ') Z ' "/proc/${broker_pid}/stat"; }; then
-			echo "::error::model provider broker did not stop cleanly" >&2
-			return 1
+			kill -KILL "${broker_pid}" 2>/dev/null || cleanup_rc=1
+			for _broker_wait in $(seq 1 20); do
+				kill -0 "${broker_pid}" 2>/dev/null || break
+				if [ -r "/proc/${broker_pid}/stat" ] && grep -q ') Z ' "/proc/${broker_pid}/stat"; then
+					break
+				fi
+				/bin/sleep 0.1
+			done
+			if kill -0 "${broker_pid}" 2>/dev/null \
+				&& { [ ! -r "/proc/${broker_pid}/stat" ] || ! grep -q ') Z ' "/proc/${broker_pid}/stat"; }; then
+				echo "::error::model provider broker did not stop cleanly" >&2
+				cleanup_rc=1
+			fi
 		fi
 		wait "${broker_pid}" 2>/dev/null || true
 	fi
-	[ -z "${MODEL_PROVIDER_BROKER_PID_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_PID_FILE}"
-	[ -z "${MODEL_PROVIDER_BROKER_READY_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_READY_FILE}"
+	if [ -s "${MODEL_PROVIDER_BROKER_ACL_BACKUP:-/nonexistent}" ] && command -v setfacl >/dev/null 2>&1; then
+		setfacl --restore="${MODEL_PROVIDER_BROKER_ACL_BACKUP}" >/dev/null 2>&1 || cleanup_rc=1
+	fi
+	[ -z "${MODEL_PROVIDER_BROKER_PID_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_PID_FILE}" || cleanup_rc=1
+	[ -z "${MODEL_PROVIDER_BROKER_READY_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_READY_FILE}" || cleanup_rc=1
 	if [ -n "${MODEL_PROVIDER_BROKER_AGENT_HOME:-}" ] && [ -d "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ] \
 		&& [ "$(stat -c %u "${MODEL_PROVIDER_BROKER_AGENT_HOME}")" != "$(id -u)" ]; then
-		sudo -n chown -R "$(id -u):$(id -g)" "${MODEL_PROVIDER_BROKER_AGENT_HOME}" || return 1
+		sudo -n chown -R "$(id -u):$(id -g)" "${MODEL_PROVIDER_BROKER_AGENT_HOME}" || cleanup_rc=1
 	fi
 	unset MODEL_PROVIDER_BROKER_BASE_URL MODEL_PROVIDER_BROKER_TOKEN MODEL_PROVIDER_BROKER_PID_FILE MODEL_PROVIDER_BROKER_READY_FILE MODEL_PROVIDER_BROKER_AGENT_HOME MODEL_PROVIDER_BROKER_ACL_BACKUP MODEL_PROVIDER_BROKER_ISOLATION_USER
 	unset MODEL_PROVIDER_BROKER_ACL_CAPTURED
+	return "${cleanup_rc}"
 }
 
 _model_provider_broker_capture_acl()
@@ -424,11 +436,22 @@ model_provider_broker_prepare_codex_readonly()
 
 model_provider_broker_exec_sanitized()
 {
+	local model_process_uid="" model_process_gid=""
 	if [ -z "${MODEL_PROVIDER_BROKER_TOKEN:-}" ] || [ -z "${MODEL_PROVIDER_BROKER_BASE_URL:-}" ]; then
 		echo "::error::model provider broker is not ready; refusing direct-provider fallback" >&2
 		return 1
 	fi
-	env -i \
+	if ! command -v sudo >/dev/null 2>&1 || ! command -v unshare >/dev/null 2>&1 || ! sudo -n true >/dev/null 2>&1; then
+		echo "::error::sudo and unshare are required for model process isolation" >&2
+		return 1
+	fi
+	model_process_uid="$(id -u)"
+	model_process_gid="$(id -g)"
+	# Keep the current file-system identity while replacing /proc with a PID
+	# namespace that cannot enumerate the secret-bearing workflow or broker.
+	# --kill-child prevents a cancelled outer job from orphaning namespace PID 1.
+	sudo -n unshare --fork --pid --mount-proc --kill-child=KILL \
+		--setuid "${model_process_uid}" --setgid "${model_process_gid}" -- env -i \
 		HOME="${MODEL_PROVIDER_BROKER_AGENT_HOME:?MODEL_PROVIDER_BROKER_AGENT_HOME is required}" \
 		PATH="${PATH}" \
 		CODEX_HOME="${CODEX_HOME:-${HOME:-/root}/.codex}" \

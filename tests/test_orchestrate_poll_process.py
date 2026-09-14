@@ -2319,8 +2319,27 @@ if args[0] == 'api':
 				key, value = f.split('=', 1)
 				payload[key] = value
 		store.setdefault('commit_status_posts', []).append(payload)
+		for pr in store.get('prs', []):
+			if pr.get('headSha') == sha:
+				pr.setdefault('commitStatuses', []).insert(0, {
+					'context': payload.get('context', ''),
+					'description': payload.get('description', ''),
+					'state': payload.get('state', ''),
+				})
 		save()
 		print(json.dumps(payload))
+		sys.exit(0)
+
+	m = re.search(r'/commits/([^/?]+)/status$', path)
+	if m and method == 'GET':
+		sha = m.group(1)
+		statuses = []
+		for pr in store.get('prs', []):
+			if pr.get('headSha') == sha:
+				statuses = list(pr.get('commitStatuses', []))
+				break
+		save()
+		print(json.dumps({'state': 'success', 'sha': sha, 'statuses': statuses}))
 		sys.exit(0)
 
 	if re.search(r'/merges$', path) and (method == 'POST' or fields):
@@ -15335,11 +15354,17 @@ def test_integration_conflict_retry_locator_survives_comment_flood():
 			"number": 353, "state": "open", "baseRefName": "main",
 			"headRefName": "orchestrator/project-192", "headSha": head_sha,
 			"mergeable": False, "mergeable_state": "dirty",
-			"body": "<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:777 -->\n",
+			"body": "Existing PR body\n",
+			"commitStatuses": [{
+				"context": "ai/resolver-retry-state-locator",
+				"description": "comment_id=777",
+				"state": "success",
+			}],
 		}],
 		existing_branches=["main", "orchestrator/project-192"],
 		merge_tree_conflict_paths=["scripts/example.py"],
 	)
+	assert f"repos/owner/repo/commits/{head_sha}/status" in result["api_calls"]
 	assert "repos/owner/repo/issues/comments/777" in result["api_calls"]
 	assert not any("/issues/353/comments?per_page=" in path for path in result["api_calls"])
 	assert [dispatch for dispatch in result["review_dispatches"] if dispatch.get("pr_number") == 353] == []
@@ -15434,8 +15459,14 @@ def test_integration_conflict_fallback_persists_verified_locator():
 		existing_branches=["main", "orchestrator/project-192"],
 		merge_tree_conflict_paths=["scripts/example.py"],
 	)
-	assert "<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:779 -->" in result["prs"][0]["body"]
-	assert 355 in result.get("pr_body_update_calls", [])
+	assert result["prs"][0]["body"] == "Existing PR body\n"
+	assert result.get("pr_body_update_calls", []) == []
+	assert {
+		"sha": head_sha,
+		"state": "success",
+		"context": "ai/resolver-retry-state-locator",
+		"description": "comment_id=779",
+	} in result["commit_status_posts"]
 	assert [dispatch for dispatch in result["review_dispatches"] if dispatch.get("pr_number") == 355] == []
 
 

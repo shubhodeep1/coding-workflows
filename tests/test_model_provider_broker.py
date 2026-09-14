@@ -347,6 +347,10 @@ def test_model_facing_workflows_use_brokered_secret_free_launches() -> None:
 		assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in workflow_text
 		assert "SCRIPT_REF=stable" not in workflow_text
 		assert "Checkout workflow support source fallback" not in workflow_text
+	helpers_text = (REPO_ROOT / "scripts" / "codex_helpers.sh").read_text(encoding="utf-8")
+	assert "unshare --fork --pid --mount-proc --kill-child=KILL" in helpers_text
+	assert helpers_text.index('kill -TERM "${broker_pid}"') < helpers_text.index('setfacl --restore="${MODEL_PROVIDER_BROKER_ACL_BACKUP}"')
+	assert 'setfacl --restore="${MODEL_PROVIDER_BROKER_ACL_BACKUP}" >/dev/null 2>&1 || return 1' not in helpers_text
 
 
 def test_model_facing_workflows_export_broker_price_policy() -> None:
@@ -389,7 +393,15 @@ def test_sanitized_launcher_exposes_only_ephemeral_provider_token(tmp_path: Path
 		export TG_ADMIN_CHAT_ID="telegram-chat"
 		export MODEL_EDITOR="openai/test-model"
 		model_provider_broker_start
-		model_provider_broker_exec_sanitized sh -c env
+		model_provider_broker_exec_sanitized sh -c '
+			sudo -n -u nobody true
+			for process_environment in /proc/[0-9]*/environ; do
+				if grep -aEq "upstream-secret|repository-secret|repository-pat|github-token|state-secret|telegram-secret|telegram-chat" "${{process_environment}}" 2>/dev/null; then
+					exit 97
+				fi
+			done
+			env
+		'
 		model_provider_broker_stop
 	'''
 	result = subprocess.run(
@@ -413,6 +425,59 @@ def test_sanitized_launcher_exposes_only_ephemeral_provider_token(tmp_path: Path
 	assert "ORCHESTRATOR_STATE_AUTH_KEYRING=" not in result.stdout
 	assert "TG_BOT_SECRET=" not in result.stdout
 	assert "TG_ADMIN_CHAT_ID=" not in result.stdout
+
+
+def test_broker_cleanup_stops_process_before_failed_acl_restore(tmp_path: Path) -> None:
+	fake_bin = tmp_path / "bin"
+	fake_bin.mkdir()
+	fake_setfacl = fake_bin / "setfacl"
+	fake_setfacl.write_text("#!/usr/bin/env sh\nexit 1\n", encoding="utf-8")
+	fake_setfacl.chmod(0o755)
+	broker_started = tmp_path / "broker.started"
+	broker_process = subprocess.Popen([
+		sys.executable,
+		"-c",
+		f'import signal,time; from pathlib import Path; signal.signal(signal.SIGTERM, signal.SIG_IGN); Path({str(broker_started)!r}).touch(); time.sleep(60)',
+	])
+	for _ in range(100):
+		if broker_started.exists():
+			break
+		time.sleep(0.01)
+	assert broker_started.exists()
+	pid_file = tmp_path / "broker.pid"
+	ready_file = tmp_path / "ready.json"
+	acl_file = tmp_path / "broker.acl"
+	pid_file.write_text(f"{broker_process.pid}\n", encoding="utf-8")
+	ready_file.write_text("{}\n", encoding="utf-8")
+	acl_file.write_text("forced restore failure\n", encoding="utf-8")
+	try:
+		result = subprocess.run(
+			[
+				"bash", "-c",
+				f'''set -uo pipefail
+				source "{REPO_ROOT / 'scripts' / 'codex_helpers.sh'}"
+				export PATH="{fake_bin}:$PATH"
+				export MODEL_PROVIDER_BROKER_PID_FILE="{pid_file}"
+				export MODEL_PROVIDER_BROKER_READY_FILE="{ready_file}"
+				export MODEL_PROVIDER_BROKER_ACL_BACKUP="{acl_file}"
+				model_provider_broker_stop
+				printf 'cleanup_rc=%s\n' "$?"
+				''',
+			],
+			cwd=REPO_ROOT,
+			text=True,
+			capture_output=True,
+			check=True,
+		)
+		assert "cleanup_rc=1" in result.stdout
+		broker_process.wait(timeout=3)
+		assert broker_process.returncode is not None
+		assert not pid_file.exists()
+		assert not ready_file.exists()
+	finally:
+		if broker_process.poll() is None:
+			broker_process.terminate()
+			broker_process.wait(timeout=3)
 
 
 def test_policy_opts_streamed_chat_requests_into_usage_reporting() -> None:

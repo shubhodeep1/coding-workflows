@@ -442,14 +442,16 @@ def test_resolver_retry_comment_lookups_are_bounded() -> None:
 	assert "select-resolver-retry" in prepare
 	assert "select-resolver-retry" in actuator
 	assert "persisted_comment_id=" in actuator
-	assert "AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1" in actuator
-	assert poller.count('final_pr_payload="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}")"') >= 2
-	assert actuator.count('live_pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"') == 2
-	locator_update = '-X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --input "${locator_payload_file}"'
+	assert 'commits/${final_pr_head_sha}/status' in poller
+	assert 'statuses/${final_pr_head_sha}' in poller
+	assert 'statuses/${live_head_sha}' in actuator
+	assert 'context=ai/resolver-retry-state-locator' in poller
+	assert 'context=ai/resolver-retry-state-locator' in actuator
+	assert 'pulls/${final_pr}" --input' not in poller
+	assert 'pulls/${PR_NUMBER}" --input' not in actuator
 	escalation_update = 'gh_retry gh issue edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:resolver-escalated"'
-	assert locator_update in actuator
+	locator_update = '-X POST "repos/${GITHUB_REPOSITORY}/statuses/${live_head_sha}"'
 	assert actuator.index(escalation_update) < actuator.index(locator_update)
-	assert f"if ! gh_retry gh api {locator_update} >/dev/null; then" in actuator
 	assert "continuing after the authoritative comment update" in actuator
 	assert "RESOLVER_RETRY_STATE_COMMENT_ID=${RESOLVER_RETRY_STATE_COMMENT_ID}" in prepare
 	assert 'existing_comment_id="${RESOLVER_RETRY_STATE_COMMENT_ID:-}"' in actuator

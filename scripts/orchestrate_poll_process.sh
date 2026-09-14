@@ -8445,17 +8445,16 @@ heal_integration_branch_conflict() {
 	if [ -n "${final_pr_head_sha}" ]; then
     local resolver_retry_state=""
     local resolver_retry_head_sha=""
-    local resolver_retry_escalated="false"
+		local resolver_retry_escalated="false"
 		local resolver_retry_locator_id=""
-		local resolver_retry_locator_marker=""
 		local resolver_retry_selected_comment_id=""
 		local resolver_retry_lookup_source=""
 		local resolver_retry_comments_pages_file=""
 		local resolver_retry_comments_file=""
 		local resolver_retry_comments_page_file=""
 		local resolver_retry_direct_comment_file=""
+		local resolver_retry_status_file=""
 		local resolver_retry_selection_file=""
-		local resolver_retry_locator_payload_file=""
 		local resolver_retry_comments_page=1
 		local resolver_retry_comments_page_count=0
 		local resolver_retry_comments_page_bytes=0
@@ -8468,8 +8467,8 @@ heal_integration_branch_conflict() {
 		resolver_retry_comments_file="$(mktemp)"
 		resolver_retry_comments_page_file="$(mktemp)"
 		resolver_retry_direct_comment_file="$(mktemp)"
+		resolver_retry_status_file="$(mktemp)"
 		resolver_retry_selection_file="$(mktemp)"
-		resolver_retry_locator_payload_file="$(mktemp)"
 		: > "${resolver_retry_comments_pages_file}"
 		resolver_retry_locator_id="$(printf '%s' "${final_pr_payload}" | jq -r '
 			(.body // "")
@@ -8477,6 +8476,22 @@ heal_integration_branch_conflict() {
 			| last // []
 			| .[0] // empty
 		' 2>/dev/null || true)"
+		if ! [[ "${resolver_retry_locator_id}" =~ ^[1-9][0-9]*$ ]]; then
+			# The PR metadata response has no commit-status payload. Read the one
+			# fixed status context only when the legacy body locator is absent;
+			# status persistence replaces the former full-body PATCH race.
+			if gh_retry_to_file "${resolver_retry_status_file}" gh api \
+				"repos/${GITHUB_REPOSITORY}/commits/${final_pr_head_sha}/status"; then
+				resolver_retry_locator_id="$(jq -r '
+					[.statuses[]?
+						| select(.context == "ai/resolver-retry-state-locator")
+						| .description
+						| select(type == "string")
+						| capture("^comment_id=(?<id>[1-9][0-9]*)$").id]
+					| first // empty
+				' "${resolver_retry_status_file}" 2>/dev/null || true)"
+			fi
+		fi
 		if [[ "${resolver_retry_locator_id}" =~ ^[1-9][0-9]*$ ]]; then
 			# The existing PR metadata call supplies the locator but cannot supply
 			# the referenced comment, so one direct REST read is required here.
@@ -8492,7 +8507,7 @@ heal_integration_branch_conflict() {
 					resolver_retry_selector_rc=$?
 					if [ "${resolver_retry_selector_rc}" -ne 1 ]; then
 						echo "::warning::[integration-heal] Direct resolver retry-state verification is unavailable; deferring conflict redispatch this tick."
-						rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}" "${resolver_retry_direct_comment_file}" "${resolver_retry_selection_file}" "${resolver_retry_locator_payload_file}"
+						rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}" "${resolver_retry_direct_comment_file}" "${resolver_retry_status_file}" "${resolver_retry_selection_file}"
 						return 0
 					fi
 				fi
@@ -8516,14 +8531,14 @@ heal_integration_branch_conflict() {
 					"repos/${GITHUB_REPOSITORY}/issues/${final_pr}/comments?per_page=100&page=${resolver_retry_comments_page}" \
 					|| ! jq -e 'type == "array"' "${resolver_retry_comments_page_file}" >/dev/null 2>&1; then
 					echo "::warning::[integration-heal] Resolver retry-state comments are unavailable; deferring conflict redispatch this tick."
-					rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}" "${resolver_retry_direct_comment_file}" "${resolver_retry_selection_file}" "${resolver_retry_locator_payload_file}"
+					rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}" "${resolver_retry_direct_comment_file}" "${resolver_retry_status_file}" "${resolver_retry_selection_file}"
 					return 0
 				fi
 				resolver_retry_comments_page_count="$(jq 'length' "${resolver_retry_comments_page_file}")"
 				resolver_retry_comments_page_bytes="$(wc -c < "${resolver_retry_comments_page_file}")"
 				if [ $((resolver_retry_comments_total_bytes + resolver_retry_comments_page_bytes)) -gt "${resolver_retry_comments_max_bytes}" ]; then
 					echo "::warning::[integration-heal] Resolver retry-state comments exceed the bounded scan; deferring conflict redispatch this tick."
-					rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}" "${resolver_retry_direct_comment_file}" "${resolver_retry_selection_file}" "${resolver_retry_locator_payload_file}"
+					rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}" "${resolver_retry_direct_comment_file}" "${resolver_retry_status_file}" "${resolver_retry_selection_file}"
 					return 0
 				fi
 				resolver_retry_comments_total_bytes=$((resolver_retry_comments_total_bytes + resolver_retry_comments_page_bytes))
@@ -8537,7 +8552,7 @@ heal_integration_branch_conflict() {
 			if [ "${resolver_retry_comments_complete}" != "true" ] \
 				|| ! jq -s 'add // []' "${resolver_retry_comments_pages_file}" > "${resolver_retry_comments_file}"; then
 				echo "::warning::[integration-heal] Resolver retry-state comment history exceeds the bounded scan; deferring conflict redispatch this tick."
-				rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}" "${resolver_retry_direct_comment_file}" "${resolver_retry_selection_file}" "${resolver_retry_locator_payload_file}"
+				rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}" "${resolver_retry_direct_comment_file}" "${resolver_retry_status_file}" "${resolver_retry_selection_file}"
 				return 0
 			fi
 			if resolver_retry_state="$(cat "${resolver_retry_comments_file}" \
@@ -8549,7 +8564,7 @@ heal_integration_branch_conflict() {
 				resolver_retry_selector_rc=$?
 				if [ "${resolver_retry_selector_rc}" -ne 1 ]; then
 					echo "::warning::[integration-heal] Resolver retry-state verification is unavailable; deferring conflict redispatch this tick."
-					rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}" "${resolver_retry_direct_comment_file}" "${resolver_retry_selection_file}" "${resolver_retry_locator_payload_file}"
+					rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}" "${resolver_retry_direct_comment_file}" "${resolver_retry_status_file}" "${resolver_retry_selection_file}"
 					return 0
 				fi
 			fi
@@ -8558,29 +8573,19 @@ heal_integration_branch_conflict() {
 		if [ "${resolver_retry_lookup_source}" = "fallback" ] && [ -s "${resolver_retry_selection_file}" ]; then
 			resolver_retry_selected_comment_id="$(jq -r '.comment_id // empty' "${resolver_retry_selection_file}" 2>/dev/null || true)"
 			if [[ "${resolver_retry_selected_comment_id}" =~ ^[1-9][0-9]*$ ]]; then
-				resolver_retry_locator_marker="<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:${resolver_retry_selected_comment_id} -->"
-				# The earlier PR read predates the bounded comment scan, so it cannot
-				# safely supply the body for this full-body PATCH.
-				if final_pr_payload="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}")" \
-					&& [ "$(printf '%s' "${final_pr_payload}" | jq -r '.head.sha // empty' 2>/dev/null)" = "${final_pr_head_sha}" ] \
-					&& printf '%s' "${final_pr_payload}" | jq --arg locator "${resolver_retry_locator_marker}" '
-					(.body // "") as $body
-					| {body: (
-						if ($body | test("(?m)^<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:[1-9][0-9]* -->$")) then
-							($body | gsub("(?m)^<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:[1-9][0-9]* -->$"; $locator))
-						else
-							$body + (if $body == "" or ($body | endswith("\n")) then "" else "\n" end) + $locator + "\n"
-						end
-					)}
-				' > "${resolver_retry_locator_payload_file}" \
-					&& gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --input "${resolver_retry_locator_payload_file}" >/dev/null; then
+				# The verified envelope is already bound to this head SHA. Persist the
+				# comment ID in a fixed commit-status context so no PR body is replaced.
+				if gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${final_pr_head_sha}" \
+					-f state=success \
+					-f context=ai/resolver-retry-state-locator \
+					-f description="comment_id=${resolver_retry_selected_comment_id}" >/dev/null; then
 					echo "  [integration-heal] Persisted verified resolver retry-state comment locator ${resolver_retry_selected_comment_id}."
 				else
 					echo "::warning::[integration-heal] Could not persist the verified resolver retry-state locator; continuing with the verified state for this tick."
 				fi
 			fi
 		fi
-		rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}" "${resolver_retry_direct_comment_file}" "${resolver_retry_selection_file}" "${resolver_retry_locator_payload_file}"
+		rm -f "${resolver_retry_comments_pages_file}" "${resolver_retry_comments_file}" "${resolver_retry_comments_page_file}" "${resolver_retry_direct_comment_file}" "${resolver_retry_status_file}" "${resolver_retry_selection_file}"
     if [ -n "${resolver_retry_state}" ]; then
       resolver_retry_head_sha="$(printf '%s' "${resolver_retry_state}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
       resolver_retry_escalated="$(printf '%s' "${resolver_retry_state}" | jq -r '.escalated // false' 2>/dev/null || echo false)"
