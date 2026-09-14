@@ -4581,14 +4581,13 @@ jobs:
             # When the editor model returns a safety-policy refusal,
             # review_apply_fixes.sh writes "Runtime failure path: -
             # model refused (safety filter)" into the fallback summary
-            # alongside the existing failure markers. Check 1 above
-            # already set EDITOR_NOOP_SUSPICIOUS=true via the existing
-            # markers (which the refusal fallback preserves verbatim for
-            # lockstep — see probably_unnecessary_but_read_if_stuck.md
-            # §20.10). This additive check sets EDITOR_NOOP_REFUSAL=true
-            # so a more specific alert can be surfaced downstream.
+            # (§20.10). Set both flags here because the partial-finalize
+            # refusal summary does not carry Check 1's failure markers,
+            # and Check 2 is skipped when REVIEWERS_SUCCESSFUL=0. The
+            # refusal flag selects the more specific downstream alert.
             if grep -qiE 'model refused \(safety filter\)' "${EDITOR_SUMMARY_FILE}"; then
               echo "::notice::Editor returned a safety-policy refusal — re-run is likely to succeed once the provider-side cache expires."
+              EDITOR_NOOP_SUSPICIOUS="true"
               EDITOR_NOOP_REFUSAL="true"
             fi
 

@@ -1029,20 +1029,25 @@ def test_validator_greps_for_recoverable_failure_sentinel_in_lockstep() -> None:
 def test_validator_check_1c_sets_suspicious_without_touching_check_1() -> None:
 	"""Check 1c must set `EDITOR_NOOP_SUSPICIOUS="true"` itself (the editor
 	can run with REVIEWERS_SUCCESSFUL=0, where Check 2 is skipped), while the
-	Check 1 regex, its warning literal and the refusal Check 1b stay
-	byte-for-byte (CLAUDE.md §6). The soft-deadline fallback sentinel must not
-	be grepped: it means budget exhaustion, not an editor failure."""
+	refusal Check 1b must independently set SUSPICIOUS for the same zero-reviewer
+	case. The Check 1 regex and warning literal stay byte-for-byte (CLAUDE.md
+	§6). The soft-deadline fallback sentinel must not be grepped: it means
+	budget exhaustion, not an editor failure."""
 	block = _step_block(_review_autofix_text(), VALIDATOR_STEP_NAME)
+	check_1b_start = block.index("Check 1b: Detect refusal-specific sentinel")
 	check_1c_start = block.index("Check 1c: Detect recoverable-failure partial-finalize sentinel")
+	check_1b_segment = block[check_1b_start:check_1c_start]
 	check_2_start = block.index("Check 2: Reviewer audit sanity", check_1c_start)
 	check_1c_segment = block[check_1c_start:check_2_start]
+	assert f"grep -qiE '{REFUSAL_SENTINEL_TEXT.replace('(', chr(92) + '(').replace(')', chr(92) + ')')}'" in check_1b_segment
+	assert 'EDITOR_NOOP_SUSPICIOUS="true"' in check_1b_segment
+	assert 'EDITOR_NOOP_REFUSAL="true"' in check_1b_segment
 	assert f"grep -qiE '{RECOVERABLE_FAILURE_SENTINEL_TEXT}'" in check_1c_segment
 	assert 'EDITOR_NOOP_SUSPICIOUS="true"' in check_1c_segment
 	assert 'EDITOR_NOOP_RECOVERABLE_FAILURE="true"' in check_1c_segment
 	assert "partial finalize requested at the soft deadline" not in check_1c_segment.split("grep -qiE")[1].split("\n")[0]
 	assert "grep -qiE 'editor failed before producing|unavailable \\(editor fallback\\)'" in block
 	assert VALIDATOR_WARNING_LITERAL in block
-	assert f"grep -qiE '{REFUSAL_SENTINEL_TEXT.replace('(', chr(92) + '(').replace(')', chr(92) + ')')}'" in block
 	assert 'if [ "${EDITOR_NOOP_SUSPICIOUS}" = "false" ] && [ "${REVIEWERS_SUCCESSFUL:-0}" -gt 0 ]; then' in block
 
 
@@ -1059,12 +1064,10 @@ def test_validator_classifies_recoverable_failure_summary(tmp_path: Path) -> Non
 	state when every reviewer slot was skipped fail-open (`skipped_open` /
 	`skipped_unmapped` in scripts/review_run_reviewers.sh exit 0 with
 	REVIEWERS_SUCCESSFUL=0, and the editor step's `if:` has no reviewer-count
-	clause), so Check 1c must set SUSPICIOUS=true on its own for the
-	recoverable_failure summary — otherwise the Telegram/PR-comment alert never
-	fires and the resolver chain gated on `EDITOR_NOOP_SUSPICIOUS != 'true'`
-	runs with nothing to land. The refusal summary at 0 reviewers is pinned
-	unchanged: Check 1's regex does not match it, so SUSPICIOUS stays false and
-	only REFUSAL is set."""
+	clause), so Checks 1b and 1c must set SUSPICIOUS=true on their own for the
+	refusal and recoverable_failure summaries — otherwise the Telegram/PR-comment
+	alert never fires and the resolver chain gated on
+	`EDITOR_NOOP_SUSPICIOUS != 'true'` runs with nothing to land."""
 	block = _step_block(_review_autofix_text(), VALIDATOR_STEP_NAME)
 	script = _step_run_script(block)
 	fixtures = {
@@ -1085,7 +1088,7 @@ def test_validator_classifies_recoverable_failure_summary(tmp_path: Path) -> Non
 		("recoverable", "6"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
 		("refusal", "6"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false"},
 		("recoverable", "0"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
-		("refusal", "0"): {"EDITOR_NOOP_SUSPICIOUS": "false", "EDITOR_NOOP_REFUSAL": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false"},
+		("refusal", "0"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false"},
 	}
 	for (name, reviewers_successful), expected_exports in expectations.items():
 		case_label = f"{name}@reviewers={reviewers_successful}"
