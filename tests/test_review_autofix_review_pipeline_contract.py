@@ -5157,6 +5157,75 @@ def test_review_pipeline_summary_reports_partial_finalize_withheld_for_safety() 
 	assert "| Partial withheld reason | insufficient_budget_for_validation_tail |" in result["step_summary"]
 
 
+def test_review_pipeline_summary_classifies_editor_noop_recoverable_failure() -> None:
+	"""The `REVIEW_AUTOFIX_RUN_SUMMARY_V1` editor slot and finalize_reason gain
+	additive values for `EDITOR_NOOP_RECOVERABLE_FAILURE` (validator Check 1c:
+	every editor attempt failed, no editor output). Refusal keeps precedence;
+	the pre-existing `unexpected_noop` / `editor_noop_suspicious` values stay
+	the fallback for runs without either specific flag (CLAUDE.md §6)."""
+	editor_noop_cases = {
+		"recoverable_failure": (
+			{"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
+			"recoverable_failure",
+			"editor_noop_recoverable_failure",
+		),
+		"refusal_precedence": (
+			{"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
+			"refusal",
+			"editor_noop_refusal",
+		),
+		"generic_noop_unchanged": (
+			{"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false"},
+			"unexpected_noop",
+			"editor_noop_suspicious",
+		),
+	}
+	for case_name, (case_env, expected_failure_class, expected_finalize_reason) in editor_noop_cases.items():
+		summary = _run_review_pipeline_summary_step_harness(extra_env=case_env)["summary"]
+		assert summary["slot_results"]["editor"] == {
+			"attempt_count": 1,
+			"status": "failed",
+			"failure_class": expected_failure_class,
+		}, case_name
+		assert summary["finalize_reason"] == expected_finalize_reason, case_name
+		assert "editor" in summary["completed_phases"], case_name
+
+	# The flag alone never demotes the editor slot: only the validator's
+	# EDITOR_NOOP_SUSPICIOUS decides between "failed" and "success", which is
+	# why Check 1c has to set SUSPICIOUS itself at REVIEWERS_SUCCESSFUL=0.
+	flag_only_summary = _run_review_pipeline_summary_step_harness(
+		extra_env={"EDITOR_NOOP_SUSPICIOUS": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
+	)["summary"]
+	assert flag_only_summary["slot_results"]["editor"]["status"] == "success"
+	assert flag_only_summary["slot_results"]["editor"]["failure_class"] == "none"
+
+
+def test_review_pipeline_summary_recoverable_failure_keeps_partial_finalize_reason_precedence() -> None:
+	"""On the real recoverable_failure path review_apply_fixes.sh also requests
+	a partial finalize, and `determine_finalize_reason` returns
+	`partial_finalize` before any editor-noop outcome (the same precedence
+	`editor_noop_refusal` already has). The editor slot's failure_class is the
+	field that names the cause on that path; the run outcome stays
+	`partial_finalize`, unchanged."""
+	summary = _run_review_pipeline_summary_step_harness(
+		extra_env={
+			"EDITOR_NOOP_SUSPICIOUS": "true",
+			"EDITOR_NOOP_REFUSAL": "false",
+			"EDITOR_NOOP_RECOVERABLE_FAILURE": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_REASON": "recoverable_failure",
+			"AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor",
+			"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false",
+		},
+	)["summary"]
+	assert summary["partial_finalize"] is True
+	assert summary["partial_finalize_reason"] == "recoverable_failure"
+	assert summary["partial_finalize_validation_tail_can_complete"] is False
+	assert summary["finalize_reason"] == "partial_finalize"
+	assert summary["slot_results"]["editor"]["failure_class"] == "recoverable_failure"
+	assert summary["slot_results"]["editor"]["status"] == "failed"
+
+
 def test_review_partial_finalize_publish_safety_gate_is_wired() -> None:
 	block = _step_block("Decide partial-finalize validation/push safety")
 	for expected in (
@@ -5366,7 +5435,6 @@ def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
 		"Run interim judge",
 		"Synthesize behavioural smoke",
 		"Detect editor-claimed-but-uncommitted changes",
-		"Validate editor no-op disposition",
 		"Detect merge conflicts",
 		"Prepare merge-conflict resolver prompt and pre-snapshot",
 		"Run Codex resolver, validate, stage, commit",
@@ -5376,6 +5444,8 @@ def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
 		assert "(env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')" in block, (
 			f"step should stay available only when the partial-finalize validation tail can complete: {step_name}"
 		)
+	validator_block = _step_block("Validate editor no-op disposition")
+	assert "(env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal'))" in validator_block
 
 
 def test_review_partial_finalize_keeps_commit_and_push_path_available() -> None:
@@ -6209,6 +6279,8 @@ def main() -> int:
 	test_review_pipeline_summary_reports_stall_recovery_for_retried_and_skipped_slots()
 	test_review_pipeline_summary_reports_partial_finalize_validated_push()
 	test_review_pipeline_summary_reports_partial_finalize_withheld_for_safety()
+	test_review_pipeline_summary_classifies_editor_noop_recoverable_failure()
+	test_review_pipeline_summary_recoverable_failure_keeps_partial_finalize_reason_precedence()
 	test_review_partial_finalize_publish_safety_gate_is_wired()
 	test_review_partial_finalize_timeout_extractor_handles_structured_yaml_layout()
 	test_review_partial_finalize_publish_safety_gate_keeps_validated_path_when_budget_remains()

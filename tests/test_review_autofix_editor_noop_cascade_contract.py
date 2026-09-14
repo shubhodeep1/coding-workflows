@@ -1026,11 +1026,74 @@ def test_validator_greps_for_recoverable_failure_sentinel_in_lockstep() -> None:
 	assert RUNBOOK.read_text(encoding="utf-8").count("EDITOR_NOOP_RECOVERABLE_FAILURE") >= 2
 
 
+def test_validator_check_1c_sets_suspicious_without_touching_check_1() -> None:
+	"""Check 1c must set `EDITOR_NOOP_SUSPICIOUS="true"` itself (the editor
+	can run with REVIEWERS_SUCCESSFUL=0, where Check 2 is skipped), while the
+	refusal Check 1b must independently set SUSPICIOUS for the same zero-reviewer
+	case. The Check 1 regex and warning literal stay byte-for-byte (CLAUDE.md
+	§6). The soft-deadline fallback sentinel must not be grepped: it means
+	budget exhaustion, not an editor failure."""
+	block = _step_block(_review_autofix_text(), VALIDATOR_STEP_NAME)
+	check_1b_start = block.index("Check 1b: Detect refusal-specific sentinel")
+	check_1c_start = block.index("Check 1c: Detect recoverable-failure partial-finalize sentinel")
+	check_1b_segment = block[check_1b_start:check_1c_start]
+	check_2_start = block.index("Check 2: Reviewer audit sanity", check_1c_start)
+	check_1c_segment = block[check_1c_start:check_2_start]
+	assert f"grep -qiE '{REFUSAL_SENTINEL_TEXT.replace('(', chr(92) + '(').replace(')', chr(92) + ')')}'" in check_1b_segment
+	assert 'EDITOR_NOOP_SUSPICIOUS="true"' in check_1b_segment
+	assert 'EDITOR_NOOP_REFUSAL="true"' in check_1b_segment
+	assert f"grep -qiE '{RECOVERABLE_FAILURE_SENTINEL_TEXT}'" in check_1c_segment
+	assert 'EDITOR_NOOP_SUSPICIOUS="true"' in check_1c_segment
+	assert 'EDITOR_NOOP_RECOVERABLE_FAILURE="true"' in check_1c_segment
+	assert "partial finalize requested at the soft deadline" not in check_1c_segment.split("grep -qiE")[1].split("\n")[0]
+	assert "grep -qiE 'editor failed before producing|unavailable \\(editor fallback\\)'" in block
+	assert VALIDATOR_WARNING_LITERAL in block
+	assert 'if [ "${EDITOR_NOOP_SUSPICIOUS}" = "false" ] && [ "${REVIEWERS_SUCCESSFUL:-0}" -gt 0 ]; then' in block
+
+
+def test_validator_gate_runs_for_editor_partial_finalize_without_validation_tail() -> None:
+	"""The workflow gate must keep cheap editor-summary classification reachable
+	when a late refusal or recoverable failure leaves too little time for the
+	validation tail, without reclassifying soft-deadline budget exhaustion."""
+	block = _step_block(_review_autofix_text(), VALIDATOR_STEP_NAME)
+	if_line = next(line.strip() for line in block.splitlines() if line.strip().startswith("if:"))
+	gate_start = if_line.index("(env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED")
+	gate_end = if_line.index(" && env.AUTOFIX_RESUME_TERMINAL", gate_start)
+	partial_finalize_gate = if_line[gate_start:gate_end]
+	gate_cases = (
+		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor", "AUTOFIX_PARTIAL_FINALIZE_REASON": "recoverable_failure"}, True),
+		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor", "AUTOFIX_PARTIAL_FINALIZE_REASON": "refusal"}, True),
+		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor", "AUTOFIX_PARTIAL_FINALIZE_REASON": "soft_deadline"}, False),
+		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "reviewers", "AUTOFIX_PARTIAL_FINALIZE_REASON": "recoverable_failure"}, False),
+		({"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true", "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "true", "AUTOFIX_PARTIAL_FINALIZE_PHASE": "reviewers", "AUTOFIX_PARTIAL_FINALIZE_REASON": "soft_deadline"}, True),
+	)
+	for gate_env, expected_result in gate_cases:
+		def replace_gate_comparison(match: re.Match[str]) -> str:
+			actual_value = gate_env[match.group(1)]
+			return str(actual_value == match.group(3) if match.group(2) == "==" else actual_value != match.group(3))
+
+		python_gate = re.sub(r"env\.([A-Z0-9_]+)\s*(==|!=)\s*'([^']*)'", replace_gate_comparison, partial_finalize_gate)
+		python_gate = python_gate.replace("||", "or").replace("&&", "and")
+		assert re.fullmatch(r"[() TrueFalsorand]+", python_gate), python_gate
+		assert eval(python_gate, {"__builtins__": {}}, {}) is expected_result, gate_env
+
+
 def test_validator_classifies_recoverable_failure_summary(tmp_path: Path) -> None:
-	"""Execute the validator step body against the real recoverable_failure
-	fallback summary shape: SUSPICIOUS must still be true (Check 2, audit
-	section is fallback-only), REFUSAL false, and the new flag true. The
-	refusal summary shape must leave the new flag false."""
+	"""Execute the validator step body against the real fallback summary
+	shapes at two reviewer counts.
+
+	REVIEWERS_SUCCESSFUL=6: the recoverable_failure summary is flagged by
+	Check 1c and the refusal summary by Check 1b before Check 2 can run:
+	SUSPICIOUS true for both, only the matching specific flag set.
+
+	REVIEWERS_SUCCESSFUL=0: Check 2 is skipped. The editor still runs in that
+	state when every reviewer slot was skipped fail-open (`skipped_open` /
+	`skipped_unmapped` in scripts/review_run_reviewers.sh exit 0 with
+	REVIEWERS_SUCCESSFUL=0, and the editor step's `if:` has no reviewer-count
+	clause), so Checks 1b and 1c must set SUSPICIOUS=true on their own for the
+	refusal and recoverable_failure summaries — otherwise the Telegram/PR-comment
+	alert never fires and the resolver chain gated on
+	`EDITOR_NOOP_SUSPICIOUS != 'true'` runs with nothing to land."""
 	block = _step_block(_review_autofix_text(), VALIDATOR_STEP_NAME)
 	script = _step_run_script(block)
 	fixtures = {
@@ -1048,13 +1111,16 @@ def test_validator_classifies_recoverable_failure_summary(tmp_path: Path) -> Non
 		),
 	}
 	expectations = {
-		"recoverable": {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
-		"refusal": {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false"},
+		("recoverable", "6"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
+		("refusal", "6"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false"},
+		("recoverable", "0"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
+		("refusal", "0"): {"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false"},
 	}
-	for name, summary in fixtures.items():
-		summary_file = tmp_path / f"{name}_summary.txt"
-		summary_file.write_text(summary, encoding="utf-8")
-		github_env = tmp_path / f"{name}_github_env"
+	for (name, reviewers_successful), expected_exports in expectations.items():
+		case_label = f"{name}@reviewers={reviewers_successful}"
+		summary_file = tmp_path / f"{name}_{reviewers_successful}_summary.txt"
+		summary_file.write_text(fixtures[name], encoding="utf-8")
+		github_env = tmp_path / f"{name}_{reviewers_successful}_github_env"
 		github_env.write_text("", encoding="utf-8")
 		result = subprocess.run(
 			["bash", "-c", script],
@@ -1062,7 +1128,7 @@ def test_validator_classifies_recoverable_failure_summary(tmp_path: Path) -> Non
 			env={
 				"PATH": os.environ["PATH"],
 				"EDITOR_SUMMARY_FILE": str(summary_file),
-				"REVIEWERS_SUCCESSFUL": "6",
+				"REVIEWERS_SUCCESSFUL": reviewers_successful,
 				"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
 				"GITHUB_ENV": str(github_env),
 			},
@@ -1070,13 +1136,20 @@ def test_validator_classifies_recoverable_failure_summary(tmp_path: Path) -> Non
 			capture_output=True,
 			check=False,
 		)
-		assert result.returncode == 0, f"validator body failed for {name}: {result.stderr}"
+		assert result.returncode == 0, f"validator body failed for {case_label}: {result.stderr}"
 		exported = dict(line.split("=", 1) for line in github_env.read_text(encoding="utf-8").splitlines() if "=" in line)
-		for key, expected in expectations[name].items():
-			assert exported.get(key) == expected, f"{name}: expected {key}={expected}, got {exported}"
+		for key, expected in expected_exports.items():
+			assert exported.get(key) == expected, f"{case_label}: expected {key}={expected}, got {exported}"
+		# Check 1's legacy regex must not match either partial-finalize
+		# summary shape: the zero-reviewer recoverable case is flagged by
+		# Check 1c alone, never by the Check 1 warning the e2e poller greps.
+		assert VALIDATOR_WARNING_LITERAL not in result.stdout, case_label
 		if name == "recoverable":
-			assert RECOVERABLE_FAILURE_VALIDATOR_NOTICE in result.stdout
-			assert REFUSAL_VALIDATOR_NOTICE not in result.stdout
+			assert RECOVERABLE_FAILURE_VALIDATOR_NOTICE in result.stdout, case_label
+			assert REFUSAL_VALIDATOR_NOTICE not in result.stdout, case_label
+		else:
+			assert REFUSAL_VALIDATOR_NOTICE in result.stdout, case_label
+			assert RECOVERABLE_FAILURE_VALIDATOR_NOTICE not in result.stdout, case_label
 
 
 def test_noop_warning_step_branches_on_recoverable_failure_with_last_error(tmp_path: Path) -> None:
@@ -1215,6 +1288,8 @@ if __name__ == "__main__":
 	test_noop_warning_generic_branch_preserved()
 	test_validator_sets_editor_noop_recoverable_failure_alongside_suspicious()
 	test_validator_greps_for_recoverable_failure_sentinel_in_lockstep()
+	test_validator_check_1c_sets_suspicious_without_touching_check_1()
+	test_validator_gate_runs_for_editor_partial_finalize_without_validation_tail()
 	with tempfile.TemporaryDirectory() as temporary_test_directory:
 		test_validator_classifies_recoverable_failure_summary(Path(temporary_test_directory))
 		test_noop_warning_step_branches_on_recoverable_failure_with_last_error(Path(temporary_test_directory))
