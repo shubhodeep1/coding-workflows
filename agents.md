@@ -377,12 +377,14 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   upstream provider key or GitHub/state/Telegram credentials. Broker instances
   accept at most `MODEL_PROVIDER_BROKER_MAX_REQUESTS` requests (default `100`,
   valid range `1..100`) and fail closed with HTTP 429 after exhaustion.
-  Every rejection the broker answers (any `_reject` status, 4xx policy or
-  502 upstream relay) is mirrored as a `MODEL_PROVIDER_BROKER_REJECT status=<n>
+  The first 100 rejections in each HTTP error class (4xx policy and 5xx
+  upstream relay) are mirrored as a `MODEL_PROVIDER_BROKER_REJECT status=<n>
   path=<path> message=<json>` stderr line and appended as one JSON line to
   `--rejections-file` (`MODEL_PROVIDER_BROKER_REJECTIONS_FILE`, default
   `<runtime dir>/model-provider-broker-rejections.jsonl`, mode 0600, removed
-  by `model_provider_broker_stop`). `model_provider_broker_policy_rejection_count`
+  by `model_provider_broker_stop`). Query strings are discarded and request
+  paths outside the allowlist are redacted before either sink is written.
+  `model_provider_broker_policy_rejection_count`
   counts only the deterministic 4xx lines and
   `model_provider_broker_last_policy_rejection` prints the newest one;
   `scripts/review_apply_fixes.sh` snapshots the count before each editor

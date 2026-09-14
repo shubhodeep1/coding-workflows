@@ -2547,10 +2547,6 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     exit 1
   fi
 
-  if [ "${cmd_rc}" -ne 0 ] && [ "${cmd_rc}" -ne 78 ] && [ "${attempt}" -eq "${editor_max_attempts}" ]; then
-    opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" attempt_failed || true
-  fi
-
   if [ "${cmd_rc}" -eq 78 ]; then
     echo "Editor attempt ${attempt}: workspace_safety_violation; aborting without retry."
     if [ -z "${PR_NUMBER:-}" ] || [ ! -f "${PR_CLOSED_SENTINEL_FILE}" ]; then
@@ -2879,11 +2875,12 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
       attempt_broker_last_rejection="$(model_provider_broker_last_policy_rejection 2>/dev/null || true)"
     fi
     echo "EDITOR_BROKER_POLICY_REJECTION attempt=${attempt} model=${EDITOR_ATTEMPT_MODEL} rc=${cmd_rc} new_rejections=$(( attempt_broker_rejections_after - attempt_broker_rejections_before )) total_rejections=${attempt_broker_rejections_after} ${attempt_broker_last_rejection:-status=unknown} — the model provider broker rejected this attempt's requests; further attempts share the same broker policy, breaking out of the retry loop."
-    if [ "${attempt}" -lt "${editor_max_attempts}" ]; then
-      opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" broker_policy_rejection || true
-    fi
+    opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" broker_policy_rejection || true
     rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file_cleanup_path}"
     break
+  fi
+  if [ "${cmd_rc}" -ne 0 ] && [ "${cmd_rc}" -ne 78 ] && [ "${attempt}" -eq "${editor_max_attempts}" ]; then
+    opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" attempt_failed || true
   fi
   # ── Safety-policy refusal short-circuit ──
   # An OpenAI-style refusal as the final-channel output (despite the

@@ -25,6 +25,7 @@ MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_RESPONSE_BODY_BYTES = 64 * 1024 * 1024
 MAX_HEADER_COUNT = 64
 MAX_HEADER_BYTES = 32 * 1024
+MAX_REJECTIONS_PER_STATUS_CLASS = 100
 HOP_BY_HOP_HEADERS = frozenset(
 	("connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade")
 )
@@ -65,6 +66,10 @@ class BrokerHandler(BaseHTTPRequestHandler):
 		return
 
 	def _reject(self, status: int, message: str) -> None:
+		rejection_path = self.path.split("?", 1)[0].split("#", 1)[0]
+		if rejection_path not in ALLOWED_PATHS:
+			rejection_path = "<redacted>"
+		self.server.record_rejection(status, message, rejection_path)  # type: ignore[attr-defined]
 		payload = json.dumps({"error": {"message": message, "type": "broker_rejection"}}).encode("utf-8")
 		self.send_response(status)
 		self.send_header("Content-Type", "application/json")
@@ -73,7 +78,6 @@ class BrokerHandler(BaseHTTPRequestHandler):
 		self.end_headers()
 		self.wfile.write(payload)
 		self.close_connection = True
-		self.server.record_rejection(status, message, self.path)  # type: ignore[attr-defined]
 
 	def _authorized(self) -> bool:
 		authorization = self.headers.get("Authorization", "")
@@ -179,6 +183,7 @@ class BrokerServer(ThreadingHTTPServer):
 		self.broker_state = state
 		self.rejections_path = rejections_path
 		self.rejections_lock = threading.Lock()
+		self.rejections_recorded_by_status_class = {4: 0, 5: 0}
 
 	def record_rejection(self, status: int, message: str, path: str) -> None:
 		"""Make a policy rejection observable to the launching shell.
@@ -190,29 +195,35 @@ class BrokerServer(ThreadingHTTPServer):
 		structured stderr line lands in the job log, and one JSON line is
 		appended to ``--rejections-file`` so ``codex_helpers.sh`` can count
 		4xx policy rejections between attempts and stop retrying a broker
-		that will keep saying no. Both writes are best-effort: a logging
-		failure must never turn into a second failure mode for the request.
+		that will keep saying no. Each HTTP error class is capped separately
+		so transient 502s cannot consume the 4xx evidence budget. Both writes
+		are best-effort: a logging failure must never turn into a second
+		failure mode for the request.
 		"""
-		try:
-			print(f"MODEL_PROVIDER_BROKER_REJECT status={status} path={path} message={json.dumps(message)}", file=sys.stderr, flush=True)
-		except (OSError, ValueError):
-			pass
-		if self.rejections_path is None:
-			return
-		record = json.dumps(
-			{"ts": int(time.time()), "status": int(status), "path": path, "message": message},
-			sort_keys=True,
-			separators=(",", ":"),
-		)
-		try:
-			with self.rejections_lock:
+		status_class = status // 100
+		with self.rejections_lock:
+			if self.rejections_recorded_by_status_class.get(status_class, MAX_REJECTIONS_PER_STATUS_CLASS) >= MAX_REJECTIONS_PER_STATUS_CLASS:
+				return
+			self.rejections_recorded_by_status_class[status_class] += 1
+			try:
+				print(f"MODEL_PROVIDER_BROKER_REJECT status={status} path={path} message={json.dumps(message)}", file=sys.stderr, flush=True)
+			except (OSError, ValueError):
+				pass
+			if self.rejections_path is None:
+				return
+			record = json.dumps(
+				{"ts": int(time.time()), "status": int(status), "path": path, "message": message},
+				sort_keys=True,
+				separators=(",", ":"),
+			)
+			try:
 				file_descriptor = os.open(self.rejections_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
 				try:
 					os.write(file_descriptor, (record + "\n").encode("utf-8"))
 				finally:
 					os.close(file_descriptor)
-		except OSError:
-			pass
+			except OSError:
+				pass
 
 
 def _atomic_write_ready_file(path: Path, document: dict[str, object]) -> None:
@@ -247,7 +258,7 @@ def main() -> int:
 	parser.add_argument(
 		"--rejections-file",
 		default="",
-		help="append one JSON line per rejected request (status, path, message) so the launcher can detect deterministic policy rejections; empty disables the file",
+		help=f"append up to {MAX_REJECTIONS_PER_STATUS_CLASS} JSON lines per HTTP error class so the launcher can detect deterministic policy rejections; empty disables the file",
 	)
 	args = parser.parse_args()
 	if not 1 <= args.max_requests <= 100:

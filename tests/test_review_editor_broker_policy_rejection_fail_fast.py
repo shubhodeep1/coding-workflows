@@ -42,8 +42,12 @@ def test_broker_exposes_rejections_file_flag() -> None:
 	broker = _text(BROKER)
 	assert 'parser.add_argument(\n\t\t"--rejections-file",' in broker
 	assert "def record_rejection(self, status: int, message: str, path: str) -> None:" in broker
-	assert 'self.server.record_rejection(status, message, self.path)' in broker
+	assert 'rejection_path = self.path.split("?", 1)[0].split("#", 1)[0]' in broker
+	assert 'self.server.record_rejection(status, message, rejection_path)' in broker
 	assert 'MODEL_PROVIDER_BROKER_REJECT status={status} path={path} message={json.dumps(message)}' in broker
+	assert "MAX_REJECTIONS_PER_STATUS_CLASS = 100" in broker
+	assert "self.rejections_recorded_by_status_class = {4: 0, 5: 0}" in broker
+	assert broker.index("self.server.record_rejection(status, message, rejection_path)") < broker.index("self.wfile.write(payload)")
 	# The record is appended 0600 and never includes tokens.
 	assert "os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600" in broker
 	assert '"status": int(status), "path": path, "message": message' in broker
@@ -84,9 +88,9 @@ def test_editor_loop_breaks_on_new_policy_rejections_after_a_failed_attempt() ->
 	assert '[ "${attempt_broker_rejections_after}" -gt "${attempt_broker_rejections_before}" ] 2>/dev/null; then' in block
 	assert "EDITOR_BROKER_POLICY_REJECTION attempt=${attempt} model=${EDITOR_ATTEMPT_MODEL} rc=${cmd_rc} new_rejections=" in block
 	assert 'opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" broker_policy_rejection || true' in block
-	# Only non-final attempts alert here; the final attempt already emitted attempt_failed.
-	assert 'if [ "${attempt}" -lt "${editor_max_attempts}" ]; then' in block
+	assert 'if [ "${attempt}" -lt "${editor_max_attempts}" ]; then' not in block
 	assert re.search(r'rm -f "\$\{tmp_output\}" "\$\{tmp_err\}" "\$\{attempt_prompt_file_cleanup_path\}"\n\s+break\n', block)
+	assert loop.index('broker_policy_rejection || true') < loop.index('"${cmd_rc}" attempt_failed || true')
 	# The loop never sets a new partial-finalize reason, so the fallback summary
 	# and the workflow's `recoverable_failure` sentinel stay in lockstep.
 	assert "editor_partial_finalize_reason" not in block

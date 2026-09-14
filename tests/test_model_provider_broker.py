@@ -187,7 +187,7 @@ def _read_rejections(path: Path) -> list[dict[str, object]]:
 
 
 def test_broker_records_policy_rejections_to_file_and_stderr(tmp_path: Path) -> None:
-	"""Every `_reject` answer is mirrored to --rejections-file and stderr.
+	"""Rejection diagnostics are sanitized and bounded in both output sinks.
 
 	PR #4077 (runs 34663517732 / 34654303940): the editor's three attempts and
 	the fallback model all failed on the same deterministic HTTP 429, but the
@@ -223,6 +223,7 @@ def test_broker_records_policy_rejections_to_file_and_stderr(tmp_path: Path) -> 
 		for path, token, expected in (
 			("/models", str(ready["token"]), 404),
 			("/responses", "attacker-token", 401),
+			(f"/responses?session={ready['token']}&upstream=upstream-secret", str(ready["token"]), 404),
 		):
 			request = urllib.request.Request(
 				str(ready["base_url"]) + path,
@@ -236,24 +237,39 @@ def test_broker_records_policy_rejections_to_file_and_stderr(tmp_path: Path) -> 
 				assert exc.code == expected
 			else:
 				raise AssertionError(f"broker accepted {path}")
+		for _ in range(120):
+			request = urllib.request.Request(str(ready["base_url"]) + "/models", method="GET")
+			try:
+				urllib.request.urlopen(request, timeout=2)
+			except urllib.error.HTTPError as exc:
+				assert exc.code == 405
+			else:
+				raise AssertionError("broker accepted an unsupported method")
 	finally:
 		process.terminate()
 		_, stderr = process.communicate(timeout=3)
 
 	records = _read_rejections(rejections_file)
-	assert [(record["status"], record["path"], record["message"]) for record in records] == [
-		(404, "/api/v1/models", "path not allowed"),
+	assert len(records) == 100
+	assert [(record["status"], record["path"], record["message"]) for record in records[:3]] == [
+		(404, "<redacted>", "path not allowed"),
 		(401, "/api/v1/responses", "invalid broker token"),
+		(404, "/api/v1/responses", "path not allowed"),
 	]
 	assert all(isinstance(record["ts"], int) for record in records)
 	# The record never carries the session token or the upstream key.
 	assert "upstream-secret" not in rejections_file.read_text(encoding="utf-8")
 	assert str(ready["token"]) not in rejections_file.read_text(encoding="utf-8")
 	assert (rejections_file.stat().st_mode & 0o777) == 0o600
-	reject_lines = [line for line in stderr.decode("utf-8").splitlines() if line.startswith("MODEL_PROVIDER_BROKER_REJECT ")]
-	assert reject_lines == [
-		'MODEL_PROVIDER_BROKER_REJECT status=404 path=/api/v1/models message="path not allowed"',
+	stderr_text = stderr.decode("utf-8")
+	assert "upstream-secret" not in stderr_text
+	assert str(ready["token"]) not in stderr_text
+	reject_lines = [line for line in stderr_text.splitlines() if line.startswith("MODEL_PROVIDER_BROKER_REJECT ")]
+	assert len(reject_lines) == 100
+	assert reject_lines[:3] == [
+		'MODEL_PROVIDER_BROKER_REJECT status=404 path=<redacted> message="path not allowed"',
 		'MODEL_PROVIDER_BROKER_REJECT status=401 path=/api/v1/responses message="invalid broker token"',
+		'MODEL_PROVIDER_BROKER_REJECT status=404 path=/api/v1/responses message="path not allowed"',
 	]
 
 
