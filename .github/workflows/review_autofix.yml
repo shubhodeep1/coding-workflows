@@ -1386,9 +1386,10 @@ jobs:
               auto_merge_ready_labels_allowed="true"
             fi
             echo "Auto-merge disabled (ENABLE_AUTO_MERGE != true) — leaving PR for manual merge."
-          elif [ -z "${PR_HEAD_SHA}" ]; then
-            auto_merge_summary="REFUSED (gate-observed head SHA unavailable)"
-            echo "::warning::Gate-observed head SHA is unavailable for PR #${PR_NUMBER}. Failing closed: refusing deterministic-skip auto-merge enablement without a --match-head-commit guard."
+          elif ! [[ "${PR_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            auto_merge_summary="REFUSED (gate-observed head SHA unavailable or malformed)"
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=head_sha_unavailable"
+            echo "::warning::Gate-observed head SHA is unavailable or malformed for PR #${PR_NUMBER}. Failing closed: refusing deterministic-skip auto-merge enablement without a --match-head-commit guard."
           elif [ -n "${PR_HEAD_REF}" ] && printf '%s\n' "${PR_HEAD_REF}" | grep -Eq '^auto/forward-merge-stable-'; then
             # Mirror of the forward-merge-fallback handling in the codex-agent
             # "Enable auto-merge on PR" step. Defense in depth: a tiny
@@ -1403,6 +1404,7 @@ jobs:
             # "Create a merge commit" requirement, etc.).
             if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
               echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${PR_HEAD_REF}')..."
+              echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=merge_commit"
               if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"; then
                 auto_merge_ready_labels_allowed="true"
                 auto_merge_summary="ENABLED (merge commit)"
@@ -1420,6 +1422,7 @@ jobs:
             fi
           else
             echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=squash"
             if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"; then
               auto_merge_ready_labels_allowed="true"
               auto_merge_summary="ENABLED (squash)"
@@ -2688,9 +2691,9 @@ jobs:
           HEAD_REF="$(jq -r '.headRefName' "${PR_META_FILE}")"
           HEAD_REPO="$(jq -r '.headRepoFullName' "${PR_META_FILE}")"
 
-          # Seed the reviewed head from the metadata snapshot before any
-          # non-push exit. The same-repo path refreshes it after checkout.
-          INITIAL_HEAD_SHA="$(jq -r '.head.sha // ""' "${PR_PAYLOAD_FILE}" 2>/dev/null || echo "")"
+          # Capture the commit actually checked out before any non-push exit.
+          # Live PR metadata may already point at a newer, unreviewed head.
+          INITIAL_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
           echo "INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}" >> "$GITHUB_ENV"
 
           if [ -z "${HEAD_REF}" ] || [ "${HEAD_REF}" = "null" ]; then

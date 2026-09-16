@@ -1595,6 +1595,7 @@ def _run_merge_with_followup(
 			"JUDGE_JSON": judge_json,
 			"RB_ACTION": "merge_with_followup",
 			"ENABLE_AUTO_MERGE": enable_auto_merge,
+			"RB_JUDGED_HEAD_SHA": pr_head_sha,
 			# Speed up both polling loops — one attempt is enough
 			# because the mock returns the configured value
 			# deterministically on the first call (sync merge succeeds
