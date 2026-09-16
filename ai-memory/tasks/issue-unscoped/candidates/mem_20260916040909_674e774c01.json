@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/4093-pytest-git-env-isolation.md:line 4 (\"reverted 1,654 lines across eight runtime helpers\") vs. line 9 (table row \"Lines reverted by that commit | 1,654 across 32 files\") | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: The changelog fragment contradicts itself by attributing the same 1,654 reverted lines to eight runtime helpers in the prose and 32 files in the table.\n  WHY: The fragment is folded verbatim into CHANGELOG.md at release time, so the contradiction will be published and may mislead incident analysis; severity differs across reviewers, so the highest severity, MAJOR, is used over NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- changelog.d/4093-pytest-git-env-isolation.md: Line 4 (\"reverted 1,654 lines across eight runtime helpers\") vs. line 9 (table row \"Lines reverted by that commit | 1,654 across 32 files\") | severity=MAJOR | confidence=5\n  PROBLEM: The same 1,654 reverted lines are attributed to \"eight runtime helpers\" in the lead paragraph and to \"32 files\" in the table.\n  WHY: When scripts/assemble_changelog.py folds this fragment into CHANGELOG.md at release time, the contradiction ships publicly and undermines trust in the audit trail.\n- tests/test_pytest_git_env_isolation.py: subprocess.run call at lines 92-108, `test_nested_pytest_with_workflow_git_env_leaves_sentinel_repo_untouched` | severity=NIT | confidence=3\n  PROBLEM: The nested pytest subprocess call has no `timeout=` parameter.\n  WHY: If the nested pytest run hangs, this test blocks indefinitely until the CI runner's job timeout kills it, with no diagnostic indicating which test hung.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/4093-pytest-git-env-isolation.md: line 4 prose (\"That commit reverted 1,654 lines across eight runtime helpers\") vs the table on line 9 (\"Lines reverted by that commit | 1,654 across 32 files\") | severity=NIT | confidence=4\n  PROBLEM: The same revert is attributed to \"eight runtime helpers\" in the prose and to \"32 files\" in the table.\n  WHY: scripts/assemble_changelog.py folds the fragment verbatim into CHANGELOG.md, so a future incident analyst sees two contradictory file counts.\n- tests/test_pytest_git_env_isolation.py: Location: test_nested_pytest_with_workflow_git_env_leaves_sentinel_repo_untouched, the `subprocess.run` call that launches the nested pytest (lines 92-109)\n  PROBLEM: The nested pytest subprocess has no `timeout=` argument.\n  WHY: If the inner pytest hangs, the outer test hangs indefinitely and the suite cannot time out the test cleanly.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- changelog.d/4093-pytest-git-env-isolation.md: prose line 4 (\"That commit reverted 1,654 lines across eight runtime helpers\") vs the table row (\"Lines reverted by that commit | 1,654 across 32 files\"); the PR description also states \"a 1,654-line revert across 32 files\" | severity=NIT | confidence=4\n  PROBLEM: The same 1,654 reverted lines are attributed to eight files in the prose and to 32 files in the table of the same fragment.\n  WHY: The fragment is folded verbatim into CHANGELOG.md at release time by scripts/assemble_changelog.py, so the contradiction ships publicly and can mislead later incident analysis.\n- tests/test_pytest_git_env_isolation.py: location: test_nested_pytest_with_workflow_git_env_leaves_sentinel_repo_untouched, the subprocess.run invoking the nested pytest (diff lines 93-106)\n  PROBLEM: The nested pytest subprocess has no timeout.\n  WHY: If the nested run wedges, the regression test hangs until the CI job timeout kills it with no diagnostic output.\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/4093-pytest-git-env-isolation.md: line 4 (\"That commit reverted 1,654 lines across eight runtime helpers\") vs line 9 (table row \"Lines reverted by that commit | 1,654 across 32 files\") | severity=NIT | confidence=3\n  PROBLEM: The same 1,654 reverted lines are attributed to \"eight runtime helpers\" in the prose and to \"32 files\" in the table.\n  WHY: The fragment is folded verbatim into CHANGELOG.md at release time by scripts/assemble_changelog.py, so the factual contradiction ships publicly and may mislead later incident analysis.\n- tests/test_pytest_git_env_isolation.py: Location: test_nested_pytest_with_workflow_git_env_leaves_sentinel_repo_untouched, the subprocess.run invoking the nested pytest (diff lines 93-106)\n  PROBLEM: The nested pytest subprocess has no timeout.\n  WHY: If the nested run hangs, the regression test blocks the entire CI job indefinitely.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "075c006272d49ee357b1f4261631665baba42a3c664ddc995e576db248b1fd76",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4094,
+    "run_id": "35049537615",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35049537615",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260916040909_674e774c01",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4094,
+    "run_id": "35049537615"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-16T04:09:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
