@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.9,
+  "details": "Many merged changes modify orchestrate polling/state scripts alongside tests for retry resolution, stale heads, identity, workflow contracts, and state synchronization. When altering polling or state transitions, add or update deterministic tests for retries, malformed input, and terminal failure paths.",
+  "fingerprint": "2039a29cac357faa994c4111a31c3d3f554f5e83bf338423c7811e317c22b967",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35053858980",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35053858980",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4049",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4056",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4070",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4075",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4076",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4052",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4057",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4071",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4077",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4079"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260916040608_94a235e133",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator polling behavior is maintained through focused process-level and workflow-contract tests.",
+  "timestamps": {
+    "created_at": "2026-09-16T04:06:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
