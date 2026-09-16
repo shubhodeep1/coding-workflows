@@ -246,6 +246,28 @@ a new value, add it to the appropriate overrides file with a
 
 ---
 
+## Test-suite git environment isolation
+
+- `tests/conftest.py` strips the repo-pinning git variables (`GIT_DIR`,
+  `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`,
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES`) from `os.environ` for the whole pytest
+  session and restores them afterwards. Every git subprocess a test spawns
+  therefore resolves its repository from `cwd`, or from variables the test
+  sets itself.
+- Why: implement.yml, review_autofix.yml, and validate.yml export `GIT_DIR` /
+  `GIT_WORK_TREE` into `$GITHUB_ENV` ("Activate workspace shell context"), and
+  the codex editor inherits them when it runs `pytest`. A scratch-repo test
+  that only set `cwd` was rebound to the live checkout: during the implement
+  run for issue #4092, `tests/test_assemble_changelog.py` produced commit
+  `37c72a5` ("base", author `test <test@example.invalid>`) on `ai/issue-4092`,
+  reverting 1,654 lines of runtime helpers, and PR #4093's review editor then
+  failed with `model_provider_broker_start: command not found` (run
+  34982425230).
+- Per-test scrubs that also drop `BASH_ENV`, `ENV`, or `WORKSPACE_PATH` stay
+  as they are; the conftest fixture is the floor, not a replacement.
+  `tests/test_pytest_git_env_isolation.py` pins the contract with a nested
+  pytest run against a sentinel repository.
+
 ## Models in use (defaults; overridable via repo-vars)
 
 | Phase | Default model | Default reasoning | Verbosity |
