@@ -384,13 +384,13 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   `16384`), a total output-token budget (default `1638400`, i.e. `100 x 16384`), and
   server-controlled provider price ceilings before forwarding. Input spend is
   budgeted too (#4090): `MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS` (default
-  `4194304`, the 16 MiB body cap at 4 bytes per token) bounds one request's
-  estimated input, `MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS` (default
-  `419430400`, `100 x 4194304`) bounds the session, and
+  `16777216`, one token per byte of the 16 MiB body cap) bounds one request's
+  conservative input reservation, `MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS`
+  (default `1677721600`, `100 x 16777216`) bounds the session, and
   `MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD` bounds the worst-case USD cost of
   all admitted requests at the price ceilings, including recognized image
   inputs (derived from the token budgets, the request-body-bound maximum image
-  count, and `MAX_REQUESTS x MAX_REQUEST_PRICE` when unset). Estimates are settled to
+  count, and `MAX_REQUESTS x MAX_REQUEST_PRICE` when unset). Reservations are settled to
   `usage.prompt_tokens` / `usage.input_tokens` like the output true-up; an
   upstream error settles input and cost to zero. The defaults are non-binding
   by construction; operators tighten the vars to enforce a phase budget. The

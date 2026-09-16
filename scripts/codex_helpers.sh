@@ -181,8 +181,8 @@ model_provider_broker_start()
 	# passed only when configured so the broker derives it from the token
 	# budgets and price ceilings otherwise (see model_provider_broker.py main).
 	broker_budget_args=(
-		--max-input-tokens "${MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS:-4194304}"
-		--max-total-input-tokens "${MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS:-419430400}"
+		--max-input-tokens "${MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS:-16777216}"
+		--max-total-input-tokens "${MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS:-1677721600}"
 	)
 	if [ -n "${MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD:-}" ]; then
 		broker_budget_args+=(--max-total-cost-usd "${MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD}")

@@ -735,7 +735,7 @@ def test_policy_defaults_keep_input_and_cost_budgets_non_binding() -> None:
 	any body the 16 MiB request cap already permits."""
 	module = _broker_module()
 	policy = _broker_policy(module)
-	assert policy.max_input_tokens == module.DEFAULT_MAX_INPUT_TOKENS == 4_194_304
+	assert policy.max_input_tokens == module.DEFAULT_MAX_INPUT_TOKENS == 16_777_216
 	assert policy.max_total_input_tokens == module.MAX_TOTAL_INPUT_TOKENS_CEILING
 	assert policy.max_total_cost_usd is None
 	assert policy.estimate_input_tokens(b"x" * module.MAX_REQUEST_BODY_BYTES) == module.DEFAULT_MAX_INPUT_TOKENS
@@ -748,13 +748,13 @@ def test_policy_estimates_input_tokens_and_rejects_oversized_prompt() -> None:
 	module = _broker_module()
 	policy = _broker_policy_with_budgets(module, max_input_tokens=20)
 	assert policy.estimate_input_tokens(b"") == 0
-	assert policy.estimate_input_tokens(b"x" * 79) == 20, "the estimate rounds up to whole tokens"
+	assert policy.estimate_input_tokens(b"!" * 20) == 20, "dense tokenizers can emit one token per byte"
 	try:
-		policy.estimate_input_tokens(b"x" * 81)
+		policy.estimate_input_tokens(b"!" * 21)
 	except module.BrokerRequestError as exc:
 		assert "input-token limit" in str(exc)
 	else:
-		raise AssertionError("an 81-byte body estimates to 21 tokens and must exceed the 20-token ceiling")
+		raise AssertionError("a 21-byte body must exceed the conservative 20-token ceiling")
 	assert policy.estimate_cost_usd(1_000_000, 1_000_000) == module.Decimal("3.1"), "1 + 2 per million tokens plus 0.1 per request"
 	assert policy.estimate_cost_usd(1_000_000, 1_000_000, 2) == module.Decimal("4.1"), "two images add 2 x the 0.5 ceiling"
 	assert policy.estimate_cost_usd(0, 0) == module.Decimal("0.1"), "the per-request price is charged even for an empty request"
@@ -779,6 +779,12 @@ def test_reserve_request_enforces_input_token_and_cost_budgets() -> None:
 	assert not cost_state.reserve_request(0, 0), "the third request would exceed the 0.25 USD budget"
 	assert not cost_state.reserve_request(0, 0, 1), "a priced image must be included in cost admission"
 	assert cost_state.requests_started == 2
+	try:
+		cost_state.reserve_request(0, 0, -1)
+	except ValueError as exc:
+		assert "image_inputs must be non-negative" in str(exc)
+	else:
+		raise AssertionError("a negative image count must not credit the cost budget")
 
 
 def test_settle_request_trues_up_input_tokens_and_cost() -> None:
@@ -815,6 +821,12 @@ def test_settle_request_trues_up_input_tokens_and_cost() -> None:
 	assert image_state.reserve_request(100, 20, 1)
 	image_state.settle_request(100, 7, 20, 5, reserved_image_inputs=1)
 	assert image_state.cost_usd_reserved == policy.estimate_cost_usd(5, 7, 1)
+	try:
+		image_state.settle_request(100, 7, 20, 5, reserved_image_inputs=-1)
+	except ValueError as exc:
+		assert "image_inputs must be non-negative" in str(exc)
+	else:
+		raise AssertionError("settlement must reject a negative reserved image count")
 
 
 def test_usage_extraction_reads_input_tokens_for_both_response_shapes() -> None:
@@ -845,7 +857,7 @@ def test_brokered_requests_settle_input_and_cost_from_upstream_usage() -> None:
 	module = _broker_module()
 	policy = _broker_policy_with_budgets(
 		module,
-		max_input_tokens=100,
+		max_input_tokens=300,
 		max_total_input_tokens=1_000,
 		max_total_cost_usd=module.Decimal("0.25"),
 	)
@@ -978,13 +990,13 @@ def test_broker_cli_validates_budget_flags_and_starts_with_derived_defaults(tmp_
 
 def test_broker_launcher_and_workflows_wire_budget_policy() -> None:
 	helpers_text = (REPO_ROOT / "scripts" / "codex_helpers.sh").read_text(encoding="utf-8")
-	assert '--max-input-tokens "${MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS:-4194304}"' in helpers_text
-	assert '--max-total-input-tokens "${MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS:-419430400}"' in helpers_text
+	assert '--max-input-tokens "${MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS:-16777216}"' in helpers_text
+	assert '--max-total-input-tokens "${MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS:-1677721600}"' in helpers_text
 	assert 'broker_budget_args+=(--max-total-cost-usd "${MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD}")' in helpers_text
 	assert helpers_text.index('"${broker_budget_args[@]}"') < helpers_text.index('"${broker_policy_args[@]}" &')
 	budget_mappings = {
-		"MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS": "4194304",
-		"MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS": "419430400",
+		"MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS": "16777216",
+		"MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS": "1677721600",
 		"MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD": "",
 	}
 	for workflow_name in (

@@ -34,16 +34,14 @@ MAX_RESPONSE_BODY_BYTES = 64 * 1024 * 1024
 USAGE_SCAN_TAIL_BYTES = 1024 * 1024
 USAGE_OUTPUT_TOKEN_FIELDS = ("completion_tokens", "output_tokens")
 USAGE_INPUT_TOKEN_FIELDS = ("prompt_tokens", "input_tokens")
-# Admission-time input-token estimate for a normalized request body. Real
-# tokenizers vary per model and per script, so this is only the reservation
-# charged while a request is in flight; it is trued up to the provider-reported
-# `usage` once the response completes (see BrokerState.settle_request). The
-# derived per-request default (MAX_REQUEST_BODY_BYTES / 4) therefore admits any
-# body the size cap already permits, while a tightened operator ceiling bounds
-# a prompt-injected agent's input spend before the request is forwarded.
-INPUT_TOKEN_ESTIMATE_BYTES_PER_TOKEN = 4
+# Admission-time input-token estimate for a normalized request body. Model
+# tokenizers can produce one token from a single UTF-8 byte, so the common
+# four-bytes-per-token average is not safe for admission control. Reserving one
+# token per byte is a tokenizer-independent upper bound for the normalized body;
+# provider-reported `usage` replaces it after completion (see settle_request).
+INPUT_TOKEN_ESTIMATE_BYTES_PER_TOKEN = 1
 DEFAULT_MAX_INPUT_TOKENS = -(-MAX_REQUEST_BODY_BYTES // INPUT_TOKEN_ESTIMATE_BYTES_PER_TOKEN)
-MAX_TOTAL_INPUT_TOKENS_CEILING = 1_000_000_000
+MAX_TOTAL_INPUT_TOKENS_CEILING = 100 * DEFAULT_MAX_INPUT_TOKENS
 TOKENS_PER_PRICE_UNIT = Decimal(1_000_000)
 MAX_HEADER_COUNT = 64
 MAX_HEADER_BYTES = 32 * 1024
@@ -146,6 +144,8 @@ class BrokerPolicy:
 		`provider.max_price`, so the reservation is never below what the
 		provider could charge under this policy.
 		"""
+		if image_inputs < 0:
+			raise ValueError("image_inputs must be non-negative")
 		prompt_price, completion_price, request_price, image_price = self.max_prices
 		return (
 			Decimal(input_tokens) * prompt_price / TOKENS_PER_PRICE_UNIT
@@ -667,7 +667,7 @@ def main() -> int:
 	parser.add_argument("--max-total-output-tokens", type=int, default=1_638_400)
 	# Input-token and cost budgets (#4090). Defaults derive from the other
 	# limits so they never bite below what those already permit:
-	#   --max-input-tokens        = ceil(MAX_REQUEST_BODY_BYTES / 4) = 4194304
+	#   --max-input-tokens        = MAX_REQUEST_BODY_BYTES = 16777216
 	#   --max-total-input-tokens  = max-requests x max-input-tokens
 	#   --max-total-cost-usd      = worst case of both total token budgets and
 	#                               body-bounded image inputs at the price ceilings
