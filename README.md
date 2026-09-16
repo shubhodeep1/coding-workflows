@@ -66,6 +66,11 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 
 #### Variables
 
+> **Head-bound merge authorization:** review/autofix applies `ai:review-skipped`
+> and `ai:ready-to-merge` only after the evaluated head is authorized for the
+> configured merge path. If initial authorization fails because the head is
+> missing or already changed, those labels stay unset for the next `synchronize` run.
+
 | Variable | Required | Default | Used By | Description |
 |---|---|---|---|---|
 | `WORKFLOW_EDITOR_MODEL` | No | `openai/gpt-5.6-sol` (every phase: clarify, plan, orchestrate, orchestrate_poll judge, orchestrate_clarify_respond, validate, workflow-log-analysis, implement, review_autofix editor, orchestrate_poll conflict resolver) | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, validate, workflow-log-analysis | Model for code editing / reasoning tasks. The pipeline standardises on `gpt-5.6-sol` (unified reasoning + coding) so a single setting changes every phase; the previous legacy editor split (patch-heavy phases on a separate older slug) was retired after the announce-without-emit regression ([openai/codex#11151](https://github.com/openai/codex/issues/11151)) drove repeat no-edit failures, and the underlying `apply_patch_tool_type: "freeform"` interaction with the OpenRouter Responses path was identified by the 2026-05-07 ablation suite (now flipped to `function` in `scripts/codex_model_catalog.json`). Setting this var overrides the default; use per-workflow vars (`WORKFLOW_ORCHESTRATE_MODEL`, `WORKFLOW_VALIDATE_MODEL`, `WORKFLOW_LOG_ANALYSIS_MODEL`) for finer control. |

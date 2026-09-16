@@ -202,6 +202,7 @@ changelog.d/4077-editor-noop-zero-reviewers-recoverable-telemetry.md
 changelog.d/4079-review-autofix-approval-pending-alert.md
 changelog.d/4084-security-audit-mitigation-policy.md
 changelog.d/4087-terminal-same-head-gate-skip.md
+changelog.d/4109-bind-auto-merge-head.md
 changelog.d/4281-security-pass-exhaustion-judge.md
 changelog.d/4281-security-pass-fix-cycle-attack-surface.md
 changelog.d/433-readme-wrapper-predicate-examples.md

@@ -3118,11 +3118,33 @@ def test_review_enable_auto_merge_helper_is_bootstrapped_and_delegated() -> None
 	assert "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" in helper_text
 	assert "INITIAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}" in block
 	assert "#   INITIAL_HEAD_SHA" in helper_text
+	assert "#   AUTO_MERGE_READY_LABELS_ALLOWED" in helper_text
+	assert 'record_auto_merge_ready_labels_allowed "false"' in helper_text
+	assert helper_text.count("if reviewed_head_is_current_for_labels; then") == 2
 	assert 'if [ -z "${INITIAL_HEAD_SHA:-}" ]; then' in helper_text
+	assert '[ "${_orch_pr_head_sha}" != "${INITIAL_HEAD_SHA}" ]' in helper_text
 	assert 'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto --match-head-commit "${INITIAL_HEAD_SHA}"' in helper_text
 	assert 'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"' in helper_text
 	for merge_line in (line for line in helper_text.splitlines() if "gh_retry gh pr merge" in line):
 		assert '--match-head-commit "${INITIAL_HEAD_SHA}"' in merge_line, merge_line
+	assert re.search(
+		r'if gh_retry gh pr merge .*? --merge --auto --match-head-commit "\$\{INITIAL_HEAD_SHA\}"; then\n\s+record_auto_merge_ready_labels_allowed "true"',
+		helper_text,
+	)
+	assert re.search(
+		r'if gh_retry gh pr merge .*? --squash --auto --match-head-commit "\$\{INITIAL_HEAD_SHA\}"; then\n\s+record_auto_merge_ready_labels_allowed "true"',
+		helper_text,
+	)
+
+
+def test_reviewed_head_authorization_precedes_ready_labels() -> None:
+	wf = _workflow_text()
+	auto_merge_step = wf.index("      - name: Enable auto-merge on PR")
+	ready_label_step = wf.index("      - name: Mark linked issues ready to merge")
+	ready_label_block = _step_block("Mark linked issues ready to merge")
+
+	assert auto_merge_step < ready_label_step
+	assert "env.AUTO_MERGE_READY_LABELS_ALLOWED == 'true'" in ready_label_block
 
 
 def test_checkout_captures_initial_head_sha_before_non_push_exits() -> None:
@@ -5782,7 +5804,7 @@ def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_
 	)
 	# The check must run BEFORE the `gh pr merge --squash --auto` call.
 	idx_guard = block.find("grep -Eq '^auto/forward-merge-stable-'")
-	idx_merge = block.find("gh pr merge")
+	idx_merge = block.find('gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto')
 	assert idx_guard != -1
 	assert idx_merge != -1
 	assert idx_guard < idx_merge, (
@@ -5816,6 +5838,14 @@ def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_
 	assert "refusing deterministic-skip auto-merge enablement without a --match-head-commit guard" in block
 	assert 'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"' in block
 	assert 'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"' in block
+	assert 'auto_merge_ready_labels_allowed="false"' in block
+	assert 'if [ "${auto_merge_ready_labels_allowed}" != "true" ]; then' in block
+	assert block.count("if deterministic_skip_head_is_current; then") == 2
+	idx_review_skipped_label = block.find('ensure_label_exists "ai:review-skipped"')
+	idx_bound_squash_merge = block.find('--squash --auto --match-head-commit "${PR_HEAD_SHA}"')
+	assert idx_review_skipped_label > idx_bound_squash_merge, (
+		"Deterministic-skip labels must be applied only after bound merge authorization succeeds"
+	)
 	idx_missing_head_guard = block.find('elif [ -z "${PR_HEAD_SHA}" ]')
 	assert idx_missing_head_guard != -1
 	assert idx_missing_head_guard < idx_merge, (
