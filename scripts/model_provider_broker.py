@@ -53,6 +53,8 @@ HOP_BY_HOP_HEADERS = frozenset(
 	("connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade")
 )
 PRICE_FIELDS = ("prompt", "completion", "request", "image")
+IMAGE_INPUT_TYPE_MARKERS = (b'"type":"image"', b'"type":"image_url"', b'"type":"input_image"')
+MAX_IMAGE_INPUTS_PER_REQUEST = MAX_REQUEST_BODY_BYTES // min(len(marker) for marker in IMAGE_INPUT_TYPE_MARKERS)
 
 
 class BrokerRequestError(ValueError):
@@ -105,6 +107,11 @@ def _encode_json(value: object) -> str:
 	raise BrokerRequestError("request JSON contains an unsupported value")
 
 
+def _count_image_inputs(normalized_body: bytes) -> int:
+	"""Count priced image input parts in a normalized provider request."""
+	return sum(normalized_body.count(marker) for marker in IMAGE_INPUT_TYPE_MARKERS)
+
+
 @dataclass(frozen=True)
 class BrokerPolicy:
 	allowed_models: frozenset[str]
@@ -132,18 +139,19 @@ class BrokerPolicy:
 			raise BrokerRequestError("request input exceeds the authorized input-token limit")
 		return estimate
 
-	def estimate_cost_usd(self, input_tokens: int, output_tokens: int) -> Decimal:
+	def estimate_cost_usd(self, input_tokens: int, output_tokens: int, image_inputs: int = 0) -> Decimal:
 		"""Return the worst-case USD cost of one request at the policy price ceilings.
 
 		Uses the configured ceilings rather than the request's (possibly lower)
 		`provider.max_price`, so the reservation is never below what the
 		provider could charge under this policy.
 		"""
-		prompt_price, completion_price, request_price, _image_price = self.max_prices
+		prompt_price, completion_price, request_price, image_price = self.max_prices
 		return (
 			Decimal(input_tokens) * prompt_price / TOKENS_PER_PRICE_UNIT
 			+ Decimal(output_tokens) * completion_price / TOKENS_PER_PRICE_UNIT
 			+ request_price
+			+ Decimal(image_inputs) * image_price
 		)
 
 	def normalize_request(self, path: str, body: bytes) -> tuple[bytes, int]:
@@ -340,15 +348,16 @@ class BrokerState:
 		self.cost_usd_reserved = Decimal(0)
 		self.lock = threading.Lock()
 
-	def reserve_request(self, output_tokens: int, input_tokens: int = 0) -> bool:
+	def reserve_request(self, output_tokens: int, input_tokens: int = 0, image_inputs: int = 0) -> bool:
 		"""Admit one request, charging its output, input, and cost ceilings.
 
 		`input_tokens` is the admission-time estimate from
 		BrokerPolicy.estimate_input_tokens; the cost reservation is the
-		worst case of both token counts at the policy price ceilings plus
-		the per-request price. Any exhausted budget refuses admission.
+		worst case of both token counts and recognized image inputs at the
+		policy price ceilings plus the per-request price. Any exhausted
+		budget refuses admission.
 		"""
-		request_cost = self.policy.estimate_cost_usd(input_tokens, output_tokens)
+		request_cost = self.policy.estimate_cost_usd(input_tokens, output_tokens, image_inputs)
 		with self.lock:
 			if (
 				self.requests_started >= self.max_requests
@@ -373,6 +382,7 @@ class BrokerState:
 		reserved_input_tokens: int = 0,
 		actual_input_tokens: int | None = None,
 		billable: bool = True,
+		reserved_image_inputs: int = 0,
 	) -> None:
 		"""True up a completed request's reservation against real usage.
 
@@ -387,7 +397,8 @@ class BrokerState:
 		A `None` actual count means that usage could not be read (cut-off
 		body, missing `usage`), and that reservation stays charged — fail
 		closed, never fail open. The cost reservation is re-derived from the
-		settled token counts at the policy price ceilings; `billable=False`
+		settled token counts and fixed image count at the policy price ceilings;
+		`billable=False`
 		(an upstream error status, or no upstream response at all) settles the
 		cost to zero because the provider billed nothing, including the
 		per-request price.
@@ -396,8 +407,12 @@ class BrokerState:
 		settled_input_tokens = reserved_input_tokens if actual_input_tokens is None else actual_input_tokens
 		if billable and settled_output_tokens == reserved_output_tokens and settled_input_tokens == reserved_input_tokens:
 			return
-		reserved_cost = self.policy.estimate_cost_usd(reserved_input_tokens, reserved_output_tokens)
-		settled_cost = self.policy.estimate_cost_usd(settled_input_tokens, settled_output_tokens) if billable else Decimal(0)
+		reserved_cost = self.policy.estimate_cost_usd(
+			reserved_input_tokens, reserved_output_tokens, reserved_image_inputs,
+		)
+		settled_cost = self.policy.estimate_cost_usd(
+			settled_input_tokens, settled_output_tokens, reserved_image_inputs,
+		) if billable else Decimal(0)
 		with self.lock:
 			self.output_tokens_reserved = max(
 				0,
@@ -496,10 +511,11 @@ class BrokerHandler(BaseHTTPRequestHandler):
 		try:
 			body, output_tokens = self.broker_state.policy.normalize_request(self.path, body)
 			input_tokens = self.broker_state.policy.estimate_input_tokens(body)
+			image_inputs = _count_image_inputs(body)
 		except BrokerRequestError as exc:
 			self._reject(400, str(exc))
 			return
-		if not self.broker_state.reserve_request(output_tokens, input_tokens):
+		if not self.broker_state.reserve_request(output_tokens, input_tokens, image_inputs):
 			self._reject(429, "broker request or output-token limit reached (request, token, or cost budget exhausted)")
 			return
 
@@ -575,7 +591,8 @@ class BrokerHandler(BaseHTTPRequestHandler):
 			):
 				actual_output_tokens, actual_input_tokens = _extract_token_usage(bytes(response_tail), upstream_content_type)
 			self.broker_state.settle_request(
-				output_tokens, actual_output_tokens, input_tokens, actual_input_tokens, billable=upstream_billed,
+				output_tokens, actual_output_tokens, input_tokens, actual_input_tokens,
+				billable=upstream_billed, reserved_image_inputs=image_inputs,
 			)
 			if connection is not None:
 				connection.close()
@@ -652,8 +669,9 @@ def main() -> int:
 	# limits so they never bite below what those already permit:
 	#   --max-input-tokens        = ceil(MAX_REQUEST_BODY_BYTES / 4) = 4194304
 	#   --max-total-input-tokens  = max-requests x max-input-tokens
-	#   --max-total-cost-usd      = worst case of both total token budgets at
-	#                               the price ceilings + max-requests x request price
+	#   --max-total-cost-usd      = worst case of both total token budgets and
+	#                               body-bounded image inputs at the price ceilings
+	#                               + max-requests x request price
 	parser.add_argument("--max-input-tokens", type=int, default=DEFAULT_MAX_INPUT_TOKENS)
 	parser.add_argument("--max-total-input-tokens", type=int, default=None)
 	parser.add_argument("--max-total-cost-usd", default=None)
@@ -691,7 +709,11 @@ def main() -> int:
 		args.max_total_input_tokens,
 	)
 	if args.max_total_cost_usd is None:
-		max_total_cost_usd = policy.estimate_cost_usd(args.max_total_input_tokens, args.max_total_output_tokens) + (
+		max_total_cost_usd = policy.estimate_cost_usd(
+			args.max_total_input_tokens,
+			args.max_total_output_tokens,
+			args.max_requests * MAX_IMAGE_INPUTS_PER_REQUEST,
+		) + (
 			(args.max_requests - 1) * max_prices[2]
 		)
 	else:

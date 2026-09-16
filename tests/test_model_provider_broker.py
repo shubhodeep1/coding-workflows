@@ -756,7 +756,10 @@ def test_policy_estimates_input_tokens_and_rejects_oversized_prompt() -> None:
 	else:
 		raise AssertionError("an 81-byte body estimates to 21 tokens and must exceed the 20-token ceiling")
 	assert policy.estimate_cost_usd(1_000_000, 1_000_000) == module.Decimal("3.1"), "1 + 2 per million tokens plus 0.1 per request"
+	assert policy.estimate_cost_usd(1_000_000, 1_000_000, 2) == module.Decimal("4.1"), "two images add 2 x the 0.5 ceiling"
 	assert policy.estimate_cost_usd(0, 0) == module.Decimal("0.1"), "the per-request price is charged even for an empty request"
+	assert module._count_image_inputs(b'{"input":[{"type":"input_image"},{"type":"image_url"}]}') == 2
+	assert module._count_image_inputs(b'{"input":"\\\"type\\\":\\\"image_url\\\""}') == 0, "prompt text is not an image part"
 
 
 def test_reserve_request_enforces_input_token_and_cost_budgets() -> None:
@@ -774,6 +777,7 @@ def test_reserve_request_enforces_input_token_and_cost_budgets() -> None:
 	assert cost_state.reserve_request(0, 0)
 	assert cost_state.cost_usd_reserved == module.Decimal("0.2")
 	assert not cost_state.reserve_request(0, 0), "the third request would exceed the 0.25 USD budget"
+	assert not cost_state.reserve_request(0, 0, 1), "a priced image must be included in cost admission"
 	assert cost_state.requests_started == 2
 
 
@@ -807,6 +811,10 @@ def test_settle_request_trues_up_input_tokens_and_cost() -> None:
 	state.settle_request(100, 1)
 	assert state.output_tokens_reserved == 11
 	assert state.input_tokens_reserved == 25
+	image_state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
+	assert image_state.reserve_request(100, 20, 1)
+	image_state.settle_request(100, 7, 20, 5, reserved_image_inputs=1)
+	assert image_state.cost_usd_reserved == policy.estimate_cost_usd(5, 7, 1)
 
 
 def test_usage_extraction_reads_input_tokens_for_both_response_shapes() -> None:
@@ -905,6 +913,15 @@ def test_brokered_requests_settle_input_and_cost_from_upstream_usage() -> None:
 		assert status == 429
 		assert "cost budget exhausted" in body
 		assert len(scripted) == 1, "the rejected request must not reach the upstream"
+
+		image_request: dict[str, object] = {
+			"model": "openai/test-model",
+			"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.test/a.png"}}]}],
+		}
+		status, body = post(image_request)
+		assert status == 429
+		assert "cost budget exhausted" in body
+		assert len(scripted) == 1, "an image over the cost budget must not reach the upstream"
 
 		oversized_request: dict[str, object] = {"model": "openai/test-model", "messages": [{"role": "user", "content": "x" * 500}]}
 		status, body = post(oversized_request)

@@ -388,8 +388,9 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   estimated input, `MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS` (default
   `419430400`, `100 x 4194304`) bounds the session, and
   `MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD` bounds the worst-case USD cost of
-  all admitted requests at the price ceilings (derived from the token budgets
-  and `MAX_REQUESTS x MAX_REQUEST_PRICE` when unset). Estimates are settled to
+  all admitted requests at the price ceilings, including recognized image
+  inputs (derived from the token budgets, the request-body-bound maximum image
+  count, and `MAX_REQUESTS x MAX_REQUEST_PRICE` when unset). Estimates are settled to
   `usage.prompt_tokens` / `usage.input_tokens` like the output true-up; an
   upstream error settles input and cost to zero. The defaults are non-binding
   by construction; operators tighten the vars to enforce a phase budget. The
