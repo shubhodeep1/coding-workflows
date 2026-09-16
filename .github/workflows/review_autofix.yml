@@ -2646,6 +2646,11 @@ jobs:
           HEAD_REF="$(jq -r '.headRefName' "${PR_META_FILE}")"
           HEAD_REPO="$(jq -r '.headRepoFullName' "${PR_META_FILE}")"
 
+          # Seed the reviewed head from the metadata snapshot before any
+          # non-push exit. The same-repo path refreshes it after checkout.
+          INITIAL_HEAD_SHA="$(jq -r '.head.sha // ""' "${PR_PAYLOAD_FILE}" 2>/dev/null || echo "")"
+          echo "INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}" >> "$GITHUB_ENV"
+
           if [ -z "${HEAD_REF}" ] || [ "${HEAD_REF}" = "null" ]; then
             echo "Unable to determine PR head branch"
             exit 1

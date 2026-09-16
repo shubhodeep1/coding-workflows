@@ -3125,6 +3125,18 @@ def test_review_enable_auto_merge_helper_is_bootstrapped_and_delegated() -> None
 		assert '--match-head-commit "${INITIAL_HEAD_SHA}"' in merge_line, merge_line
 
 
+def test_checkout_captures_initial_head_sha_before_non_push_exits() -> None:
+	block = _step_block("Checkout PR head branch")
+	payload_capture = 'INITIAL_HEAD_SHA="$(jq -r \'.head.sha // ""\' "${PR_PAYLOAD_FILE}" 2>/dev/null || echo "")"'
+	export_capture = 'echo "INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}" >> "$GITHUB_ENV"'
+	non_push_exits = [match.start() for match in re.finditer('echo "CAN_PUSH=false"', block)]
+
+	assert payload_capture in block
+	assert len(non_push_exits) == 3
+	assert block.index(payload_capture) < block.index(export_capture) < min(non_push_exits)
+	assert block.index('INITIAL_HEAD_SHA="$(git rev-parse HEAD)"') > max(non_push_exits)
+
+
 def test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated() -> None:
 	required_bootstrap_line = next(
 		line for line in _stage_helper_text().splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
