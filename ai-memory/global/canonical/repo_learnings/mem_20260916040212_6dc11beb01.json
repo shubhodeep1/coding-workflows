@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow security fixes are cross-cutting and require synchronized updates across YAML, shell helpers, Python utilities, and contract tests.",
   "timestamps": {
     "created_at": "2026-09-16T04:02:12Z",
