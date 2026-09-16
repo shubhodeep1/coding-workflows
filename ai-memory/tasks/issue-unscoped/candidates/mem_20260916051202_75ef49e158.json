@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pytest_git_env_isolation.py:33-34, 102-116 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603, moonshotai_kimi-k3, qwen_qwen3_7-plus]\n  PROBLEM: PROBE_TEST_SELECTION = \"concurrent_prs or union_backstop\" silently goes stale when test names in tests/test_assemble_changelog.py change.\n  WHY: pytest returns exit code 5 when no tests match, causing a confusing failure that does not identify probe-name drift as the cause.\n- tests/test_pytest_git_env_isolation.py:30 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, qwen_qwen3_7-plus]\n  PROBLEM: The import from conftest module relies on pytest's default import mode and can break if pytest configuration changes to importlib mode.\n  WHY: Under importlib mode, `from conftest import REPO_PINNING_GIT_ENV_VARS` can fail at collection with `ModuleNotFoundError`; this is not a current failure.\n- tests/test_pytest_git_env_isolation.py:38-49 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The dead environment filtering in _clean_git_env is redundant because the session fixture already strips the variables.\n  WHY: The filter adds no current behavior and is only relevant as defensive code if the function is called outside the fixture context.\n- tests/conftest.py:49-56 | severity=low | confidence=1\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: No defensive logging reports when the fixture strips nothing, so environment leaks could go undetected.\n  WHY: Silent fixture behavior could mask leaks of BASH_ENV/ENV/WORKSPACE_PATH that the fixture is intended to catch.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The changelog fragment must use one consistent file-count figure: line 4 states \u201ceight runtime helpers\u201d while line 9 states \u201c1,654 across 32 files\u201d.\n  expected_change_site: changelog.d/4093-pytest-git-env-isolation.md\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: changelog.d/4093-pytest-git-env-isolation.md:4 vs changelog.d/4093-pytest-git-env-isolation.md:9 contain conflicting counts (eight runtime helpers vs 32 files)\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_pytest_git_env_isolation.py: lines 33-34, 102-104 | severity=NIT | confidence=3\n  PROBLEM: PROBE_TEST_SELECTION = \"concurrent_prs or union_backstop\" silently goes stale when test names in tests/test_assemble_changelog.py change.\n  WHY: When test names change, the nested pytest subprocess exits 5, the assertion fires, and the operator sees a failure attributed to the isolation fixture rather than to probe-name drift. Debugging time is wasted chasing the wrong cause.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: The changelog fragment must use one consistent file-count figure: line 4 states \u201ceight runtime helpers\u201d while line 9 states \u201c1,654 across 32 files\u201d.\n  Expected change site: changelog.d/4093-pytest-git-env-isolation.md\n  Evidence of absence: changelog.d/4093-pytest-git-env-isolation.md:4 vs changelog.d/4093-pytest-git-env-isolation.md:9 contain conflicting counts (eight runtime helpers vs 32 files)\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- tests/test_pytest_git_env_isolation.py: lines 30, 38-49 | severity=NIT | confidence=4\n  PROBLEM: Import from conftest module and dead environment filtering in _clean_git_env\n  WHY: Import can break with pytest import-mode changes; filter is redundant since session fixture already strips the variables\n- tests/test_pytest_git_env_isolation.py: lines 33-34, 102-112 | severity=NIT | confidence=3\n  PROBLEM: Probe test selection \"concurrent_prs or union_backstop\" silently goes stale when test names change\n  WHY: pytest returns exit code 5 when no tests match, creating non-obvious failures without indicating probe-name drift\n- tests/conftest.py: lines 49-56 | severity=NIT | confidence=1\n  PROBLEM: No defensive logging when fixture strips nothing, so leaks of BASH_ENV/ENV/WORKSPACE_PATH could go undetected\n  WHY: Silent failures could mask environment leaks that the fixture is supposed to catch\n\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- file: tests/test_pytest_git_env_isolation.py\n  location: lines 113-116, the `completed.returncode == 0` assertion after the nested `subprocess.run`\n  issue: if the probe names in `PROBE_TEST_SELECTION = \"concurrent_prs or union_backstop\"` (line 34) drift from test names in `tests/test_assemble_changelog.py`, pytest exits with code 5 (\"no tests collected\") and the failure message does not distinguish probe-name drift from a real conftest regression. Both probe names currently exist (verified at tests/test_assemble_changelog.py:524 and :596), so this is a future-maintenance diagnosability improvement only.\n  suggested minimal fix: extend the existing assertion message to note that exit code 5 means the probe selection matched no tests, e.g. `assert completed.returncode == 0, (\"nested pytest run failed (exit 5 = PROBE_TEST_SELECTION matched no tests; check test names in tests/test_assemble_changelog.py)\\n\" f\"stdout:\\n{completed.stdout}\\nstderr:\\n{completed.stderr}\")`\n  estimated lines changed: 2\n  HARDENING_RISK_SCORE: 1\n\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_pytest_git_env_isolation.py: line 34 (`PROBE_TEST_SELECTION = \"concurrent_prs or union_backstop\"`) and lines 102-112 (assertion on `completed.returncode == 0`) | severity=NIT | confidence=3\n  PROBLEM: The probe selection silently goes stale when test names in `tests/test_assemble_changelog.py` change.\n  WHY: Only when a future rename in `test_assemble_changelog.py` removes or renames both `concurrent_prs` and `union_backstop` test identifiers, the nested subprocess exits 5, the assertion fires, and the stdout/stderr dump does not mention \"no tests collected\" vs \"test failed\".\n- tests/test_pytest_git_env_isolation.py: line 30 (`from conftest import REPO_PINNING_GIT_ENV_VARS`) | severity=NIT | confidence=3\n  PROBLEM: The import relies on pytest's default `import-mode=prepend` keeping `tests/` on `sys.path` ahead of the repo-root `pythonpath` entry.\n  WHY: Only if pytest import configuration changes, this import fails at collection with `ModuleNotFoundError`; this is not a current failure.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "82e48ebd46c9823dcf3569f0c2c41b0516a819f53d3472a00775a7ec0c20eb70",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4094,
+    "run_id": "35055200185",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35055200185",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260916051202_75ef49e158",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4094,
+    "run_id": "35055200185"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-16T05:12:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
