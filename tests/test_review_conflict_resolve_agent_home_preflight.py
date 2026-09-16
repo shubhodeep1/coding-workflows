@@ -100,6 +100,7 @@ def test_preflight_passes_and_logs_identity_for_a_writable_runtime_dir(tmp_path:
 	assert " parent_dir=owner=" in line
 	assert " acl=" in line and " mount=" in line
 	assert " agent_home_exists=false " in line
+	assert " agent_home_symlink=false " in line
 	assert " agent_home_acl=not-applicable" in line
 	assert PREFLIGHT_DENIED_PREFIX not in completed.stderr
 
@@ -145,9 +146,26 @@ def test_preflight_fails_closed_when_existing_agent_home_is_not_writable(tmp_pat
 		agent_home.chmod(0o700)
 	assert completed.returncode == 1
 	assert "exists=true writable=true searchable=true" in completed.stderr
-	assert "agent_home_exists=true agent_home_directory=true" in completed.stderr
+	assert "agent_home_exists=true agent_home_symlink=false agent_home_directory=true" in completed.stderr
 	assert "agent_home_writable=false agent_home_searchable=true" in completed.stderr
 	assert "agent_home_stat=owner=" in completed.stderr
 	assert " mode=500 type=directory" in completed.stderr
+	assert f"uid={os.getuid()} euid={os.geteuid()} " in completed.stderr
+	assert re.search(r" user=\S+ ", completed.stderr)
+
+
+def test_preflight_fails_closed_when_existing_agent_home_is_a_symlink(tmp_path: Path) -> None:
+	function_source = _preflight_function_source(_resolve_script_text())
+	runtime_dir = tmp_path / "runtime"
+	external_target = tmp_path / "external-target"
+	runtime_dir.mkdir()
+	external_target.mkdir()
+	(runtime_dir / "resolver-agent-home").symlink_to(external_target, target_is_directory=True)
+	completed = _run_preflight(function_source, runtime_dir)
+	assert completed.returncode == 1
+	assert "agent_home_exists=true agent_home_symlink=true agent_home_directory=true" in completed.stderr
+	assert "agent_home_writable=true agent_home_searchable=true" in completed.stderr
+	assert "agent_home_stat=owner=" in completed.stderr
+	assert " type=symbolic link" in completed.stderr
 	assert f"uid={os.getuid()} euid={os.geteuid()} " in completed.stderr
 	assert re.search(r" user=\S+ ", completed.stderr)
