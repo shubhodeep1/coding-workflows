@@ -382,7 +382,20 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   valid range `1..100`) and fail closed with HTTP 429 after exhaustion. Each
   session also enforces exact model IDs, a per-request output limit (default
   `16384`), a total output-token budget (default `1638400`, i.e. `100 x 16384`), and
-  server-controlled provider price ceilings before forwarding. Active clients
+  server-controlled provider price ceilings before forwarding. Input spend is
+  budgeted too (#4090): `MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS` (default
+  `4194304`, the 16 MiB body cap at 4 bytes per token) bounds one request's
+  estimated input, `MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS` (default
+  `419430400`, `100 x 4194304`) bounds the session, and
+  `MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD` bounds the worst-case USD cost of
+  all admitted requests at the price ceilings (derived from the token budgets
+  and `MAX_REQUESTS x MAX_REQUEST_PRICE` when unset). Estimates are settled to
+  `usage.prompt_tokens` / `usage.input_tokens` like the output true-up; an
+  upstream error settles input and cost to zero. The defaults are non-binding
+  by construction; operators tighten the vars to enforce a phase budget. The
+  three vars are exported by every model-facing workflow via
+  `${{ vars.<NAME> || '<default>' }}` and passed through
+  `model_provider_broker_start` in `scripts/codex_helpers.sh`. Active clients
   are capped at 8 and each accepted socket has a 30-second read timeout.
   Price defaults are `MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE=10` USD per
   million input tokens, `MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE=30` USD
@@ -416,7 +429,15 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   A non-escalated locator cannot override
   the trusted `ai:resolver-escalated` label; that mismatch falls back to
   highest-generation selection. A missing or invalid locator likewise scans up
-  to 10 pages and 32 MiB, then refreshes the locator. The actuator reuses the review
+  to 10 pages and 32 MiB, then refreshes the locator. Lookup order in
+  `heal_integration_branch_conflict` is fixed (#4091): the PR-body
+  `AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1` hint first (one API call, untrusted),
+  then the `ai/resolver-retry-state-locator` commit status whenever the body
+  hint is absent, stale, or fails verification, and only then bounded comment
+  discovery. A status locator that names the same comment the body hint
+  already failed on is not re-fetched. The body hint can therefore no longer
+  skip the trusted lookup, which is what let a forged locator plus a comment
+  flood defer every tick. The actuator reuses the review
   pipeline's collected comment snapshot. Legacy PR-body locators remain readable,
   but new locator writes never replace PR descriptions. An unproven history,
   API failure, or verification uncertainty defers
