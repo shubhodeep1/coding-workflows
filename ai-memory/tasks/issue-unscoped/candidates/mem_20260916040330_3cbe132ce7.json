@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "The review pipeline has dedicated stages for preparing and applying fixes, judging reviewer results, propagating labels, resolving conflicts, and maintaining Git authentication hygiene. Future changes should preserve separation between review inputs and write-capable operations and should test blocked, conflicting, and stale-head cases.",
+  "fingerprint": "252ee65fd2bf5198914546d908dae6eae017d6b1fb88cd91aa3d7f8f3ae09c6c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35053858980",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35053858980",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4049",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4056",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4070",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4075",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4076",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4052",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4057",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4071",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4077",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4079"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260916040330_3cbe132ce7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Review and autofix flows enforce explicit security boundaries around repository access, reviewer consensus, labels, and conflict handling.",
+  "timestamps": {
+    "created_at": "2026-09-16T04:03:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
