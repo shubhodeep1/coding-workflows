@@ -6274,6 +6274,10 @@ def test_deterministic_skip_merge_is_bound_to_gate_evaluated_head_sha() -> None:
 	assert ready_label_pos > ready_guard_pos, (
 		"deterministic-skip linked-issue advancement must be gated on successful bound enrolment"
 	)
+	assert re.search(
+		r'auto_merge_summary="SUPPRESSED \(forward-merge fallback[^\n]+\)"\n\s+ready_label_allowed="true"',
+		block,
+	), "configured forward-merge manual mode must still advance reviewed linked issues"
 
 
 def test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha() -> None:
@@ -6281,8 +6285,10 @@ def test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha() -> None:
 	# the reviewer panel / editor ran against (INITIAL_HEAD_SHA), and must
 	# refuse when that SHA is unavailable.
 	block = _step_block("Enable auto-merge on PR")
-	assert "AUTO_MERGE_EXPECTED_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}" in block, (
-		"Enable auto-merge on PR must pass the reviewed head (INITIAL_HEAD_SHA) to the helper"
+	assert (
+		"AUTO_MERGE_EXPECTED_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA || needs.gate.outputs.head_sha }}" in block
+	), (
+		"Enable auto-merge on PR must use INITIAL_HEAD_SHA with the gate head fallback needed by fork PRs"
 	)
 	assert "id: enable_auto_merge" in block, "auto-merge step must expose the helper's label-safety output"
 	workflow_text = _workflow_text()
@@ -6316,9 +6322,19 @@ def test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha() -> None:
 	assert '_write_ready_label_allowed "true"' in helper_text, (
 		"helper must expose successful bound enrolment to the linked-issue step"
 	)
+	assert re.search(
+		r'else\n\s+_write_ready_label_allowed "true"\n\s+echo "PR #\$\{PR_NUMBER\} head ref .*FORWARD_MERGE_FALLBACK_AUTO_MERGE',
+		helper_text,
+	), "configured forward-merge manual mode must permit linked-issue advancement"
 
 
-def _run_auto_merge_helper_with_fake_gh(tmp: Path, *, expected_head_sha: str, head_ref: str = "ai/issue-42") -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
+def _run_auto_merge_helper_with_fake_gh(
+	tmp: Path,
+	*,
+	expected_head_sha: str,
+	head_ref: str = "ai/issue-42",
+	forward_merge_auto_setting: str = "true",
+) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
 	"""Run scripts/review_enable_auto_merge.sh with a fake ``gh`` on PATH.
 
 	The fake serves the label and PR-metadata reads the helper makes and
@@ -6364,7 +6380,7 @@ def _run_auto_merge_helper_with_fake_gh(tmp: Path, *, expected_head_sha: str, he
 			"GITHUB_REPOSITORY": "test-owner/test-repo",
 			"PR_NUMBER": "42",
 			"ENABLE_AUTO_MERGE": "true",
-			"FORWARD_MERGE_FALLBACK_AUTO_MERGE": "true",
+			"FORWARD_MERGE_FALLBACK_AUTO_MERGE": forward_merge_auto_setting,
 			"ORCH_INTEGRATION_BRANCH_PATTERN": "^orchestrator/project-",
 			"AUTO_MERGE_EXPECTED_HEAD_SHA": expected_head_sha,
 			"GH_TOKEN": "fake-token",
@@ -6396,6 +6412,21 @@ def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() ->
 			["pr", "merge", "42", "--repo", "test-owner/test-repo", "--squash", "--auto", "--match-head-commit", reviewed_sha]
 		], merge_calls
 		assert f"AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=42 head_sha={reviewed_sha} action=squash" in proc.stdout, proc.stdout
+		assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
+			"ready_label_allowed=false",
+			"ready_label_allowed=true",
+		]
+
+	# The explicit forward-merge opt-out is manual-merge mode, not a review refusal.
+	with tempfile.TemporaryDirectory() as tmp_str:
+		proc, calls = _run_auto_merge_helper_with_fake_gh(
+			Path(tmp_str),
+			expected_head_sha=reviewed_sha,
+			head_ref="auto/forward-merge-stable-20260916",
+			forward_merge_auto_setting="false",
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert not [c for c in calls if c[:2] == ["pr", "merge"]], calls
 		assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
 			"ready_label_allowed=false",
 			"ready_label_allowed=true",

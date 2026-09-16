@@ -1438,6 +1438,7 @@ jobs:
               fi
             else
               auto_merge_summary="SUPPRESSED (forward-merge fallback head ref '${PR_HEAD_REF}', FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true')"
+              ready_label_allowed="true"
               echo "PR #${PR_NUMBER} head ref '${PR_HEAD_REF}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' and FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed on the deterministic-skip path. Merge manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise."
             fi
           else
@@ -5540,11 +5541,13 @@ jobs:
           # See the forward-merge-fallback branch below for the full rationale.
           FORWARD_MERGE_FALLBACK_AUTO_MERGE: ${{ vars.FORWARD_MERGE_FALLBACK_AUTO_MERGE || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
-          # Head the reviewer panel / editor cycle ran against (captured by
-          # "Checkout PR head branch"). The helper binds `gh pr merge` to it
-          # with --match-head-commit so a push that lands during the review
-          # cannot ride this run's clean verdict into main (issue #4109).
-          AUTO_MERGE_EXPECTED_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
+          # Head the reviewer panel / editor cycle ran against. Writable heads
+          # use INITIAL_HEAD_SHA captured after checkout; fork PRs retain the
+          # gate's evaluated head because Checkout PR head branch cannot fetch
+          # their branch through the target-repo origin. The helper binds
+          # `gh pr merge` to this value with --match-head-commit so a later
+          # push cannot ride this run's clean verdict into main (issue #4109).
+          AUTO_MERGE_EXPECTED_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA || needs.gate.outputs.head_sha }}
         run: |
           bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"
 

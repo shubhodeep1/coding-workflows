@@ -220,6 +220,7 @@ if printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq '^auto/forward-merge-stable-'
 			echo "::warning::Could not enable auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER}. Either the PR head moved past ${AUTO_MERGE_EXPECTED_HEAD_SHA} during the review (a push landed after the reviewed head; the next sync event re-reviews it), or 'Allow merge commits' / 'Allow auto-merge' are not enabled in repo settings / branch protection is not configured. The PR remains open for manual 'Create a merge commit'."
 		fi
 	else
+		_write_ready_label_allowed "true"
 		echo "PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' and FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed. Merge manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise (see promote-main-to-stable.yml:115-126 and the CAUTION banner in the PR body)."
 	fi
 	exit 0
