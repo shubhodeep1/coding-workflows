@@ -7,6 +7,7 @@ lineage handling, compaction, and branch-safe persistence for `ai-memory`.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import fcntl
 import hashlib
@@ -2987,6 +2988,19 @@ def _git_subprocess_env() -> dict[str, str]:
     env = dict(os.environ)
     for name in _GIT_LOCATION_ENV_VARS:
         env.pop(name, None)
+    # Authenticate networked git subprocesses without persisting a credential
+    # helper or embedding a token in the clone URL. Git ignores this
+    # command-scoped header for local/file remotes.
+    token = env.get("GH_PAT") or env.get("GH_TOKEN") or ""
+    if token:
+        auth = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
+        try:
+            config_count = int(env.get("GIT_CONFIG_COUNT", "0"))
+        except ValueError:
+            config_count = 0
+        env["GIT_CONFIG_COUNT"] = str(config_count + 1)
+        env[f"GIT_CONFIG_KEY_{config_count}"] = "http.extraHeader"
+        env[f"GIT_CONFIG_VALUE_{config_count}"] = f"Authorization: Basic {auth}"
     return env
 
 
@@ -3038,18 +3052,9 @@ def _file_lock(lock_name: str) -> Any:
 
 
 def _inject_token_into_url(url: str, token: str) -> str:
-    """Embed a GitHub token into an HTTPS origin URL for authenticated clones.
-
-    Converts ``https://github.com/owner/repo`` →
-    ``https://x-access-token:TOKEN@github.com/owner/repo``.
-    SSH and file URLs are returned unchanged.
-    """
-    if not url.startswith("https://"):
-        return url
-    # Already has embedded credentials — leave as-is.
-    if "@" in url.split("//", 1)[-1].split("/", 1)[0]:
-        return url
-    return url.replace("https://", f"https://x-access-token:{token}@", 1)
+    """Compatibility shim that always returns a credential-free URL."""
+    del token
+    return re.sub(r"^(https?://)[^/@]+@", r"\1", url)
 
 
 def _resolve_origin_url(repo_root: Path) -> str:
@@ -3074,14 +3079,10 @@ def _resolve_origin_url(repo_root: Path) -> str:
         url = process.stdout.strip()
     else:
         url = str(repo_root.resolve())
-    # When running in CI the origin URL from actions/checkout is bare HTTPS
-    # (https://github.com/owner/repo) with no embedded credentials.  Subprocess
-    # git-clone calls therefore fail with "could not read Username".  If a
-    # GH_TOKEN env-var is available, inject it so clones authenticate properly.
-    token = os.environ.get("GH_TOKEN", "")
-    if token and url.startswith("https://"):
-        url = _inject_token_into_url(url, token)
-    return url
+    # Older workflow runs may have persisted userinfo in origin. Never copy it
+    # into a subprocess argument or error message; authentication is supplied by
+    # `_git_subprocess_env` for each child process instead.
+    return re.sub(r"^(https?://)[^/@]+@", r"\1", url)
 
 
 def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:

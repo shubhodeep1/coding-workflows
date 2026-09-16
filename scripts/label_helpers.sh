@@ -10,10 +10,9 @@
 # Keeps the helper self-contained so it works even when the contract
 # file is not present in the checked-out repo.
 # shellcheck source=gh_helpers.sh
-LABEL_HELPERS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "${LABEL_HELPERS_SCRIPT_DIR}/gh_helpers.sh" ]; then
+if [ -f "scripts/gh_helpers.sh" ]; then
 	# shellcheck disable=SC1091
-	source "${LABEL_HELPERS_SCRIPT_DIR}/gh_helpers.sh"
+	source scripts/gh_helpers.sh
 fi
 # Fallback if gh_helpers.sh not available
 if ! type gh_retry >/dev/null 2>&1; then
