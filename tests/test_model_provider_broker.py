@@ -609,8 +609,8 @@ class _FakeUpstreamResponse:
 
 def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> None:
 	"""End-to-end through BrokerHandler with a fake HTTPS upstream: streamed
-	turns that report usage are settled to their real cost, an upstream error
-	settles to zero, and a stream without usage keeps its full reservation."""
+	turns that report usage are settled to their real cost, a confirmed upstream
+	error settles to zero, and ambiguous failures keep their full reservation."""
 	module = _broker_module()
 	policy = _broker_policy(module)  # per-request ceiling 100, total 150
 	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
@@ -664,11 +664,18 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 		fail_connection_construction = True
 		assert post(streamed_request) == 502
 		assert state.output_tokens_reserved == 0, "connection setup failure must release its reservation"
+		assert state.input_tokens_reserved == 0
+		assert state.cost_usd_reserved == 0
 		fail_connection_construction = False
 		fail_upstream_request = True
 		assert post(streamed_request) == 502
-		assert state.output_tokens_reserved == 0, "request failure before a response must release its reservation"
+		assert state.output_tokens_reserved == 100, "a failure after forwarding starts must keep its output reservation"
+		assert state.input_tokens_reserved > 0, "the provider may have billed the forwarded input"
+		assert state.cost_usd_reserved > 0, "an ambiguous transport failure must remain charged"
 		fail_upstream_request = False
+		state.output_tokens_reserved = 0
+		state.input_tokens_reserved = 0
+		state.cost_usd_reserved = module.Decimal(0)
 		for _ in range(5):
 			scripted.append((200, usage_stream, "text/event-stream"))
 			assert post(streamed_request) == 200

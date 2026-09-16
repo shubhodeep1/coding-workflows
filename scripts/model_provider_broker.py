@@ -398,10 +398,10 @@ class BrokerState:
 		body, missing `usage`), and that reservation stays charged — fail
 		closed, never fail open. The cost reservation is re-derived from the
 		settled token counts and fixed image count at the policy price ceilings;
-		`billable=False`
-		(an upstream error status, or no upstream response at all) settles the
-		cost to zero because the provider billed nothing, including the
-		per-request price.
+		`billable=False` (an observed upstream error response, or a failure
+		before forwarding starts) settles the cost to zero, including the
+		per-request price. An ambiguous transport failure after forwarding
+		starts keeps the full reservation.
 		"""
 		settled_output_tokens = reserved_output_tokens if actual_output_tokens is None else actual_output_tokens
 		settled_input_tokens = reserved_input_tokens if actual_input_tokens is None else actual_input_tokens
@@ -530,11 +530,12 @@ class BrokerHandler(BaseHTTPRequestHandler):
 		# Usage true-up state: the request is charged its full output ceiling
 		# and its input estimate until the upstream body has been relayed
 		# completely, then settled against the provider-reported usage (see
-		# BrokerState.settle_request). An upstream error status processed no
-		# billable tokens, so both settle at 0; a cut-off or unparseable body
-		# keeps the full reservation.
+		# BrokerState.settle_request). An observed upstream error response or
+		# pre-forward failure settles at 0; an ambiguous transport failure,
+		# cut-off body, or unparseable body keeps the full reservation.
 		upstream_status: int | None = None
 		upstream_response_received = False
+		upstream_request_started = False
 		upstream_content_type = ""
 		response_tail = bytearray()
 		body_complete = False
@@ -545,6 +546,7 @@ class BrokerHandler(BaseHTTPRequestHandler):
 				timeout=600,
 				context=ssl.create_default_context(),
 			)
+			upstream_request_started = True
 			connection.request("POST", upstream_path, body=body, headers=upstream_headers)
 			response = connection.getresponse()
 			upstream_response_received = True
@@ -581,7 +583,9 @@ class BrokerHandler(BaseHTTPRequestHandler):
 			actual_output_tokens: int | None = None
 			actual_input_tokens: int | None = None
 			upstream_billed = True
-			if not upstream_response_received or upstream_status is not None and upstream_status >= 400:
+			if not upstream_request_started or (
+				upstream_response_received and upstream_status is not None and upstream_status >= 400
+			):
 				actual_output_tokens = 0
 				actual_input_tokens = 0
 				upstream_billed = False

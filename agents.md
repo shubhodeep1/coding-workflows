@@ -392,7 +392,9 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   inputs (derived from the token budgets, the request-body-bound maximum image
   count, and `MAX_REQUESTS x MAX_REQUEST_PRICE` when unset). Reservations are settled to
   `usage.prompt_tokens` / `usage.input_tokens` like the output true-up; an
-  upstream error settles input and cost to zero. The defaults are non-binding
+  an observed upstream error response or pre-forward failure settles input and
+  cost to zero, while an ambiguous transport failure after forwarding starts
+  keeps the full reservation. The defaults are non-binding
   by construction; operators tighten the vars to enforce a phase budget. The
   three vars are exported by every model-facing workflow via
   `${{ vars.<NAME> || '<default>' }}` and passed through
@@ -408,9 +410,10 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   its full per-request ceiling only while it is in flight and is trued up to
   the provider-reported `usage` once its response completes (streamed chat
   requests are opted into `stream_options.include_usage` for this). A
-  cut-off or usage-less response keeps the full reservation and an upstream
-  error status settles at zero, so an agentic phase is bounded by real spend
-  rather than by `total / per-request` turns.
+  cut-off or usage-less response keeps the full reservation, as does an
+  ambiguous transport failure after forwarding starts; an observed upstream
+  error status or pre-forward failure settles at zero. An agentic phase is
+  therefore bounded by real spend rather than by `total / per-request` turns.
 - Same-UID model launches run inside a private PID namespace with a fresh
   `/proc`, so danger-full-access agents retain their existing workspace file
   permissions but cannot inspect the secret-bearing workflow or broker process
