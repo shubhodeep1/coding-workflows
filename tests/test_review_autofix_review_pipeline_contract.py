@@ -3116,7 +3116,13 @@ def test_review_enable_auto_merge_helper_is_bootstrapped_and_delegated() -> None
 	assert 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }' in helper_text
 	assert "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" in helper_text
 	assert "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" in helper_text
-	assert 'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto' in helper_text
+	assert "INITIAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}" in block
+	assert "#   INITIAL_HEAD_SHA" in helper_text
+	assert 'if [ -z "${INITIAL_HEAD_SHA:-}" ]; then' in helper_text
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto --match-head-commit "${INITIAL_HEAD_SHA}"' in helper_text
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"' in helper_text
+	for merge_line in (line for line in helper_text.splitlines() if "gh_retry gh pr merge" in line):
+		assert '--match-head-commit "${INITIAL_HEAD_SHA}"' in merge_line, merge_line
 
 
 def test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated() -> None:
@@ -5789,6 +5795,22 @@ def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_
 	assert 'auto_merge_summary="ENABLED (merge commit)"' in block, (
 		"deterministic-skip-merge must record the merge-commit auto-merge outcome for the step summary"
 	)
+	assert 'elif [ -z "${PR_HEAD_SHA}" ]; then' in block, (
+		"deterministic-skip-merge must fail closed when the gate-observed head SHA is unavailable"
+	)
+	assert 'auto_merge_summary="REFUSED (gate-observed head SHA unavailable)"' in block, (
+		"deterministic-skip summary must report a missing-head refusal"
+	)
+	assert "refusing deterministic-skip auto-merge enablement without a --match-head-commit guard" in block
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"' in block
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"' in block
+	idx_missing_head_guard = block.find('elif [ -z "${PR_HEAD_SHA}" ]')
+	assert idx_missing_head_guard != -1
+	assert idx_missing_head_guard < idx_merge, (
+		"Missing gate head must refuse auto-merge before either merge strategy can run"
+	)
+	for merge_line in (line for line in block.splitlines() if "gh_retry gh pr merge" in line):
+		assert '--match-head-commit "${PR_HEAD_SHA}"' in merge_line, merge_line
 
 
 def test_gate_emits_head_ref_output_for_forward_merge_suppressor_reuse() -> None:
@@ -5800,11 +5822,20 @@ def test_gate_emits_head_ref_output_for_forward_merge_suppressor_reuse() -> None
 	assert "head_ref: ${{ steps.evaluate.outputs.head_ref }}" in wf, (
 		"Gate job must expose head_ref output for downstream forward-merge suppressors"
 	)
+	assert "head_sha: ${{ steps.evaluate.outputs.head_sha }}" in wf, (
+		"Gate job must expose the exact head SHA used for deterministic-skip authorization"
+	)
 	assert 'echo "head_ref=${pr_head_ref}"' in wf, (
 		"Gate evaluate step must emit head_ref to GITHUB_OUTPUT"
 	)
+	assert 'echo "head_sha=${pr_head_sha_gate}"' in wf, (
+		"Gate evaluate step must reuse the authenticated PR metadata head SHA"
+	)
 	assert "PR_HEAD_REF: ${{ needs.gate.outputs.head_ref }}" in wf, (
 		"deterministic-skip-merge must consume head_ref from gate outputs"
+	)
+	assert "PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}" in wf, (
+		"deterministic-skip-merge must consume the gate-observed head SHA"
 	)
 	assert "post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}" in wf, (
 		"Gate job must expose cached PR title/body for the post-merge validation dispatch"

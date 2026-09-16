@@ -12,6 +12,7 @@
 #   ENABLE_AUTO_MERGE
 #   FORWARD_MERGE_FALLBACK_AUTO_MERGE
 #   ORCH_INTEGRATION_BRANCH_PATTERN
+#   INITIAL_HEAD_SHA
 #   GH_TOKEN
 
 set -euo pipefail
@@ -177,8 +178,12 @@ if printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq '^auto/forward-merge-stable-'
 	# repo var to any non-'true' value to fall back to the previous
 	# behaviour of leaving these PRs for a manual merge commit.
 	if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
+		if [ -z "${INITIAL_HEAD_SHA:-}" ]; then
+			echo "::warning::Reviewed head SHA is unavailable for forward-merge fallback PR #${PR_NUMBER}. Failing closed: refusing auto-merge enablement without a --match-head-commit guard."
+			exit 0
+		fi
 		echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${_orch_pr_head_ref}')..."
-		if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto; then
+		if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto --match-head-commit "${INITIAL_HEAD_SHA}"; then
 			echo "Auto-merge (merge commit) enabled. PR will merge once all required checks pass, preserving stable's ancestry on main."
 		else
 			echo "::warning::Could not enable auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER}. Check that 'Allow merge commits' and 'Allow auto-merge' are enabled in repo settings and branch protection is configured. The PR remains open for manual 'Create a merge commit'."
@@ -224,8 +229,13 @@ if [ "${_orch_is_integration_pr}" = "true" ]; then
 	exit 0
 fi
 
+if [ -z "${INITIAL_HEAD_SHA:-}" ]; then
+	echo "::warning::Reviewed head SHA is unavailable for PR #${PR_NUMBER}. Failing closed: refusing auto-merge enablement without a --match-head-commit guard."
+	exit 0
+fi
+
 echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
-if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
+if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"; then
 	echo "Auto-merge enabled. PR will merge once all required checks pass."
 else
 	echo "::warning::Could not enable auto-merge on PR #${PR_NUMBER}. Check that 'Allow auto-merge' is enabled in repo settings and branch protection is configured."
