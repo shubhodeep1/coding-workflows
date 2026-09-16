@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/e2e_smoke_canary.txt`\n\nScope-mode justification: The request is fully specified and restricted to one existing fixture. The complete implementation is the smallest possible change and follows \u00a76 priorities by favoring correctness and backward compatibility over unnecessary expansion.\n\n## Planning ref\n\n- Commit: `5099eb4e534533478f59b2415331b3805195fda4`\n- Branch: `main`\n- Integration branch metadata: absent; no mismatch established.\n- Clarification: the auto-answer confirms no clarification was required.\n\n## Automation and lifecycle\n\n- Change type: modify one existing fixture; no new script or subsystem.\n- Existing entry point: `.github/workflows/test-and-mark-stable.yml`, triggered by `workflow_dispatch`; its alt-model smoke job creates and verifies this canary task.\n- New scheduler wiring: none.\n- Long-running supervisor: not required.\n- Database gate: not applicable.\n- Removal registry entry: not applicable.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Replace its contents with exactly:\n    ```text\n    status: ok\n    run_id: alt-35052424845\n    updated-by: ai-pipeline\n    ```\n  - Preserve a trailing newline without adding a blank fourth line.\n\n## Functions or modules to implement\n\nNone. This is a literal update to an existing smoke-test fixture.\n\n## Data structures affected\n\nNo structured runtime data changes. The three-line canary\u2019s `run_id` value changes from `26151428977` to `alt-35052424845`.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Replace the complete fixture content\n\n- **Chosen:** Rewrite the fixture as the prescribed three lines.\n- **Alternatives considered:** Modify only the existing `run_id` line.\n- **Why:** A full replacement directly guarantees the issue\u2019s exact-content requirement and prevents unnoticed extra content.\n\n### D2 \u2014 Keep verification narrowly scoped\n\n- **Chosen:** Verify exact bytes and confirm only the canary file changed.\n- **Alternatives considered:** Run the repository-wide test suite.\n- **Why:** No executable logic changes, and broader validation would add cost without improving confidence in this literal fixture update.\n\n## Security considerations\n\n- Trust boundary: issue-authored content is reduced to the explicitly prescribed static lines.\n- Authorization: no endpoint, worker, or privileged surface changes.\n- Input validation: do not derive paths or values dynamically; use only the fixed file path and literal content.\n- Abuse cases: reject extra lines, injected commands, path substitutions, or secret-bearing content.\n- Money handling: not applicable.\n\n## Risks and edge cases\n\n- An extra blank line or omitted trailing newline could violate exact-content checks.\n- Editing generated copies such as `.codex-workflow-src/tests/e2e_smoke_canary.txt` would violate the one-file constraint.\n- Unrelated worktree changes must remain untouched.\n\n## Testing considerations\n\n1. Compare the file against the exact expected three-line payload.\n2. Confirm `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n3. Inspect the scoped diff to confirm only the previous `run_id` value changed.\n\n## Pre-execution self-check result\n\nThe target exists, the current discrepancy is confirmed, the requested value is unambiguous, and the plan respects the one-file scope.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "7f30f9299c015d07be0f06522aa09c17957a9d8782545264a26de9c8ce0d607a",
+  "lineage": {
+    "issue_number": 4098,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35052619978",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35052619978",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4098"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260916034357_34414c3752",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4098,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35052619978"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4098",
+  "timestamps": {
+    "created_at": "2026-09-16T03:43:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
