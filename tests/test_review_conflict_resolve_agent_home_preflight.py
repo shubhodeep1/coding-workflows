@@ -12,9 +12,10 @@ RUNTIME_DIR and the editor path creates its own sandbox there. The bare
 coreutils error never named the process identity or the directory state, so
 the resolver now runs ``_resolver_agent_home_preflight`` first: it logs one
 ``RESOLVER_AGENT_HOME_PREFLIGHT`` line with uid/euid/user, owner, mode, ACLs
-and mount of RUNTIME_DIR, and fails closed with
+and mount of RUNTIME_DIR plus the state of an existing resolver home, and fails closed with
 ``::error::RESOLVER_AGENT_HOME_PREFLIGHT_DENIED`` when the directory is not a
-writable, searchable directory for the current identity.
+writable, searchable directory for the current identity or an existing
+resolver home is unusable.
 
 These tests pin (a) the placement contract in the script text and (b) the
 helper's behaviour by executing the extracted function under bash.
@@ -52,7 +53,11 @@ def _preflight_function_source(text: str) -> str:
 
 
 def _run_preflight(function_source: str, target: Path) -> subprocess.CompletedProcess[str]:
-	script = f"{function_source}\n{PREFLIGHT_FUNCTION_NAME} {str(target)!r}\n"
+	agent_home = target / "resolver-agent-home"
+	script = (
+		f"MODEL_PROVIDER_BROKER_AGENT_HOME={str(agent_home)!r}\n"
+		f"{function_source}\n{PREFLIGHT_FUNCTION_NAME} {str(target)!r}\n"
+	)
 	return subprocess.run(
 		["bash", "-c", script],
 		capture_output=True,
@@ -90,6 +95,7 @@ def test_preflight_passes_and_logs_identity_for_a_writable_runtime_dir(tmp_path:
 	assert " owner=" in line and " mode=" in line and " type=directory" in line
 	assert " parent_dir=owner=" in line
 	assert " acl=" in line and " mount=" in line
+	assert " agent_home_exists=false " in line
 	assert PREFLIGHT_DENIED_PREFIX not in completed.stderr
 
 
@@ -115,3 +121,22 @@ def test_preflight_fails_closed_when_runtime_dir_is_not_writable(tmp_path: Path)
 	assert completed.returncode == 1
 	assert f"::error::{PREFLIGHT_DENIED_PREFIX} runtime_dir={locked_dir} exists=true writable=false searchable=true" in completed.stderr
 	assert " mode=500 " in completed.stderr
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory mode bits")
+def test_preflight_fails_closed_when_existing_agent_home_is_not_writable(tmp_path: Path) -> None:
+	function_source = _preflight_function_source(_resolve_script_text())
+	runtime_dir = tmp_path / "runtime"
+	agent_home = runtime_dir / "resolver-agent-home"
+	agent_home.mkdir(parents=True)
+	agent_home.chmod(0o500)
+	try:
+		completed = _run_preflight(function_source, runtime_dir)
+	finally:
+		agent_home.chmod(0o700)
+	assert completed.returncode == 1
+	assert "exists=true writable=true searchable=true" in completed.stderr
+	assert "agent_home_exists=true agent_home_directory=true" in completed.stderr
+	assert "agent_home_writable=false agent_home_searchable=true" in completed.stderr
+	assert "agent_home_stat=owner=" in completed.stderr
+	assert " mode=500 type=directory" in completed.stderr

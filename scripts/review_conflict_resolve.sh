@@ -432,24 +432,35 @@ export MODEL_PROVIDER_BROKER_AGENT_HOME
 # RUNTIME_DIR and the editor path creates its own sandbox there without
 # trouble. The log never said who the process was or what the directory
 # looked like at that moment, so record identity, ownership, mode, ACLs and
-# mount first, and fail closed with one structured line when the directory
-# is not writable instead of letting a bare coreutils error end the run.
+# mount first. Also inspect an existing sandbox home because a stale,
+# inaccessible child can fail the mkdir even when RUNTIME_DIR itself is usable.
 #
 # Log contract (stable prefixes, see agents.md "Stable log prefixes"):
 #   RESOLVER_AGENT_HOME_PREFLIGHT uid=<n> euid=<n> user=<name> runtime_dir=<path>
 #     owner=<u:g> mode=<octal> type=<kind> parent_dir=owner=<u:g> mode=<octal>
-#     acl=<entries|none> mount=<target fstype options|unknown>
+#     acl=<entries|none|unavailable> mount=<target fstype options|unknown>
+#     agent_home_exists=<bool> agent_home_directory=<bool>
+#     agent_home_writable=<bool> agent_home_searchable=<bool>
+#     agent_home_stat=<details|absent> agent_home_acl=<entries|none|unavailable>
 #   ::error::RESOLVER_AGENT_HOME_PREFLIGHT_DENIED runtime_dir=<path> exists=<bool>
-#     writable=<bool> searchable=<bool> owner=<u:g> mode=<octal> type=<kind>; ...
+#     writable=<bool> searchable=<bool> owner=<u:g> mode=<octal> type=<kind>
+#     agent_home_exists=<bool> agent_home_directory=<bool> ...
 _resolver_agent_home_preflight()
 {
 	local runtime_parent="${1:?runtime dir required}"
-	local parent_stat="" grandparent_stat="" parent_acl="" parent_mount=""
+	local parent_stat="" grandparent_stat="" parent_acl="unavailable" parent_mount=""
+	local agent_home_stat="absent" agent_home_acl="not-applicable"
 	local exists_flag="false" writable_flag="false" searchable_flag="false"
+	local agent_home_exists_flag="false" agent_home_directory_flag="false"
+	local agent_home_writable_flag="false" agent_home_searchable_flag="false" agent_home_ready_flag="true"
 	parent_stat="$(stat -c 'owner=%U:%G mode=%a type=%F' -- "${runtime_parent}" 2>&1 | tr '\n' ' ' || true)"
 	grandparent_stat="$(stat -c 'owner=%U:%G mode=%a' -- "$(dirname -- "${runtime_parent}")" 2>&1 | tr '\n' ' ' || true)"
 	if command -v getfacl >/dev/null 2>&1; then
-		parent_acl="$(getfacl -p -- "${runtime_parent}" 2>/dev/null | grep -v '^#' | grep -v '^$' | tr '\n' ',' || true)"
+		if ! parent_acl="$(getfacl -p -- "${runtime_parent}" 2>/dev/null | grep -v '^#' | grep -v '^$' | tr '\n' ',')"; then
+			parent_acl="unavailable"
+		elif [ -z "${parent_acl}" ]; then
+			parent_acl="none"
+		fi
 	fi
 	if command -v findmnt >/dev/null 2>&1; then
 		parent_mount="$(findmnt -n -o TARGET,FSTYPE,OPTIONS --target "${runtime_parent}" 2>/dev/null | head -n 1 | tr -s '[:space:]' ' ' | sed 's/[[:space:]]*$//' || true)"
@@ -457,9 +468,27 @@ _resolver_agent_home_preflight()
 	[ -d "${runtime_parent}" ] && exists_flag="true"
 	[ -w "${runtime_parent}" ] && writable_flag="true"
 	[ -x "${runtime_parent}" ] && searchable_flag="true"
-	echo "RESOLVER_AGENT_HOME_PREFLIGHT uid=$(id -u) euid=${EUID} user=$(id -un 2>/dev/null || echo unknown) runtime_dir=${runtime_parent} ${parent_stat% } parent_dir=${grandparent_stat% } acl=${parent_acl:-none} mount=${parent_mount:-unknown}"
-	if [ "${exists_flag}" != "true" ] || [ "${writable_flag}" != "true" ] || [ "${searchable_flag}" != "true" ]; then
-		echo "::error::RESOLVER_AGENT_HOME_PREFLIGHT_DENIED runtime_dir=${runtime_parent} exists=${exists_flag} writable=${writable_flag} searchable=${searchable_flag} ${parent_stat% }; the resolver sandbox home cannot be created under RUNTIME_DIR by this identity, refusing to start the broker or OpenCode." >&2
+	if [ -e "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ] || [ -L "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ]; then
+		agent_home_exists_flag="true"
+		agent_home_acl="unavailable"
+		agent_home_stat="$(stat -c 'owner=%U:%G mode=%a type=%F' -- "${MODEL_PROVIDER_BROKER_AGENT_HOME}" 2>&1 | tr '\n' ' ' || true)"
+		[ -d "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ] && agent_home_directory_flag="true"
+		[ -w "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ] && agent_home_writable_flag="true"
+		[ -x "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ] && agent_home_searchable_flag="true"
+		if command -v getfacl >/dev/null 2>&1; then
+			if ! agent_home_acl="$(getfacl -p -- "${MODEL_PROVIDER_BROKER_AGENT_HOME}" 2>/dev/null | grep -v '^#' | grep -v '^$' | tr '\n' ',')"; then
+				agent_home_acl="unavailable"
+			elif [ -z "${agent_home_acl}" ]; then
+				agent_home_acl="none"
+			fi
+		fi
+		if [ "${agent_home_directory_flag}" != "true" ] || [ "${agent_home_writable_flag}" != "true" ] || [ "${agent_home_searchable_flag}" != "true" ]; then
+			agent_home_ready_flag="false"
+		fi
+	fi
+	echo "RESOLVER_AGENT_HOME_PREFLIGHT uid=$(id -u) euid=${EUID} user=$(id -un 2>/dev/null || echo unknown) runtime_dir=${runtime_parent} ${parent_stat% } parent_dir=${grandparent_stat% } acl=${parent_acl} mount=${parent_mount:-unknown} agent_home_exists=${agent_home_exists_flag} agent_home_directory=${agent_home_directory_flag} agent_home_writable=${agent_home_writable_flag} agent_home_searchable=${agent_home_searchable_flag} agent_home_stat=${agent_home_stat% } agent_home_acl=${agent_home_acl}"
+	if [ "${exists_flag}" != "true" ] || [ "${writable_flag}" != "true" ] || [ "${searchable_flag}" != "true" ] || [ "${agent_home_ready_flag}" != "true" ]; then
+		echo "::error::RESOLVER_AGENT_HOME_PREFLIGHT_DENIED runtime_dir=${runtime_parent} exists=${exists_flag} writable=${writable_flag} searchable=${searchable_flag} ${parent_stat% } agent_home_exists=${agent_home_exists_flag} agent_home_directory=${agent_home_directory_flag} agent_home_writable=${agent_home_writable_flag} agent_home_searchable=${agent_home_searchable_flag} agent_home_stat=${agent_home_stat% }; the resolver sandbox home cannot be created under RUNTIME_DIR by this identity, refusing to start the broker or OpenCode." >&2
 		return 1
 	fi
 	return 0
