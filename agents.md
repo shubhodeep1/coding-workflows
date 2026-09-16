@@ -658,7 +658,8 @@ and shipped:
 - `BACKPRESSURE_CLEARED`
 - `RESOLVER_AGENT_HOME_PREFLIGHT` (conflict resolver: identity, owner, mode,
   ACLs and mount of `RUNTIME_DIR`, plus existing sandbox-home state, logged
-  before the sandbox-home `mkdir`)
+  before the sandbox-home `mkdir`; broker startup completes before that home
+  is transferred to the unprivileged resolver identity)
 - `RESOLVER_AGENT_HOME_PREFLIGHT_DENIED` (fail-closed `::error::` when
   `RUNTIME_DIR` or an existing sandbox home is unusable by the resolver)
 - `RECOVERY_BUDGET_ACCOUNTING`

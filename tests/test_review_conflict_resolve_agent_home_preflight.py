@@ -71,8 +71,12 @@ def test_preflight_runs_before_the_agent_home_mkdir_and_fails_closed() -> None:
 	definition = text.index(f"{PREFLIGHT_FUNCTION_NAME}()\n{{")
 	invocation = text.index(f'{PREFLIGHT_FUNCTION_NAME} "${{RUNTIME_DIR}}" || exit 1')
 	mkdir_index = text.index(AGENT_HOME_MKDIR)
-	assert definition < invocation < mkdir_index, (
-		"the sandbox-home preflight must be defined and invoked before the agent-home mkdir"
+	broker_start_index = text.index("model_provider_broker_start", mkdir_index)
+	ownership_transfer_index = text.index('sudo -n chown -R "${RESOLVER_ISOLATION_USER}"', mkdir_index)
+	opencode_launch_index = text.index('model_provider_broker_exec_unprivileged "${RESOLVER_ISOLATION_USER}"')
+	assert definition < invocation < mkdir_index < broker_start_index < ownership_transfer_index < opencode_launch_index, (
+		"the runner must preflight and start the broker before transferring the agent home, "
+		"and ownership transfer must precede the unprivileged OpenCode launch"
 	)
 	assert text.count(AGENT_HOME_MKDIR) == 1
 	function_source = _preflight_function_source(text)

@@ -496,8 +496,8 @@ _resolver_agent_home_preflight()
 _resolver_agent_home_preflight "${RUNTIME_DIR}" || exit 1
 mkdir -p "${MODEL_PROVIDER_BROKER_AGENT_HOME}/tmp" "${MODEL_PROVIDER_BROKER_AGENT_HOME}/.cache"
 chmod 0700 "${MODEL_PROVIDER_BROKER_AGENT_HOME}"
-sudo -n chown -R "${RESOLVER_ISOLATION_USER}" "${MODEL_PROVIDER_BROKER_AGENT_HOME}"
 model_provider_broker_start
+sudo -n chown -R "${RESOLVER_ISOLATION_USER}" "${MODEL_PROVIDER_BROKER_AGENT_HOME}"
 resolver_opencode_serena="off"
 if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
   resolver_opencode_serena="on"
