@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends `.github/workflows/test-and-mark-stable.yml` Wave 1 canary A marker contract  \nScope-mode justification: The issue explicitly limits changes to one fixture. Updating only its complete byte content is the safest implementation and preserves unrelated legacy smoke contracts.\n\n## Planning ref\n\n- Branch: `orchestrator/project-4100`\n- HEAD: `5099eb4e534533478f59b2415331b3805195fda4`\n- Integration metadata matches the checked-out branch.\n- The automatic `/answer` confirms implementation may proceed without clarification.\n\n## Automation and lifecycle impact\n\n- Modifies an existing fixture; introduces no script or subsystem.\n- Existing entry point: `.github/workflows/test-and-mark-stable.yml` Wave 1 canary generation.\n- No scheduler, supervisor, database gate, or removal-registry change is required.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Replace its complete contents with:\n    ```text\n    status: ok\n    decompose-run: 35052424845\n    ```\n  - Preserve one final LF newline.\n  - Remove `run_id` and `updated-by`.\n\nNo other path may change.\n\n## Functions or modules\n\nNone. This is an exact plain-text fixture replacement.\n\n## Data structures affected\n\n- Two-line canary marker:\n  1. Fixed status field.\n  2. Run-specific decomposition identifier.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Use the run-specific two-line marker\n\n- **Chosen:** Write the exact `status` and `decompose-run` lines requested.\n- **Alternatives considered:** Preserve the legacy three-line fixture or update its old run ID.\n- **Why:** The active Wave 1 generator explicitly requires `decompose-run: 35052424845`.\n\n### D2 \u2014 Enforce single-file scope\n\n- **Chosen:** Modify only `tests/e2e_smoke_canary.txt`.\n- **Alternatives considered:** Update legacy canary specifications, scripts, workflow YAML, or tests.\n- **Why:** Those represent separate smoke contracts, while this issue provides a strict `files_touched` allowlist.\n\n## Security considerations\n\n- Trust boundary: workflow-generated run metadata becomes repository fixture content.\n- Validate the marker as the exact numeric run ID supplied by the issue.\n- No endpoint, authorization surface, credential, secret, or money-handling path is involved.\n- Abuse cases to prevent: hidden extra lines, stale identifiers, CRLF drift, missing final newline, or unrelated file modifications.\n\n## Risks and edge cases\n\n- The repository also contains a legacy three-line canary specification; it must remain unchanged.\n- Ensure there is no blank third line\u2014only the required final newline.\n- Avoid editor-generated BOM or CRLF bytes.\n- Preserve the exact key name `decompose-run`.\n\n## Testing considerations\n\n1. Assert the file bytes equal:\n   `b\"status: ok\\ndecompose-run: 35052424845\\n\"`.\n2. Assert exactly two logical lines.\n3. Assert `run_id:` and `updated-by:` are absent.\n4. Run `git diff --check`.\n5. Confirm `git diff --name-only` reports only `tests/e2e_smoke_canary.txt`.\n\n## Pre-execution self-check\n\n- Requirements are unambiguous and match the inspected generator contract.\n- The planning ref matches the integration branch.\n- The file exists and currently contains the identified stale three-line content.\n- The plan respects the strict one-file scope.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c685ce5c240ce2d7f74358c908f722714c4d33e880c67b193ea7b1518e616281",
+  "lineage": {
+    "issue_number": 4103,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35053137289",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35053137289",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4103"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260916035209_9623c1c3bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4103,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35053137289"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4103",
+  "timestamps": {
+    "created_at": "2026-09-16T03:52:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
