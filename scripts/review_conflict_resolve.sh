@@ -443,7 +443,8 @@ export MODEL_PROVIDER_BROKER_AGENT_HOME
 #     agent_home_writable=<bool> agent_home_searchable=<bool>
 #     agent_home_stat=<details|absent> agent_home_acl=<entries|none|unavailable|not-applicable>
 #   ::error::RESOLVER_AGENT_HOME_PREFLIGHT_DENIED runtime_dir=<path> exists=<bool>
-#     writable=<bool> searchable=<bool> owner=<u:g> mode=<octal> type=<kind>
+#     writable=<bool> searchable=<bool> uid=<n> euid=<n> user=<name>
+#     owner=<u:g> mode=<octal> type=<kind>
 #     agent_home_exists=<bool> agent_home_directory=<bool> ...
 _resolver_agent_home_preflight()
 {
@@ -488,7 +489,7 @@ _resolver_agent_home_preflight()
 	fi
 	echo "RESOLVER_AGENT_HOME_PREFLIGHT uid=$(id -u) euid=${EUID} user=$(id -un 2>/dev/null || echo unknown) runtime_dir=${runtime_parent} ${parent_stat% } parent_dir=${grandparent_stat% } acl=${parent_acl} mount=${parent_mount:-unknown} agent_home_exists=${agent_home_exists_flag} agent_home_directory=${agent_home_directory_flag} agent_home_writable=${agent_home_writable_flag} agent_home_searchable=${agent_home_searchable_flag} agent_home_stat=${agent_home_stat% } agent_home_acl=${agent_home_acl}"
 	if [ "${exists_flag}" != "true" ] || [ "${writable_flag}" != "true" ] || [ "${searchable_flag}" != "true" ] || [ "${agent_home_ready_flag}" != "true" ]; then
-		echo "::error::RESOLVER_AGENT_HOME_PREFLIGHT_DENIED runtime_dir=${runtime_parent} exists=${exists_flag} writable=${writable_flag} searchable=${searchable_flag} ${parent_stat% } agent_home_exists=${agent_home_exists_flag} agent_home_directory=${agent_home_directory_flag} agent_home_writable=${agent_home_writable_flag} agent_home_searchable=${agent_home_searchable_flag} agent_home_stat=${agent_home_stat% }; the resolver sandbox home cannot be created under RUNTIME_DIR by this identity, refusing to start the broker or OpenCode." >&2
+		echo "::error::RESOLVER_AGENT_HOME_PREFLIGHT_DENIED runtime_dir=${runtime_parent} exists=${exists_flag} writable=${writable_flag} searchable=${searchable_flag} uid=$(id -u) euid=${EUID} user=$(id -un 2>/dev/null || echo unknown) ${parent_stat% } agent_home_exists=${agent_home_exists_flag} agent_home_directory=${agent_home_directory_flag} agent_home_writable=${agent_home_writable_flag} agent_home_searchable=${agent_home_searchable_flag} agent_home_stat=${agent_home_stat% }; the resolver sandbox home cannot be created under RUNTIME_DIR by this identity, refusing to start the broker or OpenCode." >&2
 		return 1
 	fi
 	return 0

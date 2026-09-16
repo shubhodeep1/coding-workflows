@@ -110,6 +110,8 @@ def test_preflight_fails_closed_when_runtime_dir_is_missing(tmp_path: Path) -> N
 	completed = _run_preflight(function_source, missing_dir)
 	assert completed.returncode == 1
 	assert f"::error::{PREFLIGHT_DENIED_PREFIX} runtime_dir={missing_dir} exists=false writable=false searchable=false" in completed.stderr
+	assert f"uid={os.getuid()} euid={os.geteuid()} " in completed.stderr
+	assert re.search(r" user=\S+ ", completed.stderr)
 	assert completed.stdout.startswith(f"{PREFLIGHT_LOG_PREFIX} uid=")
 
 
