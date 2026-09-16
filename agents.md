@@ -688,6 +688,13 @@ and shipped:
 - `FORCE_MERGE_BYPASS`
 - `BACKPRESSURE_TRIGGERED`
 - `BACKPRESSURE_CLEARED`
+- `RESOLVER_AGENT_HOME_PREFLIGHT` (conflict resolver: identity, owner, mode,
+  ACLs and mount of `RUNTIME_DIR`, plus existing sandbox-home state and
+  explicit symlink denial, logged
+  before the sandbox-home `mkdir`; broker startup completes before that home
+  is transferred to the unprivileged resolver identity)
+- `RESOLVER_AGENT_HOME_PREFLIGHT_DENIED` (fail-closed `::error::` when
+  `RUNTIME_DIR` is unusable or an existing sandbox home is unusable or a symlink)
 - `RECOVERY_BUDGET_ACCOUNTING`
 - `VALIDATION_DISCOVERY_STARTED`
 - `VALIDATION_DISCOVERY_AGREE`
@@ -806,6 +813,8 @@ LOG_PREFIX.name=HARNESS_ERROR_DETECTED
 LOG_PREFIX.name=FORCE_MERGE_BYPASS
 LOG_PREFIX.name=BACKPRESSURE_TRIGGERED
 LOG_PREFIX.name=BACKPRESSURE_CLEARED
+LOG_PREFIX.name=RESOLVER_AGENT_HOME_PREFLIGHT
+LOG_PREFIX.name=RESOLVER_AGENT_HOME_PREFLIGHT_DENIED
 LOG_PREFIX.name=RECOVERY_BUDGET_ACCOUNTING
 LOG_PREFIX.name=VALIDATION_DISCOVERY_STARTED
 LOG_PREFIX.name=VALIDATION_DISCOVERY_AGREE
