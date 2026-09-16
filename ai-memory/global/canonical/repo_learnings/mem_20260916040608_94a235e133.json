@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Orchestrator polling behavior is maintained through focused process-level and workflow-contract tests.",
   "timestamps": {
     "created_at": "2026-09-16T04:06:08Z",
