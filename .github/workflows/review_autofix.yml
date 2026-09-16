@@ -1421,7 +1421,7 @@ jobs:
       # has no checkout, no LLM, and no working tree, so the ~30 s spent
       # here would be pure waste there.
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@v1.3.1
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
         with:
           tool-cache: true
           android: true
@@ -1845,7 +1845,7 @@ jobs:
       - name: Setup uv for Semble
         if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')
         continue-on-error: true
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
 
       - name: Install semble
         if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')

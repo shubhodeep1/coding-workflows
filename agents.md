@@ -367,8 +367,15 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   Missing or malformed workflow identity fails closed; `stable` and `main`
   support fallbacks are not permitted.
 - Source workflows and `.github/actions/setup-runtime/action.yml` pin every
-  `actions/setup-node` and `actions/setup-python` use to its reviewed full SHA;
+  `actions/setup-node`, `actions/setup-python`, `astral-sh/setup-uv`, and
+  `jlumbroso/free-disk-space` use to its reviewed full SHA;
   `test_remote_codex_runtime_actions_are_immutable` enforces the complete set.
+- `issue_pr_status.yml` validates `job.workflow_repository` and
+  `job.workflow_sha`, verifies the support checkout's exact HEAD, and stages
+  memory plus Telegram helpers once from that immutable source. Configured
+  Telegram paths fail closed when the staged helper is absent or differs from
+  the verified source; no `stable`, `main`, or consumer-local executable
+  fallback is permitted.
 
 ## Model credential isolation
 
