@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.93,
+  "details": "Recent changes repeatedly hardened orchestrator state handling against forged scope, unauthorized identity, YAML parser issues, duplicate keys, and stale or corrupted state. State resolution should enforce schema and size limits, verify author/integration fingerprints, and recover safely rather than trusting persisted values.",
+  "fingerprint": "7118b0821bc7e9e6396a7a117e8395b6637d72652c5f3a3993b5acf001d17ce2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35053858980",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35053858980",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4049",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4056",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4070",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4075",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4076",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4052",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4057",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4071",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4077",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4079"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260916040056_6fc9cb486d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator state is treated as untrusted input and must be bounded, authenticated, and self-healing.",
+  "timestamps": {
+    "created_at": "2026-09-16T04:00:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
