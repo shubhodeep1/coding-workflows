@@ -1079,6 +1079,9 @@ fi
 if [ -z "${POST_REVIEW_HEAD_REF}" ]; then
   POST_REVIEW_HEAD_REF="${TARGET_BRANCH:-}"
 fi
+# The checked-out commit is the code snapshot the judge can inspect. Live PR
+# metadata may advance after checkout, so it is not merge authorization.
+RB_JUDGED_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
 RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE="${RUNTIME_DIR}/rb_judge_prior_round_decisions.txt"
 if command -v render_review_rb_prior_round_decisions_file >/dev/null 2>&1; then
   render_review_rb_prior_round_decisions_file "${REVIEW_LEDGER_PATH}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE}"
@@ -1099,6 +1102,7 @@ trap '_cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDG
 
 {
   printf '%s\n' 'Review-blocked judge context.'
+  printf 'Evaluated head SHA: %s\n' "${RB_JUDGED_HEAD_SHA:-unknown}"
   if [ -n "${FIRST_ISSUE_BODY}" ]; then
     append_review_rb_semble_query_section "Issue body:" "${FIRST_ISSUE_BODY}" 2500
   else
@@ -1651,7 +1655,7 @@ RB_JUDGE_COMMENT_FILE="${RUNTIME_DIR}/rb_judge_comment.md"
 post_review_blocked_assessment \
   "${RB_JUDGE_COMMENT_FILE}" \
   "${RB_OUTBOUND_REVIEW_STATE}" \
-  "${POST_REVIEW_HEAD_SHA}" \
+  "${RB_JUDGED_HEAD_SHA}" \
   "${POST_REVIEW_HEAD_REF}" || true
 
 # -----------------------------------------------------------
@@ -1661,12 +1665,16 @@ case "${RB_ACTION}" in
   merge)
     echo "Judge says merge PR #${PR_NUMBER} as-is."
 
-    # Label linked issues ready-to-merge
-    ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
-    while IFS= read -r issue_number; do
-      [ -n "${issue_number}" ] || continue
-      _resilient_phase_swap "${issue_number}" "ai:ready-to-merge" || true
-    done <<< "${ISSUE_NUMBERS}"
+    # RB_JUDGED_HEAD_SHA is the checked-out head embedded in the judge prompt.
+    # Never substitute the later mergeability poll's head: that could
+    # authorize a concurrent push the judge did not evaluate.
+    if ! [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "::warning::Review-blocked judge could not resolve the evaluated head SHA for PR #${PR_NUMBER}; refusing an unbound merge."
+      echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=unresolved_head_sha" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
+    RB_MERGE_READY_LABEL_ALLOWED="false"
 
     # Attempt merge.
     #
@@ -1717,14 +1725,31 @@ case "${RB_ACTION}" in
         # reaching the `|| true` fallthrough. Rate-limit alerts still
         # fire through every other gh_retry-wrapped call in this
         # script.
-        gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
-          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
+        if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
+          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
+          RB_MERGE_READY_LABEL_ALLOWED="true"
+        else
+          echo "::warning::Review-blocked judge merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues."
+        fi
+      else
+        RB_MERGE_READY_LABEL_ALLOWED="true"
       fi
+    elif [ "${PR_ALREADY_MERGED:-false}" = "true" ]; then
+      RB_MERGE_READY_LABEL_ALLOWED="true"
+      echo "PR #${PR_NUMBER} is already merged; advancing linked issues without another merge request."
     elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
       echo "::warning::PR #${PR_NUMBER} has merge conflicts (mergeable=false); judge cannot merge as-is."
       echo "PR #${PR_NUMBER} state=${PR_STATE} mergeable=false, merge conflicts present."
     else
       echo "PR #${PR_NUMBER} state=${PR_STATE} mergeable=${PR_MERGEABLE:-null}, cannot merge yet (mergeability still computing or PR not open)."
+    fi
+
+    if [ "${RB_MERGE_READY_LABEL_ALLOWED}" = "true" ]; then
+      ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
+      while IFS= read -r issue_number; do
+        [ -n "${issue_number}" ] || continue
+        _resilient_phase_swap "${issue_number}" "ai:ready-to-merge" || true
+      done <<< "${ISSUE_NUMBERS}"
     fi
 
     echo "judge_handled=true" >> "$GITHUB_OUTPUT"
@@ -1735,19 +1760,35 @@ case "${RB_ACTION}" in
     if [ "${IS_FINAL}" = "true" ]; then
       echo "Judge returned 'fix' but retries exhausted — treating as merge."
 
-      ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
-      while IFS= read -r issue_number; do
-        [ -n "${issue_number}" ] || continue
-        _resilient_phase_swap "${issue_number}" "ai:ready-to-merge" || true
-      done <<< "${ISSUE_NUMBERS}"
+      if ! [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "::warning::Review-blocked judge could not resolve the evaluated head SHA for PR #${PR_NUMBER}; refusing an unbound terminal merge."
+        echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+        echo "judge_skip_reason=unresolved_head_sha" >> "$GITHUB_OUTPUT"
+        exit 0
+      fi
+      RB_MERGE_READY_LABEL_ALLOWED="false"
 
       # GitHub's REST /pulls/{N} returns .state as one of `open` or
       # `closed`; drop the unreachable `merged` alt.
       PR_STATE="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed' || echo "")"
       if [ "${PR_STATE}" = "open" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
         # Best-effort merge — see note above re: gh_retry.
-        gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto 2>/dev/null \
-          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash 2>/dev/null || true
+        if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
+          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
+          RB_MERGE_READY_LABEL_ALLOWED="true"
+        else
+          echo "::warning::Review-blocked judge terminal merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues."
+        fi
+      elif [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
+        RB_MERGE_READY_LABEL_ALLOWED="true"
+      fi
+
+      if [ "${RB_MERGE_READY_LABEL_ALLOWED}" = "true" ]; then
+        ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
+        while IFS= read -r issue_number; do
+          [ -n "${issue_number}" ] || continue
+          _resilient_phase_swap "${issue_number}" "ai:ready-to-merge" || true
+        done <<< "${ISSUE_NUMBERS}"
       fi
 
       echo "judge_handled=true" >> "$GITHUB_OUTPUT"
@@ -2118,8 +2159,8 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         # where a permanently-red environmental check (which can never go
         # green) kept the judge refusing the merge, the issue stuck in
         # ai:review-blocked, and stall recovery re-firing forever.
-        if [ -z "${PR_HEAD_SHA}" ]; then
-          echo "::warning::PR #${PR_NUMBER} head SHA could not be resolved from the PR JSON — refusing merge_with_followup. Without a known SHA the merge cannot be bound via --match-head-commit (a concurrent push could land unjudged code). Leaving linked issues in ai:review-blocked."
+        if ! [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "::warning::PR #${PR_NUMBER} evaluated head SHA could not be resolved from the judge checkout — refusing merge_with_followup. Without a known SHA the merge cannot be bound via --match-head-commit (a concurrent push could land unjudged code). Leaving linked issues in ai:review-blocked."
           echo "judge_skip_reason=unresolved_head_sha" >> "$GITHUB_OUTPUT"
         else
           # PR_CHECKS_SELF_RUN_ID excludes this script's own still-
@@ -2136,7 +2177,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
           _checks_reason="check_runs_query_failed"
           if command -v _pr_checks_completed >/dev/null 2>&1; then
             if PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_CHECKS_SELF_RUN_ID="${GITHUB_RUN_ID:-}" \
-                 _pr_checks_completed "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_REF}"; then
+                 _pr_checks_completed "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then
               _checks_ok="true"
             else
               case "${PR_CHECKS_LAST_REASON:-}" in
@@ -2149,10 +2190,10 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
           fi
           if [ "${_checks_ok}" != "true" ]; then
             if [ "${_checks_reason}" = "check_runs_query_failed" ]; then
-              echo "::warning::PR #${PR_NUMBER} could not query check-runs for SHA ${PR_HEAD_SHA:0:7} — refusing merge_with_followup to avoid creating a follow-up against unvalidated code. Leaving linked issues in ai:review-blocked."
+              echo "::warning::PR #${PR_NUMBER} could not query check-runs for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup to avoid creating a follow-up against unvalidated code. Leaving linked issues in ai:review-blocked."
               echo "judge_skip_reason=check_runs_query_failed" >> "$GITHUB_OUTPUT"
             else
-              echo "::warning::PR #${PR_NUMBER} has blocking required check-run(s) for SHA ${PR_HEAD_SHA:0:7} — refusing merge_with_followup until required checks complete with success/neutral/skipped/cancelled (non-required/advisory failures are ignored). Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
+              echo "::warning::PR #${PR_NUMBER} has blocking required check-run(s) for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup until required checks complete with success/neutral/skipped/cancelled (non-required/advisory failures are ignored). Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
               echo "judge_skip_reason=blocking_check_runs" >> "$GITHUB_OUTPUT"
             fi
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
@@ -2168,15 +2209,15 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
             # gh_retry — see the `merge)` branch for the rationale
             # (best-effort, non-transient failure backoff cost).
             #
-            # `--match-head-commit "${PR_HEAD_SHA}"` binds the merge to
-            # the head SHA the mergeability poll just observed. If a
-            # concurrent push lands between the poll and this merge,
+            # `--match-head-commit "${RB_JUDGED_HEAD_SHA}"` binds the merge
+            # to the checked-out head the judge evaluated. If a concurrent
+            # push lands after checkout or before this merge,
             # GitHub rejects it — preventing unjudged code from
-            # landing under merge_with_followup's authority. The
-            # PR_HEAD_SHA non-empty check above guarantees we never
+            # landing under merge_with_followup's authority. The full-SHA
+            # check above guarantees we never
             # fall back to an unbound merge: the check-runs gate
-            # requires PR_HEAD_SHA, so reaching here means it's set.
-            _match_head_arg=(--match-head-commit "${PR_HEAD_SHA}")
+            # requires RB_JUDGED_HEAD_SHA, so reaching here means it's set.
+            _match_head_arg=(--match-head-commit "${RB_JUDGED_HEAD_SHA}")
             if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash "${_match_head_arg[@]}" 2>/dev/null; then
               echo "PR #${PR_NUMBER} merged synchronously."
               MERGE_CONFIRMED="true"

@@ -6285,10 +6285,16 @@ def test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha() -> None:
 	# the reviewer panel / editor ran against (INITIAL_HEAD_SHA), and must
 	# refuse when that SHA is unavailable.
 	block = _step_block("Enable auto-merge on PR")
-	assert (
-		"AUTO_MERGE_EXPECTED_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA || needs.gate.outputs.head_sha }}" in block
-	), (
-		"Enable auto-merge on PR must use INITIAL_HEAD_SHA with the gate head fallback needed by fork PRs"
+	assert "AUTO_MERGE_EXPECTED_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}" in block, (
+		"Enable auto-merge on PR must bind to the exact checked-out head the reviewers inspected"
+	)
+	assert "needs.gate.outputs.head_sha" not in block, (
+		"reviewed-path merge must not fall back to a later live gate SHA"
+	)
+	checkout_block = _step_block("Checkout PR head branch")
+	checked_out_sha_capture = 'INITIAL_HEAD_SHA="$(git rev-parse HEAD)"'
+	assert checkout_block.find(checked_out_sha_capture) < checkout_block.find('echo "CAN_PUSH=false"'), (
+		"read-only and fork paths must capture their checked-out reviewed SHA before exiting"
 	)
 	assert "id: enable_auto_merge" in block, "auto-merge step must expose the helper's label-safety output"
 	workflow_text = _workflow_text()
@@ -6326,6 +6332,45 @@ def test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha() -> None:
 		r'else\n\s+_write_ready_label_allowed "true"\n\s+echo "PR #\$\{PR_NUMBER\} head ref .*FORWARD_MERGE_FALLBACK_AUTO_MERGE',
 		helper_text,
 	), "configured forward-merge manual mode must permit linked-issue advancement"
+
+
+def test_review_blocked_judge_merges_are_bound_to_judged_head_sha() -> None:
+	judge_text = _rb_judge_text()
+	assert 'RB_JUDGED_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"' in judge_text, (
+		"review-blocked judge must derive merge authorization from its checked-out code snapshot"
+	)
+	assert 'printf \'Evaluated head SHA: %s\\n\' "${RB_JUDGED_HEAD_SHA:-unknown}"' in judge_text, (
+		"review-blocked judge prompt must identify the exact head its decision can authorize"
+	)
+	assert '[[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]' in judge_text, (
+		"review-blocked judge must refuse merge actions without a full evaluated head SHA"
+	)
+	for merge_mode in ("--squash --auto", "--squash"):
+		expected_call = (
+			'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" '
+			f'{merge_mode} --match-head-commit "${{RB_JUDGED_HEAD_SHA}}"'
+		)
+		assert judge_text.count(expected_call) == 2, (
+			f"both review-blocked judge merge actions must bind {merge_mode} to RB_JUDGED_HEAD_SHA"
+		)
+	judge_merge_region = judge_text[judge_text.index("  merge)\n") : judge_text.index("  merge_with_followup)\n")]
+	judge_merge_commands = [line for line in judge_merge_region.splitlines() if 'gh pr merge "${PR_NUMBER}"' in line]
+	assert len(judge_merge_commands) == 4, judge_merge_commands
+	assert all("--match-head-commit" in line for line in judge_merge_commands), (
+		f"unbound review-blocked judge merge call(s) remain: {judge_merge_commands}"
+	)
+	assert '_match_head_arg=(--match-head-commit "${RB_JUDGED_HEAD_SHA}")' in judge_text, (
+		"merge_with_followup must bind to the checked-out judged head, not a later live PR head"
+	)
+	assert '_pr_checks_completed "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"' in judge_text, (
+		"merge_with_followup must validate checks for the same judged head it can merge"
+	)
+	assert judge_text.count('RB_MERGE_READY_LABEL_ALLOWED="false"') == 2, (
+		"both judge merge actions must withhold ready labels until a bound merge request succeeds"
+	)
+	assert 'elif [ "${PR_ALREADY_MERGED:-false}" = "true" ]; then\n      RB_MERGE_READY_LABEL_ALLOWED="true"' in judge_text, (
+		"an already-merged PR must still advance its linked issues without another merge request"
+	)
 
 
 def _run_auto_merge_helper_with_fake_gh(
@@ -6567,6 +6612,7 @@ def main() -> int:
 	test_dependency_install_skips_pytest_bootstrap_for_non_pytest_repos()
 	test_deterministic_skip_merge_is_bound_to_gate_evaluated_head_sha()
 	test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha()
+	test_review_blocked_judge_merges_are_bound_to_judged_head_sha()
 	test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0

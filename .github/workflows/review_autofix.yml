@@ -2680,6 +2680,12 @@ jobs:
           HEAD_REF="$(jq -r '.headRefName' "${PR_META_FILE}")"
           HEAD_REPO="$(jq -r '.headRepoFullName' "${PR_META_FILE}")"
 
+          # Capture the checked-out head before any read-only/fork exit. For
+          # writable heads this is replaced after the live branch fetch below;
+          # for read-only heads it remains the exact commit reviewers inspect.
+          INITIAL_HEAD_SHA="$(git rev-parse HEAD)"
+          echo "INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}" >> "$GITHUB_ENV"
+
           if [ -z "${HEAD_REF}" ] || [ "${HEAD_REF}" = "null" ]; then
             echo "Unable to determine PR head branch"
             exit 1
@@ -5541,13 +5547,12 @@ jobs:
           # See the forward-merge-fallback branch below for the full rationale.
           FORWARD_MERGE_FALLBACK_AUTO_MERGE: ${{ vars.FORWARD_MERGE_FALLBACK_AUTO_MERGE || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
-          # Head the reviewer panel / editor cycle ran against. Writable heads
-          # use INITIAL_HEAD_SHA captured after checkout; fork PRs retain the
-          # gate's evaluated head because Checkout PR head branch cannot fetch
-          # their branch through the target-repo origin. The helper binds
+          # Exact checked-out head the reviewer panel / editor cycle inspected.
+          # Read-only fork paths capture it before their early exit; writable
+          # heads replace it after fetching the live branch. The helper binds
           # `gh pr merge` to this value with --match-head-commit so a later
           # push cannot ride this run's clean verdict into main (issue #4109).
-          AUTO_MERGE_EXPECTED_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA || needs.gate.outputs.head_sha }}
+          AUTO_MERGE_EXPECTED_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
         run: |
           bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"
 

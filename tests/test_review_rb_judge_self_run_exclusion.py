@@ -123,20 +123,20 @@ def test_script_captures_github_run_id() -> None:
 
 def test_script_calls_shared_gate_with_base_ref() -> None:
 	"""scripts/review_rb_judge.sh must delegate to the shared
-	_pr_checks_completed helper, passing the PR's base ref (3rd arg) so the
-	required-checks filter is applied. This is what unblocks the merge when
-	a non-required/environmental check (e.g. CodeQL with code scanning
-	disabled) is permanently red."""
+	_pr_checks_completed helper, passing the judged head and PR base ref so
+	the required-checks filter validates exactly the commit eligible to merge.
+	This is what unblocks the merge when a non-required/environmental check
+	(e.g. CodeQL with code scanning disabled) is permanently red."""
 	src = _rb_judge_text()
 	pat = re.compile(
-		r'_pr_checks_completed "\$\{PR_NUMBER\}" "\$\{PR_HEAD_SHA\}" "\$\{PR_BASE_REF\}"'
+		r'_pr_checks_completed "\$\{PR_NUMBER\}" "\$\{RB_JUDGED_HEAD_SHA\}" "\$\{PR_BASE_REF\}"'
 	)
 	assert pat.search(src), (
 		"scripts/review_rb_judge.sh's merge_with_followup gate must call "
-		"`_pr_checks_completed \"${PR_NUMBER}\" \"${PR_HEAD_SHA}\" "
+		"`_pr_checks_completed \"${PR_NUMBER}\" \"${RB_JUDGED_HEAD_SHA}\" "
 		"\"${PR_BASE_REF}\"` (the shared helper from scripts/pr_checks_lib.sh) "
-		"with the base ref so non-required/advisory failing checks no longer "
-		"block the review-blocked-judge merge."
+		"with the judged head and base ref so checks cannot be validated for a "
+		"different commit than the bound review-blocked-judge merge."
 	)
 
 
