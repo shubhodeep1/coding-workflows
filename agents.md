@@ -656,6 +656,10 @@ and shipped:
 - `FORCE_MERGE_BYPASS`
 - `BACKPRESSURE_TRIGGERED`
 - `BACKPRESSURE_CLEARED`
+- `RESOLVER_AGENT_HOME_PREFLIGHT` (conflict resolver: identity, owner, mode,
+  ACLs and mount of `RUNTIME_DIR` logged before the sandbox-home `mkdir`)
+- `RESOLVER_AGENT_HOME_PREFLIGHT_DENIED` (fail-closed `::error::` when
+  `RUNTIME_DIR` is not a writable, searchable directory for the resolver)
 - `RECOVERY_BUDGET_ACCOUNTING`
 - `VALIDATION_DISCOVERY_STARTED`
 - `VALIDATION_DISCOVERY_AGREE`

@@ -423,6 +423,48 @@ RESOLVER_ISOLATION_USER="${RESOLVER_ISOLATION_USER:-nobody}"
 RESOLVER_AGENT_ACL_BACKUP="${RUNTIME_DIR}/resolver-agent-access.acl"
 MODEL_PROVIDER_BROKER_AGENT_HOME="${RUNTIME_DIR}/resolver-agent-home"
 export MODEL_PROVIDER_BROKER_AGENT_HOME
+
+# Sandbox-home preflight. Every review_autofix resolver run on this lineage
+# since f03b8d6 (#4071) has died on the mkdir below with
+#   mkdir: cannot create directory '<RUNTIME_DIR>/resolver-agent-home': Permission denied
+# (runs 34746616712 on PR #4077; 34960984494 and 34992257788 on PR #4088),
+# although review_conflict_prepare.sh had just created files in the same
+# RUNTIME_DIR and the editor path creates its own sandbox there without
+# trouble. The log never said who the process was or what the directory
+# looked like at that moment, so record identity, ownership, mode, ACLs and
+# mount first, and fail closed with one structured line when the directory
+# is not writable instead of letting a bare coreutils error end the run.
+#
+# Log contract (stable prefixes, see agents.md "Stable log prefixes"):
+#   RESOLVER_AGENT_HOME_PREFLIGHT uid=<n> euid=<n> user=<name> runtime_dir=<path>
+#     owner=<u:g> mode=<octal> type=<kind> parent_dir=owner=<u:g> mode=<octal>
+#     acl=<entries|none> mount=<target fstype options|unknown>
+#   ::error::RESOLVER_AGENT_HOME_PREFLIGHT_DENIED runtime_dir=<path> exists=<bool>
+#     writable=<bool> searchable=<bool> owner=<u:g> mode=<octal> type=<kind>; ...
+_resolver_agent_home_preflight()
+{
+	local runtime_parent="${1:?runtime dir required}"
+	local parent_stat="" grandparent_stat="" parent_acl="" parent_mount=""
+	local exists_flag="false" writable_flag="false" searchable_flag="false"
+	parent_stat="$(stat -c 'owner=%U:%G mode=%a type=%F' -- "${runtime_parent}" 2>&1 | tr '\n' ' ' || true)"
+	grandparent_stat="$(stat -c 'owner=%U:%G mode=%a' -- "$(dirname -- "${runtime_parent}")" 2>&1 | tr '\n' ' ' || true)"
+	if command -v getfacl >/dev/null 2>&1; then
+		parent_acl="$(getfacl -p -- "${runtime_parent}" 2>/dev/null | grep -v '^#' | grep -v '^$' | tr '\n' ',' || true)"
+	fi
+	if command -v findmnt >/dev/null 2>&1; then
+		parent_mount="$(findmnt -n -o TARGET,FSTYPE,OPTIONS --target "${runtime_parent}" 2>/dev/null | head -n 1 | tr -s '[:space:]' ' ' | sed 's/[[:space:]]*$//' || true)"
+	fi
+	[ -d "${runtime_parent}" ] && exists_flag="true"
+	[ -w "${runtime_parent}" ] && writable_flag="true"
+	[ -x "${runtime_parent}" ] && searchable_flag="true"
+	echo "RESOLVER_AGENT_HOME_PREFLIGHT uid=$(id -u) euid=${EUID} user=$(id -un 2>/dev/null || echo unknown) runtime_dir=${runtime_parent} ${parent_stat% } parent_dir=${grandparent_stat% } acl=${parent_acl:-none} mount=${parent_mount:-unknown}"
+	if [ "${exists_flag}" != "true" ] || [ "${writable_flag}" != "true" ] || [ "${searchable_flag}" != "true" ]; then
+		echo "::error::RESOLVER_AGENT_HOME_PREFLIGHT_DENIED runtime_dir=${runtime_parent} exists=${exists_flag} writable=${writable_flag} searchable=${searchable_flag} ${parent_stat% }; the resolver sandbox home cannot be created under RUNTIME_DIR by this identity, refusing to start the broker or OpenCode." >&2
+		return 1
+	fi
+	return 0
+}
+_resolver_agent_home_preflight "${RUNTIME_DIR}" || exit 1
 mkdir -p "${MODEL_PROVIDER_BROKER_AGENT_HOME}/tmp" "${MODEL_PROVIDER_BROKER_AGENT_HOME}/.cache"
 chmod 0700 "${MODEL_PROVIDER_BROKER_AGENT_HOME}"
 sudo -n chown -R "${RESOLVER_ISOLATION_USER}" "${MODEL_PROVIDER_BROKER_AGENT_HOME}"
