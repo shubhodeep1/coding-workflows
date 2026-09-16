@@ -46,6 +46,8 @@ def _clean_git_env(home: Path) -> dict[str, str]:
 	env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "sentinel"
 	env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "sentinel@example.invalid"
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	# Keep user-installed test dependencies visible after HOME is isolated.
+	env["PYTHONPATH"] = os.pathsep.join(sys.path)
 	return env
 
 
@@ -106,6 +108,7 @@ def test_nested_pytest_with_workflow_git_env_leaves_sentinel_repo_untouched(tmp_
 		capture_output=True,
 		text=True,
 		check=False,
+		timeout=300,
 	)
 	assert completed.returncode == 0, (
 		"nested pytest run failed under GIT_DIR/GIT_WORK_TREE\n"

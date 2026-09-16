@@ -22,8 +22,8 @@ That is exactly how commit ``37c72a5`` ("base", author
 ``test <test@example.invalid>``) reached PR #4093 during implement run for
 issue #4092: ``tests/test_assemble_changelog.py`` copies ``os.environ`` for
 its git helper, the copy carried the workflow's ``GIT_DIR`` /
-``GIT_WORK_TREE``, and the resulting commit reverted 1,654 lines across
-eight runtime helpers (``scripts/codex_helpers.sh`` lost
+``GIT_WORK_TREE``, and the resulting commit reverted 1,654 lines across 32
+files, including eight runtime helpers (``scripts/codex_helpers.sh`` lost
 ``model_provider_broker_start``), so every later review round died with
 ``model_provider_broker_start: command not found`` (review run
 34982425230).
