@@ -710,3 +710,280 @@ def test_brokered_stream_settles_budget_from_upstream_usage(tmp_path: Path) -> N
 		server.server_close()
 		module.http.client.HTTPSConnection = original_connection  # type: ignore[misc]
 		module.USAGE_SCAN_TAIL_BYTES = original_usage_scan_tail_bytes
+
+
+def _broker_policy_with_budgets(module, **overrides):
+	"""_broker_policy plus the #4090 input-token / cost budget fields."""
+	fields = {
+		"max_input_tokens": 20,
+		"max_total_input_tokens": 30,
+		"max_total_cost_usd": module.Decimal("0.25"),
+	}
+	fields.update(overrides)
+	return module.BrokerPolicy(
+		frozenset(("openai/test-model",)),
+		100,
+		150,
+		tuple(module.Decimal(value) for value in ("1", "2", "0.1", "0.5")),
+		**fields,
+	)
+
+
+def test_policy_defaults_keep_input_and_cost_budgets_non_binding() -> None:
+	"""Regression for #4090: the new fields must not change behaviour for the
+	existing positional constructor, and the derived per-request default admits
+	any body the 16 MiB request cap already permits."""
+	module = _broker_module()
+	policy = _broker_policy(module)
+	assert policy.max_input_tokens == module.DEFAULT_MAX_INPUT_TOKENS == 4_194_304
+	assert policy.max_total_input_tokens == module.MAX_TOTAL_INPUT_TOKENS_CEILING
+	assert policy.max_total_cost_usd is None
+	assert policy.estimate_input_tokens(b"x" * module.MAX_REQUEST_BODY_BYTES) == module.DEFAULT_MAX_INPUT_TOKENS
+	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
+	assert state.reserve_request(100, module.DEFAULT_MAX_INPUT_TOKENS)
+	assert state.input_tokens_reserved == module.DEFAULT_MAX_INPUT_TOKENS
+
+
+def test_policy_estimates_input_tokens_and_rejects_oversized_prompt() -> None:
+	module = _broker_module()
+	policy = _broker_policy_with_budgets(module, max_input_tokens=20)
+	assert policy.estimate_input_tokens(b"") == 0
+	assert policy.estimate_input_tokens(b"x" * 79) == 20, "the estimate rounds up to whole tokens"
+	try:
+		policy.estimate_input_tokens(b"x" * 81)
+	except module.BrokerRequestError as exc:
+		assert "input-token limit" in str(exc)
+	else:
+		raise AssertionError("an 81-byte body estimates to 21 tokens and must exceed the 20-token ceiling")
+	assert policy.estimate_cost_usd(1_000_000, 1_000_000) == module.Decimal("3.1"), "1 + 2 per million tokens plus 0.1 per request"
+	assert policy.estimate_cost_usd(0, 0) == module.Decimal("0.1"), "the per-request price is charged even for an empty request"
+
+
+def test_reserve_request_enforces_input_token_and_cost_budgets() -> None:
+	module = _broker_module()
+	policy = _broker_policy_with_budgets(module, max_total_input_tokens=30, max_total_cost_usd=module.Decimal("0.25"))
+	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
+	# Two prompts of 15 estimated input tokens fit the 30-token budget; the third does not.
+	assert state.reserve_request(1, 15)
+	assert state.reserve_request(1, 15)
+	assert not state.reserve_request(1, 15), "aggregate input tokens must be budgeted, not only output tokens"
+	assert state.input_tokens_reserved == 30
+	# Cost budget: each request reserves 0.1 request price + token cost at the ceilings.
+	cost_state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
+	assert cost_state.reserve_request(0, 0)
+	assert cost_state.reserve_request(0, 0)
+	assert cost_state.cost_usd_reserved == module.Decimal("0.2")
+	assert not cost_state.reserve_request(0, 0), "the third request would exceed the 0.25 USD budget"
+	assert cost_state.requests_started == 2
+
+
+def test_settle_request_trues_up_input_tokens_and_cost() -> None:
+	module = _broker_module()
+	policy = _broker_policy_with_budgets(module, max_total_input_tokens=1_000, max_total_cost_usd=module.Decimal("10"))
+	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
+	assert state.reserve_request(100, 20)
+	assert state.cost_usd_reserved == policy.estimate_cost_usd(20, 100)
+	state.settle_request(100, 7, 20, 5)
+	assert state.output_tokens_reserved == 7
+	assert state.input_tokens_reserved == 5
+	assert state.cost_usd_reserved == policy.estimate_cost_usd(5, 7)
+	# Unreadable input usage keeps the input reservation while output still settles.
+	assert state.reserve_request(100, 20)
+	state.settle_request(100, 3, 20, None)
+	assert state.output_tokens_reserved == 10
+	assert state.input_tokens_reserved == 25
+	assert state.cost_usd_reserved == policy.estimate_cost_usd(5, 7) + policy.estimate_cost_usd(20, 3)
+	# A settlement that changes nothing is a no-op, and the legacy two-argument
+	# call keeps working for callers that only track output tokens.
+	before = (state.output_tokens_reserved, state.input_tokens_reserved, state.cost_usd_reserved)
+	state.settle_request(100, None, 20, None)
+	assert (state.output_tokens_reserved, state.input_tokens_reserved, state.cost_usd_reserved) == before
+	# A non-billable settlement (upstream error) releases the whole cost,
+	# including the per-request price the token counts alone would keep.
+	assert state.reserve_request(100, 20)
+	state.settle_request(100, 0, 20, 0, billable=False)
+	assert (state.output_tokens_reserved, state.input_tokens_reserved, state.cost_usd_reserved) == before
+	assert state.reserve_request(100)
+	state.settle_request(100, 1)
+	assert state.output_tokens_reserved == 11
+	assert state.input_tokens_reserved == 25
+
+
+def test_usage_extraction_reads_input_tokens_for_both_response_shapes() -> None:
+	module = _broker_module()
+	chat_stream = (
+		b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+		b'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3}}\n\n'
+		b"data: [DONE]\n\n"
+	)
+	assert module._extract_token_usage(chat_stream, "text/event-stream") == (3, 12)
+	responses_stream = (
+		b'data: {"type":"response.output_text.delta","delta":"hi"}\n\n'
+		b'data: {"type":"response.completed","response":{"usage":{"input_tokens":40,"output_tokens":6}}}\n\n'
+	)
+	assert module._extract_token_usage(responses_stream, "text/event-stream; charset=utf-8") == (6, 40)
+	assert module._extract_token_usage(b'{"usage":{"completion_tokens":2}}', "application/json") == (2, None), (
+		"missing input usage must be reported as None so its reservation stays charged"
+	)
+	assert module._extract_token_usage(b"not json", "application/json") == (None, None)
+	# The retained output-only helper still answers the same question.
+	assert module._extract_output_token_usage(chat_stream, "text/event-stream") == 3
+
+
+def test_brokered_requests_settle_input_and_cost_from_upstream_usage() -> None:
+	"""End-to-end through BrokerHandler (#4090): input tokens and cost are
+	reserved at admission, settled from `usage`, and a tight cost budget refuses
+	the request that would exceed it before it reaches the upstream."""
+	module = _broker_module()
+	policy = _broker_policy_with_budgets(
+		module,
+		max_input_tokens=100,
+		max_total_input_tokens=1_000,
+		max_total_cost_usd=module.Decimal("0.25"),
+	)
+	state = module.BrokerState("https://example.test/api/v1", "secret", "token", 100, policy)
+	scripted: list[tuple[int, bytes, str]] = []
+
+	class _FakeConnection:
+		def __init__(self, *_args: object, **_kwargs: object) -> None:
+			pass
+
+		def request(self, *_args: object, **_kwargs: object) -> None:
+			pass
+
+		def getresponse(self) -> _FakeUpstreamResponse:
+			return _FakeUpstreamResponse(*scripted.pop(0))
+
+		def close(self) -> None:
+			pass
+
+	original_connection = module.http.client.HTTPSConnection
+	module.http.client.HTTPSConnection = _FakeConnection  # type: ignore[misc]
+	server = module.BrokerServer(("127.0.0.1", 0), state)
+	server_thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+	server_thread.start()
+	try:
+		def post(body: dict[str, object]) -> tuple[int, str]:
+			request = urllib.request.Request(
+				f"http://127.0.0.1:{server.server_port}/api/v1/chat/completions",
+				data=json.dumps(body).encode("utf-8"),
+				headers={"Authorization": "Bearer token", "Content-Type": "application/json"},
+				method="POST",
+			)
+			try:
+				with urllib.request.urlopen(request, timeout=5) as response:
+					return response.status, response.read().decode("utf-8")
+			except urllib.error.HTTPError as error:
+				return error.code, error.read().decode("utf-8")
+
+		usage_stream = (
+			b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+			b'data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":10}}\n\n'
+			b"data: [DONE]\n\n"
+		)
+		streamed_request: dict[str, object] = {"model": "openai/test-model", "messages": [], "stream": True}
+		scripted.append((200, usage_stream, "text/event-stream"))
+		assert post(streamed_request)[0] == 200
+		assert state.input_tokens_reserved == 7, "input reservation settles to the provider-reported prompt tokens"
+		assert state.output_tokens_reserved == 10
+		assert state.cost_usd_reserved == policy.estimate_cost_usd(7, 10)
+
+		scripted.append((429, b'{"error":{"message":"rate limited"}}', "application/json"))
+		assert post(streamed_request)[0] == 429
+		assert state.input_tokens_reserved == 7, "an upstream error processed nothing and settles input to zero"
+		assert state.cost_usd_reserved == policy.estimate_cost_usd(7, 10)
+
+		scripted.append((200, usage_stream, "text/event-stream"))
+		assert post(streamed_request)[0] == 200
+		assert state.cost_usd_reserved == 2 * policy.estimate_cost_usd(7, 10)
+
+		# Two settled requests cost 2 x (0.1 + tokens); a third worst-case
+		# reservation (0.1 request price + 100 output x 2/M + input estimate)
+		# would push past the 0.25 USD budget, so it is refused before upstream.
+		scripted.append((200, usage_stream, "text/event-stream"))
+		status, body = post(streamed_request)
+		assert status == 429
+		assert "cost budget exhausted" in body
+		assert len(scripted) == 1, "the rejected request must not reach the upstream"
+
+		oversized_request: dict[str, object] = {"model": "openai/test-model", "messages": [{"role": "user", "content": "x" * 500}]}
+		status, body = post(oversized_request)
+		assert status == 400
+		assert "input-token limit" in body
+		assert len(scripted) == 1
+	finally:
+		server.shutdown()
+		server.server_close()
+		module.http.client.HTTPSConnection = original_connection  # type: ignore[misc]
+
+
+def _broker_cli_result(tmp_path: Path, *extra_args: str) -> tuple[int, str]:
+	ready_file = tmp_path / "cli-ready.json"
+	environment = {"PATH": os.environ["PATH"], "OPENROUTER_API_KEY": "upstream-secret"}
+	process = subprocess.Popen(
+		["python3", str(BROKER), "--ready-file", str(ready_file), "--allowed-model", "openai/test-model", *extra_args],
+		env=environment,
+		stdout=subprocess.PIPE,
+		stderr=subprocess.PIPE,
+	)
+	for _ in range(100):
+		if ready_file.exists():
+			process.terminate()
+			process.wait(timeout=5)
+			return 0, ""
+		if process.poll() is not None:
+			break
+		time.sleep(0.02)
+	if process.poll() is None:
+		process.terminate()
+	_stdout, stderr = process.communicate(timeout=5)
+	return process.returncode, stderr.decode("utf-8", errors="replace")
+
+
+def test_broker_cli_validates_budget_flags_and_starts_with_derived_defaults(tmp_path: Path) -> None:
+	module = _broker_module()
+	assert _broker_cli_result(tmp_path) == (0, ""), "defaults must derive without any budget flag"
+	assert _broker_cli_result(tmp_path, "--max-total-cost-usd", "5", "--max-input-tokens", "1000", "--max-total-input-tokens", "5000") == (0, "")
+	for arguments, fragment in (
+		(("--max-input-tokens", "0"), "--max-input-tokens must be between 1 and"),
+		(("--max-input-tokens", str(module.DEFAULT_MAX_INPUT_TOKENS + 1)), "--max-input-tokens must be between 1 and"),
+		(("--max-input-tokens", "1000", "--max-total-input-tokens", "999"), "--max-total-input-tokens must cover one request"),
+		(("--max-total-input-tokens", str(module.MAX_TOTAL_INPUT_TOKENS_CEILING + 1)), "--max-total-input-tokens must cover one request"),
+		(("--max-total-cost-usd", "0"), "--max-total-cost-usd must be a positive decimal"),
+		(("--max-total-cost-usd", "-1"), "--max-total-cost-usd must be a non-negative decimal"),
+		(("--max-total-cost-usd", "NaN"), "--max-total-cost-usd must be a non-negative decimal"),
+		(("--max-total-cost-usd", "abc"), "--max-total-cost-usd must be a non-negative decimal"),
+	):
+		returncode, stderr = _broker_cli_result(tmp_path, *arguments)
+		assert returncode == 2, (arguments, stderr)
+		assert fragment in stderr, (arguments, stderr)
+
+
+def test_broker_launcher_and_workflows_wire_budget_policy() -> None:
+	helpers_text = (REPO_ROOT / "scripts" / "codex_helpers.sh").read_text(encoding="utf-8")
+	assert '--max-input-tokens "${MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS:-4194304}"' in helpers_text
+	assert '--max-total-input-tokens "${MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS:-419430400}"' in helpers_text
+	assert 'broker_budget_args+=(--max-total-cost-usd "${MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD}")' in helpers_text
+	assert helpers_text.index('"${broker_budget_args[@]}"') < helpers_text.index('"${broker_policy_args[@]}" &')
+	budget_mappings = {
+		"MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS": "4194304",
+		"MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS": "419430400",
+		"MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD": "",
+	}
+	for workflow_name in (
+		"check_failure_triage.yml",
+		"clarify.yml",
+		"implement.yml",
+		"orchestrate.yml",
+		"orchestrate_clarify_respond.yml",
+		"orchestrate_poll.yml",
+		"plan.yml",
+		"review_autofix.yml",
+		"security-audit.yml",
+		"validate.yml",
+		"workflow-log-analysis.yml",
+	):
+		workflow_text = (REPO_ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+		for variable_name, default_value in budget_mappings.items():
+			expected_mapping = f"{variable_name}: ${{{{ vars.{variable_name} || '{default_value}' }}}}"
+			assert expected_mapping in workflow_text, (workflow_name, expected_mapping)
