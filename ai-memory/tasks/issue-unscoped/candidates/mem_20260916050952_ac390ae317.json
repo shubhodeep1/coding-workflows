@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml, step \"Enable auto-merge on PR\" (env wiring at line 5932) together with scripts/review_enable_auto_merge.sh lines 42-46 | severity=high | confidence=4\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: INITIAL_HEAD_SHA is only captured in the \"Checkout PR head branch\" step's CAN_PUSH=true branch (line 2753), so fork PRs and head refs rejected by the branch-pattern guards pass an empty AUTO_MERGE_EXPECTED_HEAD_SHA to the ungated \"Enable auto-merge on PR\" step.\n  WHY: Before this PR, a clean review of a fork PR enabled auto-merge; after this PR, the helper permanently refuses auto-merge for fork PRs because no future run will set INITIAL_HEAD_SHA on the fork path.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- .github/workflows/review_autofix.yml, step \"Enable auto-merge on PR\" (env wiring at line 5932) together with scripts/review_enable_auto_merge.sh lines 42-46\n  PROBLEM: INITIAL_HEAD_SHA is only captured in the \"Checkout PR head branch\" step's CAN_PUSH=true branch (line 2753). For fork PRs (HEAD_REPO != github.repository, line 2687-2690) and for head refs rejected by the branch-pattern guards (lines 2676-2685), the step exits early with CAN_PUSH=false and INITIAL_HEAD_SHA is never written to GITHUB_ENV. The \"Enable auto-merge on PR\" step is NOT gated on CAN_PUSH (its `if` at line 5919 has no CAN_PUSH condition), so for every fork PR the helper now receives an empty AUTO_MERGE_EXPECTED_HEAD_SHA and takes the new refuse branch at review_enable_auto_merge.sh:42-46 on every run, forever.\n  WHY: before this PR, a clean review of a fork PR enabled auto-merge (the GH_PAT can merge fork PRs; merge is a repo-level operation, not a push to the fork). After this PR, auto-merge on fork PRs is permanently refused \u2014 not \"recoverable on the next sync event\" as the warning claims, because no future run will ever have INITIAL_HEAD_SHA set on the fork path. Fork PRs in every consumer repo silently lose auto-merge. Suggested minimal fix: when INITIAL_HEAD_SHA is empty (CAN_PUSH=false), fall back to the PR head OID already available in PR_META_FILE (headRefOid) or the gate's head_sha output, rather than refusing.\n  severity=high\n  confidence=4\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "f6916493b5f2e3f46b8d45ce8156b5239bd36d4d7c371d4685a6ad7da04d32b0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35056756925",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35056756925",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260916050952_ac390ae317",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35056756925"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-16T05:09:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
