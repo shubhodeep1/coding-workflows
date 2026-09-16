@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.89,
+  "details": "The repository uses preflight checks, stall guards, and process-group termination to prevent editor or model subprocesses from leaking or hanging workflows. Changes to implementation scripts should retain cleanup on failure and should be covered by shell-behavior tests rather than relying only on successful-path tests.",
+  "fingerprint": "fc7bd7bf11aaeec8f33cf51fd0c8e217e7ad68095253ea7cd8566a11c6a1ec22",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35053858980",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35053858980",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4049",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4056",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4070",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4075",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4076",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4052",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4057",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4071",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4077",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4079"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260916040448_df41dcd518",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Long-running Codex/editor subprocesses need isolation, stall detection, and process-group cleanup.",
+  "timestamps": {
+    "created_at": "2026-09-16T04:04:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
