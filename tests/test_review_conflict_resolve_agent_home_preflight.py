@@ -96,6 +96,7 @@ def test_preflight_passes_and_logs_identity_for_a_writable_runtime_dir(tmp_path:
 	assert " parent_dir=owner=" in line
 	assert " acl=" in line and " mount=" in line
 	assert " agent_home_exists=false " in line
+	assert " agent_home_acl=not-applicable" in line
 	assert PREFLIGHT_DENIED_PREFIX not in completed.stderr
 
 

@@ -441,7 +441,7 @@ export MODEL_PROVIDER_BROKER_AGENT_HOME
 #     acl=<entries|none|unavailable> mount=<target fstype options|unknown>
 #     agent_home_exists=<bool> agent_home_directory=<bool>
 #     agent_home_writable=<bool> agent_home_searchable=<bool>
-#     agent_home_stat=<details|absent> agent_home_acl=<entries|none|unavailable>
+#     agent_home_stat=<details|absent> agent_home_acl=<entries|none|unavailable|not-applicable>
 #   ::error::RESOLVER_AGENT_HOME_PREFLIGHT_DENIED runtime_dir=<path> exists=<bool>
 #     writable=<bool> searchable=<bool> owner=<u:g> mode=<octal> type=<kind>
 #     agent_home_exists=<bool> agent_home_directory=<bool> ...
