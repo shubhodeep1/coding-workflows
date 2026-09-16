@@ -19,6 +19,9 @@
 #     lands during the review cannot ride this run's clean verdict into
 #     main. Empty or malformed → auto-merge is refused (fail closed).
 #   GH_TOKEN
+# Outputs (when GITHUB_OUTPUT is available):
+#   ready_label_allowed — true only when linked issues may safely advance;
+#     successful bound enrolment and configured manual-merge mode set true.
 
 set -euo pipefail
 
@@ -28,8 +31,21 @@ source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
+_write_ready_label_allowed()
+{
+	local ready_label_allowed_value="$1"
+	if [ -n "${GITHUB_OUTPUT:-}" ]; then
+		printf 'ready_label_allowed=%s\n' "${ready_label_allowed_value}" >> "${GITHUB_OUTPUT}"
+	fi
+}
+
+# Fail closed for every early return and merge failure. Deliberate manual-
+# merge mode and successful head-bound enrolment override this below.
+_write_ready_label_allowed "false"
+
 if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
 	echo "Auto-merge disabled (set ENABLE_AUTO_MERGE=true to enable)."
+	_write_ready_label_allowed "true"
 	exit 0
 fi
 
@@ -198,6 +214,7 @@ if printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq '^auto/forward-merge-stable-'
 		echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${_orch_pr_head_ref}')..."
 		echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${AUTO_MERGE_EXPECTED_HEAD_SHA} action=merge_commit"
 		if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto --match-head-commit "${AUTO_MERGE_EXPECTED_HEAD_SHA}"; then
+			_write_ready_label_allowed "true"
 			echo "Auto-merge (merge commit) enabled. PR will merge once all required checks pass, preserving stable's ancestry on main."
 		else
 			echo "::warning::Could not enable auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER}. Either the PR head moved past ${AUTO_MERGE_EXPECTED_HEAD_SHA} during the review (a push landed after the reviewed head; the next sync event re-reviews it), or 'Allow merge commits' / 'Allow auto-merge' are not enabled in repo settings / branch protection is not configured. The PR remains open for manual 'Create a merge commit'."
@@ -246,6 +263,7 @@ fi
 echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
 echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${AUTO_MERGE_EXPECTED_HEAD_SHA} action=squash"
 if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${AUTO_MERGE_EXPECTED_HEAD_SHA}"; then
+	_write_ready_label_allowed "true"
 	echo "Auto-merge enabled. PR will merge once all required checks pass."
 else
 	echo "::warning::Could not enable auto-merge on PR #${PR_NUMBER}. Either the PR head moved past ${AUTO_MERGE_EXPECTED_HEAD_SHA} during the review (a push landed after the reviewed head; the next sync event re-reviews it), or 'Allow auto-merge' is not enabled in repo settings / branch protection is not configured."

@@ -9,7 +9,7 @@ On 2026-09-09 and 2026-09-16 two PRs in shubhodeep1/fun-token-multi-chain (#498 
 | Incident PRs | shubhodeep1/fun-token-multi-chain#498 (+117/−4 merged, +2/−2 evaluated), #527 (+324/−16 merged, +4/−3 evaluated) |
 | Tracking issue | #4109 |
 
-What this means for consumer repos: nothing to configure. The fix arrives with the next `@stable` sync of `review_autofix.yml`. A PR whose head moves after the gate ran now stays open with a `Could not enable auto-merge` warning naming the moved head, and its next `synchronize` event re-evaluates the new diff. `ai:review-skipped` is still applied by the skip job before the merge attempt.
+What this means for consumer repos: nothing to configure. The fix arrives with the next `@stable` sync of `review_autofix.yml`. A PR whose head moves after the gate ran now stays open with a `Could not enable auto-merge` warning naming the moved head, its linked issues do not receive `ai:ready-to-merge`, and its next `synchronize` event re-evaluates the new diff. `ai:review-skipped` is still applied by the skip job before the merge attempt.
 
 ### For contributors
 

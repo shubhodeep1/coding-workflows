@@ -6266,6 +6266,14 @@ def test_deterministic_skip_merge_is_bound_to_gate_evaluated_head_sha() -> None:
 	assert "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=" in block, (
 		"deterministic-skip-merge must emit the AUTOFIX_DET_SKIP_MERGE_BOUND audit line"
 	)
+	ready_guard_pos = block.find('if [ "${ready_label_allowed}" = "true" ]; then')
+	ready_label_pos = block.find('ensure_label_exists "ai:ready-to-merge"')
+	assert ready_guard_pos > block.rfind("gh_retry gh pr merge"), (
+		"deterministic-skip linked-issue advancement must follow the bound merge attempts"
+	)
+	assert ready_label_pos > ready_guard_pos, (
+		"deterministic-skip linked-issue advancement must be gated on successful bound enrolment"
+	)
 
 
 def test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha() -> None:
@@ -6275,6 +6283,15 @@ def test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha() -> None:
 	block = _step_block("Enable auto-merge on PR")
 	assert "AUTO_MERGE_EXPECTED_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}" in block, (
 		"Enable auto-merge on PR must pass the reviewed head (INITIAL_HEAD_SHA) to the helper"
+	)
+	assert "id: enable_auto_merge" in block, "auto-merge step must expose the helper's label-safety output"
+	workflow_text = _workflow_text()
+	assert workflow_text.find("      - name: Enable auto-merge on PR") < workflow_text.find(
+		"      - name: Mark linked issues ready to merge"
+	), "reviewed-path bound merge enrolment must run before linked issues advance"
+	ready_label_block = _step_block("Mark linked issues ready to merge")
+	assert "steps.enable_auto_merge.outputs.ready_label_allowed == 'true'" in ready_label_block, (
+		"linked issues must not advance when head-bound auto-merge is refused or fails"
 	)
 	helper_text = _auto_merge_helper_text()
 	assert (
@@ -6293,6 +6310,12 @@ def test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha() -> None:
 	assert helper_text.find('=~ ^[0-9a-f]{40}$') < helper_text.find("gh_retry gh pr merge"), (
 		"helper head-SHA validation must precede the gh pr merge calls"
 	)
+	assert '_write_ready_label_allowed "false"' in helper_text, (
+		"helper must fail closed before any refusal or merge failure"
+	)
+	assert '_write_ready_label_allowed "true"' in helper_text, (
+		"helper must expose successful bound enrolment to the linked-issue step"
+	)
 
 
 def _run_auto_merge_helper_with_fake_gh(tmp: Path, *, expected_head_sha: str, head_ref: str = "ai/issue-42") -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
@@ -6305,6 +6328,7 @@ def _run_auto_merge_helper_with_fake_gh(tmp: Path, *, expected_head_sha: str, he
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir(parents=True, exist_ok=True)
 	calls_path = tmp / "gh_calls.jsonl"
+	github_output_path = tmp / "github_output.txt"
 	fake_gh = bin_dir / "gh"
 	fake_gh.write_text(
 		textwrap.dedent(
@@ -6325,7 +6349,7 @@ def _run_auto_merge_helper_with_fake_gh(tmp: Path, *, expected_head_sha: str, he
 			    sys.stderr.write("unhandled gh api path: %r\\n" % (path,))
 			    sys.exit(1)
 			if args[:2] == ["pr", "merge"]:
-			    sys.exit(0)
+			    sys.exit(1 if args[-1] == "f" * 40 else 0)
 			sys.stderr.write("unhandled gh invocation: %r\\n" % (args,))
 			sys.exit(1)
 			"""
@@ -6344,6 +6368,8 @@ def _run_auto_merge_helper_with_fake_gh(tmp: Path, *, expected_head_sha: str, he
 			"ORCH_INTEGRATION_BRANCH_PATTERN": "^orchestrator/project-",
 			"AUTO_MERGE_EXPECTED_HEAD_SHA": expected_head_sha,
 			"GH_TOKEN": "fake-token",
+			"GITHUB_OUTPUT": str(github_output_path),
+			"GH_RETRY_MAX_ATTEMPTS": "1",
 		}
 	)
 	proc = subprocess.run(
@@ -6370,6 +6396,10 @@ def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() ->
 			["pr", "merge", "42", "--repo", "test-owner/test-repo", "--squash", "--auto", "--match-head-commit", reviewed_sha]
 		], merge_calls
 		assert f"AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=42 head_sha={reviewed_sha} action=squash" in proc.stdout, proc.stdout
+		assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
+			"ready_label_allowed=false",
+			"ready_label_allowed=true",
+		]
 
 	# Forward-merge fallback PRs keep the merge-commit path, now head-bound.
 	with tempfile.TemporaryDirectory() as tmp_str:
@@ -6381,6 +6411,21 @@ def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() ->
 		assert merge_calls == [
 			["pr", "merge", "42", "--repo", "test-owner/test-repo", "--merge", "--auto", "--match-head-commit", reviewed_sha]
 		], merge_calls
+		assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
+			"ready_label_allowed=false",
+			"ready_label_allowed=true",
+		]
+
+	# A moved-head rejection leaves the label permission false.
+	with tempfile.TemporaryDirectory() as tmp_str:
+		rejected_sha = "f" * 40
+		proc, calls = _run_auto_merge_helper_with_fake_gh(Path(tmp_str), expected_head_sha=rejected_sha)
+		assert proc.returncode == 0, proc.stderr
+		assert [c for c in calls if c[:2] == ["pr", "merge"]], calls
+		assert "Could not enable auto-merge" in proc.stdout, proc.stdout
+		assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
+			"ready_label_allowed=false"
+		]
 
 	# Unknown / malformed SHA: refuse without calling gh pr merge at all.
 	for bad in ("", "5e5f1480", "not-a-sha"):
@@ -6390,6 +6435,9 @@ def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() ->
 			assert not [c for c in calls if c[:2] == ["pr", "merge"]], calls
 			assert "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=42" in proc.stdout and "action=refuse reason=head_sha_unavailable" in proc.stdout, proc.stdout
 			assert "::warning::AUTO_MERGE_EXPECTED_HEAD_SHA is empty or not a 40-hex SHA" in proc.stdout, proc.stdout
+			assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
+				"ready_label_allowed=false"
+			]
 
 
 def main() -> int:
