@@ -12,9 +12,16 @@ import sys
 import tempfile
 from pathlib import Path
 
+from conftest import REPO_PINNING_GIT_ENV_VARS
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODULE_PATH = REPO_ROOT / "scripts" / "repo_root.py"
+WORKFLOW_REPO_PINNING_GIT_ENV = {
+	name: os.environ[name]
+	for name in REPO_PINNING_GIT_ENV_VARS
+	if name in os.environ
+}
 
 if str(REPO_ROOT) not in sys.path:
 	sys.path.insert(0, str(REPO_ROOT))
@@ -69,13 +76,15 @@ def _run_cli(script_path: Path, *, cwd: Path) -> subprocess.CompletedProcess[str
 
 
 def test_repo_root_resolves_real_repo_even_when_cwd_changes() -> None:
-	with tempfile.TemporaryDirectory(prefix="repo-root-cwd-") as tmpdir:
-		with _temporary_cwd(Path(tmpdir)):
-			assert repo_root_helper.repo_root() == REPO_ROOT
+	with _temporary_env(**WORKFLOW_REPO_PINNING_GIT_ENV):
+		with tempfile.TemporaryDirectory(prefix="repo-root-cwd-") as tmpdir:
+			with _temporary_cwd(Path(tmpdir)):
+				assert repo_root_helper.repo_root() == REPO_ROOT
 
 
 def test_repo_root_from_nested_directory_resolves_repo_root() -> None:
-	assert repo_root_helper.repo_root_from(REPO_ROOT / "scripts") == REPO_ROOT
+	with _temporary_env(**WORKFLOW_REPO_PINNING_GIT_ENV):
+		assert repo_root_helper.repo_root_from(REPO_ROOT / "scripts") == REPO_ROOT
 
 
 def test_repo_root_from_git_env_fallback_accepts_real_git_dir() -> None:
@@ -130,7 +139,8 @@ def test_repo_root_from_markerless_tree_raises_clear_runtime_error() -> None:
 
 
 def test_repo_root_cli_prints_resolved_root() -> None:
-	result = _run_cli(MODULE_PATH, cwd=REPO_ROOT)
+	with _temporary_env(**WORKFLOW_REPO_PINNING_GIT_ENV):
+		result = _run_cli(MODULE_PATH, cwd=REPO_ROOT)
 	assert result.returncode == 0, result.stderr
 	assert result.stdout.strip() == str(REPO_ROOT)
 	assert result.stderr == ""

@@ -3116,7 +3116,47 @@ def test_review_enable_auto_merge_helper_is_bootstrapped_and_delegated() -> None
 	assert 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }' in helper_text
 	assert "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" in helper_text
 	assert "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" in helper_text
-	assert 'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto' in helper_text
+	assert "INITIAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}" in block
+	assert "#   INITIAL_HEAD_SHA" in helper_text
+	assert "#   AUTO_MERGE_READY_LABELS_ALLOWED" in helper_text
+	assert 'record_auto_merge_ready_labels_allowed "false"' in helper_text
+	assert helper_text.count("if reviewed_head_is_current_for_labels; then") == 2
+	assert 'if [ -z "${INITIAL_HEAD_SHA:-}" ]; then' in helper_text
+	assert '[ "${_orch_pr_head_sha}" != "${INITIAL_HEAD_SHA}" ]' in helper_text
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto --match-head-commit "${INITIAL_HEAD_SHA}"' in helper_text
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"' in helper_text
+	for merge_line in (line for line in helper_text.splitlines() if "gh_retry gh pr merge" in line):
+		assert '--match-head-commit "${INITIAL_HEAD_SHA}"' in merge_line, merge_line
+	assert re.search(
+		r'if gh_retry gh pr merge .*? --merge --auto --match-head-commit "\$\{INITIAL_HEAD_SHA\}"; then\n\s+record_auto_merge_ready_labels_allowed "true"',
+		helper_text,
+	)
+	assert re.search(
+		r'if gh_retry gh pr merge .*? --squash --auto --match-head-commit "\$\{INITIAL_HEAD_SHA\}"; then\n\s+record_auto_merge_ready_labels_allowed "true"',
+		helper_text,
+	)
+
+
+def test_reviewed_head_authorization_precedes_ready_labels() -> None:
+	wf = _workflow_text()
+	auto_merge_step = wf.index("      - name: Enable auto-merge on PR")
+	ready_label_step = wf.index("      - name: Mark linked issues ready to merge")
+	ready_label_block = _step_block("Mark linked issues ready to merge")
+
+	assert auto_merge_step < ready_label_step
+	assert "env.AUTO_MERGE_READY_LABELS_ALLOWED == 'true'" in ready_label_block
+
+
+def test_checkout_captures_initial_head_sha_before_non_push_exits() -> None:
+	block = _step_block("Checkout PR head branch")
+	payload_capture = 'INITIAL_HEAD_SHA="$(jq -r \'.head.sha // ""\' "${PR_PAYLOAD_FILE}" 2>/dev/null || echo "")"'
+	export_capture = 'echo "INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}" >> "$GITHUB_ENV"'
+	non_push_exits = [match.start() for match in re.finditer('echo "CAN_PUSH=false"', block)]
+
+	assert payload_capture in block
+	assert len(non_push_exits) == 3
+	assert block.index(payload_capture) < block.index(export_capture) < min(non_push_exits)
+	assert block.index('INITIAL_HEAD_SHA="$(git rev-parse HEAD)"') > max(non_push_exits)
 
 
 def test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated() -> None:
@@ -5764,7 +5804,7 @@ def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_
 	)
 	# The check must run BEFORE the `gh pr merge --squash --auto` call.
 	idx_guard = block.find("grep -Eq '^auto/forward-merge-stable-'")
-	idx_merge = block.find("gh pr merge")
+	idx_merge = block.find('gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto')
 	assert idx_guard != -1
 	assert idx_merge != -1
 	assert idx_guard < idx_merge, (
@@ -5789,6 +5829,30 @@ def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_
 	assert 'auto_merge_summary="ENABLED (merge commit)"' in block, (
 		"deterministic-skip-merge must record the merge-commit auto-merge outcome for the step summary"
 	)
+	assert 'elif [ -z "${PR_HEAD_SHA}" ]; then' in block, (
+		"deterministic-skip-merge must fail closed when the gate-observed head SHA is unavailable"
+	)
+	assert 'auto_merge_summary="REFUSED (gate-observed head SHA unavailable)"' in block, (
+		"deterministic-skip summary must report a missing-head refusal"
+	)
+	assert "refusing deterministic-skip auto-merge enablement without a --match-head-commit guard" in block
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"' in block
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"' in block
+	assert 'auto_merge_ready_labels_allowed="false"' in block
+	assert 'if [ "${auto_merge_ready_labels_allowed}" != "true" ]; then' in block
+	assert block.count("if deterministic_skip_head_is_current; then") == 2
+	idx_review_skipped_label = block.find('ensure_label_exists "ai:review-skipped"')
+	idx_bound_squash_merge = block.find('--squash --auto --match-head-commit "${PR_HEAD_SHA}"')
+	assert idx_review_skipped_label > idx_bound_squash_merge, (
+		"Deterministic-skip labels must be applied only after bound merge authorization succeeds"
+	)
+	idx_missing_head_guard = block.find('elif [ -z "${PR_HEAD_SHA}" ]')
+	assert idx_missing_head_guard != -1
+	assert idx_missing_head_guard < idx_merge, (
+		"Missing gate head must refuse auto-merge before either merge strategy can run"
+	)
+	for merge_line in (line for line in block.splitlines() if "gh_retry gh pr merge" in line):
+		assert '--match-head-commit "${PR_HEAD_SHA}"' in merge_line, merge_line
 
 
 def test_gate_emits_head_ref_output_for_forward_merge_suppressor_reuse() -> None:
@@ -5800,11 +5864,20 @@ def test_gate_emits_head_ref_output_for_forward_merge_suppressor_reuse() -> None
 	assert "head_ref: ${{ steps.evaluate.outputs.head_ref }}" in wf, (
 		"Gate job must expose head_ref output for downstream forward-merge suppressors"
 	)
+	assert "head_sha: ${{ steps.evaluate.outputs.head_sha }}" in wf, (
+		"Gate job must expose the exact head SHA used for deterministic-skip authorization"
+	)
 	assert 'echo "head_ref=${pr_head_ref}"' in wf, (
 		"Gate evaluate step must emit head_ref to GITHUB_OUTPUT"
 	)
+	assert 'echo "head_sha=${pr_head_sha_gate}"' in wf, (
+		"Gate evaluate step must reuse the authenticated PR metadata head SHA"
+	)
 	assert "PR_HEAD_REF: ${{ needs.gate.outputs.head_ref }}" in wf, (
 		"deterministic-skip-merge must consume head_ref from gate outputs"
+	)
+	assert "PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}" in wf, (
+		"deterministic-skip-merge must consume the gate-observed head SHA"
 	)
 	assert "post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}" in wf, (
 		"Gate job must expose cached PR title/body for the post-merge validation dispatch"
