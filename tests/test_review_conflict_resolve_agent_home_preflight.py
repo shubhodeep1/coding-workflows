@@ -127,6 +127,8 @@ def test_preflight_fails_closed_when_runtime_dir_is_not_writable(tmp_path: Path)
 		locked_dir.chmod(0o700)
 	assert completed.returncode == 1
 	assert f"::error::{PREFLIGHT_DENIED_PREFIX} runtime_dir={locked_dir} exists=true writable=false searchable=true" in completed.stderr
+	assert f"uid={os.getuid()} euid={os.geteuid()} " in completed.stderr
+	assert re.search(r" user=\S+ ", completed.stderr)
 	assert " mode=500 " in completed.stderr
 
 
@@ -147,3 +149,5 @@ def test_preflight_fails_closed_when_existing_agent_home_is_not_writable(tmp_pat
 	assert "agent_home_writable=false agent_home_searchable=true" in completed.stderr
 	assert "agent_home_stat=owner=" in completed.stderr
 	assert " mode=500 type=directory" in completed.stderr
+	assert f"uid={os.getuid()} euid={os.geteuid()} " in completed.stderr
+	assert re.search(r" user=\S+ ", completed.stderr)
