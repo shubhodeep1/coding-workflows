@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.91,
+  "details": "Security changes commonly touch multiple workflows plus shared scripts, documentation, manifests, and tests. When changing workflow behavior, inspect all callers and mirrored orchestration paths, then update workflow-contract and integration tests together so one hardened path is not bypassed by another.",
+  "fingerprint": "6c9103e890f189c26049de8d73b98daf0f9a8f417ed9b45e1e6eb95f3db48652",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35053858980",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35053858980",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4049",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4056",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4070",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4075",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4076",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4052",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4057",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4071",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4077",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4079"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260916040212_6dc11beb01",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow security fixes are cross-cutting and require synchronized updates across YAML, shell helpers, Python utilities, and contract tests.",
+  "timestamps": {
+    "created_at": "2026-09-16T04:02:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
