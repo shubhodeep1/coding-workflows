@@ -267,3 +267,183 @@ End-to-end order: support preflight → resolver permissions → deterministic r
 | Serena `(no target emitted)` | 0 | 0 | 0 | 0 | 0 / 0 / 0 |
 
 No Serena per-tool breakdown or standardized “other MCP server” telemetry was emitted.
+
+## Deep Audit — Workflows & Scripts (2026-09-16)
+
+### Section 1: Bug & Correctness Sweep
+
+Coverage: 46 workflows, 78 shell scripts, and 56 Python scripts. YAML, Bash, and Python syntax checks passed. No `pull_request_target`, direct secret logging, or actionable command-injection path was found. Actionlint was unavailable.
+
+#### BUG-001 — Cancelled required checks are treated as successful
+
+- **File:** `scripts/pr_checks_lib.sh:206-253`
+- **Severity:** High
+- **Category:** `bug`
+- **Description:** Both check-filter branches explicitly accept `conclusion == "cancelled"`. This conflicts with `scripts/orchestrate_poll_process.sh:21443-21445`, whose merge contract says cancelled checks abort the gate. **Inference:** on an unprotected branch, a synchronous merge governed only by `ORCH_FINAL_MERGE_REQUIRED_CHECKS` could proceed after a required check was cancelled. Existing tests do not cover cancellation. [NEEDS VERIFICATION]
+- **Recommended fix:** Treat only `success`, `neutral`, and `skipped` as acceptable. Update `_summarize_final_merge_blockers` at `scripts/orchestrate_poll_process.sh:708-747` and add required/non-required cancellation cases to the shared-gate tests.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001 — Final PR state is fetched twice from one endpoint
+
+- **File:** `scripts/orchestrate_poll_process.sh:9724-9735`
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:** The fallback path calls `pulls/${final_pr}` once for `.state` and again for `.merged_at`.
+- **Call count:** Current: 2 calls. Proposed: 1 call.
+- **Recommended fix:** Fetch the PR object once and parse both fields with `_jq_field`, matching the existing `final_pr_json_snapshot` branch immediately above.
+
+#### API-002 — Reissue paths fetch issue title and body separately
+
+- **File:** `scripts/orchestrate_poll_process.sh:12579-12581`, `15001-15009`, `19798-19800`
+- **Severity:** Medium
+- **Category:** `api-redundancy`
+- **Description:** Three reissue implementations issue two identical issue GETs, changing only the `--jq` selector. The implementation-failed sweep repeats this inside a multi-issue loop.
+- **Call count:** Direct paths: 2 → 1 per issue. Sweep path: 2N → `ceil(N/25)`.
+- **Recommended fix:** Fetch `{title,body}` once in direct paths. Add `title` and `body` to `_fetch_candidate_issue_details_graphql` (`scripts/orchestrate_poll_process.sh:13288-13406`) for sweep-wide reuse.
+
+#### API-003 — Release polling uses a second, weaker retry implementation
+
+- **File:** `scripts/comprehensive_test_and_release_gh_api.sh:3-47`
+- **Severity:** Medium
+- **Category:** `api-redundancy`
+- **Description:** `gh_api_safe` retries only errors containing “rate limit”, uses fixed 30/60/120-second sleeps, and ignores `Retry-After`, reset headers, 5xx responses, and transient transport failures. This duplicates the stronger `gh_retry` implementation at `scripts/gh_helpers.sh:430-494`.
+- **Call count:** Logical calls remain 1 → 1; retry attempts change from at most 4 rate-limit-only attempts to the shared configured retry policy.
+- **Recommended fix:** Source `gh_helpers.sh` from `.github/workflows/comprehensive-test-and-release.yml:56,289` and `scripts/dispatch_and_watch_workflow_run.sh:6-7`, then implement output capture through `gh_retry_to_file`.
+
+#### API-004 — Safety-latch handler bypasses reset-aware retries
+
+- **File:** `scripts/implement_handle_guard_block.sh:13-52`, `98-155`, `217-283`
+- **Severity:** Medium
+- **Category:** `api-redundancy`
+- **Description:** The staged-support, scope, and destructive-block handlers use raw `gh label`, `gh issue edit`, `gh issue view`, and `gh issue comment` calls. A transient failure can leave the safety label unapplied and merely report an unknown latch state.
+- **Call count:** Current: up to 5 calls for staged-support and 6 for scope/destructive branches. Proposed: unchanged logical count, but every call uses shared reset-aware retries.
+- **Recommended fix:** Preserve `gh_helpers.sh` beside the late handler in `.github/workflows/implement.yml:967-970`, source it, and use `gh_retry`, `_safe_gh_jq`, and `ensure_label_exists`.
+
+#### BATCH-001 — Standalone PR sweeps perform per-PR reads
+
+- **File:** `scripts/orchestrate_poll_process.sh:21305-21349`, `21463-21475`, `21500-21743`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** The conflict and no-op sweeps reuse the open-PR list but still fetch PR metadata and comments for every PR, then commits and three additional snapshots for candidates. [NEEDS VERIFICATION]
+- **Call count:** For N PRs, C no-op candidates, and T threshold candidates: current `1 + 2N + C + 3T`; proposed `1 + ceil(N/25) + 3T`.
+- **Recommended fix:** Extend the aliased batching pattern from `_fetch_candidate_issue_details_graphql` with a PR-oriented helper returning state, refs, mergeability, labels, recent comments, head SHA, and latest productive commit. Retain threshold-path refreshes for safety.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Prompt-path resolution is copied between two scripts
+
+- **File:** `scripts/render_prompt.sh:12-41,95-159`; `scripts/assemble_prompt.sh:12-93`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** `resolve_prompt_file`, `resolve_render_prompt_py`, and `resolve_assembly_source_path` have identical implementations.
+- **Recommended fix:** Move them to `scripts/prompt_path_helpers.sh` with signatures `resolve_prompt_file <path>`, `resolve_render_prompt_py`, and `resolve_assembly_source_path <path>`. Both callers should source the module after defining `SCRIPT_DIR`.
+
+#### DUP-002 — Support bootstrap logic remains duplicated across workflows
+
+- **File:** `.github/workflows/clarify.yml:217-353`; `.github/workflows/plan.yml:280-428`; `.github/workflows/orchestrate.yml:340-469`; `.github/workflows/orchestrate_clarify_respond.yml:279-414`; `.github/workflows/orchestrate_poll.yml:371-585`; `.github/workflows/implement.yml:918-1274`
+- **Severity:** Medium
+- **Category:** `duplication`
+- **Description:** These workflows independently implement ref fallback, script/schema/prompt installation, model-catalog staging, and generated `.gitignore` handling. Review and validate already delegate substantial portions to `scripts/stage_workflow_support.sh`.
+- **Recommended fix:** Generalize that script around `workflow_support_stage_from_manifest <target> <manifest-path> <destination-mode>`. Each workflow should supply a small manifest and replace its inline bootstrap body with one invocation.
+
+#### DUP-003 — Repository batch utilities are exactly duplicated
+
+- **File:** `scripts/validation_refresh_runner.py:86-163,701-723`; `scripts/audit_consumer_drift.py:41-113,142-164`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** `CommandFailure`, `CommandExecutor.run`, and `load_target_repositories` are effectively identical.
+- **Recommended fix:** Create `scripts/repo_batch_helpers.py` exporting `CommandExecutor.run(...)`, `CommandFailure`, and `load_target_repositories(path)`. Update both callers to import them.
+
+#### DUP-004 — ISO-8601 parsing has four identical implementations
+
+- **File:** `scripts/workflow_retro.py:50-62`; `scripts/collect_workflow_logs.py:96-108`; `scripts/cost_audit.py:283-295`; `scripts/analyze_workflow_logs.py:40-52`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** All four functions normalize `Z`, call `datetime.fromisoformat`, and coerce naïve values to UTC identically.
+- **Recommended fix:** Add `scripts/time_helpers.py::parse_iso8601_utc(value)` and import it from all four callers.
+
+#### DUP-005 — Internal implement and plan wrappers are 80% structurally identical
+
+- **File:** `.github/workflows/internal-implement.yml:1-32`; `.github/workflows/internal-plan.yml:1-34`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** After phase-token normalization, the workflows have 0.800 sequence similarity. Differences are limited to permissions, command markers, bot markers, and reusable target.
+- **Recommended fix:** Keep separate generated workflows, but render both from one generator function such as `render_issue_comment_phase_wrapper(phase, command, permissions, bot_markers)`. Preserve existing predicate-parity tests.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — Support-staging expression is within 813 characters of the limit
+
+- **File:** `.github/workflows/implement.yml:920-1274`
+- **Severity:** High
+- **Category:** `expression-limit`
+- **Description:** The interpolated `run:` body is approximately 20,187 characters with three `${{ }}` interpolations. Remaining headroom is only 813 characters before the 21,000-character hard limit.
+- **Recommended fix:** Extract the block into `scripts/stage_workflow_support.sh` using the manifest-based interface proposed in DUP-002.
+
+#### EXPR-002 — Preflight guard expression exceeds the medium-risk threshold
+
+- **File:** `.github/workflows/implement.yml:3108-3413`
+- **Severity:** Medium
+- **Category:** `expression-limit`
+- **Description:** The interpolated `run:` body is approximately 17,313 characters with one `${{ }}` interpolation. Remaining headroom is 3,687 characters.
+- **Recommended fix:** Extract the destructive-deletion and files-touched preflight into `scripts/implement_preflight_guards.sh`, preserving current `$GITHUB_OUTPUT` fields and exit codes.
+
+No workflow exceeds 800 KB. The largest is `.github/workflows/review_autofix.yml` at approximately 493,679 characters, leaving 554,897 characters below the 1 MiB limit.
+
+### Section 5: Cross-Cutting Concerns
+
+#### CONSIST-001 — No-op recovery duplicates and contradicts the shared check gate
+
+- **File:** `scripts/orchestrate_poll_process.sh:21734-21782`
+- **Severity:** Medium
+- **Category:** `consistency`
+- **Description:** The block says it validates “required checks” but independently rejects every failed check, including advisory checks. This contradicts the single-source contract documented at `agents.md:1026` and implemented by `pr_checks_lib.sh`.
+- **Recommended fix:** Replace the duplicated check-run query and jq filters with `_pr_checks_completed "${N_PR}" "${N_HEAD_SHA}" "${N_BASE}"`. Add a contract test requiring the three-argument call.
+
+#### DEAD-001 — Label-repair evidence engine has no runtime caller
+
+- **File:** `scripts/orchestrate_lib.py:2017-2089`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** `resolve_label_repair_evidence` is not invoked by any scoped workflow or production script. `agents.md:932-939` explicitly states the richer contradiction-evidence path is reserved and not wired into reconciliation.
+- **Recommended fix:** Either wire `resolve_label_repair_evidence(labels, comments, linked_pr)` into `reconcile_managed_issue_labels`, or move the reserved implementation out of the production library until rollout.
+
+#### DEAD-002 — Final-merge reset helper is never called
+
+- **File:** `scripts/orchestrate_poll_process.sh:751-760`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** `_clear_final_merge_ineligibility_state` claims to be called by the merge-success path but has no caller. Equivalent resets are duplicated inline at `4447-4452` and `10754-10756`.
+- **Recommended fix:** Replace the inline resets with calls to this helper and invoke it from successful final-merge paths, or delete the stale helper and comment.
+
+#### SHELL-001 — ShellCheck-confirmed assignments are never consumed
+
+- **File:** `scripts/review_issue_ledger.sh:67-104,866-917`; `scripts/review_run_reviewers.sh:754-761,3535-3549,3771-3775,4045-4048,4124-4129`
+- **Severity:** Low
+- **Category:** `shellcheck`
+- **Description:** `line_end`, `CURRENT_FLOOR`, `RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE`, `RAW_REVIEWER_SYMBOL_DIFF_SUMMARY_FILE`, `REVIEWER_HEALTH_LAST_OPEN_UNTIL_EPOCH`, and `REVIEWER_ATTEMPT_WD_REASON` are assigned but never read.
+- **Recommended fix:** Remove the assignments, or consume them in the intended range, filtering, health-state, or watchdog telemetry logic. Keep ShellCheck’s SC2034 warning enabled to prevent recurrence.
+
+No TODO, FIXME, HACK, or XXX markers were found in scoped files.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BUG-001, EXPR-001 |
+| Medium | 7 | API-002, API-003, API-004, BATCH-001, DUP-002, EXPR-002, CONSIST-001 |
+| Low | 8 | API-001, DUP-001, DUP-003, DUP-004, DUP-005, DEAD-001, DEAD-002, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2–3 | Medium |
+| API call optimization | 4–6 | Large |
+| Code modularization | 10–14 | Large |
+| Expression size reduction | 2–3 | Medium |
+| Medium/Low fixes | 5–8 | Medium |
