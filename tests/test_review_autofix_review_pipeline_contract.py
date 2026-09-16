@@ -3149,13 +3149,15 @@ def test_reviewed_head_authorization_precedes_ready_labels() -> None:
 
 def test_checkout_captures_initial_head_sha_before_non_push_exits() -> None:
 	block = _step_block("Checkout PR head branch")
-	payload_capture = 'INITIAL_HEAD_SHA="$(jq -r \'.head.sha // ""\' "${PR_PAYLOAD_FILE}" 2>/dev/null || echo "")"'
+	payload_capture = 'INITIAL_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"'
 	export_capture = 'echo "INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}" >> "$GITHUB_ENV"'
 	non_push_exits = [match.start() for match in re.finditer('echo "CAN_PUSH=false"', block)]
+	payload_capture_positions = [match.start() for match in re.finditer(re.escape(payload_capture), block)]
 
 	assert payload_capture in block
 	assert len(non_push_exits) == 3
-	assert block.index(payload_capture) < block.index(export_capture) < min(non_push_exits)
+	assert len(payload_capture_positions) == 1
+	assert payload_capture_positions[0] < block.index(export_capture) < min(non_push_exits)
 	assert block.index('INITIAL_HEAD_SHA="$(git rev-parse HEAD)"') > max(non_push_exits)
 
 
@@ -6365,9 +6367,12 @@ def test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha() -> None:
 		"reviewed-path merge must not fall back to a later live gate SHA"
 	)
 	checkout_block = _step_block("Checkout PR head branch")
-	checked_out_sha_capture = 'INITIAL_HEAD_SHA="$(jq -r \'.head.sha // ""\' "${PR_PAYLOAD_FILE}" 2>/dev/null || echo "")"'
+	checked_out_sha_capture = 'INITIAL_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"'
 	assert checkout_block.find(checked_out_sha_capture) < checkout_block.find('echo "CAN_PUSH=false"'), (
 		"read-only and fork paths must capture their checked-out reviewed SHA before exiting"
+	)
+	assert 'INITIAL_HEAD_SHA="$(jq -r \'.head.sha' not in checkout_block, (
+		"read-only and fork paths must not authorize a later live PR head"
 	)
 	workflow_text = _workflow_text()
 	assert workflow_text.find("      - name: Enable auto-merge on PR") < workflow_text.find(
