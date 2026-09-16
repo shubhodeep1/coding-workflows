@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Review and autofix flows enforce explicit security boundaries around repository access, reviewer consensus, labels, and conflict handling.",
   "timestamps": {
     "created_at": "2026-09-16T04:03:30Z",
