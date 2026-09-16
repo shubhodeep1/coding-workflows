@@ -6224,6 +6224,174 @@ def test_dependency_install_skips_pytest_bootstrap_for_non_pytest_repos() -> Non
 	assert "-m pip install pytest" not in result["calls"], result["calls"]
 
 
+def test_deterministic_skip_merge_is_bound_to_gate_evaluated_head_sha() -> None:
+	# Issue #4109: the skip decision is taken on the head the gate fetched,
+	# but `gh pr merge` was issued by PR number only, so a push that landed
+	# between the gate and the merge (fun-token-multi-chain#498, #527) was
+	# what actually merged. Both skip-path merge calls must carry
+	# --match-head-commit with the gate's head SHA, and an unknown SHA must
+	# refuse the merge instead of merging unbound.
+	wf = _workflow_text()
+	assert "head_sha: ${{ steps.evaluate.outputs.head_sha }}" in wf, (
+		"Gate job must expose head_sha output for deterministic-skip-merge head binding"
+	)
+	assert 'echo "head_sha=${pr_head_sha_gate:-${PR_HEAD_SHA:-}}" >> "${GITHUB_OUTPUT}"' in wf, (
+		"Gate evaluate step must emit the evaluated head SHA (with event-payload fallback) to GITHUB_OUTPUT"
+	)
+	job = _job_block("deterministic-skip-merge")
+	assert "PR_HEAD_SHA_EXPECTED: ${{ needs.gate.outputs.head_sha }}" in job, (
+		"deterministic-skip-merge must consume the gate's head_sha output"
+	)
+	block = _step_block("Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge")
+	assert (
+		'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA_EXPECTED}"'
+		in block
+	), "deterministic-skip squash merge must be bound with --match-head-commit"
+	assert (
+		'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA_EXPECTED}"'
+		in block
+	), "deterministic-skip forward-merge merge-commit path must be bound with --match-head-commit"
+	unbound = re.findall(r'gh pr merge "\$\{PR_NUMBER\}"[^\n]*--auto(?![^\n]*--match-head-commit)', block)
+	assert not unbound, f"unbound gh pr merge call(s) remain on the deterministic-skip path: {unbound}"
+	assert '[[ "${PR_HEAD_SHA_EXPECTED:-}" =~ ^[0-9a-f]{40}$ ]]' in block, (
+		"deterministic-skip-merge must validate the gate head SHA before merging"
+	)
+	assert 'auto_merge_summary="REFUSED (gate head SHA unknown' in block, (
+		"deterministic-skip-merge must refuse (fail closed) when the gate head SHA is unknown"
+	)
+	# The refusal must be evaluated before either merge call.
+	assert block.find('=~ ^[0-9a-f]{40}$') < block.find("gh_retry gh pr merge"), (
+		"head-SHA validation must precede the gh pr merge calls"
+	)
+	assert "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=" in block, (
+		"deterministic-skip-merge must emit the AUTOFIX_DET_SKIP_MERGE_BOUND audit line"
+	)
+
+
+def test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha() -> None:
+	# Same binding on the reviewed path: the helper must merge only the head
+	# the reviewer panel / editor ran against (INITIAL_HEAD_SHA), and must
+	# refuse when that SHA is unavailable.
+	block = _step_block("Enable auto-merge on PR")
+	assert "AUTO_MERGE_EXPECTED_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}" in block, (
+		"Enable auto-merge on PR must pass the reviewed head (INITIAL_HEAD_SHA) to the helper"
+	)
+	helper_text = _auto_merge_helper_text()
+	assert (
+		'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${AUTO_MERGE_EXPECTED_HEAD_SHA}"'
+		in helper_text
+	), "helper squash merge must be bound with --match-head-commit"
+	assert (
+		'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto --match-head-commit "${AUTO_MERGE_EXPECTED_HEAD_SHA}"'
+		in helper_text
+	), "helper forward-merge merge-commit path must be bound with --match-head-commit"
+	unbound = re.findall(r'gh pr merge "\$\{PR_NUMBER\}"[^\n]*--auto(?![^\n]*--match-head-commit)', helper_text)
+	assert not unbound, f"unbound gh pr merge call(s) remain in review_enable_auto_merge.sh: {unbound}"
+	assert '[[ "${AUTO_MERGE_EXPECTED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]' in helper_text, (
+		"helper must validate AUTO_MERGE_EXPECTED_HEAD_SHA before any merge call"
+	)
+	assert helper_text.find('=~ ^[0-9a-f]{40}$') < helper_text.find("gh_retry gh pr merge"), (
+		"helper head-SHA validation must precede the gh pr merge calls"
+	)
+
+
+def _run_auto_merge_helper_with_fake_gh(tmp: Path, *, expected_head_sha: str, head_ref: str = "ai/issue-42") -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
+	"""Run scripts/review_enable_auto_merge.sh with a fake ``gh`` on PATH.
+
+	The fake serves the label and PR-metadata reads the helper makes and
+	records every invocation to ``gh_calls.jsonl`` so the test can assert
+	the exact ``gh pr merge`` argv (or its absence).
+	"""
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir(parents=True, exist_ok=True)
+	calls_path = tmp / "gh_calls.jsonl"
+	fake_gh = bin_dir / "gh"
+	fake_gh.write_text(
+		textwrap.dedent(
+			f"""\
+			#!/usr/bin/env python3
+			import json, sys
+			args = sys.argv[1:]
+			with open({str(calls_path)!r}, "a", encoding="utf-8") as fh:
+			    fh.write(json.dumps(args) + "\\n")
+			if args[:1] == ["api"]:
+			    path = next(a for a in args[1:] if not a.startswith("-"))
+			    if "/labels" in path:
+			        sys.stdout.write("")
+			        sys.exit(0)
+			    if path.endswith("/pulls/42"):
+			        sys.stdout.write(json.dumps({{"head": {{"ref": {head_ref!r}}}, "body": ""}}))
+			        sys.exit(0)
+			    sys.stderr.write("unhandled gh api path: %r\\n" % (path,))
+			    sys.exit(1)
+			if args[:2] == ["pr", "merge"]:
+			    sys.exit(0)
+			sys.stderr.write("unhandled gh invocation: %r\\n" % (args,))
+			sys.exit(1)
+			"""
+		),
+		encoding="utf-8",
+	)
+	fake_gh.chmod(0o755)
+	env = dict(os.environ)
+	env.update(
+		{
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"GITHUB_REPOSITORY": "test-owner/test-repo",
+			"PR_NUMBER": "42",
+			"ENABLE_AUTO_MERGE": "true",
+			"FORWARD_MERGE_FALLBACK_AUTO_MERGE": "true",
+			"ORCH_INTEGRATION_BRANCH_PATTERN": "^orchestrator/project-",
+			"AUTO_MERGE_EXPECTED_HEAD_SHA": expected_head_sha,
+			"GH_TOKEN": "fake-token",
+		}
+	)
+	proc = subprocess.run(
+		["bash", str(AUTO_MERGE_HELPER)],
+		cwd=str(tmp),
+		env=env,
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	calls: list[list[str]] = []
+	if calls_path.exists():
+		calls = [json.loads(line) for line in calls_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+	return proc, calls
+
+
+def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() -> None:
+	reviewed_sha = "5e5f148079b569f2fb248b4cb99eca23883ad452"
+	with tempfile.TemporaryDirectory() as tmp_str:
+		proc, calls = _run_auto_merge_helper_with_fake_gh(Path(tmp_str), expected_head_sha=reviewed_sha)
+		assert proc.returncode == 0, proc.stderr
+		merge_calls = [c for c in calls if c[:2] == ["pr", "merge"]]
+		assert merge_calls == [
+			["pr", "merge", "42", "--repo", "test-owner/test-repo", "--squash", "--auto", "--match-head-commit", reviewed_sha]
+		], merge_calls
+		assert f"AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=42 head_sha={reviewed_sha} action=squash" in proc.stdout, proc.stdout
+
+	# Forward-merge fallback PRs keep the merge-commit path, now head-bound.
+	with tempfile.TemporaryDirectory() as tmp_str:
+		proc, calls = _run_auto_merge_helper_with_fake_gh(
+			Path(tmp_str), expected_head_sha=reviewed_sha, head_ref="auto/forward-merge-stable-20260916"
+		)
+		assert proc.returncode == 0, proc.stderr
+		merge_calls = [c for c in calls if c[:2] == ["pr", "merge"]]
+		assert merge_calls == [
+			["pr", "merge", "42", "--repo", "test-owner/test-repo", "--merge", "--auto", "--match-head-commit", reviewed_sha]
+		], merge_calls
+
+	# Unknown / malformed SHA: refuse without calling gh pr merge at all.
+	for bad in ("", "5e5f1480", "not-a-sha"):
+		with tempfile.TemporaryDirectory() as tmp_str:
+			proc, calls = _run_auto_merge_helper_with_fake_gh(Path(tmp_str), expected_head_sha=bad)
+			assert proc.returncode == 0, proc.stderr
+			assert not [c for c in calls if c[:2] == ["pr", "merge"]], calls
+			assert "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=42" in proc.stdout and "action=refuse reason=head_sha_unavailable" in proc.stdout, proc.stdout
+			assert "::warning::AUTO_MERGE_EXPECTED_HEAD_SHA is empty or not a 40-hex SHA" in proc.stdout, proc.stdout
+
+
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_opencode_full_review_cutover_removes_codex_runtime()
@@ -6318,6 +6486,9 @@ def main() -> int:
 	test_dependency_install_bootstraps_pytest_for_nested_conftest()
 	test_dependency_install_skips_pytest_bootstrap_when_already_importable()
 	test_dependency_install_skips_pytest_bootstrap_for_non_pytest_repos()
+	test_deterministic_skip_merge_is_bound_to_gate_evaluated_head_sha()
+	test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha()
+	test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
 

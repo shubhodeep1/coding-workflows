@@ -254,6 +254,7 @@ jobs:
       claude_branch_review: ${{ steps.evaluate.outputs.claude_branch_review }}
       force_full_review_tier: ${{ steps.evaluate.outputs.force_full_review_tier }}
       head_ref: ${{ steps.evaluate.outputs.head_ref }}
+      head_sha: ${{ steps.evaluate.outputs.head_sha }}
       post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}
       post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}
       post_merge_validate_context_definitely_empty: ${{ steps.evaluate.outputs.post_merge_validate_context_definitely_empty }}
@@ -1080,6 +1081,14 @@ jobs:
           # empty value as "unknown" and fall through (the empty string
           # never matches any suppressor regex, so auto-merge runs as before).
           echo "head_ref=${pr_head_ref}" >> "${GITHUB_OUTPUT}"
+          # Head SHA the gate evaluated, for deterministic-skip-merge to bind
+          # its `gh pr merge` to via --match-head-commit (issue #4109: the
+          # skip decision was taken on the opened-event diff while a push
+          # that landed seconds later was what actually merged). Sourced
+          # from the same /pulls/{n} fetch as head_ref (§15); the event
+          # payload SHA is the fallback for the same-event case. Empty when
+          # neither is known — the consumer refuses to merge on empty.
+          echo "head_sha=${pr_head_sha_gate:-${PR_HEAD_SHA:-}}" >> "${GITHUB_OUTPUT}"
           printf 'post_merge_pr_text_json=%s\n' "${POST_MERGE_PR_TEXT_JSON}" >> "${GITHUB_OUTPUT}"
           printf 'post_merge_linked_issues_json=%s\n' "${POST_MERGE_LINKED_ISSUES_JSON}" >> "${GITHUB_OUTPUT}"
           echo "post_merge_validate_context_definitely_empty=${POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY}" >> "${GITHUB_OUTPUT}"
@@ -1305,6 +1314,13 @@ jobs:
       # (invalid PR number); the suppressor treats empty as "unknown" and
       # falls through to the regular auto-merge call.
       PR_HEAD_REF: ${{ needs.gate.outputs.head_ref }}
+      # Head SHA the gate's skip decision was taken on. Every `gh pr merge`
+      # below is bound to it with --match-head-commit so a push that lands
+      # after the gate evaluated the PR (the diff the reviewers never saw)
+      # cannot ride the skip decision into main; GitHub rejects the merge
+      # and the synchronize-event run re-evaluates the new head. Empty
+      # means the gate could not resolve the head — merge is refused.
+      PR_HEAD_SHA_EXPECTED: ${{ needs.gate.outputs.head_sha }}
     steps:
       - name: Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge
         run: |
@@ -1391,9 +1407,24 @@ jobs:
           fi
 
           # 3) Auto-merge (mirrors codex-agent's "Enable auto-merge on PR" step)
+          #
+          # Head binding (issue #4109): the gate decided the skip on the head
+          # it fetched; by the time this job runs the PR may have received
+          # more commits (observed: fun-token-multi-chain#498 and #527, where
+          # a +2/-2 and a +4/-3 opened-event diff qualified as small_diff and
+          # a code push 13-19 s later was what the unbound merge shipped).
+          # `--match-head-commit` makes GitHub reject the merge unless the
+          # PR head still equals the SHA the gate evaluated. gh forwards it
+          # as expectedHeadOid on both the immediate merge and the auto-merge
+          # enrolment. An empty/malformed SHA refuses the merge (fail closed,
+          # same posture as review_rb_judge.sh) rather than merging unbound.
           auto_merge_summary="disabled by ENABLE_AUTO_MERGE"
           if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
             echo "Auto-merge disabled (ENABLE_AUTO_MERGE != true) — leaving PR for manual merge."
+          elif ! [[ "${PR_HEAD_SHA_EXPECTED:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            auto_merge_summary="REFUSED (gate head SHA unknown — cannot bind merge with --match-head-commit)"
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA_EXPECTED:-unknown} action=refuse reason=head_sha_unavailable"
+            echo "::warning::Deterministic skip fired for PR #${PR_NUMBER} but the gate could not resolve the PR head SHA ('${PR_HEAD_SHA_EXPECTED:-}'). Refusing to enable auto-merge without --match-head-commit so a push that landed after the skip decision cannot merge unreviewed. The next synchronize event (or a workflow_dispatch re-run) re-evaluates the PR."
           elif [ -n "${PR_HEAD_REF}" ] && printf '%s\n' "${PR_HEAD_REF}" | grep -Eq '^auto/forward-merge-stable-'; then
             # Mirror of the forward-merge-fallback handling in the codex-agent
             # "Enable auto-merge on PR" step. Defense in depth: a tiny
@@ -1408,12 +1439,13 @@ jobs:
             # "Create a merge commit" requirement, etc.).
             if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
               echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${PR_HEAD_REF}')..."
-              if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto; then
+              echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA_EXPECTED} action=merge_commit"
+              if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA_EXPECTED}"; then
                 auto_merge_summary="ENABLED (merge commit)"
                 echo "Auto-merge (merge commit) enabled. PR will merge once all required checks pass, preserving stable's ancestry on main."
               else
                 auto_merge_summary="FAILED to enable merge-commit auto-merge (see warnings above)"
-                echo "::warning::Could not enable auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER}. Check that 'Allow merge commits' and 'Allow auto-merge' are enabled in repo settings and branch protection is configured. The PR remains open for manual 'Create a merge commit'."
+                echo "::warning::Could not enable auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER}. Either the PR head moved past ${PR_HEAD_SHA_EXPECTED} after the gate evaluated it (a push landed after the skip decision; the synchronize-event run re-evaluates the new head), or 'Allow merge commits' / 'Allow auto-merge' are not enabled in repo settings / branch protection is not configured. The PR remains open for manual 'Create a merge commit'."
               fi
             else
               auto_merge_summary="SUPPRESSED (forward-merge fallback head ref '${PR_HEAD_REF}', FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true')"
@@ -1421,12 +1453,13 @@ jobs:
             fi
           else
             echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
-            if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto; then
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA_EXPECTED} action=squash"
+            if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA_EXPECTED}"; then
               auto_merge_summary="ENABLED (squash)"
               echo "Auto-merge enabled. PR will merge once all required checks pass."
             else
               auto_merge_summary="FAILED to enable (see warnings above)"
-              echo "::warning::Could not enable auto-merge on PR #${PR_NUMBER}. Check that 'Allow auto-merge' is enabled in repo settings and branch protection is configured."
+              echo "::warning::Could not enable auto-merge on PR #${PR_NUMBER}. Either the PR head moved past ${PR_HEAD_SHA_EXPECTED} after the gate evaluated it (a push landed after the skip decision; the synchronize-event run re-evaluates the new head), or 'Allow auto-merge' is not enabled in repo settings / branch protection is not configured."
             fi
           fi
 
@@ -5892,6 +5925,11 @@ jobs:
           # See the forward-merge-fallback branch below for the full rationale.
           FORWARD_MERGE_FALLBACK_AUTO_MERGE: ${{ vars.FORWARD_MERGE_FALLBACK_AUTO_MERGE || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
+          # Head the reviewer panel / editor cycle ran against (captured by
+          # "Checkout PR head branch"). The helper binds `gh pr merge` to it
+          # with --match-head-commit so a push that lands during the review
+          # cannot ride this run's clean verdict into main (issue #4109).
+          AUTO_MERGE_EXPECTED_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
         run: |
           bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"
 
