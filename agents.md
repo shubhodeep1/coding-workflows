@@ -392,7 +392,7 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   inputs (derived from the token budgets, the request-body-bound maximum image
   count, and `MAX_REQUESTS x MAX_REQUEST_PRICE` when unset). Reservations are settled to
   `usage.prompt_tokens` / `usage.input_tokens` like the output true-up; an
-  an observed upstream error response or pre-forward failure settles input and
+  observed upstream error response or pre-forward failure settles input and
   cost to zero, while an ambiguous transport failure after forwarding starts
   keeps the full reservation. The defaults are non-binding
   by construction; operators tighten the vars to enforce a phase budget. The
