@@ -2859,11 +2859,11 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   # (see the snapshot above) cannot be helped by another attempt or by the
   # fallback model: the same broker instance answers them, and its policy
   # decision is deterministic for the rest of this run. Log the rejection,
-  # emit the alert with its own failure class so the operator sees the real
-  # cause instead of "capacity-limited", and leave the loop. The fallback
-  # summary below still classifies this as recoverable_failure (a fresh run
-  # gets a fresh broker), so the workflow's partial-finalize handling and
-  # the no-op validator sentinels stay exactly as before.
+  # emit the broker-specific failure class on non-final attempts, preserve
+  # the existing attempt_failed class on the final attempt, and leave the
+  # loop. The fallback summary below still classifies this as
+  # recoverable_failure (a fresh run gets a fresh broker), so the workflow's
+  # partial-finalize handling and no-op validator sentinels stay unchanged.
   attempt_broker_rejections_after="${attempt_broker_rejections_before}"
   if command -v model_provider_broker_policy_rejection_count >/dev/null 2>&1; then
     attempt_broker_rejections_after="$(model_provider_broker_policy_rejection_count 2>/dev/null || echo "${attempt_broker_rejections_before}")"
@@ -2875,7 +2875,11 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
       attempt_broker_last_rejection="$(model_provider_broker_last_policy_rejection 2>/dev/null || true)"
     fi
     echo "EDITOR_BROKER_POLICY_REJECTION attempt=${attempt} model=${EDITOR_ATTEMPT_MODEL} rc=${cmd_rc} new_rejections=$(( attempt_broker_rejections_after - attempt_broker_rejections_before )) total_rejections=${attempt_broker_rejections_after} ${attempt_broker_last_rejection:-status=unknown} — the model provider broker rejected this attempt's requests; further attempts share the same broker policy, breaking out of the retry loop."
-    opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" broker_policy_rejection || true
+    if [ "${attempt}" -lt "${editor_max_attempts}" ]; then
+      opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" broker_policy_rejection || true
+    else
+      opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" attempt_failed || true
+    fi
     rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file_cleanup_path}"
     break
   fi

@@ -433,9 +433,10 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   `model_provider_broker_last_policy_rejection` prints the newest one;
   `scripts/review_apply_fixes.sh` snapshots the count before each editor
   attempt and, when a failed attempt recorded new rejections, logs
-  `EDITOR_BROKER_POLICY_REJECTION ...`, emits the `broker_policy_rejection`
-  failure class, and leaves the retry loop instead of spending the remaining
-  attempts and the capacity fallback model on the same broker decision
+  `EDITOR_BROKER_POLICY_REJECTION ...`, emits `broker_policy_rejection` on a
+  non-final attempt or preserves `attempt_failed` on the final attempt, and
+  leaves the retry loop instead of spending the remaining attempts and the
+  capacity fallback model on the same broker decision
   (PR #4077 runs 34663517732 / 34654303940 lost ~18 minutes per round to
   HTTP 429 replays). The fallback summary stays `recoverable_failure`.
 - Same-UID model launches run inside a private PID namespace with a fresh

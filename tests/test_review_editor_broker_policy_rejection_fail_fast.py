@@ -11,10 +11,10 @@ broker had already made deterministically.
 `scripts/review_apply_fixes.sh` now snapshots
 `model_provider_broker_policy_rejection_count` before every attempt and,
 when a failed attempt recorded new 4xx rejections, logs
-`EDITOR_BROKER_POLICY_REJECTION ...`, emits the `broker_policy_rejection`
-failure class, and breaks out of the loop. The partial-finalize fallback
-summary is unchanged (still `recoverable_failure`), so the workflow-side
-sentinels stay in lockstep.
+`EDITOR_BROKER_POLICY_REJECTION ...`, emits `broker_policy_rejection` before
+the final attempt or preserves `attempt_failed` on the final attempt, and
+breaks out of the loop. The partial-finalize fallback summary is unchanged
+(still `recoverable_failure`), so the workflow-side sentinels stay in lockstep.
 """
 
 from __future__ import annotations
@@ -87,10 +87,15 @@ def test_editor_loop_breaks_on_new_policy_rejections_after_a_failed_attempt() ->
 	assert '[ "${cmd_rc}" -ne 0 ] \\' in block
 	assert '[ "${attempt_broker_rejections_after}" -gt "${attempt_broker_rejections_before}" ] 2>/dev/null; then' in block
 	assert "EDITOR_BROKER_POLICY_REJECTION attempt=${attempt} model=${EDITOR_ATTEMPT_MODEL} rc=${cmd_rc} new_rejections=" in block
-	assert 'opencode_emit_failure_alert review_apply_fixes writer "${EDITOR_ATTEMPT_MODEL}" "${cmd_rc}" broker_policy_rejection || true' in block
-	assert 'if [ "${attempt}" -lt "${editor_max_attempts}" ]; then' not in block
+	assert re.search(
+		r'if \[ "\$\{attempt\}" -lt "\$\{editor_max_attempts\}" \]; then\n'
+		r'\s+opencode_emit_failure_alert review_apply_fixes writer "\$\{EDITOR_ATTEMPT_MODEL\}" "\$\{cmd_rc\}" broker_policy_rejection \|\| true\n'
+		r'\s+else\n'
+		r'\s+opencode_emit_failure_alert review_apply_fixes writer "\$\{EDITOR_ATTEMPT_MODEL\}" "\$\{cmd_rc\}" attempt_failed \|\| true\n'
+		r'\s+fi\n',
+		block,
+	)
 	assert re.search(r'rm -f "\$\{tmp_output\}" "\$\{tmp_err\}" "\$\{attempt_prompt_file_cleanup_path\}"\n\s+break\n', block)
-	assert loop.index('broker_policy_rejection || true') < loop.index('"${cmd_rc}" attempt_failed || true')
 	# The loop never sets a new partial-finalize reason, so the fallback summary
 	# and the workflow's `recoverable_failure` sentinel stay in lockstep.
 	assert "editor_partial_finalize_reason" not in block
