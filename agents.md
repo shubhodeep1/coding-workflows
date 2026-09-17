@@ -366,6 +366,16 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   validated `job.workflow_repository` plus immutable `job.workflow_sha`.
   Missing or malformed workflow identity fails closed; `stable` and `main`
   support fallbacks are not permitted.
+- Source workflows and `.github/actions/setup-runtime/action.yml` pin every
+  `actions/setup-node`, `actions/setup-python`, `astral-sh/setup-uv`, and
+  `jlumbroso/free-disk-space` use to its reviewed full SHA;
+  `test_remote_codex_runtime_actions_are_immutable` enforces the complete set.
+- `issue_pr_status.yml` validates `job.workflow_repository` and
+  `job.workflow_sha`, verifies the support checkout's exact HEAD, and stages
+  memory plus Telegram helpers once from that immutable source. Configured
+  Telegram paths fail closed when the staged helper is absent or differs from
+  the verified source; no `stable`, `main`, or consumer-local executable
+  fallback is permitted.
 
 ## Model credential isolation
 
@@ -376,7 +386,41 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   workflow-log analysis, and conflict resolution. Agent environments contain an ephemeral broker token, never the
   upstream provider key or GitHub/state/Telegram credentials. Broker instances
   accept at most `MODEL_PROVIDER_BROKER_MAX_REQUESTS` requests (default `100`,
-  valid range `1..100`) and fail closed with HTTP 429 after exhaustion.
+  valid range `1..100`) and fail closed with HTTP 429 after exhaustion. Each
+  session also enforces exact model IDs, a per-request output limit (default
+  `16384`), a total output-token budget (default `1638400`, i.e. `100 x 16384`), and
+  server-controlled provider price ceilings before forwarding. Input spend is
+  budgeted too (#4090): `MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS` (default
+  `16777216`, one token per byte of the 16 MiB body cap) bounds one request's
+  conservative input reservation, `MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS`
+  (default `1677721600`, `100 x 16777216`) bounds the session, and
+  `MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD` bounds the worst-case USD cost of
+  all admitted requests at the price ceilings, including recognized image
+  inputs (derived from the token budgets, the request-body-bound maximum image
+  count, and `MAX_REQUESTS x MAX_REQUEST_PRICE` when unset). Reservations are settled to
+  `usage.prompt_tokens` / `usage.input_tokens` like the output true-up; an
+  observed upstream error response or pre-forward failure settles input and
+  cost to zero, while an ambiguous transport failure after forwarding starts
+  keeps the full reservation. The defaults are non-binding
+  by construction; operators tighten the vars to enforce a phase budget. The
+  three vars are exported by every model-facing workflow via
+  `${{ vars.<NAME> || '<default>' }}` and passed through
+  `model_provider_broker_start` in `scripts/codex_helpers.sh`. Active clients
+  are capped at 8 and each accepted socket has a 30-second read timeout.
+  Price defaults are `MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE=10` USD per
+  million input tokens, `MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE=30` USD
+  per million output tokens, `MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE=0.10`
+  USD per request, and `MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE=1` USD per image.
+  Request values can only lower those ceilings; malformed, negative, or
+  non-finite configured values prevent broker startup. The total
+  budget counts tokens the provider actually generated: a request is charged
+  its full per-request ceiling only while it is in flight and is trued up to
+  the provider-reported `usage` once its response completes (streamed chat
+  requests are opted into `stream_options.include_usage` for this). A
+  cut-off or usage-less response keeps the full reservation, as does an
+  ambiguous transport failure after forwarding starts; an observed upstream
+  error status or pre-forward failure settles at zero. An agentic phase is
+  therefore bounded by real spend rather than by `total / per-request` turns.
   The first 100 rejections in each HTTP error class (4xx policy and 5xx
   upstream relay) are mirrored as a `MODEL_PROVIDER_BROKER_REJECT status=<n>
   path=<path> message=<json>` stderr line and appended as one JSON line to
@@ -394,6 +438,10 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   attempts and the capacity fallback model on the same broker decision
   (PR #4077 runs 34663517732 / 34654303940 lost ~18 minutes per round to
   HTTP 429 replays). The fallback summary stays `recoverable_failure`.
+- Same-UID model launches run inside a private PID namespace with a fresh
+  `/proc`, so danger-full-access agents retain their existing workspace file
+  permissions but cannot inspect the secret-bearing workflow or broker process
+  environments. Missing `sudo`/`unshare` support fails closed before launch.
 - Read-only Codex phases run with `--sandbox read-only` and web search disabled.
   Writer phases retain only their required workspace permissions in a sanitized
   environment. The conflict writer additionally runs as `nobody` with temporary
@@ -402,6 +450,26 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
 - Resolver retry tiers trust only signed
   `AUTOFIX_RESOLVER_RETRY_STATE_V2` producer comments. User-editable V1 PR-body
   markers remain recognizable as legacy text but cannot weaken verification.
+  The trusted actuator persists the marker comment ID as an untrusted commit
+  status on the signed head SHA. The poller searches up to 10 combined-status
+  pages for that context, then verifies the directly fetched comment's producer,
+  context, and signature before use; incomplete status history defers mutation.
+  A non-escalated locator cannot override
+  the trusted `ai:resolver-escalated` label; that mismatch falls back to
+  highest-generation selection. A missing or invalid locator likewise scans up
+  to 10 pages and 32 MiB, then refreshes the locator. Lookup order in
+  `heal_integration_branch_conflict` is fixed (#4091): the PR-body
+  `AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1` hint first (one API call, untrusted),
+  then the `ai/resolver-retry-state-locator` commit status whenever the body
+  hint is absent, stale, or fails verification, and only then bounded comment
+  discovery. A status locator that names the same comment the body hint
+  already failed on is not re-fetched. The body hint can therefore no longer
+  skip the trusted lookup, which is what let a forged locator plus a comment
+  flood defer every tick. The actuator reuses the review
+  pipeline's collected comment snapshot. Legacy PR-body locators remain readable,
+  but new locator writes never replace PR descriptions. An unproven history,
+  API failure, or verification uncertainty defers
+  mutation to the next poll tick.
 - `scripts/workflow_log_output_contract.py` validates and atomically publishes
   model report candidates for analysis, retro, deep-audit, and API-redundancy
   modes before any tracked report or tracker comment consumes them.
@@ -637,6 +705,13 @@ and shipped:
 - `FORCE_MERGE_BYPASS`
 - `BACKPRESSURE_TRIGGERED`
 - `BACKPRESSURE_CLEARED`
+- `RESOLVER_AGENT_HOME_PREFLIGHT` (conflict resolver: identity, owner, mode,
+  ACLs and mount of `RUNTIME_DIR`, plus existing sandbox-home state and
+  explicit symlink denial, logged
+  before the sandbox-home `mkdir`; broker startup completes before that home
+  is transferred to the unprivileged resolver identity)
+- `RESOLVER_AGENT_HOME_PREFLIGHT_DENIED` (fail-closed `::error::` when
+  `RUNTIME_DIR` is unusable or an existing sandbox home is unusable or a symlink)
 - `RECOVERY_BUDGET_ACCOUNTING`
 - `VALIDATION_DISCOVERY_STARTED`
 - `VALIDATION_DISCOVERY_AGREE`
@@ -757,6 +832,8 @@ LOG_PREFIX.name=HARNESS_ERROR_DETECTED
 LOG_PREFIX.name=FORCE_MERGE_BYPASS
 LOG_PREFIX.name=BACKPRESSURE_TRIGGERED
 LOG_PREFIX.name=BACKPRESSURE_CLEARED
+LOG_PREFIX.name=RESOLVER_AGENT_HOME_PREFLIGHT
+LOG_PREFIX.name=RESOLVER_AGENT_HOME_PREFLIGHT_DENIED
 LOG_PREFIX.name=RECOVERY_BUDGET_ACCOUNTING
 LOG_PREFIX.name=VALIDATION_DISCOVERY_STARTED
 LOG_PREFIX.name=VALIDATION_DISCOVERY_AGREE

@@ -53,6 +53,27 @@ def test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lif
 	assert "revalidate_events.v1.json" in wf
 
 
+def test_orchestrate_run_start_support_is_immutable_and_fail_closed() -> None:
+	wf = _workflow(ORCHESTRATE_WF)
+	checkout = wf.split("- name: Checkout workflow support source for run-start", 1)[1].split(
+		"- name: Stage workflow memory support files for run-start", 1
+	)[0]
+	stage = wf.split("- name: Stage workflow memory support files for run-start", 1)[1].split(
+		"- name: Record orchestration run start", 1
+	)[0]
+	record = wf.split("- name: Record orchestration run start", 1)[1].split(
+		"- name: Create runtime workspace", 1
+	)[0]
+	assert "id: run_start_support_checkout" in checkout
+	assert "continue-on-error: true" in checkout
+	assert "ref: ${{ env.SCRIPT_REF }}" in checkout
+	assert "id: run_start_support_stage" in stage
+	assert "if: steps.run_start_support_checkout.outcome == 'success'" in stage
+	assert "::error::Immutable support source checkout unavailable" in stage
+	assert "::error::Missing required immutable run-start support script" in stage
+	assert "if: steps.run_start_support_checkout.outcome == 'success' && steps.run_start_support_stage.outcome == 'success'" in record
+
+
 def test_nag_reminder_assets_and_judge_wiring_are_present() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")

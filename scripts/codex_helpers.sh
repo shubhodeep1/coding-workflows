@@ -150,7 +150,8 @@ codex_config_assemble()
 model_provider_broker_start()
 {
 	local scripts_dir="" broker_path="" ready_file="" pid_file="" broker_pid="" broker_runtime_dir="" rejections_file=""
-	local ready_deadline=0 ready_json=""
+	local ready_deadline=0 ready_json="" broker_allowed_models_csv="" broker_model=""
+	local -a broker_policy_args=() broker_allowed_models=() broker_budget_args=()
 	scripts_dir="$(_codex_helpers_resolve_scripts_dir "${CODEX_HELPERS_SCRIPTS_DIR:-}")"
 	broker_path="${scripts_dir}/model_provider_broker.py"
 	ready_file="${MODEL_PROVIDER_BROKER_READY_FILE:-${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/model-provider-broker-ready.json}"
@@ -159,6 +160,32 @@ model_provider_broker_start()
 	if [ ! -r "${broker_path}" ] || [ -z "${OPENROUTER_API_KEY:-}" ]; then
 		echo "::error::model provider broker prerequisites are unavailable" >&2
 		return 1
+	fi
+	broker_allowed_models_csv="${MODEL_PROVIDER_BROKER_ALLOWED_MODELS:-${MODEL_EDITOR:-}}"
+	IFS=',' read -r -a broker_allowed_models <<< "${broker_allowed_models_csv}"
+	for broker_model in "${broker_allowed_models[@]}"; do
+		broker_model="${broker_model#"${broker_model%%[![:space:]]*}"}"
+		broker_model="${broker_model%"${broker_model##*[![:space:]]}"}"
+		if ! [[ "${broker_model}" =~ ^[A-Za-z0-9._:-]+/[A-Za-z0-9._:-]+$ ]]; then
+			echo "::error::model provider broker allowed-model policy is missing or invalid" >&2
+			return 1
+		fi
+		broker_policy_args+=(--allowed-model "${broker_model}")
+	done
+	if [ "${#broker_policy_args[@]}" -eq 0 ]; then
+		echo "::error::model provider broker allowed-model policy is missing or invalid" >&2
+		return 1
+	fi
+	# Input-token and cost budgets (#4090). The token ceilings carry explicit
+	# defaults that equal the broker's derived worst case; the cost ceiling is
+	# passed only when configured so the broker derives it from the token
+	# budgets and price ceilings otherwise (see model_provider_broker.py main).
+	broker_budget_args=(
+		--max-input-tokens "${MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS:-16777216}"
+		--max-total-input-tokens "${MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS:-1677721600}"
+	)
+	if [ -n "${MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD:-}" ]; then
+		broker_budget_args+=(--max-total-cost-usd "${MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD}")
 	fi
 	# Per-broker rejection log (see model_provider_broker.py record_rejection):
 	# one JSON line per rejected request, read back by
@@ -179,7 +206,15 @@ model_provider_broker_start()
 		OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
 		python3 "${broker_path}" --ready-file "${ready_file}" \
 		--rejections-file "${rejections_file}" \
-		--max-requests "${MODEL_PROVIDER_BROKER_MAX_REQUESTS:-100}" &
+		--max-requests "${MODEL_PROVIDER_BROKER_MAX_REQUESTS:-100}" \
+		--max-output-tokens "${MODEL_PROVIDER_BROKER_MAX_OUTPUT_TOKENS:-16384}" \
+		--max-total-output-tokens "${MODEL_PROVIDER_BROKER_MAX_TOTAL_OUTPUT_TOKENS:-1638400}" \
+		--max-prompt-price "${MODEL_PROVIDER_BROKER_MAX_PROMPT_PRICE:-10}" \
+		--max-completion-price "${MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE:-30}" \
+		--max-request-price "${MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE:-0.10}" \
+		--max-image-price "${MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE:-1}" \
+		"${broker_budget_args[@]}" \
+		"${broker_policy_args[@]}" &
 	broker_pid=$!
 	printf '%s\n' "${broker_pid}" > "${pid_file}"
 	chmod 0600 "${pid_file}"
@@ -206,15 +241,12 @@ model_provider_broker_start()
 
 model_provider_broker_stop()
 {
-	local broker_pid=""
-	if [ -s "${MODEL_PROVIDER_BROKER_ACL_BACKUP:-/nonexistent}" ] && command -v setfacl >/dev/null 2>&1; then
-		setfacl --restore="${MODEL_PROVIDER_BROKER_ACL_BACKUP}" >/dev/null 2>&1 || return 1
-	fi
+	local broker_pid="" cleanup_rc=0
 	if [ -n "${MODEL_PROVIDER_BROKER_PID_FILE:-}" ] && [ -r "${MODEL_PROVIDER_BROKER_PID_FILE}" ]; then
 		broker_pid="$(cat "${MODEL_PROVIDER_BROKER_PID_FILE}")"
 	fi
 	if [[ "${broker_pid}" =~ ^[1-9][0-9]*$ ]] && kill -0 "${broker_pid}" 2>/dev/null; then
-		kill -TERM "${broker_pid}" 2>/dev/null || return 1
+		kill -TERM "${broker_pid}" 2>/dev/null || cleanup_rc=1
 		for _broker_wait in $(seq 1 50); do
 			kill -0 "${broker_pid}" 2>/dev/null || break
 			if [ -r "/proc/${broker_pid}/stat" ] && grep -q ') Z ' "/proc/${broker_pid}/stat"; then
@@ -224,20 +256,35 @@ model_provider_broker_stop()
 		done
 		if kill -0 "${broker_pid}" 2>/dev/null \
 			&& { [ ! -r "/proc/${broker_pid}/stat" ] || ! grep -q ') Z ' "/proc/${broker_pid}/stat"; }; then
-			echo "::error::model provider broker did not stop cleanly" >&2
-			return 1
+			kill -KILL "${broker_pid}" 2>/dev/null || cleanup_rc=1
+			for _broker_wait in $(seq 1 20); do
+				kill -0 "${broker_pid}" 2>/dev/null || break
+				if [ -r "/proc/${broker_pid}/stat" ] && grep -q ') Z ' "/proc/${broker_pid}/stat"; then
+					break
+				fi
+				/bin/sleep 0.1
+			done
+			if kill -0 "${broker_pid}" 2>/dev/null \
+				&& { [ ! -r "/proc/${broker_pid}/stat" ] || ! grep -q ') Z ' "/proc/${broker_pid}/stat"; }; then
+				echo "::error::model provider broker did not stop cleanly" >&2
+				cleanup_rc=1
+			fi
 		fi
 		wait "${broker_pid}" 2>/dev/null || true
 	fi
-	[ -z "${MODEL_PROVIDER_BROKER_PID_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_PID_FILE}"
-	[ -z "${MODEL_PROVIDER_BROKER_READY_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_READY_FILE}"
-	[ -z "${MODEL_PROVIDER_BROKER_REJECTIONS_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_REJECTIONS_FILE}"
+	if [ -s "${MODEL_PROVIDER_BROKER_ACL_BACKUP:-/nonexistent}" ] && command -v setfacl >/dev/null 2>&1; then
+		setfacl --restore="${MODEL_PROVIDER_BROKER_ACL_BACKUP}" >/dev/null 2>&1 || cleanup_rc=1
+	fi
+	[ -z "${MODEL_PROVIDER_BROKER_PID_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_PID_FILE}" || cleanup_rc=1
+	[ -z "${MODEL_PROVIDER_BROKER_READY_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_READY_FILE}" || cleanup_rc=1
+	[ -z "${MODEL_PROVIDER_BROKER_REJECTIONS_FILE:-}" ] || rm -f -- "${MODEL_PROVIDER_BROKER_REJECTIONS_FILE}" || cleanup_rc=1
 	if [ -n "${MODEL_PROVIDER_BROKER_AGENT_HOME:-}" ] && [ -d "${MODEL_PROVIDER_BROKER_AGENT_HOME}" ] \
 		&& [ "$(stat -c %u "${MODEL_PROVIDER_BROKER_AGENT_HOME}")" != "$(id -u)" ]; then
-		sudo -n chown -R "$(id -u):$(id -g)" "${MODEL_PROVIDER_BROKER_AGENT_HOME}" || return 1
+		sudo -n chown -R "$(id -u):$(id -g)" "${MODEL_PROVIDER_BROKER_AGENT_HOME}" || cleanup_rc=1
 	fi
 	unset MODEL_PROVIDER_BROKER_BASE_URL MODEL_PROVIDER_BROKER_TOKEN MODEL_PROVIDER_BROKER_PID_FILE MODEL_PROVIDER_BROKER_READY_FILE MODEL_PROVIDER_BROKER_AGENT_HOME MODEL_PROVIDER_BROKER_ACL_BACKUP MODEL_PROVIDER_BROKER_ISOLATION_USER
 	unset MODEL_PROVIDER_BROKER_ACL_CAPTURED MODEL_PROVIDER_BROKER_REJECTIONS_FILE
+	return "${cleanup_rc}"
 }
 
 # Count the deterministic policy rejections (HTTP 4xx) the running broker has
@@ -447,11 +494,22 @@ model_provider_broker_prepare_codex_readonly()
 
 model_provider_broker_exec_sanitized()
 {
+	local model_process_uid="" model_process_gid=""
 	if [ -z "${MODEL_PROVIDER_BROKER_TOKEN:-}" ] || [ -z "${MODEL_PROVIDER_BROKER_BASE_URL:-}" ]; then
 		echo "::error::model provider broker is not ready; refusing direct-provider fallback" >&2
 		return 1
 	fi
-	env -i \
+	if ! command -v sudo >/dev/null 2>&1 || ! command -v unshare >/dev/null 2>&1 || ! sudo -n true >/dev/null 2>&1; then
+		echo "::error::sudo and unshare are required for model process isolation" >&2
+		return 1
+	fi
+	model_process_uid="$(id -u)"
+	model_process_gid="$(id -g)"
+	# Keep the current file-system identity while replacing /proc with a PID
+	# namespace that cannot enumerate the secret-bearing workflow or broker.
+	# --kill-child prevents a cancelled outer job from orphaning namespace PID 1.
+	sudo -n unshare --fork --pid --mount-proc --kill-child=KILL \
+		--setuid "${model_process_uid}" --setgid "${model_process_gid}" -- env -i \
 		HOME="${MODEL_PROVIDER_BROKER_AGENT_HOME:?MODEL_PROVIDER_BROKER_AGENT_HOME is required}" \
 		PATH="${PATH}" \
 		CODEX_HOME="${CODEX_HOME:-${HOME:-/root}/.codex}" \

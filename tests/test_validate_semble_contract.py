@@ -255,7 +255,7 @@ def test_validate_workflow_bootstraps_and_exports_semble_state() -> None:
 	assert 'echo "serena_enabled=${serena_enabled}"' in wf
 	assert 'echo "bootstrap_enabled=${bootstrap_enabled}"' in wf
 	assert "- name: setup-uv\n        if: steps.semble_gate.outputs.bootstrap_enabled == 'true'" in wf
-	assert "uses: astral-sh/setup-uv@v7" in wf
+	assert "uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78" in wf
 	assert "- name: Install semble\n        if: steps.semble_gate.outputs.bootstrap_enabled == 'true'" in wf
 	assert 'echo "::notice::VALIDATION_USE_SEMBLE is not true; skipping Semble install."' in wf
 	assert "bash scripts/install_semble.sh" in wf

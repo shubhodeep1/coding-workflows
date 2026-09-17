@@ -96,6 +96,16 @@ def test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_asset
 		assert snippet in wf
 
 
+def test_validate_runtime_action_comes_from_validated_workflow_sha() -> None:
+	wf = _workflow_text()
+	assert "setup-runtime@stable" not in wf
+	assert "uses: ./.codex-workflow-runtime/.github/actions/setup-runtime" in wf
+	assert "WORKFLOW_DEFINITION_REPOSITORY: ${{ job.workflow_repository }}" in wf
+	assert "WORKFLOW_DEFINITION_SHA: ${{ job.workflow_sha }}" in wf
+	assert "ref: ${{ job.workflow_sha }}" in wf
+	assert "job.workflow_sha is not an immutable 40-character commit SHA" in wf
+
+
 def test_validate_workflow_bootstrap_lists_prompt_assembly_assets() -> None:
 	wf = _workflow_text()
 	for snippet in (
@@ -241,6 +251,7 @@ def test_run_validation_repo_checks_default_commands_do_not_reparse_shell_metach
 
 def main() -> int:
 	test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets()
+	test_validate_runtime_action_comes_from_validated_workflow_sha()
 	test_validate_workflow_bootstrap_lists_prompt_assembly_assets()
 	test_stage_workflow_support_helper_runs_overlay_loader_for_validate()
 	test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_main_checkout()

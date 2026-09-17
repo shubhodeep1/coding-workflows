@@ -563,7 +563,7 @@ if [ ! -r "${CODEX_HELPERS_PATH}" ] || ! source "${CODEX_HELPERS_PATH}" 2>/dev/n
 	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} missing=codex_helpers failopen=1 output_bytes=0"
 	exit 0
 fi
-if ! model_provider_broker_start; then
+if ! MODEL_PROVIDER_BROKER_ALLOWED_MODELS="${REVIEW_CONSOLIDATOR_MODEL}" model_provider_broker_start; then
 	: > "${CONSOLIDATOR_RAW_FILE}"
 	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} broker_start_failed=1 failopen=1 output_bytes=0"
 	exit 0

@@ -427,16 +427,37 @@ def test_resolver_retry_comment_lookups_are_bounded() -> None:
 	actuator = (REPO_ROOT / "scripts" / "review_conflict_actuate.sh").read_text(encoding="utf-8")
 	prepare = (REPO_ROOT / "scripts" / "review_conflict_prepare.sh").read_text(encoding="utf-8")
 	metadata = (REPO_ROOT / "scripts" / "review_collect_pr_metadata.sh").read_text(encoding="utf-8")
-	bounded_endpoint = "comments?sort=updated&direction=desc&per_page=100"
+	bounded_endpoint = "comments?per_page=100&page=${resolver_retry_comments_page}"
 	assert bounded_endpoint in poller
-	assert bounded_endpoint in actuator
-	poller_lookup = poller.split('local resolver_retry_comments_json=""', 1)[1].split("resolver_retry_state=", 1)[0]
+	assert "resolver_retry_comments_max_pages=10" in poller
+	assert "resolver_retry_comments_max_bytes=$((32 * 1024 * 1024))" in poller
+	assert "AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1" in poller
+	assert 'issues/comments/${resolver_retry_locator_id}' in poller
+	poller_lookup = poller.split('local resolver_retry_comments_pages_file=""', 1)[1].split('if [ -n "${resolver_retry_state}" ]', 1)[0]
 	assert "--paginate" not in poller_lookup
-	assert 'gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments' not in actuator
+	assert '--comments-json "${PR_ISSUE_COMMENTS_FILE}"' in actuator
+	assert 'issues/${PR_NUMBER}/comments?per_page=100' not in actuator
 	assert 'api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments"' in metadata
+	assert "select-resolver-retry" in poller
+	assert "select-resolver-retry" in prepare
+	assert "select-resolver-retry" in actuator
+	assert "persisted_comment_id=" in actuator
+	assert 'commits/${final_pr_head_sha}/status?per_page=100&page=${resolver_retry_status_page}' in poller
+	assert "resolver_retry_status_max_pages=10" in poller
+	assert 'status locator history exceeds the bounded scan' in poller
+	assert 'statuses/${final_pr_head_sha}' in poller
+	assert 'statuses/${live_head_sha}' in actuator
+	assert 'context=ai/resolver-retry-state-locator' in poller
+	assert 'context=ai/resolver-retry-state-locator' in actuator
+	assert 'pulls/${final_pr}" --input' not in poller
+	assert 'pulls/${PR_NUMBER}" --input' not in actuator
+	escalation_update = 'gh_retry gh issue edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:resolver-escalated"'
+	locator_update = '-X POST "repos/${GITHUB_REPOSITORY}/statuses/${live_head_sha}"'
+	assert actuator.index(escalation_update) < actuator.index(locator_update)
+	assert "continuing after the authoritative comment update" in actuator
 	assert "RESOLVER_RETRY_STATE_COMMENT_ID=${RESOLVER_RETRY_STATE_COMMENT_ID}" in prepare
 	assert 'existing_comment_id="${RESOLVER_RETRY_STATE_COMMENT_ID:-}"' in actuator
-	assert actuator.index('existing_comment_id="${RESOLVER_RETRY_STATE_COMMENT_ID:-}"') < actuator.index(bounded_endpoint)
+	assert actuator.index('existing_comment_id="${RESOLVER_RETRY_STATE_COMMENT_ID:-}"') < actuator.index('PR_ISSUE_COMMENTS_FILE')
 
 
 def test_resolve_script_wires_tier_selection_and_verifier_args() -> None:
