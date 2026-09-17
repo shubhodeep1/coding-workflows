@@ -563,23 +563,53 @@ model_provider_broker_exec_sanitized()
 		"$@"
 }
 
-model_provider_broker_exec_unprivileged()
+# model_provider_broker_unprivileged_argv_into <array_name> <isolation_user> <cmd...>
+#
+# Fills the caller's array (by name) with the exact argv that
+# model_provider_broker_exec_unprivileged would execute:
+#
+#   sudo -n -u <isolation_user> -- env -i HOME=... PATH=... <cmd...>
+#
+# Callers that must stay privileged themselves but supervise an
+# unprivileged model process (scripts/codex_stall_guard.sh,
+# scripts/codex_heartbeat.sh) pass this argv as the guard's child so the
+# guard runs as the workflow runner, keeps writing its runner-owned
+# stdout/status/heartbeat files, and recognises the `sudo -n -u <user> --`
+# prefix to enter its privileged process-group signalling mode. Nesting
+# the guard *inside* the sudo instead makes it run as <isolation_user>,
+# which cannot open the runner's mode-0600 mktemp files (PR #4088 review
+# runs 35182160034 and earlier: `PermissionError: [Errno 13] Permission
+# denied: '/tmp/tmp.XXXX'` from `_open_output`).
+#
+# Returns 1 without touching the array when the broker is not ready.
+model_provider_broker_unprivileged_argv_into()
 {
-	local isolation_user="${1:?isolation user required}"
-	shift
+	local unprivileged_argv_target_name="${1:?target array name required}"
+	local isolation_user="${2:?isolation user required}"
+	shift 2
 	if [ -z "${MODEL_PROVIDER_BROKER_TOKEN:-}" ] || [ -z "${MODEL_PROVIDER_BROKER_BASE_URL:-}" ]; then
 		echo "::error::model provider broker is not ready; refusing unprivileged direct-provider fallback" >&2
 		return 1
 	fi
-	sudo -n -u "${isolation_user}" -- env -i \
-		HOME="${MODEL_PROVIDER_BROKER_AGENT_HOME:?MODEL_PROVIDER_BROKER_AGENT_HOME is required}" \
-		PATH="${PATH}" \
-		XDG_CACHE_HOME="${MODEL_PROVIDER_BROKER_AGENT_HOME}/.cache" \
-		CODEX_HOME="${CODEX_HOME:-${MODEL_PROVIDER_BROKER_AGENT_HOME}/.codex}" \
-		TMPDIR="${MODEL_PROVIDER_BROKER_AGENT_HOME}/tmp" \
-		LANG="${LANG:-C.UTF-8}" \
-		LC_ALL="${LC_ALL:-C.UTF-8}" \
-		NO_PROXY="127.0.0.1,localhost" \
-		OPENROUTER_API_KEY="${MODEL_PROVIDER_BROKER_TOKEN}" \
+	local -n unprivileged_argv_target="${unprivileged_argv_target_name}"
+	unprivileged_argv_target=(
+		sudo -n -u "${isolation_user}" -- env -i
+		HOME="${MODEL_PROVIDER_BROKER_AGENT_HOME:?MODEL_PROVIDER_BROKER_AGENT_HOME is required}"
+		PATH="${PATH}"
+		XDG_CACHE_HOME="${MODEL_PROVIDER_BROKER_AGENT_HOME}/.cache"
+		CODEX_HOME="${CODEX_HOME:-${MODEL_PROVIDER_BROKER_AGENT_HOME}/.codex}"
+		TMPDIR="${MODEL_PROVIDER_BROKER_AGENT_HOME}/tmp"
+		LANG="${LANG:-C.UTF-8}"
+		LC_ALL="${LC_ALL:-C.UTF-8}"
+		NO_PROXY="127.0.0.1,localhost"
+		OPENROUTER_API_KEY="${MODEL_PROVIDER_BROKER_TOKEN}"
 		"$@"
+	)
+}
+
+model_provider_broker_exec_unprivileged()
+{
+	local -a exec_unprivileged_argv=()
+	model_provider_broker_unprivileged_argv_into exec_unprivileged_argv "$@" || return 1
+	"${exec_unprivileged_argv[@]}"
 }

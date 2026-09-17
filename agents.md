@@ -448,6 +448,17 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   environment. The conflict writer additionally runs as `nobody` with temporary
   ACL access to its allowlisted paths and no access to `.git`; trusted GitHub
   actuation runs afterward in `scripts/review_conflict_actuate.sh`.
+- Supervisor nesting for unprivileged launches: `scripts/codex_stall_guard.sh`
+  and `scripts/codex_heartbeat.sh` run as the workflow runner and take the
+  `sudo -n -u <user> -- env -i …` launch as their child, never the other way
+  round. `model_provider_broker_unprivileged_argv_into <array> <user> <cmd…>`
+  in `scripts/codex_helpers.sh` builds that argv (it is what
+  `model_provider_broker_exec_unprivileged` executes), so the guard keeps
+  writing its runner-owned stdout/status/heartbeat files and enters
+  privileged process-group signalling. The conflict resolver and the review
+  editor both launch this way; nesting the guard inside the sudo made it run
+  as `nobody` and fail on the runner's mode-0600 `mktemp` stdout file before
+  OpenCode started.
 - Resolver retry tiers trust only signed
   `AUTOFIX_RESOLVER_RETRY_STATE_V2` producer comments. User-editable V1 PR-body
   markers remain recognizable as legacy text but cannot weaken verification.
