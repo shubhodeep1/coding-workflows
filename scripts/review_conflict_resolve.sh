@@ -1930,7 +1930,25 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     "${RESOLVER_OPENCODE_CONFIG}"
     "${RESOLVER_OPENCODE_WORKSPACE}"
   )
+  # The stall guard / heartbeat wrapper must run as the workflow runner and
+  # wrap the `sudo -n -u <user> -- env -i ...` launch as its child — the
+  # same nesting scripts/review_apply_fixes.sh uses for the editor. The
+  # wrapper opens tmp_output and _stall_status_file (runner-owned, mode
+  # 0600 from mktemp) and writes runner-owned heartbeats; nested inside the
+  # sudo it ran as RESOLVER_ISOLATION_USER and every attempt died with
+  # `PermissionError: [Errno 13] Permission denied: '/tmp/tmp.XXXX'` before
+  # OpenCode started (PR #4088, run 35182160034). The guard also recognises
+  # the `sudo -n -u <user> --` prefix and switches to privileged
+  # process-group signalling, so stalls are killed as <user> via sudo.
+  # `timeout` stays inside the sudo, as before, so it runs as <user>.
+  resolver_unprivileged_cmd=()
   _run_codex=true
+  if ! model_provider_broker_unprivileged_argv_into resolver_unprivileged_cmd "${RESOLVER_ISOLATION_USER}" \
+      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+      "${resolver_opencode_cmd[@]}"; then
+    _codex_exit=1
+    _run_codex=false
+  fi
   if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
     if ! bash "${WORKSPACE_SAFETY_CHECK_HELPER}"; then
       _codex_exit=$?
@@ -1942,19 +1960,17 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     emit_conflict_resolver_substate "InitializingSession" "${attempt}"
     emit_conflict_resolver_substate "StreamingTurn" "${attempt}"
     if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-      model_provider_broker_exec_unprivileged "${RESOLVER_ISOLATION_USER}" timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-        "${CODEX_STALL_GUARD_HELPER}" \
+      "${CODEX_STALL_GUARD_HELPER}" \
         --phase review_conflict_resolve \
         --stdout-file "${tmp_output}" \
         --status-file "${_stall_status_file}" \
-        -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \
+        -- "${resolver_unprivileged_cmd[@]}" < "${_effective_prompt_file}" \
         || _codex_exit=$?
     elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-      model_provider_broker_exec_unprivileged "${RESOLVER_ISOLATION_USER}" timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-        "${CODEX_HEARTBEAT_HELPER}" \
+      "${CODEX_HEARTBEAT_HELPER}" \
         --phase review_conflict_resolve \
         --stdout-file "${tmp_output}" \
-        -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \
+        -- "${resolver_unprivileged_cmd[@]}" < "${_effective_prompt_file}" \
         || _codex_exit=$?
     else
       model_provider_broker_exec_unprivileged "${RESOLVER_ISOLATION_USER}" timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
