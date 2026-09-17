@@ -151,7 +151,7 @@ model_provider_broker_start()
 {
 	local scripts_dir="" broker_path="" ready_file="" pid_file="" broker_pid="" broker_runtime_dir=""
 	local ready_deadline=0 ready_json="" broker_allowed_models_csv="" broker_model=""
-	local -a broker_policy_args=() broker_allowed_models=()
+	local -a broker_policy_args=() broker_allowed_models=() # resolver-fix verification probe (PR to be closed, never merged)
 	scripts_dir="$(_codex_helpers_resolve_scripts_dir "${CODEX_HELPERS_SCRIPTS_DIR:-}")"
 	broker_path="${scripts_dir}/model_provider_broker.py"
 	ready_file="${MODEL_PROVIDER_BROKER_READY_FILE:-${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/model-provider-broker-ready.json}"
