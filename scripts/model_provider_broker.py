@@ -15,6 +15,7 @@ import ssl
 import sys
 import tempfile
 import threading
+import time
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,6 +46,7 @@ MAX_TOTAL_INPUT_TOKENS_CEILING = 100 * DEFAULT_MAX_INPUT_TOKENS
 TOKENS_PER_PRICE_UNIT = Decimal(1_000_000)
 MAX_HEADER_COUNT = 64
 MAX_HEADER_BYTES = 32 * 1024
+MAX_REJECTIONS_PER_STATUS_CLASS = 100
 BROKER_CLIENT_READ_TIMEOUT_SECONDS = 30
 BROKER_MAX_ACTIVE_CONNECTIONS = 8
 HOP_BY_HOP_HEADERS = frozenset(
@@ -441,6 +443,10 @@ class BrokerHandler(BaseHTTPRequestHandler):
 		return
 
 	def _reject(self, status: int, message: str) -> None:
+		rejection_path = self.path.split("?", 1)[0].split("#", 1)[0]
+		if rejection_path not in ALLOWED_PATHS:
+			rejection_path = "<redacted>"
+		self.server.record_rejection(status, message, rejection_path)  # type: ignore[attr-defined]
 		payload = json.dumps({"error": {"message": message, "type": "broker_rejection"}}).encode("utf-8")
 		self.send_response(status)
 		self.send_header("Content-Type", "application/json")
@@ -606,9 +612,12 @@ class BrokerServer(ThreadingHTTPServer):
 	daemon_threads = True
 	allow_reuse_address = False
 
-	def __init__(self, address: tuple[str, int], state: BrokerState) -> None:
+	def __init__(self, address: tuple[str, int], state: BrokerState, rejections_path: Path | None = None) -> None:
 		super().__init__(address, BrokerHandler)
 		self.broker_state = state
+		self.rejections_path = rejections_path
+		self.rejections_lock = threading.Lock()
+		self.rejections_recorded_by_status_class = {4: 0, 5: 0}
 		self._active_connection_slots = threading.BoundedSemaphore(BROKER_MAX_ACTIVE_CONNECTIONS)
 
 	def process_request(self, request: socket.socket, client_address: tuple[str, int]) -> None:
@@ -632,6 +641,46 @@ class BrokerServer(ThreadingHTTPServer):
 			super().process_request_thread(request, client_address)
 		finally:
 			self._active_connection_slots.release()
+
+	def record_rejection(self, status: int, message: str, path: str) -> None:
+		"""Make a policy rejection observable to the launching shell.
+
+		The handler answers the agent with the rejection body, but that body
+		only ever reaches the model runtime, which logs it as an opaque
+		``AI_APICallError`` (PR #4077 editor runs: three attempts and the
+		model fallback all burned on the same deterministic HTTP 429). One
+		structured stderr line lands in the job log, and one JSON line is
+		appended to ``--rejections-file`` so ``codex_helpers.sh`` can count
+		4xx policy rejections between attempts and stop retrying a broker
+		that will keep saying no. Each HTTP error class is capped separately
+		so transient 502s cannot consume the 4xx evidence budget. Both writes
+		are best-effort: a logging failure must never turn into a second
+		failure mode for the request.
+		"""
+		status_class = status // 100
+		with self.rejections_lock:
+			if self.rejections_recorded_by_status_class.get(status_class, MAX_REJECTIONS_PER_STATUS_CLASS) >= MAX_REJECTIONS_PER_STATUS_CLASS:
+				return
+			self.rejections_recorded_by_status_class[status_class] += 1
+			try:
+				print(f"MODEL_PROVIDER_BROKER_REJECT status={status} path={path} message={json.dumps(message)}", file=sys.stderr, flush=True)
+			except (OSError, ValueError):
+				pass
+			if self.rejections_path is None:
+				return
+			record = json.dumps(
+				{"ts": int(time.time()), "status": int(status), "path": path, "message": message},
+				sort_keys=True,
+				separators=(",", ":"),
+			)
+			try:
+				file_descriptor = os.open(self.rejections_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+				try:
+					os.write(file_descriptor, (record + "\n").encode("utf-8"))
+				finally:
+					os.close(file_descriptor)
+			except OSError:
+				pass
 
 
 def _atomic_write_ready_file(path: Path, document: dict[str, object]) -> None:
@@ -681,6 +730,11 @@ def main() -> int:
 	parser.add_argument("--max-total-cost-usd", default=None)
 	for price_field in PRICE_FIELDS:
 		parser.add_argument(f"--max-{price_field}-price", default="0")
+	parser.add_argument(
+		"--rejections-file",
+		default="",
+		help=f"append up to {MAX_REJECTIONS_PER_STATUS_CLASS} JSON lines per HTTP error class so the launcher can detect deterministic policy rejections; empty disables the file",
+	)
 	args = parser.parse_args()
 	if not 1 <= args.max_requests <= 100:
 		parser.error("--max-requests must be between 1 and 100")
@@ -745,7 +799,21 @@ def main() -> int:
 	except ValueError as exc:
 		print(f"model provider broker: {exc}", file=sys.stderr)
 		return 2
-	server = BrokerServer(("127.0.0.1", 0), state)
+	rejections_path = Path(args.rejections_file) if args.rejections_file else None
+	if rejections_path is not None:
+		try:
+			rejections_path.parent.mkdir(parents=True, exist_ok=True)
+			try:
+				rejections_path.unlink()
+			except FileNotFoundError:
+				pass
+		except OSError:
+			try:
+				print("model provider broker: rejection file unavailable; continuing without file recording", file=sys.stderr)
+			except OSError:
+				pass
+			rejections_path = None
+	server = BrokerServer(("127.0.0.1", 0), state, rejections_path)
 	stop_event = threading.Event()
 
 	def request_stop(_signum: int, _frame: object) -> None:
