@@ -1,0 +1,4 @@
+<!-- changelog: changed -->
+- **Probe fragment: deliberately conflicts with the copy of this file on `orchestrator/project-3965`.** Its only purpose is to route one review run of this branch through the pre-review conflict resolver so `scripts/review_conflict_resolve.sh` emits its `RESOLVER_AGENT_HOME_PREFLIGHT` line at the `mkdir` that has failed with `Permission denied` on every resolver run since f03b8d6.
+
+This branch is cut from f9a615c, which predates PR #4095, and adds this path with different content. The base already carries the real fragment, so the merge replay reports an add/add content conflict and the resolver step runs. The run is expected to fail at the sandbox-home preflight; the structured line it prints is the evidence the real fix needs. The PR is closed once that log is captured and this file is never meant to merge.
