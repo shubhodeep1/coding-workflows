@@ -26,6 +26,9 @@ env:
   MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_COMPLETION_PRICE || '30' }}
   MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_REQUEST_PRICE || '0.10' }}
   MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE: ${{ vars.MODEL_PROVIDER_BROKER_MAX_IMAGE_PRICE || '1' }}
+  MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS: ${{ vars.MODEL_PROVIDER_BROKER_MAX_INPUT_TOKENS || '16777216' }}
+  MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS: ${{ vars.MODEL_PROVIDER_BROKER_MAX_TOTAL_INPUT_TOKENS || '1677721600' }}
+  MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD: ${{ vars.MODEL_PROVIDER_BROKER_MAX_TOTAL_COST_USD || '' }}
   # Defaults to xhigh to match the repo-wide gpt-5.6-sol reasoning-level
   # policy. Override per-repo via vars.THINKING_LEVEL_ORCHESTRATE.
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_ORCHESTRATE || 'xhigh' }}
@@ -417,7 +420,7 @@ jobs:
       - name: Setup uv
         if: env.SEMBLE_ENABLED == 'true'
         continue-on-error: true
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
 
       - name: Install semble
         if: env.SEMBLE_ENABLED == 'true'

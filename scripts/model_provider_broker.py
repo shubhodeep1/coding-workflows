@@ -33,6 +33,16 @@ MAX_RESPONSE_BODY_BYTES = 64 * 1024 * 1024
 # memory while it is relayed to the agent.
 USAGE_SCAN_TAIL_BYTES = 1024 * 1024
 USAGE_OUTPUT_TOKEN_FIELDS = ("completion_tokens", "output_tokens")
+USAGE_INPUT_TOKEN_FIELDS = ("prompt_tokens", "input_tokens")
+# Admission-time input-token estimate for a normalized request body. Model
+# tokenizers can produce one token from a single UTF-8 byte, so the common
+# four-bytes-per-token average is not safe for admission control. Reserving one
+# token per byte is a tokenizer-independent upper bound for the normalized body;
+# provider-reported `usage` replaces it after completion (see settle_request).
+INPUT_TOKEN_ESTIMATE_BYTES_PER_TOKEN = 1
+DEFAULT_MAX_INPUT_TOKENS = -(-MAX_REQUEST_BODY_BYTES // INPUT_TOKEN_ESTIMATE_BYTES_PER_TOKEN)
+MAX_TOTAL_INPUT_TOKENS_CEILING = 100 * DEFAULT_MAX_INPUT_TOKENS
+TOKENS_PER_PRICE_UNIT = Decimal(1_000_000)
 MAX_HEADER_COUNT = 64
 MAX_HEADER_BYTES = 32 * 1024
 BROKER_CLIENT_READ_TIMEOUT_SECONDS = 30
@@ -41,6 +51,8 @@ HOP_BY_HOP_HEADERS = frozenset(
 	("connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade")
 )
 PRICE_FIELDS = ("prompt", "completion", "request", "image")
+IMAGE_INPUT_TYPE_MARKERS = (b'"type":"image"', b'"type":"image_url"', b'"type":"input_image"')
+MAX_IMAGE_INPUTS_PER_REQUEST = MAX_REQUEST_BODY_BYTES // min(len(marker) for marker in IMAGE_INPUT_TYPE_MARKERS)
 
 
 class BrokerRequestError(ValueError):
@@ -93,12 +105,54 @@ def _encode_json(value: object) -> str:
 	raise BrokerRequestError("request JSON contains an unsupported value")
 
 
+def _count_image_inputs(normalized_body: bytes) -> int:
+	"""Count priced image input parts in a normalized provider request."""
+	return sum(normalized_body.count(marker) for marker in IMAGE_INPUT_TYPE_MARKERS)
+
+
 @dataclass(frozen=True)
 class BrokerPolicy:
 	allowed_models: frozenset[str]
 	max_output_tokens: int
 	max_total_output_tokens: int
 	max_prices: tuple[Decimal, Decimal, Decimal, Decimal]
+	# Input-token and decimal cost budgets (security-pass finding
+	# `broker-authorizes-arbitrary-paid-requests`, #4090). The output budget
+	# alone left input spend outside the phase budget: up to `max_requests`
+	# near-context prompts were authorized as long as each response stayed
+	# small. Defaults are derived so the ceilings never bite below what the
+	# request cap and price ceilings already permit; operators tighten them.
+	max_input_tokens: int = DEFAULT_MAX_INPUT_TOKENS
+	max_total_input_tokens: int = MAX_TOTAL_INPUT_TOKENS_CEILING
+	max_total_cost_usd: Decimal | None = None
+
+	def estimate_input_tokens(self, normalized_body: bytes) -> int:
+		"""Return the admission-time input-token reservation for a normalized body.
+
+		Raises BrokerRequestError when the estimate exceeds the per-request
+		ceiling so an oversized prompt is rejected before it is forwarded.
+		"""
+		estimate = -(-len(normalized_body) // INPUT_TOKEN_ESTIMATE_BYTES_PER_TOKEN)
+		if estimate > self.max_input_tokens:
+			raise BrokerRequestError("request input exceeds the authorized input-token limit")
+		return estimate
+
+	def estimate_cost_usd(self, input_tokens: int, output_tokens: int, image_inputs: int = 0) -> Decimal:
+		"""Return the worst-case USD cost of one request at the policy price ceilings.
+
+		Uses the configured ceilings rather than the request's (possibly lower)
+		`provider.max_price`, so the reservation is never below what the
+		provider could charge under this policy.
+		"""
+		if image_inputs < 0:
+			raise ValueError("image_inputs must be non-negative")
+		prompt_price, completion_price, request_price, image_price = self.max_prices
+		return (
+			Decimal(input_tokens) * prompt_price / TOKENS_PER_PRICE_UNIT
+			+ Decimal(output_tokens) * completion_price / TOKENS_PER_PRICE_UNIT
+			+ request_price
+			+ Decimal(image_inputs) * image_price
+		)
 
 	def normalize_request(self, path: str, body: bytes) -> tuple[bytes, int]:
 		try:
@@ -194,14 +248,13 @@ class BrokerPolicy:
 		return min(value, self.max_output_tokens)
 
 
-def _usage_output_tokens(document: object) -> int | None:
-	"""Return the provider-reported output token count in a response document.
+def _usage_token_count(document: object, field_names: tuple[str, ...]) -> int | None:
+	"""Return the first usable token count under `usage` for the given fields.
 
-	Accepts a chat-completions object or chunk (`usage.completion_tokens`),
-	a Responses API object (`usage.output_tokens`), or a Responses API stream
-	event that wraps the object (`response.usage.output_tokens`). Returns None
-	when the document carries no usable usage so the caller keeps the
-	pessimistic reservation instead of guessing.
+	Accepts a chat-completions object or chunk (`usage.*`), a Responses API
+	object (`usage.*`), or a Responses API stream event that wraps the object
+	(`response.usage.*`). Returns None when the document carries no usable
+	usage so the caller keeps the pessimistic reservation instead of guessing.
 	"""
 	if not isinstance(document, dict):
 		return None
@@ -212,22 +265,34 @@ def _usage_output_tokens(document: object) -> int | None:
 			usage = wrapped.get("usage")
 	if not isinstance(usage, dict):
 		return None
-	for field_name in USAGE_OUTPUT_TOKEN_FIELDS:
+	for field_name in field_names:
 		value = usage.get(field_name)
 		if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
 			return value
 	return None
 
 
-def _extract_output_token_usage(response_tail: bytes, content_type: str) -> int | None:
-	"""Parse the actual output token usage from the tail of an upstream body.
+def _usage_output_tokens(document: object) -> int | None:
+	"""Return the provider-reported output token count in a response document
+	(`usage.completion_tokens` or `usage.output_tokens`); see _usage_token_count."""
+	return _usage_token_count(document, USAGE_OUTPUT_TOKEN_FIELDS)
+
+
+def _usage_input_tokens(document: object) -> int | None:
+	"""Return the provider-reported input token count in a response document
+	(`usage.prompt_tokens` or `usage.input_tokens`); see _usage_token_count."""
+	return _usage_token_count(document, USAGE_INPUT_TOKEN_FIELDS)
+
+
+def _extract_token_usage(response_tail: bytes, content_type: str) -> tuple[int | None, int | None]:
+	"""Parse the actual (output, input) token usage from the tail of an upstream body.
 
 	`response_tail` is at most USAGE_SCAN_TAIL_BYTES of the end of the body.
 	For SSE bodies the `data:` lines are scanned from the end so the final
 	usage-bearing chunk wins and a truncated first line is simply skipped.
 	Callers must pass complete non-streamed bodies; streamed bodies may be a
-	tail. Returns None whenever no usage can be read (fail-closed: the
-	reservation stays).
+	tail. Each element is None whenever that count cannot be read
+	(fail-closed: the corresponding reservation stays).
 	"""
 	text = response_tail.decode("utf-8", errors="replace")
 	if content_type.partition(";")[0].strip().lower() == "text/event-stream":
@@ -242,15 +307,20 @@ def _extract_output_token_usage(response_tail: bytes, content_type: str) -> int 
 				chunk = json.loads(payload)
 			except json.JSONDecodeError:
 				continue
-			usage = _usage_output_tokens(chunk)
-			if usage is not None:
-				return usage
-		return None
+			output_usage = _usage_output_tokens(chunk)
+			if output_usage is not None:
+				return output_usage, _usage_input_tokens(chunk)
+		return None, None
 	try:
 		document = json.loads(text)
 	except json.JSONDecodeError:
-		return None
-	return _usage_output_tokens(document)
+		return None, None
+	return _usage_output_tokens(document), _usage_input_tokens(document)
+
+
+def _extract_output_token_usage(response_tail: bytes, content_type: str) -> int | None:
+	"""Output-token half of _extract_token_usage; retained for existing callers."""
+	return _extract_token_usage(response_tail, content_type)[0]
 
 
 class BrokerState:
@@ -274,39 +344,87 @@ class BrokerState:
 		self.policy = policy
 		self.requests_started = 0
 		self.output_tokens_reserved = 0
+		self.input_tokens_reserved = 0
+		self.cost_usd_reserved = Decimal(0)
 		self.lock = threading.Lock()
 
-	def reserve_request(self, output_tokens: int) -> bool:
+	def reserve_request(self, output_tokens: int, input_tokens: int = 0, image_inputs: int = 0) -> bool:
+		"""Admit one request, charging its output, input, and cost ceilings.
+
+		`input_tokens` is the admission-time estimate from
+		BrokerPolicy.estimate_input_tokens; the cost reservation is the
+		worst case of both token counts and recognized image inputs at the
+		policy price ceilings plus the per-request price. Any exhausted
+		budget refuses admission.
+		"""
+		request_cost = self.policy.estimate_cost_usd(input_tokens, output_tokens, image_inputs)
 		with self.lock:
 			if (
 				self.requests_started >= self.max_requests
 				or self.output_tokens_reserved + output_tokens > self.policy.max_total_output_tokens
+				or self.input_tokens_reserved + input_tokens > self.policy.max_total_input_tokens
+				or (
+					self.policy.max_total_cost_usd is not None
+					and self.cost_usd_reserved + request_cost > self.policy.max_total_cost_usd
+				)
 			):
 				return False
 			self.requests_started += 1
 			self.output_tokens_reserved += output_tokens
+			self.input_tokens_reserved += input_tokens
+			self.cost_usd_reserved += request_cost
 			return True
 
-	def settle_request(self, reserved_output_tokens: int, actual_output_tokens: int | None) -> None:
+	def settle_request(
+		self,
+		reserved_output_tokens: int,
+		actual_output_tokens: int | None,
+		reserved_input_tokens: int = 0,
+		actual_input_tokens: int | None = None,
+		billable: bool = True,
+		reserved_image_inputs: int = 0,
+	) -> None:
 		"""True up a completed request's reservation against real usage.
 
-		`reserve_request` charges the request's full output ceiling while it
-		is in flight, which is the only safe assumption before the provider
-		answers. Once the response is complete the provider-reported usage
-		replaces that ceiling so the total budget bounds tokens actually
-		generated rather than the number of requests: without this, every
-		agentic turn stayed charged at the ceiling and the editor hit HTTP
-		429 after `max_total_output_tokens / max_output_tokens` (4 by
-		default) turns. `actual_output_tokens=None` means usage could not
-		be read (cut-off body, missing `usage`), and the full reservation
-		stays charged — fail closed, never fail open.
+		`reserve_request` charges the request's full output ceiling and its
+		input estimate while it is in flight, which is the only safe
+		assumption before the provider answers. Once the response is
+		complete the provider-reported usage replaces those figures so the
+		total budgets bound tokens actually processed rather than the number
+		of requests: without this, every agentic turn stayed charged at the
+		ceiling and the editor hit HTTP 429 after
+		`max_total_output_tokens / max_output_tokens` (4 by default) turns.
+		A `None` actual count means that usage could not be read (cut-off
+		body, missing `usage`), and that reservation stays charged — fail
+		closed, never fail open. The cost reservation is re-derived from the
+		settled token counts and fixed image count at the policy price ceilings;
+		`billable=False` (an observed upstream error response, or a failure
+		before forwarding starts) settles the cost to zero, including the
+		per-request price. An ambiguous transport failure after forwarding
+		starts keeps the full reservation.
 		"""
-		if actual_output_tokens is None:
+		settled_output_tokens = reserved_output_tokens if actual_output_tokens is None else actual_output_tokens
+		settled_input_tokens = reserved_input_tokens if actual_input_tokens is None else actual_input_tokens
+		if billable and settled_output_tokens == reserved_output_tokens and settled_input_tokens == reserved_input_tokens:
 			return
+		reserved_cost = self.policy.estimate_cost_usd(
+			reserved_input_tokens, reserved_output_tokens, reserved_image_inputs,
+		)
+		settled_cost = self.policy.estimate_cost_usd(
+			settled_input_tokens, settled_output_tokens, reserved_image_inputs,
+		) if billable else Decimal(0)
 		with self.lock:
 			self.output_tokens_reserved = max(
 				0,
-				self.output_tokens_reserved - reserved_output_tokens + actual_output_tokens,
+				self.output_tokens_reserved - reserved_output_tokens + settled_output_tokens,
+			)
+			self.input_tokens_reserved = max(
+				0,
+				self.input_tokens_reserved - reserved_input_tokens + settled_input_tokens,
+			)
+			self.cost_usd_reserved = max(
+				Decimal(0),
+				self.cost_usd_reserved - reserved_cost + settled_cost,
 			)
 
 
@@ -392,11 +510,13 @@ class BrokerHandler(BaseHTTPRequestHandler):
 			return
 		try:
 			body, output_tokens = self.broker_state.policy.normalize_request(self.path, body)
+			input_tokens = self.broker_state.policy.estimate_input_tokens(body)
+			image_inputs = _count_image_inputs(body)
 		except BrokerRequestError as exc:
 			self._reject(400, str(exc))
 			return
-		if not self.broker_state.reserve_request(output_tokens):
-			self._reject(429, "broker request or output-token limit reached")
+		if not self.broker_state.reserve_request(output_tokens, input_tokens, image_inputs):
+			self._reject(429, "broker request or output-token limit reached (request, token, or cost budget exhausted)")
 			return
 
 		upstream_headers = {
@@ -408,12 +528,14 @@ class BrokerHandler(BaseHTTPRequestHandler):
 		upstream_path = f"{self.broker_state.upstream_prefix}{self.path.removeprefix('/api/v1')}"
 		connection: http.client.HTTPSConnection | None = None
 		# Usage true-up state: the request is charged its full output ceiling
-		# until the upstream body has been relayed completely, then settled
-		# against the provider-reported usage (see BrokerState.settle_request).
-		# An upstream error status generated no output, so it settles at 0;
-		# a cut-off or unparseable body keeps the full reservation.
+		# and its input estimate until the upstream body has been relayed
+		# completely, then settled against the provider-reported usage (see
+		# BrokerState.settle_request). An observed upstream error response or
+		# pre-forward failure settles at 0; an ambiguous transport failure,
+		# cut-off body, or unparseable body keeps the full reservation.
 		upstream_status: int | None = None
 		upstream_response_received = False
+		upstream_request_started = False
 		upstream_content_type = ""
 		response_tail = bytearray()
 		body_complete = False
@@ -424,6 +546,7 @@ class BrokerHandler(BaseHTTPRequestHandler):
 				timeout=600,
 				context=ssl.create_default_context(),
 			)
+			upstream_request_started = True
 			connection.request("POST", upstream_path, body=body, headers=upstream_headers)
 			response = connection.getresponse()
 			upstream_response_received = True
@@ -458,14 +581,23 @@ class BrokerHandler(BaseHTTPRequestHandler):
 		finally:
 			self.close_connection = True
 			actual_output_tokens: int | None = None
-			if not upstream_response_received or upstream_status is not None and upstream_status >= 400:
+			actual_input_tokens: int | None = None
+			upstream_billed = True
+			if not upstream_request_started or (
+				upstream_response_received and upstream_status is not None and upstream_status >= 400
+			):
 				actual_output_tokens = 0
+				actual_input_tokens = 0
+				upstream_billed = False
 			elif body_complete and (
 				upstream_content_type.partition(";")[0].strip().lower() == "text/event-stream"
 				or response_bytes <= USAGE_SCAN_TAIL_BYTES
 			):
-				actual_output_tokens = _extract_output_token_usage(bytes(response_tail), upstream_content_type)
-			self.broker_state.settle_request(output_tokens, actual_output_tokens)
+				actual_output_tokens, actual_input_tokens = _extract_token_usage(bytes(response_tail), upstream_content_type)
+			self.broker_state.settle_request(
+				output_tokens, actual_output_tokens, input_tokens, actual_input_tokens,
+				billable=upstream_billed, reserved_image_inputs=image_inputs,
+			)
 			if connection is not None:
 				connection.close()
 
@@ -537,6 +669,16 @@ def main() -> int:
 	# never bites below what the request cap already permits, while the price
 	# ceilings still bound the spend of one phase.
 	parser.add_argument("--max-total-output-tokens", type=int, default=1_638_400)
+	# Input-token and cost budgets (#4090). Defaults derive from the other
+	# limits so they never bite below what those already permit:
+	#   --max-input-tokens        = MAX_REQUEST_BODY_BYTES = 16777216
+	#   --max-total-input-tokens  = max-requests x max-input-tokens
+	#   --max-total-cost-usd      = worst case of both total token budgets and
+	#                               body-bounded image inputs at the price ceilings
+	#                               + max-requests x request price
+	parser.add_argument("--max-input-tokens", type=int, default=DEFAULT_MAX_INPUT_TOKENS)
+	parser.add_argument("--max-total-input-tokens", type=int, default=None)
+	parser.add_argument("--max-total-cost-usd", default=None)
 	for price_field in PRICE_FIELDS:
 		parser.add_argument(f"--max-{price_field}-price", default="0")
 	args = parser.parse_args()
@@ -546,6 +688,12 @@ def main() -> int:
 		parser.error("--max-output-tokens must be between 1 and 1000000")
 	if not args.max_output_tokens <= args.max_total_output_tokens <= 10_000_000:
 		parser.error("--max-total-output-tokens must cover one request and be at most 10000000")
+	if not 1 <= args.max_input_tokens <= DEFAULT_MAX_INPUT_TOKENS:
+		parser.error(f"--max-input-tokens must be between 1 and {DEFAULT_MAX_INPUT_TOKENS}")
+	if args.max_total_input_tokens is None:
+		args.max_total_input_tokens = min(args.max_requests * args.max_input_tokens, MAX_TOTAL_INPUT_TOKENS_CEILING)
+	if not args.max_input_tokens <= args.max_total_input_tokens <= MAX_TOTAL_INPUT_TOKENS_CEILING:
+		parser.error(f"--max-total-input-tokens must cover one request and be at most {MAX_TOTAL_INPUT_TOKENS_CEILING}")
 	allowed_models = frozenset(args.allowed_model)
 	if any(not model or len(model) > 256 for model in allowed_models):
 		parser.error("--allowed-model values must be non-empty and at most 256 characters")
@@ -556,7 +704,38 @@ def main() -> int:
 		)
 	except BrokerRequestError as exc:
 		parser.error(str(exc))
-	policy = BrokerPolicy(allowed_models, args.max_output_tokens, args.max_total_output_tokens, max_prices)  # type: ignore[arg-type]
+	policy = BrokerPolicy(
+		allowed_models,
+		args.max_output_tokens,
+		args.max_total_output_tokens,
+		max_prices,  # type: ignore[arg-type]
+		args.max_input_tokens,
+		args.max_total_input_tokens,
+	)
+	if args.max_total_cost_usd is None:
+		max_total_cost_usd = policy.estimate_cost_usd(
+			args.max_total_input_tokens,
+			args.max_total_output_tokens,
+			args.max_requests * MAX_IMAGE_INPUTS_PER_REQUEST,
+		) + (
+			(args.max_requests - 1) * max_prices[2]
+		)
+	else:
+		try:
+			max_total_cost_usd = _parse_decimal(args.max_total_cost_usd, "--max-total-cost-usd")
+		except BrokerRequestError as exc:
+			parser.error(str(exc))
+		if max_total_cost_usd <= 0:
+			parser.error("--max-total-cost-usd must be a positive decimal")
+	policy = BrokerPolicy(
+		allowed_models,
+		args.max_output_tokens,
+		args.max_total_output_tokens,
+		max_prices,  # type: ignore[arg-type]
+		args.max_input_tokens,
+		args.max_total_input_tokens,
+		max_total_cost_usd,
+	)
 	upstream_key = os.environ.get("OPENROUTER_API_KEY", "")
 	if not upstream_key:
 		print("model provider broker: OPENROUTER_API_KEY is unavailable", file=sys.stderr)

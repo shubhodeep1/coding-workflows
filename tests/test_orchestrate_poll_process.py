@@ -15453,6 +15453,103 @@ def test_integration_conflict_forged_locator_is_not_authority():
 	assert "history exceeds the bounded scan" in (result["stdout"] + result["stderr"])
 
 
+def test_integration_conflict_forged_body_locator_falls_back_to_status_locator():
+	"""Regression for security-pass finding resolver-state-comment-window-eviction (#4091).
+
+	A forged numeric body locator used to skip the trusted commit-status lookup
+	entirely, so a comment flood over the 10-page bound made every tick defer.
+	The body hint must now be untrusted: when it fails verification the poller
+	consults the commit-status locator on the head SHA before bounded comment
+	discovery and recovers the signed state without paging the flood.
+	"""
+	head_sha = "8" * 40
+	marker = _resolver_retry_state_block_for_test(source_pr=358, head_sha=head_sha, consecutive_failure_count=20)
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	noise_comments = [
+		{"id": 3000 + index, "body": "noise", "user": {"login": "outsider", "id": 999}}
+		for index in range(1005)
+	]
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 358: []},
+		issue_comments={358: [
+			{"id": 788, "body": marker, "user": {"login": "outsider", "id": 999}},
+			{"id": 787, "body": marker, "user": {"login": "github-actions[bot]", "id": 41898282}},
+			*noise_comments,
+		]},
+		prs=[{
+			"number": 358, "state": "open", "baseRefName": "main",
+			"headRefName": "orchestrator/project-192", "headSha": head_sha,
+			"mergeable": False, "mergeable_state": "dirty",
+			"body": "<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:788 -->\n",
+			"commitStatuses": [
+				{
+					"context": "ai/resolver-retry-state-locator",
+					"description": "comment_id=787",
+					"state": "success",
+				},
+			],
+		}],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+	)
+	api_calls = result["api_calls"]
+	# The untrusted body hint is still tried first (one cheap read) ...
+	assert "repos/owner/repo/issues/comments/788" in api_calls
+	# ... but its verification failure now routes to the trusted status locator
+	# instead of straight into bounded comment discovery.
+	assert api_calls.index("repos/owner/repo/issues/comments/788") \
+		< api_calls.index(f"repos/owner/repo/commits/{head_sha}/status?per_page=100&page=1")
+	assert "repos/owner/repo/issues/comments/787" in api_calls
+	assert not any("/issues/358/comments?per_page=" in path for path in api_calls), (
+		"a verified status locator must short-circuit the bounded comment scan"
+	)
+	assert "body locator failed verification; consulting the commit-status locator" in (result["stdout"] + result["stderr"])
+	assert "history exceeds the bounded scan" not in (result["stdout"] + result["stderr"])
+	assert [dispatch for dispatch in result["review_dispatches"] if dispatch.get("pr_number") == 358] == []
+	assert result["latest_state"]["integration_sync_status"] == "escalated"
+
+
+def test_integration_conflict_status_locator_repeating_failed_body_hint_falls_back_once():
+	"""The status locator naming the same comment the body hint already failed
+	on must not be re-fetched; the poller goes straight to bounded discovery."""
+	head_sha = "9" * 40
+	marker = _resolver_retry_state_block_for_test(source_pr=359, head_sha=head_sha, consecutive_failure_count=20)
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 359: []},
+		issue_comments={359: [
+			{"id": 790, "body": marker, "user": {"login": "outsider", "id": 999}},
+			{"id": 789, "body": marker, "user": {"login": "github-actions[bot]", "id": 41898282}},
+		]},
+		prs=[{
+			"number": 359, "state": "open", "baseRefName": "main",
+			"headRefName": "orchestrator/project-192", "headSha": head_sha,
+			"mergeable": False, "mergeable_state": "dirty",
+			"body": "<!-- AUTOFIX_RESOLVER_RETRY_COMMENT_ID_V1:790 -->\n",
+			"commitStatuses": [
+				{"context": "ai/resolver-retry-state-locator", "description": "comment_id=790", "state": "success"},
+			],
+		}],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+	)
+	api_calls = result["api_calls"]
+	assert api_calls.count("repos/owner/repo/issues/comments/790") == 1
+	assert f"repos/owner/repo/commits/{head_sha}/status?per_page=100&page=1" in api_calls
+	assert any("/issues/359/comments?per_page=" in path for path in api_calls)
+	assert "status locator repeats the unverified body hint" in (result["stdout"] + result["stderr"])
+	assert [dispatch for dispatch in result["review_dispatches"] if dispatch.get("pr_number") == 359] == []
+	assert result["latest_state"]["integration_sync_status"] == "escalated"
+
+
 def test_integration_conflict_locator_cannot_downgrade_escalated_label():
 	head_sha = "6" * 40
 	non_escalated_marker = _resolver_retry_state_block_for_test(
