@@ -2234,11 +2234,16 @@ print(m.group(1) if m else "")
         if [ "${RB_FOLLOWUP_INTEGRATION_BRANCH}" = "(default branch)" ]; then
           RB_FOLLOWUP_INTEGRATION_BRANCH=""
         fi
-        if [ -z "${RB_FOLLOWUP_INTEGRATION_BRANCH}" ] && [ -n "${PR_BASE_REF:-}" ] \
-          && printf '%s\n' "${PR_BASE_REF}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}"; then
-          RB_FOLLOWUP_INTEGRATION_BRANCH="${PR_BASE_REF}"
-          if [ -z "${RB_FOLLOWUP_TRACKING_ISSUE}" ] && [[ "${PR_BASE_REF}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
-            RB_FOLLOWUP_TRACKING_ISSUE="${BASH_REMATCH[1]}"
+        if [ -z "${RB_FOLLOWUP_INTEGRATION_BRANCH}" ] && [ -n "${PR_BASE_REF:-}" ]; then
+          RB_FOLLOWUP_PATTERN_MATCH_RC=0
+          printf '%s\n' "${PR_BASE_REF}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" || RB_FOLLOWUP_PATTERN_MATCH_RC=$?
+          if [ "${RB_FOLLOWUP_PATTERN_MATCH_RC}" -eq 2 ]; then
+            echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is not a valid POSIX ERE (${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}); PR base ${PR_BASE_REF} follow-up will resolve to the default branch unless parent metadata supplies lineage." >&2
+          elif [ "${RB_FOLLOWUP_PATTERN_MATCH_RC}" -eq 0 ]; then
+            RB_FOLLOWUP_INTEGRATION_BRANCH="${PR_BASE_REF}"
+            if [ -z "${RB_FOLLOWUP_TRACKING_ISSUE}" ] && [[ "${PR_BASE_REF}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
+              RB_FOLLOWUP_TRACKING_ISSUE="${BASH_REMATCH[1]}"
+            fi
           fi
         fi
         RB_FOLLOWUP_LINEAGE_LINES=""
