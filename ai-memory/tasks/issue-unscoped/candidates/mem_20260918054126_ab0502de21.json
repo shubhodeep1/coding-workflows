@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:16294-16302 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The timeline-evidence branch sets `SECURITY_FIX_PR_MERGED=\"true\"` and advances the cycle without calling `backfill_validation_fix_issue_merged_label`.\n  WHY: A closed security-pass fix issue can retain an inconsistent label such as `ai:ready-to-merge` instead of being corrected to `ai:merged`; severity was reported as NIT by both reviewers.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: When timeline evidence confirms a merged PR for a closed security-pass fix issue, the fix issue's labels should be corrected to match the evidence (e.g., backfill ai:merged label)\n  expected_change_site: scripts/orchestrate_poll_process.sh around line 16297-16310\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The code sets SECURITY_FIX_PR_MERGED=\"true\" and advances the cycle but does not call backfill_validation_fix_issue_merged_label to correct the issue's labels\n- requirement: Lineage parsing should be robust to regex match failures and preserve parent metadata even when regex doesn't match\n  expected_change_site: scripts/review_rb_judge.sh around line 2279-2280\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Python one-liners could silently fail when regex doesn't match, leaving variables empty despite existing parent metadata\n- requirement: Git availability should be validated before using git check-ref-format\n  expected_change_site: scripts/review_rb_judge.sh around line 2297-2304\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Integration branch validation uses git check-ref-format without checking if Git is available\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh\n  Line or code reference: lines 16294-16302 (the new `if validation_fix_issue_has_merged_pr_evidence ... ; then` block)\n  Problem: The new timeline-evidence branch sets `SECURITY_FIX_PR_MERGED=\"true\"` and lets the existing cycle-advancement block run, but never calls `backfill_validation_fix_issue_merged_label`. The validation fix-up path (per agents.md) explicitly invokes that helper after timeline evidence confirms a merged PR so the issue stops carrying the inconsistent `ai:ready-to-merge` label on a merged-and-closed issue; the security-pass path now creates the same inconsistent state that the terminal-label guard exists to prevent.\n  Why it fails at runtime: A fix issue previously clobbered by the buggy post-merge phase swap (the very shape this PR fixes) reaches the poller with `ai:ready-to-merge`, `state=closed`, and a merged implementation PR. The new evidence check advances `security_pass_cycle` correctly, but the issue itself is never flipped to `ai:merged`. The next poller tick, the mention-only-failure diagnostic, the security-pass follow-up bookkeeping, and any audit report still read `ai:ready-to-merge` on a merged-and-closed issue \u2014 the exact label state that triggered #4379.\n  ISSUE_CONFIDENCE: 4\n  SEVERITY: NIT\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: When timeline evidence confirms a merged PR for a closed security-pass fix issue, the fix issue's labels should be corrected to match the evidence (e.g., backfill ai:merged label)\n  Expected change site: scripts/orchestrate_poll_process.sh around line 16297-16310\n  Evidence of absence: The code sets SECURITY_FIX_PR_MERGED=\"true\" and advances the cycle but does not call backfill_validation_fix_issue_merged_label to correct the issue's labels\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: Lineage parsing should be robust to regex match failures and preserve parent metadata even when regex doesn't match\n  Expected change site: scripts/review_rb_judge.sh around line 2279-2280\n  Evidence of absence: Python one-liners could silently fail when regex doesn't match, leaving variables empty despite existing parent metadata\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: Git availability should be validated before using git check-ref-format\n  Expected change site: scripts/review_rb_judge.sh around line 2297-2304\n  Evidence of absence: Integration branch validation uses git check-ref-format without checking if Git is available\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh\n  Line or code reference: 16300-16302\n  Problem: When timeline evidence confirms a merged PR for a closed security-pass fix issue, the code sets `SECURITY_FIX_PR_MERGED=\"true\"` and advances the cycle, but does NOT call `backfill_validation_fix_issue_merged_label` to correct the issue's labels.\n  Why it fails at runtime: The closed fix issue keeps whatever label the judge's phase swap left on it (e.g., `ai:ready-to-merge`), creating the exact inconsistent state this PR is designed to prevent. The equivalent validation fix-up path at line 16756 calls the backfill function after the same evidence check. The terminal-label guard in `_resilient_phase_swap` prevents this race going forward, but the timeline evidence branch exists precisely for the corner case where `ai:merged` is missing \u2014 in that case, not backfilling leaves the label inconsistent for any future reader or diagnostic.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "4199c57ee1406817110b5dee8fdd6f5ee4692357d43a21c6e706fa90281100b6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4118,
+    "run_id": "35308367111",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35308367111",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260918054126_ab0502de21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4118,
+    "run_id": "35308367111"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-18T05:41:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
