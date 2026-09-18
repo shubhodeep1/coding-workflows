@@ -249,3 +249,186 @@ Overall success was 74.85% of all runs and 96.97% of success-or-cancel terminal 
 | Sweep batching | One PR snapshot; active runs prefetched per workflow/status |
 | Poller batching | GraphQL batches of 25 plus cycle-local caches |
 | Main data gap | No endpoint, page-count, cache-hit or duration summary |
+
+## Deep Audit — Workflows & Scripts (2026-09-18)
+
+### Section 1: Bug & Correctness Sweep
+
+All 46 workflows, 79 shell scripts, and 56 Python scripts passed YAML, `bash -n`, and Python AST parsing.
+
+#### BUG-001 — Review-blocked actions are not bound to the judged PR head
+
+- **ID:** BUG-001
+- **File:** `scripts/review_rb_judge.sh:1647-1664,1967-2072,2509-2549`
+- **Severity:** High
+- **Category:** `bug`
+- **Description:** The post-judge live PR fetch checks only whether the PR merged. It never compares the current `.head.sha` with `RB_JUDGED_HEAD_SHA`. An intervening push can therefore cause the no-op fix path to apply `ai:ready-to-merge`, or `close_and_reissue` to close and preserve a baseline from a head the judge never evaluated. The close occurs before the later `gh pr view` head lookup.
+- **Recommended fix:** Retain `.head.sha` from `_guard_pr_meta`, compare it with `RB_JUDGED_HEAD_SHA` before posting or executing any action, and exit with a structured stale-head skip when they differ. Use `RB_JUDGED_HEAD_SHA` for the reissue baseline and remove the later redundant head lookup.
+
+#### BUG-002 — Stale check-run failures can triage a newer PR head
+
+- **ID:** BUG-002
+- **File:** `.github/workflows/check_failure_triage.yml:64-145`; `scripts/check_failure_triage.sh:144-177,358-399`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** `head_sha` is syntax-validated, but neither PR fetch verifies that the live PR head still equals that SHA. Inference: a check for an older commit can complete after a newer push, causing an obsolete failure to open a fix issue against the current PR.
+- **Recommended fix:** Compare `.head.sha` with `HEAD_SHA` in the lightweight derivation job and repeat the comparison immediately before issue creation. Log and skip stale events rather than filing an issue.
+
+#### SEC-001 — Privileged review job executes a mutable third-party action tag
+
+- **ID:** SEC-001
+- **File:** `.github/workflows/review_autofix.yml:1637-1662`; `.github/workflows/internal-review.yml:30-33,53-66`
+- **Severity:** Medium
+- **Category:** `security`
+- **Description:** `jlumbroso/free-disk-space@v1.3.1` is referenced by a movable tag and executes before later steps expose write credentials. A compromised or moved tag could persist code on the runner and intercept those credentials.
+- **Recommended fix:** Pin the action to a reviewed 40-character commit SHA and configure automated dependency updates for the pin.
+
+#### SEC-002 — PAT is interpolated directly into generated shell source
+
+- **ID:** SEC-002
+- **File:** `.github/workflows/review_autofix.yml:5961-6009`; `.github/workflows/implement.yml:4315-4327`
+- **Severity:** Low
+- **Category:** `security`
+- **Description:** Both steps already export `GH_TOKEN`, but interpolate `${{ secrets.GH_PAT }}` directly into the `run:` script and Git remote URL. This unnecessarily places the secret in generated shell source and increases exposure if command or remote diagnostics are introduced. [NEEDS VERIFICATION]
+- **Recommended fix:** Use `${GH_TOKEN}` and `${GITHUB_REPOSITORY}` from the step environment. Prefer a temporary credential header/helper over persisting the token in `.git/config`.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### BATCH-001 — PR metadata collection performs five or six separable calls
+
+- **ID:** BATCH-001
+- **File:** `scripts/review_collect_pr_metadata.sh:209-225,251-269,464-477`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** The normal path separately fetches PR metadata, issue comments, review comments, closing issue references, and the diff: five logical calls, or six when top-level reviews are enabled. Pagination can increase the underlying request count.
+- **Recommended fix:** Extend `gh_pr_with_all_comments` in `gh_helpers.sh` to return comment IDs/timestamps, top-level review state/body, and closing issue references. **Current:** 5–6 logical calls. **Proposed:** 2—one consolidated GraphQL call plus the separate diff representation, with existing REST pagination as fail-open fallback.
+
+#### API-001 — Merge-train comment upsert re-fetches a listed comment
+
+- **ID:** API-001
+- **File:** `scripts/review_merge_train.sh:255-290`
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:** `_mt_find_marker_comment_id` lists all comments but returns only the ID. `_mt_upsert_comment` then fetches that comment again solely to compare its body.
+- **Recommended fix:** Return `{id,body}` from the initial comments query and pass both into `_mt_upsert_comment`. **Current:** 2 reads per existing-marker upsert. **Proposed:** 1 read; write count unchanged. Extend the script’s existing cycle-local cache pattern.
+
+#### BATCH-002 — Merge-train file inspection remains per-PR REST fan-out
+
+- **ID:** BATCH-002
+- **File:** `scripts/review_merge_train.sh:123-136,202-230`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** `_mt_blockers_for_into` invokes one paginated `/pulls/{n}/files` request per older PR. With `MERGE_TRAIN_MAX_OLDER_PRS=20`, a gate can issue up to 21 logical file-list calls when the current PR also needs fallback hydration. [NEEDS VERIFICATION]
+- **Recommended fix:** Add an aliased GraphQL batch patterned after `_fetch_candidate_issue_details_graphql`, requesting each PR’s `files(first:100)`. **Current:** up to 20–21 calls. **Proposed:** 1 batch for the configured cap, with per-PR REST fallback only when `hasNextPage=true`.
+
+#### API-002 — Default-branch metadata is fetched repeatedly per poll
+
+- **ID:** API-002
+- **File:** `scripts/orchestrate_poll_process.sh:16190-16206,16691-16728,20598-20601,21505-21518`
+- **Severity:** Medium
+- **Category:** `api-redundancy`
+- **Description:** Normal tracking-issue processing fetches repository `.default_branch` once per issue, while merge-conflict, judge, and standalone-sweep paths can fetch it again. For `T` normally processed tracking issues, the minimum is approximately `T+1` calls, with additional path-dependent reads.
+- **Recommended fix:** Fetch repository metadata once before the tracking loop into `REPOSITORY_DEFAULT_BRANCH` and reuse it everywhere. **Current:** approximately `T+1` or more. **Proposed:** 1 call per poll job. Follow the existing `ACTIVE_WORKFLOW_ISSUES` cycle-cache pattern.
+
+#### API-003 — Authentication failures can consume the full retry budget
+
+- **ID:** API-003
+- **File:** `scripts/gh_helpers.sh:75-94,439-493`
+- **Severity:** Medium
+- **Category:** `api-redundancy`
+- **Description:** `_is_gh_permanent_failure` handles 404, 422, and selected permission text but omits common HTTP 400/401 and generic non-rate-limit 403 responses. Those failures can be retried five times despite being non-transient.
+- **Recommended fix:** Check `_is_gh_rate_limit` first, then classify 400/401 and non-rate-limit 403 as permanent. **Current:** up to 5 identical calls. **Proposed:** 1 call for permanent failures; retain the existing retry budget for transient failures.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001 — Workflow-analysis runtime setup is repeated across four jobs
+
+- **ID:** DUP-001
+- **File:** `.github/workflows/workflow-log-analysis.yml:207-291,689-808,1376-1517,1887-2021`
+- **Severity:** Medium
+- **Category:** `duplication`
+- **Description:** Python setup, Codex caching/install/restore, configuration, uv/Semble installation, and index construction are near-identical in weekly-retro, analyze, deep-audit, and API-redundancy jobs.
+- **Recommended fix:** Create a local composite action backed by `scripts/workflow_analysis_runtime_helpers.sh`. Suggested function: `workflow_analysis_prepare_runtime <model> <reasoning> <semble_index_path>`. Update all four jobs to invoke it.
+
+#### DUP-002 — Context-budget telemetry helper has four copies
+
+- **ID:** DUP-002
+- **File:** `scripts/review_apply_fixes.sh:164-202`; `scripts/review_consolidate.sh:268-307`; `scripts/review_rb_judge.sh:256-294`; `scripts/review_run_reviewers.sh:69-107`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** `emit_context_budget_warn_for_prompt` is duplicated almost byte-for-byte, including the embedded Python importer and fail-open behavior.
+- **Recommended fix:** Move it to `scripts/review_prompt_helpers.sh` with signature `emit_context_budget_warn_for_prompt <phase> <prompt_path> <model>`, stage it once, and source it from all four callers.
+
+#### DUP-003 — Support checkout and staging logic is independently maintained
+
+- **ID:** DUP-003
+- **File:** `.github/workflows/check_failure_triage.yml:213-303`; `.github/workflows/clarify.yml:167-354`; `.github/workflows/plan.yml:230-429`; `.github/workflows/orchestrate.yml:290-470`; `.github/workflows/orchestrate_clarify_respond.yml:226-415`; `.github/workflows/orchestrate_poll.yml:318-586`; `.github/workflows/implement.yml:865-1276`
+- **Severity:** Medium
+- **Category:** `duplication`
+- **Description:** Each workflow separately resolves the source ref, performs primary/fallback/main checkouts, and stages overlapping helper sets. `review_autofix.yml` and `validate.yml` already centralize this through `stage_workflow_support.sh`.
+- **Recommended fix:** Extend `scripts/stage_workflow_support.sh` with `stage_workflow_support <phase> --script-ref <ref> --manifest <path> --main-fallback`, using phase manifests for differences. Migrate the listed workflows incrementally.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001 — Implement support-staging block exceeds the medium-risk threshold
+
+- **ID:** EXPR-001
+- **File:** `.github/workflows/implement.yml:920-1276`
+- **Severity:** Medium
+- **Category:** `expression-limit`
+- **Description:** The interpolated `run:` scalar is approximately **16,985 characters**, leaving **4,015 characters** before GitHub’s 21,000-character limit. It contains three `${{ }}` interpolations and will fail workflow loading if future edits exceed the limit.
+- **Recommended fix:** Bind `github.repository`, `PROMPT_PRELUDE_REFACTOR_ENABLED`, and `UNATTENDED_IDENTITY_REINJECT_ENABLED` through step `env:` values so the block contains no template interpolation, or migrate the block under DUP-003 to `stage_workflow_support.sh`.
+
+No `if:` expression exceeded 739 characters. No workflow exceeded 800 KB; the largest was `review_autofix.yml` at approximately 497,695 characters.
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001 — Branch-rebuild threshold outputs are assigned but never consumed
+
+- **ID:** DEAD-001
+- **File:** `scripts/orchestrate_poll_process.sh:8791-8871`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** `BRANCH_REBUILD_SKIP_REASON` and `BRANCH_REBUILD_LAST_REBUILD_AT` receive multiple values, but no caller reads or logs them. Only `BRANCH_REBUILD_ESCALATED_ERROR` affects behavior.
+- **Recommended fix:** Either emit the values through a structured `BRANCH_REBUILD_THRESHOLD_DECISION` log at the caller or remove the dead assignments.
+
+#### DEAD-002 — Summary and smoke-test values are computed but discarded
+
+- **ID:** DEAD-002
+- **File:** `.github/workflows/orchestrate.yml:1273-1277`; `.github/workflows/test-and-mark-stable.yml:1140-1152`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** `WAVE_COUNT` is assigned from the dependency-edge count and never rendered. `BLOB_CONTENT` is decoded from the contents API and never read.
+- **Recommended fix:** Remove `BLOB_CONTENT`. Remove `WAVE_COUNT`, or calculate the actual wave count and add it to the summary table if that metric is intended.
+
+#### CONSIST-001 — Failure-alert API lookup bypasses canonical helpers
+
+- **ID:** CONSIST-001
+- **File:** `.github/workflows/orchestrate_poll.yml:965-978`; `.github/workflows/forward-merge-stable-to-main.yml:483-497`
+- **Severity:** Low
+- **Category:** `consistency`
+- **Description:** Two duplicate failure-alert blocks use raw authenticated `curl` rather than `gh_retry`, `_safe_gh_jq`, or `curl_gh_api`. They therefore lack shared permanent-error handling, rate-limit telemetry, and backoff.
+- **Recommended fix:** Add `gh_first_failed_step <repo> <run_id> <attempt>` to `scripts/gh_helpers.sh` and call it from both workflows. Normal call count remains one.
+
+ShellCheck found no actionable SC2086, SC2046, SC2006, or SC2015 violations. Remaining warnings were intentional glob matching, dynamic sourcing, or dead assignments covered above.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | BUG-001 |
+| Medium | 9 | BUG-002, SEC-001, BATCH-001, BATCH-002, API-002, API-003, DUP-001, DUP-003, EXPR-001 |
+| Low | 6 | SEC-002, API-001, DUP-002, DEAD-001, DEAD-002, CONSIST-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 1 | Medium |
+| API call optimization | 4 | Large |
+| Code modularization | ≈16 | Large |
+| Expression size reduction | 1–2 | Small |
+| Medium/Low fixes | ≈8 | Medium |
