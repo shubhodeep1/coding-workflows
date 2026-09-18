@@ -3313,8 +3313,10 @@ has_label() {
 
 validation_fix_issue_has_merged_pr_evidence() {
   local issue_num="$1"
+  local expected_base="${2:-}"
   local timeline_json
   local validation_merged_pr_candidates validation_candidate_pr validation_candidate_pr_json
+  local validation_candidate_base
   local validation_pr_lookup_failed=false
 
   if ! timeline_json="$(_issue_timeline_with_cross_refs_json "${issue_num}")"; then
@@ -3346,6 +3348,13 @@ validation_fix_issue_has_merged_pr_evidence() {
       validation_pr_lookup_failed=true
       echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=pr_fetch_failed" >&2
       continue
+    fi
+    if [ -n "${expected_base}" ]; then
+      validation_candidate_base="$(printf '%s' "${validation_candidate_pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
+      if [ -z "${validation_candidate_base}" ] || [ "${validation_candidate_base}" != "${expected_base}" ]; then
+        echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${issue_num} candidate_pr=${validation_candidate_pr} rejected=base_mismatch" >&2
+        continue
+      fi
     fi
     if _pr_json_is_issue_implementation_pr "${issue_num}" "${validation_candidate_pr_json}"; then
       return 0
@@ -13513,9 +13522,10 @@ _fetch_candidate_issue_details_graphql() {
                   ... on PullRequest {
                     number state merged
                     labels(first: 100) { nodes { name } }
-                    mergedAt
-                    headRefName
-                    headRefOid
+	                    mergedAt
+	                    headRefName
+	                    baseRefName
+	                    headRefOid
                     mergeable
                     mergeStateStatus
                     mergeCommit { oid }
@@ -13570,9 +13580,10 @@ _fetch_candidate_issue_details_graphql() {
                       merged: (.merged // false),
                       labels: [(.labels.nodes // [])[]?.name],
                       merged_at: (.mergedAt // null),
-                      merge_commit_sha: (.mergeCommit.oid // null),
-                      head_ref: (.headRefName // null),
-                      head_sha: (.headRefOid // null),
+	                      merge_commit_sha: (.mergeCommit.oid // null),
+	                      head_ref: (.headRefName // null),
+	                      base_ref: (.baseRefName // null),
+	                      head_sha: (.headRefOid // null),
                       mergeable: (.mergeable // null),
                       merge_state_status: (.mergeStateStatus // null),
                       headPushedAt: (
@@ -16406,8 +16417,8 @@ The active security-pass fix cycle continues; the waivers apply from its next re
         SECURITY_FIX_STATE="$(printf '%s' "${SECURITY_FIX_FALLBACK_JSON}" | jq -r '.state')"
         SECURITY_FIX_LABELS="$(printf '%s' "${SECURITY_FIX_FALLBACK_JSON}" | jq -c '.labels')"
         SECURITY_FIX_PR_MERGED="false"
-        if [ "${SECURITY_FIX_STATE}" = "closed" ] && ! has_label "${SECURITY_FIX_LABELS}" "ai:merged"; then
-          if validation_fix_issue_has_merged_pr_evidence "${SECURITY_FIX_ISSUE}"; then
+        if [ "${SECURITY_FIX_STATE}" = "closed" ]; then
+	          if validation_fix_issue_has_merged_pr_evidence "${SECURITY_FIX_ISSUE}" "${INTEGRATION_BRANCH_TRACKING}"; then
             if ! backfill_validation_fix_issue_merged_label "${SECURITY_FIX_ISSUE}" "${SECURITY_FIX_LABELS}"; then
               echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE}: merged PR detected but ai:merged backfill failed." >&2
             fi
@@ -16421,24 +16432,27 @@ The active security-pass fix cycle continues; the waivers apply from its next re
           fi
         fi
       else
-        SECURITY_FIX_STATE="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].state // "open"')"
-        SECURITY_FIX_LABELS="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -c --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].labels // []')"
-        SECURITY_FIX_PR_MERGED="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].linked_pr.merged // false')"
+	        SECURITY_FIX_STATE="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].state // "open"')"
+	        SECURITY_FIX_LABELS="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -c --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].labels // []')"
+	        SECURITY_FIX_PR_MERGED="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].linked_pr.merged // false')"
+	        SECURITY_FIX_PR_BASE="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].linked_pr.base_ref // ""')"
+	        SECURITY_FIX_PR_NUMBER="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].linked_pr.number // "unknown"')"
+	        if [ "${SECURITY_FIX_PR_MERGED}" = "true" ] \
+	          && { [ -z "${SECURITY_FIX_PR_BASE}" ] || [ "${SECURITY_FIX_PR_BASE}" != "${INTEGRATION_BRANCH_TRACKING}" ]; }; then
+	          echo "VALIDATION_FIX_MERGED_EVIDENCE issue=${SECURITY_FIX_ISSUE} candidate_pr=${SECURITY_FIX_PR_NUMBER} rejected=base_mismatch" >&2
+	          SECURITY_FIX_PR_MERGED="false"
+	        fi
         # The batch's linked_pr only carries CrossReferencedEvents with
         # willCloseTarget=true, and GitHub sets that flag only for PRs
         # into the default branch — so it is null for every fix PR
-        # merged into an integration branch.  When the ai:merged label
-        # is also missing (tele-funtoken-msg-scoring#4379: the
-        # review-blocked judge's post-merge phase swap replaced the
-        # PR-close handler's ai:merged with ai:ready-to-merge six seconds
-        # after it landed), fall back to the same timeline evidence the
-        # cache-miss path already consults before declaring the fix
-        # closed-without-merge.  §15: one timeline read plus label
-        # reconciliation, only on this closed + unlabelled + unlinked corner.
+        # merged into an integration branch. The ai:merged label is not
+        # evidence here because issue_pr_status may apply it for a PR into
+        # any base. Fall back to the timeline whenever the cache has no
+        # valid integration-base merge. §15: one timeline read plus label
+        # reconciliation, only on this closed + no-valid-cache-evidence corner.
         if [ "${SECURITY_FIX_STATE}" = "closed" ] \
-          && [ "${SECURITY_FIX_PR_MERGED}" != "true" ] \
-          && ! has_label "${SECURITY_FIX_LABELS}" "ai:merged"; then
-          if validation_fix_issue_has_merged_pr_evidence "${SECURITY_FIX_ISSUE}"; then
+          && [ "${SECURITY_FIX_PR_MERGED}" != "true" ]; then
+	          if validation_fix_issue_has_merged_pr_evidence "${SECURITY_FIX_ISSUE}" "${INTEGRATION_BRANCH_TRACKING}"; then
             echo "SECURITY_PASS_FIX_MERGED_EVIDENCE tracking_issue=${TRACKING_NUM} issue=${SECURITY_FIX_ISSUE} source=timeline"
             if ! backfill_validation_fix_issue_merged_label "${SECURITY_FIX_ISSUE}" "${SECURITY_FIX_LABELS}"; then
               echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE}: merged PR detected but ai:merged backfill failed." >&2
@@ -16454,7 +16468,7 @@ The active security-pass fix cycle continues; the waivers apply from its next re
         fi
       fi
       if [ "${SECURITY_FIX_STATE}" = "closed" ] \
-        && { [ "${SECURITY_FIX_PR_MERGED}" = "true" ] || has_label "${SECURITY_FIX_LABELS}" "ai:merged"; }; then
+        && [ "${SECURITY_FIX_PR_MERGED}" = "true" ]; then
         SECURITY_PASS_COMPLETED_CYCLES="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
         if ! [[ "${SECURITY_PASS_COMPLETED_CYCLES}" =~ ^[0-9]+$ ]]; then
           SECURITY_PASS_COMPLETED_CYCLES=0
