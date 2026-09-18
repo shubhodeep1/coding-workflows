@@ -14,9 +14,22 @@ import sys
 body = sys.stdin.read()
 pattern = re.compile(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", re.MULTILINE)
 match = pattern.search(body)
-if not match:
+if match:
+	print(match.group(1).strip())
 	sys.exit(0)
-print(match.group(1).strip())
+# "Target branch:" is an accepted alias for human-authored issues that name
+# the branch they must be planned and implemented against (issue #4075 used
+# `**Target branch:** `orchestrator/project-3965` (integration branch ...)`,
+# which the canonical parser above does not recognise, so planning checked
+# out main and blocked). The backticked form may carry trailing prose; the
+# plain form is a single whitespace-free token. The canonical
+# "Integration branch:" line always wins when both are present. Keep in
+# sync with TARGET_BRANCH_LINE_RE in scripts/orchestrate_lib.py.
+alias_pattern = re.compile(r"^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)\s*(?:`\s*([^`\n]+?)\s*`(?:\s.*)?|([^`\s]+))\s*$", re.MULTILINE)
+alias_match = alias_pattern.search(body)
+if not alias_match:
+	sys.exit(0)
+print((alias_match.group(1) or alias_match.group(2) or "").strip())
 '
 }
 

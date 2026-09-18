@@ -1,0 +1,14 @@
+{
+  "name": "child_target_branch_alias_missing_fails",
+  "issues": {
+    "101": {
+      "body": "Child task body\n\nTarget branch: `orchestrator/project-gone` (deleted)\n"
+    },
+    "1047": {
+      "body": "## Project: Tracking\n"
+    }
+  },
+  "branch_exists": {},
+  "expected_stdout": "",
+  "expected_exit_code": 1
+}

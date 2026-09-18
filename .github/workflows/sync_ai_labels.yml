@@ -239,6 +239,17 @@ jobs:
           ERROR_COUNT: ${{ steps.summarize.outputs.error_count }}
           ALERT_LEVEL: ${{ steps.summarize.outputs.alert_level }}
           DRY_RUN: ${{ inputs.dry_run }}
+          # The clean-run ping (created=0/updated=0/errors=0, emitted at DEBUG)
+          # fires on every @stable release dispatch in every consumer repo, so
+          # it is pure noise by default. AI_LABEL_SYNC_SUCCESS_ALERT_LEVEL is a
+          # step-scoped ALERT_MSG_LEVEL override applied ONLY when the run
+          # outcome is DEBUG; it defaults to SILENT so tg_helpers.sh's
+          # _tg_should_send drops the ping unless a consumer opts back in via
+          # vars.AI_LABEL_SYNC_SUCCESS_ALERT_LEVEL=DEBUG. WARNING (per-label
+          # errors) and ERROR (sync failed) pings are unaffected and keep
+          # honouring the global ALERT_MSG_LEVEL. Mirrors PR_PROCESSED_ALERT_LEVEL
+          # in review_autofix.yml. Dry-runs are treated the same as real runs.
+          AI_LABEL_SYNC_SUCCESS_ALERT_LEVEL: ${{ vars.AI_LABEL_SYNC_SUCCESS_ALERT_LEVEL || 'SILENT' }}
         run: |
           set -euo pipefail
 
@@ -259,6 +270,11 @@ jobs:
             suffix=" (dry-run)"
           fi
           msg="AI label sync${suffix} for ${GITHUB_REPOSITORY}: created=${CREATED:-0}, updated=${UPDATED:-0}, unchanged=${UNCHANGED:-0}, errors=${ERROR_COUNT:-0}"
+          # Only the DEBUG (clean-run) outcome is re-thresholded; see the
+          # AI_LABEL_SYNC_SUCCESS_ALERT_LEVEL comment in this step's env block.
+          if [ "${ALERT_LEVEL:-ERROR}" = "DEBUG" ]; then
+            export ALERT_MSG_LEVEL="${AI_LABEL_SYNC_SUCCESS_ALERT_LEVEL:-SILENT}"
+          fi
           tg_send_msg "${msg}" "${ALERT_LEVEL:-ERROR}" >/dev/null || true
 
       - name: Fail on total sync failure

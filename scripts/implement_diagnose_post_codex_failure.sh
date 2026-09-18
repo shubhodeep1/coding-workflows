@@ -47,7 +47,9 @@
 #     diagnose fails or returns unparseable JSON.
 
 set -euo pipefail
-source scripts/gh_helpers.sh 2>/dev/null || true
+IMPLEMENT_DIAGNOSE_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 type gh_retry &>/dev/null || gh_retry() { "$@"; }
 type _safe_gh_jq &>/dev/null || _safe_gh_jq() {
   local _tmpf
@@ -212,8 +214,9 @@ fi
 echo "handled=true" >> "$GITHUB_OUTPUT"
 
 ensure_implementation_failed_label() {
-  if [ -f scripts/label_helpers.sh ]; then
-    source scripts/label_helpers.sh
+  if [ -f "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/label_helpers.sh" ]; then
+    # shellcheck disable=SC1091
+    source "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/label_helpers.sh"
     ensure_label_exists "ai:implementation-failed" "${GITHUB_REPOSITORY}" || true
   else
     gh_retry gh label create "ai:implementation-failed" --repo "${GITHUB_REPOSITORY}" \
@@ -230,8 +233,9 @@ ensure_implementation_failed_label() {
 }
 
 ensure_implement_fixup_labels() {
-  if [ -f scripts/label_helpers.sh ]; then
-    source scripts/label_helpers.sh
+  if [ -f "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/label_helpers.sh" ]; then
+    # shellcheck disable=SC1091
+    source "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/label_helpers.sh"
     ensure_label_exists "ai:clarification" "${GITHUB_REPOSITORY}" || true
     ensure_label_exists "ai:implement-fix-up" "${GITHUB_REPOSITORY}" || true
   else
@@ -396,7 +400,7 @@ EOF
 fi
 
 DIAGNOSE_MODE_PROMPT="${DIAGNOSE_MODE_PROMPT_TEMPLATE}"
-if ensure_diagnose_asset "scripts/render_prompt.sh" "scripts/render_prompt.sh"; then
+if ensure_diagnose_asset "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/render_prompt.sh" "scripts/render_prompt.sh"; then
   DIAGNOSE_RENDERED_PROMPT="${RUNTIME_DIR}/mode-implement-diagnose.rendered.txt"
   DIAGNOSE_SERENA_TOOL_HINTS=""
   if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
@@ -407,7 +411,7 @@ Serena hints:
 EOF
     )"
   fi
-  if SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" > "${DIAGNOSE_RENDERED_PROMPT}"; then
+  if SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/render_prompt.sh" "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" > "${DIAGNOSE_RENDERED_PROMPT}"; then
     DIAGNOSE_MODE_PROMPT="${DIAGNOSE_RENDERED_PROMPT}"
   else
     echo "::warning::Failed to render ${DIAGNOSE_MODE_PROMPT_TEMPLATE}; using raw prompt."
@@ -437,9 +441,9 @@ Keep the response focused on actionable diagnosis grounded in the supplied evide
 EOF
 fi
 
-if [ -f scripts/semble_helpers.sh ]; then
+if [ -f "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/semble_helpers.sh" ]; then
   # shellcheck source=/dev/null
-  source scripts/semble_helpers.sh 2>/dev/null || true
+  source "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/semble_helpers.sh" 2>/dev/null || true
 fi
 
 build_diagnose_semble_query() {

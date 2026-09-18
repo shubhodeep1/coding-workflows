@@ -54,6 +54,7 @@ build_metadata_payload()
 	LEDGER_TOKENS_OUTPUT="${tokens_output}" \
 	LEDGER_TOKENS_TOTAL="${tokens_total}" \
 	LEDGER_TOKENS_LOG_FILE="${tokens_log_file}" \
+	LEDGER_TOKENS_LOG_MAX_BYTES="${LEDGER_TOKENS_LOG_MAX_BYTES:-}" \
 	PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
 import json
 import os
@@ -168,11 +169,59 @@ token_values = {
 	"total": parse_int(os.environ.get("LEDGER_TOKENS_TOTAL")),
 }
 
+
+def read_tokens_log_tail(tokens_log_path, tail_max_bytes):
+	"""Return the trailing `tail_max_bytes` of the log, snapped to a line start.
+
+	Every parser above keeps the LAST match it finds, and editor CLIs write
+	their usage summary at the end of the log, so the tail carries the same
+	answer the whole file would.  Reading the whole file does not: the
+	`{`-candidate scan in parse_usage_from_text() is O(n^2) in the document
+	length, because json.JSONDecodeError's constructor counts newlines from
+	byte 0 of the document on every failed candidate.  A 30 MB codex log
+	therefore burns over an hour of pure CPU per call and silently consumes
+	the caller's whole job budget (run 34074649678 on issue #4017 lost a
+	3-hour implement job to two such calls; the log carried no `usage`
+	object at all and its only `tokens used` line sat 20 bytes from EOF).
+
+	A `tail_max_bytes` of exactly 0 disables the bound and reads the whole
+	file.  That is the only disabling value that can reach here: the caller
+	derives it from LEDGER_TOKENS_LOG_MAX_BYTES through parse_int(), which
+	yields a non-negative integer or None, and None becomes the default.
+	The `<= 0` guard below is defensive for direct callers, not a contract.
+	"""
+	if tail_max_bytes <= 0:
+		return tokens_log_path.read_text(encoding="utf-8", errors="replace")
+	tokens_log_size = tokens_log_path.stat().st_size
+	if tokens_log_size <= tail_max_bytes:
+		return tokens_log_path.read_text(encoding="utf-8", errors="replace")
+	# Read one byte ahead of the window so a seek that lands exactly after a
+	# newline is recognised as already line-aligned.  Without it the first
+	# line of the window, complete though it is, would be dropped below.
+	# tokens_log_size > tail_max_bytes here, so the offset is never negative.
+	with tokens_log_path.open("rb") as tokens_log_handle:
+		tokens_log_handle.seek(tokens_log_size - tail_max_bytes - 1)
+		byte_before_window = tokens_log_handle.read(1)
+		tail_chunk = tokens_log_handle.read()
+	if byte_before_window != b"\n":
+		# Drop the partial first line, and with it any split UTF-8 sequence
+		# at the seek point.  When the window holds no newline at all, keep
+		# it whole rather than discarding every candidate match in it.
+		first_newline_at = tail_chunk.find(b"\n")
+		if first_newline_at != -1:
+			tail_chunk = tail_chunk[first_newline_at + 1:]
+	return tail_chunk.decode("utf-8", errors="replace")
+
+
+tokens_log_max_bytes = parse_int(os.environ.get("LEDGER_TOKENS_LOG_MAX_BYTES"))
+if tokens_log_max_bytes is None:
+	tokens_log_max_bytes = 1048576
+
 log_path_raw = os.environ.get("LEDGER_TOKENS_LOG_FILE", "").strip()
 if log_path_raw:
 	log_path = Path(log_path_raw)
 	if log_path.exists():
-		text = log_path.read_text(encoding="utf-8", errors="replace")
+		text = read_tokens_log_tail(log_path, tokens_log_max_bytes)
 		for parsed in (parse_usage_from_text(text), parse_openrouter_usage_line(text)):
 			for key, value in parsed.items():
 				if token_values.get(key) is None and value is not None:
@@ -207,10 +256,12 @@ emit_deduped_run_event()
 	LEDGER_PR_NUMBER="${pr_number}" \
 	LEDGER_ACTOR="${actor}" \
 	LEDGER_METADATA_PAYLOAD="${metadata_payload}" \
+	LEDGER_EMIT_TIMEOUT_SECONDS="${LEDGER_EMIT_TIMEOUT_SECONDS:-}" \
 	PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
 import fcntl
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -261,7 +312,38 @@ with lock_path.open("a+", encoding="utf-8") as handle:
 		"--metadata-json",
 		os.environ["LEDGER_METADATA_PAYLOAD"],
 	]
-	completed = subprocess.run(cmd, capture_output=True, text=True, check=False)
+	# Telemetry must never outlive the work it describes.  record-run-event
+	# touches the ai-memory store, so an unbounded call here would hold the
+	# exclusive flock above and stall the caller's job with no log line until
+	# the runner's own timeout cancelled it.  Bound it and fail open.
+	# Contract (README / agents.md): a positive finite number of seconds
+	# bounds the call, exactly `0` disables the bound, and anything else --
+	# empty, negative, `nan`, `inf`, or non-numeric -- falls back to the
+	# default.  Only `0` may remove the safety bound; a typo never should.
+	emit_timeout_raw = (os.environ.get("LEDGER_EMIT_TIMEOUT_SECONDS") or "").strip()
+	emit_timeout = 120.0
+	if emit_timeout_raw:
+		try:
+			emit_timeout_parsed = float(emit_timeout_raw)
+		except ValueError:
+			emit_timeout_parsed = None
+		if emit_timeout_parsed is not None and math.isfinite(emit_timeout_parsed):
+			if emit_timeout_parsed == 0:
+				emit_timeout = None
+			elif emit_timeout_parsed > 0:
+				emit_timeout = emit_timeout_parsed
+
+	try:
+		completed = subprocess.run(
+			cmd,
+			capture_output=True,
+			text=True,
+			check=False,
+			timeout=emit_timeout,
+		)
+	except subprocess.TimeoutExpired:
+		print(f"emit_failed:timeout:record-run-event exceeded {emit_timeout}s")
+		raise SystemExit(0)
 	if completed.returncode != 0:
 		detail = (completed.stderr or completed.stdout or "").strip().replace("\n", " | ")
 		if detail:

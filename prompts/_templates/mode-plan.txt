@@ -166,8 +166,13 @@ Before exiting, audit the plan you are about to emit.
   `STATUS: NOT_CLEAR`.
 - Any emitted `PLAN_SELF_CHECK` finding must be a single line and specific to
   the current issue, plan, or missing evidence.
-- `PLAN_SELF_CHECK: BLOCKER:` findings reopen clarification; do not emit a
+- `PLAN_SELF_CHECK: BLOCKER:` findings stop the run; do not emit a
   normal implementation plan that proceeds to approval in that case.
+  A blocker on its own routes the issue to the blocked path (`ai:blocked`
+  plus one human page), because there is nothing for `/answer` to resolve.
+  Clarification only reopens when the same output also carries a Q-ID
+  question block or a `NEEDS_CLARIFICATION` status, so pose the questions
+  explicitly whenever a human answer could actually clear the blocker.
 - Do not emit both `PLAN_SELF_CHECK: PASS` and any `PLAN_SELF_CHECK: WARNING:`
   or `PLAN_SELF_CHECK: BLOCKER:` lines in the same output.
 - Do not emit `STATUS: CLEAR` when any `PLAN_SELF_CHECK: BLOCKER:` line is

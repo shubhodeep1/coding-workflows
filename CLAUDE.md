@@ -259,10 +259,15 @@ scope. §6 (naming immutability) and §10 (MongoDB contracts) remain hard
 rules even under proactive scope and are NOT superseded.
 
 When the user asks Claude to address PR review feedback — via `@codex change`
-in a PR, a direct chat request, a `subscribe_pr_activity` event, or any
-equivalent trigger — apply fixes with a **wide proactive scope**. Default to
-action, not to asking. Only stop and ask on the genuinely ambiguous items
-enumerated in §12.D.
+in a PR, a direct chat request, or any equivalent trigger — apply fixes with
+a **wide proactive scope**. Default to action, not to asking. Only stop and
+ask on the genuinely ambiguous items enumerated in §12.D.
+
+A `subscribe_pr_activity` event is **not** a trigger for this mode. PR
+watching is disabled by §25, so no such event should ever reach an
+interactive session; if one does, do not act on it — treat it as a
+misconfiguration and report it. §12 is entered only by a direct request in
+the session.
 
 ### A) Single-PR Rule (NON-NEGOTIABLE)
 
@@ -366,14 +371,23 @@ After changes:
 
 ### G) Autofix CI / Address-Comments Mode Add-ons
 
-When Claude is invoked under the **autofix CI / address-comments mode** —
+**INACTIVE — superseded by §25.** The autofix CI / address-comments mode
+this subsection describes was entered by a `subscribe_pr_activity` event
+(a failing required check or a new review comment waking the session).
+§25 disables PR watching entirely, so that mode is never entered and the
+add-ons below are never in force on their own. The text is retained
+unchanged so section references stay stable (§6) and so the categories
+can be re-activated by editing §25 in a reviewed change. When the user
+directly asks in the session to fix CI or address review comments on a
+PR, plain §12 (A–F) applies; the add-ons below do not.
+
+When Claude was invoked under the **autofix CI / address-comments mode** —
 i.e. an **interactive Claude Code session** driven by a
 `subscribe_pr_activity` event tied to a failing required check, an
 `@codex change` / "address the review comments" request on a PR, or any
 equivalent trigger that tasks the interactive session with making the
-branch green and the review thread satisfied — the following are
-first-class auto-apply categories on top of §12.B. Fix them without
-asking.
+branch green and the review thread satisfied — the following were
+first-class auto-apply categories on top of §12.B.
 
 This subsection governs **interactive sessions only**, consistent with
 the preface at the top of this file (lines 7–10): the unattended
@@ -874,13 +888,52 @@ forever; ancestry is what separates "stacking on merged history" from
 "fresh work that reuses the name". No override flag is needed, and the
 guard goes quiet as soon as the branch is reset — before the new PR exists.
 
+Condition 3 is refined for repositories that merge with **merge commits**.
+There the merged head *is* an ancestor of the default branch, so after the
+reset it is an ancestor of `HEAD` too and plain ancestry would block the
+very remediation §21.A prescribes. The guard therefore also looks at where
+the branch forks off `origin/<default>`: a fork point on the default
+branch's first-parent chain means the branch was rebuilt from the default
+branch (allow); a fork point on merged side history means the branch is
+still sitting on the merged commits (block). Squash- and rebase-merged PRs
+never put the merged head into the default branch, so plain ancestry
+already decides for them.
+
+The same hook guards the GitHub MCP push tools — `mcp__github__push_files`
+and `mcp__github__create_or_update_file` — through a second `PreToolUse`
+matcher in `.claude/settings.json`. Those tools write to a remote branch
+without a local `git push`, so the remote branch tip (fetched via
+`git ls-remote` + `git fetch`) takes the role `HEAD` plays for a local
+commit. When the target repository is not the local checkout, ancestry
+cannot be verified and a merged-PR match **asks** for confirmation instead
+of blocking, because a block there could never self-clear.
+
 ### C) Fail-open contract
 
-Any inability to answer the question — `gh` missing, token expired or
-unauthenticated, network failure, unparseable hook payload, detached HEAD,
-not a git repo, undeterminable `<owner>/<repo>` — **allows** the command and
-emits a warning naming the branch. A guard that hard-blocks every commit
-whenever a token lapses would cost more than the bug it prevents.
+An unreachable GitHub API — `gh` missing, token expired or unauthenticated,
+network failure, or Claude Code Web's agent proxy answering HTTP 403 as it
+does for sessions without the GitHub App connected — does **not** silently
+allow the command. The guard falls back to git history alone, fetching
+`origin/<default>` through the git remote (which works in exactly the
+sessions where the API does not):
+
+1. If the branch sits on merge-commit side history already in
+   `origin/<default>` and origin still holds a branch tip fully contained in
+   `origin/<default>`, the command is **blocked** with the same remediation as
+   the API path.
+2. Otherwise git history is **inconclusive** (an absent remote ref could be a
+   deleted merged branch or a never-pushed branch, and a rebuilt branch and a
+   squash- or rebase-merged one look identical): a `git push` or an MCP push
+   is routed through the harness permission prompt (`permissionDecision: ask`)
+   so a human confirms the PR is still open, and a bare `git commit` is allowed
+   with a warning, since the work only strands once pushed.
+
+Only the cases where nothing branch-shaped can be checked at all — an
+unparseable hook payload, detached HEAD, not a git repo, an undeterminable
+`<owner>/<repo>` — still **allow** the command and emit a warning naming the
+branch. A guard that hard-blocks every commit whenever the environment is
+broken would cost more than the bug it prevents; asking on a push is the
+compromise.
 
 The merged-PR check is skipped on the default branch and when
 `CLAUDE_PR_MERGE_GUARD=off` is set (default: unset, i.e. enabled). The API-write
@@ -893,6 +946,10 @@ Per §15, the guard issues **one** API call per guarded command — a single
 caches the result for 300 seconds keyed on `<slug>/<branch>`. Cached data may
 satisfy an *allow*; a *block* is always re-verified against a live call first,
 so opening a new PR clears the guard immediately instead of after the TTL.
+
+The git-history fallback in §21.C issues no GitHub API calls at all: one
+`git ls-remote` for the branch and one `git fetch` for the default branch
+(plus the branch, when origin still has it), both through the git remote.
 
 The call goes over REST (`gh api repos/<slug>/pulls`), **not** `gh pr list`.
 Claude Code Web's agent proxy serves only a pinned set of GraphQL operations
@@ -1050,11 +1107,14 @@ without a separate approval round:
 - pull request and issue comments, review-thread replies, and resolving
   review threads you have addressed;
 - applying or removing `ai:*` and other workflow labels the pipelines expect,
-  and subscribing/unsubscribing to PR activity.
+  and unsubscribing from PR activity. Subscribing to PR activity is **not**
+  a routine write: §25 forbids it outright, and a `PreToolUse` hook blocks
+  the call.
 
-Two constraints ride along and are **not** relaxed by this subsection:
+Three constraints ride along and are **not** relaxed by this subsection:
 §19 (no auto-close keywords against `ai:orchestrator-tracking` issues) governs
-every body you post, and §21 (merged-PR commit guard) governs every commit
+every body you post, §25 (PR watching is disabled) governs what happens after
+a push, and §21 (merged-PR commit guard) governs every commit
 and push.
 
 ### C) Destructive & Administrative Writes — ALWAYS Ask First
@@ -1349,6 +1409,76 @@ Rules (same as §22.C):
 - The unattended pipelines read `unattended_system_instructions.md` and
   never see this file, so §24 grants no new access to any codex-driven
   phase.
+
+---
+
+## §25. PR Watching Is Disabled (MANDATORY)
+
+Interactive Claude Code sessions **never watch a pull request after pushing
+it.** This section applies in this repo and in every consumer repo that
+receives this file via the `@stable` sync. It is strict: it is NOT
+superseded by §12 (PR Review Mode), and it holds even when the user asks
+for PR watching in the session.
+
+### A) What is forbidden
+
+- **Subscribing to PR activity** by any mechanism — the
+  `subscribe_pr_activity` tool of any MCP server (`mcp__github__…`,
+  `mcp__Claude_Code_Remote__…`, or any other), a harness "watch this PR"
+  option, or any equivalent.
+- **Offering to watch.** The harness's default prompt tells Claude to ask,
+  after opening a PR, whether the user wants it watched for CI failures and
+  review comments. Do not ask that question, and do not mention the option.
+- **Entering autofix CI / address-comments mode on an event.** No
+  `subscribe_pr_activity` wake-up is ever acted on (§12.G is inactive).
+  Fixing CI or addressing review comments happens only when the user asks
+  for it directly in the session, and then under plain §12.
+
+### B) If the user asks for it anyway
+
+Refuse, even on an explicit "watch this PR" request. Reply in one or two
+sentences that CLAUDE.md §25 forbids PR watching in this repository and
+that enabling it requires changing §25 and removing the
+`pr_watch_guard.py` hook from `.claude/settings.json` in a reviewed change
+first. Then continue with the rest of the task. Do not work around the
+rule with another mechanism that amounts to watching (polling the PR in a
+loop, delegating the watch to a subagent or another session).
+
+### C) What is still allowed
+
+- Pushing the branch, opening the PR, and reporting its link (§23.B).
+- Unsubscribing from PR activity (`unsubscribe_pr_activity`) — tearing an
+  existing subscription down is always permitted.
+- Reading a PR's state, CI status, or review comments when the user asks
+  about it, and acting on that request under §12 when asked to.
+- Scheduled self check-ins and reminders (`send_later`, Routines) for work
+  the user asked for. This section bans the PR-activity subscription, not
+  the scheduler.
+
+### D) Enforcement
+
+The rule is enforced deterministically by `.claude/hooks/pr_watch_guard.py`,
+wired as a `PreToolUse` hook in `.claude/settings.json` under the matcher
+`mcp__.*__subscribe_pr_activity`. Prose alone cannot enforce this: the
+harness prompt actively pushes toward offering a watch, and the instruction
+is furthest from the context window's live edge exactly when a session has
+run long enough to open a PR. The hook blocks every `subscribe_pr_activity`
+call from any MCP server, never blocks `unsubscribe_pr_activity`, issues no
+API calls (§15), and fails open with a `systemMessage` warning when the hook
+payload cannot be read, is invalid or non-object JSON, or guard evaluation
+raises an internal exception. There is deliberately no environment-variable
+escape hatch. The hook and the settings entry ship to consumer repos
+through the same `.claude/` sync as the §21 guard;
+`tests/test_pr_watch_guard.py` covers the rule and the wiring.
+Empty or whitespace-only hook input is treated as an empty object and allowed
+silently because there is no tool payload to evaluate.
+
+### E) Interactive Sessions Only
+
+The unattended pipelines read `unattended_system_instructions.md` and never
+see this file. §25 says nothing about the unattended `review_autofix`
+workflow (`Codex PR Self-Healing Semantic Agent`) or the orchestrator's
+stall recovery — those keep their own policies.
 
 ---
 

@@ -14,7 +14,10 @@
 # queries GitHub's GET /rate_limit endpoint (not itself rate-limited)
 # to read X-RateLimit-Reset, then sleeps until reset+1 s (capped at
 # 600 s, floored at 1 s, fallback 30 s).  Other transient failures
-# use exponential backoff (1 s, 2 s, 4 s, …).
+# use exponential backoff (1 s, 2 s, 4 s, …).  curl_gh_api reads the
+# 403/429 response headers directly instead: a numeric Retry-After
+# (secondary rate limit) takes precedence over X-RateLimit-Reset —
+# see _parse_reset_header.
 
 # Guard against double-sourcing
 if [ "${_GH_HELPERS_LOADED:-}" = "1" ]; then
@@ -109,21 +112,50 @@ _sleep_until_reset()
 		wait_secs=30
 	fi
 
-	echo "::warning::  Rate limit resets in ${wait_secs}s (X-RateLimit-Reset: ${reset_epoch:-unknown})" >&2
+	echo "::warning::  Rate limit resets in ${wait_secs}s (computed reset epoch: ${reset_epoch:-unknown})" >&2
 	sleep "${wait_secs}"
 }
 
 # ---------------------------------------------------------------
-# _parse_reset_header — extract X-RateLimit-Reset from a header
-# dump file (produced by curl -D).
+# _parse_reset_header — derive the rate-limit reset epoch from a
+# header dump file (produced by curl -D).
+#
+# Precedence:
+#   1. Retry-After (integer seconds) → now + seconds. GitHub sends
+#      this on secondary rate limits (abuse detection); it is the
+#      authoritative wait and is usually well under a minute.
+#   2. X-RateLimit-Reset (epoch) → primary window reset.
+#
+# Without step 1 a secondary-limit 403 was timed against the
+# primary window, which can be up to an hour away, so the caller
+# slept the full 600 s cap in _sleep_until_reset instead of the
+# few seconds GitHub asked for. A non-numeric Retry-After (the
+# HTTP-date form) is ignored and falls through to step 2.
 #
 # Prints the epoch timestamp to stdout; empty string on failure.
+# Always returns 0: a missing header or header file is the empty
+# string, never a non-zero status, so the function is safe under
+# `set -euo pipefail` even outside an `if` / `||` context.
 # ---------------------------------------------------------------
 _parse_reset_header()
 {
 	local header_file="$1"
+	local _retry_after_secs
+	_retry_after_secs=$(grep -i '^retry-after:' "${header_file}" 2>/dev/null \
+		| head -1 | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*$//' | tr -d '\r' || true)
+	case "${_retry_after_secs}" in
+		''|*[!0-9]*) : ;;
+		*)
+			echo "::warning::  Retry-After: ${_retry_after_secs}s present (secondary rate limit); honouring it over X-RateLimit-Reset" >&2
+			# 10# forces decimal: a zero-padded value such as "08" would
+			# otherwise be parsed as octal and abort the arithmetic.
+			echo $(( $(date +%s) + 10#${_retry_after_secs} ))
+			return 0
+			;;
+	esac
 	grep -i '^x-ratelimit-reset:' "${header_file}" 2>/dev/null \
-		| head -1 | awk '{print $2}' | tr -d '\r'
+		| head -1 | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*$//' | tr -d '\r' || true
+	return 0
 }
 
 # ---------------------------------------------------------------

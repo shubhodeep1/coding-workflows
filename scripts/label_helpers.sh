@@ -10,9 +10,10 @@
 # Keeps the helper self-contained so it works even when the contract
 # file is not present in the checked-out repo.
 # shellcheck source=gh_helpers.sh
-if [ -f "scripts/gh_helpers.sh" ]; then
+LABEL_HELPERS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${LABEL_HELPERS_SCRIPT_DIR}/gh_helpers.sh" ]; then
 	# shellcheck disable=SC1091
-	source scripts/gh_helpers.sh
+	source "${LABEL_HELPERS_SCRIPT_DIR}/gh_helpers.sh"
 fi
 # Fallback if gh_helpers.sh not available
 if ! type gh_retry >/dev/null 2>&1; then
@@ -62,6 +63,7 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:comprehensive-test-pending"]="1d76db"
 	["ai:needs-prompt-review"]="fbca04"
 	["ai:review-skipped"]="c2e0c6"
+	["ai:merge-queued"]="c5def5"
 	["ai:retro"]="5319e7"
 	["ai:security-audit"]="5319e7"
 	["ai:security"]="0e8a16"
@@ -114,6 +116,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:comprehensive-test-pending"]="Pending comprehensive release callback dispatch."
 	["ai:needs-prompt-review"]="Validation prompt self-heal PR awaiting manual review"
 	["ai:review-skipped"]="Reviewer panel + editor cycle skipped by deterministic gate (doc-only or under size threshold)"
+	["ai:merge-queued"]="Review queued behind an older open PR that edits the same files (merge train)"
 	["ai:retro"]="Stable tracker issue for weekly workflow retrospectives"
 	["ai:security-audit"]="Stable tracker issue for periodic default-branch security audits"
 	["ai:security"]="Follow-up issue opened by the periodic security audit workflow"

@@ -47,6 +47,20 @@ INTEGRATION_BRANCH_LINE_RE = re.compile(
 	r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$",
 	re.MULTILINE,
 )
+# "Target branch:" is an accepted alias of "Integration branch:" for
+# human-authored issues that name the branch they must be planned and
+# implemented against. Issue #4075 used
+# ``**Target branch:** `orchestrator/project-3965` (integration branch ...)``,
+# which INTEGRATION_BRANCH_LINE_RE does not recognise, so planning checked
+# out main and the planner blocked with "integration branch mismatch". The
+# backticked form may carry trailing prose after the closing backtick; the
+# plain form is a single whitespace-free token. The canonical line always
+# wins when both are present (see extract_integration_branch). Keep in sync
+# with the alias pattern in scripts/resolve_integration_ref.sh.
+TARGET_BRANCH_LINE_RE = re.compile(
+	r"^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)\s*(?:`\s*([^`\n]+?)\s*`(?:\s.*)?|([^`\s]+))\s*$",
+	re.MULTILINE,
+)
 TRACKING_ISSUE_LINE_RE = re.compile(
 	r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$",
 	re.MULTILINE,
@@ -790,10 +804,19 @@ def validate_wave_file_partition(
 		separately from pair overlaps so the caller can treat them with a
 		different policy if desired; at present they are serialized the same
 		way.
+	- ``unknown_scope`` overlaps: a sibling whose ``files_touched`` list is
+		empty is paired with EVERY other sibling in the wave (``files`` is
+		``[]``). An empty list means the planner could not, or chose not to,
+		predict the files, so the guard has nothing to prove the siblings
+		are disjoint; the only safe assumption is that they collide.
+		Project binance-blessings#249 omitted ``files_touched`` on three
+		phases that all edit twap_router.py and README.md, explicitly to run
+		them in parallel; every sibling merge then conflicted the remaining
+		PRs and the late resolver ran O(n^2) times. Serializing unknown
+		scope closes that bypass. Two unknown-scope siblings are also paired
+		with each other.
 
-	Issues whose ``files_touched`` list is empty are never flagged — there is
-	nothing to compare. The byte-level pre-merge probe in the poller handles
-	unknown-scope issues at merge time instead.
+	A wave with a single issue never yields overlaps.
 	"""
 	hot = hot_files or set()
 	overlaps: list[dict[str, Any]] = []
@@ -807,11 +830,19 @@ def validate_wave_file_partition(
 	seen_pairs: set[tuple[str, str]] = set()
 	for i, iid_a in enumerate(wave_ids):
 		fa = files_for[iid_a]
-		if not fa:
-			continue
 		for iid_b in wave_ids[i + 1:]:
 			fb = files_for[iid_b]
-			if not fb:
+			if not fa or not fb:
+				pair_key = (iid_a, iid_b)
+				if pair_key in seen_pairs:
+					continue
+				seen_pairs.add(pair_key)
+				overlaps.append({
+					"type": "unknown_scope",
+					"issue_a": iid_a,
+					"issue_b": iid_b,
+					"files": [],
+				})
 				continue
 			common = sorted(fa & fb)
 			if not common:
@@ -1323,6 +1354,7 @@ def render_tracking_issue_body_from_state(
 		for issue_number in security_pass_active_fix_issues
 		if isinstance(issue_number, int) and not isinstance(issue_number, bool) and issue_number > 0
 	) or "none"
+	security_pass_waived_count = _security_pass_waived_count(state)
 	security_pass_block = "\n".join(
 		[
 			"<!-- orchestrator:security-pass -->",
@@ -1331,6 +1363,7 @@ def render_tracking_issue_body_from_state(
 			f"- Completed fix cycles: {security_pass_cycle}",
 			f"- Audited integration SHA: `{security_pass_head_sha or 'none'}`",
 			f"- Active fix issue: {security_pass_fix_display}",
+			*([f"- Waived findings: {security_pass_waived_count}"] if security_pass_waived_count else []),
 			"<!-- /orchestrator:security-pass -->",
 		]
 	)
@@ -1350,6 +1383,22 @@ def render_tracking_issue_body_from_state(
 	if body_template.endswith("\n"):
 		rendered += "\n"
 	return rendered
+
+
+def _security_pass_waived_count(state: dict[str, Any]) -> int:
+	"""Count the accepted (waived) security-pass findings recorded in state.
+
+	Rendered as a `- Waived findings: N` row only when non-zero, so bodies of
+	projects that never waived anything are byte-identical to before.
+	"""
+	waived = state.get("security_pass_waived_findings", [])
+	if not isinstance(waived, list):
+		return 0
+	return sum(
+		1
+		for row in waived
+		if isinstance(row, dict) and isinstance(row.get("finding_id"), str) and row.get("finding_id")
+	)
 
 
 def format_wave_status_comment(state: dict[str, Any], wave_idx: int) -> str:
@@ -1390,6 +1439,9 @@ def format_wave_status_comment(state: dict[str, Any], wave_idx: int) -> str:
 		lines.append(f"- Completed fix cycles: {security_pass_cycle}")
 		lines.append(f"- Audited integration SHA: `{security_pass_head_sha or 'none'}`")
 		lines.append(f"- Active fix issue: {security_pass_fix_display}")
+		security_pass_waived_count = _security_pass_waived_count(state)
+		if security_pass_waived_count:
+			lines.append(f"- Waived findings: {security_pass_waived_count}")
 		lines.append("")
 	return "\n".join(lines)
 
@@ -2718,13 +2770,21 @@ def get_impl_noop_count(
 # ---------------------------------------------------------------------------
 
 def extract_integration_branch(body: str) -> str:
-	"""Extract integration-branch metadata from markdown body text."""
+	"""Extract integration-branch metadata from markdown body text.
+
+	The canonical ``Integration branch:`` line wins; ``Target branch:`` is
+	accepted as an alias when no canonical line is present
+	(TARGET_BRANCH_LINE_RE).
+	"""
 	if not body:
 		return ""
 	match = INTEGRATION_BRANCH_LINE_RE.search(body)
-	if not match:
+	if match:
+		return match.group(1).strip()
+	alias_match = TARGET_BRANCH_LINE_RE.search(body)
+	if not alias_match:
 		return ""
-	return match.group(1).strip()
+	return (alias_match.group(1) or alias_match.group(2) or "").strip()
 
 
 def extract_tracking_issue_number(body: str) -> int | None:

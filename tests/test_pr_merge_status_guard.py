@@ -401,6 +401,8 @@ def test_default_branch_uses_remote_head_when_local_refs_are_missing(monkeypatch
 			("git", "rev-parse", "--verify", "refs/remotes/origin/main"): (1, "", ""),
 			("git", "rev-parse", "--verify", "refs/remotes/origin/master"): (1, "", ""),
 			(
+				"env",
+				"GIT_TERMINAL_PROMPT=0",
 				"git",
 				"ls-remote",
 				"--symref",
@@ -420,7 +422,7 @@ def test_default_branch_does_not_guess_local_main_over_remote_head(monkeypatch) 
 	def _fake_run(argv, cwd, timeout):
 		lookup = {
 			("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): (1, "", ""),
-			("git", "ls-remote", "--symref", "origin", "HEAD"): (
+			("env", "GIT_TERMINAL_PROMPT=0", "git", "ls-remote", "--symref", "origin", "HEAD"): (
 				0,
 				"ref: refs/heads/trunk\tHEAD\n0123456789abcdef\tHEAD\n",
 				"",
@@ -438,7 +440,7 @@ def test_default_branch_returns_empty_when_only_local_main_exists(monkeypatch) -
 	def _fake_run(argv, cwd, timeout):
 		lookup = {
 			("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): (1, "", ""),
-			("git", "ls-remote", "--symref", "origin", "HEAD"): (1, "", ""),
+			("env", "GIT_TERMINAL_PROMPT=0", "git", "ls-remote", "--symref", "origin", "HEAD"): (1, "", ""),
 		}
 		result = lookup.get(tuple(argv))
 		assert result is not None, f"unexpected argv: {argv}"
@@ -446,6 +448,22 @@ def test_default_branch_returns_empty_when_only_local_main_exists(monkeypatch) -
 
 	monkeypatch.setattr(guard, "_run", _fake_run)
 	assert guard.default_branch("/repo") == ""
+
+
+def test_remote_history_operations_disable_terminal_prompts(monkeypatch) -> None:
+	observed_calls: list[tuple[list[str], int]] = []
+
+	def _fake_run(argv, cwd, timeout):
+		observed_calls.append((argv, timeout))
+		return 0, "", ""
+
+	monkeypatch.setattr(guard, "_run", _fake_run)
+	assert guard.default_branch("/repo") == ""
+	assert guard.remote_branch_tip("feature/x", "/repo") == ""
+	assert guard.fetch_from_origin(["main"], "/repo") is True
+	remote_calls = [call for call in observed_calls if call[0][:3] == ["env", "GIT_TERMINAL_PROMPT=0", "git"]]
+	assert len(remote_calls) == 3
+	assert all(timeout == guard._GIT_REMOTE_TIMEOUT_SECONDS for _, timeout in remote_calls)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -777,3 +795,397 @@ def test_claude_md_documents_the_guard() -> None:
 	assert "CLAUDE_PR_MERGE_GUARD=off" in text
 	assert "The guard is skipped entirely" not in text
 	assert "The API-write\nconfirmation safeguard remains active in both cases." in text
+
+
+# ──────────────────────────────────────────────────────────────────
+# Merge-commit refinement, git-history fallback, MCP push tools
+# ──────────────────────────────────────────────────────────────────
+
+
+def _stub_gh(stub_bin: Path, payload: str | None) -> None:
+	"""Write a `gh` stub: answers with `payload`, or fails like a gated proxy."""
+	stub = stub_bin / "gh"
+	if payload is None:
+		stub.write_text(
+			"#!/bin/sh\necho 'gh: GitHub access is not enabled for this session (HTTP 403)' >&2\nexit 1\n",
+			encoding="utf-8",
+		)
+	else:
+		stub.write_text(f"#!/bin/sh\ncat <<'EOF'\n{payload}\nEOF\n", encoding="utf-8")
+	stub.chmod(0o755)
+
+
+def _merged_pr_payload(head_sha: str) -> str:
+	return json.dumps(
+		[
+			{
+				"number": 41,
+				"state": "closed",
+				"html_url": "https://github.com/o/r/pull/41",
+				"title": "the merged one",
+				"merged_at": "2026-07-01T10:00:00Z",
+				"head": {"sha": head_sha},
+			}
+		]
+	)
+
+
+def _run_hook_payload(repo: Path, stub_bin: Path, payload: dict) -> subprocess.CompletedProcess:
+	env = _git_env()
+	env["PATH"] = f"{stub_bin}{os.pathsep}{env.get('PATH', '')}"
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env.pop("CLAUDE_PR_MERGE_GUARD", None)
+	env["TMPDIR"] = str(repo.parent / "cache")
+	(repo.parent / "cache").mkdir(exist_ok=True)
+	payload = {**payload, "cwd": str(repo)}
+	return subprocess.run(
+		[sys.executable, str(GUARD_PATH)],
+		input=json.dumps(payload),
+		capture_output=True,
+		text=True,
+		env=env,
+		timeout=120,
+	)
+
+
+def _bash_payload(command: str) -> dict:
+	return {"tool_name": "Bash", "tool_input": {"command": command}}
+
+
+def _mcp_payload(branch: str = "feature/x", owner: str = "o", repo: str = "r") -> dict:
+	return {
+		"tool_name": "mcp__github__push_files",
+		"tool_input": {
+			"owner": owner,
+			"repo": repo,
+			"branch": branch,
+			"files": [{"path": "f.txt", "content": "x"}],
+			"message": "m",
+		},
+	}
+
+
+def _ask_decision(proc: subprocess.CompletedProcess) -> dict | None:
+	for line in proc.stdout.splitlines():
+		try:
+			parsed = json.loads(line)
+		except ValueError:
+			continue
+		if parsed.get("hookSpecificOutput", {}).get("permissionDecision") == "ask":
+			return parsed
+	return None
+
+
+@pytest.fixture()
+def merge_commit_repo(tmp_path: Path):
+	"""A repo with a real (local, offline) origin whose `feature/x` was merged
+	into main by a merge commit, checked out at the merged head.
+
+	`remote.origin.url` stays a github.com URL so slug derivation works;
+	`url.<bare>.insteadOf` routes fetch/ls-remote to the bare repo. Returns
+	(repo_path, stub_bin_path, merged_sha, merge_commit_sha).
+	"""
+	bare = tmp_path / "origin.git"
+	subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True, env=_git_env())
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q", "-b", "main")
+	_git(repo, "config", "user.email", "test@example.com")
+	_git(repo, "config", "user.name", "Test")
+	_git(repo, "remote", "add", "origin", "https://github.com/o/r.git")
+	_git(repo, "config", f"url.{bare}.insteadOf", "https://github.com/o/r.git")
+	(repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "seed")
+	_git(repo, "push", "-q", "origin", "main")
+	_git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+	_git(repo, "checkout", "-q", "-b", "feature/x")
+	(repo / "work.txt").write_text("work\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "merged work")
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "push", "-q", "origin", "feature/x")
+
+	_git(repo, "checkout", "-q", "main")
+	(repo / "main.txt").write_text("main moved on\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "main work")
+	_git(repo, "merge", "-q", "--no-ff", "feature/x", "-m", "Merge pull request #41")
+	merge_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "push", "-q", "origin", "main")
+	_git(repo, "checkout", "-q", "feature/x")
+
+	stub_bin = tmp_path / "bin"
+	stub_bin.mkdir()
+	_stub_gh(stub_bin, _merged_pr_payload(merged_sha))
+	return repo, stub_bin, merged_sha, merge_sha
+
+
+def test_first_parent_chain_separates_side_history_from_branch_states(merge_commit_repo) -> None:
+	repo, _, merged_sha, merge_sha = merge_commit_repo
+	cwd = str(repo)
+	assert guard.on_first_parent_chain(merge_sha, "refs/remotes/origin/main", cwd) is True
+	assert guard.on_first_parent_chain(merged_sha, "refs/remotes/origin/main", cwd) is False
+	seed = _git(repo, "rev-list", "--max-parents=0", "HEAD")
+	assert guard.on_first_parent_chain(seed, "refs/remotes/origin/main", cwd) is True
+	assert guard.on_first_parent_chain("", "refs/remotes/origin/main", cwd) is None
+
+
+def test_merge_commit_stranded_branch_still_blocks(merge_commit_repo) -> None:
+	repo, stub_bin, _, _ = merge_commit_repo
+	proc = _run_hook_payload(repo, stub_bin, _bash_payload("git commit -m next"))
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "pull/41" in proc.stderr
+
+
+def test_merge_commit_reset_branch_is_allowed(merge_commit_repo) -> None:
+	"""Regression: with merge-commit merges the merged head is an ancestor of
+	the default branch, so plain ancestry blocked the §21.A remediation
+	itself. The fork point on main's first-parent chain must clear it."""
+	repo, stub_bin, _, _ = merge_commit_repo
+	_git(repo, "checkout", "-q", "-B", "feature/x", "origin/main")
+	(repo / "fresh.txt").write_text("fresh\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "fresh work on a rebuilt branch")
+	proc = _run_hook_payload(repo, stub_bin, _bash_payload("git commit -m next"))
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is None
+
+
+def test_history_fallback_asks_when_origin_dropped_the_merged_branch(merge_commit_repo) -> None:
+	"""An absent remote ref could be a deleted branch or one never pushed."""
+	repo, stub_bin, _, _ = merge_commit_repo
+	_stub_gh(stub_bin, None)
+	_git(repo, "push", "-q", "origin", "--delete", "feature/x")
+	commit_proc = _run_hook_payload(repo, stub_bin, _bash_payload("git commit -m next"))
+	assert commit_proc.returncode == 0, commit_proc.stdout + commit_proc.stderr
+	assert "never-pushed branch" in commit_proc.stdout
+	assert _ask_decision(commit_proc) is None
+	push_proc = _run_hook_payload(repo, stub_bin, _bash_payload("git push -u origin feature/x"))
+	assert push_proc.returncode == 0, push_proc.stdout + push_proc.stderr
+	assert _ask_decision(push_proc) is not None
+
+
+def test_history_fallback_never_pushed_stacked_branch_is_inconclusive(merge_commit_repo) -> None:
+	"""A new branch based on merged side history must not be destructively reset."""
+	repo, stub_bin, _, _ = merge_commit_repo
+	_stub_gh(stub_bin, None)
+	_git(repo, "checkout", "-q", "-b", "feature/never-pushed")
+	commit_proc = _run_hook_payload(repo, stub_bin, _bash_payload("git commit -m next"))
+	assert commit_proc.returncode == 0, commit_proc.stdout + commit_proc.stderr
+	assert "never-pushed branch" in commit_proc.stdout
+	(repo / "stacked.txt").write_text("stacked\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "stacked work")
+	push_proc = _run_hook_payload(
+		repo, stub_bin, _bash_payload("git push -u origin feature/never-pushed")
+	)
+	assert push_proc.returncode == 0, push_proc.stdout + push_proc.stderr
+	assert _ask_decision(push_proc) is not None
+
+
+def test_history_fallback_blocks_when_remote_branch_is_contained_in_main(merge_commit_repo) -> None:
+	repo, stub_bin, _, _ = merge_commit_repo
+	_stub_gh(stub_bin, None)
+	proc = _run_hook_payload(repo, stub_bin, _bash_payload("git push origin feature/x"))
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "fully contained in origin/main" in proc.stderr
+
+
+def test_history_fallback_push_asks_when_inconclusive(merge_commit_repo) -> None:
+	"""A rebuilt branch and a squash-merged one look identical to git; the
+	push must go through the harness prompt, not silently proceed."""
+	repo, stub_bin, _, _ = merge_commit_repo
+	_stub_gh(stub_bin, None)
+	_git(repo, "checkout", "-q", "-B", "feature/x", "origin/main")
+	(repo / "fresh.txt").write_text("fresh\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "fresh")
+	proc = _run_hook_payload(repo, stub_bin, _bash_payload("git push -u origin feature/x"))
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	decision = _ask_decision(proc)
+	assert decision is not None, proc.stdout
+	assert "inconclusive" in decision["systemMessage"]
+	assert "still open" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_history_fallback_commit_warns_when_inconclusive(merge_commit_repo) -> None:
+	"""A local commit strands nothing by itself; it is allowed with a warning."""
+	repo, stub_bin, _, _ = merge_commit_repo
+	_stub_gh(stub_bin, None)
+	_git(repo, "checkout", "-q", "-B", "feature/x", "origin/main")
+	proc = _run_hook_payload(repo, stub_bin, _bash_payload("git commit -m next"))
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is None
+	assert "merged-PR guard skipped" in json.loads(proc.stdout)["systemMessage"]
+
+
+def test_history_fallback_treats_a_stacked_branch_as_inconclusive(merge_commit_repo) -> None:
+	"""`feature/y` forks off `feature/x` (merged side history) but carries its
+	own unmerged commits on origin — a stacked branch, not a corpse."""
+	repo, stub_bin, _, _ = merge_commit_repo
+	_stub_gh(stub_bin, None)
+	_git(repo, "checkout", "-q", "-b", "feature/y")
+	(repo / "stacked.txt").write_text("stacked\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "stacked work")
+	_git(repo, "push", "-q", "origin", "feature/y")
+	proc = _run_hook_payload(repo, stub_bin, _bash_payload("git push origin feature/y"))
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is not None
+	assert "carries commits not yet in origin/main" in proc.stdout
+
+
+def test_history_verdict_is_unavailable_without_a_default_branch(tmp_path: Path) -> None:
+	verdict, detail = guard.git_history_verdict("HEAD", "feature/x", "", str(tmp_path))
+	assert verdict == guard.VERDICT_UNAVAILABLE
+	assert "default branch" in detail
+
+
+def test_mcp_push_onto_merged_remote_branch_is_blocked(merge_commit_repo) -> None:
+	repo, stub_bin, _, _ = merge_commit_repo
+	proc = _run_hook_payload(repo, stub_bin, _mcp_payload())
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "origin/feature/x" in proc.stderr
+	assert "pull/41" in proc.stderr
+
+
+def test_mcp_push_onto_rebuilt_remote_branch_is_allowed(merge_commit_repo) -> None:
+	repo, stub_bin, _, _ = merge_commit_repo
+	_git(repo, "checkout", "-q", "-B", "feature/x", "origin/main")
+	_git(repo, "push", "-q", "--force", "origin", "feature/x")
+	proc = _run_hook_payload(repo, stub_bin, _mcp_payload())
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is None
+
+
+def test_mcp_push_to_a_branch_origin_does_not_have_is_allowed(merge_commit_repo) -> None:
+	repo, stub_bin, _, _ = merge_commit_repo
+	_stub_gh(stub_bin, None)
+	proc = _run_hook_payload(repo, stub_bin, _mcp_payload(branch="feature/never-pushed"))
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert proc.stdout.strip() == ""
+
+
+def test_mcp_push_uses_history_fallback_when_api_is_gated(merge_commit_repo) -> None:
+	repo, stub_bin, _, _ = merge_commit_repo
+	_stub_gh(stub_bin, None)
+	proc = _run_hook_payload(repo, stub_bin, _mcp_payload())
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "fully contained in origin/main" in proc.stderr
+
+
+def test_mcp_push_asks_when_remote_tip_fetch_fails(merge_commit_repo, monkeypatch, capsys) -> None:
+	repo, _, merged_sha, _ = merge_commit_repo
+	monkeypatch.setattr(guard, "remote_branch_tip", lambda branch, cwd: merged_sha)
+	monkeypatch.setattr(guard, "fetch_from_origin", lambda refs, cwd: False)
+	monkeypatch.setattr(
+		guard, "query_pull_requests", lambda *args: pytest.fail("API lookup must not run")
+	)
+	payload = {**_mcp_payload(), "cwd": str(repo)}
+	assert guard.evaluate(payload) == (0, "")
+	decision = _ask_decision(
+		subprocess.CompletedProcess([], 0, stdout=capsys.readouterr().out, stderr="")
+	)
+	assert decision is not None
+	assert "could not fetch origin/feature/x" in decision["systemMessage"]
+
+
+def test_mcp_push_asks_when_remote_tip_lookup_fails(merge_commit_repo, monkeypatch, capsys) -> None:
+	repo, _, _, _ = merge_commit_repo
+	monkeypatch.setattr(guard, "remote_branch_tip", lambda branch, cwd: None)
+	monkeypatch.setattr(
+		guard, "query_pull_requests", lambda *args: pytest.fail("API lookup must not run")
+	)
+	payload = {**_mcp_payload(), "cwd": str(repo)}
+	assert guard.evaluate(payload) == (0, "")
+	decision = _ask_decision(
+		subprocess.CompletedProcess([], 0, stdout=capsys.readouterr().out, stderr="")
+	)
+	assert decision is not None
+	assert "could not list origin's branches" in decision["systemMessage"]
+	assert "no local checkout" not in decision["systemMessage"]
+
+
+def test_remote_only_mcp_push_caches_fresh_pr_snapshot(monkeypatch, tmp_path: Path) -> None:
+	pull_requests = [MERGED_PR]
+	cache_writes: list[tuple[str, str, list[dict]]] = []
+	monkeypatch.setattr(guard, "repo_slug", lambda cwd: "o/local")
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: pull_requests)
+	monkeypatch.setattr(
+		guard,
+		"_write_cache",
+		lambda slug, branch, entries: cache_writes.append((slug, branch, entries)),
+	)
+	payload = {**_mcp_payload(), "cwd": str(tmp_path)}
+	assert guard.evaluate(payload) == (0, "")
+	assert cache_writes == [("o/r", "feature/x", pull_requests)]
+
+
+@pytest.mark.parametrize("gated", [False, True])
+def test_mcp_push_to_another_repository_asks(merge_commit_repo, gated: bool) -> None:
+	"""No local checkout of the target → ancestry cannot be verified → ask."""
+	repo, stub_bin, _, _ = merge_commit_repo
+	if gated:
+		_stub_gh(stub_bin, None)
+	proc = _run_hook_payload(repo, stub_bin, _mcp_payload(owner="someone-else"))
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	decision = _ask_decision(proc)
+	assert decision is not None, proc.stdout
+	assert "someone-else/r" in decision["systemMessage"]
+
+
+def test_mcp_push_to_default_branch_is_skipped(merge_commit_repo) -> None:
+	repo, stub_bin, _, _ = merge_commit_repo
+	_stub_gh(stub_bin, None)
+	proc = _run_hook_payload(repo, stub_bin, _mcp_payload(branch="main"))
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert proc.stdout.strip() == ""
+
+
+def test_mcp_create_or_update_file_is_guarded_too(merge_commit_repo) -> None:
+	repo, stub_bin, _, _ = merge_commit_repo
+	payload = {
+		"tool_name": "mcp__github__create_or_update_file",
+		"tool_input": {"owner": "o", "repo": "r", "branch": "feature/x", "path": "f", "content": "c", "message": "m"},
+	}
+	proc = _run_hook_payload(repo, stub_bin, payload)
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+
+
+def test_mcp_push_with_malformed_input_is_ignored() -> None:
+	assert guard.evaluate({"tool_name": "mcp__github__push_files", "tool_input": {"owner": "o"}}) == (0, "")
+	assert guard.evaluate({"tool_name": "mcp__github__push_files", "tool_input": "nope"}) == (0, "")
+
+
+def test_mcp_push_escape_hatch(monkeypatch) -> None:
+	monkeypatch.setenv("CLAUDE_PR_MERGE_GUARD", "off")
+	monkeypatch.setattr(guard, "repo_slug", lambda cwd: pytest.fail("must not run"))
+	assert guard.evaluate(_mcp_payload()) == (0, "")
+
+
+@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+def test_guard_is_wired_for_the_mcp_push_tools(path: Path) -> None:
+	settings = json.loads(path.read_text(encoding="utf-8"))
+	entries = settings["hooks"]["PreToolUse"]
+	matched = [
+		entry
+		for entry in entries
+		if set(str(entry.get("matcher", "")).split("|")) == set(guard.MCP_PUSH_TOOLS)
+	]
+	assert matched, f"{path} has no PreToolUse hook matching {sorted(guard.MCP_PUSH_TOOLS)}"
+	commands = [hook["command"] for entry in matched for hook in entry["hooks"]]
+	assert any(
+		command.startswith("python3 ") and "pr_merge_status_guard.py" in command
+		for command in commands
+	)
+
+
+def test_claude_md_documents_the_history_fallback() -> None:
+	text = CLAUDE_MD.read_text(encoding="utf-8")
+	assert "mcp__github__push_files" in text
+	assert "first-parent" in text
+	assert "git history" in text
+	assert "permissionDecision" in text or "asks" in text

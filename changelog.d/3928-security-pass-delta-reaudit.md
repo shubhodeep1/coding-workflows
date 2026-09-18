@@ -1,0 +1,19 @@
+<!-- changelog: fixed -->
+- **The project security pass now converges instead of exhausting its fix budget on new findings every cycle.** After a consolidated fix issue merges, the re-audit covers only what changed since the last audited commit, re-verifies the findings it already reported, and asks the implementer to clear a defect class rather than one line.
+
+Until now every re-audit in `orchestrate_poll_process.sh` re-scanned the whole `merge-base..integration-head` range from scratch with no memory of earlier cycles. On tele-funtoken-msg-scoring#3928, fun-token-multi-chain#471 and binance-blessings#249 every `[security-pass]` fix issue merged, no finding ID ever repeated between cycles, and all three projects still ended in `ai:security-pass-failed` because each fresh full-range sample surfaced something the previous one had not, often the same defect class at a sibling location (another exchange venue, another adapter). The poller now records `security_pass_last_audited_sha` and `security_pass_reported_findings` in state; `scripts/security_audit.sh` accepts `SECURITY_AUDIT_DIFF_SINCE` (scope narrows to range files changed since that commit, plus files cited by prior findings) and `SECURITY_AUDIT_PRIOR_FINDINGS` (the earlier findings are appended to the prompt with instructions to re-emit persisting ones under the same ID and to report every remaining instance of the class). The first audit of a project, and every audit after `/re-security-pass`, still covers the full range. A clean pass invalidated by a head advance (sync merge, resolver merge, fix PR) also audits only the new commits. The default `MAX_SECURITY_PASS_CYCLES` rises from `3` to `5`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Projects failed on non-repeating findings when this landed | 4 of 4 open tracking issues across 3 consumer repos |
+| Fix issues merged before exhaustion (#3928 after its `/re-security-pass`, #471, #249) | 3 each |
+| Full-range re-audit cost on #3928 | 154 files, about 13 min of Codex per tick |
+| `MAX_SECURITY_PASS_CYCLES` default | `3` before, `5` after |
+| New structured log key | `SECURITY_PASS_SCOPE` (`mode=full|delta`, `reason=…`, `since_sha=…`, `prior_findings=N`) |
+| New GitHub API calls | 0 |
+
+What this means for operators: a project that reaches the security pass works through its findings on its own. Each fix cycle audits the fix and the findings it was meant to clear, so the loop ends when those are resolved, not when the auditor runs out of new things to say about untouched code. Projects already labelled `ai:security-pass-failed` recover with `/re-security-pass` once this release reaches `@stable`; that reset still runs one full-range audit first.
+
+### For contributors
+
+`run_security_pass_inline` computes the delta pointer next to the merge-base: the recorded `security_pass_last_audited_sha` (or, for state that passed before the field existed, `security_pass_head_sha`) is used only when it resolves and is an ancestor of the current head; anything else logs `mode=full reason=last_audited_sha_not_ancestor_of_head` and audits the full range. The pointer and the findings memory are written by the same `jq` that records `security_pass_head_sha`, cleared by `/re-security-pass` and by the `ENABLE_SECURITY_PASS=false` release path, and the memory is emptied by a clean pass. Memory entries trim `exploit_scenario` and `recommendation` to 600 characters and keep the latest 60 findings. In `security_audit.sh` the explicit range remains the scope contract; `SECURITY_AUDIT_DIFF_SINCE` intersects it and fails closed on a commit that does not resolve or is not an ancestor of the head, and `SECURITY_AUDIT_PRIOR_FINDINGS` fails closed on anything that is not a JSON array of objects citing repository-relative files. Regression coverage lives in `tests/test_orchestrate_poll_process.py` and `tests/test_security_audit_workflow_contract.py`.
