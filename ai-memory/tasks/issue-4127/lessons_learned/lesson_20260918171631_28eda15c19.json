@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-09-18T17:16:31Z",
+  "issue_number": 4127,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=scripts/review_rb_judge.sh:782-860; cited_path=stable:scripts/review_rb_judge.sh, stable:tests/test_review_rb_judge_label_propagation.py; files_touched=.ai/.workspace_source_manifest.txt, changelog.d/4127-security-fix-pr-base.md, scripts/orchestrate_poll_process.sh, tests/test_orchestrate_poll_process.py.",
+  "phase": "review_autofix",
+  "pr_number": 4130,
+  "record_id": "lesson_20260918171631_28eda15c19",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "stable:scripts/review_rb_judge.sh, stable:tests/test_review_rb_judge_label_propagation.py",
+    "scripts/review_rb_judge.sh",
+    ".ai/.workspace_source_manifest.txt",
+    "changelog.d/4127-security-fix-pr-base.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_orchestrate_poll_process.py"
+  ]
+}
