@@ -3627,6 +3627,18 @@ def test_security_pass_merged_fix_falls_back_to_rest_when_graphql_is_unavailable
 		gql_mode="error",
 		issue_labels={10: ["ai:merged"], 900: ["ai:merged"]},
 		issue_closed={900: True},
+		issue_linked_prs={900: 901},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-09-17T14:18:06Z",
+				"baseRefName": "orchestrator/project-192",
+				"headRefName": "ai/issue-900",
+				"willCloseTarget": False,
+			},
+		],
 		existing_branches=["main", "orchestrator/project-192"],
 	)
 
@@ -3641,7 +3653,7 @@ def test_security_pass_merged_fix_into_wrong_base_does_not_advance_cycle() -> No
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
-		issue_labels={10: ["ai:merged"], 900: ["ai:ready-to-merge"]},
+		issue_labels={10: ["ai:merged"], 900: ["ai:merged"]},
 		issue_closed={900: True},
 		issue_linked_prs={900: 901},
 		prs=[
@@ -3663,7 +3675,7 @@ def test_security_pass_merged_fix_into_wrong_base_does_not_advance_cycle() -> No
 	assert "VALIDATION_FIX_MERGED_EVIDENCE issue=900 candidate_pr=901 rejected=base_mismatch" in combined, combined
 	assert result["latest_state"]["security_pass_cycle"] == 1
 	assert result["latest_state"]["status"] == "failed"
-	assert "ai:merged" not in result["issues"]["900"]["labels"]
+	assert "ai:merged" in result["issues"]["900"]["labels"]
 
 
 def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
@@ -5717,7 +5729,8 @@ def test_security_pass_closed_fix_timeline_evidence_rejects_wrong_base() -> None
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
-		issue_labels={10: ["ai:merged"], 900: ["ai:ready-to-merge"]},
+		gql_mode="error",
+		issue_labels={10: ["ai:merged"], 900: ["ai:merged"]},
 		issue_closed={900: True},
 		issue_linked_prs={900: 901},
 		prs=[
@@ -5736,11 +5749,12 @@ def test_security_pass_closed_fix_timeline_evidence_rejects_wrong_base() -> None
 	)
 
 	combined = result["stdout"] + result["stderr"]
+	assert "falling back to a direct issue lookup" in combined, combined
 	assert "VALIDATION_FIX_MERGED_EVIDENCE issue=900 candidate_pr=901 rejected=base_mismatch" in combined, combined
 	assert "SECURITY_PASS_FIX_MERGED_EVIDENCE" not in combined, combined
 	assert result["latest_state"]["security_pass_cycle"] == 1
 	assert result["latest_state"]["status"] == "failed"
-	assert "ai:merged" not in result["issues"]["900"]["labels"]
+	assert "ai:merged" in result["issues"]["900"]["labels"]
 
 
 def test_security_pass_closed_fix_evidence_lookup_failure_retains_fixing_state() -> None:

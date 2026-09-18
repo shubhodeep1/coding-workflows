@@ -16417,7 +16417,7 @@ The active security-pass fix cycle continues; the waivers apply from its next re
         SECURITY_FIX_STATE="$(printf '%s' "${SECURITY_FIX_FALLBACK_JSON}" | jq -r '.state')"
         SECURITY_FIX_LABELS="$(printf '%s' "${SECURITY_FIX_FALLBACK_JSON}" | jq -c '.labels')"
         SECURITY_FIX_PR_MERGED="false"
-        if [ "${SECURITY_FIX_STATE}" = "closed" ] && ! has_label "${SECURITY_FIX_LABELS}" "ai:merged"; then
+        if [ "${SECURITY_FIX_STATE}" = "closed" ]; then
 	          if validation_fix_issue_has_merged_pr_evidence "${SECURITY_FIX_ISSUE}" "${INTEGRATION_BRANCH_TRACKING}"; then
             if ! backfill_validation_fix_issue_merged_label "${SECURITY_FIX_ISSUE}" "${SECURITY_FIX_LABELS}"; then
               echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE}: merged PR detected but ai:merged backfill failed." >&2
@@ -16445,17 +16445,13 @@ The active security-pass fix cycle continues; the waivers apply from its next re
         # The batch's linked_pr only carries CrossReferencedEvents with
         # willCloseTarget=true, and GitHub sets that flag only for PRs
         # into the default branch — so it is null for every fix PR
-        # merged into an integration branch.  When the ai:merged label
-        # is also missing (tele-funtoken-msg-scoring#4379: the
-        # review-blocked judge's post-merge phase swap replaced the
-        # PR-close handler's ai:merged with ai:ready-to-merge six seconds
-        # after it landed), fall back to the same timeline evidence the
-        # cache-miss path already consults before declaring the fix
-        # closed-without-merge.  §15: one timeline read plus label
-        # reconciliation, only on this closed + unlabelled + unlinked corner.
+        # merged into an integration branch. The ai:merged label is not
+        # evidence here because issue_pr_status may apply it for a PR into
+        # any base. Fall back to the timeline whenever the cache has no
+        # valid integration-base merge. §15: one timeline read plus label
+        # reconciliation, only on this closed + no-valid-cache-evidence corner.
         if [ "${SECURITY_FIX_STATE}" = "closed" ] \
-          && [ "${SECURITY_FIX_PR_MERGED}" != "true" ] \
-          && ! has_label "${SECURITY_FIX_LABELS}" "ai:merged"; then
+          && [ "${SECURITY_FIX_PR_MERGED}" != "true" ]; then
 	          if validation_fix_issue_has_merged_pr_evidence "${SECURITY_FIX_ISSUE}" "${INTEGRATION_BRANCH_TRACKING}"; then
             echo "SECURITY_PASS_FIX_MERGED_EVIDENCE tracking_issue=${TRACKING_NUM} issue=${SECURITY_FIX_ISSUE} source=timeline"
             if ! backfill_validation_fix_issue_merged_label "${SECURITY_FIX_ISSUE}" "${SECURITY_FIX_LABELS}"; then
@@ -16472,7 +16468,7 @@ The active security-pass fix cycle continues; the waivers apply from its next re
         fi
       fi
       if [ "${SECURITY_FIX_STATE}" = "closed" ] \
-        && { [ "${SECURITY_FIX_PR_MERGED}" = "true" ] || has_label "${SECURITY_FIX_LABELS}" "ai:merged"; }; then
+        && [ "${SECURITY_FIX_PR_MERGED}" = "true" ]; then
         SECURITY_PASS_COMPLETED_CYCLES="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
         if ! [[ "${SECURITY_PASS_COMPLETED_CYCLES}" =~ ^[0-9]+$ ]]; then
           SECURITY_PASS_COMPLETED_CYCLES=0
