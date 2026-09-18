@@ -5376,6 +5376,132 @@ def test_security_pass_fix_successor_malformed_state_is_inconclusive() -> None:
 		assert not api_call_path.exists()
 
 
+def _security_pass_fixing_state_with_closed_fix_issue() -> dict:
+	state = _base_state(status="security-pass-fixing")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_cycle": 1,
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [900],
+			"security_pass_head_sha": "audited-head",
+		}
+	)
+	return state
+
+
+def test_security_pass_closed_fix_with_timeline_merged_pr_evidence_advances_cycle() -> None:
+	"""Regression for tele-funtoken-msg-scoring#4379 / project #3928.
+
+	The fix PR merged into the integration branch, so the candidate-details
+	GraphQL batch carries no linked_pr for it (``willCloseTarget`` is false
+	for PRs into a non-default base), and the review-blocked judge's
+	post-merge phase swap had replaced the PR-close handler's ``ai:merged``
+	with ``ai:ready-to-merge``.  The closed fix issue must still count as
+	merged through the timeline evidence the cache-miss path already used,
+	instead of failing the project as closed-without-merge."""
+	result = _run_poller(
+		state=_security_pass_fixing_state_with_closed_fix_issue(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={10: ["ai:merged"], 900: ["ai:ready-to-merge", "ai:orchestrator-managed"]},
+		issue_closed={900: True},
+		issue_linked_prs={900: 901},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-09-17T14:18:06Z",
+				"baseRefName": "orchestrator/project-192",
+				"headRefName": "ai/issue-900",
+				"willCloseTarget": False,
+				"mergeable": None,
+				"mergeable_state": "unknown",
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	combined = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_FIX_MERGED_EVIDENCE tracking_issue=192 issue=900 source=timeline" in combined, combined
+	assert "reason=fix_issue_closed_without_merged_pr" not in combined, combined
+	assert result["latest_state"]["status"] != "failed", result["latest_state"]
+	assert result["latest_state"]["security_pass_cycle"] == 2
+	assert result["latest_state"]["security_pass_active_fix_issues"] == []
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	security_fix_labels = result["issues"]["900"]["labels"]
+	assert "ai:merged" in security_fix_labels, security_fix_labels
+	assert "ai:ready-to-merge" not in security_fix_labels, security_fix_labels
+
+
+def test_security_pass_closed_fix_with_mention_only_merged_pr_still_fails() -> None:
+	"""A merged PR that merely mentions the fix issue is not evidence."""
+	result = _run_poller(
+		state=_security_pass_fixing_state_with_closed_fix_issue(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={10: ["ai:merged"], 900: ["ai:ready-to-merge"]},
+		issue_closed={900: True},
+		issue_linked_prs={900: 901},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-09-17T14:18:06Z",
+				"baseRefName": "orchestrator/project-192",
+				"headRefName": "claude/unrelated-investigation",
+				"headRefFromApi": "claude/unrelated-investigation",
+				"body": "Refs #900",
+				"willCloseTarget": False,
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	combined = result["stdout"] + result["stderr"]
+	assert "VALIDATION_FIX_MERGED_EVIDENCE issue=900 candidate_pr=901 rejected=not_implementation_pr" in combined, combined
+	assert "SECURITY_PASS_FAILED reason=fix_issue_closed_without_merged_pr" in combined, combined
+	assert result["latest_state"]["status"] == "failed"
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+
+
+def test_security_pass_closed_fix_evidence_lookup_failure_retains_fixing_state() -> None:
+	"""A timeline lookup failure is not a verdict: keep security-pass-fixing
+	and retry on the next poll instead of terminalizing the project."""
+	result = _run_poller(
+		state=_security_pass_fixing_state_with_closed_fix_issue(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={10: ["ai:merged"], 900: ["ai:ready-to-merge"]},
+		issue_closed={900: True},
+		issue_linked_prs={900: 901},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-09-17T14:18:06Z",
+				"baseRefName": "orchestrator/project-192",
+				"headRefName": "ai/issue-900",
+				"willCloseTarget": False,
+			},
+		],
+		timeline_fail_for_issues=[900],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	combined = result["stdout"] + result["stderr"]
+	assert "merged-PR evidence lookup failed; retaining fixing state" in combined, combined
+	assert "reason=fix_issue_closed_without_merged_pr" not in combined, combined
+	assert result["latest_state"]["status"] == "security-pass-fixing"
+	assert result["latest_state"]["security_pass_active_fix_issues"] == [900]
+
+
 def _security_pass_fix_issue_body(tracking_issue: int, cycle: int) -> str:
 	"""Body create_security_pass_fix_issue writes for a consolidated fix issue.
 

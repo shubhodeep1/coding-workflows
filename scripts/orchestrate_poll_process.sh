@@ -11298,7 +11298,7 @@ prime_phase_concurrency_snapshot() {
 # recovery-push path.
 #
 # Args: $1 = head branch.  Echoes the databaseId of the freshest matching
-# in_progress/queued review run younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
+# in_progress/queued/pending review run younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
 # else nothing.  Freshness mirrors build_active_issue_set's review-run window
 # so a review still legitimately editing past STALL_THRESHOLD_MINUTES is not
 # clobbered, while a genuinely hung run older than the review budget does not
@@ -11328,18 +11328,32 @@ _direct_inflight_review_run_on_branch()
 	# so its freshness window is the review-run budget, not the generic stall
 	# threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
 	_di_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
+	# Diagnostics (CLAUDE.md §8): this helper is the last guard before the
+	# destructive empty-commit push and fails open on any error.  Poller
+	# run 35230465327 (tele-funtoken-msg-scoring#4367) pushed onto a
+	# branch whose review run 35226455269 was live, with no trace of why
+	# both the cached scan and this listing came back empty.  Report the
+	# listing outcome on stderr (stdout is the return value) so the next
+	# miss is attributable; the fail-open contract itself is unchanged.
+	local _di_rc=0 _di_runs_total="invalid" _di_runs_live="invalid" _di_match=""
 	_di_runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
 		--branch "${_di_branch}" \
 		--limit 30 \
 		--json databaseId,status,name,workflowName,startedAt,createdAt \
-		2>/dev/null || echo "")"
-	[ -n "${_di_runs_json}" ] || return 0
-	printf '%s' "${_di_runs_json}" | jq -r \
+		2>/dev/null)" || _di_rc=$?
+	if [ "${_di_rc}" -ne 0 ] || [ -z "${_di_runs_json}" ] \
+		|| ! printf '%s' "${_di_runs_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+		echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=listing_unavailable" >&2
+		return 0
+	fi
+	_di_runs_total="$(printf '%s' "${_di_runs_json}" | jq -r 'length' 2>/dev/null || echo "invalid")"
+	_di_runs_live="$(printf '%s' "${_di_runs_json}" | jq -r '[.[]? | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")] | length' 2>/dev/null || echo "invalid")"
+	_di_match="$(printf '%s' "${_di_runs_json}" | jq -r \
 		--argjson now "${_di_now_epoch}" \
 		--argjson threshold "${_di_stall_secs}" '
 		(if type == "array" then . else [] end)
 		| [ .[]?
-			| select((.status // "") == "in_progress" or (.status // "") == "queued")
+			| select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
 			| select(
 				((.name // "") == "AI Review" or (.name // "") == "Internal Review" or (.name // "") == "Review Autofix"
 				 or (.name // "") == "Internal: AI Review & Autofix" or (.name // "") == "Codex PR Self-Healing Semantic Agent")
@@ -11352,7 +11366,12 @@ _direct_inflight_review_run_on_branch()
 			   else $now end) as $start_epoch
 			| select(($now - $start_epoch) < $threshold)
 		  ] | (.[0].databaseId // empty)
-	' 2>/dev/null || echo ""
+	' 2>/dev/null || echo "")"
+	if [ -z "${_di_match}" ]; then
+		echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=no_fresh_review_run" >&2
+		return 0
+	fi
+	printf '%s\n' "${_di_match}"
 }
 
 # Build a set of issue numbers that have *genuinely active* (in_progress or
@@ -16251,6 +16270,9 @@ The active security-pass fix cycle continues; the waivers apply from its next re
         SECURITY_FIX_PR_MERGED="false"
         if [ "${SECURITY_FIX_STATE}" = "closed" ] && ! has_label "${SECURITY_FIX_LABELS}" "ai:merged"; then
           if validation_fix_issue_has_merged_pr_evidence "${SECURITY_FIX_ISSUE}"; then
+            if ! backfill_validation_fix_issue_merged_label "${SECURITY_FIX_ISSUE}" "${SECURITY_FIX_LABELS}"; then
+              echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE}: merged PR detected but ai:merged backfill failed." >&2
+            fi
             SECURITY_FIX_PR_MERGED="true"
           else
             SECURITY_FIX_MERGED_EVIDENCE_RC=$?
@@ -16264,6 +16286,34 @@ The active security-pass fix cycle continues; the waivers apply from its next re
         SECURITY_FIX_STATE="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].state // "open"')"
         SECURITY_FIX_LABELS="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -c --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].labels // []')"
         SECURITY_FIX_PR_MERGED="$(printf '%s' "${SECURITY_FIX_DETAILS_JSON}" | jq -r --arg issue "${SECURITY_FIX_ISSUE}" '.[$issue].linked_pr.merged // false')"
+        # The batch's linked_pr only carries CrossReferencedEvents with
+        # willCloseTarget=true, and GitHub sets that flag only for PRs
+        # into the default branch — so it is null for every fix PR
+        # merged into an integration branch.  When the ai:merged label
+        # is also missing (tele-funtoken-msg-scoring#4379: the
+        # review-blocked judge's post-merge phase swap replaced the
+        # PR-close handler's ai:merged with ai:ready-to-merge six seconds
+        # after it landed), fall back to the same timeline evidence the
+        # cache-miss path already consults before declaring the fix
+        # closed-without-merge.  §15: one timeline read plus label
+        # reconciliation, only on this closed + unlabelled + unlinked corner.
+        if [ "${SECURITY_FIX_STATE}" = "closed" ] \
+          && [ "${SECURITY_FIX_PR_MERGED}" != "true" ] \
+          && ! has_label "${SECURITY_FIX_LABELS}" "ai:merged"; then
+          if validation_fix_issue_has_merged_pr_evidence "${SECURITY_FIX_ISSUE}"; then
+            echo "SECURITY_PASS_FIX_MERGED_EVIDENCE tracking_issue=${TRACKING_NUM} issue=${SECURITY_FIX_ISSUE} source=timeline"
+            if ! backfill_validation_fix_issue_merged_label "${SECURITY_FIX_ISSUE}" "${SECURITY_FIX_LABELS}"; then
+              echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE}: merged PR detected but ai:merged backfill failed." >&2
+            fi
+            SECURITY_FIX_PR_MERGED="true"
+          else
+            SECURITY_FIX_MERGED_EVIDENCE_RC=$?
+            if [ "${SECURITY_FIX_MERGED_EVIDENCE_RC}" -eq 2 ]; then
+              echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE} merged-PR evidence lookup failed; retaining fixing state."
+              continue
+            fi
+          fi
+        fi
       fi
       if [ "${SECURITY_FIX_STATE}" = "closed" ] \
         && { [ "${SECURITY_FIX_PR_MERGED}" = "true" ] || has_label "${SECURITY_FIX_LABELS}" "ai:merged"; }; then
