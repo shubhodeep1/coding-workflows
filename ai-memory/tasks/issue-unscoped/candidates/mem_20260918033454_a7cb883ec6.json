@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh: lines 2220-2233 | severity=high | confidence=4\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: Parent-metadata extraction propagates the literal sentinel `(default branch)` as a real integration branch name.\n  WHY: Default-branch-only follow-up issues then fail permanently when `resolve_integration_ref.sh` validates the nonexistent `(default branch)` ref instead of falling back to the default branch.\n- scripts/review_rb_judge.sh: line 2234 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k3]\n  PROBLEM: The base-branch fallback hardcodes the `orchestrator/project-` prefix instead of honoring the operator-configurable `ORCH_INTEGRATION_BRANCH_PATTERN`.\n  WHY: Repositories with a custom integration-branch pattern silently fail to derive the integration branch for parent issues lacking metadata and fall back to the default branch.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- scripts/review_rb_judge.sh\n  Line or code reference: lines 2220-2233 (the new FIRST_ISSUE_BODY lineage extraction), interacting with scripts/orchestrate_poll_process.sh:4862 and scripts/resolve_integration_ref.sh:63-67\n  Problem: The parent-metadata extraction propagates the literal sentinel `(default branch)` as if it were a real branch name. When an orchestrator project runs default-branch-only (no integration branch), `create_security_pass_fix_issue` writes `- Integration branch: \\`(default branch)\\`` into the fix issue body (orchestrate_poll_process.sh:4862). The judge's new regex `([^`\\n]+?)` strips the backticks and captures `(default branch)`, so the follow-up issue is created with `- Integration branch: (default branch)`. On the follow-up's plan/implement run, `resolve_integration_ref.sh` extracts that value, calls `branch_exists \"(default branch)\"`, gets a 404, emits `::error::Integration branch '(default branch)' declared in child issue #N does not exist.` and returns 1 \u2014 a hard, non-self-healing failure on every subsequent plan/implement attempt for that follow-up. Before this diff the follow-up carried no Integration branch line at all and resolved cleanly to the default branch, so this is a regression introduced by the lineage propagation for exactly the project shape the parent-metadata source was meant to serve.\n  Why it fails at runtime: follow-up issues created from default-branch-only projects (security-pass fix issues, or any managed issue whose metadata carries the `(default branch)` sentinel) enter a permanent plan/implement error loop instead of resolving to the default branch.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n\n- scripts/review_rb_judge.sh\n  Line or code reference: line 2234 (`[[ \"${PR_BASE_REF:-}\" =~ ^orchestrator/project-([0-9]+)$ ]]`)\n  Problem: The base-branch fallback hardcodes the `orchestrator/project-` prefix, but the integration-branch naming is operator-configurable via `ORCH_INTEGRATION_BRANCH_PATTERN` (README, default `^orchestrator/project-`). On a repo that overrode the pattern, the fallback derivation silently never fires. The parent-metadata source still covers most orchestrator-managed cases, so this is a consistency gap in the heuristic fallback rather than a failure on default configuration.\n  Why it fails at runtime: with a custom integration branch pattern, a parent issue lacking metadata (the binance-blessings#288 shape this fallback exists for) produces a follow-up that again resolves to the default branch \u2014 the exact defect this PR fixes \u2014 with no logged indication that the pattern mismatch was the cause.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM moonshotai_kimi-k3 ===",
+  "fingerprint": "9c9ed5ca2f56c303da3075d7e98a5e1ee0d3cdf54f8afa01e1deb2d2e68f2ad0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35301606245",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35301606245",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260918033454_a7cb883ec6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35301606245"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-09-18T03:34:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
