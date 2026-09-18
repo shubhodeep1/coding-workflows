@@ -22,6 +22,7 @@ import textwrap
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
+IMPLEMENT_STAGED_SUPPORT_WORKSPACE_SCRIPT = REPO_ROOT / "scripts" / "implement_staged_support_workspace.sh"
 IMPLEMENT_GUARD_HANDLER = REPO_ROOT / "scripts" / "implement_handle_guard_block.sh"
 FILES_TOUCHED_SCOPE_GUARD = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
 
@@ -1602,7 +1603,7 @@ def test_commit_helper_restores_untouched_staged_support_files_to_head() -> None
 		proc = _run_commit_helper(repo_dir, env)
 		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
 		assert "IMPLEMENT_STAGED_SUPPORT_RESTORED path=scripts/helper.sh" in proc.stdout
-		assert "IMPLEMENT_STAGED_SUPPORT_RESTORE restored=1 rebased=0 conflicts=0" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORE restored=1 rebased=0 edited_from_head=0 conflicts=0" in proc.stdout
 		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
 		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() != baseline_head
 		committed = _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split()
@@ -1623,7 +1624,7 @@ def test_commit_helper_rebases_editor_edits_of_staged_support_files_onto_head() 
 		proc = _run_commit_helper(repo_dir, env)
 		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
 		assert "IMPLEMENT_STAGED_SUPPORT_REBASED path=scripts/helper.sh" in proc.stdout
-		assert "IMPLEMENT_STAGED_SUPPORT_RESTORE restored=0 rebased=1 conflicts=0" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORE restored=0 rebased=1 edited_from_head=0 conflicts=0" in proc.stdout
 		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
 		committed = _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split()
 		assert sorted(committed) == ["README.md", "scripts/helper.sh"], committed
@@ -1713,6 +1714,255 @@ def test_commit_helper_runtime_copy_survives_restoring_its_worktree_path() -> No
 		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
 		assert _git_out(["git", "show", "HEAD:scripts/implement_commit_changes.sh"], cwd=repo_dir) == "#!/usr/bin/env bash\nexit 97\n"
 		assert _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split() == ["README.md"]
+
+
+def _run_workspace_helper(repo_dir: Path, env: dict[str, str], mode: str) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
+		["bash", str(IMPLEMENT_STAGED_SUPPORT_WORKSPACE_SCRIPT), mode],
+		cwd=str(repo_dir),
+		env=env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+
+
+def _editor_head_ledger(env: dict[str, str]) -> Path:
+	return Path(env["STAGED_SUPPORT_LEDGER"]).parent / "staged_support_editor_head.txt"
+
+
+def test_staged_support_workspace_restore_then_reinstall_round_trip() -> None:
+	"""restore shows the editor HEAD's copy; reinstall puts SCRIPT_REF's back when untouched."""
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_roundtrip_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		helper = repo_dir / "scripts" / "helper.sh"
+		proc = _run_workspace_helper(repo_dir, env, "restore")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORED path=scripts/helper.sh" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORE restored=1 removed=0 skipped=0" in proc.stdout
+		assert helper.read_text(encoding="utf-8") == _STAGED_HELPER_BRANCH
+		assert (helper.stat().st_mode & 0o777) == 0o644
+		assert _editor_head_ledger(env).read_text(encoding="utf-8") == "scripts/helper.sh\n"
+		assert _git_out(["git", "status", "--porcelain", "--", "scripts/helper.sh"], cwd=repo_dir).strip() == ""
+
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALLED path=scripts/helper.sh" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALL reinstalled=1 edited_from_head=0" in proc.stdout
+		assert helper.read_text(encoding="utf-8") == _STAGED_HELPER_MAIN
+		assert (helper.stat().st_mode & 0o777) == 0o755
+		# The head ledger survives for the commit helper; the untouched copy
+		# then takes the existing restore-to-HEAD path.
+		assert _editor_head_ledger(env).read_text(encoding="utf-8") == "scripts/helper.sh\n"
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORE restored=1 rebased=0 edited_from_head=0 conflicts=0" in proc.stdout
+		committed = _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split()
+		assert committed == ["README.md"], committed
+
+
+def test_staged_support_workspace_editor_edit_of_branch_file_commits_without_rebase() -> None:
+	"""Regression for #4113 (run 35072286584): the editor edits the branch's
+	own helper, so an edit on a line the branch changed is a plain edit and
+	never the 3-way conflict that fails closed into ai:needs-human."""
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_edit_") as td:
+		repo_dir, github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		helper = repo_dir / "scripts" / "helper.sh"
+		assert _run_workspace_helper(repo_dir, env, "restore").returncode == 0
+		# The editor edits the branch's line — the shape that conflicted before.
+		edited = _STAGED_HELPER_BRANCH.replace("branch line A\n", "branch line A hardened by the editor\n")
+		helper.write_text(edited, encoding="utf-8")
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD path=scripts/helper.sh" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALL reinstalled=0 edited_from_head=1" in proc.stdout
+		assert helper.read_text(encoding="utf-8") == edited
+
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD path=scripts/helper.sh" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_REBASE" not in proc.stdout + proc.stderr
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORE restored=0 rebased=0 edited_from_head=1 conflicts=0" in proc.stdout
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() != baseline_head
+		committed = _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split()
+		assert sorted(committed) == ["README.md", "scripts/helper.sh"], committed
+		assert _git_out(["git", "show", "HEAD:scripts/helper.sh"], cwd=repo_dir) == edited
+		assert "main line A" not in _git_out(["git", "show", "HEAD:scripts/helper.sh"], cwd=repo_dir)
+		mode_line = _git_out(["git", "ls-files", "-s", "scripts/helper.sh"], cwd=repo_dir)
+		assert mode_line.startswith("100644 "), mode_line
+
+
+def test_staged_support_workspace_preserves_implement_edit_across_repair_restore() -> None:
+	"""A second restore for syntax repair must not drop the implementation edit ledger."""
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_repair_restore_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		helper = repo_dir / "scripts" / "helper.sh"
+		assert _run_workspace_helper(repo_dir, env, "restore").returncode == 0
+		edited = _STAGED_HELPER_BRANCH.replace("branch line A\n", "branch line A hardened by the editor\n")
+		helper.write_text(edited, encoding="utf-8")
+		assert _run_workspace_helper(repo_dir, env, "reinstall").returncode == 0
+
+		proc = _run_workspace_helper(repo_dir, env, "restore")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "reason=modified_before_editor" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORE restored=0 removed=0 skipped=1" in proc.stdout
+		assert _editor_head_ledger(env).read_text(encoding="utf-8") == "scripts/helper.sh\n"
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALL reinstalled=0 edited_from_head=1" in proc.stdout
+		assert helper.read_text(encoding="utf-8") == edited
+
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD path=scripts/helper.sh" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_REBASE" not in proc.stdout + proc.stderr
+		assert _git_out(["git", "show", "HEAD:scripts/helper.sh"], cwd=repo_dir) == edited
+
+
+def test_staged_support_workspace_handles_staging_recreation_of_branch_deleted_file() -> None:
+	"""A file the branch deleted but staging recreated is hidden from the
+	editor, reinstalled when untouched, and never committed; an editor
+	recreation survives as the editor's own change."""
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_deleted_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		extra = repo_dir / "scripts" / "extra.sh"
+		extra.write_text("#!/usr/bin/env bash\nmain-only helper\n", encoding="utf-8")
+		extra.chmod(0o755)
+		base_extra = Path(env["STAGED_SUPPORT_BASE_DIR"]) / "scripts" / "extra.sh"
+		base_extra.write_text("#!/usr/bin/env bash\nmain-only helper\n", encoding="utf-8")
+		base_extra.chmod(0o755)
+		with open(env["STAGED_SUPPORT_LEDGER"], "a", encoding="utf-8") as ledger:
+			ledger.write("scripts/extra.sh\n")
+
+		proc = _run_workspace_helper(repo_dir, env, "restore")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORED path=scripts/extra.sh state=absent-in-head" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORE restored=1 removed=1 skipped=0" in proc.stdout
+		assert not extra.exists()
+
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALLED path=scripts/extra.sh state=absent-in-head" in proc.stdout
+		assert extra.read_text(encoding="utf-8") == "#!/usr/bin/env bash\nmain-only helper\n"
+
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORED path=scripts/extra.sh state=absent-in-head" in proc.stdout
+		committed = _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split()
+		assert committed == ["README.md"], committed
+		assert not extra.exists()
+
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_recreated_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		extra = repo_dir / "scripts" / "extra.sh"
+		extra.write_text("#!/usr/bin/env bash\nmain-only helper\n", encoding="utf-8")
+		base_extra = Path(env["STAGED_SUPPORT_BASE_DIR"]) / "scripts" / "extra.sh"
+		base_extra.write_text("#!/usr/bin/env bash\nmain-only helper\n", encoding="utf-8")
+		with open(env["STAGED_SUPPORT_LEDGER"], "a", encoding="utf-8") as ledger:
+			ledger.write("scripts/extra.sh\n")
+		assert _run_workspace_helper(repo_dir, env, "restore").returncode == 0
+		assert not extra.exists()
+		extra.write_text("#!/usr/bin/env bash\nrecreated by the editor\n", encoding="utf-8")
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD path=scripts/extra.sh state=recreated-by-editor" in proc.stdout
+		assert extra.read_text(encoding="utf-8") == "#!/usr/bin/env bash\nrecreated by the editor\n"
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_RECREATED_BY_EDITOR path=scripts/extra.sh" in proc.stdout
+		committed = _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split()
+		assert sorted(committed) == ["README.md", "scripts/extra.sh"], committed
+
+
+def test_staged_support_workspace_skips_paths_modified_before_editor_and_noops_without_ledger() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_skip_") as td:
+		modified = _STAGED_HELPER_MAIN + "touched by a pre-editor step\n"
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), modified)
+		proc = _run_workspace_helper(repo_dir, env, "restore")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_SKIPPED_PATH path=scripts/helper.sh reason=modified_before_editor" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORE restored=0 removed=0 skipped=1" in proc.stdout
+		assert (repo_dir / "scripts" / "helper.sh").read_text(encoding="utf-8") == modified
+		assert _editor_head_ledger(env).read_text(encoding="utf-8") == ""
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 0
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALL reinstalled=0 edited_from_head=0" in proc.stdout
+
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_noledger_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		consumer_env = {key: value for key, value in env.items() if key not in {"STAGED_SUPPORT_LEDGER", "STAGED_SUPPORT_BASE_DIR"}}
+		for mode in ("restore", "reinstall"):
+			proc = _run_workspace_helper(repo_dir, consumer_env, mode)
+			assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert f"IMPLEMENT_STAGED_SUPPORT_EDITOR_SKIPPED mode={mode} reason=no_ledger" in proc.stdout
+		assert (repo_dir / "scripts" / "helper.sh").read_text(encoding="utf-8") == _STAGED_HELPER_MAIN
+		proc = _run_workspace_helper(repo_dir, env, "bogus")
+		assert proc.returncode == 2
+
+
+def test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_unsafe_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		Path(env["STAGED_SUPPORT_LEDGER"]).write_text("../escape.sh\n", encoding="utf-8")
+		proc = _run_workspace_helper(repo_dir, env, "restore")
+		assert proc.returncode == 1
+		assert "IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path=../escape.sh reason=unsafe_path" in proc.stdout + proc.stderr
+	for unsafe_ledger_path in (".", "./"):
+		with tempfile.TemporaryDirectory(prefix="test_staged_ws_current_dir_") as td:
+			repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+			Path(env["STAGED_SUPPORT_LEDGER"]).write_text(f"{unsafe_ledger_path}\n", encoding="utf-8")
+			proc = _run_workspace_helper(repo_dir, env, "restore")
+			assert proc.returncode == 1
+			assert f"IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path={unsafe_ledger_path} reason=unsafe_path" in proc.stdout + proc.stderr
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_nobase_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		(Path(env["STAGED_SUPPORT_BASE_DIR"]) / "scripts" / "helper.sh").unlink()
+		proc = _run_workspace_helper(repo_dir, env, "restore")
+		assert proc.returncode == 1
+		assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh" in proc.stdout + proc.stderr
+		assert (repo_dir / "scripts" / "helper.sh").read_text(encoding="utf-8") == _STAGED_HELPER_MAIN
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_nomode_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		assert _run_workspace_helper(repo_dir, env, "restore").returncode == 0
+		mock_bin = Path(td) / "mock-bin"
+		mock_bin.mkdir()
+		mock_stat = mock_bin / "stat"
+		mock_stat.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+		mock_stat.chmod(0o755)
+		env["PATH"] = f"{mock_bin}:{env['PATH']}"
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 1
+		assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh reason=mode_unavailable" in proc.stdout + proc.stderr
+
+
+def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
+	stage_block = _step_block_text("Stage workflow support files")
+	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do" in stage_block
+	assert 'echo "STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"' in stage_block
+	implement_run = _extract_run_script("Run Codex implementation")
+	helper_line = 'STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_staged_support_workspace.sh"'
+	restore_call = 'bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" restore'
+	reinstall_call = 'bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" reinstall'
+	assert implement_run.count(helper_line) == 1
+	assert implement_run.count(restore_call) == 1
+	assert implement_run.count(reinstall_call) == 1
+	assert '--repo-root "${WORKSPACE_PATH:-${GITHUB_WORKSPACE}}"' in implement_run
+	# restore precedes the pre-Codex baseline capture and the attempt loop;
+	# reinstall follows the loop and precedes the transcript archive.
+	assert implement_run.index(restore_call) < implement_run.index("python3 scripts/targeted_file_context.py")
+	assert implement_run.index(restore_call) < implement_run.index('CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"')
+	assert implement_run.index(restore_call) < implement_run.index('for attempt in $(seq 1 "${max_attempts}"); do')
+	assert implement_run.rindex("bash scripts/codex_thread_reuse.sh direct-run") < implement_run.index(reinstall_call)
+	assert implement_run.index(reinstall_call) < implement_run.index('if [ "${implement_succeeded}" = "true" ]; then')
+	repair_run = _extract_run_script("Attempt post-Codex syntax repair")
+	assert repair_run.count(restore_call) == 1
+	assert repair_run.count(reinstall_call) == 1
+	assert repair_run.index(restore_call) < repair_run.index("repair_succeeded=false")
+	assert repair_run.index(reinstall_call) < repair_run.index("if [ \"${repair_succeeded}\" != 'true' ]; then")
+	commit_helper = IMPLEMENT_COMMIT_SCRIPT.read_text(encoding="utf-8")
+	assert 'staged_support_editor_head_ledger="${STAGED_SUPPORT_EDITOR_HEAD_LEDGER:-}"' in commit_helper
+	assert "IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD" in commit_helper
 
 
 def test_commit_helper_fails_closed_when_staged_support_base_is_missing() -> None:

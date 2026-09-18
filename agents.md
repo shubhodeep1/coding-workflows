@@ -230,6 +230,21 @@ a new value, add it to the appropriate overrides file with a
   `IMPLEMENT_STAGED_SUPPORT_RECREATED_BY_EDITOR`, `IMPLEMENT_STAGED_SUPPORT_BASE_MISSING`,
   `IMPLEMENT_STAGED_SUPPORT_HEAD_READ_FAILED`, `IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT`,
   `IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED`, `IMPLEMENT_STAGED_SUPPORT_RESTORE`.
+- `scripts/implement_staged_support_workspace.sh` (staged into the run dir with the other
+  helpers, self-repo only, no-op without a ledger) changes what the *editor* sees:
+  `restore` runs right before the Codex implementation loop and before the post-Codex
+  syntax-repair loop, puts every ledger path still equal to its installed copy back to
+  `HEAD` (removing staging recreations of branch-deleted files) and lists them in
+  `STAGED_SUPPORT_EDITOR_HEAD_LEDGER` (`${RUNTIME_DIR}/staged_support_editor_head.txt`);
+  `reinstall` runs after each loop and puts the installed copy back for every listed path
+  the editor left untouched. The commit helper commits a listed path the editor changed
+  as a plain edit (`IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD`) and never re-bases it.
+  Regression: #4113 (run 35072286584) edited `main`'s `scripts/codex_helpers.sh` on
+  `orchestrator/project-3965`, the re-base conflicted, and the issue halted in
+  `ai:needs-human`. Log keys: `IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORED`,
+  `IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALLED`, `IMPLEMENT_STAGED_SUPPORT_EDITOR_SKIPPED`,
+  `IMPLEMENT_STAGED_SUPPORT_EDITOR_SKIPPED_PATH`, `IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORE`,
+  `IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALL`, `IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD`.
 - Staged-support failures are consumed by the runtime-preserved rejection handler,
   which attempts and verifies the `ai:needs-human` latch, comments with the affected paths and
   latch status, sends the configured CRITICAL alert, and prevents generic diagnosis/re-issue handling.
@@ -609,7 +624,21 @@ prompt, a codex failure, or an invalid verdict also fall back to the terminal
 path; nothing passes silently. Every round increments
 `security_pass_judge_rounds` (reset by `/re-security-pass` and the kill-switch
 release) and posts a `⚖️ Security-pass exhaustion judge` comment with the
-decision table. Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
+decision table. With `SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED` (default `true`) the
+accepted finding's advisory follow-up is not filed at judge time: the waiver
+row keeps `followup_pending: true`, `audited_head_sha`, and the `finding`
+payload (`SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED`), and
+`security_pass_file_deferred_advisory_followups`, called from every site that
+records `final_merge_status = "merged"`, files it once the integration branch
+is on the default branch (`SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED`, body line
+naming the merging PR, `🔐 Security-pass advisory follow-ups filed` comment).
+Judge-time filing planned #4090 / #4091 against a `main` that did not yet
+contain the broker module the findings cite, so the planner emitted
+`BLOCKED: PR #3968 is still open` and both sat in `ai:blocked`. The
+`/security-pass-waive` path defers the same way. A create that fails keeps the
+row pending for the next merged-state tick; `create_security_pass_advisory_followup`
+clears `followup_pending` and drops the payload when it records the issue.
+Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
 and `security_pass_apply_waivers_to_findings` re-applies them to the result
 (exact id, or same file and category within `SECURITY_AUDIT_WAIVER_LINE_WINDOW`,
 default 40 lines). `/security-pass-waive <finding_id> ...` (human
@@ -797,6 +826,8 @@ and shipped:
 - `SECURITY_PASS_WAIVE_REJECTED`
 - `SECURITY_PASS_WAIVED_SUPPRESSED`
 - `SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED`
+- `SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED`
+- `SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED`
 
 - `SEMBLE_QUERY`
 - `SEMBLE_FALLBACK`
@@ -930,6 +961,8 @@ LOG_PREFIX.name=SECURITY_PASS_WAIVED
 LOG_PREFIX.name=SECURITY_PASS_WAIVE_REJECTED
 LOG_PREFIX.name=SECURITY_PASS_WAIVED_SUPPRESSED
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED
+LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED
+LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED
 LOG_PREFIX.name=SEMBLE_QUERY
 LOG_PREFIX.name=SEMBLE_FALLBACK
 LOG_PREFIX.name=SERENA_QUERY

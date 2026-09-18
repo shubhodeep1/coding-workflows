@@ -4515,14 +4515,25 @@ def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> Non
 	assert "Refs #192" in advisory_body
 	assert "Notify @​security-team about issue #​123." in advisory_body
 	assert "@security-team" not in advisory_body
+	# Deferred filing (SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED default): the
+	# advisory is filed by the final-merge arm of this same tick, after the
+	# integration branch landed on the default branch, and its body says so.
+	assert "has since merged into the default branch via PR #" in advisory_body
+	assert "Plan and implement this issue against the default branch." in advisory_body
 	assert waived[0]["issue"] == created[0]["number"]
+	assert "followup_pending" not in waived[0]
+	assert "finding" not in waived[0]
 	assert latest_state["security_pass_followup_issues"] == [{"finding_id": "SEC-TEST-1", "issue": created[0]["number"]}]
 	assert "ai:security-pass-failed" not in result["tracking_labels"]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_JUDGE_DECIDED tracking_issue=192 round=1" in combined_log
 	assert "accepted=1 keep_fixing=0 failed=0" in combined_log
 	assert "SECURITY_PASS_WAIVED tracking_issue=192 source=judge round=1 ids=SEC-TEST-1" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=192 finding=SEC-TEST-1 source=judge reason=integration_branch_not_merged" in combined_log
 	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED tracking_issue=192 finding=SEC-TEST-1 issue={created[0]['number']} source=judge" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED tracking_issue=192" in combined_log
+	assert "filed=1 pending=1" in combined_log
+	assert combined_log.index("SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED") < combined_log.index("SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED")
 	assert "SECURITY_PASS_CLEAN tracking_issue=192" in combined_log
 	assert "reason=exhaustion_judge_accepted accepted=1" in combined_log
 	assert "SECURITY_PASS_FAILED" not in combined_log
@@ -4533,7 +4544,15 @@ def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> Non
 	]
 	assert len(judge_comments) == 1
 	assert "accepted every remaining finding as a known risk" in judge_comments[0]
-	assert f"follow-ups: #{created[0]['number']}" in judge_comments[0]
+	assert "follow-up issues will be filed once `orchestrator/project-192` merges into the default branch" in judge_comments[0]
+	assert f"#{created[0]['number']}" not in judge_comments[0]
+	filed_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## 🔐 Security-pass advisory follow-ups filed")
+	]
+	assert len(filed_comments) == 1
+	assert f"- `SEC-TEST-1` → #{created[0]['number']}" in filed_comments[0]
 	assert "| SEC-TEST-1 | high | scripts/example.py:1 | accept_with_followup |" in judge_comments[0]
 	assert "Ping @​security about #​55." in judge_comments[0]
 	assert not any("Project security pass exhausted" in comment["body"] for comment in result["issues"]["192"]["comments"])
@@ -4543,6 +4562,182 @@ def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> Non
 		and "exhaustion judge accepted 1 remaining finding(s)" in notification["message"]
 		for notification in result["telegram_notifications"]
 	)
+
+
+def test_security_pass_advisory_followup_kill_switch_files_at_judge_time() -> None:
+	"""SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED=false restores judge-time filing."""
+	result = _run_poller(
+		state=_security_pass_exhausted_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(
+			[_security_pass_test_finding(), _security_pass_second_test_finding()]
+		),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={
+			"SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED": "false",
+			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+				_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"), ("SEC-TEST-2", "accept_with_followup"))
+			),
+		},
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "security-pass-fixing"
+	created = result.get("created_issues", [])
+	assert [issue["labels"] for issue in created] == [["ai:security"], ["ai:clarification", "ai:orchestrator-managed"]]
+	assert created[0]["title"] == "[security-pass] Advisory: SEC-TEST-2 (medium, scripts/example.py:1)"
+	advisory_body = result["issues"][str(created[0]["number"])]["body"]
+	assert "has since merged into the default branch" not in advisory_body
+	waived = latest_state["security_pass_waived_findings"]
+	assert waived[0]["issue"] == created[0]["number"]
+	assert "followup_pending" not in waived[0]
+	assert "finding" not in waived[0]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED" not in combined_log
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED tracking_issue=192 finding=SEC-TEST-2 issue={created[0]['number']} source=judge" in combined_log
+	judge_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 1)")
+	]
+	assert len(judge_comments) == 1
+	assert f"follow-ups: #{created[0]['number']}" in judge_comments[0]
+
+
+def test_security_pass_deferred_advisory_followups_file_when_final_merge_lands() -> None:
+	"""Pending waiver rows from an earlier tick are filed by the final-merge arm.
+
+	Regression for #4090 / #4091 (project #3965): the advisories were filed
+	at judge time against `main`, which did not yet contain the code the
+	findings cite (`scripts/model_provider_broker.py` existed only on
+	`orchestrator/project-3965`), so the standalone planner emitted
+	`BLOCKED: PR #3968 is still open` and both issues sat in ai:blocked.
+	"""
+	state = _base_state(status="in_progress")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"security_pass_waived_findings": [
+				{
+					"finding_id": "SEC-DEFERRED",
+					"file": "scripts/example.py",
+					"line": 1,
+					"owasp_or_stride_category": "A01: Broken Access Control",
+					"severity": "high",
+					"justification": "Bounded by the broker; tracked as a follow-up.",
+					"source": "judge",
+					"waived_by": "security-pass-exhaustion-judge",
+					"waived_at_cycle": 3,
+					"issue": None,
+					"followup_pending": True,
+					"audited_head_sha": "deadbeefcafe",
+					"finding": _security_pass_test_finding() | {"finding_id": "SEC-DEFERRED"},
+				},
+				{
+					"finding_id": "SEC-ALREADY-FILED",
+					"file": "scripts/example.py",
+					"line": 2,
+					"owasp_or_stride_category": "A01: Broken Access Control",
+					"severity": "low",
+					"justification": "Filed earlier.",
+					"source": "judge",
+					"waived_by": "security-pass-exhaustion-judge",
+					"waived_at_cycle": 3,
+					"issue": 850,
+				},
+			],
+			"security_pass_followup_issues": [{"finding_id": "SEC-ALREADY-FILED", "issue": 850}],
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "complete"
+	assert latest_state["final_merge_status"] == "merged"
+	final_pr = latest_state["final_merge_pr"]
+	created = result.get("created_issues", [])
+	assert len(created) == 1
+	assert created[0]["labels"] == ["ai:security"]
+	assert created[0]["title"] == "[security-pass] Advisory: SEC-DEFERRED (high, scripts/example.py:1)"
+	advisory_body = result["issues"][str(created[0]["number"])]["body"]
+	assert "<!-- security-pass-advisory:192:SEC-DEFERRED -->" in advisory_body
+	assert "for integration branch `orchestrator/project-192` at `deadbeefcafe`" in advisory_body
+	assert f"has since merged into the default branch via PR #{final_pr}" in advisory_body
+	waived = {row["finding_id"]: row for row in latest_state["security_pass_waived_findings"]}
+	assert waived["SEC-DEFERRED"]["issue"] == created[0]["number"]
+	assert "followup_pending" not in waived["SEC-DEFERRED"]
+	assert "finding" not in waived["SEC-DEFERRED"]
+	assert waived["SEC-ALREADY-FILED"]["issue"] == 850
+	assert {row["finding_id"]: row["issue"] for row in latest_state["security_pass_followup_issues"]} == {
+		"SEC-ALREADY-FILED": 850,
+		"SEC-DEFERRED": created[0]["number"],
+	}
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED tracking_issue=192 finding=SEC-DEFERRED issue={created[0]['number']} source=judge" in combined_log
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED tracking_issue=192 final_pr={final_pr} default_branch=main filed=1 pending=1" in combined_log
+	filed_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## 🔐 Security-pass advisory follow-ups filed")
+	]
+	assert len(filed_comments) == 1
+	assert f"via PR #{final_pr}" in filed_comments[0]
+	assert f"- `SEC-DEFERRED` → #{created[0]['number']}" in filed_comments[0]
+
+
+def test_security_pass_deferred_advisory_followup_retries_on_completed_tick() -> None:
+	"""A pending row from a failed merge-tick create retries after completion."""
+	state = _base_state(status="complete")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"final_merge_pr": 300,
+			"final_merge_status": "merged",
+			"security_pass_waived_findings": [
+				{
+					"finding_id": "SEC-RETRY",
+					"file": "scripts/example.py",
+					"line": 1,
+					"owasp_or_stride_category": "A01: Broken Access Control",
+					"severity": "high",
+					"justification": "Retry the advisory after a transient create failure.",
+					"source": "judge",
+					"waived_by": "security-pass-exhaustion-judge",
+					"waived_at_cycle": 3,
+					"issue": None,
+					"followup_pending": True,
+					"audited_head_sha": "deadbeefcafe",
+					"finding": _security_pass_test_finding() | {"finding_id": "SEC-RETRY"},
+				}
+			],
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	created = result.get("created_issues", [])
+	assert len(created) == 1
+	assert created[0]["labels"] == ["ai:security"]
+	assert latest_state["security_pass_waived_findings"][0]["issue"] == created[0]["number"]
+	assert "followup_pending" not in latest_state["security_pass_waived_findings"][0]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED tracking_issue=192 final_pr=300 default_branch=main filed=1 pending=1" in combined_log
 
 
 def test_security_pass_advisory_followup_reconciles_remote_marker_before_create() -> None:
@@ -4601,20 +4796,29 @@ def test_security_pass_exhaustion_judge_keep_fixing_creates_consolidated_fix_iss
 	assert latest_state["security_pass_status"] == "blocked"
 	assert latest_state["security_pass_cycle"] == 3
 	assert latest_state["security_pass_judge_rounds"] == 1
-	assert [row["finding_id"] for row in latest_state["security_pass_waived_findings"]] == ["SEC-TEST-2"]
+	waived = latest_state["security_pass_waived_findings"]
+	assert [row["finding_id"] for row in waived] == ["SEC-TEST-2"]
+	# The accepted finding's advisory is deferred until the integration
+	# branch merges: the waiver row carries the finding payload and the
+	# pending flag, and no ai:security issue exists yet.
+	assert waived[0]["issue"] is None
+	assert waived[0]["followup_pending"] is True
+	assert waived[0]["finding"]["finding_id"] == "SEC-TEST-2"
+	assert waived[0]["audited_head_sha"] == result["security_audit_capture"]["diff_head"]
 	assert [row["finding_id"] for row in latest_state["security_pass_reported_findings"]] == ["SEC-TEST-1"]
 	created = result.get("created_issues", [])
-	assert [issue["labels"] for issue in created] == [["ai:security"], ["ai:clarification", "ai:orchestrator-managed"]]
-	assert created[0]["title"] == "[security-pass] Advisory: SEC-TEST-2 (medium, scripts/example.py:1)"
-	assert created[1]["title"] == "[security-pass] Project #192 fix cycle 4"
-	fix_body = result["issues"][str(created[1]["number"])]["body"]
+	assert [issue["labels"] for issue in created] == [["ai:clarification", "ai:orchestrator-managed"]]
+	assert created[0]["title"] == "[security-pass] Project #192 fix cycle 4"
+	fix_body = result["issues"][str(created[0]["number"])]["body"]
 	assert "| SEC-TEST-1 |" in fix_body
 	assert "| SEC-TEST-2 |" not in fix_body
 	assert "- Local ID: `security-pass-fix-cycle-4`" in fix_body
-	assert latest_state["security_pass_active_fix_issues"] == [created[1]["number"]]
+	assert latest_state["security_pass_active_fix_issues"] == [created[0]["number"]]
 	assert result["tracking_labels"] == ["ai:security-pass-fixing"]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "accepted=1 keep_fixing=1 failed=0" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=192 finding=SEC-TEST-2 source=judge reason=integration_branch_not_merged" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED" not in combined_log
 	assert "SECURITY_PASS_FIX_ISSUE_CREATED tracking_issue=192" in combined_log
 	assert "SECURITY_PASS_FAILED" not in combined_log
 	judge_comments = [
@@ -4905,26 +5109,32 @@ def test_security_pass_waive_command_in_failed_state_persists_waivers_and_reaudi
 	assert waived["SEC-OLD"]["file"] == "scripts/example.py"
 	assert waived["SEC-OLD"]["line"] == 1
 	assert waived["unknown.id-1"]["file"] == ""
-	created = result.get("created_issues", [])
-	assert len(created) == 1
-	assert created[0]["labels"] == ["ai:security"]
-	assert created[0]["title"] == "[security-pass] Advisory: SEC-OLD (medium, scripts/example.py:1)"
-	assert waived["SEC-OLD"]["issue"] == created[0]["number"]
-	advisory_body = result["issues"][str(created[0]["number"])]["body"]
-	assert "accepted as a known risk by an operator (`/security-pass-waive`)" in advisory_body
+	# Operator waivers defer their advisory follow-up the same way the judge
+	# does: the known finding keeps its payload and pending flag, an id that
+	# matched nothing gets no follow-up at all, and no issue is filed until
+	# the integration branch merges.
+	assert result.get("created_issues", []) == []
+	assert waived["SEC-OLD"]["issue"] is None
+	assert waived["SEC-OLD"]["followup_pending"] is True
+	assert waived["SEC-OLD"]["finding"]["finding_id"] == "SEC-OLD"
+	assert waived["SEC-OLD"]["audited_head_sha"] == "old-head"
+	assert "followup_pending" not in waived["unknown.id-1"]
+	assert "finding" not in waived["unknown.id-1"]
 	capture = result["security_audit_capture"]
 	assert [row["finding_id"] for row in capture["waived_findings"]] == ["SEC-OLD", "unknown.id-1"]
 	assert not capture["diff_since"]
 	assert "ai:security-pass-failed" not in result["tracking_labels"]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_WAIVED tracking_issue=192 source=operator by=octocat ids=SEC-OLD,unknown.id-1" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=192 finding=SEC-OLD source=operator reason=integration_branch_not_merged" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED" not in combined_log
 	assert "SECURITY_PASS_WAIVE_REJECTED" not in combined_log
 	assert "mode=full reason=no_prior_audit" in combined_log
 	comment_bodies = [comment["body"] for comment in result["issues"]["192"]["comments"]]
 	ack_comments = [body for body in comment_bodies if body.startswith("<!-- security-pass-waive-dedup:")]
 	assert len(ack_comments) == 1
 	assert "## ✅ Security-pass findings waived" in ack_comments[0]
-	assert f"- `SEC-OLD` (scripts/example.py:1; follow-up #{created[0]['number']})" in ack_comments[0]
+	assert "- `SEC-OLD` (scripts/example.py:1; follow-up issue filed once the integration branch merges into the default branch)" in ack_comments[0]
 	assert "- `unknown.id-1` (not among the reported findings; matched by exact id only)" in ack_comments[0]
 	assert "The bounded security-pass fix loop was reset." in ack_comments[0]
 	assert any(
@@ -5065,10 +5275,11 @@ def test_security_pass_waive_command_in_fixing_state_persists_without_reset() ->
 	assert [row["finding_id"] for row in latest_state["security_pass_waived_findings"]] == ["SEC-FIXING"]
 	assert latest_state["security_pass_reported_findings"] == []
 	assert result["security_audit_capture"] is None
-	created = result.get("created_issues", [])
-	assert [issue["labels"] for issue in created] == [["ai:security"]]
+	assert result.get("created_issues", []) == []
+	assert latest_state["security_pass_waived_findings"][0]["followup_pending"] is True
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_WAIVED tracking_issue=192 source=operator by=octocat ids=SEC-FIXING" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=192 finding=SEC-FIXING source=operator" in combined_log
 	assert "Security-pass fix issue #700 remains in progress." in combined_log
 	ack_comments = [
 		comment["body"]
