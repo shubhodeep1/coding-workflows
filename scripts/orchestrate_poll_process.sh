@@ -1326,6 +1326,21 @@ if ! [[ "${MAX_SECURITY_PASS_JUDGE_ROUNDS}" =~ ^[0-9]+$ ]]; then
   MAX_SECURITY_PASS_JUDGE_ROUNDS="0"
 fi
 
+# Advisory follow-ups for accepted (waived) findings are filed only after the
+# project's integration branch has merged into the default branch.  Filing
+# them at judge time pointed the standalone clarify/plan pipeline at a
+# default branch that did not yet contain the cited code: #4090 and #4091
+# (project #3965) were planned against `main` while
+# `scripts/model_provider_broker.py` existed only on
+# `orchestrator/project-3965`, the planner emitted `BLOCKED: PR #3968 is
+# still open`, and both issues sat in ai:blocked waiting for a human.
+# `false` restores judge-time filing.
+if is_truthy "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED:-true}"; then
+  SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED="true"
+else
+  SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED="false"
+fi
+
 if is_truthy "${ALLOW_WORKFLOW_EDITS:-true}"; then
   ALLOW_WORKFLOW_EDITS="true"
 else
@@ -5472,6 +5487,11 @@ create_security_pass_advisory_followup() {
   local head_sha="$3"
   local justification="$4"
   local source="${5:-judge}"
+  # Optional: the final PR that merged the integration branch into the
+  # default branch.  Set by security_pass_file_deferred_advisory_followups so
+  # the body tells the pipeline the cited code is already on the default
+  # branch; empty on the legacy judge-time filing path.
+  local merged_pr="${6:-}"
   local finding_id existing_issue body_file title issue_url issue_number advisory_marker remote_followups_json
   SECURITY_PASS_ADVISORY_ISSUE_NUMBER=""
   finding_id="$(printf '%s' "${finding_json}" | jq -r '.finding_id // ""' 2>/dev/null || true)"
@@ -5501,7 +5521,7 @@ create_security_pass_advisory_followup() {
   if [[ "${existing_issue}" =~ ^[0-9]+$ ]]; then
     if ! jq --arg id "${finding_id}" --argjson issue "${existing_issue}" '
       .security_pass_followup_issues = ([.security_pass_followup_issues[]? | select(.finding_id != $id)] + [{finding_id: $id, issue: $issue}] | .[-100:])
-      | .security_pass_waived_findings = [(.security_pass_waived_findings // [])[] | if .finding_id == $id then .issue = $issue else . end]
+      | .security_pass_waived_findings = [(.security_pass_waived_findings // [])[] | if .finding_id == $id then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end]
     ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
       rm -f "${STATE_FILE}.tmp"
       echo "::warning::Found advisory follow-up #${existing_issue} for security-pass finding ${finding_id}, but could not reconcile it into state."
@@ -5511,7 +5531,7 @@ create_security_pass_advisory_followup() {
   fi
   body_file="${RUNTIME_DIR}/security_pass_advisory_${TRACKING_NUM}_$(printf '%s' "${finding_id}" | tr -c 'A-Za-z0-9._-' '_').md"
   printf '%s\n' "${finding_json}" > "${body_file}.finding.json"
-  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" <<'PY'
+  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" "${merged_pr}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -5526,6 +5546,7 @@ integration_branch = sys.argv[4] or "(default branch)"
 head_sha = sys.argv[5]
 justification = sys.argv[6]
 source = sys.argv[7]
+merged_pr = sys.argv[8] if len(sys.argv) > 8 else ""
 
 
 def prose(value: object) -> str:
@@ -5547,6 +5568,15 @@ lines = [
 	"",
 	f"Non-blocking security follow-up. This finding was reported by the mandatory project security pass for integration branch `{integration_branch}` at `{head_sha}` and accepted as a known risk by {accepted_by} after the consolidated fix-cycle budget was spent. The project completes without this fix; address it through the normal issue pipeline.",
 	"",
+]
+if merged_pr.isdigit():
+	lines.extend(
+		[
+			f"The integration branch has since merged into the default branch via PR #{merged_pr}, so the cited location refers to code that is already on the default branch. Plan and implement this issue against the default branch.",
+			"",
+		]
+	)
+lines += [
 	f"**Why it was accepted:** {prose(justification) or '(no justification recorded)'}",
 	"",
 	f"- Finding ID: `{finding_id}`",
@@ -5593,7 +5623,7 @@ PY
     .security_pass_followup_issues = (((.security_pass_followup_issues // []) + [{finding_id: $id, issue: $issue}]) | .[-100:])
     | .security_pass_waived_findings = [
         (.security_pass_waived_findings // [])[]
-        | if .finding_id == $id then .issue = $issue else . end
+        | if .finding_id == $id then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end
       ]
   ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
     rm -f "${STATE_FILE}.tmp"
@@ -5601,6 +5631,75 @@ PY
   fi
   echo "SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED tracking_issue=${TRACKING_NUM} finding=${finding_id} issue=${issue_number} source=${source}"
   SECURITY_PASS_ADVISORY_ISSUE_NUMBER="${issue_number}"
+  return 0
+}
+
+# security_pass_file_deferred_advisory_followups <integration_branch> <default_branch> <final_pr>
+#
+# File the `ai:security` advisory follow-ups that the exhaustion judge or
+# `/security-pass-waive` deferred (waiver rows carrying `followup_pending`
+# and a `finding` payload) now that the integration branch has merged into
+# the default branch via <final_pr>.  Called from every site that records
+# `final_merge_status = "merged"`, before that site's post_state_comment, so
+# the cleared flags ride the state comment already being posted.  Each row
+# goes through create_security_pass_advisory_followup (its own dedupe, marker
+# reconciliation, and fail-open contract apply); a row whose create fails
+# keeps `followup_pending` and is retried by the next merged-state tick.
+# No GitHub API calls beyond those of create_security_pass_advisory_followup;
+# returns 0 always.
+security_pass_file_deferred_advisory_followups() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local final_pr="${3:-}"
+  local pending_json pending_count row_json row_finding row_justification row_source row_head_sha
+  local filed_count=0 filed_lines=""
+  pending_json="$(jq -c '
+    [(.security_pass_waived_findings // [])[]
+      | select((.followup_pending // false) == true and .issue == null and (.finding | type) == "object")]
+  ' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+  pending_count="$(printf '%s' "${pending_json}" | jq -r 'length' 2>/dev/null || echo 0)"
+  [[ "${pending_count}" =~ ^[0-9]+$ ]] || pending_count=0
+  if [ "${pending_count}" -eq 0 ]; then
+    return 0
+  fi
+  while IFS= read -r row_json; do
+    [ -n "${row_json}" ] || continue
+    row_finding="$(printf '%s' "${row_json}" | jq -c '.finding')"
+    row_justification="$(printf '%s' "${row_json}" | jq -r '.justification // ""')"
+    row_source="$(printf '%s' "${row_json}" | jq -r '.source // "judge"')"
+    row_head_sha="$(printf '%s' "${row_json}" | jq -r '.audited_head_sha // ""')"
+    if [ -z "${row_head_sha}" ]; then
+      row_head_sha="$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+    fi
+    create_security_pass_advisory_followup "${row_finding}" "${integration_branch}" "${row_head_sha}" "${row_justification}" "${row_source}" "${final_pr}"
+    if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
+      filed_count=$((filed_count + 1))
+      filed_lines="${filed_lines}"$'\n'"- \`$(printf '%s' "${row_json}" | jq -r '.finding_id')\` → #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
+      # The create path clears the pending fields when it records a new
+      # issue; when it returned an issue it already knew from
+      # security_pass_followup_issues the row would stay pending forever, so
+      # settle it here as well (idempotent).
+      if ! jq --arg id "$(printf '%s' "${row_json}" | jq -r '.finding_id')" --argjson issue "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" '
+        .security_pass_waived_findings = [
+          (.security_pass_waived_findings // [])[]
+          | if .finding_id == $id then (.issue = $issue | del(.followup_pending) | del(.finding)) else . end
+        ]
+      ' "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+        rm -f "${STATE_FILE}.tmp"
+        echo "::warning::Could not settle the deferred advisory row for finding $(printf '%s' "${row_json}" | jq -r '.finding_id') on tracking issue #${TRACKING_NUM}; it will be reconciled on the next merged-state tick."
+      fi
+    fi
+  done < <(printf '%s' "${pending_json}" | jq -c '.[]')
+  echo "SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED tracking_issue=${TRACKING_NUM} final_pr=${final_pr:-none} default_branch=${default_branch} filed=${filed_count} pending=${pending_count}"
+  if [ "${filed_count}" -gt 0 ]; then
+    post_tracking_comment "## 🔐 Security-pass advisory follow-ups filed
+
+\`${integration_branch}\` has merged into \`${default_branch}\`${final_pr:+ via PR #${final_pr}}, so the ${filed_count} finding(s) the security pass accepted as known risks now have non-blocking \`ai:security\` follow-up issue(s) planned against the default branch:
+${filed_lines}"
+  fi
+  if [ "${filed_count}" -lt "${pending_count}" ]; then
+    echo "::warning::$((pending_count - filed_count)) deferred security-pass advisory follow-up(s) for tracking issue #${TRACKING_NUM} could not be filed this tick; they stay pending and are retried on the next merged-state tick."
+  fi
   return 0
 }
 
@@ -5794,10 +5893,18 @@ ${decisions_table}}"
     return 1
   fi
 
-  # Accepted findings: waiver rows + advisory follow-ups.
+  # Accepted findings: waiver rows + advisory follow-ups.  With
+  # SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED (default) the waiver row keeps
+  # the finding payload and a `followup_pending` flag, and
+  # security_pass_file_deferred_advisory_followups files the issue once the
+  # integration branch has merged into the default branch, so the standalone
+  # pipeline plans it against code that exists there.
   followup_issues=""
+  followup_suffix=""
+  followup_tg_suffix=""
   if [ "${accepted_count}" -gt 0 ]; then
-    waivers_json="$(jq -c --argjson cycle "${completed_cycles}" '
+    waivers_json="$(jq -c --argjson cycle "${completed_cycles}" --arg head_sha "${head_sha}" \
+      --argjson defer "$([ "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED}" = "true" ] && echo true || echo false)" '
       [.decisions[] | select(.action == "accept_with_followup") | {
         finding_id: .finding.finding_id,
         file: .finding.file,
@@ -5809,28 +5916,39 @@ ${decisions_table}}"
         waived_by: "security-pass-exhaustion-judge",
         waived_at_cycle: $cycle,
         issue: null
-      }]' "${verdict_file}")"
+      } + (if $defer then {followup_pending: true, audited_head_sha: $head_sha, finding: .finding} else {} end)]' "${verdict_file}")"
     if ! security_pass_record_waivers "${waivers_json}"; then
       echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=waiver_state_write_failed round=${judge_round}"
       return 1
     fi
     echo "SECURITY_PASS_WAIVED tracking_issue=${TRACKING_NUM} source=judge round=${judge_round} ids=$(printf '%s' "${waivers_json}" | jq -r 'map(.finding_id) | join(",")')"
-    while IFS= read -r finding_json; do
-      [ -n "${finding_json}" ] || continue
-      justification="$(printf '%s' "${finding_json}" | jq -r '.justification // ""')"
-      create_security_pass_advisory_followup "$(printf '%s' "${finding_json}" | jq -c '.finding')" "${integration_branch}" "${head_sha}" "${justification}" "judge"
-      followup_issue="${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
-      if [[ "${followup_issue}" =~ ^[0-9]+$ ]]; then
-        followup_issues="${followup_issues}${followup_issues:+, }#${followup_issue}"
-      fi
-    done < <(jq -c '.decisions[] | select(.action == "accept_with_followup")' "${verdict_file}")
+    if [ "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED}" = "true" ]; then
+      while IFS= read -r finding_id; do
+        [ -n "${finding_id}" ] || continue
+        echo "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=${TRACKING_NUM} finding=${finding_id} source=judge reason=integration_branch_not_merged"
+      done < <(printf '%s' "${waivers_json}" | jq -r '.[].finding_id')
+      followup_suffix=" (follow-up issues will be filed once \`${integration_branch}\` merges into the default branch)"
+      followup_tg_suffix=" (follow-ups filed after the final merge)"
+    else
+      while IFS= read -r finding_json; do
+        [ -n "${finding_json}" ] || continue
+        justification="$(printf '%s' "${finding_json}" | jq -r '.justification // ""')"
+        create_security_pass_advisory_followup "$(printf '%s' "${finding_json}" | jq -c '.finding')" "${integration_branch}" "${head_sha}" "${justification}" "judge"
+        followup_issue="${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
+        if [[ "${followup_issue}" =~ ^[0-9]+$ ]]; then
+          followup_issues="${followup_issues}${followup_issues:+, }#${followup_issue}"
+        fi
+      done < <(jq -c '.decisions[] | select(.action == "accept_with_followup")' "${verdict_file}")
+      followup_suffix="${followup_issues:+ (follow-ups: ${followup_issues})}"
+      followup_tg_suffix="${followup_issues:+ (follow-ups ${followup_issues})}"
+    fi
   fi
 
   decisions_table="$(render_security_pass_judge_decisions_table "${verdict_file}" 2>/dev/null || true)"
   if [ "${fixing_count}" -gt 0 ]; then
     post_tracking_comment "## ⚖️ Security-pass exhaustion judge (round ${judge_round})
 
-The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remain at integration head \`${head_sha}\`. The judge accepted ${accepted_count} finding(s) as known risks${followup_issues:+ (follow-ups: ${followup_issues})} and granted one more consolidated fix cycle for ${fixing_count} finding(s). The re-audit after that fix merges returns to the judge if findings remain.
+The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remain at integration head \`${head_sha}\`. The judge accepted ${accepted_count} finding(s) as known risks${followup_suffix} and granted one more consolidated fix cycle for ${fixing_count} finding(s). The re-audit after that fix merges returns to the judge if findings remain.
 
 **Summary:** $(security_pass_prose "${summary}")
 ${decisions_table:+
@@ -5867,13 +5985,13 @@ ${decisions_table}}"
   post_state_comment || true
   post_tracking_comment "## ⚖️ Security-pass exhaustion judge (round ${judge_round})
 
-The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remained at integration head \`${head_sha}\`. The judge accepted every remaining finding as a known risk${followup_issues:+ (follow-ups: ${followup_issues})}; the security pass is recorded clean at this head and completion continues. Comment \`/re-security-pass\` to re-run a full audit instead.
+The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remained at integration head \`${head_sha}\`. The judge accepted every remaining finding as a known risk${followup_suffix}; the security pass is recorded clean at this head and completion continues. Comment \`/re-security-pass\` to re-run a full audit instead.
 
 **Summary:** $(security_pass_prose "${summary}")
 ${decisions_table:+
 ${decisions_table}}"
   echo "SECURITY_PASS_CLEAN tracking_issue=${TRACKING_NUM} head_sha=${head_sha} reason=exhaustion_judge_accepted accepted=${accepted_count}"
-  tg_notify "Project #${TRACKING_NUM} security pass: the exhaustion judge accepted ${accepted_count} remaining finding(s) as known risks after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} fix cycles${followup_issues:+ (follow-ups ${followup_issues})}; completion continues." "WARNING"
+  tg_notify "Project #${TRACKING_NUM} security pass: the exhaustion judge accepted ${accepted_count} remaining finding(s) as known risks after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} fix cycles${followup_tg_suffix}; completion continues." "WARNING"
   SECURITY_PASS_JUDGE_OUTCOME="passed"
   return 0
 }
@@ -9766,6 +9884,7 @@ finalize_integration_merge_if_needed() {
         jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 		mark_integration_branch_squash_fresh
+        security_pass_file_deferred_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
         post_state_comment || true
         return 0
       fi
@@ -9813,6 +9932,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 	mark_integration_branch_squash_fresh
+    security_pass_file_deferred_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
     post_state_comment || true
     return 0
   fi
@@ -9903,6 +10023,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
        .integration_conflict_unresolved_ticks = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 	mark_integration_branch_squash_fresh
+    security_pass_file_deferred_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
     post_state_comment || true
     post_tracking_comment "## ✅ Final merge complete
 
@@ -9943,6 +10064,7 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 	mark_integration_branch_squash_fresh
+    security_pass_file_deferred_advisory_followups "${integration_branch}" "${default_branch}" "${final_pr}"
     post_state_comment || true
     return 0
   fi
@@ -16153,7 +16275,18 @@ The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was no
                 }
             ]
         ' "${STATE_FILE}")"
-        if ! security_pass_record_waivers "$(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c 'map(del(.finding))')"; then
+        # With SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED the row keeps the
+        # finding payload and a followup_pending flag so
+        # security_pass_file_deferred_advisory_followups can file the
+        # advisory after the final merge (same contract as the judge path).
+        if [ "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED}" = "true" ]; then
+          SECURITY_PASS_WAIVERS_STATE_JSON="$(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c --arg head_sha "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}")" '
+            map(if .finding != null then . + {followup_pending: true, audited_head_sha: $head_sha} else del(.finding) end)
+          ')"
+        else
+          SECURITY_PASS_WAIVERS_STATE_JSON="$(printf '%s' "${SECURITY_PASS_WAIVERS_JSON}" | jq -c 'map(del(.finding))')"
+        fi
+        if ! security_pass_record_waivers "${SECURITY_PASS_WAIVERS_STATE_JSON}"; then
           echo "::warning::Could not persist /security-pass-waive for tracking issue #${TRACKING_NUM}; leaving the command unmarked so the next poll retries it."
           continue
         fi
@@ -16162,14 +16295,19 @@ The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was no
           [ -n "${SECURITY_PASS_WAIVE_ROW}" ] || continue
           SECURITY_PASS_WAIVE_ROW_ID="$(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -r '.finding_id')"
           if printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -e '.finding != null' >/dev/null 2>&1; then
-            create_security_pass_advisory_followup \
-              "$(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -c '.finding')" \
-              "${INTEGRATION_BRANCH_TRACKING}" \
-              "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}")" \
-              "$(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -r '.justification')" \
-              "operator"
-            SECURITY_PASS_WAIVE_ROW_ISSUE="${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
-            SECURITY_PASS_WAIVE_LINES="${SECURITY_PASS_WAIVE_LINES}"$'\n'"- \`${SECURITY_PASS_WAIVE_ROW_ID}\` ($(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -r '.file + ":" + (.line | tostring)')${SECURITY_PASS_WAIVE_ROW_ISSUE:+; follow-up #${SECURITY_PASS_WAIVE_ROW_ISSUE}})"
+            if [ "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED}" = "true" ]; then
+              echo "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=${TRACKING_NUM} finding=${SECURITY_PASS_WAIVE_ROW_ID} source=operator reason=integration_branch_not_merged"
+              SECURITY_PASS_WAIVE_LINES="${SECURITY_PASS_WAIVE_LINES}"$'\n'"- \`${SECURITY_PASS_WAIVE_ROW_ID}\` ($(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -r '.file + ":" + (.line | tostring)'); follow-up issue filed once the integration branch merges into the default branch)"
+            else
+              create_security_pass_advisory_followup \
+                "$(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -c '.finding')" \
+                "${INTEGRATION_BRANCH_TRACKING}" \
+                "$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}")" \
+                "$(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -r '.justification')" \
+                "operator"
+              SECURITY_PASS_WAIVE_ROW_ISSUE="${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
+              SECURITY_PASS_WAIVE_LINES="${SECURITY_PASS_WAIVE_LINES}"$'\n'"- \`${SECURITY_PASS_WAIVE_ROW_ID}\` ($(printf '%s' "${SECURITY_PASS_WAIVE_ROW}" | jq -r '.file + ":" + (.line | tostring)')${SECURITY_PASS_WAIVE_ROW_ISSUE:+; follow-up #${SECURITY_PASS_WAIVE_ROW_ISSUE}})"
+            fi
           else
             SECURITY_PASS_WAIVE_LINES="${SECURITY_PASS_WAIVE_LINES}"$'\n'"- \`${SECURITY_PASS_WAIVE_ROW_ID}\` (not among the reported findings; matched by exact id only)"
           fi
@@ -16479,6 +16617,7 @@ Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall 
             echo "::warning::[external-finalize] failed to persist merged state for PR #${_orch_extfin_pr}; leaving final_merge_status pending."
             continue
           fi
+          security_pass_file_deferred_advisory_followups "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING:-main}" "${_orch_extfin_pr}"
           post_state_comment || true
           handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
           set_tracking_phase_label "ai:merged"

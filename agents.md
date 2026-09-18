@@ -609,7 +609,21 @@ prompt, a codex failure, or an invalid verdict also fall back to the terminal
 path; nothing passes silently. Every round increments
 `security_pass_judge_rounds` (reset by `/re-security-pass` and the kill-switch
 release) and posts a `⚖️ Security-pass exhaustion judge` comment with the
-decision table. Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
+decision table. With `SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED` (default `true`) the
+accepted finding's advisory follow-up is not filed at judge time: the waiver
+row keeps `followup_pending: true`, `audited_head_sha`, and the `finding`
+payload (`SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED`), and
+`security_pass_file_deferred_advisory_followups`, called from every site that
+records `final_merge_status = "merged"`, files it once the integration branch
+is on the default branch (`SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED`, body line
+naming the merging PR, `🔐 Security-pass advisory follow-ups filed` comment).
+Judge-time filing planned #4090 / #4091 against a `main` that did not yet
+contain the broker module the findings cite, so the planner emitted
+`BLOCKED: PR #3968 is still open` and both sat in `ai:blocked`. The
+`/security-pass-waive` path defers the same way. A create that fails keeps the
+row pending for the next merged-state tick; `create_security_pass_advisory_followup`
+clears `followup_pending` and drops the payload when it records the issue.
+Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
 and `security_pass_apply_waivers_to_findings` re-applies them to the result
 (exact id, or same file and category within `SECURITY_AUDIT_WAIVER_LINE_WINDOW`,
 default 40 lines). `/security-pass-waive <finding_id> ...` (human
@@ -795,6 +809,8 @@ and shipped:
 - `SECURITY_PASS_WAIVE_REJECTED`
 - `SECURITY_PASS_WAIVED_SUPPRESSED`
 - `SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED`
+- `SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED`
+- `SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED`
 
 - `SEMBLE_QUERY`
 - `SEMBLE_FALLBACK`
@@ -926,6 +942,8 @@ LOG_PREFIX.name=SECURITY_PASS_WAIVED
 LOG_PREFIX.name=SECURITY_PASS_WAIVE_REJECTED
 LOG_PREFIX.name=SECURITY_PASS_WAIVED_SUPPRESSED
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED
+LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED
+LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED
 LOG_PREFIX.name=SEMBLE_QUERY
 LOG_PREFIX.name=SEMBLE_FALLBACK
 LOG_PREFIX.name=SERENA_QUERY
