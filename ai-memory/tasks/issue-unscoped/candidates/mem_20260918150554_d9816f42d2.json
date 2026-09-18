@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.92,
+  "details": "Merged changes repeatedly modify GitHub Actions, shell helpers, or orchestration scripts alongside targeted tests such as workflow contract, polling, security-boundary, and helper-script tests. When changing automation behavior, update or add tests that assert the exact YAML, environment, payload, and state-transition contracts rather than relying only on end-to-end execution.",
+  "fingerprint": "516548873d3869a3750c5addea2590df9ed1664141a1fda00f852cc17fe96dea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35360126262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35360126262",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4070",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4075",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4076",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4092",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4109",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4071",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4077",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4079",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4093",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4112"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260918150554_d9816f42d2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow changes in this repository should be accompanied by contract-focused tests.",
+  "timestamps": {
+    "created_at": "2026-09-18T15:05:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
