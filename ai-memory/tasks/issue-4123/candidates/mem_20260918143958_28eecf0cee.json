@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope  \nReuse-audit: extends existing `tests/e2e_smoke_canary.txt` fixture  \nScope-mode justification: The request is fully specified and explicitly limits changes to one existing file. No broader implementation is necessary.\n\nPlanning ref: `main` at `2e33a1906947fc9d16788c8764955455e080ba36`.\n\n## Automation wiring\n\n- Change type: Modify existing data fixture only; no new script or subsystem.\n- Scheduler/PR-push entry point: None required.\n- Long-running supervisor: Not required.\n- Database gate: Not applicable.\n- Future-removal registry: Not applicable.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n  - Replace the complete contents with:\n    1. `status: ok`\n    2. `run_id: 35356773021`\n    3. `updated-by: ai-pipeline`\n  - Preserve exactly one trailing newline.\n- No other files may change.\n\n## Functions or modules to implement\n\nNone. This is a literal fixture-content update.\n\n## Data structures affected\n\n- Plain-text canary record.\n- Only the `run_id` value changes from `26151428977` to `35356773021`.\n\n## API/interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Perform an exact whole-file replacement\n\n- **Chosen:** Overwrite the tracked file with the specified three-line byte sequence.\n- **Alternatives considered:** Edit only the numeric run ID or regenerate the fixture through a helper.\n- **Why:** Whole-file replacement directly enforces the required line count, ordering, content, and final newline without expanding scope.\n\n## Security considerations\n\n- Trust boundary: Issue-provided literal content is written only to the explicitly authorized fixture path.\n- Authorization: No endpoint, worker, credential, or privileged surface is introduced.\n- Validation: Verify the exact bytes and ensure no path other than `tests/e2e_smoke_canary.txt` changed.\n- Abuse cases: Prevent path expansion, extra injected lines, missing final newline, or accidental edits to unrelated files.\n- Money handling: Not applicable.\n\n## Risks and edge cases\n\n- An editor could omit the POSIX trailing newline.\n- Redirecting incorrectly could append instead of replace.\n- Formatting tools or incidental edits could modify additional files.\n- No codebase conflict found: the target exists, is tracked, and currently contains the same three-line structure with an older run ID.\n\n## Testing considerations\n\n1. Compare the file byte-for-byte with `status: ok\\nrun_id: 35356773021\\nupdated-by: ai-pipeline\\n`.\n2. Confirm it contains exactly three lines.\n3. Confirm the final byte is newline.\n4. Run `git diff --name-only` and verify the sole changed path is `tests/e2e_smoke_canary.txt`.\n5. No broader test suite is warranted for this fixture-only update.\n\n## Assumptions and missing context\n\n- Empty integration-branch metadata means there is no integration-ref mismatch to block planning.\n- No additional tests, documentation, changelog, or automation wiring are required because those would violate the explicit one-file constraint.\n\nPLAN_SELF_CHECK: PASS  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "fa71acc920a21669398f100e8de3fc7f80a46e3743183494587d39064a09ab06",
+  "lineage": {
+    "issue_number": 4123,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35357182162",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35357182162",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4123"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260918143958_28eecf0cee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4123,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "35357182162"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #4123",
+  "timestamps": {
+    "created_at": "2026-09-18T14:39:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
