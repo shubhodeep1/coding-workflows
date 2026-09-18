@@ -1908,6 +1908,13 @@ def test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base() 
 		proc = _run_workspace_helper(repo_dir, env, "restore")
 		assert proc.returncode == 1
 		assert "IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path=../escape.sh reason=unsafe_path" in proc.stdout + proc.stderr
+	for unsafe_ledger_path in (".", "./"):
+		with tempfile.TemporaryDirectory(prefix="test_staged_ws_current_dir_") as td:
+			repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+			Path(env["STAGED_SUPPORT_LEDGER"]).write_text(f"{unsafe_ledger_path}\n", encoding="utf-8")
+			proc = _run_workspace_helper(repo_dir, env, "restore")
+			assert proc.returncode == 1
+			assert f"IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path={unsafe_ledger_path} reason=unsafe_path" in proc.stdout + proc.stderr
 	with tempfile.TemporaryDirectory(prefix="test_staged_ws_nobase_") as td:
 		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
 		(Path(env["STAGED_SUPPORT_BASE_DIR"]) / "scripts" / "helper.sh").unlink()
