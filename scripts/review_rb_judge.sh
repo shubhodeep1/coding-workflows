@@ -781,16 +781,18 @@ echo "judge_skip_reason=" >> "$GITHUB_OUTPUT"
 
 # _resilient_phase_swap <issue_number> <target_label>
 #
-# Atomically swap AI phase labels on an issue via REST API GET+PUT,
-# avoiding the `gh issue edit --remove-label` failure mode where a
-# label that does not exist as a repo label definition aborts the
-# entire command.  Falls back to POST (add-only) on PUT failure.
-# API calls: 2 (GET + PUT) happy path, 3 on fallback.
+# Swap AI phase labels without letting a concurrent terminal label be
+# removed by a stale full-label PUT. Non-terminal targets are added first,
+# then only phase labels observed by the initial GET are removed; a final
+# GET reconciles terminal precedence. GitHub exposes no conditional label
+# mutation, so the existing GET cannot safely support a full replacement.
+# API calls: terminal target 2 (GET + PUT); non-terminal target 3 plus one
+# DELETE per observed old phase, and one more DELETE when a terminal race wins.
 _resilient_phase_swap()
 {
 	local _rps_issue="$1" _rps_target="$2"
 	local _rps_phases='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:ready-to-merge","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
-	local _rps_cur _rps_new
+	local _rps_cur _rps_new _rps_phase _rps_terminal
 	if ! _rps_cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
 		--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
 		echo "::warning::_resilient_phase_swap: GET labels failed for #${_rps_issue} — falling back to POST add." >&2
@@ -809,13 +811,39 @@ _resilient_phase_swap()
 	# and the orchestrator's security-pass check then read the closed
 	# issue as "closed without a merged PR" and failed project #3928.
 	# A terminal label is only ever replaced by another terminal label.
-	local _rps_terminal
 	_rps_terminal="$(printf '%s\n' "${_rps_cur}" | jq -r --arg t "${_rps_target}" '
 		if ($t == "ai:merged" or $t == "ai:closed") then empty
 		else (map(select(. == "ai:merged" or . == "ai:closed")) | first // empty)
 		end' 2>/dev/null || echo "")"
 	if [ -n "${_rps_terminal}" ]; then
 		echo "_resilient_phase_swap: issue #${_rps_issue} already carries terminal label ${_rps_terminal}; not swapping to ${_rps_target}."
+		return 0
+	fi
+	if [ "${_rps_target}" != "ai:merged" ] && [ "${_rps_target}" != "ai:closed" ]; then
+		if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+			-f "labels[]=${_rps_target}" >/dev/null 2>&1; then
+			echo "::warning::_resilient_phase_swap: POST add failed for #${_rps_issue}." >&2
+			return 1
+		fi
+		while IFS= read -r _rps_phase; do
+			[ -n "${_rps_phase}" ] || continue
+			gh_retry gh api -X DELETE "repos/${REPOSITORY}/issues/${_rps_issue}/labels/$(printf '%s' "${_rps_phase}" | jq -sRr @uri)" >/dev/null 2>&1 \
+				|| echo "::warning::_resilient_phase_swap: could not remove prior phase ${_rps_phase} from #${_rps_issue}." >&2
+		done < <(printf '%s\n' "${_rps_cur}" | jq -r --argjson p "${_rps_phases}" --arg t "${_rps_target}" \
+			'.[] | select(. as $label | ($p | index($label)) != null and . != $t and . != "ai:merged" and . != "ai:closed")')
+		if ! _rps_cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+			--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
+			echo "::warning::_resilient_phase_swap: terminal reconciliation GET failed for #${_rps_issue}; target was added without deleting any terminal label." >&2
+			return 0
+		fi
+		_rps_terminal="$(printf '%s\n' "${_rps_cur:-[]}" | jq -r 'map(select(. == "ai:merged" or . == "ai:closed")) | first // empty' 2>/dev/null || echo "")"
+		if [ -n "${_rps_terminal}" ]; then
+			if gh_retry gh api -X DELETE "repos/${REPOSITORY}/issues/${_rps_issue}/labels/$(printf '%s' "${_rps_target}" | jq -sRr @uri)" >/dev/null 2>&1; then
+				echo "_resilient_phase_swap: terminal label ${_rps_terminal} appeared while swapping #${_rps_issue}; removed non-terminal target ${_rps_target}."
+			else
+				echo "::warning::_resilient_phase_swap: terminal ${_rps_terminal} won for #${_rps_issue}, but removing ${_rps_target} failed." >&2
+			fi
+		fi
 		return 0
 	fi
 	_rps_new="$(printf '%s\n' "${_rps_cur}" | jq -c --argjson p "${_rps_phases}" --arg t "${_rps_target}" \
@@ -2280,6 +2308,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         # PR base branch when it is an orchestrator integration branch.
         RB_FOLLOWUP_TRACKING_ISSUE=""
         RB_FOLLOWUP_INTEGRATION_BRANCH=""
+        RB_FOLLOWUP_PARENT_DECLARED_DEFAULT="false"
         if [ -n "${FIRST_ISSUE_LINEAGE_BODY:-}" ]; then
           RB_FOLLOWUP_INTEGRATION_BRANCH="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
 import re, sys
@@ -2296,13 +2325,15 @@ print(m.group(1) if m else "")
         fi
         if [ "${RB_FOLLOWUP_INTEGRATION_BRANCH}" = "(default branch)" ]; then
           RB_FOLLOWUP_INTEGRATION_BRANCH=""
+          RB_FOLLOWUP_PARENT_DECLARED_DEFAULT="true"
         elif [ -n "${RB_FOLLOWUP_INTEGRATION_BRANCH}" ] \
           && { [[ "${RB_FOLLOWUP_INTEGRATION_BRANCH}" == -* ]] || ! git check-ref-format "refs/heads/${RB_FOLLOWUP_INTEGRATION_BRANCH}" >/dev/null 2>&1; }; then
           echo "::warning::Ignoring invalid Integration branch metadata on parent issue #${FIRST_ISSUE:-?}; falling back to the PR base."
           RB_FOLLOWUP_INTEGRATION_BRANCH=""
           RB_FOLLOWUP_TRACKING_ISSUE=""
         fi
-        if [ -z "${RB_FOLLOWUP_INTEGRATION_BRANCH}" ] && [ -n "${PR_BASE_REF:-}" ]; then
+        if [ "${RB_FOLLOWUP_PARENT_DECLARED_DEFAULT}" != "true" ] \
+          && [ -z "${RB_FOLLOWUP_INTEGRATION_BRANCH}" ] && [ -n "${PR_BASE_REF:-}" ]; then
           RB_FOLLOWUP_PATTERN_MATCH_RC=0
           printf '%s\n' "${PR_BASE_REF}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" || RB_FOLLOWUP_PATTERN_MATCH_RC=$?
           if [ "${RB_FOLLOWUP_PATTERN_MATCH_RC}" -eq 2 ]; then
@@ -2323,8 +2354,10 @@ print(m.group(1) if m else "")
           RB_FOLLOWUP_LINEAGE_LINES="${RB_FOLLOWUP_LINEAGE_LINES}
 - Integration branch: ${RB_FOLLOWUP_INTEGRATION_BRANCH}"
         fi
-        if [ -n "${RB_FOLLOWUP_LINEAGE_LINES}" ]; then
+        if [ -n "${RB_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
           echo "Follow-up lineage: tracking issue #${RB_FOLLOWUP_TRACKING_ISSUE:-none}, integration branch ${RB_FOLLOWUP_INTEGRATION_BRANCH:-none}."
+        elif [[ "${RB_FOLLOWUP_TRACKING_ISSUE}" =~ ^[0-9]+$ ]]; then
+          echo "Follow-up lineage: tracking issue #${RB_FOLLOWUP_TRACKING_ISSUE}; no integration branch, so the follow-up will resolve to the default branch."
         else
           echo "Follow-up lineage: no Integration branch / Tracking issue metadata on parent #${FIRST_ISSUE:-?} and PR base ${PR_BASE_REF:-?} is not an orchestrator integration branch; follow-up will resolve to the default branch."
         fi

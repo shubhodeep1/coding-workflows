@@ -338,8 +338,13 @@ if args[:1] == ["api"]:
 		sys.exit(1)
 	api_responses = state.get("api_responses", {}) or {}
 	matched = None
+	api_response_sequences = state.get("api_response_sequences", {}) or {}
+	for pattern, responses in api_response_sequences.items():
+		if pattern and pattern in path and responses:
+			matched = responses.pop(0)
+			break
 	for pattern, resp in api_responses.items():
-		if pattern and pattern in path:
+		if matched is None and pattern and pattern in path:
 			matched = resp
 			break
 	save()
@@ -2202,18 +2207,19 @@ def test_merge_with_followup_derives_lineage_from_pr_base_branch_fallback() -> N
 
 
 def test_merge_with_followup_ignores_default_branch_sentinel() -> None:
-	"""Default-branch-only parent metadata must not become a branch ref."""
+	"""Explicit default-branch metadata suppresses a matching PR-base fallback."""
 	state = _run_merge_with_followup(
 		parent_label_set=["ai:orchestrator-managed", "ai:review-blocked"],
 		first_issue_body=(
 			"- Tracking issue: #4001\n"
 			"- Integration branch: `(default branch)`\n"
 		),
-		pr_base_ref="main",
+		pr_base_ref="orchestrator/project-249",
 	)
 	body = _followup_body_from_state(state)
 	assert "- Tracking issue: #4001" in body, body
 	assert "Integration branch:" not in body, body
+	assert "follow-up will resolve to the default branch" in state["_stdout"]
 
 
 def test_merge_with_followup_honors_custom_integration_branch_pattern() -> None:
@@ -2295,10 +2301,15 @@ def _extract_resilient_phase_swap() -> str:
 	return match.group(0)
 
 
-def _run_resilient_phase_swap(current_labels: list[str], target: str) -> dict:
+def _run_resilient_phase_swap(
+	current_labels: list[str],
+	target: str,
+	*,
+	labels_after_mutation: list[str] | None = None,
+) -> dict:
 	"""Run the real _resilient_phase_swap against a mock gh whose GET
 	labels endpoint returns ``current_labels``; returns the mock state
-	plus stdout so callers can assert whether a PUT was issued."""
+	plus stdout so callers can assert which label mutations were issued."""
 	fn = _extract_resilient_phase_swap()
 	with tempfile.TemporaryDirectory(prefix="test_rb_judge_rps_") as td:
 		tmp_path = Path(td)
@@ -2306,10 +2317,12 @@ def _run_resilient_phase_swap(current_labels: list[str], target: str) -> dict:
 		bin_dir.mkdir()
 		gh_state_file = tmp_path / "gh_state.json"
 		_install_mock_gh(bin_dir, gh_state_file)
-		gh_state_file.write_text(
-			json.dumps({"api_responses": {"issues/41/labels": current_labels}}),
-			encoding="utf-8",
-		)
+		mock_state = {"api_responses": {"issues/41/labels": current_labels}}
+		if labels_after_mutation is not None:
+			mock_state["api_response_sequences"] = {
+				"issues/41/labels": [current_labels, labels_after_mutation],
+			}
+		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
 		script = tmp_path / "rps_harness.sh"
 		script.write_text(
 			"#!/usr/bin/env bash\nset -euo pipefail\n"
@@ -2340,6 +2353,13 @@ def _put_label_calls(state: dict) -> list[list[str]]:
 	]
 
 
+def _delete_label_calls(state: dict) -> list[list[str]]:
+	return [
+		call for call in state.get("api_calls", [])
+		if "DELETE" in call and any("/issues/41/labels/" in arg for arg in call)
+	]
+
+
 def test_resilient_phase_swap_does_not_downgrade_ai_merged() -> None:
 	"""An issue the PR-close handler already labelled ai:merged must keep
 	it: the swap to ai:ready-to-merge is skipped and no PUT is issued."""
@@ -2362,9 +2382,24 @@ def test_resilient_phase_swap_still_swaps_non_terminal_phase() -> None:
 	state = _run_resilient_phase_swap(
 		["ai:review-blocked", "ai:orchestrator-managed"], "ai:ready-to-merge",
 	)
-	puts = _put_label_calls(state)
-	assert len(puts) == 1, state.get("api_calls")
+	assert _put_label_calls(state) == [], state.get("api_calls")
+	assert any("POST" in call for call in state.get("api_calls", [])), state.get("api_calls")
+	assert any("ai%3Areview-blocked" in arg for call in _delete_label_calls(state) for arg in call)
 	assert "not swapping" not in state["_stdout"]
+
+
+def test_resilient_phase_swap_preserves_terminal_label_added_during_swap() -> None:
+	state = _run_resilient_phase_swap(
+		["ai:review-blocked", "ai:orchestrator-managed"],
+		"ai:ready-to-merge",
+		labels_after_mutation=["ai:merged", "ai:ready-to-merge", "ai:orchestrator-managed"],
+	)
+	assert _put_label_calls(state) == [], state.get("api_calls")
+	deletes = _delete_label_calls(state)
+	assert any("ai%3Areview-blocked" in arg for call in deletes for arg in call), deletes
+	assert any("ai%3Aready-to-merge" in arg for call in deletes for arg in call), deletes
+	assert not any("ai%3Amerged" in arg for call in deletes for arg in call), deletes
+	assert "terminal label ai:merged appeared while swapping #41" in state["_stdout"]
 
 
 def test_resilient_phase_swap_allows_terminal_to_terminal() -> None:
