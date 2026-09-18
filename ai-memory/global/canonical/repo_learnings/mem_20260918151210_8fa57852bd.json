@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Long-running model or editor subprocesses require process-group isolation and cleanup safeguards.",
   "timestamps": {
     "created_at": "2026-09-18T15:12:10Z",
