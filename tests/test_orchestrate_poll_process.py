@@ -1854,9 +1854,10 @@ if args[0] == 'api':
 								'labels': {
 									'nodes': [{'name': label} for label in pr.get('labels', [])],
 								},
-								'mergedAt': pr.get('merged_at', None),
-								'headRefName': pr.get('headRefName', ''),
-								'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),
+					'mergedAt': pr.get('merged_at', None),
+					'headRefName': pr.get('headRefName', ''),
+					'baseRefName': pr.get('baseRefName', ''),
+					'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),
 								'mergeable': pr.get('mergeable', None),
 								'mergeStateStatus': str(pr.get('mergeStateStatus', pr.get('mergeable_state', ''))).upper(),
 								'mergeCommit': {
@@ -3632,6 +3633,37 @@ def test_security_pass_merged_fix_falls_back_to_rest_when_graphql_is_unavailable
 	assert result["latest_state"]["security_pass_cycle"] == 1
 	assert result["latest_state"]["security_pass_status"] == "passed"
 	assert "falling back to a direct issue lookup" in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_merged_fix_into_wrong_base_does_not_advance_cycle() -> None:
+	result = _run_poller(
+		state=_security_pass_fixing_state_with_closed_fix_issue(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={10: ["ai:merged"], 900: ["ai:ready-to-merge"]},
+		issue_closed={900: True},
+		issue_linked_prs={900: 901},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-09-17T14:18:06Z",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-900",
+				"body": "Fixes #900",
+				"willCloseTarget": True,
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	combined = result["stdout"] + result["stderr"]
+	assert "VALIDATION_FIX_MERGED_EVIDENCE issue=900 candidate_pr=901 rejected=base_mismatch" in combined, combined
+	assert result["latest_state"]["security_pass_cycle"] == 1
+	assert result["latest_state"]["status"] == "failed"
+	assert "ai:merged" not in result["issues"]["900"]["labels"]
 
 
 def test_security_pass_cycle_exhaustion_terminalizes_project() -> None:
@@ -5677,6 +5709,38 @@ def test_security_pass_closed_fix_with_mention_only_merged_pr_still_fails() -> N
 	assert "SECURITY_PASS_FAILED reason=fix_issue_closed_without_merged_pr" in combined, combined
 	assert result["latest_state"]["status"] == "failed"
 	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+
+
+def test_security_pass_closed_fix_timeline_evidence_rejects_wrong_base() -> None:
+	result = _run_poller(
+		state=_security_pass_fixing_state_with_closed_fix_issue(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		issue_labels={10: ["ai:merged"], 900: ["ai:ready-to-merge"]},
+		issue_closed={900: True},
+		issue_linked_prs={900: 901},
+		prs=[
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-09-17T14:18:06Z",
+				"baseRefName": "main",
+				"headRefName": "ai/issue-900",
+				"body": "Fixes #900",
+				"willCloseTarget": False,
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	combined = result["stdout"] + result["stderr"]
+	assert "VALIDATION_FIX_MERGED_EVIDENCE issue=900 candidate_pr=901 rejected=base_mismatch" in combined, combined
+	assert "SECURITY_PASS_FIX_MERGED_EVIDENCE" not in combined, combined
+	assert result["latest_state"]["security_pass_cycle"] == 1
+	assert result["latest_state"]["status"] == "failed"
+	assert "ai:merged" not in result["issues"]["900"]["labels"]
 
 
 def test_security_pass_closed_fix_evidence_lookup_failure_retains_fixing_state() -> None:

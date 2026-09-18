@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Security-pass fix cycles now advance only when the merged fix PR targets the project's integration branch.** Both cached GraphQL evidence and timeline fallback evidence reject wrong-base or missing-base candidates without adding an unconditional API request, preventing a merge into `main` or another branch from spending a project's security-pass cycle while its integration branch remains unfixed.
