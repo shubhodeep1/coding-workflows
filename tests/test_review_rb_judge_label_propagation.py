@@ -1046,6 +1046,7 @@ _pr_meta='{{}}'
 {{
   printf 'FIRST_ISSUE=%s\n' "${{FIRST_ISSUE}}"
   printf 'FIRST_ISSUE_BODY=%s\n' "${{FIRST_ISSUE_BODY}}"
+  printf 'FIRST_ISSUE_LINEAGE_BODY=%s\n' "${{FIRST_ISSUE_LINEAGE_BODY}}"
   printf 'FIRST_ISSUE_LABELS_JSON=%s\n' "${{FIRST_ISSUE_LABELS_JSON}}"
 }} > "${{CAPTURE_FILE}}"
 """
@@ -1123,6 +1124,7 @@ def test_complete_graphql_node_avoids_issue_rest_read() -> None:
 	assert state["_captured"] == {
 		"FIRST_ISSUE": "41",
 		"FIRST_ISSUE_BODY": "Build feature X.",
+		"FIRST_ISSUE_LINEAGE_BODY": "Build feature X.",
 		"FIRST_ISSUE_LABELS_JSON": '["ai:orchestrator-managed","ai:closed"]',
 	}
 	assert len(_matching_api_calls(state, "graphql")) == 1
@@ -1139,6 +1141,7 @@ def test_complete_graphql_empty_body_preserves_first_issue_labels() -> None:
 
 	assert state["_captured"]["FIRST_ISSUE"] == "41"
 	assert state["_captured"]["FIRST_ISSUE_BODY"] == "Fallback body"
+	assert state["_captured"]["FIRST_ISSUE_LINEAGE_BODY"] == ""
 	assert json.loads(state["_captured"]["FIRST_ISSUE_LABELS_JSON"]) == ["ai:orchestrator-managed"]
 	assert _matching_api_calls(state, "issues/41") == []
 	assert _matching_api_calls(state, "issues/42") == []
@@ -1484,6 +1487,7 @@ def _run_merge_with_followup(
 	check_runs_state: str = "success",  # "success" (all complete + green) or "pending" (one in_progress)
 	enable_xpg_echo: bool = False,
 	first_issue_body: str = "",
+	first_issue_lineage_body: str | None = None,
 	pr_base_ref: str = "",
 ) -> dict:
 	"""Run the merge_with_followup branch with a mocked PR mergeability
@@ -1596,6 +1600,9 @@ def _run_merge_with_followup(
 			"ISSUE_NUMBERS": "41",
 			"FIRST_ISSUE": "41",
 			"FIRST_ISSUE_BODY": first_issue_body,
+			"FIRST_ISSUE_LINEAGE_BODY": (
+				first_issue_body if first_issue_lineage_body is None else first_issue_lineage_body
+			),
 			"FIRST_ISSUE_LABELS_JSON": json.dumps(parent_label_set),
 			"JUDGE_JSON": judge_json,
 			"RB_ACTION": "merge_with_followup",
@@ -2118,10 +2125,6 @@ def main() -> int:
 	return 1 if failed > 0 else 0
 
 
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 # =============================================================================
 # merge_with_followup lineage metadata + terminal-label guard
 # =============================================================================
@@ -2203,6 +2206,29 @@ def test_merge_with_followup_parent_metadata_wins_over_pr_base_branch() -> None:
 	assert "- Tracking issue: #4001" in body, body
 	assert "- Integration branch: orchestrator/project-4001" in body, body
 	assert "project-9999" not in body, body
+
+
+def test_merge_with_followup_ignores_sibling_issue_lineage() -> None:
+	"""The first non-empty requirement body may belong to a sibling issue,
+	but lineage must come from the actual parent or the PR-base fallback."""
+	sibling_body = "- Tracking issue: #4001\n- Integration branch: orchestrator/project-4001\n"
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"], first_issue_body=sibling_body,
+		first_issue_lineage_body="", pr_base_ref="orchestrator/project-249",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Tracking issue: #249" in body and "project-4001" not in body, body
+
+
+def test_merge_with_followup_invalid_parent_branch_uses_pr_base_fallback() -> None:
+	invalid_parent_body = "- Tracking issue: #4001\n- Integration branch: invalid branch\n"
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"], first_issue_body=invalid_parent_body,
+		pr_base_ref="orchestrator/project-249",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Tracking issue: #249" in body and "invalid branch" not in body, body
+	assert "Ignoring invalid Integration branch metadata" in state["_stdout"]
 
 
 def test_merge_with_followup_without_lineage_keeps_body_unchanged() -> None:
@@ -2308,3 +2334,7 @@ def test_resilient_phase_swap_allows_terminal_to_terminal() -> None:
 	never blocked by the guard."""
 	state = _run_resilient_phase_swap(["ai:merged"], "ai:closed")
 	assert len(_put_label_calls(state)) == 1, state.get("api_calls")
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

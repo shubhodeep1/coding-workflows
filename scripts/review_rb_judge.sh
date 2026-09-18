@@ -935,6 +935,7 @@ unset _pr_meta
 
 FIRST_ISSUE=""
 FIRST_ISSUE_BODY=""
+FIRST_ISSUE_LINEAGE_BODY=""
 # Labels of the parent (FIRST_ISSUE) issue. Complete GraphQL nodes avoid
 # a redundant REST GET; incomplete nodes retain the existing REST fallback.
 FIRST_ISSUE_LABELS_JSON="[]"
@@ -975,6 +976,7 @@ while IFS= read -r issue_number; do
   BODY="$(printf '%s' "${ISSUE_META_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
   if [ -z "${FIRST_ISSUE}" ]; then
     FIRST_ISSUE="${issue_number}"
+    FIRST_ISSUE_LINEAGE_BODY="${BODY}"
     FIRST_ISSUE_LABELS_JSON="$(printf '%s' "${ISSUE_META_JSON}" | jq -c '[(.labels // [])[]?.name]' 2>/dev/null || echo '[]')"
   fi
   if [ -z "${FIRST_ISSUE_BODY}" ]; then
@@ -2278,19 +2280,25 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         # PR base branch when it is an orchestrator integration branch.
         RB_FOLLOWUP_TRACKING_ISSUE=""
         RB_FOLLOWUP_INTEGRATION_BRANCH=""
-        if [ -n "${FIRST_ISSUE_BODY:-}" ]; then
-          RB_FOLLOWUP_INTEGRATION_BRANCH="$(printf '%s\n' "${FIRST_ISSUE_BODY}" | python3 -c '
+        if [ -n "${FIRST_ISSUE_LINEAGE_BODY:-}" ]; then
+          RB_FOLLOWUP_INTEGRATION_BRANCH="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
 import re, sys
 body = sys.stdin.read()
 m = re.search(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", body, re.MULTILINE)
 print(m.group(1).strip() if m else "")
 ' 2>/dev/null || echo "")"
-          RB_FOLLOWUP_TRACKING_ISSUE="$(printf '%s\n' "${FIRST_ISSUE_BODY}" | python3 -c '
+          RB_FOLLOWUP_TRACKING_ISSUE="$(printf '%s\n' "${FIRST_ISSUE_LINEAGE_BODY}" | python3 -c '
 import re, sys
 body = sys.stdin.read()
 m = re.search(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", body, re.MULTILINE)
 print(m.group(1) if m else "")
 ' 2>/dev/null || echo "")"
+        fi
+        if [ -n "${RB_FOLLOWUP_INTEGRATION_BRANCH}" ] \
+          && { [[ "${RB_FOLLOWUP_INTEGRATION_BRANCH}" == -* ]] || ! git check-ref-format "refs/heads/${RB_FOLLOWUP_INTEGRATION_BRANCH}" >/dev/null 2>&1; }; then
+          echo "::warning::Ignoring invalid Integration branch metadata on parent issue #${FIRST_ISSUE:-?}; falling back to the PR base."
+          RB_FOLLOWUP_INTEGRATION_BRANCH=""
+          RB_FOLLOWUP_TRACKING_ISSUE=""
         fi
         if [ -z "${RB_FOLLOWUP_INTEGRATION_BRANCH}" ] && [[ "${PR_BASE_REF:-}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
           RB_FOLLOWUP_INTEGRATION_BRANCH="${PR_BASE_REF}"

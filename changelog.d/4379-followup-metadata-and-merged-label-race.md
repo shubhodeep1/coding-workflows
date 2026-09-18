@@ -8,10 +8,10 @@ When the per-PR review-blocked judge (`review_autofix.yml`, `scripts/review_rb_j
 | Consumer issues that surfaced the defects | `tele-funtoken-msg-scoring#3928` / `#4379` / `#4386`, `binance-blessings#290` |
 | Extra API calls on the poller's happy path | 0 (the timeline read runs only for a closed, unlabelled, unlinked fix issue) |
 | Extra API calls in the judge's phase swap | 0 (the guard reads the labels GET it already issued) |
-| New regression tests | 8 in `tests/test_review_rb_judge_label_propagation.py`, 3 in `tests/test_orchestrate_poll_process.py` |
+| New regression tests | 10 in `tests/test_review_rb_judge_label_propagation.py`, 3 in `tests/test_orchestrate_poll_process.py`, 2 in `tests/test_retrigger_inflight_direct_fallback.py` |
 
 What this means for operators: a project whose security-pass fix PR was merged by the review-blocked judge advances to its re-audit instead of parking in `ai:security-pass-failed`, and a judge-created follow-up issue lands on the integration branch its parent belongs to. Projects already parked by the race still need `/re-security-pass`; follow-ups already opened without lineage need the two metadata lines added to their body by hand.
 
 ### For contributors
 
-The stall recovery's direct in-flight review check (`_direct_inflight_review_run_on_branch`) now logs `STALL_INFLIGHT_DIRECT_CHECK branch=<b> rc=<n> runs=<n> live=<n> matched=0 outcome=<listing_unavailable|no_fresh_review_run>` on stderr whenever it returns nothing. Poller run 35230465327 pushed a recovery commit onto `ai/issue-4367` while review run 35226455269 was live and left no trace of why; the fail-open contract is unchanged, the miss is now attributable.
+The stall recovery's direct in-flight review check (`_direct_inflight_review_run_on_branch`) now treats concurrency-held `pending` review runs as active and logs `STALL_INFLIGHT_DIRECT_CHECK branch=<b> rc=<n> runs=<n> live=<n> matched=0 outcome=<listing_unavailable|no_fresh_review_run>` on stderr whenever it returns nothing. Poller run 35230465327 pushed a recovery commit onto `ai/issue-4367` while review run 35226455269 was live and left no trace of why; the fail-open contract is unchanged, the miss is now attributable.

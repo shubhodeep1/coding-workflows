@@ -11298,7 +11298,7 @@ prime_phase_concurrency_snapshot() {
 # recovery-push path.
 #
 # Args: $1 = head branch.  Echoes the databaseId of the freshest matching
-# in_progress/queued review run younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
+# in_progress/queued/pending review run younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
 # else nothing.  Freshness mirrors build_active_issue_set's review-run window
 # so a review still legitimately editing past STALL_THRESHOLD_MINUTES is not
 # clobbered, while a genuinely hung run older than the review budget does not
@@ -11347,13 +11347,13 @@ _direct_inflight_review_run_on_branch()
 		return 0
 	fi
 	_di_runs_total="$(printf '%s' "${_di_runs_json}" | jq -r 'length' 2>/dev/null || echo "invalid")"
-	_di_runs_live="$(printf '%s' "${_di_runs_json}" | jq -r '[.[]? | select((.status // "") == "in_progress" or (.status // "") == "queued")] | length' 2>/dev/null || echo "invalid")"
+	_di_runs_live="$(printf '%s' "${_di_runs_json}" | jq -r '[.[]? | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")] | length' 2>/dev/null || echo "invalid")"
 	_di_match="$(printf '%s' "${_di_runs_json}" | jq -r \
 		--argjson now "${_di_now_epoch}" \
 		--argjson threshold "${_di_stall_secs}" '
 		(if type == "array" then . else [] end)
 		| [ .[]?
-			| select((.status // "") == "in_progress" or (.status // "") == "queued")
+			| select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
 			| select(
 				((.name // "") == "AI Review" or (.name // "") == "Internal Review" or (.name // "") == "Review Autofix"
 				 or (.name // "") == "Internal: AI Review & Autofix" or (.name // "") == "Codex PR Self-Healing Semantic Agent")
