@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Multiple changes converge on orchestrate_poll_process.sh and orchestrate_state_v2.py, with dedicated tests for polling, resolver retries, author identity, stale states, and blocked reviews. New orchestration behavior should preserve explicit state transitions, bounded retries, and deterministic handling of missing, conflicting, or invalid state.",
+  "fingerprint": "ea23db47dceb6183af3c65aa083f09d88d7b6621a6eb2f11a90645cf48b53400",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35360126262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35360126262",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4070",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4075",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4076",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4092",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4109",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4071",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4077",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4079",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4093",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4112"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260918151037_c30789e8c9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestration polling and state resolution are centralized concerns with explicit retry and failure contracts.",
+  "timestamps": {
+    "created_at": "2026-09-18T15:10:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
