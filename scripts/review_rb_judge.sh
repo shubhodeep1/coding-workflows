@@ -800,6 +800,24 @@ _resilient_phase_swap()
 		return 1
 	fi
 	_rps_cur="${_rps_cur:-[]}"
+	# Never downgrade a terminal phase.  The PR-close handler
+	# (issue_pr_status.yml) labels the linked issue ai:merged as soon as
+	# the PR merges, and this judge runs its swap only AFTER the merge
+	# (and, for merge_with_followup, after follow-up creation), so the
+	# two race.  tele-funtoken-msg-scoring#4379: ai:merged landed at
+	# 14:18:39, this swap replaced it with ai:ready-to-merge at ~14:18:45,
+	# and the orchestrator's security-pass check then read the closed
+	# issue as "closed without a merged PR" and failed project #3928.
+	# A terminal label is only ever replaced by another terminal label.
+	local _rps_terminal
+	_rps_terminal="$(printf '%s\n' "${_rps_cur}" | jq -r --arg t "${_rps_target}" '
+		if ($t == "ai:merged" or $t == "ai:closed") then empty
+		else (map(select(. == "ai:merged" or . == "ai:closed")) | first // empty)
+		end' 2>/dev/null || echo "")"
+	if [ -n "${_rps_terminal}" ]; then
+		echo "_resilient_phase_swap: issue #${_rps_issue} already carries terminal label ${_rps_terminal}; not swapping to ${_rps_target}."
+		return 0
+	fi
 	_rps_new="$(printf '%s\n' "${_rps_cur}" | jq -c --argjson p "${_rps_phases}" --arg t "${_rps_target}" \
 		'(. - $p) + [$t] | unique')"
 	if printf '{"labels":%s}' "${_rps_new}" | \
@@ -2186,13 +2204,69 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         # time the follow-up's clarify / planner phases run (modulo
         # the orphan-hedge case above, which is documented in the
         # warning).
+        # Carry the parent's orchestrator lineage so plan.yml /
+        # implement.yml (scripts/resolve_integration_ref.sh) check the
+        # follow-up out on the project's integration branch instead of
+        # the default branch.  Without these two lines the resolver
+        # falls back to main: tele-funtoken-msg-scoring#4386 planned
+        # against main and Codex emitted "BLOCKED: integration branch
+        # mismatch"; binance-blessings#290 implemented against main,
+        # where the file the follow-up had to restore already existed,
+        # while the real gap sat on orchestrator/project-249.
+        # Source order: the parent issue's own metadata first, then the
+        # PR base branch when it is an orchestrator integration branch.
+        RB_FOLLOWUP_TRACKING_ISSUE=""
+        RB_FOLLOWUP_INTEGRATION_BRANCH=""
+        if [ -n "${FIRST_ISSUE_BODY:-}" ]; then
+          RB_FOLLOWUP_INTEGRATION_BRANCH="$(printf '%s\n' "${FIRST_ISSUE_BODY}" | python3 -c '
+import re, sys
+body = sys.stdin.read()
+m = re.search(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", body, re.MULTILINE)
+print(m.group(1).strip() if m else "")
+' 2>/dev/null || echo "")"
+          RB_FOLLOWUP_TRACKING_ISSUE="$(printf '%s\n' "${FIRST_ISSUE_BODY}" | python3 -c '
+import re, sys
+body = sys.stdin.read()
+m = re.search(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", body, re.MULTILINE)
+print(m.group(1) if m else "")
+' 2>/dev/null || echo "")"
+        fi
+        if [ "${RB_FOLLOWUP_INTEGRATION_BRANCH}" = "(default branch)" ]; then
+          RB_FOLLOWUP_INTEGRATION_BRANCH=""
+        fi
+        if [ -z "${RB_FOLLOWUP_INTEGRATION_BRANCH}" ] && [ -n "${PR_BASE_REF:-}" ]; then
+          RB_FOLLOWUP_PATTERN_MATCH_RC=0
+          printf '%s\n' "${PR_BASE_REF}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" || RB_FOLLOWUP_PATTERN_MATCH_RC=$?
+          if [ "${RB_FOLLOWUP_PATTERN_MATCH_RC}" -eq 2 ]; then
+            echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is not a valid POSIX ERE (${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}); PR base ${PR_BASE_REF} follow-up will resolve to the default branch unless parent metadata supplies lineage." >&2
+          elif [ "${RB_FOLLOWUP_PATTERN_MATCH_RC}" -eq 0 ]; then
+            RB_FOLLOWUP_INTEGRATION_BRANCH="${PR_BASE_REF}"
+            if [ -z "${RB_FOLLOWUP_TRACKING_ISSUE}" ] && [[ "${PR_BASE_REF}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
+              RB_FOLLOWUP_TRACKING_ISSUE="${BASH_REMATCH[1]}"
+            fi
+          fi
+        fi
+        RB_FOLLOWUP_LINEAGE_LINES=""
+        if [[ "${RB_FOLLOWUP_TRACKING_ISSUE}" =~ ^[0-9]+$ ]]; then
+          RB_FOLLOWUP_LINEAGE_LINES="${RB_FOLLOWUP_LINEAGE_LINES}
+- Tracking issue: #${RB_FOLLOWUP_TRACKING_ISSUE}"
+        fi
+        if [ -n "${RB_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
+          RB_FOLLOWUP_LINEAGE_LINES="${RB_FOLLOWUP_LINEAGE_LINES}
+- Integration branch: ${RB_FOLLOWUP_INTEGRATION_BRANCH}"
+        fi
+        if [ -n "${RB_FOLLOWUP_LINEAGE_LINES}" ]; then
+          echo "Follow-up lineage: tracking issue #${RB_FOLLOWUP_TRACKING_ISSUE:-none}, integration branch ${RB_FOLLOWUP_INTEGRATION_BRANCH:-none}."
+        else
+          echo "Follow-up lineage: no Integration branch / Tracking issue metadata on parent #${FIRST_ISSUE:-?} and PR base ${PR_BASE_REF:-?} is not an orchestrator integration branch; follow-up will resolve to the default branch."
+        fi
         FULL_FOLLOWUP_BODY="${FOLLOWUP_BODY}
 
 ---
 **Merge-with-followup metadata**
 - Source PR: #${PR_NUMBER} (review-blocked judge merged with deferred gap tracked here)
 - Parent issue: ${FIRST_ISSUE:+#${FIRST_ISSUE}}
-- Type: review-blocked-followup"
+- Type: review-blocked-followup${RB_FOLLOWUP_LINEAGE_LINES}"
 
         # Apply ai:clarification immediately at creation time so the
         # follow-up enters the pipeline without waiting for the
