@@ -77,7 +77,7 @@ fi
 
 _unsafe_path() {
   case "$1" in
-    /*|../*|*/../*|..|*/..) return 0 ;;
+    /*|../*|*/../*|..|*/..|.|./) return 0 ;;
   esac
   return 1
 }
