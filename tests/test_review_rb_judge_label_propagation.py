@@ -2117,10 +2117,6 @@ def main() -> int:
 	return 1 if failed > 0 else 0
 
 
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 # =============================================================================
 # merge_with_followup lineage metadata + terminal-label guard
 # =============================================================================
@@ -2307,3 +2303,7 @@ def test_resilient_phase_swap_allows_terminal_to_terminal() -> None:
 	never blocked by the guard."""
 	state = _run_resilient_phase_swap(["ai:merged"], "ai:closed")
 	assert len(_put_label_calls(state)) == 1, state.get("api_calls")
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
