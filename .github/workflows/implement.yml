@@ -2139,7 +2139,7 @@ jobs:
           if [ -s "${PLAN_FILE}" ]; then
             python3 scripts/targeted_file_context.py \
               --plan-file "${PLAN_FILE}" \
-              --repo-root "${GITHUB_WORKSPACE}" \
+              --repo-root "${WORKSPACE_PATH:-${GITHUB_WORKSPACE}}" \
               --semble-bin "$(command -v semble 2>/dev/null || true)" \
               --semble-index "${SEMBLE_INDEX_PATH}" \
               --semble-max-chunks "6" \

@@ -4695,6 +4695,51 @@ def test_security_pass_deferred_advisory_followups_file_when_final_merge_lands()
 	assert f"- `SEC-DEFERRED` → #{created[0]['number']}" in filed_comments[0]
 
 
+def test_security_pass_deferred_advisory_followup_retries_on_completed_tick() -> None:
+	"""A pending row from a failed merge-tick create retries after completion."""
+	state = _base_state(status="complete")
+	state.update(
+		{
+			"integration_branch": "orchestrator/project-192",
+			"final_merge_pr": 300,
+			"final_merge_status": "merged",
+			"security_pass_waived_findings": [
+				{
+					"finding_id": "SEC-RETRY",
+					"file": "scripts/example.py",
+					"line": 1,
+					"owasp_or_stride_category": "A01: Broken Access Control",
+					"severity": "high",
+					"justification": "Retry the advisory after a transient create failure.",
+					"source": "judge",
+					"waived_by": "security-pass-exhaustion-judge",
+					"waived_at_cycle": 3,
+					"issue": None,
+					"followup_pending": True,
+					"audited_head_sha": "deadbeefcafe",
+					"finding": _security_pass_test_finding() | {"finding_id": "SEC-RETRY"},
+				}
+			],
+		}
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="false",
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	created = result.get("created_issues", [])
+	assert len(created) == 1
+	assert created[0]["labels"] == ["ai:security"]
+	assert latest_state["security_pass_waived_findings"][0]["issue"] == created[0]["number"]
+	assert "followup_pending" not in latest_state["security_pass_waived_findings"][0]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED tracking_issue=192 final_pr=300 default_branch=main filed=1 pending=1" in combined_log
+
+
 def test_security_pass_advisory_followup_reconciles_remote_marker_before_create() -> None:
 	"""A lost create response/state write must not duplicate the advisory."""
 	result = _run_poller(

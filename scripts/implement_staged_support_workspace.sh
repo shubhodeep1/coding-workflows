@@ -83,7 +83,10 @@ _unsafe_path() {
 }
 
 if [ "${mode}" = "restore" ]; then
-  : > "${editor_head_ledger}"
+  # The implementation and syntax-repair loops both call restore. Keep the
+  # ledger cumulative so a helper edited by the implementation loop still
+  # takes the plain HEAD-edit commit path after the repair loop runs.
+  : >> "${editor_head_ledger}"
   restored=0
   removed=0
   skipped=0
@@ -121,7 +124,9 @@ if [ "${mode}" = "restore" ]; then
       echo "IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORED path=${staged_path} state=absent-in-head"
       removed=$((removed + 1))
     fi
-    printf '%s\n' "${staged_path}" >> "${editor_head_ledger}"
+    if ! grep -Fqx -- "${staged_path}" "${editor_head_ledger}"; then
+      printf '%s\n' "${staged_path}" >> "${editor_head_ledger}"
+    fi
   done < "${staged_support_ledger}"
   echo "IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORE restored=${restored} removed=${removed} skipped=${skipped} head_ledger=${editor_head_ledger}"
   exit 0
@@ -149,7 +154,11 @@ while IFS= read -r staged_path; do
     # `git diff --quiet HEAD` compares content and mode, and fails (non-zero)
     # when the path was deleted from the worktree.
     if [ -f "${staged_path}" ] && git diff --quiet HEAD -- "${staged_path}" 2>/dev/null; then
-      staged_base_mode="$(stat -c '%a' -- "${staged_base}")"
+      staged_base_mode="$(stat -c '%a' -- "${staged_base}" 2>/dev/null || true)"
+      if [ -z "${staged_base_mode}" ]; then
+        echo "::error::IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=${staged_path} reason=mode_unavailable; cannot reinstall the support-ref copy."
+        exit 1
+      fi
       install -m "${staged_base_mode}" -- "${staged_base}" "${staged_path}"
       echo "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALLED path=${staged_path}"
       reinstalled=$((reinstalled + 1))
@@ -158,7 +167,11 @@ while IFS= read -r staged_path; do
       edited=$((edited + 1))
     fi
   elif [ ! -e "${staged_path}" ]; then
-    staged_base_mode="$(stat -c '%a' -- "${staged_base}")"
+    staged_base_mode="$(stat -c '%a' -- "${staged_base}" 2>/dev/null || true)"
+    if [ -z "${staged_base_mode}" ]; then
+      echo "::error::IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=${staged_path} reason=mode_unavailable; cannot reinstall the support-ref copy."
+      exit 1
+    fi
     mkdir -p -- "$(dirname -- "${staged_path}")"
     install -m "${staged_base_mode}" -- "${staged_base}" "${staged_path}"
     echo "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALLED path=${staged_path} state=absent-in-head"

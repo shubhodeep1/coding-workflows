@@ -1793,6 +1793,33 @@ def test_staged_support_workspace_editor_edit_of_branch_file_commits_without_reb
 		assert mode_line.startswith("100644 "), mode_line
 
 
+def test_staged_support_workspace_preserves_implement_edit_across_repair_restore() -> None:
+	"""A second restore for syntax repair must not drop the implementation edit ledger."""
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_repair_restore_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		helper = repo_dir / "scripts" / "helper.sh"
+		assert _run_workspace_helper(repo_dir, env, "restore").returncode == 0
+		edited = _STAGED_HELPER_BRANCH.replace("branch line A\n", "branch line A hardened by the editor\n")
+		helper.write_text(edited, encoding="utf-8")
+		assert _run_workspace_helper(repo_dir, env, "reinstall").returncode == 0
+
+		proc = _run_workspace_helper(repo_dir, env, "restore")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "reason=modified_before_editor" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORE restored=0 removed=0 skipped=1" in proc.stdout
+		assert _editor_head_ledger(env).read_text(encoding="utf-8") == "scripts/helper.sh\n"
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALL reinstalled=0 edited_from_head=1" in proc.stdout
+		assert helper.read_text(encoding="utf-8") == edited
+
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD path=scripts/helper.sh" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_REBASE" not in proc.stdout + proc.stderr
+		assert _git_out(["git", "show", "HEAD:scripts/helper.sh"], cwd=repo_dir) == edited
+
+
 def test_staged_support_workspace_handles_staging_recreation_of_branch_deleted_file() -> None:
 	"""A file the branch deleted but staging recreated is hidden from the
 	editor, reinstalled when untouched, and never committed; an editor
@@ -1888,6 +1915,18 @@ def test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base() 
 		assert proc.returncode == 1
 		assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh" in proc.stdout + proc.stderr
 		assert (repo_dir / "scripts" / "helper.sh").read_text(encoding="utf-8") == _STAGED_HELPER_MAIN
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_nomode_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		assert _run_workspace_helper(repo_dir, env, "restore").returncode == 0
+		mock_bin = Path(td) / "mock-bin"
+		mock_bin.mkdir()
+		mock_stat = mock_bin / "stat"
+		mock_stat.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+		mock_stat.chmod(0o755)
+		env["PATH"] = f"{mock_bin}:{env['PATH']}"
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 1
+		assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh reason=mode_unavailable" in proc.stdout + proc.stderr
 
 
 def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
@@ -1901,6 +1940,7 @@ def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	assert implement_run.count(helper_line) == 1
 	assert implement_run.count(restore_call) == 1
 	assert implement_run.count(reinstall_call) == 1
+	assert '--repo-root "${WORKSPACE_PATH:-${GITHUB_WORKSPACE}}"' in implement_run
 	# restore precedes the pre-Codex baseline capture and the attempt loop;
 	# reinstall follows the loop and precedes the transcript archive.
 	assert implement_run.index(restore_call) < implement_run.index("python3 scripts/targeted_file_context.py")

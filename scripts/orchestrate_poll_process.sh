@@ -16644,6 +16644,17 @@ The orchestrator detected that the integration PR was squash-merged outside the 
   if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
     DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
   fi
+  # Retry advisory creation on every later merged-state tick. The transition
+  # arms attempt filing immediately, but a transient create failure leaves the
+  # waiver row pending and completed projects otherwise skip the finalizer.
+  if [ "$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")" = "merged" ] \
+    && jq -e 'any((.security_pass_waived_findings // [])[]; (.followup_pending // false) == true and .issue == null and (.finding | type) == "object")' "${STATE_FILE}" >/dev/null 2>&1; then
+    security_pass_file_deferred_advisory_followups \
+      "${INTEGRATION_BRANCH_TRACKING}" \
+      "${DEFAULT_BRANCH_TRACKING}" \
+      "$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+    post_state_comment || true
+  fi
   if [ -n "${INTEGRATION_BRANCH_TRACKING}" ] \
     && [ "${PROJECT_STATUS}" != "complete" ] \
     && [ "${PROJECT_STATUS}" != "failed" ] \
