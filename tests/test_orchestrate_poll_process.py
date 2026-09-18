@@ -5431,6 +5431,9 @@ def test_security_pass_closed_fix_with_timeline_merged_pr_evidence_advances_cycl
 	assert result["latest_state"]["security_pass_cycle"] == 2
 	assert result["latest_state"]["security_pass_active_fix_issues"] == []
 	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	security_fix_labels = result["issues"]["900"]["labels"]
+	assert "ai:merged" in security_fix_labels, security_fix_labels
+	assert "ai:ready-to-merge" not in security_fix_labels, security_fix_labels
 
 
 def test_security_pass_closed_fix_with_mention_only_merged_pr_still_fails() -> None:

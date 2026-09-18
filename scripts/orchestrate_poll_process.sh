@@ -16270,6 +16270,9 @@ The active security-pass fix cycle continues; the waivers apply from its next re
         SECURITY_FIX_PR_MERGED="false"
         if [ "${SECURITY_FIX_STATE}" = "closed" ] && ! has_label "${SECURITY_FIX_LABELS}" "ai:merged"; then
           if validation_fix_issue_has_merged_pr_evidence "${SECURITY_FIX_ISSUE}"; then
+            if ! backfill_validation_fix_issue_merged_label "${SECURITY_FIX_ISSUE}" "${SECURITY_FIX_LABELS}"; then
+              echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE}: merged PR detected but ai:merged backfill failed." >&2
+            fi
             SECURITY_FIX_PR_MERGED="true"
           else
             SECURITY_FIX_MERGED_EVIDENCE_RC=$?
@@ -16292,13 +16295,16 @@ The active security-pass fix cycle continues; the waivers apply from its next re
         # PR-close handler's ai:merged with ai:ready-to-merge six seconds
         # after it landed), fall back to the same timeline evidence the
         # cache-miss path already consults before declaring the fix
-        # closed-without-merge.  §15: one timeline read, only on this
-        # closed + unlabelled + unlinked corner.
+        # closed-without-merge.  §15: one timeline read plus label
+        # reconciliation, only on this closed + unlabelled + unlinked corner.
         if [ "${SECURITY_FIX_STATE}" = "closed" ] \
           && [ "${SECURITY_FIX_PR_MERGED}" != "true" ] \
           && ! has_label "${SECURITY_FIX_LABELS}" "ai:merged"; then
           if validation_fix_issue_has_merged_pr_evidence "${SECURITY_FIX_ISSUE}"; then
             echo "SECURITY_PASS_FIX_MERGED_EVIDENCE tracking_issue=${TRACKING_NUM} issue=${SECURITY_FIX_ISSUE} source=timeline"
+            if ! backfill_validation_fix_issue_merged_label "${SECURITY_FIX_ISSUE}" "${SECURITY_FIX_LABELS}"; then
+              echo "::warning::Security-pass fix issue #${SECURITY_FIX_ISSUE}: merged PR detected but ai:merged backfill failed." >&2
+            fi
             SECURITY_FIX_PR_MERGED="true"
           else
             SECURITY_FIX_MERGED_EVIDENCE_RC=$?
