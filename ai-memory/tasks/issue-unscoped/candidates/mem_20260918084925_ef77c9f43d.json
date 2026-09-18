@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh: around line 5690 (also around lines 5521 and 5623) | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `jq \u2026 > \"${STATE_FILE}.tmp\" || ! mv \"${STATE_FILE}.tmp\" \"${STATE_FILE}\"` pattern was reported as capable of overwriting the real state file with corrupt output when `jq` fails.\n  WHY: The finding is disputed by deepseek_deepseek-v4-pro, moonshotai_kimi-k3, and qwen_qwen3_7-plus, which verified that `||` short-circuits after `! jq` succeeds on jq failure, so `mv` is not executed and the warning branch runs.\n- scripts/implement_staged_support_workspace.sh: lines 78-83 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603, moonshotai_kimi-k3]\n  PROBLEM: The `_unsafe_path` guard does not reject the bare `.` path, allowing `git restore --source=HEAD --worktree -- \".\"` to restore the entire working tree and discard uncommitted editor changes.\n  WHY: Mistralai_mistral-small-2603 rated this BLOCKER; deepseek_deepseek-v4-pro and moonshotai_kimi-k3 treated it as low-risk defense-in-depth because the ledger is machine-generated and does not realistically emit `.`.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: scripts/implement_staged_support_workspace.sh\n  Location: _unsafe_path function, lines 78-83\n  Issue: The path-traversal guard accepts bare `.` as a safe path, which would allow `git restore --source=HEAD --worktree -- \".\"` to restore the entire working tree.\n  Suggested minimal fix: Add `.|` to the case pattern: `/*|../*|*/../*|..|*/..|.|*/.)`\n  HARDENING_RISK_SCORE: 1 \u2014 ledger is machine-generated and `.` is never a real path; purely defense-in-depth.\n  ISSUE_CONFIDENCE: 2 \u2014 no practical runtime trigger exists since the ledger is produced from git porcelain output which never emits `.`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/orchestrate_poll_process.sh\n  Line or code reference: around line 5690 in the new `security_pass_file_deferred_advisory_followups` function (the `jq \u2026 > \"${STATE_FILE}.tmp\" || ! mv \"${STATE_FILE}.tmp\" \"${STATE_FILE}\"` block that settles the waiver row after a successful create)\n  Problem: The `if ! jq \u2026 || ! mv \u2026; then \u2026 fi` pattern has inverted truth-table semantics. The intent is \"if jq fails, try to roll back the rename; if either step fails, enter the warning branch\". With `||` and `!`, the expression evaluates to false (skips the branch) precisely when jq fails AND mv succeeds \u2014 which is the case that silently leaves a corrupt STATE_FILE on disk. Specifically: when jq exits non-zero, jq's stdout to `${STATE_FILE}.tmp` is empty/garbled; mv then overwrites the real state file with that empty/garbled content; `! mv` is then 1; the `||` produces 1; `if ! 1` is false; the warning branch is skipped, no `rm -f tmp`, no warning, and the next poll reads a corrupt state.\n  Why it fails at runtime: The poller is the only writer of `${STATE_FILE}`. A transient jq failure on the merged-state tick \u2014 malformed state JSON, a syntax-level jq regression, or a resource hiccup \u2014 corrupts the project's `security_pass_waived_findings` (the very ledger this PR's deferral machinery relies on). The very rows the new function was written to settle (`followup_pending: true`, `audited_head_sha`, `finding`) are lost, and the next run's `pending_json` selection returns an empty list, so the deferred advisory is never filed even though `create_security_pass_advisory_followup` returned a real issue number on the line above. The same `jq || ! mv` shape is also present in `create_security_pass_advisory_followup` at the `existing_issue` reconciliation (around line 5521) and the post-create state write (around line 5623); both pre-existing instances will exhibit the same silent corruption. Fix: split the write and the rename into two explicit checks (e.g. `if ! jq \u2026 > tmp; then rm -f tmp; echo ::warning::; continue; fi; mv tmp state`) so a failed jq never silently overwrites the state file. Apply consistently at all three call sites.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: scripts/implement_staged_support_workspace.sh\n  Line or code reference: lines 85-130, 153-177\n  Problem: The _unsafe_path guard does not reject the bare . path, allowing `git restore --source=HEAD --worktree -- \".\"` to restore the entire working tree and discard uncommitted editor changes.\n  Why it fails at runtime: If `.` were somehow placed in the ledger, the restore operation would overwrite the entire workspace, losing all uncommitted editor changes. The ledger is machine-generated so this cannot happen in normal operation, but a one-line addition would close the gap.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k3 ===\n- File: scripts/implement_staged_support_workspace.sh\n  Location: `_unsafe_path()` (lines 78-83)\n  Issue: the case pattern rejects `/*`, `../*`, `*/../*`, `..`, `*/..` but not the bare `.` (or `./`). If such an entry ever reached the ledger, `git restore --source=HEAD --worktree -- .` would restore the entire worktree to HEAD, silently discarding all uncommitted editor edits and turning the run into a no-op. The ledger is machine-generated by the staging step so this cannot occur in practice, but the guard's stated contract is fail-closed on unsafe ledger paths and this is the one destructive relative path it misses.\n  Suggested minimal fix: extend the pattern in `_unsafe_path()` to `/*|../*|*/../*|..|*/..|.|./)` (same change mirrored in the identical case in scripts/implement_commit_changes.sh:165-166 if consistency is desired).\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM moonshotai_kimi-k3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_6 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_6 ===",
+  "fingerprint": "7e1bf89c2183a4e017a50d07efdd41c387069577d01da3d5bb34e7404b600ea4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4119,
+    "run_id": "35321998372",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35321998372",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260918084925_ef77c9f43d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4119,
+    "run_id": "35321998372"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-09-18T08:49:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
