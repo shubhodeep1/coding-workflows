@@ -230,6 +230,21 @@ a new value, add it to the appropriate overrides file with a
   `IMPLEMENT_STAGED_SUPPORT_RECREATED_BY_EDITOR`, `IMPLEMENT_STAGED_SUPPORT_BASE_MISSING`,
   `IMPLEMENT_STAGED_SUPPORT_HEAD_READ_FAILED`, `IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT`,
   `IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED`, `IMPLEMENT_STAGED_SUPPORT_RESTORE`.
+- `scripts/implement_staged_support_workspace.sh` (staged into the run dir with the other
+  helpers, self-repo only, no-op without a ledger) changes what the *editor* sees:
+  `restore` runs right before the Codex implementation loop and before the post-Codex
+  syntax-repair loop, puts every ledger path still equal to its installed copy back to
+  `HEAD` (removing staging recreations of branch-deleted files) and lists them in
+  `STAGED_SUPPORT_EDITOR_HEAD_LEDGER` (`${RUNTIME_DIR}/staged_support_editor_head.txt`);
+  `reinstall` runs after each loop and puts the installed copy back for every listed path
+  the editor left untouched. The commit helper commits a listed path the editor changed
+  as a plain edit (`IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD`) and never re-bases it.
+  Regression: #4113 (run 35072286584) edited `main`'s `scripts/codex_helpers.sh` on
+  `orchestrator/project-3965`, the re-base conflicted, and the issue halted in
+  `ai:needs-human`. Log keys: `IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORED`,
+  `IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALLED`, `IMPLEMENT_STAGED_SUPPORT_EDITOR_SKIPPED`,
+  `IMPLEMENT_STAGED_SUPPORT_EDITOR_SKIPPED_PATH`, `IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORE`,
+  `IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALL`, `IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD`.
 - Staged-support failures are consumed by the runtime-preserved rejection handler,
   which attempts and verifies the `ai:needs-human` latch, comments with the affected paths and
   latch status, sends the configured CRITICAL alert, and prevents generic diagnosis/re-issue handling.

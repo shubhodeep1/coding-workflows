@@ -948,7 +948,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1269,6 +1269,7 @@ jobs:
             {
               echo "STAGED_SUPPORT_LEDGER=${STAGED_SUPPORT_LEDGER}"
               echo "STAGED_SUPPORT_BASE_DIR=${STAGED_SUPPORT_BASE_DIR}"
+              echo "STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"
               echo "IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
             } >> "$GITHUB_ENV"
           fi
@@ -2108,6 +2109,22 @@ jobs:
           Output: repository changes only.
           EOF
 
+          # Self-repo staged-support editor view: show the editor the
+          # branch's own copies of the helpers that "Stage workflow support
+          # files" replaced with SCRIPT_REF's, so an edit to one of them is a
+          # plain edit of the branch's file instead of a 3-way re-base that
+          # can conflict into ai:needs-human (issue #4113, run 35072286584).
+          # No-op in consumer repos (no ledger). Runs before the targeted
+          # file context is inlined and before the pre-Codex baseline, so the
+          # prompt, the baseline and the disk agree; the untouched copies are
+          # reinstalled right after the attempt loop.
+          STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_staged_support_workspace.sh"
+          if [ -f "${STAGED_SUPPORT_WORKSPACE_HELPER}" ]; then
+            bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" restore
+          else
+            echo "::notice::${STAGED_SUPPORT_WORKSPACE_HELPER} is unavailable on ${SCRIPT_REF:-this ref}; the editor sees the staged support copies."
+          fi
+
           # Pre-load files named in the plan's "Files likely to change"
           # section so the editor's first turn is a write rather than a
           # read. A file that would push the cumulative byte count over
@@ -2901,6 +2918,12 @@ jobs:
               sleep "${sleep_secs}"
             fi
           done
+
+          # Put SCRIPT_REF's copies back for every support path the editor
+          # left untouched; edited paths stay as the editor's plain edits.
+          if [ -f "${STAGED_SUPPORT_WORKSPACE_HELPER}" ]; then
+            bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" reinstall
+          fi
 
           if [ "${implement_succeeded}" = "true" ]; then
             archive_transcript "${GITHUB_RUN_ID:-local-run}" "implement" "${CODEX_OUTPUT_FILE}"
@@ -3731,6 +3754,13 @@ jobs:
           REPAIR_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/post_codex_repair_semble_query.txt"
           build_repair_semble_query "${REPAIR_SEMBLE_QUERY_FILE}"
 
+          # Same editor view as the implementation step: the repair agent
+          # edits the branch's own helper copies, never SCRIPT_REF's.
+          STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_staged_support_workspace.sh"
+          if [ -f "${STAGED_SUPPORT_WORKSPACE_HELPER}" ]; then
+            bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" restore
+          fi
+
           repair_succeeded=false
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Post-Codex syntax repair attempt ${attempt}/${max_attempts}"
@@ -3901,6 +3931,10 @@ jobs:
             fi
             emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
           done
+
+          if [ -f "${STAGED_SUPPORT_WORKSPACE_HELPER}" ]; then
+            bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" reinstall
+          fi
 
           if [ "${repair_succeeded}" != 'true' ]; then
             echo "::error::Post-Codex syntax repair did not succeed after ${max_attempts} attempt(s)."

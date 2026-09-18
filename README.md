@@ -1844,6 +1844,21 @@ copies, while editor-modified or deleted support files remain subject to `files_
 An unavailable ledger or baseline, unreadable branch blob, or merge conflict emits
 `IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT` or a more specific staged-support error, sets
 `staged_support_rebase_conflict=true` with `staged_support_rebase_conflict_files`, and fails closed.
+
+The editor itself never sees SCRIPT_REF's copies any more. Right before the Codex implementation
+loop (and again before the post-Codex syntax-repair loop) the workflow runs
+`scripts/implement_staged_support_workspace.sh restore` from the immutable runtime directory: every
+ledger path whose workspace content still equals the installed copy is put back to `HEAD`'s version
+(or removed when `HEAD` does not track it) and recorded in `STAGED_SUPPORT_EDITOR_HEAD_LEDGER`
+(`${RUNTIME_DIR}/staged_support_editor_head.txt`). After the loop, `... reinstall` puts the installed
+copy back for every recorded path the editor left untouched, so later workflow steps see what they saw
+before. A path the editor did change is a plain edit of the branch's own file: the commit helper
+commits it as-is (`IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD`) instead of attempting the 3-way
+re-base. That re-base is what turned #4113's `scripts/codex_helpers.sh` edit (477 lines apart from
+`main` on `orchestrator/project-3965`) into `IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT` and an
+`ai:needs-human` halt in run 35072286584. The helper is a no-op without a ledger (consumer repos),
+fails closed on an unsafe ledger path or a missing baseline copy, logs every decision under
+`IMPLEMENT_STAGED_SUPPORT_EDITOR_*`, and issues no GitHub API calls.
 The dedicated rejection handler attempts to label the issue `ai:needs-human`, verifies the latch,
 reports an absent or unknown latch in its issue comment and CRITICAL Telegram alert, and suppresses generic diagnose/re-issue handling. The
 summary `IMPLEMENT_STAGED_SUPPORT_RESTORE restored=<n> rebased=<n> conflicts=<n>` remains available

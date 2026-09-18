@@ -118,10 +118,27 @@ fi
 #   - the 3-way merge conflicts: fail closed (IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT)
 #     rather than commit a SCRIPT_REF-based copy that drops the branch's edits;
 #   - the editor deleted the file: keep the deletion, it is the editor's change.
+# Paths listed in STAGED_SUPPORT_EDITOR_HEAD_LEDGER were shown to the editor
+# as HEAD's version by scripts/implement_staged_support_workspace.sh (restore
+# before the editor, reinstall of untouched copies after it), so an edit
+# there is a plain edit of the branch's own file: it is committed as-is
+# (IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD) and never re-based, which is
+# what turned #4113's codex_helpers.sh edit into a conflict and ai:needs-human.
 # Consumer repos never set the ledger (their staged helpers are excluded at
 # commit time), so this block is a no-op there.
 staged_support_ledger="${STAGED_SUPPORT_LEDGER:-}"
 staged_support_base_dir="${STAGED_SUPPORT_BASE_DIR:-}"
+staged_support_editor_head_ledger="${STAGED_SUPPORT_EDITOR_HEAD_LEDGER:-}"
+if [ -z "${staged_support_editor_head_ledger}" ] && [ -n "${staged_support_ledger}" ]; then
+  staged_support_editor_head_ledger="$(dirname -- "${staged_support_ledger}")/staged_support_editor_head.txt"
+fi
+declare -A staged_support_editor_saw_head=()
+if [ -n "${staged_support_editor_head_ledger}" ] && [ -f "${staged_support_editor_head_ledger}" ]; then
+  while IFS= read -r staged_support_head_path; do
+    [ -n "${staged_support_head_path}" ] || continue
+    staged_support_editor_saw_head["${staged_support_head_path}"]=1
+  done < "${staged_support_editor_head_ledger}"
+fi
 if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; then
   if [ -z "${staged_support_ledger}" ] || [ ! -f "${staged_support_ledger}" ]; then
     echo "::error::IMPLEMENT_STAGED_SUPPORT_LEDGER_MISSING path=${staged_support_ledger:-<unset>}; refusing to commit without the staged-support inventory."
@@ -141,6 +158,7 @@ if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; the
   fi
   staged_support_restored=0
   staged_support_rebased=0
+  staged_support_edited_from_head=0
   staged_support_conflicts=""
   while IFS= read -r staged_support_path; do
     [ -n "${staged_support_path}" ] || continue
@@ -169,7 +187,14 @@ if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; the
     fi
     if ! git cat-file -e "HEAD:${staged_support_path}" >/dev/null 2>&1; then
       if [ ! -e "${staged_support_path}" ]; then
-        echo "IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR path=${staged_support_path}"
+        if [ -n "${staged_support_editor_saw_head[${staged_support_path}]+set}" ]; then
+          # The pre-editor restore removed this staging recreation of a
+          # branch-deleted file and the editor never brought it back.
+          echo "IMPLEMENT_STAGED_SUPPORT_RESTORED path=${staged_support_path} state=absent-in-head"
+          staged_support_restored=$((staged_support_restored + 1))
+        else
+          echo "IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR path=${staged_support_path}"
+        fi
       elif cmp -s -- "${staged_support_path}" "${staged_support_base}" \
         && [ "${staged_support_mode}" = "${staged_support_base_mode}" ]; then
         rm -f -- "${staged_support_path}"
@@ -189,6 +214,18 @@ if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; the
       git restore --source=HEAD --worktree -- "${staged_support_path}"
       echo "IMPLEMENT_STAGED_SUPPORT_RESTORED path=${staged_support_path}"
       staged_support_restored=$((staged_support_restored + 1))
+      continue
+    fi
+    if [ -n "${staged_support_editor_saw_head[${staged_support_path}]+set}" ]; then
+      # The editor was shown HEAD's version, so whatever is here now is its
+      # own edit of the branch's file: commit it as-is, no re-base needed.
+      if git diff --quiet HEAD -- "${staged_support_path}" 2>/dev/null; then
+        echo "IMPLEMENT_STAGED_SUPPORT_RESTORED path=${staged_support_path} state=already-head"
+        staged_support_restored=$((staged_support_restored + 1))
+      else
+        echo "IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD path=${staged_support_path}"
+        staged_support_edited_from_head=$((staged_support_edited_from_head + 1))
+      fi
       continue
     fi
     staged_support_head="$(mktemp)"
@@ -222,7 +259,7 @@ if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; the
     fi
     rm -f -- "${staged_support_head}" "${staged_support_merged}"
   done < "${staged_support_ledger}"
-  echo "IMPLEMENT_STAGED_SUPPORT_RESTORE restored=${staged_support_restored} rebased=${staged_support_rebased} conflicts=$(printf '%s' "${staged_support_conflicts}" | wc -w | tr -d ' ')"
+  echo "IMPLEMENT_STAGED_SUPPORT_RESTORE restored=${staged_support_restored} rebased=${staged_support_rebased} edited_from_head=${staged_support_edited_from_head} conflicts=$(printf '%s' "${staged_support_conflicts}" | wc -w | tr -d ' ')"
   if [ -n "${staged_support_conflicts}" ]; then
     {
       echo "staged_support_rebase_conflict=true"
