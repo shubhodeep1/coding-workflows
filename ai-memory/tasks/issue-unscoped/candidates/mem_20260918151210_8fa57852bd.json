@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "The implementation flow includes stall guards and editor-isolation preflight logic, including process-group termination tests. When invoking external coding tools, ensure child processes cannot outlive the workflow step and that stalls, cancellation, and failure paths clean up the complete process group.",
+  "fingerprint": "b718882f51aac82272b345ae7bd2b309420f0bdb225df3e13052fef2700eb68f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "35360126262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "35360126262",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/4070",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4075",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4076",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4092",
+      "https://github.com/shubhodeep1/coding-workflows/issues/4109",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4071",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4077",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4079",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4093",
+      "https://github.com/shubhodeep1/coding-workflows/pull/4112"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260918151210_8fa57852bd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Long-running model or editor subprocesses require process-group isolation and cleanup safeguards.",
+  "timestamps": {
+    "created_at": "2026-09-18T15:12:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
