@@ -613,6 +613,14 @@ def test_review_autofix_wires_reissue_preserve_baseline_flag_default_true() -> N
 	)
 
 
+def test_review_autofix_wires_integration_branch_pattern_to_judge() -> None:
+	wf = _review_autofix_text()
+	assert "ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}" in wf, (
+		"review_autofix.yml must pass the configured integration-branch pattern to "
+		"the review-blocked judge's follow-up lineage fallback."
+	)
+
+
 def test_close_and_reissue_spot_fix_preserves_baseline_branch_and_keeps_caller_checkout_clean() -> None:
 	state = _run_close_and_reissue(
 		["ai:orchestrator-managed"],
@@ -1485,6 +1493,7 @@ def _run_merge_with_followup(
 	enable_xpg_echo: bool = False,
 	first_issue_body: str = "",
 	pr_base_ref: str = "",
+	orch_integration_branch_pattern: str = "^orchestrator/project-",
 ) -> dict:
 	"""Run the merge_with_followup branch with a mocked PR mergeability
 	state and judge JSON.  Returns the captured gh-mock state plus the
@@ -1600,6 +1609,7 @@ def _run_merge_with_followup(
 			"JUDGE_JSON": judge_json,
 			"RB_ACTION": "merge_with_followup",
 			"ENABLE_AUTO_MERGE": enable_auto_merge,
+			"ORCH_INTEGRATION_BRANCH_PATTERN": orch_integration_branch_pattern,
 			# Speed up both polling loops — one attempt is enough
 			# because the mock returns the configured value
 			# deterministically on the first call (sync merge succeeds
@@ -2181,6 +2191,34 @@ def test_merge_with_followup_derives_lineage_from_pr_base_branch_fallback() -> N
 	body = _followup_body_from_state(state)
 	assert "- Tracking issue: #249" in body, body
 	assert "- Integration branch: orchestrator/project-249" in body, body
+
+
+def test_merge_with_followup_ignores_default_branch_sentinel() -> None:
+	"""Default-branch-only parent metadata must not become a branch ref."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed", "ai:review-blocked"],
+		first_issue_body=(
+			"- Tracking issue: #4001\n"
+			"- Integration branch: `(default branch)`\n"
+		),
+		pr_base_ref="main",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Tracking issue: #4001" in body, body
+	assert "Integration branch:" not in body, body
+
+
+def test_merge_with_followup_honors_custom_integration_branch_pattern() -> None:
+	"""A custom configured pattern still propagates a metadata-less PR base."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed", "ai:review-blocked"],
+		first_issue_body="Parent body without orchestrator metadata.\n",
+		pr_base_ref="custom/integration/249",
+		orch_integration_branch_pattern="^custom/integration/",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Integration branch: custom/integration/249" in body, body
+	assert "Tracking issue:" not in body, body
 
 
 def test_merge_with_followup_parent_metadata_wins_over_pr_base_branch() -> None:

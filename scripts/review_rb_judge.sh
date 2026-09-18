@@ -2231,9 +2231,13 @@ m = re.search(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+
 print(m.group(1) if m else "")
 ' 2>/dev/null || echo "")"
         fi
-        if [ -z "${RB_FOLLOWUP_INTEGRATION_BRANCH}" ] && [[ "${PR_BASE_REF:-}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
+        if [ "${RB_FOLLOWUP_INTEGRATION_BRANCH}" = "(default branch)" ]; then
+          RB_FOLLOWUP_INTEGRATION_BRANCH=""
+        fi
+        if [ -z "${RB_FOLLOWUP_INTEGRATION_BRANCH}" ] && [ -n "${PR_BASE_REF:-}" ] \
+          && printf '%s\n' "${PR_BASE_REF}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}"; then
           RB_FOLLOWUP_INTEGRATION_BRANCH="${PR_BASE_REF}"
-          if [ -z "${RB_FOLLOWUP_TRACKING_ISSUE}" ]; then
+          if [ -z "${RB_FOLLOWUP_TRACKING_ISSUE}" ] && [[ "${PR_BASE_REF}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
             RB_FOLLOWUP_TRACKING_ISSUE="${BASH_REMATCH[1]}"
           fi
         fi
