@@ -5586,7 +5586,6 @@ def test_security_pass_fix_successor_malformed_state_is_inconclusive() -> None:
 		assert result.stdout.splitlines() == ["2", "2"]
 		assert not api_call_path.exists()
 
-
 def _security_pass_fixing_state_with_closed_fix_issue() -> dict:
 	state = _base_state(status="security-pass-fixing")
 	state.update(
