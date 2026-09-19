@@ -357,7 +357,7 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 def test_judge_context_issue_numbers_are_normalized_without_globbing():
 	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
 	block_start_marker = '  MERGED_PR_SUMMARIES=""\n  OPEN_PR_SUMMARIES=""\n'
-	block_end_marker = '  unset _sorted_issue_nums _issue_status\n'
+	block_end_marker = '  unset _sorted_issue_nums _issue_status _judge_diff_pass _judge_pr_diff_budget_left\n'
 	block_start_index = poller_source_text.index(block_start_marker)
 	block_end_index = poller_source_text.index(block_end_marker, block_start_index)
 	production_block = poller_source_text[
@@ -370,12 +370,21 @@ def test_judge_context_issue_numbers_are_normalized_without_globbing():
 		# unquoted shell expansion in the production block.
 		(worktree / "3").touch()
 		(worktree / "17").touch()
+		# The block reads each issue's wave status from STATE_FILE before the
+		# PR lookup (merged PRs are collected first, then open ones); an empty
+		# wave keeps every issue on the open pass, in sorted order.
+		state_file = worktree / "state.json"
+		state_file.write_text(json.dumps({"waves": [{"issues": []}]}), encoding="utf-8")
 		runner = worktree / "run-normalization.sh"
 		runner.write_text(
 			"#!/usr/bin/env bash\n"
 			"set -euo pipefail\n"
 			"LOOKUP_LOG=\"${1}\"\n"
 			"ISSUE_NUMS=\"${2-}\"\n"
+			f"STATE_FILE={str(state_file)!r}\n"
+			"WAVE_IDX=0\n"
+			"JUDGE_PR_DIFF_MAX_BYTES=65536\n"
+			"JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=524288\n"
 			"_issue_cross_ref_pr_number_last()\n"
 			"{\n"
 			"  printf '%s\\n' \"${1}\" >> \"${LOOKUP_LOG}\"\n"
@@ -12659,6 +12668,105 @@ def test_judge_prompt_includes_harness_validation_context():
 	assert "Latest validation raw status: harness_error" in prompt
 	assert "Harness-broken label present: true" in prompt
 	assert "Judge note: the latest validation failure is classified as a harness/infrastructure defect" in prompt
+
+
+def test_judge_prompt_caps_embedded_pr_diffs_by_bytes():
+	"""Regression for tele-funtoken-msg-scoring#3928 / run 35425771769: a
+	merged PR whose diff is a handful of huge single lines passes the
+	500-line cap untouched, and two such PRs pushed the judge prompt past
+	codex's 1,048,576-character stdin cap. JUDGE_PR_DIFF_MAX_BYTES must cut
+	each diff, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES must bound the sum across the
+	prompt (merged PRs first, sorted issue order), every cut must be
+	labelled for the judge, and the poller must log the prompt size."""
+	state = _base_state(status="in_progress")
+	state["total_issues"] = 3
+	state["waves"][0]["issues"] = [
+		{"id": "issue-1", "github_issue": 10, "status": "merged"},
+		{"id": "issue-2", "github_issue": 11, "status": "merged"},
+		{"id": "issue-3", "github_issue": 12, "status": "merged"},
+	]
+	state["issue_number_map"] = {"issue-1": 10, "issue-2": 11, "issue-3": 12}
+	# One "diff" line far larger than the per-PR cap, like a minified bundle.
+	huge_line = "bundle-" + ("x" * 5000)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:merged"], 11: ["ai:merged"], 12: ["ai:merged"]},
+		issue_linked_prs={10: 77, 11: 78, 12: 79},
+		prs=[
+			{"number": 77, "state": "closed", "merged": True, "headRefName": "ai/issue-10", "body": huge_line},
+			{"number": 78, "state": "closed", "merged": True, "headRefName": "ai/issue-11", "body": huge_line},
+			{"number": 79, "state": "closed", "merged": True, "headRefName": "ai/issue-12", "body": huge_line},
+		],
+		codex_json={
+			"status": "in_progress",
+			"justification": "wave verified",
+			"assessment": "ok",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+		env_overrides={
+			"JUDGE_PR_DIFF_MAX_BYTES": "2000",
+			"JUDGE_PR_DIFFS_TOTAL_MAX_BYTES": "2500",
+		},
+	)
+	prompt = result["judge_prompt"]
+	assert "--- PR #77 (Issue #10) ---" in prompt
+	assert "--- PR #78 (Issue #11) ---" in prompt
+	assert "--- PR #79 (Issue #12) ---" in prompt
+	merged_block = prompt.partition("=== MERGED PR DIFFS (truncated; cache-stable) ===")[2].partition("=== WAVE 1 COMPLETION STATUS ===")[0]
+	# Per-PR cap: the first PR gets the full 2000 bytes, the second only the
+	# 500 bytes left in the shared budget, and the third is elided outright.
+	assert "truncated to a prefix within 2000 bytes (JUDGE_PR_DIFF_MAX_BYTES=2000, shared JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500)" in merged_block
+	assert "truncated to a prefix within 500 bytes (JUDGE_PR_DIFF_MAX_BYTES=2000, shared JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500)" in merged_block
+	assert "[NOTE: PR diff elided — the shared judge PR-diff budget (JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500 bytes) is exhausted" in merged_block
+	# The sum of embedded diff bytes never exceeds the shared budget; the
+	# 5 KB single lines are gone, only headers and notes remain on top.
+	assert len(merged_block.encode("utf-8")) < 2500 + 1500, len(merged_block)
+	assert merged_block.count("bundle-") == 2
+	assert "x" * 2001 not in merged_block
+	# Merged-first ordering by issue number: PR #77 must precede #78 and #79.
+	assert merged_block.index("--- PR #77 ") < merged_block.index("--- PR #78 ") < merged_block.index("--- PR #79 ")
+	stdout = result["stdout"]
+	assert "Judge context: PR #77 (issue #10) diff truncated from" in stdout
+	assert "Judge context: PR #79 (issue #12) diff elided — JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500 budget exhausted" in stdout
+	assert "Judge prompt size: " in stdout
+	assert "(codex stdin cap: 1048576 characters; JUDGE_PR_DIFF_MAX_BYTES=2000, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=2500)." in stdout
+	assert "::warning::Judge prompt for #192" not in stdout
+	assert result["latest_state"]["status"] == "in_progress"
+
+
+def test_judge_prompt_keeps_small_pr_diffs_intact_under_default_byte_caps():
+	"""Ordinary diffs sit far below the default caps and must be embedded
+	verbatim, with no truncation note and no budget log line."""
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 77},
+		prs=[
+			{"number": 77, "state": "closed", "merged": True, "headRefName": "ai/issue-10", "body": "ordinary small diff"},
+		],
+		codex_json={
+			"status": "in_progress",
+			"justification": "wave verified",
+			"assessment": "ok",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	prompt = result["judge_prompt"]
+	assert "--- PR #77 (Issue #10) ---" in prompt
+	assert "ordinary small diff" in prompt
+	assert "[NOTE: PR diff" not in prompt
+	assert "Judge context: PR #77" not in result["stdout"]
+	assert "JUDGE_PR_DIFF_MAX_BYTES=65536, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=524288" in result["stdout"]
 
 
 def test_judge_repeat_fingerprint_penalty_is_suppressed_after_harness_error():

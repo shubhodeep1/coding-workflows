@@ -197,6 +197,45 @@ worktree_registry_deregister() {
 	bash scripts/worktree_registry.sh deregister "${name}" || true
 }
 
+# _judge_truncate_pr_diff_file — Truncate a PR diff file in place to at
+# most <max_bytes> bytes on a UTF-8 character boundary. Mirrors the
+# RB_JUDGE_PR_DIFF_MAX_BYTES truncation in scripts/review_rb_judge.sh.
+# Falls back to a raw `head -c` prefix when python3 is unavailable
+# (sanitize_codex_prompt_file strips an invalid trailing byte later).
+# Input: path, positive integer byte cap. Issues no GitHub API calls.
+_judge_truncate_pr_diff_file()
+{
+	local diff_path="$1"
+	local max_bytes="$2"
+	local truncated_tmp
+
+	[ -f "${diff_path}" ] || return 0
+	[[ "${max_bytes}" =~ ^[0-9]+$ ]] || return 0
+	truncated_tmp="$(mktemp)" || return 0
+	if PYTHONDONTWRITEBYTECODE=1 python3 - "${diff_path}" "${max_bytes}" > "${truncated_tmp}" 2>/dev/null <<'PY'
+import sys
+
+cap = int(sys.argv[2])
+read_cap = cap + 1 if cap > 0 else 0
+with open(sys.argv[1], 'rb') as fh:
+    data = fh.read(read_cap)
+if cap > 0 and len(data) > cap:
+    i = cap
+    while i > 0 and (data[i] & 0xC0) == 0x80:
+        i -= 1
+    data = data[:i]
+sys.stdout.buffer.write(data)
+PY
+	then
+		mv -f "${truncated_tmp}" "${diff_path}"
+	elif head -c "${max_bytes}" "${diff_path}" > "${truncated_tmp}" 2>/dev/null; then
+		mv -f "${truncated_tmp}" "${diff_path}"
+	else
+		rm -f "${truncated_tmp}"
+	fi
+	return 0
+}
+
 extract_judge_json_with_status() {
   local output_file="$1"
   local parsed_json=""
@@ -1568,6 +1607,33 @@ JUDGE_REPEAT_FINGERPRINT_MAX="${JUDGE_REPEAT_FINGERPRINT_MAX:-2}"
 if ! [[ "${JUDGE_REPEAT_FINGERPRINT_MAX}" =~ ^[0-9]+$ ]] || [ "${JUDGE_REPEAT_FINGERPRINT_MAX}" -lt 1 ]; then
   echo "::warning::JUDGE_REPEAT_FINGERPRINT_MAX must be a positive integer; defaulting to 2"
   JUDGE_REPEAT_FINGERPRINT_MAX="2"
+fi
+
+# Byte budgets for the PR diffs embedded in the wave judge prompt. codex's
+# `turn/start` stdin envelope is a hard 1,048,576-character cap; the judge
+# prompt already carries ~250 KB of static context (system instructions,
+# README, agents.md, semble prefetch), so the diff blocks must be bounded
+# by bytes, not only by lines. The legacy `head -n 500` line cap alone let
+# tele-funtoken-msg-scoring#3928 (run 35425771769) embed two ~390 KB
+# committed-`dist` refresh PRs whose minified bundles are single 44-66 KB
+# lines; the assembled prompt reached ~1.28 M characters and both judge
+# attempts died with `Input exceeds the maximum length` before the model
+# ran. Same failure class as RB_JUDGE_PR_DIFF_MAX_BYTES in
+# scripts/review_rb_judge.sh, applied here per PR and across the wave.
+#   JUDGE_PR_DIFF_MAX_BYTES        — cap per embedded PR diff (after the
+#                                    500-line cap).
+#   JUDGE_PR_DIFFS_TOTAL_MAX_BYTES — shared budget across every PR diff in
+#                                    the prompt (merged block first, then the
+#                                    open block gets the remainder).
+JUDGE_PR_DIFF_MAX_BYTES="${JUDGE_PR_DIFF_MAX_BYTES:-65536}"
+if ! [[ "${JUDGE_PR_DIFF_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${JUDGE_PR_DIFF_MAX_BYTES}" -lt 1 ]; then
+  echo "::warning::JUDGE_PR_DIFF_MAX_BYTES must be a positive integer; defaulting to 65536"
+  JUDGE_PR_DIFF_MAX_BYTES="65536"
+fi
+JUDGE_PR_DIFFS_TOTAL_MAX_BYTES="${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES:-524288}"
+if ! [[ "${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES}" -lt 1 ]; then
+  echo "::warning::JUDGE_PR_DIFFS_TOTAL_MAX_BYTES must be a positive integer; defaulting to 524288"
+  JUDGE_PR_DIFFS_TOTAL_MAX_BYTES="524288"
 fi
 
 # Recovery-budget accounting for judge failures whose normalized fingerprint
@@ -20563,6 +20629,16 @@ Manual intervention required." >/dev/null
   #     merged, this block is stable across ticks and extends the
   #     cacheable prefix by the sum of the diffs (typically 5-15 K
   #     tokens for mature projects).
+  #   - Every embedded diff is bounded by bytes as well as by lines:
+  #     JUDGE_PR_DIFF_MAX_BYTES per PR and JUDGE_PR_DIFFS_TOTAL_MAX_BYTES
+  #     across the whole prompt, so the assembled prompt stays under
+  #     codex's 1,048,576-character `turn/start` stdin cap even when a
+  #     PR commits minified bundles (single 40-70 KB lines that the
+  #     500-line cap never trims). The shared budget is consumed in two
+  #     passes — merged PRs first, in sorted issue order, then open PRs
+  #     with whatever remains — so the merged block never depends on an
+  #     in-flight PR's size and stays byte-stable within a wave.
+  #   - API-call count is unchanged: exactly one diff fetch per linked PR.
   MERGED_PR_SUMMARIES=""
   OPEN_PR_SUMMARIES=""
   _sorted_issue_nums="$(
@@ -20571,43 +20647,72 @@ Manual intervention required." >/dev/null
       { grep -E '^[0-9]+$' || true; } |
       sort -un
   )"
-  while IFS= read -r inum; do
-    [ -n "${inum}" ] || continue
-    PR_NUM="$(_issue_cross_ref_pr_number_last "${inum}" 2>/dev/null || echo "")"
-    if [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
-      # Fetch the diff into a temp file before truncating: piping
-      # gh api directly into `head -500` causes SIGPIPE on gh api once
-      # head has read enough lines, which gh_retry then treats as a
-      # transient failure and retries with exponential backoff.
-      _pr_diff_tmp="$(mktemp)"
-      if gh_retry_to_file "${_pr_diff_tmp}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
-        -H 'Accept: application/vnd.github.diff'; then
-        PR_DIFF="$(head -n 500 "${_pr_diff_tmp}" 2>/dev/null || echo "(diff unavailable)")"
-      else
-        echo "::warning::Failed to fetch PR #${PR_NUM} diff for judge context (issue #${inum}); falling back to '(diff unavailable)'." >&2
-        PR_DIFF="(diff unavailable)"
-      fi
-      rm -f "${_pr_diff_tmp}"
-      unset _pr_diff_tmp
+  _judge_pr_diff_budget_left="${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES}"
+  for _judge_diff_pass in merged open; do
+    while IFS= read -r inum; do
+      [ -n "${inum}" ] || continue
       _issue_status="$(jq -r --arg num "${inum}" --argjson wi "${WAVE_IDX}" \
         '.waves[$wi].issues[] | select((.github_issue | tostring) == $num) | .status // ""' \
         "${STATE_FILE}" 2>/dev/null | head -n1)"
-      if [ "${_issue_status}" = "merged" ]; then
-        MERGED_PR_SUMMARIES+="
+      if [ "${_judge_diff_pass}" = "merged" ]; then
+        [ "${_issue_status}" = "merged" ] || continue
+      else
+        [ "${_issue_status}" != "merged" ] || continue
+      fi
+      PR_NUM="$(_issue_cross_ref_pr_number_last "${inum}" 2>/dev/null || echo "")"
+      if [[ "${PR_NUM}" =~ ^[0-9]+$ ]]; then
+        # Fetch the diff into a temp file before truncating: piping
+        # gh api directly into `head -500` causes SIGPIPE on gh api once
+        # head has read enough lines, which gh_retry then treats as a
+        # transient failure and retries with exponential backoff.
+        _pr_diff_tmp="$(mktemp)"
+        _pr_diff_capped_tmp="$(mktemp)"
+        if gh_retry_to_file "${_pr_diff_tmp}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" \
+          -H 'Accept: application/vnd.github.diff'; then
+          head -n 500 "${_pr_diff_tmp}" > "${_pr_diff_capped_tmp}" 2>/dev/null || printf '%s' "(diff unavailable)" > "${_pr_diff_capped_tmp}"
+          _pr_diff_bytes="$(wc -c < "${_pr_diff_capped_tmp}" 2>/dev/null | tr -cd '0-9' || true)"
+          [[ "${_pr_diff_bytes}" =~ ^[0-9]+$ ]] || _pr_diff_bytes=0
+          _pr_diff_allowance="${JUDGE_PR_DIFF_MAX_BYTES}"
+          if [ "${_judge_pr_diff_budget_left}" -lt "${_pr_diff_allowance}" ]; then
+            _pr_diff_allowance="${_judge_pr_diff_budget_left}"
+          fi
+          if [ "${_pr_diff_bytes}" -le "${_pr_diff_allowance}" ]; then
+            PR_DIFF="$(cat "${_pr_diff_capped_tmp}")"
+            _judge_pr_diff_budget_left=$(( _judge_pr_diff_budget_left - _pr_diff_bytes ))
+          elif [ "${_pr_diff_allowance}" -le 0 ]; then
+            echo "Judge context: PR #${PR_NUM} (issue #${inum}) diff elided — JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES} budget exhausted (${_pr_diff_bytes} bytes omitted)."
+            PR_DIFF="[NOTE: PR diff elided — the shared judge PR-diff budget (JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES} bytes) is exhausted; ${_pr_diff_bytes} bytes omitted. Read the PR's files directly if this diff matters to the verdict.]"
+          else
+            _judge_truncate_pr_diff_file "${_pr_diff_capped_tmp}" "${_pr_diff_allowance}"
+            echo "Judge context: PR #${PR_NUM} (issue #${inum}) diff truncated from ${_pr_diff_bytes} to ${_pr_diff_allowance} bytes (JUDGE_PR_DIFF_MAX_BYTES=${JUDGE_PR_DIFF_MAX_BYTES}, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES})."
+            PR_DIFF="[NOTE: PR diff is ${_pr_diff_bytes} bytes after the 500-line cap; truncated to a prefix within ${_pr_diff_allowance} bytes (JUDGE_PR_DIFF_MAX_BYTES=${JUDGE_PR_DIFF_MAX_BYTES}, shared JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES}) to fit codex stdin (1 MB cap). Read the PR's files directly for the elided tail if needed.]
+$(cat "${_pr_diff_capped_tmp}")"
+            _judge_pr_diff_budget_left=$(( _judge_pr_diff_budget_left - _pr_diff_allowance ))
+          fi
+          [ "${_judge_pr_diff_budget_left}" -ge 0 ] || _judge_pr_diff_budget_left=0
+        else
+          echo "::warning::Failed to fetch PR #${PR_NUM} diff for judge context (issue #${inum}); falling back to '(diff unavailable)'." >&2
+          PR_DIFF="(diff unavailable)"
+        fi
+        rm -f "${_pr_diff_tmp}" "${_pr_diff_capped_tmp}"
+        unset _pr_diff_tmp _pr_diff_capped_tmp _pr_diff_bytes _pr_diff_allowance
+        if [ "${_issue_status}" = "merged" ]; then
+          MERGED_PR_SUMMARIES+="
 --- PR #${PR_NUM} (Issue #${inum}) ---
 ${PR_DIFF}
 
 "
-      else
-        OPEN_PR_SUMMARIES+="
+        else
+          OPEN_PR_SUMMARIES+="
 --- PR #${PR_NUM} (Issue #${inum}, status=${_issue_status:-unknown}) ---
 ${PR_DIFF}
 
 "
+        fi
       fi
-    fi
-  done <<< "${_sorted_issue_nums}"
-  unset _sorted_issue_nums _issue_status
+    done <<< "${_sorted_issue_nums}"
+  done
+  unset _sorted_issue_nums _issue_status _judge_diff_pass _judge_pr_diff_budget_left
 
   # Fetch CI status on default branch
   DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
@@ -20742,6 +20847,19 @@ ${PR_DIFF}
     echo "Return in_progress to advance to the next wave."
   } > "${JUDGE_PROMPT_FILE}"
   rm -f "${JUDGE_SEMBLE_QUERY_FILE}"
+
+  # Surface the assembled prompt size before the first codex exec. The
+  # CLI's `turn/start` envelope is a hard 1,048,576-character stdin cap;
+  # a prompt over it fails every attempt identically with an opaque
+  # `Input exceeds the maximum length` on stderr (run 35425771769), so
+  # log the size where the next regression is visible near the top of
+  # the failing job instead of buried behind the echoed prompt.
+  JUDGE_PROMPT_BYTES="$(wc -c < "${JUDGE_PROMPT_FILE}" 2>/dev/null | tr -cd '0-9' || true)"
+  [[ "${JUDGE_PROMPT_BYTES}" =~ ^[0-9]+$ ]] || JUDGE_PROMPT_BYTES=0
+  echo "Judge prompt size: ${JUDGE_PROMPT_BYTES} bytes (codex stdin cap: 1048576 characters; JUDGE_PR_DIFF_MAX_BYTES=${JUDGE_PR_DIFF_MAX_BYTES}, JUDGE_PR_DIFFS_TOTAL_MAX_BYTES=${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES})."
+  if [ "${JUDGE_PROMPT_BYTES}" -gt 950000 ]; then
+    echo "::warning::Judge prompt for #${TRACKING_NUM} is ${JUDGE_PROMPT_BYTES} bytes; close to or over codex's 1 MB stdin cap. Expect 'Input exceeds the maximum length' judge failures unless JUDGE_PR_DIFF_MAX_BYTES (current: ${JUDGE_PR_DIFF_MAX_BYTES}) / JUDGE_PR_DIFFS_TOTAL_MAX_BYTES (current: ${JUDGE_PR_DIFFS_TOTAL_MAX_BYTES}) or the static context (README/agents/system instructions) are tightened."
+  fi
 
   # Run judge via Codex
   JUDGE_SUCCESS=false
