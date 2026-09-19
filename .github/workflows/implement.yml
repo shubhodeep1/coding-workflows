@@ -5225,6 +5225,40 @@ jobs:
           if [ -z "${ISSUE_LABELS_JSON}" ]; then
             ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
           fi
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          # A deliberate `BLOCKED: <reason>` verdict (the "Run Codex
+          # implementation" step leaves codex_blocked.flag) is a terminal
+          # answer, not a stuck attempt.  Parking the issue back in
+          # ai:awaiting-approval let stall recovery post /approved every
+          # STALL_THRESHOLD minutes and re-run the same blocked
+          # implementation — tele-funtoken-msg-scoring#4395 burned four
+          # implement runs (~50K tokens each) over ~15h before the stall
+          # judge's escalate_human was honoured.  Mirror plan.yml's
+          # "Handle blocked planning output": move to ai:blocked, which the
+          # poller treats as human-gated (no stall recovery, no re-issue),
+          # and say how to resume.
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/codex_blocked.flag" ]; then
+            BLOCKED_REASON="$(head -n 1 "${RUNTIME_DIR}/codex_blocked.flag" | cut -c1-600)"
+            gh_retry gh label create "ai:blocked" --repo "${{ github.repository }}" \
+              --color "b60205" --description "Blocked: human input required" \
+              2>/dev/null || true
+            if ! gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --add-label 'ai:blocked' --remove-label 'ai:implementing' \
+              --remove-label 'ai:awaiting-approval' >/dev/null; then
+              echo "::error::Failed to apply the ai:blocked latch to issue ${ISSUE_NUMBER}; refusing to report terminalization."
+              exit 1
+            fi
+            BLOCKED_COMMENT="$(printf '%s\n\n%s\n\n%s\n%s\n\n%s' \
+              "Implementation blocked: human input required." \
+              "Reason: ${BLOCKED_REASON}" \
+              "The implementer returned a deliberate BLOCKED verdict, so autonomous stall recovery and re-issuance are paused for this issue (they would only re-run the same blocked implementation)." \
+              "To resume once the blocker is cleared: comment /answer to re-plan, or remove ai:blocked, add ai:awaiting-approval and comment /approved to re-run the approved plan." \
+              "Run: ${RUN_URL}")"
+            gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+              -f body="${BLOCKED_COMMENT}"
+            echo "IMPLEMENT_BLOCKED_TERMINALIZED issue=${ISSUE_NUMBER} label=ai:blocked"
+            exit 0
+          fi
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
             gh_retry gh label create "ai:awaiting-approval" --repo "${{ github.repository }}" \
               --color "fbca04" --description "Awaiting human approval to implement" \
@@ -5232,7 +5266,6 @@ jobs:
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
               --add-label 'ai:awaiting-approval' --remove-label 'ai:implementing' >/dev/null 2>&1 || true
           fi
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
             REASON="AI implementation workflow was cancelled/timed out for ${ISSUE_URL}. Run: ${RUN_URL}"
           else

@@ -1379,6 +1379,48 @@ if ! [[ "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" =~ ^[0-9]+$ ]]; then
   MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS="2"
 fi
 
+# Comprehensive release callback target (README 12f).  A tracking issue that
+# carries ai:comprehensive-test-pending (applied by orchestrate.yml from the
+# promote cycle's tracking_labels input) dispatches this workflow to promote.  The default promotes the default branch to stable
+# (fast-forward + full release gate); the pre-2026-09 target
+# test-and-mark-stable.yml on `stable` stays selectable for a stable-only
+# patch release.
+COMPREHENSIVE_RELEASE_WORKFLOW_FILE="${COMPREHENSIVE_RELEASE_WORKFLOW_FILE:-promote-main-to-stable.yml}"
+COMPREHENSIVE_RELEASE_WORKFLOW_REF="${COMPREHENSIVE_RELEASE_WORKFLOW_REF:-main}"
+if ! [[ "${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]]; then
+  echo "::warning::COMPREHENSIVE_RELEASE_WORKFLOW_FILE must be a workflow filename; defaulting to promote-main-to-stable.yml"
+  COMPREHENSIVE_RELEASE_WORKFLOW_FILE="promote-main-to-stable.yml"
+fi
+if [ -z "${COMPREHENSIVE_RELEASE_WORKFLOW_REF}" ] || [[ "${COMPREHENSIVE_RELEASE_WORKFLOW_REF}" =~ [[:space:]] ]]; then
+  echo "::warning::COMPREHENSIVE_RELEASE_WORKFLOW_REF must be a single ref name; defaulting to main"
+  COMPREHENSIVE_RELEASE_WORKFLOW_REF="main"
+fi
+# Promote cycle (README 12f): the proving run's completion dispatches the
+# verifying run through the same dispatcher the daily cycle uses, and the
+# verifying run's ready-to-merge point promotes the pinned commit while its
+# own final merge is held until the release run finishes (or this cap).
+APPLY_ANALYSIS_DISPATCHER="${APPLY_ANALYSIS_DISPATCHER:-scripts/apply_analysis_on_main.sh}"
+COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS="${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS:-21600}"
+if ! [[ "${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" =~ ^[0-9]+$ ]] || [ "${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" -lt 60 ]; then
+  echo "::warning::COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS must be an integer >= 60; defaulting to 21600"
+  COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS="21600"
+fi
+# Bot logins whose non-code commits may land on main during a cycle without
+# deferring the promotion (comma-separated).
+COMPREHENSIVE_CYCLE_BOT_LOGINS="${COMPREHENSIVE_CYCLE_BOT_LOGINS:-github-actions[bot]}"
+# Marker comments are trusted only from these author associations (the
+# orchestrator posts them with GH_PAT, i.e. as the repository owner) or from
+# github-actions[bot]; a marker from anyone else is ignored and reported.
+COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS="${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS:-OWNER,MEMBER,COLLABORATOR}"
+# Poll ticks a proving run's completion may retry a transient verifying-run
+# dispatch (another project in flight, orchestrator run in flight, guard
+# unavailable) before giving up.
+COMPREHENSIVE_VERIFICATION_RETRY_MAX="${COMPREHENSIVE_VERIFICATION_RETRY_MAX:-24}"
+if ! [[ "${COMPREHENSIVE_VERIFICATION_RETRY_MAX}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::COMPREHENSIVE_VERIFICATION_RETRY_MAX must be a non-negative integer; defaulting to 24"
+  COMPREHENSIVE_VERIFICATION_RETRY_MAX="24"
+fi
+
 # Advisory follow-ups for accepted (waived) findings are filed only after the
 # project's integration branch has merged into the default branch.  Filing
 # them at judge time pointed the standalone clarify/plan pipeline at a
@@ -10278,6 +10320,14 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     return 1
   fi
 
+  # Promote cycle: a VERIFYING run's ready-to-merge point promotes the pinned
+  # commit and holds this merge until the release finishes (README 12f).
+  if ! comprehensive_promotion_gate_before_final_merge "${final_pr}"; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
+    echo "  [final-merge] PR #${final_pr} held by the promote cycle. Will retry next poll."
+    return 1
+  fi
+
   local merge_err=""
   if merge_err="$(gh_retry gh pr merge "${final_pr}" --repo "${GITHUB_REPOSITORY}" --squash --delete-branch 2>&1 >/dev/null)"; then
     jq --argjson final_pr "${final_pr}" \
@@ -10458,10 +10508,460 @@ extract_comprehensive_release_metadata() {
   fi
 }
 
+# comprehensive_cycle_metadata_json <comments_json>
+#
+# Reads the apply-analysis marker comment (posted by orchestrate.yml from the
+# dispatcher's tracking_comment input) and prints
+#   {role, doc, baseline_sha, smoke_sha, promote_sha, proving_merge_sha}
+# with "" for anything absent. role is "" for a tracking issue that carries
+# ai:comprehensive-test-pending without a marker (legacy callback path).
+comprehensive_cycle_metadata_json() {
+  local comments_json="$1"
+  printf '%s' "${comments_json}" | jq -c --arg trusted "${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}" '
+    def line($body; $key): (($body | capture("(?m)^" + $key + ": (?<v>[^\r\n]+)")? // {v: ""}) | .v | gsub("^\\s+|\\s+$"; ""));
+    def is_marker: ((.body // "") | test("(?m)^apply-analysis-source-doc: "));
+    def trusted: (((.author_association // "") as $a | ($trusted | split(",") | map(gsub("^\\s+|\\s+$"; "")) | index($a)) != null)
+                  or ((.user.login // "") == "github-actions[bot]"));
+    ([ .[] | select(is_marker and trusted) | .body ] | last // "") as $body
+    | ([ .[] | select(is_marker and (trusted | not)) ] | length > 0) as $untrusted
+    | {
+        role: line($body; "apply-analysis-role"),
+        doc: line($body; "apply-analysis-source-doc"),
+        baseline_sha: line($body; "apply-analysis-cycle-baseline-sha"),
+        smoke_sha: line($body; "apply-analysis-smoke-sha"),
+        promote_sha: line($body; "apply-analysis-promote-sha"),
+        proving_merge_sha: line($body; "apply-analysis-proving-merge-sha"),
+        untrusted_marker: $untrusted
+      }' 2>/dev/null || echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","untrusted_marker":false}'
+}
+
+# comprehensive_stable_tag_commit
+# Prints the commit the `stable` tag points at (dereferencing an annotated
+# tag), or "" when the tag cannot be resolved.
+# Prints the commit the `stable` tag points at (dereferencing an annotated
+# tag). Prints nothing and returns 0 when the tag does not exist; returns 2
+# when the lookup itself failed, so callers can tell "no tag yet" from "could
+# not read the tag" and never treat a transient API error as an absent tag.
+comprehensive_stable_tag_commit() {
+  local ref_json object_type object_sha tag_json err_file
+  err_file="$(mktemp)"
+  if ! ref_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/tags/stable" 2>"${err_file}")"; then
+    if grep -qiE '404|not found' "${err_file}"; then
+      rm -f "${err_file}"
+      return 0
+    fi
+    cat "${err_file}" >&2
+    rm -f "${err_file}"
+    return 2
+  fi
+  rm -f "${err_file}"
+  object_type="$(printf '%s' "${ref_json}" | jq -r '.object.type // empty' 2>/dev/null || true)"
+  object_sha="$(printf '%s' "${ref_json}" | jq -r '.object.sha // empty' 2>/dev/null || true)"
+  if [ "${object_type}" = "tag" ] && [[ "${object_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+    if ! tag_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}" 2>/dev/null)"; then
+      return 2
+    fi
+    printf '%s' "${tag_json}" | jq -r '.object.sha // empty' 2>/dev/null || return 2
+  elif [ "${object_type}" = "commit" ] && [[ "${object_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+    printf '%s\n' "${object_sha}"
+  else
+    return 2
+  fi
+}
+
+# comprehensive_promotion_hold_or_fail <reason> <now_epoch> <alert_text>
+#
+# Shared bounded hold for pre-dispatch checks that could not run this tick
+# (compare or tag lookup unavailable). Returns 1 (hold the merge) until
+# COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS have passed since the first hold,
+# then records the promotion as failed, alerts, and returns 0 (merge proceeds).
+comprehensive_promotion_hold_or_fail() {
+  local reason="$1"
+  local now="$2"
+  local alert_text="$3"
+  local gate_started
+  gate_started="$(jq -r '.comprehensive_promotion.gate_started_at // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+  if ! [[ "${gate_started}" =~ ^[0-9]+$ ]]; then
+    jq --argjson t "${now}" '.comprehensive_promotion = {status: "pending", gate_started_at: $t}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    echo "COMPREHENSIVE_PROMOTION_HOLD tracking_issue=${TRACKING_NUM} reason=${reason}"
+    return 1
+  fi
+  if [ $((now - gate_started)) -lt "${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" ]; then
+    echo "COMPREHENSIVE_PROMOTION_HOLD tracking_issue=${TRACKING_NUM} reason=${reason}"
+    return 1
+  fi
+  jq --arg r "${reason}" '.comprehensive_promotion = {status: "failed", reason: ($r + " past the hold cap")}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment || true
+  echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=${reason}"
+  tg_notify "${alert_text}" "CRITICAL"
+  return 0
+}
+
+# comprehensive_forward_merge_pr_verified <sha> <subject>
+# 0 when the commit is the merge commit of a merged PR whose head branch is
+# auto/forward-merge-stable-* (the forward-merge workflow's fallback PR);
+# the subject alone is never trusted. One PR read.
+comprehensive_forward_merge_pr_verified() {
+  local sha="$1"
+  local subject="$2"
+  local pr_number pr_json
+  pr_number="$(printf '%s' "${subject}" | sed -nE 's/^Merge pull request #([0-9]+) from [^/]+\/auto\/forward-merge-stable-.*/\1/p')"
+  [[ "${pr_number}" =~ ^[0-9]+$ ]] || return 1
+  pr_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" 2>/dev/null || true)"
+  [ -n "${pr_json}" ] || return 1
+  printf '%s' "${pr_json}" | jq -e --arg sha "${sha}" '
+    ((.merged == true) or (.merged_at != null))
+    and (((.head.ref // .headRefName // "") | test("^auto/forward-merge-stable-")))
+    and ((.merge_commit_sha // "") == $sha)' >/dev/null 2>&1
+}
+
+# comprehensive_cycle_is_code_path <path>
+# Mirrors scripts/promote_main_cycle.sh: 0 when the path counts as code.
+comprehensive_cycle_is_code_path() {
+  case "$1" in
+    CLAUDE.md|*/CLAUDE.md|.claude/*) return 0 ;;
+  esac
+  case "$1" in
+    analysis/*|ai-memory/*|docs/*|tests/e2e_smoke_canary.txt|CHANGELOG.md|*.md) return 1 ;;
+  esac
+  return 0
+}
+
+# comprehensive_untested_commits_json <smoke_sha> <promote_sha> <proving_merge_sha>
+#
+# Prints a JSON array of the commits between the smoke-tested commit and the
+# commit about to be promoted that the cycle did NOT prove: everything except
+# the proving run's own merge, forward-merge PR merges (content already on
+# stable), and commits by COMPREHENSIVE_CYCLE_BOT_LOGINS that touch only
+# non-code paths. Exit 2 when the compare or a commit lookup failed.
+# API calls: 1 compare + 1 per bot commit (§15).
+comprehensive_untested_commits_json() {
+  local smoke_sha="$1"
+  local promote_sha="$2"
+  local proving_merge_sha="${3:-}"
+  local compare_json
+  if ! compare_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/compare/${smoke_sha}...${promote_sha}" --jq '{status: (.status // ""), total_commits: (.total_commits // 0), commits: [(.commits // [])[] | {sha: .sha, message: ((.commit.message // "") | split("\n")[0]), author: (.author.login // ""), committer: (.committer.login // "")}]}')"; then
+    return 2
+  fi
+  local listed total compare_status
+  # Only a range that descends from the smoke-tested commit can be judged
+  # by its commit list. `behind` or `diverged` (a reset or rewritten default
+  # branch) lists no commits in the forward direction and would otherwise
+  # read as "nothing untested"; treat it as untested so the promotion defers.
+  compare_status="$(printf '%s' "${compare_json}" | jq -r '.status')"
+  case "${compare_status}" in
+    ahead|identical) ;;
+    *)
+      printf '[{"sha":"","message":"compare status %s: the promotion candidate does not descend from the smoke-tested commit","author":""}]\n' "${compare_status:-unknown}"
+      return 0
+      ;;
+  esac
+  listed="$(printf '%s' "${compare_json}" | jq -r '.commits | length')"
+  total="$(printf '%s' "${compare_json}" | jq -r '.total_commits')"
+  if [ "${listed}" -lt "${total}" ]; then
+    printf '[{"sha":"","message":"compare listed %s of %s commits; treating the range as untested","author":""}]\n' "${listed}" "${total}"
+    return 0
+  fi
+  local untested='[]' row sha message author committer allowed files_json path
+  while IFS= read -r row; do
+    [ -n "${row}" ] || continue
+    sha="$(printf '%s' "${row}" | jq -r '.sha')"
+    message="$(printf '%s' "${row}" | jq -r '.message')"
+    author="$(printf '%s' "${row}" | jq -r '.author')"
+    committer="$(printf '%s' "${row}" | jq -r '.committer')"
+    allowed="false"
+    if [ -n "${proving_merge_sha}" ] && [ "${sha}" = "${proving_merge_sha}" ]; then
+      allowed="true"
+    elif printf '%s' "${message}" | grep -qE '^Merge pull request #[0-9]+ from [^/]+/auto/forward-merge-stable-' \
+      && comprehensive_forward_merge_pr_verified "${sha}" "${message}"; then
+      allowed="true"
+    elif printf ',%s,' "${COMPREHENSIVE_CYCLE_BOT_LOGINS}" | grep -qF ",${author}," \
+      || printf ',%s,' "${COMPREHENSIVE_CYCLE_BOT_LOGINS}" | grep -qF ",${committer},"; then
+      if ! files_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${sha}" --jq '{count: ((.files // []) | length), paths: [(.files // [])[] | .filename, (.previous_filename // empty)]}')"; then
+        return 2
+      fi
+      # The commit endpoint returns at most 300 files per page; a bot commit
+      # that large cannot be proven non-code from one page, so fail closed.
+      if [ "$(printf '%s' "${files_json}" | jq -r '.count')" -ge 300 ]; then
+        echo "::warning::Commit ${sha:0:7} lists 300+ files; treating it as untested rather than trusting a truncated file list." >&2
+        allowed="false"
+      else
+        allowed="true"
+        while IFS= read -r path; do
+          [ -n "${path}" ] || continue
+          if comprehensive_cycle_is_code_path "${path}"; then
+            allowed="false"
+            break
+          fi
+        done < <(printf '%s' "${files_json}" | jq -r '.paths[]')
+      fi
+    fi
+    if [ "${allowed}" != "true" ]; then
+      untested="$(printf '%s' "${untested}" | jq -c --argjson r "${row}" '. + [$r]')"
+    fi
+  done < <(printf '%s' "${compare_json}" | jq -c '.commits[]')
+  printf '%s\n' "${untested}"
+}
+
+# dispatch_comprehensive_verification_run <cycle_metadata_json>
+#
+# Called when the PROVING run of a promote cycle completes (its final PR
+# merged). Runs the dispatcher with role=verifying so the next analysis doc
+# re-proves the pipeline on top of the proving merge; promote_sha is the
+# default branch tip right now. Prints DISPATCHED or SKIPPED reason.
+dispatch_comprehensive_verification_run() {
+  local metadata_json="$1"
+  local default_branch main_tip final_pr proving_merge_sha dispatch_output outcome
+  default_branch="${DEFAULT_BRANCH_TRACKING:-main}"
+  main_tip="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/heads/${default_branch}" --jq '.object.sha // empty' || echo "")"
+  if ! [[ "${main_tip}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "RETRY reason=default_branch_unavailable branch=${default_branch}"
+    return 0
+  fi
+  final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+  proving_merge_sha=""
+  if [[ "${final_pr}" =~ ^[0-9]+$ ]]; then
+    proving_merge_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merge_commit_sha // empty' || echo "")"
+  fi
+  if [ ! -f "${APPLY_ANALYSIS_DISPATCHER}" ]; then
+    echo "SKIPPED reason=dispatcher_missing path=${APPLY_ANALYSIS_DISPATCHER}"
+    return 0
+  fi
+  dispatch_output="$(APPLY_ANALYSIS_ROLE=verifying \
+    APPLY_ANALYSIS_CYCLE_BASELINE_SHA="$(printf '%s' "${metadata_json}" | jq -r '.baseline_sha')" \
+    APPLY_ANALYSIS_SMOKE_SHA="$(printf '%s' "${metadata_json}" | jq -r '.smoke_sha')" \
+    APPLY_ANALYSIS_PROMOTE_SHA="${main_tip}" \
+    APPLY_ANALYSIS_PROVING_MERGE_SHA="${proving_merge_sha}" \
+    APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE="${TRACKING_NUM}" \
+    GITHUB_REF_NAME="${default_branch}" \
+    GITHUB_SHA="${main_tip}" \
+    GITHUB_OUTPUT="" \
+    bash "${APPLY_ANALYSIS_DISPATCHER}" 2>&1 || true)"
+  printf '%s\n' "${dispatch_output}" | sed 's/^/  [verifying-dispatch] /' >&2
+  outcome="$(printf '%s\n' "${dispatch_output}" | sed -n 's/^APPLY_ANALYSIS_DISPATCHED doc=\([^ ]*\).*/DISPATCHED doc=\1/p' | tail -n 1)"
+  if [ -z "${outcome}" ]; then
+    outcome="SKIPPED reason=$(printf '%s\n' "${dispatch_output}" | sed -n 's/^APPLY_ANALYSIS_SKIPPED reason=\([^ ]*\).*/\1/p' | tail -n 1)"
+    [ "${outcome}" != "SKIPPED reason=" ] || outcome="SKIPPED reason=dispatcher_error"
+  fi
+  # Transient outcomes are retried on later ticks (bounded by
+  # COMPREHENSIVE_VERIFICATION_RETRY_MAX in the caller); terminal ones
+  # (disabled, no_docs, all_docs_processed, dispatcher_missing) are not.
+  case "${outcome}" in
+    "SKIPPED reason=project_in_flight"*|"SKIPPED reason=orchestrate_run_in_flight"*|"SKIPPED reason=guard_unavailable"*|"SKIPPED reason=dispatcher_error"*)
+      outcome="RETRY ${outcome#SKIPPED }"
+      ;;
+  esac
+  printf '%s\n' "${outcome}"
+}
+
+# comprehensive_promotion_release_outcome <dispatched_at_epoch>
+#
+# Prints promoted | failed | pending by reading the release runs created after
+# the promotion was dispatched: a failed promote-main-to-stable run (the
+# fast-forward refused) or a completed test-and-mark-stable run on stable.
+comprehensive_promotion_release_outcome() {
+  local dispatched_at="$1"
+  local promote_sha="${2:-}"
+  local tag_before="${3:-}"
+  local since promote_state gate_state tag_now compare_status
+  # Ground truth first: the promotion succeeded when the stable tag moved
+  # since dispatch and now points at promote_sha or a descendant of it (the
+  # release job commits the changelog assembly on top before tagging). A
+  # concurrent unrelated release cannot satisfy this.
+  tag_now="$(comprehensive_stable_tag_commit 2>/dev/null || true)"
+  if [[ "${tag_now}" =~ ^[0-9a-f]{40}$ ]] && [ "${tag_now}" != "${tag_before}" ] && [[ "${promote_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+    compare_status="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/compare/${promote_sha}...${tag_now}" --jq '.status // empty' 2>/dev/null || echo "")"
+    case "${compare_status}" in
+      identical|ahead)
+        echo "promoted"
+        return 0
+        ;;
+    esac
+  fi
+  since="$(date -u -d "@${dispatched_at}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "${dispatched_at}" +%Y-%m-%dT%H:%M:%SZ)"
+  promote_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}/runs?per_page=20" 2>/dev/null | jq -r --arg since "${since}" '[.workflow_runs[]? | select(.event == "workflow_dispatch" and .created_at >= $since)] | sort_by(.created_at) | last | ((.status // "") + " " + (.conclusion // ""))' 2>/dev/null || echo "")"
+  case "${promote_state}" in
+    "completed failure"|"completed cancelled"|"completed timed_out"|"completed startup_failure")
+      echo "failed"
+      return 0
+      ;;
+  esac
+  gate_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/test-and-mark-stable.yml/runs?per_page=20" 2>/dev/null | jq -r --arg since "${since}" '[.workflow_runs[]? | select((.head_branch // "") == "stable" and .created_at >= $since)] | sort_by(.created_at) | last | ((.status // "") + " " + (.conclusion // ""))' 2>/dev/null || echo "")"
+  case "${gate_state}" in
+    "completed success") echo "pending" ;;
+    "completed "*) echo "failed" ;;
+    *) echo "pending" ;;
+  esac
+}
+
+# comprehensive_promotion_gate_before_final_merge <final_pr>
+#
+# The VERIFYING run's ready-to-merge point is where the promote cycle
+# promotes. Returns 0 to let the final merge proceed and 1 to hold it for
+# this tick (the caller opts out of the finalize retry budget). State lives
+# under .comprehensive_promotion {status, promote_sha, dispatched_at, reason}.
+#   pending    -> quiescence check between the smoke-tested commit and
+#                 promote_sha; untested commits -> deferred (merge proceeds);
+#                 clean -> dispatch promote-main-to-stable with target_sha and
+#                 hold
+#   dispatched -> promoted / failed (merge proceeds) or still pending (hold),
+#                 bounded by COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS
+# Anything else (deferred, promoted, failed, skipped) merges.
+comprehensive_promotion_gate_before_final_merge() {
+  local final_pr="$1"
+  if ! has_label "${TRACKING_LABELS:-[]}" "ai:comprehensive-test-pending"; then
+    return 0
+  fi
+  local metadata_json role promote_sha smoke_sha proving_merge_sha status now
+  metadata_json="$(comprehensive_cycle_metadata_json "${COMMENTS:-[]}")"
+  role="$(printf '%s' "${metadata_json}" | jq -r '.role')"
+  if [ "${role}" != "verifying" ]; then
+    return 0
+  fi
+  status="$(jq -r '.comprehensive_promotion.status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")"
+  now="$(date +%s)"
+  case "${status}" in
+    pending)
+      promote_sha="$(printf '%s' "${metadata_json}" | jq -r '.promote_sha')"
+      smoke_sha="$(printf '%s' "${metadata_json}" | jq -r '.smoke_sha')"
+      proving_merge_sha="$(printf '%s' "${metadata_json}" | jq -r '.proving_merge_sha')"
+      if [ "${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" != "promote-main-to-stable.yml" ]; then
+        # Only the promote workflow accepts target_sha; any other release
+        # target cannot pin the promotion, so refuse rather than release
+        # whatever main is now.
+        jq --arg wf "${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" '.comprehensive_promotion = {status: "failed", reason: ("pinned promotion requires promote-main-to-stable.yml, got " + $wf)}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=release_workflow_not_pinnable workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}"
+        post_tracking_comment "## ❌ Promotion not possible
+
+\`COMPREHENSIVE_RELEASE_WORKFLOW_FILE\` is \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\`, which cannot promote a pinned commit (only promote-main-to-stable.yml takes \`target_sha\`). Nothing is promoted; the final merge proceeds."
+        tg_notify "Project #${TRACKING_NUM}: promotion skipped, ${COMPREHENSIVE_RELEASE_WORKFLOW_FILE} cannot pin target_sha." "CRITICAL"
+        return 0
+      fi
+      if ! [[ "${promote_sha}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${smoke_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+        jq '.comprehensive_promotion = {status: "skipped", reason: "marker lacks promote_sha/smoke_sha"}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        echo "COMPREHENSIVE_PROMOTION_SKIPPED tracking_issue=${TRACKING_NUM} reason=missing_marker_shas"
+        post_tracking_comment "## ⏭️ Promotion skipped
+
+This verifying run's marker comment lacks \`apply-analysis-promote-sha\` / \`apply-analysis-smoke-sha\`, so the poller cannot pin a promotion. The final merge proceeds; promote by hand with promote-main-to-stable.yml if wanted."
+        tg_notify "Project #${TRACKING_NUM}: verifying run lacks cycle SHAs; promotion skipped, merge proceeds." "CRITICAL"
+        return 0
+      fi
+      local untested_json untested_rc
+      set +e
+      untested_json="$(comprehensive_untested_commits_json "${smoke_sha}" "${promote_sha}" "${proving_merge_sha}")"
+      untested_rc=$?
+      set -e
+      if [ "${untested_rc}" -ne 0 ]; then
+        if ! comprehensive_promotion_hold_or_fail quiescence_check_unavailable "${now}" \
+          "Project #${TRACKING_NUM}: could not compare ${smoke_sha:0:7}...${promote_sha:0:7} within the hold cap; promotion abandoned, merge proceeds."; then
+          return 1
+        fi
+        return 0
+      fi
+      local untested_count
+      untested_count="$(printf '%s' "${untested_json}" | jq -r 'length')"
+      if [ "${untested_count}" -gt 0 ]; then
+        local untested_md
+        untested_md="$(printf '%s' "${untested_json}" | jq -r '.[] | "- `" + (.sha | .[0:7]) + "` " + (.message | .[0:100]) + (if .author != "" then " (" + .author + ")" else "" end)')"
+        jq --argjson n "${untested_count}" --arg promote "${promote_sha}" '.comprehensive_promotion = {status: "deferred", reason: "untested commits since smoke-tested commit", untested_count: $n, promote_sha: $promote}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment || true
+        echo "COMPREHENSIVE_PROMOTION_DEFERRED tracking_issue=${TRACKING_NUM} untested=${untested_count} smoke_sha=${smoke_sha} promote_sha=${promote_sha}"
+        post_tracking_comment "## ⏸️ Promotion deferred
+
+${untested_count} commit(s) landed on \`${DEFAULT_BRANCH_TRACKING:-main}\` between the smoke-tested commit \`${smoke_sha:0:7}\` and the promotion candidate \`${promote_sha:0:7}\` that this cycle did not prove:
+
+${untested_md}
+
+Nothing is promoted. This project's final merge proceeds; the next daily promote cycle starts over from a baseline that includes these commits."
+        tg_notify "Project #${TRACKING_NUM}: promotion deferred, ${untested_count} untested commit(s) on main since ${smoke_sha:0:7}. Next daily cycle re-proves." "WARNING"
+        return 0
+      fi
+      # The pre-dispatch tag position is what later proves the promotion
+      # moved the tag. A lookup failure must not be recorded as "no tag":
+      # hold (bounded) and retry next tick instead.
+      local tag_before tag_before_rc
+      set +e
+      tag_before="$(comprehensive_stable_tag_commit)"
+      tag_before_rc=$?
+      set -e
+      if [ "${tag_before_rc}" -ne 0 ]; then
+        if ! comprehensive_promotion_hold_or_fail stable_tag_lookup_unavailable "${now}" \
+          "Project #${TRACKING_NUM}: could not read the stable tag before dispatching the promotion within the hold cap; promotion abandoned, merge proceeds."; then
+          return 1
+        fi
+        return 0
+      fi
+      local _dispatch_err
+      _dispatch_err="$(mktemp)"
+      if gh_retry gh workflow run "${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" --repo "${GITHUB_REPOSITORY}" --ref "${COMPREHENSIVE_RELEASE_WORKFLOW_REF}" -f "target_sha=${promote_sha}" -f "dry_run=false" -f "skip_e2e=false" >/dev/null 2>"${_dispatch_err}"; then
+        rm -f "${_dispatch_err}"
+        jq --arg promote "${promote_sha}" --arg tag_before "${tag_before}" --argjson t "${now}" '.comprehensive_promotion = {status: "dispatched", promote_sha: $promote, dispatched_at: $t, tag_before: $tag_before}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment || true
+        echo "COMPREHENSIVE_PROMOTION_DISPATCHED tracking_issue=${TRACKING_NUM} promote_sha=${promote_sha} workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}"
+        post_tracking_comment "## 🚀 Promotion dispatched
+
+Every commit between the smoke-tested commit \`${smoke_sha:0:7}\` and \`${promote_sha:0:7}\` was proven by this cycle. \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\` was dispatched with \`target_sha=${promote_sha}\` (full release gate). This project's final PR #${final_pr} stays unmerged until that release finishes so \`${DEFAULT_BRANCH_TRACKING:-main}\` HEAD is the version under test; hold cap ${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}s."
+        tg_notify "Project #${TRACKING_NUM}: promotion of ${promote_sha:0:7} dispatched; final merge held until the release finishes." "WARNING"
+        return 1
+      fi
+      local _dispatch_msg
+      _dispatch_msg="$(cat "${_dispatch_err}" 2>/dev/null || true)"
+      rm -f "${_dispatch_err}"
+      jq --arg reason "${_dispatch_msg}" '.comprehensive_promotion = {status: "failed", reason: ("dispatch failed: " + $reason)}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=dispatch_failed"
+      tg_notify "Project #${TRACKING_NUM}: could not dispatch ${COMPREHENSIVE_RELEASE_WORKFLOW_FILE} (${_dispatch_msg:-unknown error}); merge proceeds without promotion." "CRITICAL"
+      return 0
+      ;;
+    dispatched)
+      local dispatched_at outcome
+      dispatched_at="$(jq -r '.comprehensive_promotion.dispatched_at // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+      [[ "${dispatched_at}" =~ ^[0-9]+$ ]] || dispatched_at=0
+      promote_sha="$(jq -r '.comprehensive_promotion.promote_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+      outcome="$(comprehensive_promotion_release_outcome "${dispatched_at}" "${promote_sha}" "$(jq -r '.comprehensive_promotion.tag_before // ""' "${STATE_FILE}" 2>/dev/null || echo "")")"
+      case "${outcome}" in
+        promoted)
+          jq '.comprehensive_promotion.status = "promoted"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          post_state_comment || true
+          echo "COMPREHENSIVE_PROMOTION_DONE tracking_issue=${TRACKING_NUM} promote_sha=${promote_sha}"
+          post_tracking_comment "## ✅ Promoted
+
+\`${promote_sha:0:7}\` is now \`stable\` (release gate passed). Releasing the hold on final PR #${final_pr}; this project's own merge is covered by the next daily cycle."
+          tg_notify "Project #${TRACKING_NUM}: ${promote_sha:0:7} promoted to stable; verifying merge released." "WARNING"
+          return 0
+          ;;
+        failed)
+          jq '.comprehensive_promotion.status = "failed" | .comprehensive_promotion.reason = "release run failed"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          post_state_comment || true
+          echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=release_failed promote_sha=${promote_sha}"
+          post_tracking_comment "## ❌ Promotion failed
+
+The release run for \`${promote_sha:0:7}\` did not succeed; \`stable\` is unchanged. Releasing the hold on final PR #${final_pr}. The next daily cycle retries once \`${DEFAULT_BRANCH_TRACKING:-main}\` carries a new code change."
+          tg_notify "Project #${TRACKING_NUM}: release of ${promote_sha:0:7} failed; stable unchanged, verifying merge released." "CRITICAL"
+          return 0
+          ;;
+      esac
+      if [ $((now - dispatched_at)) -ge "${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" ]; then
+        jq '.comprehensive_promotion.status = "failed" | .comprehensive_promotion.reason = "hold cap reached before the release finished"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment || true
+        echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=hold_timeout"
+        post_tracking_comment "## ⌛ Promotion hold expired
+
+The release run for \`${promote_sha:0:7}\` did not finish within ${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}s. Releasing the hold on final PR #${final_pr}; check the release run by hand."
+        tg_notify "Project #${TRACKING_NUM}: promotion hold cap reached; verifying merge released, check the release run." "CRITICAL"
+        return 0
+      fi
+      echo "COMPREHENSIVE_PROMOTION_HOLD tracking_issue=${TRACKING_NUM} promote_sha=${promote_sha} waited=$((now - dispatched_at))s"
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 dispatch_comprehensive_release_workflow() {
   local version_tag="${1:-}"
   local test_repo="${2:-}"
-  local run_args=("test-and-mark-stable.yml" "--repo" "${GITHUB_REPOSITORY}" "--ref" "stable" "-f" "dry_run=false")
+  local run_args=("${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}" "--repo" "${GITHUB_REPOSITORY}" "--ref" "${COMPREHENSIVE_RELEASE_WORKFLOW_REF}" "-f" "dry_run=false")
 
   if [ -n "${version_tag}" ]; then
     run_args+=("-f" "version_tag=${version_tag}")
@@ -10496,6 +10996,76 @@ handle_comprehensive_release_callback_if_needed() {
   callback_handled="$(jq -r '.comprehensive_release_callback.handled // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
   if [ "${callback_handled}" = "true" ]; then
     echo "Comprehensive release callback already handled for project #${TRACKING_NUM}; skipping dispatch."
+  elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.role')" = "proving" ]; then
+    # Promote cycle, proving run merged: dispatch the verifying run. The
+    # promotion itself happens at the verifying run's ready-to-merge point.
+    local cycle_metadata_json verification_outcome
+    cycle_metadata_json="$(comprehensive_cycle_metadata_json "${comments_json}")"
+    verification_outcome="$(dispatch_comprehensive_verification_run "${cycle_metadata_json}")"
+    if [[ "${verification_outcome}" == RETRY* ]]; then
+      local verification_retries
+      verification_retries="$(jq -r '.comprehensive_release_callback.verification_retries // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+      [[ "${verification_retries}" =~ ^[0-9]+$ ]] || verification_retries=0
+      verification_retries=$((verification_retries + 1))
+      if [ "${verification_retries}" -le "${COMPREHENSIVE_VERIFICATION_RETRY_MAX}" ]; then
+        jq --argjson n "${verification_retries}" '.comprehensive_release_callback = ((.comprehensive_release_callback // {}) + {verification_retries: $n})' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        # Persist the counter now: the state file is rebuilt from the state
+        # comment on every tick, so an unposted increment would reset to 0.
+        post_state_comment || true
+        echo "COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED tracking_issue=${TRACKING_NUM} ${verification_outcome} retry=${verification_retries}/${COMPREHENSIVE_VERIFICATION_RETRY_MAX}"
+        return 0
+      fi
+      verification_outcome="SKIPPED ${verification_outcome#RETRY } retries_exhausted=${COMPREHENSIVE_VERIFICATION_RETRY_MAX}"
+    fi
+    jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg outcome "${verification_outcome}" \
+      '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at, role: "proving", verification: $outcome}' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    case "${verification_outcome}" in
+      DISPATCHED*)
+        echo "COMPREHENSIVE_VERIFICATION_DISPATCHED tracking_issue=${TRACKING_NUM} ${verification_outcome#DISPATCHED }"
+        post_tracking_comment "## 🔁 Verifying run dispatched
+
+The proving run merged. The next analysis doc (${verification_outcome#DISPATCHED doc=}) was handed to the orchestrator as the verifying run; its ready-to-merge point promotes \`${DEFAULT_BRANCH_TRACKING:-main}\` as of this merge to \`stable\`."
+        tg_notify "Project #${TRACKING_NUM} (proving) merged; verifying run dispatched (${verification_outcome#DISPATCHED }). Promotion follows its ready-to-merge." "DEBUG"
+        ;;
+      *)
+        echo "COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED tracking_issue=${TRACKING_NUM} ${verification_outcome}"
+        post_tracking_comment "## ⚠️ Verifying run not dispatched
+
+The proving run merged, but the verifying run could not be dispatched (${verification_outcome}). Nothing is promoted; the next daily promote cycle starts over once \`${DEFAULT_BRANCH_TRACKING:-main}\` carries a new code change and enough analysis docs exist."
+        tg_notify "Project #${TRACKING_NUM} (proving) merged but the verifying run was not dispatched (${verification_outcome}); no promotion this cycle." "CRITICAL"
+        ;;
+    esac
+  elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.untrusted_marker')" = "true" ]; then
+    # A marker comment from an untrusted author with no trusted one: never
+    # dispatch or promote on its say-so, and never consume the cycle either.
+    # The callback stays unhandled and the label stays on, so the issue
+    # keeps the daily cycle held (cycle_in_flight) until a human either
+    # posts a trusted marker or removes the label. Alert once, not per tick.
+    local untrusted_alerted
+    untrusted_alerted="$(jq -r '.comprehensive_release_callback.untrusted_marker_alerted // false' "${STATE_FILE}" 2>/dev/null || echo "false")"
+    echo "COMPREHENSIVE_MARKER_UNTRUSTED tracking_issue=${TRACKING_NUM} alerted=${untrusted_alerted}"
+    if [ "${untrusted_alerted}" != "true" ]; then
+      jq --arg alerted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '.comprehensive_release_callback = ((.comprehensive_release_callback // {}) + {role: "untrusted", untrusted_marker_alerted: true, untrusted_marker_alerted_at: $alerted_at})' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment || true
+      post_tracking_comment "## ⚠️ Untrusted apply-analysis marker
+
+This tracking issue carries \`ai:comprehensive-test-pending\` but its only apply-analysis marker comment was posted by an author outside \`${COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS}\`. The poller does not dispatch or promote on it, and it keeps the label so no new promote cycle starts until a human resolves this: post the marker from a trusted account, or remove \`ai:comprehensive-test-pending\` to abandon the cycle. Nothing is promoted."
+      tg_notify "Project #${TRACKING_NUM}: apply-analysis marker from an untrusted author ignored; cycle held human-gated (label kept), no verifying run, no promotion." "CRITICAL"
+    fi
+    return 0
+  elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.role')" = "verifying" ]; then
+    # Promotion (or its deferral) already happened before this final merge;
+    # the verifying run's own merge never promotes.
+    jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at, role: "verifying"}' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    echo "COMPREHENSIVE_VERIFYING_COMPLETE tracking_issue=${TRACKING_NUM} promotion=$(jq -r '.comprehensive_promotion.status // "none"' "${STATE_FILE}")"
   elif [ "${project_status}" = "complete" ]; then
     local metadata_json
     local version_tag
@@ -10516,7 +11086,7 @@ handle_comprehensive_release_callback_if_needed() {
 
     if dispatch_comprehensive_release_workflow "${version_tag}" "${test_repo}"; then
       msg="Comprehensive release callback dispatched for project #${TRACKING_NUM}."
-      msg+=$'\n'"Workflow: test-and-mark-stable.yml"
+      msg+=$'\n'"Workflow: ${COMPREHENSIVE_RELEASE_WORKFLOW_FILE} (ref ${COMPREHENSIVE_RELEASE_WORKFLOW_REF})"
       msg+=$'\n'"dry_run: false"
       if [ -n "${version_tag}" ]; then
         msg+=$'\n'"version_tag: ${version_tag}"
@@ -10532,7 +11102,7 @@ handle_comprehensive_release_callback_if_needed() {
       post_state_comment || true
     else
       msg="Comprehensive release callback failed for project #${TRACKING_NUM}."
-      msg+=$'\n'"Workflow: test-and-mark-stable.yml"
+      msg+=$'\n'"Workflow: ${COMPREHENSIVE_RELEASE_WORKFLOW_FILE} (ref ${COMPREHENSIVE_RELEASE_WORKFLOW_REF})"
       msg+=$'\n'"dry_run: false"
       if [ -n "${COMPREHENSIVE_RELEASE_DISPATCH_ERROR:-}" ]; then
         msg+=$'\n'"Error: ${COMPREHENSIVE_RELEASE_DISPATCH_ERROR}"
